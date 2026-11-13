@@ -64,7 +64,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { refuse, useAssistantDraft } from "~/app/assistant/draft.ts";
+import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
 /**
@@ -195,7 +195,7 @@ export function CeilingEditor({
   const access = useOrgWriteAccess(targetOf(scope));
   const write = useCeilingWrite(scope, { onApplied });
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setText] = useDraftState("");
   const [error, setError] = useState<string | undefined>();
   // The value the last save wrote, so the figure says it while it applies.
   const [expected, setExpected] = useState<number | null | undefined>(undefined);
@@ -329,11 +329,13 @@ export function CeilingEditor({
               },
             },
           ],
-          apply: (next) => {
-            setText(next);
-            setError(undefined);
-            if (write.state.kind !== "idle" && !write.busy) write.reset();
-          },
+          // AS TYPING SETS IT: the last refusal and the finished write cleared.
+          write: writeTo(setText, {
+            also: () => {
+              setError(undefined);
+              if (write.state.kind !== "idle" && !write.busy) write.reset();
+            },
+          }),
           blocked: () => (write.busy ? "The ceiling is being saved." : null),
         }
       : null,

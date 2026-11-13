@@ -14,6 +14,7 @@ export type AtlasKind =
   | "domain"
   | "hostname"
   | "endpoint"
+  | "certificate"
   | "service"
   | "host"
   | "datastore"
@@ -44,9 +45,15 @@ export type AtlasRelation =
   | "built_from"
   | "deployed_by"
   | "monitored_by"
+  | "secured_by"
   | "belongs_to"
   | "documented_in"
   | "owned_by";
+
+/** What a relation says of the two entries it joins, as the map draws it
+ *  (`atlas.Family`): a request's path, what an entry stands on, and
+ *  everything around it. */
+export type AtlasFamily = "calls" | "runs_on" | "around";
 
 /** Who provides an account, a model or a resource (`atlas.Vendor`). */
 export type AtlasVendor =
@@ -80,6 +87,7 @@ export type AtlasFact =
   | "vendor"
   | "capability"
   | "account_ref"
+  | "account_name"
   | "site"
   | "region"
   | "integration"
@@ -99,6 +107,7 @@ export type AtlasFact =
   | "last_result"
   | "runner"
   | "required"
+  | "pipeline_state"
   | "harness"
   | "model"
   | "sign_in"
@@ -110,7 +119,14 @@ export type AtlasFact =
   | "server_version"
   | "tool_count"
   | "oauth_issuer"
-  | "sign_in_expires";
+  | "sign_in_expires"
+  | "covers"
+  | "expires"
+  | "issuer"
+  | "validity"
+  | "certificate_type"
+  | "monitor_state"
+  | "state_since";
 
 /** The grammar a fact's value is written in (`atlas.ValueType`). */
 type AtlasValueType =
@@ -162,7 +178,11 @@ export type AtlasSignalKind =
   | "model_sitting_out"
   | "model_failing"
   | "server_test_failed"
-  | "standing_alarm";
+  | "standing_alarm"
+  | "monitor_alerting"
+  | "monitor_warning"
+  | "monitor_no_data"
+  | "pipeline_failing";
 
 /** How urgent a signal is (`atlas.Severity`). */
 type AtlasSeverity = "danger" | "warning";
@@ -180,6 +200,20 @@ export type AtlasUseChannel = "command" | "tool_call" | "model_call" | "push";
 /** Which way a trace walks (`atlas.Direction`): `up` is what depends on the
  *  entry, `down` what it depends on. */
 type AtlasDirection = "up" | "down";
+
+/** What one line of the atlas's log did (`atlas.Change`). `withdrawn` is a
+ *  claim its source stopped making: what an integration's read no longer
+ *  holds, or a "the same" a person took back. */
+type AtlasChange =
+  | "recorded"
+  | "retired"
+  | "fact_set"
+  | "fact_denied"
+  | "related"
+  | "unrelated"
+  | "joined"
+  | "kept_apart"
+  | "withdrawn";
 
 /** A place an atlas read reads (`gather.SourceName`). */
 export type AtlasCoverageSource =
@@ -211,6 +245,20 @@ export interface AtlasRead {
   withheld: number;
 }
 
+/** Who answers for an entry (`atlas.Owner`): a seat by its handle or a unit
+ *  by its key, never a page and never free text. */
+interface AtlasOwner {
+  kind: AtlasExternal;
+  name: string;
+}
+
+/** How many current entries an entry relies on and how many rely on it,
+ *  through the relations the map draws at rest (`atlas.RelationCount`). */
+interface AtlasRelationCount {
+  depends_on: number;
+  used_by: number;
+}
+
 /** One entry as a list row or a map card shows it (`atlas.Summary`). */
 export interface AtlasSummary {
   id: string;
@@ -220,9 +268,17 @@ export interface AtlasSummary {
   /** The entry's canonical key, the card's second line. */
   key: string;
   vendor?: AtlasVendor;
+  /** The owner a person or the engine's records name, never a suggestion. */
+  owner?: AtlasOwner;
+  /** The one line a person gave it: somebody's words, drawn as plain text. */
+  purpose?: string;
+  relations: AtlasRelationCount;
   state: AtlasState;
   word: AtlasWord;
   health: AtlasHealth;
+  /** Why the entry is not quiet, in one sentence of the engine's own words;
+   *  absent for a quiet one. */
+  reason?: string;
   /** How many open signals the reader may read. */
   signals: number;
   review: boolean;
@@ -256,15 +312,19 @@ interface AtlasMapGroup {
   closed: boolean;
 }
 
-/** One relation between two entries a map or a trace draws. */
+/** One relation between two entries a map or a trace draws, and the family
+ *  it is drawn in. */
 export interface AtlasMapEdge {
   from: string;
   to: string;
   relation: AtlasRelation;
+  family: AtlasFamily;
 }
 
-/** `atlas_map`: the atlas drawn as its lanes. Only structural relations are
- *  edges; `collapsed` is the groups the engine closed past its bound. */
+/** `atlas_map`: the atlas drawn as its lanes. Its edges are the relations
+ *  drawn at rest or, asked with `relations: "all"`, every relation between
+ *  two drawn entries; `collapsed` is the groups the engine closed past its
+ *  bound. */
 export interface AtlasMapAnswer extends AtlasRead {
   lanes: AtlasMapLane[];
   groups: AtlasMapGroup[];
@@ -319,6 +379,8 @@ export interface AtlasFactView {
   /** A fact of meaning only an integration or an agent has given. */
   suggested?: boolean;
   others?: AtlasClaimed[];
+  /** The member a fact of each host is of: which host's visibility this is. */
+  of?: AtlasRef;
 }
 
 /** One relation from an entry: to another entry by `to`, or to a seat, a
@@ -428,4 +490,57 @@ export interface AtlasFacetsAnswer extends AtlasRead {
   words: Partial<Record<AtlasWord, number>>;
   health: Partial<Record<AtlasHealth, number>>;
   total: number;
+}
+
+/** What a log line's relation, or its "the same", names (`atlas.LineTarget`):
+ *  another entry by `id`, or a seat, a unit or a page by `external`. `name`
+ *  is the entry's name or the identity's own. */
+interface AtlasLineTarget {
+  id?: string;
+  external?: AtlasExternal;
+  name: string;
+}
+
+/** One line of the atlas's log (`atlas.Line`): what changed on which entry,
+ *  when, and in whose voice. `text` is one sentence of the engine's own
+ *  words; `value`, `name` and `target` are somebody's, drawn as plain text. */
+interface AtlasLine {
+  id: string;
+  at: string;
+  /** The entry the line is about, with its name and kind. */
+  entry: string;
+  name: string;
+  kind: AtlasKind;
+  change: AtlasChange;
+  text: string;
+  fact?: AtlasFact;
+  relation?: AtlasRelation;
+  value?: AtlasValue;
+  target?: AtlasLineTarget;
+  source: AtlasSource;
+}
+
+/** `atlas_log`: one page of the atlas's log, newest first, the company's or
+ *  one entry's. A page may hold fewer lines than its limit where lines are
+ *  not the reader's to see; `next_cursor` is absent on the last page. */
+export interface AtlasLogAnswer extends AtlasRead {
+  lines: AtlasLine[];
+  next_cursor?: string;
+}
+
+/** One entry's part of the log: its lines a day over the window, oldest
+ *  first (absent where it took none), and its newest line however old. */
+interface AtlasEntryActivity {
+  id: string;
+  days?: number[];
+  last?: AtlasLine;
+}
+
+/** `atlas_activity`: the log counted over its last fourteen UTC days, oldest
+ *  first and today last, from `from`: the company's lines a day, and each
+ *  entry the log holds a line of. */
+export interface AtlasActivityAnswer extends AtlasRead {
+  from: string;
+  days: number[];
+  entries: AtlasEntryActivity[];
 }

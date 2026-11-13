@@ -6,8 +6,7 @@
 // # Who has to agree on it
 //
 // Every data node, identically: the atlas is read from whichever node a person
-// reaches, several people (and, at later record versions, agents and the
-// integrations' reads) change it, and its history must outlive any one node's
+// reaches, several people, the agents and the integrations' reads change it, and its history must outlive any one node's
 // event store. That is the replicated estate, which only this domain's applier
 // writes. What the engine already keeps (the company settings, Gitlet, the
 // integrations' status, the access log) is never copied here: [atlas.Fold]
@@ -28,6 +27,19 @@
 //     before it was published. A claim is kept, never updated, but for being
 //     REPLACED: a voice's newer claim on the same slot ([atlas.Claim.Slot])
 //     marks its older one, which stays as the entry's history.
+//     An AGENT's claim is the same record at version 3 (ADR-0132), written by
+//     [Writer.Observe]: its source is the seat, with the turn it recorded in
+//     and the evidence the engine checked behind it, so its confidence is
+//     read off the record and chosen by nobody. It replaces only the seat's
+//     own earlier claim on the slot, is conditioned on no version, and an
+//     agent's denial is a dispute the fold never lets win.
+//   - `read` records one integration's read of the entry (ADR-0129): the
+//     claims the read holds on it that are new or changed, in the
+//     integration's voice, and the slots of its earlier claims it no longer
+//     holds, which are withdrawn into the entry's history. A read that stopped
+//     seeing the entry retires it with one denied exists claim. A read that
+//     holds what the log already holds is never recorded, so an unchanged
+//     hourly read of thousands of names writes nothing.
 //   - `purge` erases what it names everywhere, history included, and leaves a
 //     permanent MARKER: an entry (every claim on it, every claim naming it),
 //     or a value by its digest (every claim carrying it, every entry it is the
@@ -63,7 +75,11 @@
 // # Reads
 //
 // [Reader.Live] reads every live claim for the fold, at the caller's level,
-// `session` by default ([DefaultRead]); [Reader.Entry] an entry's version for
-// a person's next edit; [Reader.History] an entry's claims, replaced ones
-// included; and [Reader.Purges] what was purged, by whom and when, never what.
+// `session` by default ([DefaultRead]); [Reader.LiveOf] one voice's, which an
+// integration's read is diffed against; [Reader.Entry] an entry's version for
+// a person's next edit; [Reader.Log] the log as lines, newest first, a claim
+// recorded and a claim a read withdrew each one line, for the whole company or
+// for named entries; [Reader.Activity] how many lines each entry took a day,
+// and each entry's newest record; and [Reader.Purges] what was purged, by whom
+// and when, never what.
 package atlasdomain

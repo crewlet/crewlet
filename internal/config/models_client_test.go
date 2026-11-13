@@ -20,7 +20,8 @@ import (
 // tells an operator an entry runs executors that every launch skips. The jobs
 // and the places a run happens are the engine's closed sets, and the field the
 // page writes for each seat job is the one the engine reports that job at, so
-// an assignment made on the page is the one a seat runs on.
+// an assignment made on the page is the one a seat runs on. And the name its
+// wizard lets a person give a model is one the key grammar takes, and no other.
 func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -56,13 +57,14 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		{"DEFAULT_HARNESS_AUTH_MODE", string(unset.ResolvedAuthMode())},
 		{"DEFAULT_HARNESS_TIMEOUT_SECONDS", strconv.FormatFloat(unset.Timeout(), 'f', -1, 64)},
 		{"DEFAULT_HARNESS_MAX_CONCURRENT", strconv.Itoa(unset.Concurrency())},
+		{"MODEL_KEY_PATTERN", config.ProviderKeyPattern().String()},
 	} {
 		got, err := clientsource.Scalar(tree, tc.name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != tc.want {
-			t.Errorf("contract/models.ts %s is %q, the engine's default is %q", tc.name, got, tc.want)
+			t.Errorf("contract/models.ts %s is %q, and the engine's is %q", tc.name, got, tc.want)
 		}
 	}
 }

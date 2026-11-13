@@ -30,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -648,72 +649,80 @@ func mustLogged(t *testing.T, s sandbox.PendingStore, turnID string) loggedRun {
 }
 
 func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.PendingStore) {
-	// A second launch in one turn presents the same turn id, and
-	// the box on that row is the paused checkout it may reattach to. A
-	// launch that erased it would re-clone the work instead — and one that
-	// did not tell the launch which box it was would leave the launch no
-	// way to reclaim it when the next job runs elsewhere.
-	//
-	// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a process
-	// tree on the host of the node that launched the job it was made for, so
-	// the relaunch may continue in it only there — and until this launch
-	// attaches a box of its own, the row's box is still that one, reclaimed by
-	// that host. What was the previous JOB's and not its box's — its command,
-	// its session — is not the relaunch's: a reader that found it would read
-	// the finished job back as this one.
-	first := run("t1")
-	first.Placement, first.LaunchNode = "direct", "node-a"
-	mustLaunched(t, s, first)
-	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", Harness: "claude-code"},
-		sandbox.Fence{}); err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	// AND WHEN IT WAS FIRST ATTACHED, which is how old its checkouts can be:
-	// a relaunch continues in it only while it is young enough
-	// ([sandbox.KeptBoxMaxAge]), so a box the attach left undated, or a reset
-	// that handed the launch no date, would never be continued in.
-	dated := mustGet(t, s, "t1").BoxSince
-	if dated.IsZero() {
-		t.Fatal("attaching a box to a run that named none left it undated")
-	}
-	next := run("t1")
-	next.LaunchNode = "node-b"
-	opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
-	if err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
+	// IN A BUBBLE, so the store's clock is the case's: the box is dated the
+	// instant it is attached, and the relaunch comes a second later.
+	synctest.Test(t, func(t *testing.T) {
+		// A second launch in one turn presents the same turn id, and
+		// the box on that row is the paused checkout it may reattach to. A
+		// launch that erased it would re-clone the work instead — and one that
+		// did not tell the launch which box it was would leave the launch no
+		// way to reclaim it when the next job runs elsewhere.
+		//
+		// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a process
+		// tree on the host of the node that launched the job it was made for, so
+		// the relaunch may continue in it only there — and until this launch
+		// attaches a box of its own, the row's box is still that one, reclaimed by
+		// that host. What was the previous JOB's and not its box's — its command,
+		// its session — is not the relaunch's: a reader that found it would read
+		// the finished job back as this one.
+		first := run("t1")
+		first.Placement, first.LaunchNode = "direct", "node-a"
+		mustLaunched(t, s, first)
+		attached := time.Now().UTC()
+		if err := s.AttachSandbox(t.Context(), "t1",
+			sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", Harness: "claude-code"},
+			sandbox.Fence{}); err != nil {
+			t.Fatalf("attach: %v", err)
+		}
+		// AND WHEN IT WAS FIRST ATTACHED, which is how old its checkouts can be:
+		// a relaunch continues in it only while it is young enough
+		// ([sandbox.KeptBoxMaxAge]), so a box the attach left undated, or a reset
+		// that handed the launch no date, would never be continued in. And a
+		// relaunch that dated it again would date it a second later, where on
+		// the machine's clock the two read equal inside one tick.
+		if dated := mustGet(t, s, "t1").BoxSince; !dated.Equal(attached) {
+			t.Fatalf("attaching a box to a run that named none dated it %v, want %v, the instant it "+
+				"was attached", dated, attached)
+		}
+		time.Sleep(time.Second)
+		next := run("t1")
+		next.LaunchNode = "node-b"
+		opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
+		if err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
 
-	got := mustGet(t, s, "t1")
-	if got.SandboxID != "box-9" || got.Placement != "direct" || got.LaunchNode != "node-a" {
-		t.Errorf("a second launch erased the attached box, its cell or its host: box %q in %q on %q",
-			got.SandboxID, got.Placement, got.LaunchNode)
-	}
-	if got.CommandID != "" || got.SessionID != "" {
-		t.Errorf("the relaunch's row still names the previous job: command %q, session %q",
-			got.CommandID, got.SessionID)
-	}
-	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
-		Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
-	prior := opened.Prior
-	since := prior.Since
-	prior.Since = time.Time{}
-	if prior != want || !since.Equal(dated) {
-		t.Errorf("the relaunch was handed %+v, dated %v, as the box it found, want %+v dated %v",
-			prior, since, want, dated)
-	}
-	if !got.BoxSince.Equal(dated) {
-		t.Errorf("the relaunch's row dates its box %v, want the attach's %v", got.BoxSince, dated)
-	}
-	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
-	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", Harness: "claude-code"},
-		sandbox.Fence{}); err != nil {
-		t.Fatalf("attach the relaunch's box: %v", err)
-	}
-	if got := mustGet(t, s, "t1"); got.SandboxID != "box-10" || got.LaunchNode != "node-b" {
-		t.Errorf("the relaunch's box %q is named on %q, want box-10 on node-b", got.SandboxID, got.LaunchNode)
-	}
+		got := mustGet(t, s, "t1")
+		if got.SandboxID != "box-9" || got.Placement != "direct" || got.LaunchNode != "node-a" {
+			t.Errorf("a second launch erased the attached box, its cell or its host: box %q in %q on %q",
+				got.SandboxID, got.Placement, got.LaunchNode)
+		}
+		if got.CommandID != "" || got.SessionID != "" {
+			t.Errorf("the relaunch's row still names the previous job: command %q, session %q",
+				got.CommandID, got.SessionID)
+		}
+		want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
+			Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
+		prior := opened.Prior
+		since := prior.Since
+		prior.Since = time.Time{}
+		if prior != want || !since.Equal(attached) {
+			t.Errorf("the relaunch was handed %+v, dated %v, as the box it found, want %+v dated %v",
+				prior, since, want, attached)
+		}
+		if !got.BoxSince.Equal(attached) {
+			t.Errorf("the relaunch's row dates its box %v, want the attach's %v", got.BoxSince, attached)
+		}
+		// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
+		if err := s.AttachSandbox(t.Context(), "t1",
+			sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", Harness: "claude-code"},
+			sandbox.Fence{}); err != nil {
+			t.Fatalf("attach the relaunch's box: %v", err)
+		}
+		if got := mustGet(t, s, "t1"); got.SandboxID != "box-10" || got.LaunchNode != "node-b" {
+			t.Errorf("the relaunch's box %q is named on %q, want box-10 on node-b", got.SandboxID, got.LaunchNode)
+		}
+	})
 }
 
 // A RELAUNCH'S BOX MOVES THE ROW TO ITS CELL. The next job can land in
@@ -963,27 +972,36 @@ func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 // box exists, so an answer that differed from the row — a stale name, or the
 // previous job's — would file every call the box makes under a job that is not
 // its own.
+//
+// IN A BUBBLE, so the store's clock is the case's: each launch is held to the
+// instant it was made, a second after the one before, where a relaunch that
+// answered the previous job's start read equal to its own inside one tick of
+// the machine's clock.
 func testALaunchAnswersTheJobItOpened(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
-	var names []string
-	for i := range 2 {
-		opened, err := s.BeginLaunch(ctx, run("t-answered"), sandbox.Fence{})
-		if err != nil {
-			t.Fatalf("launch %d: %v", i+1, err)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		var names []string
+		for i := range 2 {
+			launched := time.Now().UTC()
+			opened, err := s.BeginLaunch(ctx, run("t-answered"), sandbox.Fence{})
+			if err != nil {
+				t.Fatalf("launch %d: %v", i+1, err)
+			}
+			row := mustGet(t, s, "t-answered")
+			if opened.LaunchID == "" || opened.LaunchID != row.LaunchID {
+				t.Fatalf("launch %d answered job %q, and the row holds %q", i+1, opened.LaunchID, row.LaunchID)
+			}
+			if facts := row.Launch; !facts.StartedAt.Equal(launched) || !opened.Launch.StartedAt.Equal(launched) {
+				t.Errorf("launch %d answered a start of %v, and the row records %v; want both %v, the "+
+					"instant it launched", i+1, opened.Launch.StartedAt, facts.StartedAt, launched)
+			}
+			names = append(names, opened.LaunchID)
+			time.Sleep(time.Second)
 		}
-		row := mustGet(t, s, "t-answered")
-		if opened.LaunchID == "" || opened.LaunchID != row.LaunchID {
-			t.Fatalf("launch %d answered job %q, and the row holds %q", i+1, opened.LaunchID, row.LaunchID)
+		if names[0] == names[1] {
+			t.Error("a relaunch answered the first job's name — the case exercises nothing")
 		}
-		if facts := row.Launch; !facts.StartedAt.Equal(opened.Launch.StartedAt) || opened.Launch.StartedAt.IsZero() {
-			t.Errorf("launch %d answered a start of %v, and the row records %v",
-				i+1, opened.Launch.StartedAt, facts.StartedAt)
-		}
-		names = append(names, opened.LaunchID)
-	}
-	if names[0] == names[1] {
-		t.Error("a relaunch answered the first job's name — the case exercises nothing")
-	}
+	})
 }
 
 // A LAUNCH ON A ROW A NEWER LEASE HOLDS IS REFUSED, not reported open. The
@@ -2328,7 +2346,11 @@ func testAQuestionIsParkedWithItsAnchor(t *testing.T, s sandbox.PendingStore) {
 	if got := mustGet(t, s, "t1"); got.Status == sandbox.StatusAwaiting || got.Question != "" {
 		t.Fatalf("run %q asking %q, want the refused park to have written nothing", got.Status, got.Question)
 	}
-	asked := time.Now().UTC().Truncate(time.Microsecond)
+	// THE ANCHOR STATED, years from any clock and to the nanosecond: a store
+	// that parked the question at its own clock's instant, not the one it was
+	// handed, is told apart from one that kept it, which an anchor read from the
+	// clock just before the park equals inside one tick.
+	asked := time.Date(2003, time.April, 5, 6, 7, 8, 9, time.UTC)
 	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -3653,42 +3675,55 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	// carries whether its record went out, and a later release that says
 	// nothing never takes that back. A second launch is a second job with a
 	// record of its own.
-	before := time.Now().UTC()
-	r := run("t1")
-	r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
-		// Not the caller's to choose: the store dates the job.
-		StartedAt: base, Published: true, Iteration: 9}
-	mustLaunched(t, s, r)
-	got := mustGet(t, s, "t1")
-	facts := got.Launch
-	if facts.StartedAt.Before(before) || facts.StartedAt.After(time.Now().UTC()) {
-		t.Errorf("the job is dated %s, not the instant it launched", facts.StartedAt)
-	}
-	if facts.Model != "claude-sonnet-5" || facts.Iteration != suspension().Iteration || facts.Published {
-		t.Errorf("the launch record = %+v, want the model, iteration %d and nothing published",
-			facts, suspension().Iteration)
-	}
+	//
+	// IN A BUBBLE, so the store's clock is the case's: it stands still while
+	// the case writes and reads, and moves only by the case's own wait. Each
+	// job is dated exactly the instant it launched, the second a second after
+	// the first, where two readings of the machine's clock held a date only
+	// to an order a coarse clock stamps equal and a stepped one reverses, and
+	// a second job dated the first one's instant passed.
+	synctest.Test(t, func(t *testing.T) {
+		launched := time.Now().UTC()
+		r := run("t1")
+		r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
+			// Not the caller's to choose: the store dates the job.
+			StartedAt: base, Published: true, Iteration: 9}
+		mustLaunched(t, s, r)
+		got := mustGet(t, s, "t1")
+		facts := got.Launch
+		if !facts.StartedAt.Equal(launched) {
+			t.Errorf("the job is dated %s, not the instant it launched, %s", facts.StartedAt, launched)
+		}
+		if facts.Model != "claude-sonnet-5" || facts.Iteration != suspension().Iteration || facts.Published {
+			t.Errorf("the launch record = %+v, want the model, iteration %d and nothing published",
+				facts, suspension().Iteration)
+		}
 
-	claimed := mustClaim(t, s, "t1")
-	release := releaseOf(claimed)
-	release.Published = true
-	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
-		t.Fatalf("release: released=%v err=%v", released, err)
-	}
-	retry := mustClaim(t, s, "t1")
-	if !retry.Launch.Published {
-		t.Fatal("the retry's claim came back without the publish the first attempt made")
-	}
-	mustRelease(t, s, retry)
-	if !mustGet(t, s, "t1").Launch.Published {
-		t.Error("a release that carried no publish erased the record of one")
-	}
+		claimed := mustClaim(t, s, "t1")
+		release := releaseOf(claimed)
+		release.Published = true
+		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
+			t.Fatalf("release: released=%v err=%v", released, err)
+		}
+		retry := mustClaim(t, s, "t1")
+		if !retry.Launch.Published {
+			t.Fatal("the retry's claim came back without the publish the first attempt made")
+		}
+		mustRelease(t, s, retry)
+		if !mustGet(t, s, "t1").Launch.Published {
+			t.Error("a release that carried no publish erased the record of one")
+		}
 
-	mustBeginLaunch(t, s, run("t1"))
-	next := mustGet(t, s, "t1")
-	if f := next.Launch; f.Published || f.Iteration != 0 || f.StartedAt.Before(facts.StartedAt) {
-		t.Errorf("the second job inherited the first one's record: %+v", f)
-	}
+		// THE SECOND JOB A SECOND LATER, on the bubble's clock.
+		time.Sleep(time.Second)
+		relaunched := launched.Add(time.Second)
+		mustBeginLaunch(t, s, run("t1"))
+		next := mustGet(t, s, "t1")
+		if f := next.Launch; f.Published || f.Iteration != 0 || !f.StartedAt.Equal(relaunched) {
+			t.Errorf("the second job, launched %s, carries %+v: want a record of its own, dated then",
+				relaunched, f)
+		}
+	})
 }
 
 // answerOf is a recorded answer made of one delivery, carrying text's stand-in
@@ -4366,77 +4401,86 @@ func testALetGoWaitsForTheCopiesAlreadyOwed(t *testing.T, s sandbox.PendingStore
 // A TURN TAKES ITS ANSWER ONCE, on the claim that drives it, and a release
 // gives it back to the run for the retry: what the seat's next holder reads to
 // tell a reply a turn used from one nobody ever got to.
+//
+// IN A BUBBLE, so the store's clock is the case's: the take is dated the
+// instant it is made, and the repeat comes a second later, where a repeat
+// that dated it again read equal to the first inside one tick of the
+// machine's clock.
 func testATurnTakesTheAnswerItsClaimDrives(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
-	mustLaunched(t, s, run("t1"))
-	park(t, s, "t1")
-	launch := mustGet(t, s, "t1").LaunchID
-	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("RecordAnswer = %v, %v", ok, err)
-	}
-	// NOT BEFORE THE CLAIM: an answer still owed its resume is nobody's.
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
-		t.Fatalf("TakeAnswer before the claim = %v, %v, want refused", ok, err)
-	}
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("ClaimForResume = %v, %v", ok, err)
-	}
-	if got := mustGet(t, s, "t1"); got.Answer == nil || got.Answer.Taken() {
-		t.Fatalf("answer %+v, want it claimed and NOT taken: a claim is not a turn", got.Answer)
-	}
-	if ok, err := s.TakeAnswer(ctx, "t1", "another-launch", sandbox.Fence{}); err != nil || ok {
-		t.Fatalf("TakeAnswer for another launch = %v, %v, want refused", ok, err)
-	}
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("TakeAnswer = %v, %v", ok, err)
-	}
-	taken := mustGet(t, s, "t1").Answer
-	if taken == nil || !taken.Taken() {
-		t.Fatalf("answer %+v, want it taken", taken)
-	}
-	// IDEMPOTENT, and the instant is the first one's.
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("a repeated TakeAnswer = %v, %v, want true", ok, err)
-	}
-	if got := mustGet(t, s, "t1").Answer; !got.TakenAt.Equal(taken.TakenAt) {
-		t.Errorf("a repeated take moved the instant from %v to %v", taken.TakenAt, got.TakenAt)
-	}
-	// A RELEASE GIVES IT BACK: the retry's turn takes it again.
-	if released, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{
-		Launch: launch, To: sandbox.StatusAnswered,
-	}); err != nil || !released {
-		t.Fatalf("ReleaseClaim = %v, %v", released, err)
-	}
-	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
-		got.Answer.Taken() {
-		t.Fatalf("run = %q answer %+v, want it owed again and not taken", got.Status, got.Answer)
-	}
-	// A NEWER LEASE FENCES A TAKE OUT: the seat's next holder decides on a
-	// row nobody who lost the seat can still write.
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
-		t.Fatalf("ClaimForResume = %v, %v", ok, err)
-	}
-	if ok, err := s.ClaimOwnership(ctx, "t1", "next", 5); err != nil || !ok {
-		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
-	}
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "old", Epoch: 1}); err != nil || ok {
-		t.Fatalf("TakeAnswer under an outranked fence = %v, %v, want refused", ok, err)
-	}
-	// NOR UNDER NO LEASE AT ALL, which every other write here lets
-	// through: a stalled claimant that held none took the answer on a row
-	// its successor had fenced, and the person was answered twice.
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
-		t.Fatalf("TakeAnswer under no lease on a fenced row = %v, %v, want refused", ok, err)
-	}
-	if got := mustGet(t, s, "t1").Answer; got == nil || got.Taken() {
-		t.Fatalf("answer %+v, want it untaken after the outranked take", got)
-	}
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "next", Epoch: 5}); err != nil || !ok {
-		t.Fatalf("TakeAnswer under the row's own lease = %v, %v", ok, err)
-	}
-	if ok, err := s.TakeAnswer(ctx, "gone", launch, sandbox.Fence{}); err != nil || ok {
-		t.Errorf("TakeAnswer on a run that does not exist = %v, %v", ok, err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		mustLaunched(t, s, run("t1"))
+		park(t, s, "t1")
+		launch := mustGet(t, s, "t1").LaunchID
+		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("RecordAnswer = %v, %v", ok, err)
+		}
+		// NOT BEFORE THE CLAIM: an answer still owed its resume is nobody's.
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+			t.Fatalf("TakeAnswer before the claim = %v, %v, want refused", ok, err)
+		}
+		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("ClaimForResume = %v, %v", ok, err)
+		}
+		if got := mustGet(t, s, "t1"); got.Answer == nil || got.Answer.Taken() {
+			t.Fatalf("answer %+v, want it claimed and NOT taken: a claim is not a turn", got.Answer)
+		}
+		if ok, err := s.TakeAnswer(ctx, "t1", "another-launch", sandbox.Fence{}); err != nil || ok {
+			t.Fatalf("TakeAnswer for another launch = %v, %v, want refused", ok, err)
+		}
+		took := time.Now().UTC()
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("TakeAnswer = %v, %v", ok, err)
+		}
+		taken := mustGet(t, s, "t1").Answer
+		if taken == nil || !taken.Taken() || !taken.TakenAt.Equal(took) {
+			t.Fatalf("answer %+v, want it taken at %s", taken, took)
+		}
+		// IDEMPOTENT, and the instant is the first one's.
+		time.Sleep(time.Second)
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("a repeated TakeAnswer = %v, %v, want true", ok, err)
+		}
+		if got := mustGet(t, s, "t1").Answer; !got.TakenAt.Equal(took) {
+			t.Errorf("a repeated take moved the instant from %v to %v", took, got.TakenAt)
+		}
+		// A RELEASE GIVES IT BACK: the retry's turn takes it again.
+		if released, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{
+			Launch: launch, To: sandbox.StatusAnswered,
+		}); err != nil || !released {
+			t.Fatalf("ReleaseClaim = %v, %v", released, err)
+		}
+		if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
+			got.Answer.Taken() {
+			t.Fatalf("run = %q answer %+v, want it owed again and not taken", got.Status, got.Answer)
+		}
+		// A NEWER LEASE FENCES A TAKE OUT: the seat's next holder decides on a
+		// row nobody who lost the seat can still write.
+		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("ClaimForResume = %v, %v", ok, err)
+		}
+		if ok, err := s.ClaimOwnership(ctx, "t1", "next", 5); err != nil || !ok {
+			t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+		}
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "old", Epoch: 1}); err != nil || ok {
+			t.Fatalf("TakeAnswer under an outranked fence = %v, %v, want refused", ok, err)
+		}
+		// NOR UNDER NO LEASE AT ALL, which every other write here lets
+		// through: a stalled claimant that held none took the answer on a row
+		// its successor had fenced, and the person was answered twice.
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+			t.Fatalf("TakeAnswer under no lease on a fenced row = %v, %v, want refused", ok, err)
+		}
+		if got := mustGet(t, s, "t1").Answer; got == nil || got.Taken() {
+			t.Fatalf("answer %+v, want it untaken after the outranked take", got)
+		}
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "next", Epoch: 5}); err != nil || !ok {
+			t.Fatalf("TakeAnswer under the row's own lease = %v, %v", ok, err)
+		}
+		if ok, err := s.TakeAnswer(ctx, "gone", launch, sandbox.Fence{}); err != nil || ok {
+			t.Errorf("TakeAnswer on a run that does not exist = %v, %v", ok, err)
+		}
+	})
 }
 
 // A DEAD CLAIM'S ANSWER IS REVIVED ONCE, FENCED AND COUNTED. The seat's next
@@ -4448,73 +4492,81 @@ func testATurnTakesTheAnswerItsClaimDrives(t *testing.T, s sandbox.PendingStore)
 // the claim it names is revived — that job, that answer, no newer lease — and
 // only once: a revived run is no longer the claim, so a take under the dead
 // claim's lease finds nothing to take.
+//
+// IN A BUBBLE, so the store's clock is the case's: the first loss is dated the
+// instant it is counted, and the next a second later, where a revival that
+// dated the first loss again read equal to it inside one tick of the machine's
+// clock.
 func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
-	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), false)
-	next := sandbox.Fence{Owner: "next", Epoch: 2}
-	for name, revival := range map[string]sandbox.Revival{
-		"another launch": {Launch: "another-launch", Answer: []string{"r1"}, Fence: next, Lost: true},
-		"another answer": {Launch: launch, Answer: []string{"r2"}, Fence: next, Lost: true},
-	} {
-		if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
-			t.Fatalf("a revival naming %s = %v, %v, want refused", name, ok, err)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), false)
+		next := sandbox.Fence{Owner: "next", Epoch: 2}
+		for name, revival := range map[string]sandbox.Revival{
+			"another launch": {Launch: "another-launch", Answer: []string{"r1"}, Fence: next, Lost: true},
+			"another answer": {Launch: launch, Answer: []string{"r2"}, Fence: next, Lost: true},
+		} {
+			if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+				t.Fatalf("a revival naming %s = %v, %v, want refused", name, ok, err)
+			}
 		}
-	}
-	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true}); err == nil || ok {
-		t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
-	}
-	revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true}
-	revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
-	if err != nil || !ok {
-		t.Fatalf("ReviveAnswer = %v, %v", ok, err)
-	}
-	got := mustGet(t, s, "t1")
-	if got.Status != sandbox.StatusAnswered || got.Owner != "next" || got.OwnerEpoch != 2 {
-		t.Fatalf("run %q owned by %q at %d, want it answered again under the reviving lease",
-			got.Status, got.Owner, got.OwnerEpoch)
-	}
-	if a := got.Answer; a == nil || !bytes.Equal(a.Sealed, sealOf("use main")) || a.Taken() || a.LostClaims != 1 ||
-		a.FirstLostAt.IsZero() {
-		t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted", a)
-	}
-	if revived.Status != got.Status || revived.OwnerEpoch != got.OwnerEpoch ||
-		revived.Answer == nil || revived.Answer.LostClaims != 1 {
-		t.Fatalf("ReviveAnswer reported %q at %d with %+v, want the row as written",
-			revived.Status, revived.OwnerEpoch, revived.Answer)
-	}
-	if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
-		t.Fatalf("a second revival of the same claim = %v, %v, want refused: it is no longer a claim", ok, err)
-	}
-	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
-		t.Fatalf("a take under the dead claim = %v, %v, want refused: the answer is the run's again", ok, err)
-	}
+		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true}); err == nil || ok {
+			t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
+		}
+		revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true}
+		lost := time.Now().UTC()
+		revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
+		if err != nil || !ok {
+			t.Fatalf("ReviveAnswer = %v, %v", ok, err)
+		}
+		got := mustGet(t, s, "t1")
+		if got.Status != sandbox.StatusAnswered || got.Owner != "next" || got.OwnerEpoch != 2 {
+			t.Fatalf("run %q owned by %q at %d, want it answered again under the reviving lease",
+				got.Status, got.Owner, got.OwnerEpoch)
+		}
+		if a := got.Answer; a == nil || !bytes.Equal(a.Sealed, sealOf("use main")) || a.Taken() || a.LostClaims != 1 ||
+			!a.FirstLostAt.Equal(lost) {
+			t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted at %s", a, lost)
+		}
+		if revived.Status != got.Status || revived.OwnerEpoch != got.OwnerEpoch ||
+			revived.Answer == nil || revived.Answer.LostClaims != 1 {
+			t.Fatalf("ReviveAnswer reported %q at %d with %+v, want the row as written",
+				revived.Status, revived.OwnerEpoch, revived.Answer)
+		}
+		if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+			t.Fatalf("a second revival of the same claim = %v, %v, want refused: it is no longer a claim", ok, err)
+		}
+		if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+			t.Fatalf("a take under the dead claim = %v, %v, want refused: the answer is the run's again", ok, err)
+		}
 
-	// THE NEXT CLAIM DYING TOO is counted on the same answer, from the same
-	// first instant: what the count bounds is a series no one node sees.
-	first := got.Answer.FirstLostAt
-	later := sandbox.Fence{Owner: "later", Epoch: 3}
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), next); err != nil || !ok {
-		t.Fatalf("the revived run's claim = %v, %v", ok, err)
-	}
-	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
-		Fence: later, Lost: true}); err != nil || !ok {
-		t.Fatalf("the second revival = %v, %v", ok, err)
-	}
-	if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(first) {
-		t.Fatalf("answer lost %d claims since %v, want 2 since %v", a.LostClaims, a.FirstLostAt, first)
-	}
+		// THE NEXT CLAIM DYING TOO is counted on the same answer, from the same
+		// first instant: what the count bounds is a series no one node sees.
+		time.Sleep(time.Second)
+		later := sandbox.Fence{Owner: "later", Epoch: 3}
+		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), next); err != nil || !ok {
+			t.Fatalf("the revived run's claim = %v, %v", ok, err)
+		}
+		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
+			Fence: later, Lost: true}); err != nil || !ok {
+			t.Fatalf("the second revival = %v, %v", ok, err)
+		}
+		if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(lost) {
+			t.Fatalf("answer lost %d claims since %v, want 2 since %v", a.LostClaims, a.FirstLostAt, lost)
+		}
 
-	// NOT UNDER AN OUTRANKED LEASE: a holder that lost the seat revives
-	// nothing its successor holds.
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), later); err != nil || !ok {
-		t.Fatalf("the third claim = %v, %v", ok, err)
-	}
-	if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
-		t.Fatalf("a revival under an outranked lease = %v, %v, want refused", ok, err)
-	}
-	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || got.Answer.LostClaims != 2 {
-		t.Fatalf("run %q with %d lost claims, want the claim left as it was", got.Status, got.Answer.LostClaims)
-	}
+		// NOT UNDER AN OUTRANKED LEASE: a holder that lost the seat revives
+		// nothing its successor holds.
+		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), later); err != nil || !ok {
+			t.Fatalf("the third claim = %v, %v", ok, err)
+		}
+		if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+			t.Fatalf("a revival under an outranked lease = %v, %v, want refused", ok, err)
+		}
+		if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || got.Answer.LostClaims != 2 {
+			t.Fatalf("run %q with %d lost claims, want the claim left as it was", got.Status, got.Answer.LostClaims)
+		}
+	})
 }
 
 // AN ANSWER IS RECORDED ONLY UNDER THE SEAT'S LEASE. A row a newer lease owns

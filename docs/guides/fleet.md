@@ -61,9 +61,10 @@ all at an external cluster with `stream.type: nats` and `stream.url` — one
 whose servers all set `max_payload: 8MB`, since an event or a node's answer to
 another may be that large (a company's files cross in messages of 128 KiB,
 which any server carries); a
-server at nats-server's 1 MiB default is refused at connect, by name, and so
-is one that authenticates nobody, since every node must present a credential
-it checks ([An external NATS
+server at nats-server's 1 MiB default is refused at connect, by name, so is
+one whose `jetstream { limits { duplicate_window } }` is below the dead
+letters' 15 minutes, and so is one that authenticates nobody, since every
+node must present a credential it checks ([An external NATS
 server](deployment.md#an-external-nats-server)). It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
@@ -356,7 +357,7 @@ node:
 | `gitlet` | Serves the company's git repositories, where the company sets [`code.backend: gitlet`](../concepts/gitlet.md): a disposable [cache](../concepts/gitlet.md#the-cache-on-a-gitlet-node) of them on this node's disk, sized by its Tier A [`gitlet` block](../concepts/configuration.md#gitlet), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
-| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the sandbox waiter, the integration reconcile loop, the atlas collect duty, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
 `data` decides **which state logs it applies**: a data node applies all eleven

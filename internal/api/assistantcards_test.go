@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -17,8 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -75,6 +80,7 @@ func TestEveryReadCardReadsItsRoutesOwnAnswer(t *testing.T) {
 				continue
 			}
 			maps.Copy(args, argsFor[tool.Name])
+			maps.Copy(args, argsFor[name])
 			answer := askAsAdmin(t, fx, tool.Name, name, args)
 			if answer == nil {
 				continue
@@ -137,11 +143,30 @@ func askAsAdmin(t *testing.T, fx *assistApp, tool, name string, args map[string]
 	return answer
 }
 
-// argsFor are the arguments a tool is asked with beyond its examples: the seat
-// this fixture's live state knows, where the example names one it does not.
+// argsFor are the arguments a tool is asked with beyond its examples, by tool
+// and by card variant: the seat this fixture's live state knows, where the
+// example names one it does not, and the atlas entries its settings declare.
 var argsFor = map[string]map[string]any{
 	"get_agent": {"handle": "ceo"},
+	// THE ATLAS ENTRIES the filled company's settings declare, by the id
+	// each one's kind and key derive: the search finds the model by a word
+	// of its key, the entry read is the model, and the trace walks from the
+	// zone up to the host name in it, and from the host name down to the
+	// zone.
+	"search_atlas":           {"q": "zulu"},
+	"get_atlas_entry":        {"entry": atlasEntryID(atlas.KindModel, atlas.ModelLLMPrefix+"/zulu")},
+	"trace_atlas_entry/up":   {"entry": atlasEntryID(atlas.KindDomain, config.CloudflareZoneKey(atlasZone))},
+	"trace_atlas_entry/down": {"entry": atlasEntryID(atlas.KindHostname, atlasHostName)},
 }
+
+// The zone the filled company declares at Cloudflare, and the host name in it
+// the deployment answers at.
+const (
+	atlasZone     = "example.com"
+	atlasHostName = "crewlet.example.com"
+)
+
+func atlasEntryID(k atlas.Kind, key string) string { return atlas.MustRef(k, key).ID().String() }
 
 // heldElsewhere are the card variants another suite holds to their route's
 // answer, because this App does not stand their surface up.
@@ -253,6 +278,17 @@ func filledWorld(t *testing.T) cardsWorld {
 		Chart: authz.NoChart{}, Marks: estate, Roster: estate,
 		Limits: func() artifacts.Limits { return artifacts.Limits{CompanyBytes: 1, Artifacts: 1} }},
 		Reads: estate}
+	// THE ATLAS over the same settings, every record source it reads
+	// answering: the Mattermost integration's state and the alarms.
+	atlasCompany, err := config.ParseCompany([]byte(cardsCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// A ZONE AND A HOST NAME IN IT, so a trace reaches something.
+	atlasCompany.Integrations.Cloudflare = &config.Cloudflare{Enabled: true,
+		Provisioning: &config.CloudflareProvisioning{AccountID: "0123456789abcdef0123456789abcdef",
+			Zones: []string{atlasZone}}}
+	s.Atlas = atlasDepsOf(atlasCompany, s.Reconciles)
 	status := filled[coord.NodeStatus]()
 	if _, _, err := s.Coord.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a/1", TTL: time.Hour,
@@ -261,6 +297,38 @@ func filledWorld(t *testing.T) cardsWorld {
 	}
 	return cardsWorld{paritySources: s, building: building}
 }
+
+// atlasDepsOf is an atlas over company's settings, the deployment answering at
+// the filled host name, and the record sources a fixture has: its reconcile
+// states where it keeps any, and alarms the fleet has evaluated.
+func atlasDepsOf(company *config.Company, reconciles func(context.Context) []integration.State) *builtin.AtlasDeps {
+	return &builtin.AtlasDeps{
+		Settings: func(context.Context) (builtin.AtlasSettings, bool) {
+			return builtin.AtlasSettings{Company: company, Revision: "r1",
+				Deployment: derive.Deployment{APIAddress: "https://" + atlasHostName}}, true
+		},
+		Records: func(context.Context) gather.Sources {
+			sources := gather.Sources{Alarms: filledAlarms{}}
+			if reconciles != nil {
+				sources.Integrations = reconciledStates(reconciles)
+			}
+			return sources
+		},
+	}
+}
+
+// reconciledStates is the fixture's reconcile states as the atlas reads them.
+type reconciledStates func(context.Context) []integration.State
+
+func (r reconciledStates) LoadIntegrations(ctx context.Context) ([]integration.State, error) {
+	return r(ctx), nil
+}
+
+// filledAlarms is an alarm record the fleet has evaluated, holding none.
+type filledAlarms struct{}
+
+func (filledAlarms) LatestAlarms() []statelog.Alarm { return []statelog.Alarm{} }
+func (filledAlarms) AlarmsEvaluated() bool          { return true }
 
 // filled is assistanttest.Filled on this suite's clock.
 func filled[T any]() T { return assistanttest.Filled[T](clock) }

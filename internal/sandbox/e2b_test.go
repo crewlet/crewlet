@@ -248,7 +248,7 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
 				}
-				time.Sleep(s.streamDelay)
+				time.Sleep(s.streamDelay) //fixedwait:simulated a command that takes real time, its frames streamDelay apart
 			}
 			_, _ = w.Write(connectFrame(0, frame))
 		}
@@ -378,7 +378,7 @@ func (s *e2bStub) hold(path string, content []byte) {
 	s.mu.Lock()
 	s.files[path] = slices.Clone(content)
 	s.mu.Unlock()
-	time.Sleep(uploadGap)
+	time.Sleep(uploadGap) //fixedwait:simulated the network an upload's body crosses while envd writes it in place
 }
 
 // serveFilesystem answers envd's filesystem Move and Remove as Connect unary
@@ -1318,7 +1318,7 @@ func TestE2BAWriteItsCallerGaveUpOnLeavesNothingStaged(t *testing.T) {
 	var staged string
 	select {
 	case staged = <-halfWritten:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the upload never reached envd")
 	}
 	cancel()

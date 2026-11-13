@@ -36,10 +36,12 @@
 
 import {
   ASSISTANT_ACTION_CONTEXT_INVALIDATE,
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
   type AssistantActionEvent,
   type AssistantActionReport,
   type AssistantPageContext,
 } from "~/contract/assistant.ts";
+import { clipUtf8 } from "~/lib/clip.ts";
 import { call, versioned } from "~/protocol/assistant.ts";
 import { newActOpID } from "~/protocol/act.ts";
 import { RestError } from "~/protocol/rest.ts";
@@ -103,6 +105,19 @@ function sendReport(
   opKey: string,
 ): Promise<unknown> {
   return call("PUT /assistant/actions/{id}", body, { id: actionId, opKey });
+}
+
+/**
+ * A reason or a receipt as the report carries it: within the engine's one
+ * short line ([ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES]), cut at a whole
+ * character and marked where it is longer. The engine REFUSES a longer one,
+ * and a refused report is one nobody hears: the page has drawn its outcome
+ * already, so the turn waits on the action until its expiry and the model
+ * never learns why the screen refused it. The screen's whole sentence is what
+ * this tab draws; only the report is cut.
+ */
+function reportLine(text: string): string {
+  return clipUtf8(text, ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES);
 }
 
 /** Whether a report's failure is one a second copy may get past: no answer, or the engine unavailable. */
@@ -249,8 +264,8 @@ export async function takeAction(
       ...versioned,
       state: result.outcome,
       revision: result.revision,
-      ...(result.reason === undefined ? {} : { reason: result.reason }),
-      ...(result.receipt === undefined ? {} : { receipt: result.receipt }),
+      ...(result.reason === undefined ? {} : { reason: reportLine(result.reason) }),
+      ...(result.receipt === undefined ? {} : { receipt: reportLine(result.receipt) }),
       ...(screen === null ? {} : { page_context: screen }),
     },
     report,

@@ -93,6 +93,7 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		Reach:            InProcess,
 		BucketPrefix:     fmt.Sprintf("p%d", bucketSeq.Add(1)),
 		MaxRateWindow:    ttl,
 		MaxClaimTTL:      ttl,

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the seat access ledger -------------------------------------------- //
@@ -28,6 +30,9 @@ func (f *Fleet) SeatAccessRecords(_ context.Context, kind string) (map[string][]
 func (f *Fleet) PutSeatAccessRecord(_ context.Context, kind, handle string, value []byte) error {
 	if kind == "" || handle == "" {
 		return errors.New("coord/memory: a seat access record needs its integration and its seat")
+	}
+	if err := coord.HoldValue("the "+kind+" access record of "+handle, len(value)); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

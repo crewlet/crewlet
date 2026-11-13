@@ -250,18 +250,125 @@ the mailbox attaches**, and a hydration that fails refuses the seat — a peer
 that can hydrate should take it instead, and a seat serving with amnesia
 produces work its own history contradicts.
 
-**The replay reads to where the changelog's leader says the seat's rows end.**
-On a fleet the changelog is replicated, and the replay is a consumer the server
-places on any member of the stream, delivering out of that member's copy — and
-a follower applies a row a moment after the leader acknowledged it. A replay
+**The replay is a table at a time, in a fixed order.** The changelog keeps no
+order across subjects, and a seat's tables are not independent of each other: a
+skill's versions reference the skill, and the store enforces the reference.
+Every publish sends a seat's skills again, whole, and each version once, so
+from a seat's second publish on the changelog holds a skill's only copy after
+the versions published before it. One replay of the seat in the changelog's own
+order wrote those versions first, and a store that did not already hold the
+skill (a node that never held the seat, a `[seats]` satellite at every boot, a
+node that lost its store) refused them and the seat with them
+([#1051](https://github.com/crewlet/crewlet/issues/1051)). So each table is
+replayed on its own, the skills before their versions, and every skill the
+changelog holds is in the store before the first version is written. A version
+whose skill is still not in the store is left out rather than refusing the
+seat: nothing reads a version without its skill, and refused, the seat could be
+placed on no node whose store lacked the skill. Its skill is missing for one of
+two reasons. The changelog does not hold it at all: the skill was written after
+a publish read the seat's skills and refined before that publish read their
+versions, and its node stopped holding the seat, through a crash or a cut
+flush, before another publish carried the skill. Or the store skipped it,
+because it already held another skill of the seat's under the same name: a
+skill deleted by hand and synthesized again under a new id leaves both on the
+changelog.
+
+**Each table's replay reads to a barrier the hydration publishes.** On a fleet
+the changelog is replicated, and a replay is a consumer the server places on
+any member of the stream, delivering out of that member's copy — and a
+follower applies a row a moment after the leader acknowledged it. A replay
 hosted on a follower that was behind counted what its copy held, delivered it
 and reported success, short of the rows the seat's previous owner published
-last, among them what its release flushed. So the node first asks
-the leader for the sequence of the seat's newest row, and the hydration is not
-done until the replay has delivered a row at or past it. A copy that is behind
-hands over the rest as it applies them; one that has not within the
+last, among them what its release flushed. So before the first table the node
+publishes a **barrier**, a message of no bytes on the seat's own subject
+(`crewlet.memory.SEAT-ID.hydration-barrier`), and keeps the sequence the
+changelog acknowledged it at: the stream's leader numbers messages in the
+order it acknowledges them, so every row the changelog had acknowledged before
+lies below that sequence. Each table's replay reads the table's subjects and
+the barrier's through one consumer, which delivers in the stream's order, so
+its copy hands over the table's rows and then the barrier, once it has applied
+that far, and the replay is done when it has received a barrier at or past
+that sequence and its copy holds nothing more. At or past, because two nodes
+can hydrate one seat at once while it moves: each publishes a barrier, the
+stream keeps one message per subject, so the later replaces the earlier, and
+both hydrations end at it. A seat therefore has one barrier on the changelog
+however often it has been hydrated. Rows published after the barrier, by a
+flush still landing, are read too while their table's replay is still
+running and its copy has counted them; one that lands after its table's
+replay has ended stays on the changelog for the seat's next hydration. A
+barrier an earlier hydration left, on a copy that has not applied this one's,
+is passed over. A copy that has not applied the barrier within the
 hydration's fifteen seconds fails the hydration, which refuses the seat rather
 than admitting it without its newest memory.
+
+The barrier lies past the **whole** changelog as its leader held it, every
+seat's rows and not only this one's, so a replay waits for its copy to apply
+all of it, even where the copy already holds every row of the table. A member
+that is still catching its copy up after a restart is given about a third of
+the replays on a three-member fleet (the server prefers members caught up in
+the cluster's metadata, whatever their copy of the stream), and a hydration's
+six replays meet it nine times in ten: until that member has caught up, most
+hydrations wait for it, and one whose fifteen seconds run out first refuses
+the seat until the next sweep.
+
+**A hydration writes.** The barrier is the one write a hydration makes, before
+it reads a row, so a broker that refuses this node's writes refuses its
+hydrations too, as it already refuses the seat's mailbox and its memory's
+publishes. An account or a server at its storage limit refuses the publish,
+and the hydration's error carries the broker's refusal. A user without publish
+permission on the memory subjects (`crewlet.memory.>`) is not answered at all:
+the broker sends the connection a permissions error instead (logged as
+`jetstream_client_error`), and the hydration, refused when its fifteen seconds
+run out, names that error. The barrier takes no row's place: the changelog has
+no age, size or message-count limit, so the only message it drops is the one a
+newer message on the same subject replaces, and the barrier's subject is no
+row's.
+
+Nothing a hydration asks is answered with a row except its pulls: the barrier
+carries no bytes, and a replay's count comes back in the reply that creates
+its consumer. The other way to find where a table ends is to read the stream's
+leader, and its answer to a read of a row is the row itself, whole and a third
+larger. On a `[seats]` satellite that answer crosses the leaf link, which the
+satellite's broker holds to its 8 MiB `max_payload`, and a row of some 6 MiB or
+more in it closes the link, the satellite's lease renewals with it
+([#1031](https://github.com/crewlet/crewlet/issues/1031)). A consumer answers
+for the leader only when the server has placed it on the leader's own server:
+the server places a consumer on whichever member it chooses, and its count is
+that member's copy's. A read has to check that, and make the consumer again
+until it lands there, each attempt a metadata proposal. The barrier needs
+neither. A barrier whose publish a member drops, as one that still believes it
+leads after an election does, is published again two seconds later, as a read
+the leader did not answer is asked again; published twice, it is one barrier,
+the later.
+
+The fifteen seconds are the whole hydration's. Two round trips read the
+changelog's identity, before the barrier and after the last table, and one
+publishes the barrier; each of the six tables costs three for its replay's
+consumer (made, with its count in the reply, fetched from, and deleted); and
+counting the seat's rows of the retired table costs two more. That is 23 round
+trips for any seat, with rows or without: across a leaf link to another region,
+at 100 ms a round trip, about 2.3 seconds before the rows' own bytes, so a seat
+whose rows take longer than the other 12.7 to cross such a link is refused
+there; at 5 ms a round trip they cost 115 ms, and at 1 ms, 23 ms.
+
+**A replay holds one pull of rows at a time, bounded in messages and in
+bytes.** A pull asks for at most 256 messages, which sets how many round trips
+a table's rows take, and for at most one message at the broker's limit (its
+`max_payload`, 8 MiB on the embedded broker) with room for the subjects the
+broker counts beside it, which is what a hydration holds of the changelog's
+rows at once, and all it holds of them. A memory row is bounded only by the
+broker (an episode keeps its ask whole), so a pull bounded by its rows alone
+held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
+([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a
+pull nothing past its bytes, so a pull bounded below its next row would be
+sent nothing on every attempt and the seat refused: a row at the broker's limit
+always fits one. The limit is read off the node's own connection rather than
+fixed at 8 MiB, because nothing else bounds a memory row: an external broker
+may carry more, and a row that large is published there. That is why an
+external broker's servers must all
+[carry the same limit](../guides/deployment.md#the-largest-message-every-server-must-carry):
+a node whose connection carries less than the row is refused the seat at
+every sweep, with an error that names its `max_payload` and that setting.
 
 The subject carries the seat's **id**, as its lease and its mailbox do.
 
@@ -279,16 +386,20 @@ carrying: their rows are the replicated estate's, the same on every data node,
 and their bytes the fleet's object store's
 ([Conversation Sessions](conversation-sessions.md#where-a-session-lives)).
 
-A row of a table this build does not carry is skipped, never refused, and the
-hydration says so in one line (`memory_rows_not_carried`), with the rows it
-skipped counted per table. A table a newer build carries is left on the
-changelog for that build. A table this build has **retired** (one it carried
+A hydration reads only the tables this build knows. A table only a newer
+build carries is never read, never refused, and its rows stay on the changelog
+for that build. A table this build has **retired** (one it carried
 before, such as `conversation_sessions`, whose sessions now live in the
-executor log) has nobody left to republish or replace its rows. So the first
-hydration that meets them purges the seat's subjects of that table from the
-changelog, once and for every node. The next hydration, on any node, meets none
-and says nothing. A purge that fails is said (`memory_retired_rows_not_purged`)
-and is tried again by the next hydration. During a rolling upgrade, a node
+executor log) has nobody left to republish or replace its rows. So every
+hydration counts the seat's rows of that table on the changelog, with a
+consumer that delivers none of them, and the first that finds any purges the
+seat's subjects of that table from the changelog, once and for every node; the
+next hydration, on any node, finds none. What a hydration did not carry it says
+in one line (`memory_rows_not_carried`): the retired tables it found rows of,
+with `purged=false` where a purge failed, and the rows it left out for want of
+a parent, counted per table. A count or a purge that fails is said
+(`memory_retired_rows_not_purged`) and is tried again by the next hydration.
+During a rolling upgrade, a node
 still on a build that carried the table may publish its rows again, and the
 next hydration on an upgraded node purges them again. That is harmless, since
 the table's content lives elsewhere now, and it ends with the upgrade.
@@ -411,9 +522,16 @@ while this node holds the seat
 moves, an older copy of its profiles, skills or onboarding marker can land
 after the newer one and replace it: published by the releasing node's own
 sync, from a cycle it began before the release, or by the next holder while it
-is still taking the seat ([#511](https://github.com/crewlet/crewlet/issues/511)). A
-release whose flush runs out or fails says so, `seat_memory_not_flushed`, at
-warning. A row lost so stays in its node's store alone, which a node without
+is still taking the seat ([#511](https://github.com/crewlet/crewlet/issues/511)).
+A publish of the seat landing in that window while the next holder hydrates it
+can also move a row the hydration has not read yet past its barrier, and slip
+by the count its replay ends on, which the broker moves for the replaced row
+at once and for its replacement a moment later: the hydration then carries
+neither copy of the row, which stays on the changelog for the seat's next
+hydration. The same race can leave that count one row high, and the
+hydration then waits out its fifteen seconds and refuses the seat until the
+next sweep. A release whose flush runs out or fails says so,
+`seat_memory_not_flushed`, at warning. A row lost so stays in its node's store alone, which a node without
 `data` deletes at its next boot: a diary note, an episode or a skill version
 reaches the changelog only if that node holds the seat again, and a change to
 a profile, a skill or the onboarding marker is overwritten with the
@@ -660,7 +778,7 @@ agent here?", and a miss means "not on this node", never "does not exist".
 
 Some work belongs to the company rather than to a seat. Running it on every node is not merely wasteful, it races — N reapers deciding independently to expire the same paused sandbox, N clustering passes writing N sets of near-identical auto-drafted skills.
 
-Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so there is no handoff protocol: a node that stops gracefully gives every duty back once its duty loops have finished their last tick (`duty_released`), and a peer takes it on its next tick; a node that dies releases it by lapsing, and a peer takes it on the first tick after the lease runs out. A duty's TTL is sized from its own work rather than from the seat heartbeat (most outlive three of their own ticks, so one slow claim never moves them, and the integration reconcile's outlives one whole pass), which makes it anything from 30 seconds to three hours, and duty leases live in a [bucket of their own](coordination.md#the-lease-ttl-bounds-seats-and-presence-only) for that reason: the seat lease TTL does not bound them. There are ten:
+Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so there is no handoff protocol: a node that stops gracefully gives every duty back once its duty loops have finished their last tick (`duty_released`), and a peer takes it on its next tick; a node that dies releases it by lapsing, and a peer takes it on the first tick after the lease runs out. A duty's TTL is sized from its own work rather than from the seat heartbeat (most outlive three of their own ticks, so one slow claim never moves them, and the integration reconcile's outlives one whole pass), which makes it anything from 30 seconds to three hours, and duty leases live in a [bucket of their own](coordination.md#the-lease-ttl-bounds-seats-and-presence-only) for that reason: the seat lease TTL does not bound them. There are eleven:
 
 | Duty | What it does | Why once |
 |---|---|---|
@@ -668,6 +786,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `learning` | All four learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, episode compaction, and cross-agent promotion | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all four because they run on one loop |
 | `integration-reconcile` | Runs every connected third-party app's [reconcile pass](integration-reconcile.md) on its own cadence | N nodes would each sweep every surface on every tick. What stops two writers at one third-party app is a different lease, `worker:setup-provision-<kind>`, which every writer at a surface holds around one pass and gives back when it ends, so it is mutual exclusion rather than a duty; this one keeps the sweep itself on one node |
+| `atlas-collect` | Reads each connected integration's vendor whole for the [atlas](atlas.md#what-integrations-read), on the company's `atlas.refresh_interval_seconds` (hourly by default, never under five minutes), and records on the atlas log only what changed since the log's last word in that integration's voice: a new or changed entry, a withdrawn fact, and the retirement of an entry two complete reads at least a day apart both missed. A read that failed or was cut short records and retires nothing. Each source's standing (its last complete read, that read's digest, its calls and withheld values, the entries it has stopped seeing) is kept in the coordination store | Two readers would spend a vendor's rate limit twice for one answer, and each would diff the same read against the log and publish the same records, which the log would take once and the standings would count twice |
 | `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask nothing will answer any more — a channel whose seat still owes its answer, on an executor's record or in an inbox held by its executor, a pause or a spent budget window, is [spared](event-system.md#ephemeral-a2a-channels-internala2a) — and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat), its executor and its executor sessions once the seat has been absent for 24 hours, and the forgetting of a removed human seat's [chat read state](#the-removed-seat) after the same 24 hours. And the coordination store's [removal markers](coordination.md#removal-markers-are-swept), from every shared-state bucket with no age, once they are three hours old — each purged through its own revision, so a key written again since is untouched. The channel and mailbox records, the chat read state and the markers are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every data node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |

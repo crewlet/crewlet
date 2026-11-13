@@ -131,6 +131,13 @@ export const PAGE_LABELS_MAX = 32;
 export const PAGE_LABEL_MAX_BYTES = 64;
 
 /**
+ * The most pages one listing answers (`internal/doclet`' `MaxLimit`): a larger
+ * ask is clamped to it. A tree level or a container is read in windows this
+ * wide. Held by the same gate.
+ */
+export const PAGE_LIST_MAX = 500;
+
+/**
  * The orders a `pages` listing is read in — `internal/doclet`' `ListOrders`:
  * `title`, the knowledge base's own (by space, title and id, the order every
  * tree is drawn in), and `newest`, by when each page last changed, which the

@@ -101,7 +101,7 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
     {
       id: "read",
       name: "Read",
-      note: "Reads zones, zone settings, DNS, cache rules, firewall and WAF rules, IP lists, SSL and analytics.",
+      note: "Reads zones, zone settings, DNS, cache rules, transform rules, firewall and WAF rules, IP lists, SSL and analytics.",
     },
     {
       id: "operate",
@@ -111,7 +111,7 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
     {
       id: "configure",
       name: "Configure",
-      note: "Everything Operate does, plus editing compression rules and every zone setting, the SSL mode and security level included.",
+      note: "Everything Operate does, plus editing transform rules, compression rules and every zone setting, the SSL mode and security level included.",
     },
     {
       id: "secure",

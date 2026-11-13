@@ -75,6 +75,13 @@
 //
 // ssh_read and ssh_operate reach a seat's servers for the company alone, and
 // ssh_operate only once a person approved that one call (ADR-0107, ssh.go).
+//
+// # What an agent records in the atlas
+//
+// atlas_record and atlas_dispute are an agent seat's alone, and each is held
+// to a tool call of the same turn: the engine reads the cited call's answer
+// itself, derives the record's confidence from the cited tool, and lets an
+// agent remove nothing and decide no meaning (ADR-0132, atlasrecord.go).
 package builtin
 
 import (

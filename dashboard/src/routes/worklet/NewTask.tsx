@@ -96,7 +96,7 @@ import { handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
 import { projectOptions, startingProject } from "~/lib/startingProject.ts";
 import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib/work.ts";
 import { humanize, textBudget } from "~/lib/format.ts";
-import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
+import { PROJECT_PAGE, TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import type { WorkProjectDetail } from "~/protocol/index.ts";
 
 /** How many seats the assignee field offers at once. */
@@ -241,7 +241,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   const index = useMemo(() => indexOrg(org), [org]);
   const write = useAct("create_work_item");
 
-  const projects = useQuery("work_projects", { limit: 200 }, { pollMs: 120_000 });
+  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
   const rows = useMemo(() => projects.data?.projects ?? [], [projects.data]);
 
   const [draft, setDraft] = useState<NewTaskDraft>(() => ({

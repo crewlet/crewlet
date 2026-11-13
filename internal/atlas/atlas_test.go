@@ -292,8 +292,8 @@ func TestNoConfidenceIsChosenByTheCaller(t *testing.T) {
 }
 
 // AN AGENT NEVER DECIDES WHAT A THING MEANS: it sets no purpose, environment
-// or importance and names no owner, and only a person says two entries are
-// not the same or denies anything.
+// or importance, names no owner and no dependency, and only a person says two
+// entries are not the same or denies anything.
 func TestAnAgentNeverSetsMeaning(t *testing.T) {
 	t.Parallel()
 	agent := atlas.AgentSource("sre", "t1", atlas.EvidenceCall)
@@ -309,6 +309,9 @@ func TestAnAgentNeverSetsMeaning(t *testing.T) {
 		t.Error("an agent set an owner")
 	}
 	other := atlas.MustRef(atlas.KindService, "billing-api")
+	if _, err := atlas.Relates(svc, atlas.RelationDependsOn, other, agent, now); err == nil {
+		t.Error("an agent set what depends on what")
+	}
 	if _, err := atlas.Distinct(svc, other, agent, now); err == nil {
 		t.Error("an agent said two entries are not the same")
 	}
@@ -379,5 +382,78 @@ func TestAnEntryTheEngineNamesIsDeclaredWhereItIsNamed(t *testing.T) {
 		if named != (want != "") || named && src.Kind != want {
 			t.Errorf("%s is named by the engine %v, from %s; want %q", ref, named, src.Kind, want)
 		}
+	}
+}
+
+// A CERTIFICATE IS KEYED BY ITS VENDOR'S OWN IDENTIFIER, so two sources that
+// meet the same certificate at one vendor name one entry, and a key that
+// names no vendor, or a vendor the engine does not know, is refused.
+func TestACertificateIsKeyedByItsVendorsIdentifier(t *testing.T) {
+	t.Parallel()
+	r, err := atlas.NewRef(atlas.KindCertificate, "cloudflare/3822ff90-ea29-44df-9e55-21300bb9419b")
+	if err != nil || r.Key != "cloudflare/3822ff90-ea29-44df-9e55-21300bb9419b" {
+		t.Fatalf("a certificate under its vendor: %v, %v", r, err)
+	}
+	for _, key := range []string{"3822ff90-ea29-44df-9e55-21300bb9419b", "nobody/3822ff90", "cloudflare/", "cloudflare"} {
+		if _, err := atlas.NewRef(atlas.KindCertificate, key); !errors.Is(err, atlas.ErrInvalid) {
+			t.Errorf("certificate key %q: %v, want ErrInvalid", key, err)
+		}
+	}
+}
+
+// A SERVER KNOWN BY ITS ADDRESS ALONE IS KEYED BY THAT ADDRESS IN ITS CANONICAL
+// FORM, so two spellings of one address name one server, and a private one
+// is marked as its key.
+func TestAServerKnownByItsAddressIsKeyedCanonically(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"203.0.113.10": "addr/203.0.113.10", "2001:DB8::1": "addr/2001:db8::1", "::ffff:9.9.9.9": "addr/9.9.9.9",
+	} {
+		got, err := atlas.AddressHostKey(raw)
+		if err != nil || got != want {
+			t.Errorf("AddressHostKey(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	if _, err := atlas.AddressHostKey("web-1.acme.example"); !errors.Is(err, atlas.ErrInvalid) {
+		t.Errorf("a name is not an address: %v", err)
+	}
+	private := atlas.MustRef(atlas.KindHost, "addr/10.0.0.5")
+	if !private.Private() || atlas.MustRef(atlas.KindHost, "addr/9.9.9.9").Private() {
+		t.Error("a server's address key is private exactly where the address is")
+	}
+}
+
+// AN INTEGRATION DENIES ONLY THE ENTRY ITSELF: its read retires an entry it
+// stopped seeing, and withdraws rather than denies a fact or a relation. An
+// agent denies nothing.
+func TestAnIntegrationDeniesOnlyTheEntryItself(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	host := atlas.MustRef(atlas.KindHostname, "api.acme.example")
+	cloudflare := atlas.IntegrationSource("cloudflare")
+	exists := m(atlas.Exists(host, cloudflare, now))
+	retired := exists
+	retired.Denied = true
+	if err := retired.Validate(); err != nil {
+		t.Errorf("an integration's retirement of an entry: %v", err)
+	}
+	url := m(atlas.Says(host, atlas.FactURL, "https://api.acme.example", cloudflare, now))
+	url.Denied = true
+	if err := url.Validate(); err == nil {
+		t.Error("an integration denied a fact, which it withdraws instead")
+	}
+	zone := m(atlas.Relates(host, atlas.RelationInZone, atlas.MustRef(atlas.KindDomain, "acme.example"), cloudflare, now))
+	zone.Denied = true
+	if err := zone.Validate(); err == nil {
+		t.Error("an integration denied a relation, which it withdraws instead")
+	}
+	// AN AGENT'S DENIAL IS A DISPUTE: a claim it may make, which the fold
+	// never lets win (TestAnAgentsDisputeNeverWins).
+	agent := atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall)
+	if _, err := atlas.Dispute(exists, agent, now); err != nil {
+		t.Errorf("an agent's dispute of an entry: %v", err)
+	}
+	if _, err := atlas.Dispute(exists, cloudflare, now); err == nil {
+		t.Error("an integration disputed an entry")
 	}
 }

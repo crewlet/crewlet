@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -443,6 +444,66 @@ func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
 	}
 	if want := strconv.Itoa(gitlet.MaxBlameLines); got != want {
 		t.Errorf("the dashboard's CODE_MAX_BLAME_LINES is %s, want the engine's gitlet.MaxBlameLines, %s", got, want)
+	}
+}
+
+// THE DASHBOARD READS A CHANGE'S CONVERSATION A PAGE OF THE ENGINE'S BOUND AT
+// A TIME: one page size for every part it lists (`CHANGE_PART_PAGE`,
+// `contract/code.ts`), which is the comments', reviews' and findings' (the
+// standing ones' too) own most and within the reviewers'. A page past a
+// part's bound is refused, and every page of that part with it; a smaller one
+// reads a long conversation in more round trips than it needs.
+//
+// Mutation: move CHANGE_PART_PAGE, or any one part's bound, and this fails.
+func TestTheDashboardReadsAChangesConversationAtTheEnginesPage(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "CHANGE_PART_PAGE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := strconv.Atoi(got)
+	if err != nil {
+		t.Fatalf("CHANGE_PART_PAGE is %q, no count of rows: %v", got, err)
+	}
+	for name, bound := range map[string]int{
+		"MaxCommentsPerPage": gitlet.MaxCommentsPerPage,
+		"MaxReviewsPerPage":  gitlet.MaxReviewsPerPage,
+		"MaxFindingsPerPage": gitlet.MaxFindingsPerPage,
+	} {
+		if page != bound {
+			t.Errorf("the dashboard reads a change's parts %d rows a page and the engine's "+
+				"%s is %d: change CHANGE_PART_PAGE in contract/code.ts", page, name, bound)
+		}
+	}
+	if page > gitlet.MaxReviewersPerPage {
+		t.Errorf("the dashboard reads %d reviewers a page, past the engine's %d", page,
+			gitlet.MaxReviewersPerPage)
+	}
+}
+
+// THE DASHBOARD NAMES AN OBJECT AS THE ENGINE'S REPOSITORIES DO: a commit's
+// page is addressed by a whole id of [gitref.OIDHexLen] digits and git's null
+// id is that many zeros, and a row prints the fewest digits the engine takes
+// back ([gitlet.MinAbbrevDigits]), so what a person copies out of a row is an id
+// a tool resolves. A width moved on one side alone is a commit page no address
+// reaches, or a printed id the engine refuses.
+//
+// Mutation: move either figure on either side and this fails.
+func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string]int{
+		"OBJECT_ID_HEX_DIGITS":        gitref.OIDHexLen,
+		"OBJECT_ID_MIN_ABBREV_DIGITS": gitlet.MinAbbrevDigits,
+	} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != strconv.Itoa(engine) {
+			t.Errorf("the dashboard's %s is %s and the engine's is %d: change it in "+
+				"contract/objectids.ts", name, got, engine)
+		}
 	}
 }
 

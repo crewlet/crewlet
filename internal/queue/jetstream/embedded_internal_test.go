@@ -13,6 +13,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, and telling the two apart is
@@ -192,6 +194,46 @@ func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 			"embedded member's listener budget (%v) would hold a reconnect on a "+
 			"partitioned member for that long",
 			applied.Timeout, externalHandshake, listenTimeout)
+	}
+}
+
+// AN EXTERNAL DIAL GIVES EVERY SOCKET WRITE THE CROSSING OF THE LARGEST ONE THE
+// CLIENT MAKES before it cuts the connection under it.
+//
+// The client writes a large message whole, in one socket Write under one
+// deadline, and a reconnect flushes what it buffered the same way. Left at the
+// client's minute, a write of more than about two mebibytes across a link at
+// the floor broke the connection — and everything riding it — long before the
+// write's own budget ended. So the deadline covers the largest Write the
+// client makes: one message at the contract's ceiling behind as much as either
+// of its buffers holds short of its limit, at the object store's floor —
+// worked out here off the options the dial applies, so a buffer a later change
+// sets larger raises what the deadline has to cover.
+//
+// Mutation: dial without FlusherTimeout, and the client's minute holds every
+// Write.
+func TestAnExternalDialGivesEveryWriteTheLargestWritesCrossing(t *testing.T) {
+	t.Parallel()
+	opts, _, err := dialOptions(Config{})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
+	}
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatalf("applying an option: %v", err)
+		}
+	}
+	buffered := applied.WriteBufferSize
+	if buffered <= 0 {
+		buffered = nats.DefaultWriteBufSize
+	}
+	largest := max(buffered, applied.ReconnectBufSize) + queue.MaxPayloadBytes
+	if crossing := jsapi.Sending(largest, objstore.MiBPace); applied.FlusherTimeout < crossing {
+		t.Errorf("an external dial's client cuts a socket Write after %v, and the largest it "+
+			"makes, %d bytes, takes %v to cross a link at the floor: a write the link was "+
+			"carrying at a pace the engine allows would break the connection",
+			applied.FlusherTimeout, largest, crossing)
 	}
 }
 

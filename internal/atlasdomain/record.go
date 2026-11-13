@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -19,7 +20,12 @@ import (
 //   - 1: the base format: a person's claim on an entry, the purge of an entry
 //     or of a value, an hour's expiry, the trim's trimmed record, and the
 //     framework's eviction, generation and barrier.
-const RecordVersion = 1
+//   - 2: an integration's read of one entry (`read`, ADR-0129): the claims it
+//     holds on the entry that changed, and the slots it withdraws.
+//   - 3: an agent's claim (ADR-0132): a `claim` whose source is an agent, by
+//     its seat, with the turn it was recorded in and the evidence the engine
+//     checked behind it.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -36,7 +42,15 @@ const GateRecordVersion = 1
 // fact, a relation) needs no row: the applier keeps every word as text and
 // judges none, so it lands as the same row on every build, and a reader that
 // does not know it yet skips the claim by name ([atlas.View.Skipped]).
-var versionedFields = statelog.RecordFields{}
+//
+// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW, for the access log's reason:
+// two builds of a rolling upgrade disagree about it all the same, and a build
+// without the row would fault on the record rather than retain it.
+var versionedFields = statelog.RecordFields{
+	{Name: "Op read", Since: 2, Path: []string{"op"}, Equals: string(OpRead)},
+	{Name: "Claim.Source agent", Since: 3, Op: string(OpClaim), Path: []string{"mutation", "source", "kind"},
+		Equals: string(atlas.SourceAgent)},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -47,8 +61,16 @@ type OpKind string
 // The ops an atlas record can carry.
 const (
 	// OpClaim records one claim on an entry: a fact, a relation, the entry
-	// itself, two entries joined or kept apart, or a denial of any of them.
+	// itself, two entries joined or kept apart, or a denial of any of them;
+	// a person's, or an agent's with the evidence of its turn.
 	OpClaim OpKind = "claim"
+
+	// OpRead records one integration's read of one entry (ADR-0129): the
+	// claims the read holds on it that are new or changed, and the slots of
+	// its own earlier claims it no longer holds, which are withdrawn. A read
+	// that stopped seeing the entry retires it: one denied exists claim, and
+	// every other slot withdrawn.
+	OpRead OpKind = "read"
 
 	// OpPurge erases an entry or a value everywhere, its history included,
 	// and marks it so nothing brings it back.
@@ -74,7 +96,7 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpClaim, OpPurge, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpClaim, OpRead, OpPurge, OpExpire, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

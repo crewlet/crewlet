@@ -281,7 +281,7 @@ func TestTwoAttemptsAtOneEndingOnANodeFinishItOnce(t *testing.T) {
 	go func() { stopped <- rig.fireRetries() }()
 	select {
 	case <-entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the stop's retry never reached the stopped turn's close")
 	}
 	// THE SECOND ATTEMPT, as the launch the stop refused makes it.

@@ -48,6 +48,15 @@ const (
 	// draft: what the assistant can and cannot do there, in a few sentences.
 	PageDraftHelpMaxRunes = 600
 
+	// PageDraftLabelMaxRunes is the longest label a draft field carries, in
+	// Unicode code points: a page title's bound, since a label names a field
+	// as a title names a page.
+	PageDraftLabelMaxRunes = PageTitleMaxRunes
+
+	// PageDraftHintMaxRunes is the longest hint a draft field carries: what
+	// a value must be, in a few words, or the values a choice takes.
+	PageDraftHintMaxRunes = 200
+
 	// AuditReasonMaxRunes is the longest reason an administrator gives for a
 	// compliance read of somebody else's conversation (D06).
 	AuditReasonMaxRunes = 500
@@ -540,13 +549,17 @@ const (
 	// room or a direct conversation. Not "channel", which is the frame's
 	// word for an A2A channel.
 	ResourceRoom ResourceKind = "room"
+	// ResourceAtlasEntry is one entry of the company's atlas (ADR-0126),
+	// named by the id its kind and key derive: the frame's `atlas` object,
+	// under the name the authority table knows it by.
+	ResourceAtlasEntry ResourceKind = "atlas_entry"
 )
 
-// ResourceKinds are the twelve, in declaration order.
+// ResourceKinds are the thirteen, in declaration order.
 var ResourceKinds = []ResourceKind{
 	ResourceTask, ResourceProject, ResourceSeat, ResourceUnit, ResourcePage,
 	ResourceContainer, ResourceArtifact, ResourceTurn, ResourceRun,
-	ResourceSchedule, ResourceView, ResourceRoom,
+	ResourceSchedule, ResourceView, ResourceRoom, ResourceAtlasEntry,
 }
 
 // Valid reports whether k is a kind this build knows.

@@ -16,13 +16,6 @@ import { doingWords, RUNNING_ROWS, workingLongestFirst } from "./seats.ts";
 import { WORKLET_ITEM_BACKEND } from "./work.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
-/**
- * `store.MaxTurnDays` — the read refuses to look further back than this, and
- * it is the event store's own retention, so it is also as far back as any
- * turn can be read at all.
- */
-export const MAX_TURN_DAYS = 30;
-
 /** A uuid, which is what a Worklet task's id is: 36 characters no row has room for. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

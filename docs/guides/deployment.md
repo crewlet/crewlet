@@ -1033,6 +1033,30 @@ limits of the account the engine signs in to and of its user — an account's
 account's or a user's JWT on an operator-mode deployment — so where either
 states one, raise it to 8 MiB or leave it unlimited too.
 
+**And no leaf node between the engine and the cluster that carries less than
+a leader's reply.** A node reads a state log's records and the dead letters
+with the stream leader's message read, whose reply carries the message
+base64-encoded in JSON: about 11.2 MB for a message at 8 MiB. A route between
+the cluster's servers and a server's delivery to its own client carry any size,
+so `stream.url` naming the cluster's own servers needs nothing more. A NATS
+leaf node standing between them is another matter: a leaf server holds every
+message its link carries to its own `max_payload` and closes the whole link on
+one larger, every lease and mailbox the node holds across it going with it.
+Dial the cluster's servers directly, or give such a leaf node a `max_payload`
+of at least 12 MB. The engine's own leaves — its nodes without `data` on an
+[embedded fleet](#every-node-embeds-a-member-of-one-cluster) — read a message that large raw instead,
+since their links are the engine's.
+
+**And the same limit on every node's connection.** A seat's memory rows are
+bounded by nothing but the limit of the connection that published them, and a
+node reads them in pulls no larger than its own connection's limit
+([A seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+So where one server, account or user carries more than another (16 MiB beside
+8 MiB, say), a memory row larger than the smaller limit is never sent to a node
+connected through it, and that node refuses the seat at every placement sweep,
+saying the next row is larger than a pull its connection carries and naming
+its `max_payload`.
+
 **A node refuses to start against a server that holds it to less.** A server
 below it would take every small write and refuse the first large one — a node
 that booted, reported itself healthy, served, and then refused a webhook
@@ -1086,6 +1110,47 @@ So a reload that lowers the limit either takes down every node whose next
 large message reaches it, until the limit is raised again, or leaves them
 running and refusing every large write. Neither is a broker that carries what
 they send, which is the reason not to lower it.
+
+**No duplicate-window limit below 15 minutes, on any server.** The engine's
+dead letters, `CREWLET_DLQ`, declare a duplicate window of 15 minutes: a dead
+letter is kept under an identity of its own, and the window is what makes a
+second keep of the same one store nothing — a node handed the record while
+another's keep of it was still crossing a slow link — for as long as the
+longest keep at the engine's slowest link takes. nats-server refuses a stream
+whose window is above its own `jetstream { limits { duplicate_window } }`, so
+a server that sets one below 15 minutes refuses the stream when the node
+first provisions it, and the boot fails. The server answers every invalid
+stream configuration with the same code, so the refusal names the window as
+the likely cause, beside the server's own words:
+
+```text
+engine: stream: ensure stream CREWLET_DLQ: nats: API error: code=500 err_code=10052 description=duplicates window can not be larger then server limit of 10m0s; CREWLET_DLQ declares a duplicate window of 15m0s, and a server whose JetStream limits cap the window below that refuses the stream as an invalid configuration, so the likely cause is jetstream { limits { duplicate_window } } set below 15m0s: raise it to 15m0s or more, or remove it, in the configuration of every server stream.url reaches
+```
+
+Raise the limit to `15m` or more, or remove it, on every server `stream.url`
+reaches. A server that sets none carries the window as it is.
+
+**A large write across a slow link is given its time by the client too.** The
+NATS client writes a message whole, in one socket write, and gives the
+connection up when that write does not finish inside its write deadline. Left
+at the client's default of a minute, that cut a write of more than about
+2 MiB across a link at the engine's floor (a mebibyte in thirty seconds), and
+broke the connection under every other request riding it, the node's leases
+among them. So the engine sets the deadline to the largest write the client
+makes — a message at 8 MiB behind as much as the client buffers, the 8 MiB it
+holds while reconnecting included — at that floor: about eight minutes. What
+that costs is on a connection that dies in the middle of a large write: the
+client gives it up only when the deadline passes, and nothing else moves on
+the connection meanwhile. A small write's own socket write never runs into
+it. But a caller's own deadline is not checked while its request waits for
+the connection, which a large write holds for its whole socket write, nor
+while its own write is in the socket: a caller, a small write or a lease
+renewal among them, is held behind every large write ahead of it, each for
+up to that deadline of about eight minutes (the client's minute cut the write
+and broke the connection), and then for its own. Bounding that wait needs the
+write windowed, which
+[crewlet/crewlet#1035](https://github.com/crewlet/crewlet/issues/1035)
+tracks.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
@@ -1446,7 +1511,7 @@ both.
 - **`data`** holds the company's durable state — a copy of the replicated estate, the identity directory's included, and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
 - **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep
+- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the atlas collect duty, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the Gitlet nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every Gitlet node reads.
 
@@ -1940,7 +2005,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the atlas collect duty, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
 - *Unbounded table growth.* `scheduled_runs` answers a short-horizon question and is written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so is the chat read state of a human seat the company no longer has, which no age could tell from a person who simply has not opened chat for a while, forgotten 24 hours after a sweep first finds the seat gone — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 Two things are still per-process. `max_concurrent`: Tier A's

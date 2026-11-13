@@ -1223,7 +1223,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},
 		{"Listen", listenErr},
-		{"KeepDeadLetter", q.KeepDeadLetter(ctx, letters, []byte("probe"), []byte("probe"))},
+		{"KeepDeadLetter", second(q.KeepDeadLetter(ctx, letters, "probe", []byte("probe"), []byte("probe")))},
 		{"DeadLettersOn", keptErr(q.DeadLettersOn(ctx, letters))},
 		{"DeadLetterFrame", frameErr(q.DeadLetterFrame(ctx, letters, absentLetter))},
 		{"DeadLetterMarks", marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))},

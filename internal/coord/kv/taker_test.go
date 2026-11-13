@@ -36,7 +36,7 @@ func TestALapsedTakerLeasesKeyIsRemoved(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	js := jsOf(embeddedNATS(t))
-	s := openStoreVia(t, js, time.Minute)
+	s := openStoreVia(t, js, InProcess, time.Minute)
 
 	status, err := s.laneFor(coord.TakerResource("node-a:0")).kv.Status(ctx)
 	if err != nil {
@@ -123,5 +123,5 @@ func shortenDuties(ctx context.Context, t *testing.T, js jetstream.JetStream, s 
 	if err != nil {
 		t.Fatalf("address the duty bucket's leader: %v", err)
 	}
-	s.duties = &lane{kv: settled(js, bucket), read: read, stream: facts.stream, maxTTL: coord.MaxDutyTTL}
+	s.duties = &lane{kv: settled(js, bucket, InProcess), read: read, stream: facts.stream, maxTTL: coord.MaxDutyTTL}
 }

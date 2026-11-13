@@ -22,7 +22,7 @@ const AnswerBriefTool = "answer_brief"
 // on a task.
 var BriefRefKinds = []wire.ResourceKind{
 	wire.ResourceTask, wire.ResourceProject, wire.ResourceSeat, wire.ResourcePage,
-	wire.ResourceArtifact, wire.ResourceRoom,
+	wire.ResourceArtifact, wire.ResourceRoom, wire.ResourceAtlasEntry,
 }
 
 // BriefScreenOf is the link table's screen for a brief ref's kind, and false
@@ -41,6 +41,10 @@ func BriefScreenOf(kind wire.ResourceKind) (screen, param string, ok bool) {
 		return "artifact", "id", true
 	case wire.ResourceRoom:
 		return "chatlet", "id", true
+	case wire.ResourceAtlasEntry:
+		// THE MAP OPENED ON THE ENTRY, as the entry's chip opens it: where
+		// what it depends on is in view beside it.
+		return "atlas-entry-on-map", "id", true
 	}
 	return "", "", false
 }

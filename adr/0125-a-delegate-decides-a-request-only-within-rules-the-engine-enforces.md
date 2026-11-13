@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/delegated`
-- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`
+- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`, `internal/delegated.TestASubjectIsWhatARequestDecidesNeverItsWording`, `internal/sandbox.TestAHeldCallIsOpenFromItsRecordingToItsAnswer`, `internal/agent/builtin.TestARepeatAskJoinsTheRequestStillOpen`, `internal/agent/builtin.TestAnAskThatDiffersInSubstanceIsItsOwnRequest`, `internal/agent/builtin.TestAnAskAfterItsRequestWasDecidedIsANewRequest`, `internal/agent/builtin.TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing`, `internal/agent/builtin.TestTwoTurnsAskingAtOnceComeToOneRequest`
 - **Measured:** in one company over a month, the person answering one agent's requests took its recommendation on 90 of 95, and another agent's on 31 of 32 (the advisor's `approval.rubber_stamp`). Each was a merge, a deploy or a server command waiting in the Inbox.
 - **Tag-status:** unreleased
 
@@ -103,7 +103,30 @@ run of another commit and a commit status never pass one; no status is read
 for it, since no agent's app is offered Commit statuses. The approval rule is
 unchanged.
 
+**Amended: a seat's repeat of a request still open joins it.** A seat is
+woken about one piece of work more than once, and each turn's run holds its
+own call, so the same merge at the same head became two requests, two delegate
+turns and two escalations. A held call of a delegable kind now carries its
+subject (`delegated.Subject`): the digest of its kind and what it decides (a
+merge's change, head and method; a deploy's repository, commit, environment
+and set of changes; a command's server as shown, its text and its stdin),
+never the requester's reason. A call whose seat already holds an open call of
+that act and subject on another run is not held: the caller is told the
+request that waits, by its id, and its run is not parked. Open is from the
+moment the call is recorded until an answer, an ending or the run's next job
+takes it (`sandbox.PendingRun.HeldOpen`), so a request escalated to people
+still joins and one already answered does not. The read and the write are
+made under one lock on the node that holds the seat, the only node that
+serves the seat's calls, and a read that fails refuses the call.
+
 ## Why the obvious alternative is wrong
+
+Parking the repeating run on the first request, so both carry on when it is
+answered, would run the approved step once and the work after it twice.
+Identifying a request by the digest of its arguments would miss every repeat,
+since two turns never word a reason alike; identifying it by its change alone
+would let a turn that asked about a new head wait on an answer about the old
+one.
 
 A delegate trusted to follow a written policy is a model that reads requests
 written by other models, any of which may carry words meant for it. Every

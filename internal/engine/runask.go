@@ -18,7 +18,7 @@ import (
 // after that must reach the store the node holds now.
 type runAsks struct{ engine *Engine }
 
-var _ builtin.RunAskDesk = runAsks{}
+var _ builtin.HeldDesk = runAsks{}
 
 // errNoRunStore is why a question cannot be recorded, nor an executor's row
 // read, on a node holding no sandbox runtime: there is no row for either.
@@ -43,4 +43,14 @@ func (d runAsks) Get(ctx context.Context, turnID string) (sandbox.PendingRun, bo
 		return sandbox.PendingRun{}, false, errNoRunStore
 	}
 	return rt.pending.Get(ctx, turnID)
+}
+
+// ListActiveForSeat reads the seat's unfinished runs; see
+// [sandbox.PendingStore.ListActiveForSeat].
+func (d runAsks) ListActiveForSeat(ctx context.Context, handle string) ([]sandbox.PendingRun, error) {
+	rt := d.engine.sandbox.Load()
+	if rt == nil || rt.pending == nil {
+		return nil, errNoRunStore
+	}
+	return rt.pending.ListActiveForSeat(ctx, handle)
 }

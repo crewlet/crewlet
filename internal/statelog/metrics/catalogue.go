@@ -654,7 +654,11 @@ func Catalogue() []Instrument {
 				"and kept as a dead letter in CREWLET_DLQ, frame and all, by why " +
 				"(the deferral reasons, or `untranslatable`). Each is a wake " +
 				"nobody has had until a node whose feed starts able to read it " +
-				"replays it; `feed_dead_lettered` is raised from the first.",
+				"replays it; `feed_dead_lettered` is raised from the first. " +
+				"Counted once across the fleet, by whichever data node takes the " +
+				"record's dead-letter claim, whichever of its keeps stored the " +
+				"entry; a node whose claim the coordination store could not " +
+				"decide counts the record anyway.",
 		},
 		{
 			Name: TrackerFeedDeadLetterExpired, Kind: KindCounter, Unit: UnitCount,

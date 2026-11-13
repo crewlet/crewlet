@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,7 +199,8 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			t.Parallel()
 			runner := executor.NewClaudeCode()
 			script := startAndScript(t, runner, box(t, runner), req)
-			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT; ")
+			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT "+
+				"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
 				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",
@@ -459,6 +461,39 @@ func after(argv []string, flag string) string {
 	return ""
 }
 
+// scriptArgv runs a Claude Code run's script under sh, its harness a stand-in
+// that answers `--version` with version and records the argv it was started
+// with, and returns that argv and the script's error stream.
+func scriptArgv(t *testing.T, sh boxShell, script, version string) ([]string, string) {
+	t.Helper()
+	const standIn = `#!/bin/sh
+if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi
+for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
+`
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeStandIn(t, filepath.Join(bin, "claude"), standIn)
+	argv := sh.argv
+	if len(argv) == 0 {
+		argv = []string{"sh"}
+	}
+	cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", sh.prelude+script)...) //nolint:gosec // the script under test
+	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "FAKE_DIR=" + dir, "FAKE_VERSION=" + version}
+	var stderr strings.Builder
+	cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("the script: %v\n%s", err, stderr.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // under the case's own dir
+	if err != nil {
+		t.Fatalf("the harness never started: %v\n%s", err, stderr.String())
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n"), stderr.String()
+}
+
 // A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS, AND IS NOT
 // TOLD OF NOTES. From 2.1.118 a release runs a settings file's mcp_tool hooks,
 // and before 2.1.163 it drops what a Stop hook answers: a note taken as the run
@@ -469,7 +504,8 @@ func after(argv []string, flag string) string {
 // has and the standing instructions alone, and the run's error stream says why
 // — its notes then wait for the review, and its collection says it never asked.
 // A version it cannot read is taken for a current release. Under every sh a
-// box may run the script with.
+// box may run the script with. From 2.1.310 the file the hooks decide is
+// handed as its pinned copy ([pinnedOf]).
 //
 // Mutation: name the hooked settings whatever the version, compare the patch
 // alone, or hand an older release the instructions told of notes, and this
@@ -479,64 +515,42 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 	p := executor.Paths{Home: "/box"}
 	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
 		Steer: steerWiring}, p, ""))
-	standIn := `#!/bin/sh
-if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi
-for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
-`
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
-			version string
-			hooks   bool
+			version       string
+			hooks, pinned bool
 		}{
-			{"2.1.150 (Claude Code)", false},
-			{"2.1.162 (Claude Code)", false},
-			{"2.0.300 (Claude Code)", false},
-			{"1.9.999 (Claude Code)", false},
-			{"2.1.163 (Claude Code)", true},
-			{"2.1.310 (Claude Code)", true},
-			{"2.2.0 (Claude Code)", true},
-			{"10.0.0 (Claude Code)", true},
-			{"", true},
-			{"Claude Code, a version of its own", true},
+			{"2.1.150 (Claude Code)", false, false},
+			{"2.1.162 (Claude Code)", false, false},
+			{"2.0.300 (Claude Code)", false, false},
+			{"1.9.999 (Claude Code)", false, false},
+			{"2.1.163 (Claude Code)", true, false},
+			{"2.1.309 (Claude Code)", true, false},
+			{"2.1.310 (Claude Code)", true, true},
+			{"2.2.0 (Claude Code)", true, true},
+			{"10.0.0 (Claude Code)", true, true},
+			{"", true, true},
+			{"Claude Code, a version of its own", true, true},
 		} {
 			t.Run(tc.version, func(t *testing.T) {
-				dir := t.TempDir()
-				bin := filepath.Join(dir, "bin")
-				if err := os.MkdirAll(bin, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				writeStandIn(t, filepath.Join(bin, "claude"), standIn)
-				argv := sh.argv
-				if len(argv) == 0 {
-					argv = []string{"sh"}
-				}
-				cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", sh.prelude+script)...) //nolint:gosec // the script under test
-				cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "FAKE_DIR=" + dir,
-					"FAKE_VERSION=" + tc.version}
-				var stderr strings.Builder
-				cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
-				if err := cmd.Run(); err != nil {
-					t.Fatalf("the script: %v\n%s", err, stderr.String())
-				}
-				raw, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // under the case's own dir
-				if err != nil {
-					t.Fatalf("the harness never started: %v\n%s", err, stderr.String())
-				}
-				args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+				args, stderr := scriptArgv(t, sh, script, tc.version)
 				// ONE SETTINGS FILE, the one the hooks decide: with them
 				// where they are read, every run's where they are not.
 				settings := p.ClaudeSettings()
 				if tc.hooks {
 					settings = p.ClaudeNotesSettings()
 				}
+				if tc.pinned {
+					settings = pinnedOf(p, settings)
+				}
 				if n := strings.Count(strings.Join(args, "\n"), "--settings"); n != 1 ||
 					after(args, "--settings") != settings {
 					t.Errorf("on %q the harness was handed %d settings files, %q, want %q alone (argv %q)",
 						tc.version, n, after(args, "--settings"), settings, args)
 				}
-				if said := strings.Contains(stderr.String(), "older than 2.1.163"); said == tc.hooks {
+				if said := strings.Contains(stderr, "older than 2.1.163"); said == tc.hooks {
 					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
-						tc.version, said, !tc.hooks, stderr.String())
+						tc.version, said, !tc.hooks, stderr)
 				}
 				// ONE SYSTEM TEXT, the one the hooks decide: told of notes
 				// where they are read, as it stands where they are not.
@@ -572,15 +586,16 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		version string
-		steer   sandbox.SteerWiring
-		hooks   bool
+		version       string
+		steer         sandbox.SteerWiring
+		hooks, pinned bool
 	}{
-		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true},
-		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false},
-		"wired to its notes, on a release it cannot read":  {"Claude Code, a version of its own", steerWiring, true},
-		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false},
-		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false},
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
+		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false, false},
+		"wired to its notes, on a release it cannot read": {"Claude Code, a version of its own", steerWiring,
+			true, true},
+		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
+		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -588,6 +603,9 @@ func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 			want := run.paths.ClaudeSettings()
 			if tc.hooks {
 				want = run.paths.ClaudeNotesSettings()
+			}
+			if tc.pinned {
+				want = pinnedOf(run.paths, want)
 			}
 			if run.named != want {
 				t.Fatalf("the harness was handed %q, want %q (argv %q)", run.named, want, run.argv)
@@ -652,14 +670,14 @@ func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
 func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		release string
-		steer   sandbox.SteerWiring
-		notes   bool
+		release       string
+		steer         sandbox.SteerWiring
+		notes, pinned bool
 	}{
-		"at the skills' floor, wired to its notes": {"2.1.118 (Claude Code)", steerWiring, false},
-		"below the note floor, wired to its notes": {"2.1.150 (Claude Code)", steerWiring, false},
-		"wired to none": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false},
-		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true},
+		"at the skills' floor, wired to its notes": {"2.1.118 (Claude Code)", steerWiring, false, false},
+		"below the note floor, wired to its notes": {"2.1.150 (Claude Code)", steerWiring, false, false},
+		"wired to none": {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -671,6 +689,9 @@ func TestARunThatCarriesTheEnginesSkillHookSwitchesHooksOn(t *testing.T) {
 			want := run.paths.ClaudeSkillsSettings()
 			if tc.notes {
 				want = run.paths.ClaudeNotesSettings()
+			}
+			if tc.pinned {
+				want = pinnedOf(run.paths, want)
 			}
 			if run.named != want {
 				t.Errorf("the harness was handed %q, want %q (argv %q)", run.named, want, run.argv)
@@ -702,10 +723,12 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 		release string
 		steer   sandbox.SteerWiring
 		skills  []sandbox.Skill
+		pinned  bool
 	}{
-		"handed no skills, wired to none":                 {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil},
-		"handed no skills, below the note floor":          {"2.1.150 (Claude Code)", steerWiring, nil},
-		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring, handedSkills()[1:]},
+		"handed no skills, wired to none":        {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
+		"handed no skills, below the note floor": {"2.1.150 (Claude Code)", steerWiring, nil, false},
+		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", steerWiring,
+			handedSkills()[1:], false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -717,9 +740,12 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 			if slices.Contains(run.argv, "--plugin-dir") {
 				t.Fatalf("the run was started with a plugin (argv %q)", run.argv)
 			}
-			if run.named != run.paths.ClaudeSettings() {
-				t.Errorf("the harness was handed %q, want every run's settings, %q", run.named,
-					run.paths.ClaudeSettings())
+			want := run.paths.ClaudeSettings()
+			if tc.pinned {
+				want = pinnedOf(run.paths, want)
+			}
+			if run.named != want {
+				t.Errorf("the harness was handed %q, want every run's settings, %q", run.named, want)
 			}
 			if on, set := run.settings["disableAllHooks"]; set {
 				t.Errorf("the settings of a run carrying no hook of the engine's hold disableAllHooks %s, "+
@@ -758,6 +784,11 @@ var claudeSettingsSince = map[string]string{
 	// alone (held below), which 2.1.118 is the first to run (its changelog:
 	// "Hooks can now invoke MCP tools directly via `type: \"mcp_tool\"`").
 	"hooks": "2.1.118",
+	// Declared ("Environment variables to set for Claude Code sessions") in the
+	// shipped schema of 2.1.310, the oldest read for it, and 2.1.322. Only the
+	// pinned copies hold it, which are handed from 2.1.310 alone
+	// (executor.ClaudeCompactionPinFloor), so no older release needs reading.
+	"env": "2.1.310",
 }
 
 // NO SETTINGS FILE HOLDS A KEY NEWER THAN THE OLDEST RELEASE IT IS HANDED. A
@@ -767,12 +798,14 @@ var claudeSettingsSince = map[string]string{
 // run at all, since every run is handed --append-system-prompt-file, which
 // 1.0.61 does not know (both read in its shipped code); the skills' from the
 // release that first runs their hook; the notes' from the one that first reads
-// a Stop hook's answer. Every key of every settings file a run's configuration
+// a Stop hook's answer; and each one's pinned copy from the later of its own
+// floor and the pin's. Every key of every settings file a run's configuration
 // writes is held to the first release that declares it, and a key or a file
 // this case knows no release of goes red too.
 //
-// Mutation: write disableAllHooks into every run's settings, or lower the
-// skills' floor below 1.0.68, and this goes red.
+// Mutation: write disableAllHooks or the pin's env block into every run's
+// settings, lower the skills' floor below 1.0.68, or the pin's below 2.1.310,
+// and this goes red.
 func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T) {
 	t.Parallel()
 	b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
@@ -781,10 +814,21 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
+	// A pinned copy is handed from the later of its file's own floor and the
+	// pin's ([claudePinGate] runs after the gates that choose the file).
+	pinned := func(floor string) string {
+		if executor.ReleaseAtLeast(floor, executor.ClaudeCompactionPinFloor) {
+			return floor
+		}
+		return executor.ClaudeCompactionPinFloor
+	}
 	oldest := map[string]string{
-		p.ClaudeSettings():       "1.0.61",
-		p.ClaudeSkillsSettings(): executor.ClaudeSkillsFloor,
-		p.ClaudeNotesSettings():  executor.ClaudeNotesFloor,
+		p.ClaudeSettings():             "1.0.61",
+		p.ClaudeSkillsSettings():       executor.ClaudeSkillsFloor,
+		p.ClaudeNotesSettings():        executor.ClaudeNotesFloor,
+		p.ClaudeSettingsPinned():       pinned("1.0.61"),
+		p.ClaudeSkillsSettingsPinned(): pinned(executor.ClaudeSkillsFloor),
+		p.ClaudeNotesSettingsPinned():  pinned(executor.ClaudeNotesFloor),
 	}
 	held := map[string]bool{}
 	for _, file := range b.written {
@@ -844,6 +888,128 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 			t.Errorf("the configuration of a run wired to its notes and handed skills wrote no %s", file)
 		}
 	}
+}
+
+// pinnedOf is the pinned copy of one of a run's settings files: the file a
+// release that takes the pin is handed in its place ([claudePinGate]).
+func pinnedOf(p executor.Paths, file string) string {
+	return map[string]string{
+		p.ClaudeSettings():       p.ClaudeSettingsPinned(),
+		p.ClaudeSkillsSettings(): p.ClaudeSkillsSettingsPinned(),
+		p.ClaudeNotesSettings():  p.ClaudeNotesSettingsPinned(),
+	}[file]
+}
+
+// EVERY SETTINGS FILE HAS A PINNED COPY THAT HOLDS THE ENGINE'S COMPACTION
+// POINT OVER THE REPOSITORY'S. Claude Code assigns every settings source's
+// `env` block to its own environment once it has started, a checkout's own
+// `.claude/settings.json` before the run's --settings, so a repository that
+// sets CLAUDE_CODE_AUTO_COMPACT_WINDOW, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or
+// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE would move the point the run compacts at
+// after the wrapper pinned it. So each settings file the configuration writes
+// (every run's, the skills' and the notes') has a pinned copy holding the same
+// settings and an `env` block of exactly those three: the window the wrapper
+// pins for the run's model, and the two overrides blank, which the harness
+// reads as none. The file itself holds no `env`, since a release older than
+// the pin's floor is handed it.
+//
+// Mutation: write one file's pinned copy without the block or with another
+// window, leave an override out rather than blank, or write the block into
+// the file itself, and this goes red.
+func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	p := executor.PathsFor(b)
+	const model = "claude-haiku-4-5"
+	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Model: model,
+		Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	pin := map[string]any{
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
+		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+	}
+	read := func(file string) map[string]any {
+		raw, err := b.ReadFile(t.Context(), file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		var doc map[string]any
+		if err = json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s is not JSON: %v\n%s", file, err, raw)
+		}
+		return doc
+	}
+	for _, file := range []string{p.ClaudeSettings(), p.ClaudeSkillsSettings(), p.ClaudeNotesSettings()} {
+		plain, pinned := read(file), read(pinnedOf(p, file))
+		if _, set := plain["env"]; set {
+			t.Errorf("%s holds an env block, which a release older than the pin's floor may not know", file)
+		}
+		if env := pinned["env"]; !reflect.DeepEqual(env, pin) {
+			got, _ := json.Marshal(env)
+			want, _ := json.Marshal(pin)
+			t.Errorf("%s's pinned copy holds env %s, want exactly %s", file, got, want)
+		}
+		delete(pinned, "env")
+		if !reflect.DeepEqual(pinned, plain) {
+			got, _ := json.Marshal(pinned)
+			want, _ := json.Marshal(plain)
+			t.Errorf("%s's pinned copy holds %s beside its env, want the file's own settings %s", file, got, want)
+		}
+	}
+}
+
+// A RELEASE THAT TAKES THE PIN IS HANDED THE PINNED COPY OF THE FILE ITS GATES
+// CHOSE. The run's script reads the box's version and, at 2.1.310 or later,
+// names the pinned copy of whichever settings file the skills' and the notes'
+// gates chose (every run's, the skills' or the notes'). An older release is
+// handed the file itself, which it can validate. A version the script cannot
+// read is taken for a current release. Under every sh a box may run the script
+// with.
+//
+// Mutation: drop the pin's gate, lower its floor, or drop one file's arm, and a
+// row goes red.
+func TestAReleaseThatTakesThePinIsHandedThePinnedCopy(t *testing.T) {
+	t.Parallel()
+	p := executor.Paths{Home: "/box"}
+	variants := []struct {
+		name string
+		req  sandbox.RunRequest
+		file string
+	}{
+		{"every run's", sandbox.RunRequest{Brief: "x"}, p.ClaudeSettings()},
+		{"the skills'", sandbox.RunRequest{Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring()},
+			p.ClaudeSkillsSettings()},
+		{"the notes'", sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p.ClaudeNotesSettings()},
+	}
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, v := range variants {
+			script := scriptOf(t, commandOf(claude(), v.req, p, ""))
+			for _, tc := range []struct {
+				version string
+				pinned  bool
+			}{
+				{"2.1.309 (Claude Code)", false},
+				{"2.1.310 (Claude Code)", true},
+				{"2.2.0 (Claude Code)", true},
+				{"Claude Code, a version of its own", true},
+			} {
+				t.Run(v.name+" on "+tc.version, func(t *testing.T) {
+					args, _ := scriptArgv(t, sh, script, tc.version)
+					want := v.file
+					if tc.pinned {
+						want = pinnedOf(p, v.file)
+					}
+					if n := strings.Count(strings.Join(args, "\n"), "--settings"); n != 1 ||
+						after(args, "--settings") != want {
+						t.Errorf("the harness was handed %d settings files, %q, want %q alone (argv %q)",
+							n, after(args, "--settings"), want, args)
+					}
+				})
+			}
+		}
+	})
 }
 
 // A RUN THAT RAN OUT OF CONTEXT IS TOLD FROM EVERY OTHER FAILED ONE, by the

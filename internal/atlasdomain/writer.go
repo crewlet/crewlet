@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,8 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ATLAS WRITE PATH: one record per claim a person makes, per purge and per
-// expired hour, decided inside one snapshot of this node's rows. EVERY VALUE IS
+// THE ATLAS WRITE PATH: one record per claim a person or an agent makes, per
+// integration's read of an entry, per purge and per expired hour, decided
+// inside one snapshot of this node's rows. EVERY VALUE IS
 // JUDGED HERE, by the vocabulary's own grammar, before it is published: the
 // applier judges none, so a rule a newer build learns cannot make two nodes
 // disagree about a row.
@@ -204,7 +206,53 @@ func (w *Writer) Record(ctx context.Context, c Call, claim atlas.Claim, ifMatch 
 	if err := c.person(); err != nil {
 		return statelog.Result{}, err
 	}
-	claim.Source, claim.Position, claim.ObservedAt = atlas.PersonSource(c.By.Name), 0, w.now()
+	return w.claim(ctx, c, claim, atlas.PersonSource(c.By.Name), ifMatch)
+}
+
+// Observation is where an agent's claim comes from, as the node that ran its
+// turn established it: the run, and the class of evidence its cited call is.
+type Observation struct {
+	// Turn is the run the claim was recorded in.
+	Turn string
+
+	// Evidence is what the cited call of that turn is evidence of, derived
+	// from the call's tool by the engine and never passed by the agent.
+	Evidence atlas.Evidence
+}
+
+// Observe writes one agent's claim on its entry (ADR-0132): an entry, a fact
+// or a relation a call of its own turn showed it, or its dispute of one the
+// atlas holds. The claim's source is the calling seat, in the turn and with
+// the evidence seen names, whatever the claim says. The vocabulary refuses
+// what an agent never records (a fact of meaning, an owner, "the same" and
+// "not the same"), and its value and every key it names are refused if shaped
+// like a credential. An agent's claim is conditioned on no version: it
+// replaces only the seat's own earlier claim on the slot, and outranks nobody.
+//
+// WHETHER THE CITED CALL SHOWED THE VALUE is the calling node's to check,
+// since only the node that ran the turn holds what its calls answered; this
+// writer holds the claim to everything a record can be held to.
+func (w *Writer) Observe(ctx context.Context, c Call, claim atlas.Claim, seen Observation) (statelog.Result, error) {
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	if c.By.Kind != iam.ActorAgent {
+		return statelog.Result{}, invalid("an agent's claim is recorded by the agent's own seat, not by a %s",
+			c.By.Kind)
+	}
+	if strings.TrimSpace(seen.Turn) == "" || len(seen.Turn) > MaxTurnBytes {
+		return statelog.Result{}, invalid("an agent's claim names the turn it was recorded in, in at most %d bytes",
+			MaxTurnBytes)
+	}
+	return w.claim(ctx, c, claim, atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence), NoIfMatch)
+}
+
+// claim publishes one claim as src, judged and conditioned as [Writer.Record]
+// says.
+func (w *Writer) claim(ctx context.Context, c Call, claim atlas.Claim, src atlas.Source,
+	ifMatch uint64) (statelog.Result, error) {
+
+	claim.Source, claim.Position, claim.ObservedAt = src, 0, w.now()
 	// THE KEYS FIRST: a refusal of the claim's grammar names its entry, and a
 	// key shaped like a credential is refused before anything repeats it.
 	if err := claim.Recordable(); err != nil {
@@ -377,4 +425,98 @@ func expirableBefore(ctx context.Context, tx *sql.Tx, before int64) (bool, error
 		return true, nil
 	}
 	return false, nil
+}
+
+// ---- an integration's read ---------------------------------------------- //
+
+// ReadInput is one integration's read of one entry, as the collect duty hands
+// it to the log (ADR-0129): the voice it speaks in, the entry, the claims the
+// read holds on it that are new or changed, the slots of the voice's earlier
+// claims it no longer holds, and when the read saw it.
+type ReadInput struct {
+	Source     atlas.Source
+	Entry      atlas.Ref
+	Claims     []atlas.Claim
+	Withdrawn  []string
+	ObservedAt time.Time
+}
+
+// Read writes one integration's read of one entry. The caller is the engine's
+// own duty, never a person or an agent; the source is an integration's; every
+// claim is on the entry, in the read's voice, judged by the vocabulary's
+// grammar with credentials refused in its value and in every key it names;
+// and a slot is withdrawn or claimed, never both. A read on, naming or
+// carrying anything purged answers [ErrPurged], and is recorded nowhere.
+func (w *Writer) Read(ctx context.Context, c Call, in ReadInput) (statelog.Result, error) {
+	if err := c.validate(); err != nil {
+		return statelog.Result{}, err
+	}
+	if c.By.Kind != iam.ActorSystem {
+		return statelog.Result{}, invalid("an integration's read is the engine's own record: a %s records a claim",
+			c.By.Kind)
+	}
+	if in.Source.Kind != atlas.SourceIntegration {
+		return statelog.Result{}, invalid("a read speaks as an integration, not as a %s", in.Source.Kind)
+	}
+	if _, err := atlas.Exists(in.Entry, in.Source, w.now()); err != nil {
+		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if len(in.Claims) == 0 && len(in.Withdrawn) == 0 {
+		return statelog.Result{}, invalid("a read of %s holds nothing and withdraws nothing", in.Entry)
+	}
+	at := in.ObservedAt.UTC()
+	if at.IsZero() {
+		at = w.now()
+	}
+	subject, scope := EntrySubject(in.Entry), ScopeSet{Subject: true}
+	payload := Read{V: baseRecordVersion, Source: Source{Kind: in.Source.Kind, Name: in.Source.Name},
+		ObservedAt: at}
+	markers := []marker{{markerEntry, subject.ID}}
+	slots := map[string]bool{}
+	for _, claim := range in.Claims {
+		claim.Source, claim.Position, claim.ObservedAt = in.Source, 0, at
+		if claim.Subject != in.Entry {
+			return statelog.Result{}, invalid("a read of %s carries a claim on %s", in.Entry, claim.Subject)
+		}
+		if err := claim.Recordable(); err != nil {
+			return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if err := claim.Validate(); err != nil {
+			return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		slot := claim.Slot()
+		if slots[slot] {
+			return statelog.Result{}, invalid("a read of %s claims one slot twice", in.Entry)
+		}
+		slots[slot] = true
+		p := claimOf(ReadClaimID(c.OpID, slot), claim)
+		p.ObservedAt = at
+		payload.Claims = append(payload.Claims, p)
+		for _, m := range claimMarkers(subject.ID, p) {
+			if !slices.Contains(markers, m) {
+				markers = append(markers, m)
+			}
+		}
+	}
+	for _, slot := range in.Withdrawn {
+		switch {
+		case slot == "":
+			return statelog.Result{}, invalid("a read of %s withdraws a slot it does not name", in.Entry)
+		case slots[slot]:
+			return statelog.Result{}, invalid("a read of %s claims a slot it also withdraws", in.Entry)
+		}
+		slots[slot] = true
+		payload.Withdrawn = append(payload.Withdrawn, slot)
+	}
+	return publish(ctx, w.publisher, request(subject, scope, c.OpID,
+		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			if _, held, err := heldBy(ctx, tx, markers, c.OpID); err != nil || held {
+				return statelog.Decision{}, purgedOr(err, "%s, or something the read names, was purged", in.Entry)
+			}
+			version, err := versionOf(ctx, tx, subject.ID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			return decision(stamp, c.By, subject, OpRead, scope, c.OpID, payload, w.now(), version)
+		}))
 }

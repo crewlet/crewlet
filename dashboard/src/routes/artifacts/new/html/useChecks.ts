@@ -13,7 +13,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { isAbort, RestError, type ArtifactCheckAnswer } from "~/protocol/index.ts";
-import { ARTIFACT_CHECK_MAX_BYTES, ARTIFACT_CHECK_MAX_FILES } from "~/contract/artifacts.ts";
+import {
+  ARTIFACT_CHECK_MAX_BYTES,
+  ARTIFACT_CHECK_MAX_FILES,
+} from "~/contract/artifactsworkspace.ts";
 import { checkPage } from "~/lib/artifacts/api.ts";
 import { refusalText } from "~/lib/refusal.ts";
 

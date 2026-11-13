@@ -591,16 +591,19 @@ func (*cloudflarePass) Kind() integration.Kind { return integration.KindCloudfla
 // Needs is nil: the provisioner token is held in the company document.
 func (*cloudflarePass) Needs() *setup.Requirement { return nil }
 
-// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
+// Run is the company-level pass, then the agents' own access
+// ([Engine.withSeatAccessReads]): the inspection the company half made is
+// handed to the agents' session, so the account's zones and permission
+// groups are read once a pass.
 func (p *cloudflarePass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
-	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+	return p.engine.withSeatAccessReads(ctx, p.Kind(), in, p.run)
 }
 
-func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integration.Finding, error) {
+func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integration.Finding, seataccess.PassReads, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Cloudflare
 	if cfg == nil || !cfg.Enabled {
-		return nil, integration.ErrNotConfigured
+		return nil, nil, integration.ErrNotConfigured
 	}
 	if cfg.Provisioning == nil {
 		// Config validation refuses this shape; a document that reached
@@ -608,7 +611,7 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning",
 			Detail: "integrations.cloudflare.provisioning is unset, so no agent's token can be minted",
-		}}, nil
+		}}, nil, nil
 	}
 	env := p.engine.resolver()
 	token := strings.TrimSpace(env.Value(cfg.Provisioning.APIToken))
@@ -616,7 +619,7 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning.api_token",
 			Detail: "the Cloudflare provisioner token did not resolve, so no agent's token can be minted",
-		}}, nil
+		}}, nil, nil
 	}
 	client, err := cloudflare.NewClient(cloudflare.ClientOptions{
 		AccountID: env.Value(cfg.Provisioning.AccountID), Token: token,
@@ -628,12 +631,12 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning.account_id",
 			Detail: "integrations.cloudflare.provisioning.account_id does not resolve to a Cloudflare account ID",
-		}}, nil
+		}}, nil, nil
 	}
 	// THE AGENTS' TOKENS, which the orphan advisory spares: the ledger's.
 	held, err := p.engine.seatAccessAccounts(ctx, integration.KindCloudflare)
 	if err != nil {
-		return nil, fmt.Errorf("engine: cloudflare pass: %w", err)
+		return nil, nil, fmt.Errorf("engine: cloudflare pass: %w", err)
 	}
 	res, err := cloudflare.Reconcile(ctx, cloudflare.Options{
 		Client: client, Config: cfg, Company: company.Config.Name,
@@ -641,9 +644,9 @@ func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integrat
 		InUse:   seataccess.LevelsInUse(company.Config, seataccess.LaneCloudflare),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: cloudflare pass: %w", err)
+		return nil, nil, fmt.Errorf("engine: cloudflare pass: %w", err)
 	}
-	return res.Findings(), nil
+	return res.Findings(), res.Inspection, nil
 }
 
 // SetupSink is the recorder a pass writes minted credentials through.

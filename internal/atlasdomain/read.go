@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -51,66 +50,7 @@ func DefaultRead() statelog.Freshness { return statelog.Freshness{Level: statelo
 // again in the write's own snapshot.
 var stale = statelog.Freshness{Level: statelog.ReadStale}
 
-// rowScanner is one row, from a query or a query row.
-type rowScanner interface{ Scan(dest ...any) error }
-
 // ---- claims ------------------------------------------------------------- //
-
-// claimColumns is every column a [ClaimRow] is read from, in [scanClaim]'s
-// order: the claim itself as its record's JSON, and what the log says of it.
-const claimColumns = `claim_id, entry_id, claim, observed_at, by, by_kind, at, position,
-	replaced, superseded_at, superseded_position`
-
-// ClaimRow is one claim as the log recorded it.
-type ClaimRow struct {
-	// ID is the claim's own id, Entry its entry's.
-	ID    string
-	Entry string
-
-	// Claim is what it says, in the vocabulary's own type, its Position the
-	// record's.
-	Claim atlas.Claim
-
-	// By is who wrote the record.
-	By iam.Actor
-
-	// At is the broker's instant for the record, Position its place on the log.
-	At       time.Time
-	Position statelog.Position
-
-	// Replaced is true for a claim a newer claim of the same voice replaced,
-	// ReplacedAt when, and ReplacedBy the record that did.
-	Replaced   bool
-	ReplacedAt time.Time
-	ReplacedBy statelog.Position
-}
-
-// scanClaim reads one claim row.
-func scanClaim(row rowScanner) (ClaimRow, error) {
-	var (
-		c                                              ClaimRow
-		body, byKind                                   string
-		observed, at, position, replacedAt, replacedBy int64
-		replaced                                       int
-		wire                                           Claim
-	)
-	if err := row.Scan(&c.ID, &c.Entry, &body, &observed, &c.By.Name, &byKind, &at, &position,
-		&replaced, &replacedAt, &replacedBy); err != nil {
-		return ClaimRow{}, err
-	}
-	if err := json.Unmarshal([]byte(body), &wire); err != nil {
-		return ClaimRow{}, fmt.Errorf("claim %s does not decode: %w", c.ID, err)
-	}
-	stream := Domain{}.Stream().Name
-	c.Claim = wire.vocabulary(store.DecodeTime(observed), uint64(position))
-	c.By.Kind = iam.ActorKind(byKind)
-	c.At, c.Position = store.DecodeTime(at), statelog.Unpack(stream, position)
-	if replaced == 1 {
-		c.Replaced, c.ReplacedAt = true, store.DecodeTime(replacedAt)
-		c.ReplacedBy = statelog.Unpack(stream, replacedBy)
-	}
-	return c, nil
-}
 
 // Live is every claim the atlas holds now: the newest of each voice on each
 // slot of each entry, every one of which [atlas.Fold] reads.
@@ -139,23 +79,8 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var (
-				body               string
-				observed, position int64
-				wire               Claim
-			)
-			if err := rows.Scan(&body, &observed, &position); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			if err := json.Unmarshal([]byte(body), &wire); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("the claim at %d does not decode: %w", position, err)
-			}
-			out.Claims = append(out.Claims, wire.vocabulary(store.DecodeTime(observed), uint64(position)))
-		}
-		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		out.Claims, err = scanLive(rows)
+		if err != nil {
 			return err
 		}
 		if len(out.Claims) > MaxLiveClaims {
@@ -169,6 +94,61 @@ func (r *Reader) Live(ctx context.Context, fresh statelog.Freshness) (Live, erro
 	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
+}
+
+// LiveOf reads every live claim one voice holds: what an integration's read is
+// diffed against before it is recorded (ADR-0129). Stale by default on the
+// duty's side, since the read decides nothing a snapshot would not decide
+// again: a claim it misses is written once more, which the applier takes once.
+func (r *Reader) LiveOf(ctx context.Context, src atlas.Source, fresh statelog.Freshness) (Live, error) {
+	var out Live
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		out = Live{}
+		rows, err := tx.QueryContext(ctx, `
+			SELECT claim, observed_at, position FROM atlas_claims INDEXED BY atlas_claims_source_idx
+			WHERE replaced = 0 AND source_kind = ? AND source_name = ? ORDER BY position LIMIT ?`,
+			string(src.Kind), src.Name, MaxLiveClaims+1)
+		if err != nil {
+			return err
+		}
+		out.Claims, err = scanLive(rows)
+		if err != nil {
+			return err
+		}
+		if len(out.Claims) > MaxLiveClaims {
+			return fmt.Errorf("atlasdomain: %s/%s holds more than %d live claims, past what one read "+
+				"answers", src.Kind, src.Name, MaxLiveClaims)
+		}
+		return nil
+	})
+	if err != nil {
+		return Live{}, fmt.Errorf("atlasdomain: read %s/%s's live claims: %w", src.Kind, src.Name, err)
+	}
+	out.Position, out.Complete = answer.Position, answer.Complete
+	return out, nil
+}
+
+// scanLive reads live claims off rows of (claim, observed_at, position), and
+// closes them.
+func scanLive(rows *sql.Rows) ([]atlas.Claim, error) {
+	var out []atlas.Claim
+	for rows.Next() {
+		var (
+			body               string
+			observed, position int64
+			wire               Claim
+		)
+		if err := rows.Scan(&body, &observed, &position); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(body), &wire); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("the claim at %d does not decode: %w", position, err)
+		}
+		out = append(out, wire.vocabulary(store.DecodeTime(observed), uint64(position)))
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 // ---- one entry ---------------------------------------------------------- //
@@ -227,61 +207,6 @@ func (r *Reader) Entry(ctx context.Context, id string, fresh statelog.Freshness)
 		return EntryRow{}, false, fmt.Errorf("atlasdomain: read entry %s: %w", id, err)
 	}
 	return out, found, nil
-}
-
-// HistoryPage is one page of an entry's claims, newest first, the ones a newer
-// claim replaced included.
-type HistoryPage struct {
-	Claims []ClaimRow
-
-	// Next is the cursor of the page after this one, empty on the last.
-	Next string
-
-	Position statelog.Position
-	Complete bool
-}
-
-// History pages the claims recorded on one entry, newest first, from cursor:
-// what changed on it, when, and who said so, for as long as the retention
-// keeps it.
-func (r *Reader) History(ctx context.Context, id, cursor string, limit int,
-	fresh statelog.Freshness) (HistoryPage, error) {
-
-	if !IsEntryID(id) {
-		return HistoryPage{}, invalid("%q is not an entry id", id)
-	}
-	before, size, err := page(cursor, limit)
-	if err != nil {
-		return HistoryPage{}, err
-	}
-	var out HistoryPage
-	answer, err := r.log.Read(ctx, fresh.Query(EntryScope(id), true), func(tx *sql.Tx) error {
-		out = HistoryPage{}
-		rows, queryErr := tx.QueryContext(ctx, `SELECT `+claimColumns+`
-			FROM atlas_claims INDEXED BY atlas_claims_entry_idx
-			WHERE entry_id = ? AND position < ? ORDER BY position DESC LIMIT ?`, id, before, size+1)
-		if queryErr != nil {
-			return queryErr
-		}
-		for rows.Next() {
-			c, scanErr := scanClaim(rows)
-			if scanErr != nil {
-				_ = rows.Close()
-				return scanErr
-			}
-			out.Claims = append(out.Claims, c)
-		}
-		return errors.Join(rows.Err(), rows.Close())
-	})
-	if err != nil {
-		return HistoryPage{}, fmt.Errorf("atlasdomain: read entry %s's history: %w", id, err)
-	}
-	if len(out.Claims) > size {
-		out.Claims = out.Claims[:size]
-		out.Next = cursorOf(out.Claims[size-1].Position)
-	}
-	out.Position, out.Complete = answer.Position, answer.Complete
-	return out, nil
 }
 
 // ---- purges ------------------------------------------------------------- //
@@ -388,27 +313,3 @@ func (r *Reader) ExpirableHours(ctx context.Context, cutoff time.Time, limit int
 	}
 	return out, nil
 }
-
-// ---- paging ------------------------------------------------------------- //
-
-// page reads a cursor and a limit: before is the packed position a page starts
-// below, the largest for none.
-func page(cursor string, limit int) (before int64, size int, err error) {
-	switch {
-	case limit < 0 || limit > MaxPageSize:
-		return 0, 0, invalid("a page holds 1 to %d rows", MaxPageSize)
-	case limit == 0:
-		limit = DefaultPageSize
-	}
-	if cursor == "" {
-		return int64(1<<63 - 1), limit, nil
-	}
-	before, err = strconv.ParseInt(cursor, 10, 64)
-	if err != nil || before <= 0 {
-		return 0, 0, invalid("the cursor %q is not one a page answered", cursor)
-	}
-	return before, limit, nil
-}
-
-// cursorOf is the cursor of the page below position p.
-func cursorOf(p statelog.Position) string { return strconv.FormatInt(p.Packed(), 10) }

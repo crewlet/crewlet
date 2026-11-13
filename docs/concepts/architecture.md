@@ -207,6 +207,7 @@ and write this node's own copy of the replicated estate.
 | `worker:sandbox-waiter` | Polls the detached runs whose boxes every node reaches (`e2b`) and resumes the turns waiting on them, over the stream; the same tick is the box keepalive. Each node polls the `direct` and `container` boxes on its own host itself, with no duty, and this one ends the runs of a node that left for good. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox, executor and executor sessions, and forgetting the chat read state of a human seat the company no longer has. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
+| `worker:atlas-collect` | The [atlas collect](atlas.md#what-integrations-read) duty: each connected integration's vendor read whole for the atlas, hourly by default, with only what changed recorded on the atlas log. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 | `worker:retention` | The state logs' trim: each domain's floor terms evaluated, what all of them permit purged, and the conclusion published. |
 | `worker:embeddings` | The knowledge base's embeddings, computed once for the company and published as records every data node applies. |
@@ -778,10 +779,14 @@ decision, not the broker's.
 and placement moves seats — so every memory row also rides
 `crewlet.memory.SEAT-ID.TABLE.DIGEST`, one subject per row, on a stream that
 retains exactly one message per subject. By the seat's **id**, as its lease
-and its mailbox are named. A node acquiring a seat replays that
-seat's rows in a single pass and hydrates them **before** the mailbox is
-attached. Deletes deliberately do not travel: the lifecycle re-converges, and a
-tombstone protocol would be a second thing to keep correct forever.
+and its mailbox are named. A node acquiring a seat replays that seat's rows a
+table at a time, in a fixed order that writes a skill before its versions, each
+table read until it has delivered a barrier at or past the one the node
+published on the seat's own subject first and the copy serving it holds
+nothing more, and hydrates them **before** the mailbox is attached (see
+[A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it)).
+Deletes deliberately do not travel: the lifecycle re-converges, and a tombstone
+protocol would be a second thing to keep correct forever.
 
 **The line was learned, not designed.** Migrations `0010`–`0013` are what
 breaking it cost: the delivery dedupe, the completion ledger, the config

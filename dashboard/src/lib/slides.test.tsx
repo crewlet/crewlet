@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import { SLIDE_ICON_GLYPH_PERCENT } from "~/contract/artifacts.ts";
+import { SLIDE_ICON_GLYPH_PERCENT } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { nodeAt, renderSlide, slideSource, slideStyle, titleOf, withText } from "./slides.tsx";
 

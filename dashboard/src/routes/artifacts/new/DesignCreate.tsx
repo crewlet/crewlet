@@ -76,14 +76,18 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
-import { plural, textBudget } from "~/lib/format.ts";
+import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
+import { bytesOverWords, plural, textBudget, utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { createDesign } from "~/lib/artifacts/api.ts";
-import { CANVAS_MAX_SIDE, CANVAS_MIN_SIDE } from "~/lib/artifacts/canvas.ts";
 import {
   BOARD_BRIEF_MAX_BYTES,
+  CANVAS_MAX_SIDE,
+  CANVAS_MIN_SIDE,
   DESIGN_MAX_BOARDS,
+} from "~/contract/artifactsworkspace.ts";
+import {
   FRAME_PRESETS,
   STARTER_LAYOUTS,
   addBoard,
@@ -109,10 +113,23 @@ import {
 } from "~/lib/artifacts/designLayout.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleProblem, useNoPagesHold, useSaveIn, useWorkItem } from "./create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import {
+  artifactTaskBody,
+  filedTaskText,
+  UNMADE_ARTIFACT,
+  useFileArtifactTask,
+} from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeTo,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
 /** Briefs to start from, one press each. */
@@ -149,8 +166,13 @@ const PRESET_GLYPHS: Record<FramePreset["id"], ReactNode> = {
 /** What a design's brief asks for, in the panel's helper line. */
 const BRIEF_HINT = "What it is for, who it is for, the brand to follow and what done looks like.";
 
-/** The most a design's brief holds, as a task's description holds it. */
-const DESIGN_BRIEF_MAX_BYTES = 8000;
+/**
+ * The most a design's own brief holds: a quarter of what a task's description
+ * holds (`TASK_BODY_MAX_BYTES`), whose other three quarters are the boards'
+ * briefs and the references the brief shares it with. The whole task text is
+ * held to the description's bound at the press ([taskTooLong]).
+ */
+const DESIGN_BRIEF_MAX_BYTES = TASK_BODY_MAX_BYTES / 4;
 
 /** What a new design holds beyond what every create page does. */
 interface DesignState {
@@ -230,7 +252,8 @@ export function DesignCreate() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
   const access = useArtifactAccess({ app: true });
   const create = useKeyedGesture();
   const who = useWhoBuildsIt("design");
@@ -240,11 +263,11 @@ export function DesignCreate() {
   // again on its own, so a second press never makes a second design.
   const [made, setMade] = useState<string | null>(null);
 
-  const [title, setTitle] = useState("");
-  const [brief, setBrief] = useState("");
-  const [links, setLinks] = useState<string[]>([]);
+  const [title, setTitle] = useDraftState("");
+  const [brief, setBrief] = useDraftState("");
+  const [links, setLinks] = useDraftState<string[]>([]);
   const [linkError, setLinkError] = useState<string | undefined>();
-  const [draft, setDraft] = useState<DesignDraft | null>(null);
+  const [draft, setDraft] = useDraftState<DesignDraft | null>(null);
   const [picking, setPicking] = useState(true);
   const [selected, setSelected] = useState<CanvasBoardSelection | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -282,13 +305,33 @@ export function DesignCreate() {
   const briefBudget = textBudget(brief, DESIGN_BRIEF_MAX_BYTES, "a design's brief");
   const builder = chosenAgent(who);
   const noPages = useNoPagesHold();
+  // THE TASK TEXT AS IT IS FILED, the boards' briefs and the references with
+  // the design's own: up to 64 boards of 2,000 bytes each are four times what
+  // a task's description holds, which the engine refuses after the design was
+  // made.
+  const taskBytes = draft
+    ? utf8Bytes(
+        filedTaskText(
+          {
+            kind: "design",
+            brief: taskBrief({ brief, draft, links }),
+            artifact: made ?? UNMADE_ARTIFACT,
+          },
+          saveIn,
+        ),
+      )
+    : 0;
+  const taskTooLong =
+    taskBytes > TASK_BODY_MAX_BYTES
+      ? `The brief and the boards are ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task. Shorten the boards' briefs.`
+      : undefined;
   const blocked =
     noPages ??
     (!access.can
       ? access.reason
       : (ask.held ??
         (builder ? undefined : "Add an agent to the chart to build it.") ??
-        (briefBudget.over ? "Shorten the brief." : hold)));
+        (briefBudget.over ? "Shorten the brief." : (hold ?? taskTooLong))));
   const busy = create.busy || ask.busy;
   // WHAT IS OPEN, for the assistant: the name, the references, each board's
   // name and purpose, and the hand-off. A layout is picked as a press of it
@@ -310,16 +353,21 @@ export function DesignCreate() {
       extra: {
         value: { draft, links },
         fields: designFields(draft),
-        apply: (next) => {
-          if (next.draft !== draft) {
-            setDraft(next.draft);
-            if (draft === null) {
-              setSelected(null);
-              setPicking(false);
-            }
-          }
-          if (next.links !== links) setLinks([...next.links]);
-        },
+        write: writeParts<DesignState>(
+          { draft, links },
+          {
+            // A LAYOUT PICKED for an empty canvas closes the picker, as its own press does.
+            draft: writeTo(setDraft, {
+              also: () => {
+                if (draft === null) {
+                  setSelected(null);
+                  setPicking(false);
+                }
+              },
+            }),
+            links: writeVia(setLinks, (next: readonly string[]) => [...next]),
+          },
+        ),
       },
       blocked: () => (busy ? "The design is being made." : null),
     }),

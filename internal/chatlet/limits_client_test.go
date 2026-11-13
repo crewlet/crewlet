@@ -45,6 +45,7 @@ func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 		"MAX_PURPOSE_CHARS":       chatlet.MaxPurpose,
 		"MAX_DIRECT_PARTICIPANTS": chatlet.MaxDMParticipants,
 		"MAX_MESSAGE_LINKS":       chatlet.MaxLinks,
+		"MAX_READ_PAGE":           chatlet.MaxLimit,
 	} {
 		raw, err := clientsource.Scalar(tree, name)
 		if err != nil {

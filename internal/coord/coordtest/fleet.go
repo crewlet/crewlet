@@ -64,6 +64,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"sandbox_run_parts", runPartCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
+		{"atlas_sources", atlasSourceCases},
 		{"seat_access", seatAccessCases},
 		{"access_reviews", accessReviewCases},
 		{"conversation_holds", conversationHoldCases},
@@ -90,6 +91,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"listings", listingCases},
 		{"markers", markerCases},
 		{"floors", floorCases},
+		{"values", valueCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -2674,6 +2676,120 @@ var integrationCases = []fleetCase{
 		copy(value, []byte(`{"attempts":9}`))
 		if got := string(h.integrations()["gitlab"]); got != `{"attempts":1}` {
 			h.t.Fatalf("read back %q after the caller reused its buffer", got)
+		}
+	}},
+}
+
+// ---- the atlas sources' standings --------------------------------------- //
+
+func (h *fleetHarness) putAtlasSource(kind, value string) {
+	h.t.Helper()
+	if err := h.f.PutAtlasSourceStatus(h.ctx, kind, []byte(value)); err != nil {
+		h.t.Fatalf("PutAtlasSourceStatus(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) atlasSources() map[string][]byte {
+	h.t.Helper()
+	got, err := h.f.AtlasSourceStatuses(h.ctx)
+	if err != nil {
+		h.t.Fatalf("AtlasSourceStatuses: %v", err)
+	}
+	return got
+}
+
+func (h *fleetHarness) atlasSourceNames() []string {
+	h.t.Helper()
+	names := slices.Collect(maps.Keys(h.atlasSources()))
+	slices.Sort(names)
+	return names
+}
+
+var atlasSourceCases = []fleetCase{
+	{name: "a recorded standing reads back byte for byte", fn: func(h *fleetHarness) {
+		// The value is OPAQUE to this store: internal/atlas/collect marshals
+		// the last read, its digest and what it has stopped seeing into it.
+		const standing = `{"kind":"cloudflare","last_complete_at":"2026-11-12T07:00:00Z","digest":"ab12"}`
+		h.putAtlasSource("cloudflare", standing)
+		if got := string(h.atlasSources()["cloudflare"]); got != standing {
+			h.t.Fatalf("read back %q, want %q", got, standing)
+		}
+	}},
+
+	{name: "a source with no standing is absent rather than empty", fn: func(h *fleetHarness) {
+		// The duty reads a missing key as "never read, so due now, with
+		// nothing to retire"; an empty value would parse as a standing with
+		// no read in it, which is not the same fact.
+		h.putAtlasSource("datadog", `{"kind":"datadog"}`)
+		if _, present := h.atlasSources()["cloudflare"]; present {
+			h.t.Fatal("a source nothing recorded came back present")
+		}
+	}},
+
+	{name: "the last write wins", fn: func(h *fleetHarness) {
+		// No compare-and-set: the collect duty is a fleet singleton that
+		// re-claims its lease before every source it visits, so one writer
+		// holds a key at a time. See [coord.AtlasSources].
+		h.putAtlasSource("cloudflare", `{"calls":1}`)
+		h.putAtlasSource("cloudflare", `{"calls":2}`)
+		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":2}` {
+			h.t.Fatalf("read back %q, want the second write", got)
+		}
+	}},
+
+	{name: "every recorded source is listed", fn: func(h *fleetHarness) {
+		h.putAtlasSource("cloudflare", `{}`)
+		h.putAtlasSource("datadog", `{}`)
+		want := []string{"cloudflare", "datadog"}
+		if got := h.atlasSourceNames(); !slices.Equal(got, want) {
+			h.t.Fatalf("listed %v, want %v", got, want)
+		}
+	}},
+
+	{name: "a deleted standing is gone and the rest survive", fn: func(h *fleetHarness) {
+		h.putAtlasSource("cloudflare", `{}`)
+		h.putAtlasSource("datadog", `{}`)
+		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
+		}
+		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"datadog"}) {
+			h.t.Fatalf("listed %v, want datadog alone", got)
+		}
+	}},
+
+	{name: "deleting a standing that is not there is the outcome asked for", fn: func(h *fleetHarness) {
+		// The duty forgets every source the company no longer connects, on
+		// every tick, so this is the common path.
+		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "never-recorded"); err != nil {
+			h.t.Fatalf("deleting an absent standing: %v", err)
+		}
+	}},
+
+	{name: "a standing the caller mutates afterwards does not change the store", fn: func(h *fleetHarness) {
+		value := []byte(`{"calls":1}`)
+		if err := h.f.PutAtlasSourceStatus(h.ctx, "cloudflare", value); err != nil {
+			h.t.Fatalf("PutAtlasSourceStatus: %v", err)
+		}
+		copy(value, []byte(`{"calls":9}`))
+		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":1}` {
+			h.t.Fatalf("read back %q after the caller reused its buffer", got)
+		}
+	}},
+
+	{name: "a standing is kept apart from the integration statuses", fn: func(h *fleetHarness) {
+		// The two are the same shape of record about the same vendors, and
+		// a backend that kept them in one place would hand the reconcile
+		// loop a row it forgets as a surface nothing declares.
+		h.putAtlasSource("cloudflare", `{"calls":1}`)
+		h.putIntegration("cloudflare", `{"phase":"ready"}`)
+		if got := string(h.integrations()["cloudflare"]); got != `{"phase":"ready"}` {
+			h.t.Fatalf("the integration status reads %q", got)
+		}
+		if err := h.f.DeleteIntegrationStatus(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatal(err)
+		}
+		if got := string(h.atlasSources()["cloudflare"]); got != `{"calls":1}` {
+			h.t.Fatalf("forgetting the integration status took the standing with it: %q", got)
 		}
 	}},
 }

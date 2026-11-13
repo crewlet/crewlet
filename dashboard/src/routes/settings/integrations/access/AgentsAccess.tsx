@@ -19,9 +19,14 @@
  * writes a revision (no switch, picker, scope, Keep or save). Actions at the
  * vendor write none and still run: rotate, remove, restore, retry, check
  * again and install.
+ *
+ * THE DRAFT IS ASK CREWLET'S TO READ AND PROPOSE TO (`assistantDraft.ts`):
+ * every control is a field, set through the same update path the control
+ * calls, so a proposal the person approves is the change the control would
+ * have made, and it is saved, like any other, through Review.
  */
 
-import { memo, useId, useState, type ReactNode } from "react";
+import { memo, useContext, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -52,6 +57,7 @@ import type {
   AccessSeatLane,
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
+import { useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { asSentence, fmtDate, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
@@ -65,6 +71,12 @@ import {
   type AccessDraft,
   type PlacedRefusal,
 } from "./api.ts";
+import {
+  accessDraft,
+  accessDraftPart,
+  AccessDraftPartsContext,
+  useAccessDraftPart,
+} from "./assistantDraft.ts";
 import {
   PermissionsDialog,
   RemoveDialog,
@@ -88,15 +100,14 @@ import {
   levelName,
   managedOutside,
   MANAGED_OUTSIDE,
+  menuName,
   offNote,
   levelsHeading,
   levelSummary,
   noToolRemedy,
-  onlyScope,
   offSentence,
   permissionCount,
   permissionWords,
-  productOnly,
   productOnlyNote,
   providedExternally,
   refusedLevel,
@@ -110,6 +121,11 @@ import {
   statusOf,
   statusRank,
   toolWords,
+  wantOf,
+  withEnabled,
+  withLevel,
+  withPermission,
+  withScope,
   type Handoff,
   type Lane,
   type SeatAction,
@@ -177,7 +193,7 @@ function levelOptions(lane: Lane): SelectOption[] {
     .filter((l) => !(lane.multiple && l.id === ""))
     .map((l) => ({
       value: l.id,
-      label: l.custom ? `${l.name} (custom)` : l.name,
+      label: menuName(l),
       ...(l.unavailable
         ? { description: l.unavailable, disabled: true }
         : l.note
@@ -204,7 +220,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   onReplaceKey,
   stepFor,
 }: AgentsAccessProps) {
-  const [draft, setDraft] = useState<AccessDraft>({});
+  const [draft, setDraft] = useDraftState<AccessDraft>({});
   // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [review, setReview] = useState(false);
@@ -259,7 +275,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   const locked = held !== undefined || readOnly !== undefined || data.syncing;
 
   const desiredOf = (seat: AccessSeat, lane: AccessLaneKey): AccessDesired =>
-    draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
+    wantOf(draft, seat, lane);
 
   let changes = 0;
   // A DRAFT THE ENGINE WOULD REFUSE is held at the review, with its reason.
@@ -274,19 +290,43 @@ export const AgentsAccess = memo(function AgentsAccess({
       }
     }
 
-  const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
+  /**
+   * One control's change to one seat's lane, made by the tab's update path
+   * (`logic.ts`) over the draft as it stands: the banner's sentence goes, and
+   * so does a refusal about that lane's controls.
+   */
+  const change = (seat: AccessSeat, lane: Lane, to: (d: AccessDraft) => AccessDraft) => {
     setSaid("");
     setRefusal((r) => (r?.seat === seat.handle && r.lane === lane.key ? null : r));
-    setDraft((d) => {
-      const merged = { ...desiredOf(seat, lane.key), ...next };
-      const lanesDraft = { ...(d[seat.handle] ?? {}) };
-      if (sameDesired(lane, merged, seat.lanes[lane.key]!.desired)) delete lanesDraft[lane.key];
-      else lanesDraft[lane.key] = merged;
-      const out = { ...d, [seat.handle]: lanesDraft };
-      if (Object.keys(lanesDraft).length === 0) delete out[seat.handle];
-      return out;
-    });
+    setDraft(to);
   };
+
+  // WHAT IS OPEN, for Ask Crewlet, to a reader who may change it here: every
+  // control's value as the draft stands, each set through the update path its
+  // control calls (`assistantDraft.ts`). A held or read-only tab has no draft
+  // to tell. On an agent's own page, which draws a tab per integration, the
+  // page gathers every tab into its one draft instead.
+  const gathered = useContext(AccessDraftPartsContext);
+  const part =
+    held === undefined && readOnly === undefined && lanes.length > 0 && seats.length > 0
+      ? accessDraftPart(
+          { kind, name, syncing: data.syncing, lanes, seats },
+          draft,
+          writeTo(setDraft, {
+            also: (next) => {
+              setSaid("");
+              // A REFUSAL ABOUT A LANE THE CHANGE MOVED goes, as it does when its
+              // own control changes it. The engine names the lane by its key.
+              const at = (d: AccessDraft, r: PlacedRefusal) => d[r.seat]?.[r.lane as AccessLaneKey];
+              setRefusal((r) => (r && at(draft, r) !== at(next, r) ? null : r));
+            },
+          }),
+        )
+      : null;
+  useAssistantDraft<AccessDraft>(
+    gathered === null && part !== null ? accessDraft(part, data.revision) : null,
+  );
+  useAccessDraftPart(gathered, part);
 
   // THE TAB OPENS IN THE CLICK, so a popup blocker lets it through, and goes
   // to the link once the engine has minted it: single-use, so never stored.
@@ -410,10 +450,9 @@ export const AgentsAccess = memo(function AgentsAccess({
               checked={want.enabled}
               disabled={locked || seat.departed}
               title={held}
-              onCheckedChange={(checked) => {
-                const only = checked ? onlyScope(lane, want) : undefined;
-                change(seat, lane, only ? { enabled: true, scope: only } : { enabled: checked });
-              }}
+              onCheckedChange={(checked) =>
+                change(seat, lane, (d) => withEnabled(d, seat, lane, checked))
+              }
             />
           )}
         </>
@@ -456,8 +495,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 placeholder={levelName(lane, "")}
                 onChange={(v) => {
                   const level = joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String));
-                  // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
-                  change(seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
+                  change(seat, lane, (d) => withLevel(d, seat, lane, level));
                 }}
                 renderMultiLabel={(sel) =>
                   levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
@@ -474,10 +512,7 @@ export const AgentsAccess = memo(function AgentsAccess({
                 options={levelOptions(lane)}
                 placeholder="Choose one"
                 disabled={off || locked || seat.departed}
-                onChange={(v) => {
-                  const level = String(v);
-                  change(seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
-                }}
+                onChange={(v) => change(seat, lane, (d) => withLevel(d, seat, lane, String(v)))}
               />
             ) : lane.permissions ? (
               <Inline gap={1}>
@@ -810,12 +845,11 @@ export const AgentsAccess = memo(function AgentsAccess({
           seat={editing.seat}
           lane={editing.lane}
           want={desiredOf(editing.seat, editing.lane.key)}
-          onChange={(perm, value) => {
-            const next = { ...(desiredOf(editing.seat, editing.lane.key).permissions ?? {}) };
-            if (value === "none") delete next[perm];
-            else next[perm] = value;
-            change(editing.seat, editing.lane, { permissions: next });
-          }}
+          onChange={(perm, value) =>
+            change(editing.seat, editing.lane, (d) =>
+              withPermission(d, editing.seat, editing.lane, perm, value),
+            )
+          }
           onClose={() => setEditing(null)}
         />
       )}
@@ -825,7 +859,11 @@ export const AgentsAccess = memo(function AgentsAccess({
           lane={scoping.lane}
           want={desiredOf(scoping.seat, scoping.lane.key)}
           refused={refusalAt(scoping.seat, scoping.lane, "scope")?.words}
-          onChange={(scope) => change(scoping.seat, scoping.lane, { scope })}
+          onChange={(scope) =>
+            change(scoping.seat, scoping.lane, (d) =>
+              withScope(d, scoping.seat, scoping.lane, scope),
+            )
+          }
           onClose={() => setScoping(null)}
         />
       )}

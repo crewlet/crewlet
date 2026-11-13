@@ -22,10 +22,11 @@
  * places the two apart, and files the task with `useFileArtifactTask`.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ChoiceList, FormField, Select, type SelectOption } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { PROJECT_PAGE } from "~/contract/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -36,6 +37,7 @@ import type { MakeKind } from "~/lib/artifacts/words.ts";
 import { useWorkItem } from "./create.ts";
 import { STRUCTURE_PATH } from "~/app/routes.ts";
 import { placeName } from "~/app/nav.ts";
+import { useDraftState, type DraftSetter } from "~/app/assistant/draft.ts";
 
 /** Up to this many agents are drawn as a list; more are a searchable field. */
 const LISTED_AGENTS = 4;
@@ -46,10 +48,11 @@ export interface WhoBuildsItState {
   builders: Builder[];
   /** The chosen agent's handle, "" while the chart has none. */
   seat: string;
-  setSeat: (seat: string) => void;
+  /** The page's draft holds the choice ([createDraft]), so its setter is the branded one. */
+  setSeat: DraftSetter<string>;
   /** The project the task is filed in, "" while none is known. */
   project: string;
-  setProject: (project: string) => void;
+  setProject: DraftSetter<string>;
   projects: readonly WorkProjectRow[];
   projectsLoading: boolean;
 }
@@ -68,13 +71,13 @@ export function useWhoBuildsIt(kind: MakeKind, suggested?: string): WhoBuildsItS
     () => artifactBuilders(index, kind, suggested),
     [index, kind, suggested],
   );
-  const [picked, setSeat] = useState("");
+  const [picked, setSeat] = useDraftState("");
   const seat = builders.some((b) => b.seat.handle === picked)
     ? picked
     : (builders[0]?.seat.handle ?? "");
-  const listed = useQuery("work_projects", { limit: 200 }, { pollMs: 120_000 });
+  const listed = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
   const projects = useMemo(() => listed.data?.projects ?? [], [listed.data]);
-  const [chosenProject, setProject] = useState("");
+  const [chosenProject, setProject] = useDraftState("");
   const project =
     chosenProject ||
     startingProject(

@@ -63,8 +63,9 @@ func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 	// the scheduler's business.
 	const deadline = 10 * time.Second
 	waited := time.Now()
+	//fixedwait:measure a poll's own deadline: the cancel is asserted after it, and a reset to the package constant fires minutes past it
 	for !cancelled.Load() && time.Since(waited) < deadline {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
 	if !cancelled.Load() {
 		t.Errorf("an idle stream was not abandoned %s after its last byte, "+

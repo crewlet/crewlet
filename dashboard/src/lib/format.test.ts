@@ -29,6 +29,7 @@ import {
   fmtBytes,
   fmtClock,
   fmtCount,
+  fmtCountShort,
   fmtDate,
   fmtDateTime,
   fmtDateTimeFull,
@@ -251,6 +252,16 @@ describe("numbers", () => {
     expect(fmtCount(9999)).toBe((9999).toLocaleString());
     expect(fmtCount(12_400)).toBe("12.4k");
     expect(fmtCount(1_240_000)).toBe("1.2M");
+  });
+
+  // A PLACE FOUR CHARACTERS WIDE shortens a step sooner, and never past four.
+  test("a short count fits four characters at every magnitude", () => {
+    expect(fmtCountShort(999)).toBe("999");
+    expect(fmtCountShort(2000)).toBe("2k");
+    expect(fmtCountShort(2400)).toBe("2.4k");
+    expect(fmtCountShort(12_400)).toBe("12k");
+    expect(fmtCountShort(123_456)).toBe("123k");
+    expect(fmtCountShort(1_240_000)).toBe("1.2M");
   });
 
   // A WHOLE FIGURE CARRIES NO ZERO FRACTION: a founder writes a ceiling as a

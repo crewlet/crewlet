@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -198,6 +199,11 @@ type Fact struct {
 type Items struct {
 	// Path is the list's path within the answer (not the record).
 	Path string
+	// Expand, when named, is a list inside each entry of that list whose
+	// every entry is an item of its own, its parent under `parent`, as
+	// [Table.Expand] expands a row: a trace's hops, each holding the
+	// entries it reached, listed entry by entry with the hop's distance.
+	Expand string
 	// Kind is the dashboard object each item is, or empty for none.
 	Kind wire.ResourceKind
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
@@ -264,8 +270,11 @@ func (s Spec) Paths() []Path {
 	}
 	opens := func(from string, o *Open) {
 		if o != nil {
-			for _, p := range o.Params {
-				add(from, p)
+			// IN ONE ORDER, so two walks of one spec are one list: a link
+			// with two parameters (an entry and a direction) is otherwise
+			// walked in map order.
+			for _, param := range slices.Sorted(maps.Keys(o.Params)) {
+				add(from, o.Params[param])
 			}
 			add(from, o.LabelFrom)
 		}
@@ -290,6 +299,7 @@ func (s Spec) Paths() []Path {
 		opens("record", e.Open)
 		if it := e.Items; it != nil {
 			add("", it.Path)
+			add("item", it.Expand)
 			for _, p := range []string{it.ID, it.Label, it.Fact, it.Depth} {
 				add("item", p)
 			}
@@ -587,6 +597,9 @@ func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 		noun := it.Noun
 		card.ItemsNoun = &noun
 		list, _ := lookup(doc, it.Path).([]any)
+		if it.Expand != "" {
+			list = expand(list, it.Expand)
+		}
 		for at, raw := range list {
 			// AN ITEM'S PATHS NAME ITS FIELDS, and one left unnamed reads
 			// nothing: read with lookup, an empty path is the item itself, and

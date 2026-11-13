@@ -78,6 +78,7 @@ import {
   changed,
   changesOf,
   deckSlide,
+  deckTextProblem,
   draftOf,
   duplicateSlide,
   insertSlide,
@@ -97,8 +98,20 @@ import {
   withText,
   type SlideRenderContext,
 } from "~/lib/slides.tsx";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
-import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
+import {
+  ARTIFACT_LABEL_MAX_BYTES,
+  DECK_NOTES_MAX_RUNES,
+  DECK_TITLE_MAX_BYTES,
+  SLIDE_TRANSITIONS,
+} from "~/contract/artifactsworkspace.ts";
+import { overWords, textBudget, utf8Bytes } from "~/lib/format.ts";
 import {
   EyeOffGlyph,
   FileTextGlyph,
@@ -176,7 +189,7 @@ function Deck({
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
 
   const base = useMemo(() => draftOf(deck, version), [deck, version]);
-  const [draft, setDraft] = useState<DeckDraft | null>(null);
+  const [draft, setDraft] = useDraftState<DeckDraft | null>(null);
   const [merge, setMerge] = useState<DeckMerge | null>(null);
   // ONLY THE HEAD IS EDITED, since a save is a version based on the head and
   // an older version is history to read or restore. A draft already open
@@ -207,7 +220,7 @@ function Deck({
           scope: `Your edit of “${detail.title}” (not saved)`,
           value: shown,
           fields: deckEditFields(shown.order),
-          apply: setDraft,
+          write: writeVia(setDraft, (next: DeckDraft) => next),
           blocked: () =>
             merge && merge.conflicts.length > 0 ? "Settle where both edits differ first." : null,
         }
@@ -391,10 +404,6 @@ function useShowChannel(
 
 // ---- what the assistant reads and sets ------------------------------------ //
 
-/** The most a deck's title and a slide's notes hold, as their fields hold them. */
-const DECK_TITLE_MAX = 120;
-const NOTES_MAX = 4000;
-
 /**
  * The fields of a deck's edit: its title, and each slide's title (the first
  * run of its heading, as the engine reads a slide's title) and speaker
@@ -410,8 +419,8 @@ export function deckEditFields(order: readonly string[]): DraftFieldSpec<DeckDra
       write: (d, title) =>
         typeof title !== "string"
           ? refuse("The deck's title is a line of text.")
-          : [...title].length > DECK_TITLE_MAX
-            ? refuse(`The deck's title holds at most ${DECK_TITLE_MAX} characters.`)
+          : utf8Bytes(title) > DECK_TITLE_MAX_BYTES
+            ? refuse(`The deck's title is ${overWords(title, DECK_TITLE_MAX_BYTES)}.`)
             : { ...d, title },
     },
     ...order.flatMap((id, i): DraftFieldSpec<DeckDraft>[] => [
@@ -444,8 +453,8 @@ export function deckEditFields(order: readonly string[]): DraftFieldSpec<DeckDra
           const slide = slideAt(d, i);
           if (!slide) return refuse("That slide is no longer in the deck.");
           if (typeof notes !== "string") return refuse("Speaker notes are text.");
-          if ([...notes].length > NOTES_MAX) {
-            return refuse(`Speaker notes hold at most ${NOTES_MAX} characters.`);
+          if ([...notes].length > DECK_NOTES_MAX_RUNES) {
+            return refuse(`Speaker notes hold at most ${DECK_NOTES_MAX_RUNES} characters.`);
           }
           return { ...d, slides: { ...d.slides, [id]: { ...slide, notes } } };
         },
@@ -595,6 +604,18 @@ function DeckEditor({
     </Button>
   );
 
+  // WHAT THE ENGINE WOULD REFUSE is said at its field and holds Save, measured
+  // in the engine's own unit, and never cut out of what a person typed or
+  // pasted: the fields' `maxLength` cut a paste at a count of their own, and
+  // passed a title of non-Latin letters the publish then refused in bytes.
+  const notesOver = [...(current.notes ?? "")].length > DECK_NOTES_MAX_RUNES;
+  const titleOver = utf8Bytes(shown.title) > DECK_TITLE_MAX_BYTES;
+  const labelBudget = textBudget(label, ARTIFACT_LABEL_MAX_BYTES, "a version's label");
+  const blocked =
+    merge && merge.conflicts.length > 0
+      ? "Resolve each change both of you made first."
+      : (deckTextProblem(shown) ?? (labelBudget.over ? labelBudget.line : undefined));
+
   const saveNow = async () => {
     const against = merge?.live ?? base;
     setSaving(true);
@@ -709,14 +730,20 @@ function DeckEditor({
         {phone && strip}
         {editable ? (
           <div className="slides-panel">
-            <FormField label="Speaker notes" helper="Everyone who can open the deck can read them.">
+            <FormField
+              label="Speaker notes"
+              helper="Everyone who can open the deck can read them."
+              {...(notesOver
+                ? { error: `Speaker notes hold at most ${DECK_NOTES_MAX_RUNES} characters.` }
+                : {})}
+            >
               {(field) => (
                 <Textarea
                   id={field.id}
                   aria-describedby={field.describedBy}
+                  aria-invalid={field.invalid}
                   value={current.notes ?? ""}
                   autoResize
-                  maxLength={4000}
                   onChange={(e) => {
                     const notes = e.target.value;
                     const id = current.id;
@@ -728,13 +755,18 @@ function DeckEditor({
                 />
               )}
             </FormField>
-            <FormField label="Deck title">
+            <FormField
+              label="Deck title"
+              {...(titleOver
+                ? { error: `The deck's title is ${overWords(shown.title, DECK_TITLE_MAX_BYTES)}.` }
+                : {})}
+            >
               {(field) => (
                 <Input
                   id={field.id}
                   aria-describedby={field.describedBy}
+                  aria-invalid={field.invalid}
                   value={shown.title}
-                  maxLength={120}
                   onChange={(e) => {
                     const title = e.target.value;
                     change((d) => ({ ...d, title }));
@@ -759,7 +791,7 @@ function DeckEditor({
                     aria-label="Version label"
                     placeholder="Label (optional)"
                     value={label}
-                    maxLength={60}
+                    error={labelBudget.over}
                     onChange={(e) => setLabel(e.target.value)}
                   />
                   <Button
@@ -776,9 +808,7 @@ function DeckEditor({
                     size="small"
                     variant="primary"
                     loading={saving}
-                    {...(merge && merge.conflicts.length > 0
-                      ? { disabledReason: "Resolve each change both of you made first." }
-                      : {})}
+                    {...(blocked ? { disabledReason: blocked } : {})}
                     onClick={() => void saveNow()}
                   >
                     Save version
@@ -786,6 +816,11 @@ function DeckEditor({
                 </>
               )}
             </div>
+            {labelBudget.line && (
+              <p className="artifact-note" role={labelBudget.over ? "alert" : undefined}>
+                {labelBudget.line}
+              </p>
+            )}
             <p className="artifact-note">
               Click any text on the slide to change it. New slide, at the end of the strip, adds one
               after this slide; on a thumbnail, Command or Control+D copies it and Delete removes

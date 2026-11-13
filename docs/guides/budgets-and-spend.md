@@ -101,9 +101,12 @@ harness's own prompt, its standing instructions and its brief and grows from
 there. A session's context is bounded by its harness's compaction for that
 reason. Every Claude Code run is pinned to the context window of the model it
 works under (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, with the variables that would
-switch compaction off unset) and compacts at that window less its own headroom
-of about 33 000 tokens, so a continued run of *n* requests on a 1 000 000-token
-model is charged up to about *n* × 967 000 input tokens before its output, and
+switch compaction off or move the point it compacts at unset, and from 2.1.310
+the same window and those two overrides held over a repository's own settings)
+and compacts at
+that window less its own headroom of about 33 000 tokens, so a continued run of
+*n* requests on a 1 000 000-token model is charged up to about *n* × 967 000
+input tokens before its output, and
 on a 200 000-token model up to about *n* × 167 000. A smaller fixed window
 would charge less per request and starve the run: its first request already
 carries the harness's prompt, its tools and the brief, and a window too small

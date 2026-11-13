@@ -17,7 +17,7 @@
 
 import { EXTERNAL_URL_MAX, externalUrl } from "@crewlethq/ui";
 import type { DataOp, LiveSocket } from "~/protocol/index.ts";
-import { RUNTIME_CONTRACT, STATE_COLLECTION } from "~/contract/artifacts.ts";
+import { RUNTIME_CONTRACT, STATE_COLLECTION } from "~/contract/artifactsworkspace.ts";
 import {
   BRIDGE_MESSAGE,
   capabilityOf,

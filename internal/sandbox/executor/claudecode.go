@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -313,6 +312,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		}
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
+	// THE COMPACTION POINT PINNED IN THE SETTINGS AS WELL, on a release whose
+	// settings take the pin ([claudeCompactionPinFloor]): the pinned copy of
+	// whichever file the gates above chose ([claudePinGate]), so a repository's
+	// own settings cannot move the point the wrapper pinned. After every gate
+	// that chooses cs.
+	b.WriteString(claudePinGate(paths, len(req.Skills) > 0, req.Steer.Set()))
 	line(`set -- "$@" --settings "$cs"`)
 	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
@@ -413,6 +418,42 @@ const claudeCarryFloor = "2.1.310"
 // version on", its changelog) — a session compacted by an older release comes
 // back without its summary, or with the history before it.
 const claudeCarriedWriterFloor = "2.1.300"
+
+// claudeCompactionPinFloor is the oldest Claude Code release a run is started
+// with its compaction point pinned in its settings as well as in its
+// environment ([claudeCompactionPin], [claudePinGate]): 2.1.310, the oldest
+// release read whose settings schema declares `env` ("Environment variables to
+// set for Claude Code sessions", 2.1.310 and 2.1.322 alike). A settings file a
+// release cannot validate is ignored whole in print mode, the retention with it
+// ([claudeSettings]), so the pinned copy is handed only where the key was read.
+// It is also the oldest release a box continues a session carried from another
+// box on ([claudeCarryFloor]), so every carried session's run has the pin.
+const claudeCompactionPinFloor = "2.1.310"
+
+// claudePinGate is the part of a Claude Code run's script that hands its
+// harness, on a release at or after [claudeCompactionPinFloor], the pinned copy
+// of the settings file the gates before it chose ([Paths.ClaudeSettingsPinned],
+// [Paths.ClaudeSkillsSettingsPinned], [Paths.ClaudeNotesSettingsPinned]), and on
+// an older release the file as chosen. Each file the run's gates can choose has
+// its arm: every run's, the skills' for a run handed skills, and the notes' for
+// a run wired to its notes. Those are the files [ClaudeCode.WriteConfig] writes
+// with their pinned copies, and no other file is named.
+func claudePinGate(paths Paths, skills, notes bool) string {
+	files := [][2]string{{paths.ClaudeSettings(), paths.ClaudeSettingsPinned()}}
+	if skills {
+		files = append(files, [2]string{paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned()})
+	}
+	if notes {
+		files = append(files, [2]string{paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned()})
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "if at %s; then case $cs in\n", floorArgs(claudeCompactionPinFloor))
+	for _, file := range files {
+		fmt.Fprintf(&b, "  %s) cs=%s ;;\n", sandbox.ShellQuote(file[0]), sandbox.ShellQuote(file[1]))
+	}
+	b.WriteString("esac; fi\n")
+	return b.String()
+}
 
 // claudeNotesGate is the part of a run's script wired to its notes that
 // decides, by the harness's release ([claudeRelease]), its settings (cs) and
@@ -1067,6 +1108,11 @@ func floorArgs(version string) string {
 // and its settings a third time, with hooks switched on so that hook runs
 // whatever the repository says ([Paths.ClaudeSkillsSettings]).
 //
+// EVERY SETTINGS FILE IS WRITTEN WITH ITS PINNED COPY BESIDE IT: the same
+// settings with the compaction point pinned ([claudeCompactionPin]) under the
+// window the wrapper pins ([ClaudeCode.Pins]), which a release that takes the
+// pin is handed in the file's place ([claudePinGate]).
+//
 // The settings files are written afresh, at the mode a box writes every file
 // with (0600 on a local box): a box write replaces a file whole
 // ([sandbox.Sandbox.WriteFile]), and the run's artefacts are cleared before it
@@ -1078,19 +1124,23 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	if err := writeClaudeSettings(ctx, box, paths.ClaudeSettings(), newClaudeSettings()); err != nil {
+	pin := claudeCompactionPin(sandbox.ClaudeCodeWindow(req.Model))
+	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
+		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeSkillsSettings(), newClaudeHooksOnSettings()); err != nil {
+		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSkillsSettings(), paths.ClaudeSkillsSettingsPinned(),
+			newClaudeHooksOnSettings(nil), newClaudeHooksOnSettings(pin)); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer)); err != nil {
+		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
+			claudeSteerSettings(req.Steer, nil), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
@@ -1116,6 +1166,18 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeSettingsPair writes one of a run's settings files twice: settings
+// to file, which a release before [claudeCompactionPinFloor] is handed, and
+// pinned, the same settings with the compaction point pinned
+// ([claudeCompactionPin]), to pinnedFile, which a release at or after it is
+// handed in file's place ([claudePinGate]).
+func writeClaudeSettingsPair(ctx context.Context, box sandbox.Sandbox, file, pinnedFile string, settings, pinned any) error {
+	if err := writeClaudeSettings(ctx, box, file, settings); err != nil {
+		return err
+	}
+	return writeClaudeSettings(ctx, box, pinnedFile, pinned)
 }
 
 // writeClaudeSettings renders settings into file: every run's settings
@@ -1262,9 +1324,21 @@ const claudeProjectDir = "crewlet"
 //     session carried between boxes would carry too;
 //   - CLAUDE_CODE_AUTO_COMPACT_WINDOW, window ([sandbox.ClaudeCodeWindow]): the
 //     window of the model the run works under, which the harness compacts at
-//     less its own headroom. The variable takes precedence over a window an
-//     image or a repository sets, and the two variables that would switch
-//     compaction off altogether are unset beside it ([claudeCompactionOff]).
+//     less its own headroom. The variables that would switch compaction off
+//     altogether or move the point it compacts at are unset beside it
+//     ([claudeCompactionOff]), and on a release that takes it the run's
+//     settings pin the same window and blank the same two overrides
+//     ([claudeCompactionPin]), over what a repository's own settings set. No
+//     agent definition caps the main thread's window, whatever a repository,
+//     an image or a managed directory ships. A subagent's or an in-process
+//     teammate's can be lower: from 2.1.312 an agent definition's own
+//     `autoCompactWindow` (a repository's `.claude/agents/<name>.md`, for one)
+//     lowers the pinned window for the conversation that definition runs,
+//     where 2.1.310 drops it wherever the variable is set ("Changed a
+//     subagent's `autoCompactWindow` to lower the window set by
+//     `CLAUDE_CODE_AUTO_COMPACT_WINDOW`", the 2.1.312 changelog; read in
+//     2.1.310 and 2.1.322). Lower only, so no request carries more than the
+//     window.
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]); and the harness's own retention sweep
@@ -1315,7 +1389,8 @@ const claudeRetentionDays = 36500
 
 // claudeSettings is the settings file every Claude Code run is started with
 // (`--settings`, [Paths.ClaudeSettings]): the harness's own retention sweep held
-// off ([claudeRetentionDays]), and nothing else. A run that starts a hook of
+// off ([claudeRetentionDays]), and nothing else but, in its pinned copy, the
+// compaction point's pin ([claudeCompactionPin]). A run that starts a hook of
 // the engine's is started with these settings and hooks switched on in this
 // file's place ([claudeHooksOnSettings]), and the notes' hooks beside them where
 // those are among its hooks ([claudeNotesSettings]), so every file a run is
@@ -1329,14 +1404,55 @@ const claudeRetentionDays = 36500
 // 1.0.60, 1.0.61 and 2.1.112, whose commands refuse an option they do not
 // know, and which take the value as a whole number at least 0 (1.0.x) or 1
 // (2.1.112, as 2.1.310 does). A settings file the harness cannot validate is
-// ignored without a word in print mode, so it holds no other field.
+// ignored without a word in print mode, so it holds no other field, and its
+// pinned copy, which adds the compaction point's pin, is handed only to a
+// release that takes it ([claudeCompactionPinFloor]).
 type claudeSettings struct {
 	CleanupPeriodDays int `json:"cleanupPeriodDays"`
+
+	// Env is the compaction point's pin ([claudeCompactionPin]) in a file's
+	// pinned copy, and nil, so left out, in the file itself.
+	Env map[string]string `json:"env,omitempty"`
 }
 
-// newClaudeSettings is every Claude Code run's settings.
-func newClaudeSettings() claudeSettings {
-	return claudeSettings{CleanupPeriodDays: claudeRetentionDays}
+// newClaudeSettings is every Claude Code run's settings, with env as its `env`
+// block: the pin in a pinned copy, nil otherwise.
+func newClaudeSettings(env map[string]string) claudeSettings {
+	return claudeSettings{CleanupPeriodDays: claudeRetentionDays, Env: env}
+}
+
+// claudeCompactionPin is the `env` block of every pinned settings file
+// ([claudeCompactionPinFloor]): CLAUDE_CODE_AUTO_COMPACT_WINDOW at the window
+// [claudeSessionLayout] pins, and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE and
+// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE blank.
+//
+// THE WRAPPER'S PIN AGAIN, BECAUSE A REPOSITORY'S SETTINGS CAN UNDO IT. The
+// harness assigns every settings source's `env` block to its own environment
+// once it has started, in the order user, project, local, `--settings`,
+// managed, a later source's value winning (read in 2.1.310 and 2.1.322). So a
+// checkout's own `.claude/settings.json` or `.claude/settings.local.json` that
+// sets any of the three sets it again after the wrapper unset or pinned it
+// ([claudeCompactionOff], [claudeSessionLayout]): the two overrides lower the
+// point the run compacts at or set the count it refuses a request past, and the
+// window replaces the pin. The run's `--settings` is assigned after the
+// repository's, so the same three there win over it.
+//
+// BLANK, NOT LEFT OUT: a key the run's settings leave out leaves the
+// repository's value standing, and the harness reads either override as none
+// where it is empty (`h?parseFloat(h):void 0`, 2.1.310 and 2.1.322 alike).
+//
+// What is NOT pinned, and why: a managed settings file, which the harness
+// ranks last, still wins over the run's, as an image's or a host's policy is
+// its operator's own. DISABLE_AUTO_COMPACT and DISABLE_COMPACT are left to the
+// repository, as its `autoCompactEnabled: false` is: either only switches
+// compaction off, which leaves nothing summarized, and the run's requests then
+// grow to its model's own window, as docs/concepts/code-sandbox.md states.
+func claudeCompactionPin(window sandbox.ExecutorWindow) map[string]string {
+	return map[string]string{
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(window.Tokens),
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
+		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+	}
 }
 
 // claudeHooksOnSettings is the settings of a Claude Code run that starts a hook
@@ -1368,9 +1484,9 @@ type claudeHooksOnSettings struct {
 }
 
 // newClaudeHooksOnSettings is the settings of a run that starts a hook of the
-// engine's.
-func newClaudeHooksOnSettings() claudeHooksOnSettings {
-	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(), DisableAllHooks: false}
+// engine's, with env as their `env` block ([newClaudeSettings]).
+func newClaudeHooksOnSettings(env map[string]string) claudeHooksOnSettings {
+	return claudeHooksOnSettings{claudeSettings: newClaudeSettings(env), DisableAllHooks: false}
 }
 
 // claudeArchiveFormat is the layout a Claude Code run packs its session in
@@ -1462,13 +1578,32 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // claudeCompactionOff is every variable that, set in a run's environment,
-// switches its harness's compaction off: DISABLE_AUTO_COMPACT, automatic and
-// idle compaction, and DISABLE_COMPACT, every compaction (the vendor's
-// environment reference). Set by a seat's role.sandbox.env or by an image, either
-// would let a run's context grow past its model's window rather than compact
-// ([claudeSessionLayout]). Unset rather than refused, as [claudeSwitchesOff] is:
-// the run's compaction is the engine's to decide.
-var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"}
+// switches its harness's compaction off or moves the point it compacts at:
+//   - DISABLE_AUTO_COMPACT, automatic and idle compaction, and
+//     DISABLE_COMPACT, every compaction (the vendor's environment reference),
+//     either of which would let a run's context grow past its model's window
+//     rather than compact;
+//   - CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, which lowers the point the harness
+//     compacts at to that share of its window, and
+//     CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE, which sets the count past which it
+//     refuses a request until the conversation is compacted (both read in the
+//     harness's own threshold code, 2.1.310 and 2.1.322 alike), either of which
+//     would have it compact a session at a point the engine does not reckon
+//     with: the window [claudeSessionLayout] pins, less the harness's own
+//     headroom, which docs/concepts/code-sandbox.md states and every floor the
+//     engine continues a session by is held to.
+//
+// Set by a seat's role.sandbox.env or by an image, any of them is unset rather
+// than refused, as [claudeSwitchesOff] is: the run's compaction is the
+// engine's to decide. A repository's own settings can set them again once the
+// harness has started, by its `env` block; on a release that takes the pin, the
+// run's settings blank the two that move the point over it
+// ([claudeCompactionPin]), and leave the two that switch compaction off to the
+// repository, as its `autoCompactEnabled: false` is. CLAUDE_CODE_MAX_CONTEXT_TOKENS is not among them: it is
+// the real window of a model the harness does not know, which it reads for
+// such a model alone.
+var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+	"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
@@ -1538,10 +1673,10 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// UNCACHED remainder, and a run is almost entirely cached
 		// rounds — so reading it alone put a fraction of every run's
 		// prompt on the budget counter and the spend rollup.
-		res.CacheReadTokens = u.CacheReadInputTokens
-		res.CacheWriteTokens = u.CacheCreationInputTokens
-		res.InputTokens = u.InputTokens + res.CacheReadTokens + res.CacheWriteTokens
-		res.OutputTokens = u.OutputTokens
+		res.CacheReadTokens = u.CacheRead
+		res.CacheWriteTokens = u.CacheCreate
+		res.InputTokens = u.Input + res.CacheReadTokens + res.CacheWriteTokens
+		res.OutputTokens = u.Output
 	}
 	if !res.Success {
 		res.Error = msg.failure()
@@ -1563,31 +1698,34 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 // far as one, and `errors` what went wrong on a subtype that is not success,
 // which carries no `result` at all.
 //
-// Decoded into named fields so the stream's decoder and [ClaudeCode.Parse] read
-// one shape, and TOLERANTLY (a field of an unexpected type is left zero and
-// the rest still read), because a field the vendor reshapes must cost that
-// field rather than the run's whole account.
+// Read into named fields so the stream's decoder and [ClaudeCode.Parse] read
+// one shape, off one decode of the line ([claudeResultWire]) by its keys
+// exactly as written, and TOLERANTLY (a field of an unexpected type is left
+// zero and the rest still read), because a field the vendor reshapes must
+// cost that field rather than the run's whole account.
 type claudeResult struct {
-	Type         string   `json:"type"`
-	Subtype      string   `json:"subtype"`
-	IsError      bool     `json:"is_error"`
-	Result       string   `json:"result"`
-	Errors       []string `json:"errors"`
-	SessionID    string   `json:"session_id"`
-	TotalCostUSD float64  `json:"total_cost_usd"`
+	Type    string
+	Subtype string
+	IsError bool
+	Result  string
+	// Errors is the list of what went wrong, raw: read an error at a time
+	// ([claudeResult.errorsSaid]), never decoded whole, and only where a
+	// result that did not succeed is read, since every line of the stream is
+	// decoded for a result's keys.
+	Errors       json.RawMessage
+	SessionID    string
+	TotalCostUSD float64
 	// NumTurns is how many turns the run's agent loop took — one model
 	// call each — on every subtype, a run stopped by its turn cap included.
-	NumTurns int `json:"num_turns"`
+	NumTurns int
 	// TerminalReason is why the run's loop ended, beside the subtype:
 	// "completed" for a loop that finished, and [claudeHookStopped] for one a
 	// hook stopped. Absent on a harness that does not report it.
-	TerminalReason string `json:"terminal_reason"`
-	Usage          *struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
+	TerminalReason string
+	// Usage is the session's tokens, in the keys a message's usage has
+	// ([claudeUsage]); nil where the result carries none, or none that is an
+	// object.
+	Usage *claudeUsage
 	// SinceLastResult is, per model, what the calls THIS PROCESS counted
 	// since it wrote its previous result cost — since it started, for its
 	// first — on 2.1.310 and later, absent before. The harness's own SDK schema
@@ -1598,17 +1736,172 @@ type claudeResult struct {
 	// ([claudeEvents.runSpend]). `usage` and `total_cost_usd` beside it are
 	// the session's, which from 2.1.277 a continued session starts from
 	// ([ClaudeCode.TotalsRestored]).
-	SinceLastResult map[string]claudeModelUsage `json:"model_usage_since_last_result"`
+	//
+	// RAW, and read where it is asked for ([claudeResult.sinceLastResult]): on
+	// a result line of the stream, by the reader that sums it, a model at a
+	// time and for at most [claudeResultModelsMax] models, and never by
+	// [ClaudeCode.Parse], which reads none of it, nor on a line of another
+	// type that carries the key.
+	SinceLastResult json.RawMessage
+}
+
+// claudeResultWire is the result message as its one decode leaves it
+// ([wireDecode]): each key a [claudeResult] holds, by its exact name and raw,
+// read into the result by [claudeResultWire.result].
+type claudeResultWire struct {
+	Type            json.RawMessage `json:"type"`
+	Subtype         json.RawMessage `json:"subtype"`
+	IsError         json.RawMessage `json:"is_error"`
+	Result          json.RawMessage `json:"result"`
+	Errors          json.RawMessage `json:"errors"`
+	SessionID       json.RawMessage `json:"session_id"`
+	TotalCostUSD    json.RawMessage `json:"total_cost_usd"`
+	NumTurns        json.RawMessage `json:"num_turns"`
+	TerminalReason  json.RawMessage `json:"terminal_reason"`
+	Usage           json.RawMessage `json:"usage"`
+	SinceLastResult json.RawMessage `json:"model_usage_since_last_result"`
+}
+
+// result is the result w holds, DECODED LOOSELY, as the whole decode it
+// replaced read one: a key of another kind than its field's reads as that
+// field's zero value, a usage that is no object as none, and the rest of the
+// result as written.
+func (w claudeResultWire) result() claudeResult {
+	r := claudeResult{
+		Type: looseString(w.Type), Subtype: looseString(w.Subtype), IsError: looseTrue(w.IsError),
+		Result: looseString(w.Result), Errors: w.Errors, SessionID: looseString(w.SessionID),
+		TotalCostUSD: looseFloat(w.TotalCostUSD), NumTurns: int(looseInt(w.NumTurns)),
+		TerminalReason: looseString(w.TerminalReason), SinceLastResult: w.SinceLastResult,
+	}
+	if wireObject(w.Usage) {
+		usage := looseUsage(w.Usage)
+		r.Usage = &usage
+	}
+	return r
+}
+
+// claudeResultModelsMax is the most models a result's spend model by model is
+// read for ([claudeResult.sinceLastResult]); a result naming more is read for
+// none of them.
+//
+// SIXTY-FOUR. A result names the models its process called, and every result
+// measured that states its spend names one model or none (117, of 2.1.310 and
+// 2.1.322, each naming claude-sonnet-4-5 where it names any): a process calls
+// a handful at most, its own model, the one it falls back to, the small one
+// its helpers run on and the one a subagent runs on (each a setting 2.1.322's
+// shipped code reads). Sixty-four leaves a later release and a repository's
+// own agents room many times over, and holds what a result costs its reader
+// to that many models' spends, however many the line names.
+const claudeResultModelsMax = 64
+
+// errResultModels is a result whose spend model by model names more models
+// than [claudeResultModelsMax]: read for none of them.
+var errResultModels = fmt.Errorf("executor: a result states its spend for more than %d models",
+	claudeResultModelsMax)
+
+// sinceLastResult is the result's per-run spend, model by model
+// ([claudeResult.SinceLastResult]), and whether the result states it:
+// PRESENT, EVEN EMPTY, IS STATED, and an absent key states nothing, as on a
+// release before 2.1.310, which never writes it. Each model's spend is read
+// by its keys exactly as written and loosely by type ([looseModelUsage]), and
+// a model the result names twice by its last, as JSON.parse reads it.
+//
+// A VALUE THAT IS THERE AND NO OBJECT IS UNREAD, null among it, never a
+// result that states nothing: both releases measured write the key as an
+// object or not at all (their result schema declares it an optional record
+// of objects), so another kind is a reshape or a line no harness wrote, never
+// a spend of nothing. Read as nothing, it would leave that result's calls out
+// of the run's sum, as a result past the bound would (below).
+//
+// A MODEL AT A TIME ([eachKey]), never the whole object first, and AT MOST
+// [claudeResultModelsMax] OF THEM. The walk keeps each model it meets and a
+// copy of the last spend written for it, made into the room the one before
+// left, and reads each kept spend once the walk is over: so a model named
+// over and over costs one spend's copy and one read, never one for each time
+// it is named, and a line naming any number of models costs no more than one
+// naming that many.
+//
+// A RESULT NAMING MORE IS UNREAD, errResultModels: the walk stops at the
+// first model past the bound, and no spend of the result is read, never the
+// sum of the models before it, which would charge the run for some of its
+// calls and not the rest. So is an object the walk cannot read to its end,
+// its own error, which no line the stream decoded whole holds. Its one
+// reader, the run's event stream, then reads the run's own spend as stated by
+// none of its results ([claudeEvents.runSpend]).
+func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool, error) {
+	switch {
+	case r.SinceLastResult == nil:
+		return nil, false, nil
+	case !wireObject(r.SinceLastResult):
+		return nil, false, fmt.Errorf("executor: a result states its spend as %s, not an object",
+			wireKind(r.SinceLastResult))
+	}
+	var (
+		// place is each model met, by its name, its place in names and last.
+		place = map[string]int{}
+		names []string
+		// last is the last spend written for each model met, its own copy:
+		// the walk's bytes are valid only while it hands them over.
+		last [][]byte
+	)
+	err := eachKey(r.SinceLastResult, func(name []byte, spend json.RawMessage) error {
+		if i, met := place[string(name)]; met {
+			last[i] = append(last[i][:0], spend...)
+			return nil
+		}
+		if len(names) == claudeResultModelsMax {
+			return errResultModels
+		}
+		model := string(name)
+		place[model] = len(names)
+		names = append(names, model)
+		last = append(last, append([]byte(nil), spend...))
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	spent := make(map[string]claudeModelUsage, len(names))
+	for i, model := range names {
+		spent[model] = looseModelUsage(last[i])
+	}
+	return spent, true, nil
 }
 
 // claudeModelUsage is one model's spend as Claude Code's result states it per
-// model, in camelCase as `modelUsage` and its per-run sibling print it.
+// model, in camelCase as `modelUsage` and its per-run sibling print it
+// ([claudeModelUsageWire]).
 type claudeModelUsage struct {
-	InputTokens              int     `json:"inputTokens"`
-	OutputTokens             int     `json:"outputTokens"`
-	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
-	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
-	CostUSD                  float64 `json:"costUSD"`
+	InputTokens              int
+	OutputTokens             int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
+	CostUSD                  float64
+}
+
+// claudeModelUsageWire is one model's spend as its decode leaves it, each key
+// by its exact name and raw ([looseModelUsage]).
+type claudeModelUsageWire struct {
+	InputTokens              json.RawMessage `json:"inputTokens"`
+	OutputTokens             json.RawMessage `json:"outputTokens"`
+	CacheReadInputTokens     json.RawMessage `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens json.RawMessage `json:"cacheCreationInputTokens"`
+	CostUSD                  json.RawMessage `json:"costUSD"`
+}
+
+// looseModelUsage is the spend raw holds, DECODED LOOSELY, as the whole decode
+// it replaced read one: a figure of another kind than its field's reads as
+// none, the others as written, and a spend that is no object as none at all.
+func looseModelUsage(raw json.RawMessage) claudeModelUsage {
+	var w claudeModelUsageWire
+	if !wireObject(raw) || wireDecode(raw, &w) != nil {
+		return claudeModelUsage{}
+	}
+	return claudeModelUsage{
+		InputTokens: int(looseInt(w.InputTokens)), OutputTokens: int(looseInt(w.OutputTokens)),
+		CacheReadInputTokens:     int(looseInt(w.CacheReadInputTokens)),
+		CacheCreationInputTokens: int(looseInt(w.CacheCreationInputTokens)), CostUSD: looseFloat(w.CostUSD),
+	}
 }
 
 // claudeTotalsRestored is the first Claude Code release whose continued
@@ -1693,7 +1986,12 @@ func (r claudeResult) contextExhausted() bool {
 	if r.TerminalReason != "" {
 		return slices.Contains(claudeContextReasons, r.TerminalReason)
 	}
-	said := strings.Join(append([]string{r.Result}, r.Errors...), "\n")
+	// The errors' text TRIMMED reads as their whole text does: a sentence is
+	// found within a line, and none opens or closes with a blank.
+	said := r.Result
+	if errs := r.errorsSaid(); errs != "" {
+		said += "\n" + errs
+	}
 	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
 		return strings.Contains(said, sentence)
 	})
@@ -1720,7 +2018,7 @@ func (r claudeResult) failure() string {
 			"terminal_reason hook_stopped): a hook of the repository's, the image's or the box " +
 			"home's own settings exited 2 or returned a block; the run's own steering hooks " +
 			"never block"
-		if why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result)); why != "" {
+		if why := r.why(); why != "" {
 			stopped += ": " + why
 		}
 		return stopped
@@ -1729,7 +2027,7 @@ func (r claudeResult) failure() string {
 	if how == "success" {
 		how = ""
 	}
-	why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result))
+	why := r.why()
 	switch {
 	case how != "" && why != "":
 		return how + ": " + why
@@ -1741,21 +2039,68 @@ func (r claudeResult) failure() string {
 	return "it reported an error and said nothing about it"
 }
 
+// why is why the run did not succeed, as its result says, trimmed: what its
+// errors say ([claudeResult.errorsSaid]), else its final text, else nothing.
+func (r claudeResult) why() string {
+	if errs := r.errorsSaid(); errs != "" {
+		return errs
+	}
+	return strings.TrimSpace(r.Result)
+}
+
+// errorsSaid is what the result's errors say, a line apart, trimmed: each
+// error that is a string as written and each of another kind as nothing, as
+// the list decoded into strings and joined read once trimmed, and "" for
+// errors that are no list.
+//
+// AN ERROR AT A TIME ([eachElement]), and never the whole list first: decoded
+// whole, the list held a string's 16 bytes for every element it listed,
+// however small the element, on every line of the stream, since every line is
+// decoded into a result. And the line apart is owed only before an error that
+// says something, so a run of errors that say nothing writes nothing at
+// either end of the text, which trimming would drop, and a line each between
+// two that say something, as their whole text did.
+func (r claudeResult) errorsSaid() string {
+	var (
+		said  strings.Builder
+		owed  int
+		first = true
+	)
+	if eachElement(r.Errors, func(element json.RawMessage) error {
+		if !first {
+			owed++
+		}
+		first = false
+		text := looseString(element)
+		if text == "" {
+			return nil
+		}
+		for ; owed > 0 && said.Len() > 0; owed-- {
+			said.WriteByte('\n')
+		}
+		owed = 0
+		said.WriteString(text)
+		return nil
+	}) != nil {
+		return ""
+	}
+	return strings.TrimSpace(said.String())
+}
+
 // decodeClaudeResult reads the result message: the one line the result file
 // holds, which the wrapper copied from the end of the stream.
 func decodeClaudeResult(text string) (claudeResult, bool) {
 	if !strings.HasPrefix(text, "{") {
 		return claudeResult{}, false
 	}
-	var msg claudeResult
-	err := json.Unmarshal([]byte(text), &msg)
-	var mismatch *json.UnmarshalTypeError
-	// A syntax error is reported before any field is decoded, so a mismatch
-	// means a whole object with one field of another type.
-	if err == nil || errors.As(err, &mismatch) {
-		return msg, true
+	// A WHOLE OBJECT IS A RESULT'S ACCOUNT, whatever its keys hold: its decode
+	// fails only where the line is no whole JSON object, and a key of another
+	// kind than its field's is read loosely ([claudeResultWire.result]).
+	var w claudeResultWire
+	if wireDecode([]byte(text), &w) != nil {
+		return claudeResult{}, false
 	}
-	return claudeResult{}, false
+	return w.result(), true
 }
 
 // lastLine is the text's last line, trimmed.

@@ -15,17 +15,23 @@ import { describe, expect, test } from "vitest";
 
 import { repoRoot } from "~/test/engineFiles.ts";
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_ENUM,
+  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
   ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
+  ASSISTANT_PAGE_VALUE_MAX_BYTES,
   type AssistantEventKind,
   type AssistantPageContext,
 } from "../contract/assistant.ts";
 import {
+  actionArgsProblem,
   assistantUnavailable,
   createAssistantStreamParser,
   isProposalDigest,
   narrowCard,
   pageContextFits,
   questionFits,
+  wireBytes,
   type AssistantNarrowFrame,
   type AssistantStreamFault,
 } from "./assistantWire.ts";
@@ -168,6 +174,74 @@ describe("the bounds a request is held to before it is sent", () => {
         query: { q: "x".repeat(ASSISTANT_PAGE_CONTEXT_MAX_BYTES + 1) },
       }),
     ).toBe(false);
+  });
+
+  // THE ENGINE MEASURES WHAT IT ENCODES: Go's `encoding/json` writes "<",
+  // ">" and "&" as \u003c, \u003e and \u0026, and U+2028 and U+2029 escaped,
+  // so a context inside the bound by the browser's bytes was over it there.
+  // Mutation: measure the browser's bytes alone, and the context at the
+  // bound with an "R&D" in its title fits.
+  test("a page context is measured in the bytes the engine encodes it to", () => {
+    const browser = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+    expect(wireBytes({ a: "<&>" })).toBe('{"a":"\\u003c\\u0026\\u003e"}'.length);
+    expect(wireBytes({ a: "\u2028\u2029" })).toBe('{"a":"\\u2028\\u2029"}'.length);
+    expect(wireBytes({ a: "é›" })).toBe(browser({ a: "é›" }));
+    const padded = (n: number): AssistantPageContext => ({
+      ...context,
+      title: "R&D",
+      query: { q: "x".repeat(n) },
+    });
+    const atBound = padded(ASSISTANT_PAGE_CONTEXT_MAX_BYTES - browser(padded(0)));
+    expect(browser(atBound)).toBe(ASSISTANT_PAGE_CONTEXT_MAX_BYTES);
+    expect(pageContextFits(atBound)).toBe(false);
+    expect(pageContextFits({ ...atBound, title: "R-D" })).toBe(true);
+  });
+
+  // AN ACTION'S ARGUMENTS ARE HELD TO THE BOUNDS THE ENGINE READS A SCHEMA BY,
+  // in every part, wherever a screen's data can push them: the members of an
+  // object, the values an enum lists, each listed or constant value, a
+  // description, and the whole schema's bytes, each named where it is
+  // broken. Mutation: drop any one check, or the walk into a part's parts,
+  // and its case here is called fit.
+  test("an action's arguments are held to the bounds the engine reads a schema by", () => {
+    const many = (n: number, pad = 0) =>
+      Array.from({ length: n }, (_, i) => `seat-${i}${"y".repeat(pad)}`);
+    expect(
+      actionArgsProblem({
+        type: "object",
+        additionalProperties: false,
+        properties: { seat: { type: "string", enum: many(ASSISTANT_ACTION_ARGS_MAX_ENUM) } },
+      }),
+    ).toBeNull();
+    expect(
+      actionArgsProblem({
+        type: "object",
+        properties: { seat: { type: "string", enum: many(ASSISTANT_ACTION_ARGS_MAX_ENUM + 1) } },
+      }),
+    ).toBe("args.seat lists 65 values, over 64");
+    expect(
+      actionArgsProblem({
+        type: "object",
+        properties: Object.fromEntries(
+          many(ASSISTANT_ACTION_ARGS_MAX_MEMBERS + 1).map((name) => [name, { type: "string" }]),
+        ),
+      }),
+    ).toBe("args declares 33 members, over 32");
+    expect(
+      actionArgsProblem({
+        type: "array",
+        items: {
+          type: "string",
+          description: "d".repeat(ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES + 1),
+        },
+      }),
+    ).toBe("args[]'s description is not text of at most 300 characters");
+    expect(
+      actionArgsProblem({ oneOf: [{ const: "x".repeat(ASSISTANT_PAGE_VALUE_MAX_BYTES + 1) }] }),
+    ).toBe("args(1) lists a value that is not plain text of at most 512 bytes");
+    expect(actionArgsProblem({ type: "string", enum: many(60, 100) })).toMatch(
+      /^its arguments are \d+ bytes, over 6144$/,
+    );
   });
 
   test("a viewer answer with no assistant member reads as disabled", () => {

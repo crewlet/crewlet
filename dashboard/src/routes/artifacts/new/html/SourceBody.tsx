@@ -64,10 +64,17 @@ import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
 import { titleHold, titleProblem, useNoPagesHold, useSaveIn, useWorkItem } from "../create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
+import { filedTaskText, useFileArtifactTask } from "../fileTask.ts";
 import { useWhoBuildsIt } from "../WhoBuildsIt.tsx";
 import { createDraft, linesOf } from "../assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTool, chosenAgent, taskRefusal, useAskPanel } from "../AskAgent.tsx";
 import { pageName, taskBody, taskTitle } from "./brief.ts";
 import { DraftPreview } from "./DraftPreview.tsx";
@@ -180,17 +187,20 @@ export function SourceBody() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
   const access = useArtifactAccess({ app: true });
   const editor = useRef<SourceEditorHandle>(null);
 
   const initial = useMemo(() => skeleton(), []);
-  const [files, setFiles] = useState<PageFile[]>([
+  const [files, setFiles] = useDraftState<PageFile[]>([
     { path: "index.html", kind: "text", text: initial },
   ]);
   const [active, setActive] = useState("index.html");
-  const [typedTitle, setTypedTitle] = useState<string | null>(null);
-  const [overrides, setOverrides] = useState<ReadonlyMap<ArtifactCapability, boolean>>(new Map());
+  const [typedTitle, setTypedTitle] = useDraftState<string | null>(null);
+  const [overrides, setOverrides] = useDraftState<ReadonlyMap<ArtifactCapability, boolean>>(
+    new Map(),
+  );
   const [skipped, setSkipped] = useState<string[]>([]);
   const [side, setSide] = useState<"preview" | "checks">("preview");
   const [leaving, setLeaving] = useState(false);
@@ -220,7 +230,7 @@ export function SourceBody() {
   const panel = useAskPanel(true);
   const who = useWhoBuildsIt("html");
   const task = useFileArtifactTask();
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useDraftState("");
   const agent = chosenAgent(who)?.seat;
   // THE PAGE'S TITLE NAMES THE TASK once the person has given one, or written
   // a page that has one; the skeleton's own placeholder title names nothing.
@@ -230,7 +240,7 @@ export function SourceBody() {
   const handed = entrySource
     ? `${taskBody(asked)}\n\nBuild on the page as it stands (${entry}):\n\n\`\`\`html\n${entrySource.trimEnd()}\n\`\`\``
     : taskBody(asked);
-  const sent = artifactTaskBody("html", handed);
+  const sent = filedTaskText({ kind: "html", brief: handed }, saveIn);
   const sentBytes = utf8Bytes(sent);
   const noPages = useNoPagesHold();
   const askHold =
@@ -271,26 +281,26 @@ export function SourceBody() {
         "a file you know in full. You make no images; pictures are files the person brings.",
       step: panel.open ? "ask" : side,
       title,
-      setTitle: setTypedTitle,
+      setTitle: writeVia(setTypedTitle, (next: string) => next),
       brief,
       setBrief,
       who,
       extra: {
         value: { files, capabilities },
         fields: pageFields(files),
-        apply: (next) => {
-          if (next.files !== files) setFiles([...next.files]);
-          if (next.capabilities !== capabilities) {
-            setOverrides(
-              new Map(
-                CAPABILITY_CHOICES.map((c) => [
-                  c.capability,
-                  next.capabilities.includes(c.capability),
-                ]),
-              ),
-            );
-          }
-        },
+        write: writeParts<PageState>(
+          { files, capabilities },
+          {
+            files: writeVia(setFiles, (next: PageState["files"]) => [...next]),
+            // HELD AS EVERY CHOICE'S OVERRIDE, so a capability the change
+            // leaves out is turned off rather than left to what is detected.
+            capabilities: writeVia(
+              setOverrides,
+              (next: PageState["capabilities"]) =>
+                new Map(CAPABILITY_CHOICES.map((c) => [c.capability, next.includes(c.capability)])),
+            ),
+          },
+        ),
       },
       blocked: () => (running ? "The preview is being published." : null),
     }),

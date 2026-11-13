@@ -54,6 +54,7 @@ type Fleet struct {
 	runParts     map[runPartKey]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
+	atlasSources map[string][]byte
 
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
@@ -192,6 +193,7 @@ func NewFleet() *Fleet {
 		runParts:          map[runPartKey]coord.Record{},
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
+		atlasSources:      map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
@@ -403,15 +405,21 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	if f.set {
 		previous = f.target.At
 	}
+	at := coord.ActivationAt(req.At, previous)
+	// HELD TO WHAT ONE KEY HOLDS by the very record the KV writes for it,
+	// refused before anything here changes.
+	value, err := coord.ActivationValue(req, payload, at)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err := coord.HoldValue("the activation pointer", len(value)); err != nil {
+		return coord.Activation{}, err
+	}
 	f.payload = payload
 	f.epoch++
 	f.target = coord.Activation{
-		Epoch: f.epoch, RevisionID: req.RevisionID,
-		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
-		Origin: req.Origin, Restored: req.Restore,
-	}
-	if !f.target.Origin.CreatedAt.IsZero() {
-		f.target.Origin.CreatedAt = f.target.Origin.CreatedAt.UTC()
+		Epoch: f.epoch, RevisionID: req.RevisionID, At: at, Summary: req.Summary,
+		Origin: req.Origin.UTC(), Restored: req.Restore,
 	}
 	f.set = true
 	return f.target, nil
@@ -1003,6 +1011,9 @@ func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an integration status needs a surface name")
 	}
+	if err := coord.HoldValue("the integration status of "+kind, len(value)); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.integrations[kind] = bytes.Clone(value)
@@ -1016,6 +1027,43 @@ func (f *Fleet) DeleteIntegrationStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.integrations, kind)
+	return nil
+}
+
+// ---- the atlas sources' standings --------------------------------------- //
+
+// AtlasSourceStatuses returns every recorded standing, keyed by source, each
+// cloned on the way out as the integration statuses are.
+func (f *Fleet) AtlasSourceStatuses(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasSources))
+	for kind, value := range f.atlasSources {
+		out[kind] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasSourceStatus records one source's standing.
+func (f *Fleet) PutAtlasSourceStatus(_ context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an atlas source standing needs a source name")
+	}
+	if err := coord.HoldValue("the atlas source standing of "+kind, len(value)); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasSources[kind] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasSourceStatus drops a source's standing; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasSourceStatus(_ context.Context, kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasSources, kind)
 	return nil
 }
 

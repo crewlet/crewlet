@@ -30,7 +30,7 @@ const productionSeatTTL = 45 * time.Second
 func TestCrossProjectMoveAndMergeRunOnEmbeddedKVCoordination(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")
-	claims, err := kv.Open(t.Context(), r.broker.JetStream(), kv.Config{TTL: productionSeatTTL})
+	claims, err := kv.Open(t.Context(), r.broker.JetStream(), kv.Config{TTL: productionSeatTTL, Reach: kv.InProcess})
 	if err != nil {
 		t.Fatalf("open the coordination store: %v", err)
 	}

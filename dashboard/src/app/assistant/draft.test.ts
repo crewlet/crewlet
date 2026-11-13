@@ -12,10 +12,18 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES,
+  ASSISTANT_ACTION_ARGS_MAX_MEMBERS,
+  ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES,
+  ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
+  type AssistantPageDraft,
 } from "~/contract/assistant.ts";
-import { pageContextFits } from "~/protocol/assistantWire.ts";
+import { bytesOf } from "~/lib/clip.ts";
+import { orList } from "~/lib/words.ts";
+import { heldWrite } from "~/test/drafts.ts";
+import { pageContextFits, wireBytes } from "~/protocol/assistantWire.ts";
 import {
   applyPageAction,
   buildPageContext,
@@ -29,10 +37,13 @@ import {
 } from "./context.ts";
 import {
   draftSetAction,
+  draftSetArgs,
   draftSnapshot,
   isSecretDraftPath,
+  listing,
   parseDraftChange,
   refuse,
+  said,
   type AssistantDraftSpec,
 } from "./draft.ts";
 
@@ -74,7 +85,7 @@ function spec(value: Form = FORM, apply = vi.fn()): AssistantDraftSpec<Form> {
       { path: "password", label: "Password", secret: true, read: (f) => f.password },
       { path: "api_key", label: "Key", read: (f) => f.apiKey, write: (f) => f },
     ],
-    apply,
+    write: heldWrite(apply),
   };
 }
 
@@ -151,6 +162,138 @@ describe("the draft a page sends", () => {
   });
 });
 
+/** A snapshot of `n` editable text fields: labels of `label` characters, hints of `hint`, each holding `value`. */
+function editable(n: number, label: number, hint: number, value = "v"): AssistantPageDraft {
+  return {
+    kind: "client",
+    fields: Array.from({ length: n }, (_, i) => ({
+      path: `f${i}`,
+      label: `F${i}`.padEnd(label, "x"),
+      kind: "text" as const,
+      value,
+      ...(hint > 0 ? { hint: "h".repeat(hint) } : {}),
+      editable: true,
+    })),
+    more: 0,
+  };
+}
+
+/**
+ * WHAT draft.set DECLARES IT TAKES IS A SCHEMA THE ENGINE READS, or nothing.
+ *
+ * A member per editable field grows with the draft, and the engine refuses
+ * the whole page context, and the question asked with it, for an action
+ * declaring more members than one object may hold, encoding past its bytes,
+ * or carrying a description past its bound
+ * (`internal/assistant/wire.ActionArgs`). Past the members or the bytes, the
+ * frame sends `draft.set` with no arguments (`buildPageContext`), which the
+ * engine takes for it alone, reading the draft's editable fields instead; a
+ * description is cut to its bound, and the example offered only where it still
+ * fits, since either is better cut than the whole declaration lost.
+ */
+describe("what draft.set declares it takes", () => {
+  // Mutation: drop the guard's members check, or its bytes check, and the
+  // 33-member or the twenty wide members are declared.
+  test("a member per editable field while one schema may hold them, and none past that", () => {
+    const page: FramePage = {
+      screen: "brand-setup",
+      title: "Brand › Set up",
+      path: ["company"],
+      params: {},
+      query: {},
+    };
+    const sent = (draft: AssistantPageDraft) =>
+      buildPageContext(page, {
+        draft,
+        actions: {
+          "draft.set": {
+            ...draftSetAction(() => null),
+            args: draftSetArgs(draft),
+          } as PageActionSpec<unknown>,
+        },
+      });
+    const most = sent(editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS, 10, 0));
+    expect(
+      Object.keys(most.action_args?.["draft.set"]?.properties?.values?.properties ?? {}),
+    ).toHaveLength(ASSISTANT_ACTION_ARGS_MAX_MEMBERS);
+    // PAST THE MEMBERS, and TWENTY MEMBERS at the longest label and hint a
+    // field carries, under the member bound and over the bytes: still
+    // offered, with no arguments.
+    for (const past of [
+      editable(ASSISTANT_ACTION_ARGS_MAX_MEMBERS + 1, 10, 0),
+      editable(20, 120, 200),
+    ]) {
+      const context = sent(past);
+      expect(context.accepts).toEqual(["draft.set"]);
+      expect(context.action_args?.["draft.set"]).toBeUndefined();
+      expect(pageContextFits(context)).toBe(true);
+    }
+  });
+
+  // Mutation: send the label and hint whole, and the description runs past
+  // the engine's bound.
+  test("cuts a description at the engine's bound, keeping the words that say its kind", () => {
+    const args = draftSetArgs({
+      kind: "client",
+      fields: [
+        {
+          path: "tags",
+          label: "T".repeat(120),
+          hint: "h".repeat(200),
+          kind: "list",
+          value: "",
+          editable: true,
+        },
+      ],
+      more: 0,
+    });
+    const description = args?.properties?.values?.properties?.tags?.description ?? "";
+    expect([...description]).toHaveLength(ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES);
+    expect(description).toMatch(/h…\. A list of items, or one item per line\.$/);
+  });
+
+  // A VALUE RUNS TO A THOUSAND CHARACTERS, so the example it makes is left
+  // out where it would push the schema past its bytes, and the members stay.
+  // Mutation: always offer the example, and this one is declared.
+  test("offers a field's own value as the example only where it still fits", () => {
+    const long = draftSetArgs(
+      editable(16, 120, 200, "x".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES)),
+    );
+    expect(Object.keys(long?.properties?.values?.properties ?? {})).toHaveLength(16);
+    expect(long?.examples).toBeUndefined();
+    expect(draftSetArgs(editable(16, 120, 200))?.examples).toEqual([{ values: { f0: "v" } }]);
+  });
+
+  // WHAT draft.set DECLARES IS SHED BEFORE ANY FIELD OF THE DRAFT: the
+  // fields say it again, and a field shed with its member still declared was
+  // one the model was offered and the engine refused as not in the draft.
+  // Mutation: shed the fields first, and fields the context had room for go.
+  test("a page over its budget sheds what draft.set declares before a field of its draft", () => {
+    const page: FramePage = {
+      screen: "brand-setup",
+      title: "Brand › Set up",
+      path: ["company"],
+      params: {},
+      query: {},
+    };
+    const draft = editable(11, 100, 150, "y".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES));
+    const args = draftSetArgs(draft);
+    const action = { ...draftSetAction(() => null), args } as PageActionSpec<unknown>;
+    const declared = buildPageContext(page, { draft });
+    // THE CASE IT MEANS: the draft fits whole, and does not beside its arguments.
+    expect(pageContextFits(declared)).toBe(true);
+    expect(wireBytes({ ...declared, action_args: { "draft.set": args } })).toBeGreaterThan(
+      ASSISTANT_PAGE_CONTEXT_MAX_BYTES,
+    );
+    const context = buildPageContext(page, { draft, actions: { "draft.set": action } });
+    expect(pageContextFits(context)).toBe(true);
+    expect(context.accepts).toEqual(["draft.set"]);
+    expect(context.action_args?.["draft.set"]).toBeUndefined();
+    expect(context.draft?.fields).toHaveLength(11);
+    expect(context.draft?.more).toBe(0);
+  });
+});
+
 describe("draft.set", () => {
   test("sets editable fields through the screen's write and shows each one's value now", () => {
     const parsed = parseDraftChange(spec(), { values: { title: "On call", tags: "ops\npager\n" } });
@@ -169,6 +312,48 @@ describe("draft.set", () => {
             items: ["ops", "pager"],
             currentItems: ["ops"],
           },
+        ],
+      },
+    });
+  });
+
+  // A CHANGE IS A SET OF VALUES, WRITTEN IN THE SCREEN'S ORDER: the engine's
+  // encoder sorts a proposal's values by path, so a field whose control waits
+  // on another is named before it as often as after. Mutation: write in the
+  // payload's order, and the access named first is refused while the switch
+  // named after it is still off.
+  test("writes the values in the order the screen declares its fields, not the order they are named in", () => {
+    interface Access {
+      on: boolean;
+      level: string;
+    }
+    const access: AssistantDraftSpec<Access> = {
+      kind: "client",
+      scope: "Access (not saved)",
+      value: { on: false, level: "" },
+      fields: [
+        {
+          path: "switch",
+          label: "On",
+          read: (a) => (a.on ? "On" : "Off"),
+          write: (a, v) => ({ ...a, on: v === "On" }),
+        },
+        {
+          path: "access",
+          label: "Access",
+          read: (a) => a.level,
+          write: (a, v) => (a.on ? { ...a, level: String(v) } : refuse("Turn it on first.")),
+        },
+      ],
+      write: heldWrite(vi.fn()),
+    };
+    expect(parseDraftChange(access, { values: { access: "Admin", switch: "On" } })).toEqual({
+      ok: true,
+      value: {
+        next: { on: true, level: "Admin" },
+        rows: [
+          { field: "On", next: "On", current: "Off" },
+          { field: "Access", next: "Admin", current: "(empty)" },
         ],
       },
     });
@@ -259,7 +444,7 @@ describe("a file field", () => {
         },
       },
     ],
-    apply: vi.fn(),
+    write: heldWrite(vi.fn()),
   };
 
   test("is sent as a file field, by its name, that the assistant may set", () => {
@@ -304,5 +489,51 @@ describe("a file field", () => {
       ok: false,
       reason: "Not that one.",
     });
+  });
+});
+
+// A REFUSAL IS ONE SHORT LINE: the reason a page action's report carries back
+// to the model, which the engine takes within its line. The template's own
+// words stay whole, a value that fits stays whole, and the longest give way
+// first, so the room a short value leaves goes to the long ones rather than
+// being cut away from all of them alike; a list says as many as fit and how
+// many more. Mutation: give every value the same share whatever the others
+// take, and the two long values here are cut further than the line needs.
+describe("a refusal said in one short line", () => {
+  const line = ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES;
+
+  test("is the sentence itself where it fits", () => {
+    expect(said`${"Datadog"} offers ${"SRE"} no level called “${"Owner"}”.`).toBe(
+      "Datadog offers SRE no level called “Owner”.",
+    );
+    expect(said`It offers ${listing(["View", "Edit", "Admin"], orList)}.`).toBe(
+      "It offers View, Edit or Admin.",
+    );
+  });
+
+  test("keeps its words and its short values whole, the long ones sharing what is left", () => {
+    const sentence = said`${"QA"} is off on ${"設".repeat(300)}, and its ${"x".repeat(500)} waits.`;
+    expect(bytesOf(sentence)).toBeLessThanOrEqual(line);
+    expect(bytesOf(sentence)).toBeGreaterThan(line - 8);
+    expect(sentence).toMatch(/^QA is off on 設+…, and its x+… waits\.$/);
+    const [, shorter, longer] = /on (設+)…, and its (x+)…/.exec(sentence) ?? [];
+    // An even share of the room the words and "QA" left: a third of the bytes
+    // each, give or take a character.
+    expect(Math.abs(bytesOf(shorter ?? "") - bytesOf(longer ?? ""))).toBeLessThanOrEqual(3);
+  });
+
+  test("lists as many names as fit, then how many more", () => {
+    const names = Array.from({ length: 40 }, (_, i) => `acme/service-${i + 1}`);
+    const sentence = said`GitHub's connection reaches no repository called “${"acme/secret"}”. It reaches: ${listing(names)}.`;
+    expect(bytesOf(sentence)).toBeLessThanOrEqual(line);
+    expect(sentence).toMatch(
+      /^GitHub's .+ called “acme\/secret”\. It reaches: acme\/service-1, .+ and \d+ more\.$/,
+    );
+  });
+
+  test("says how many there are where not even the first fits", () => {
+    const names = ["設".repeat(200), "設".repeat(200)];
+    const sentence = said`It offers ${listing(names)}.`;
+    expect(sentence).toBe("It offers 2 of them.");
   });
 });

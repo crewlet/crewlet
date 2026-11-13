@@ -14,6 +14,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { LayerHost } from "@crewlethq/ui";
 import { SlidesView, deckEditFields } from "./SlidesView.tsx";
+import { DECK_NOTES_MAX_RUNES, DECK_TITLE_MAX_BYTES } from "~/contract/artifactsworkspace.ts";
 import { context, openFrame } from "./draftTesting.ts";
 import { draftSnapshot, parseDraftChange } from "~/app/assistant/draft.ts";
 import { draftOf } from "~/lib/artifacts/deck.ts";
@@ -21,6 +22,7 @@ import { titleOf } from "~/lib/slides.tsx";
 import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactDeck, ArtifactDetail } from "~/protocol/index.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 // A READER WHO MAY NOT PUBLISH: the deck shows its slides rather than the editor.
 vi.mock("~/lib/artifacts/access.ts", () => ({ useArtifactAccess: () => ({ can: false }) }));
@@ -196,7 +198,7 @@ test("a deck's edit reads and sets the deck's title and each slide's title and n
     scope: "Your edit (not saved)",
     value: draft,
     fields: deckEditFields(draft.order),
-    apply: () => {},
+    write: heldWrite(),
   };
   const first = draft.slides[draft.order[0]!]!;
   expect(draftSnapshot(spec).fields[1]).toMatchObject({
@@ -212,4 +214,26 @@ test("a deck's edit reads and sets the deck's title and each slide's title and n
   expect(titleOf(parsed.value.next.slides[draft.order[0]!]!.root)).toBe("Where we are");
   expect(parsed.value.next.slides[draft.order[1]!]!.notes).toBe("Pause.");
   expect(parseDraftChange(spec, { values: { "slides.1.notes": "x".repeat(4001) } }).ok).toBe(false);
+});
+
+// THE ENGINE'S UNITS: a deck's title is bounded in UTF-8 bytes
+// (`slideformat.MaxTitleBytes`) and a slide's notes in characters
+// (`slideformat.MaxNotesRunes`), so a title of forty-one Japanese characters
+// is past it while forty are not, and notes of emoji count one each.
+test("a deck's edit holds its title to the engine's bytes and its notes to its characters", () => {
+  const draft = draftOf(deck, 1);
+  const spec = {
+    kind: "client" as const,
+    scope: "Your edit (not saved)",
+    value: draft,
+    fields: deckEditFields(draft.order),
+    write: heldWrite(),
+  };
+  const set = (values: Record<string, string>) => parseDraftChange(spec, { values });
+  expect(set({ title: "語".repeat(DECK_TITLE_MAX_BYTES / 3) }).ok).toBe(true);
+  const long = set({ title: "語".repeat(DECK_TITLE_MAX_BYTES / 3 + 1) });
+  expect(long.ok).toBe(false);
+  if (!long.ok) expect(long.reason).toMatch(/^The deck's title is about 1 character too long/);
+  expect(set({ "slides.1.notes": "🙂".repeat(DECK_NOTES_MAX_RUNES) }).ok).toBe(true);
+  expect(set({ "slides.1.notes": "🙂".repeat(DECK_NOTES_MAX_RUNES + 1) }).ok).toBe(false);
 });

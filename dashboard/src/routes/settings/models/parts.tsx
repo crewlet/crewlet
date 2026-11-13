@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { Menu, RelativeTime, StatusDot, Text } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
+import { SEAT_HANDLE } from "~/contract/identity.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
 import type { ModelView } from "./data.ts";
@@ -54,7 +55,7 @@ const FOCUSES = ["credential", "host-login"] as const;
 const isCategory = (v: string): v is JobCategory =>
   (CATEGORY_ORDER as readonly string[]).includes(v);
 /** A seat handle as the engine writes one (`roles[].handle`), so an address cannot carry anything else. */
-const HANDLE = /^[a-z0-9][a-z0-9-]*$/;
+const HANDLE = new RegExp(SEAT_HANDLE);
 
 /**
  * The uses to add, as one parameter: `assistant`, or `category:handle`, comma

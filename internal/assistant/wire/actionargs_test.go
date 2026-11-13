@@ -135,6 +135,24 @@ func TestAnOperationIsHeldToTheShapeItsOpNames(t *testing.T) {
 	}
 }
 
+// A STRING IS HELD TO ITS PATTERN, as written: a seat's handle on a screen
+// with more seats than an enum lists is held to the handle's grammar, and a
+// value outside it is refused naming the pattern, before any card. Mutation:
+// skip the pattern, and "QA Lead" passes.
+func TestAStringIsHeldToItsPattern(t *testing.T) {
+	t.Parallel()
+	seat := decode(t, `{"type": "object", "additionalProperties": false, "properties": {
+		"seat": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "maxLength": 64}}}`)
+	if err := seat.Check(value(t, `{"seat": "qa-lead"}`)); err != nil {
+		t.Errorf("a handle was refused: %v", err)
+	}
+	err := seat.Check(value(t, `{"seat": "QA Lead"}`))
+	if want := `args.seat is text matching ^[a-z0-9][a-z0-9-]*$, not "QA Lead"`; err == nil ||
+		!strings.Contains(err.Error(), want) {
+		t.Errorf("%v, want it to say %q", err, want)
+	}
+}
+
 // A SCHEMA THE ENGINE WOULD READ DIFFERENTLY FROM THE SCREEN IS REFUSED.
 //
 // A keyword outside the vocabulary (it would be ignored, and the engine would
@@ -150,14 +168,16 @@ func TestADeclaredSchemaIsHeldToTheVocabulary(t *testing.T) {
 		deep = `{"type": "object", "properties": {"x": ` + deep + `}}`
 	}
 	for name, raw := range map[string]string{
-		"an unknown keyword":         `{"type": "object", "minProperties": 1}`,
-		"an unknown type":            `{"type": "date"}`,
-		"a pattern RE2 refuses":      `{"type": "object", "patternProperties": {"(?<=a)b": {}}}`,
-		"a required member unnamed":  `{"type": "object", "required": ["seat"], "properties": {}}`,
-		"a schema nested too deep":   deep,
-		"an example it refuses":      `{"type": "object", "additionalProperties": false, "examples": [{"x": 1}]}`,
-		"examples below the top":     `{"type": "object", "properties": {"x": {"type": "string", "examples": ["a"]}}}`,
-		"a description with a break": `{"type": "string", "description": "one\u0000two"}`,
+		"an unknown keyword":           `{"type": "object", "minProperties": 1}`,
+		"an unknown type":              `{"type": "date"}`,
+		"a pattern RE2 refuses":        `{"type": "object", "patternProperties": {"(?<=a)b": {}}}`,
+		"a string pattern RE2 refuses": `{"type": "string", "pattern": "(?<=a)b"}`,
+		"a string pattern too long":    `{"type": "string", "pattern": "` + strings.Repeat("a", 129) + `"}`,
+		"a required member unnamed":    `{"type": "object", "required": ["seat"], "properties": {}}`,
+		"a schema nested too deep":     deep,
+		"an example it refuses":        `{"type": "object", "additionalProperties": false, "examples": [{"x": 1}]}`,
+		"examples below the top":       `{"type": "object", "properties": {"x": {"type": "string", "examples": ["a"]}}}`,
+		"a description with a break":   `{"type": "string", "description": "one\u0000two"}`,
 	} {
 		if _, err := wire.DecodeActionArgs([]byte(raw)); !errors.Is(err, wire.ErrInvalid) {
 			t.Errorf("%s validated (%v)", name, err)

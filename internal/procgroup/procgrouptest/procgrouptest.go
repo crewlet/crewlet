@@ -82,7 +82,7 @@ func StandInRaceOptions() string {
 // test, so one still running then belongs to a test that failed to end it, and
 // holding on would leave a stray process on the developer's machine for good.
 func Hold() {
-	time.Sleep(HoldLimit)
+	time.Sleep(HoldLimit) //fixedwait:simulated a helper process that stays up until the code under test ends it
 }
 
 // HoldLimit is how long [Hold] holds. It is the default -timeout of `go test`,
@@ -124,9 +124,9 @@ func AwaitGone(t testing.TB, pid int, within time.Duration) bool {
 		if !running {
 			return true
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: every caller fails the case on the false it returns
 			return false
 		}
-		time.Sleep(awaitPoll)
+		time.Sleep(awaitPoll) //fixedwait:liveness
 	}
 }

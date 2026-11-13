@@ -203,6 +203,28 @@ describe("problems", () => {
     );
   });
 
+  // THE ENGINE'S GRAMMARS, held as `MODEL_KEY_PATTERN` and `REFERENCE_NAME`:
+  // a model's name as `config.ProviderKeyPattern` takes one, and its secret's
+  // as the secret store does, which takes lowercase and a leading underscore.
+  test("a model's name and its secret's are held to the engine's grammars, and no narrower", () => {
+    const named = (key: string) =>
+      draftProblems(draft({ key }), []).filter((p) => p.path === "key");
+    for (const key of ["sonnet-key", "9b", "gpt-5.1_mini"]) expect(named(key), key).toEqual([]);
+    for (const key of ["Sonnet", "-sonnet", ".hidden", "son net", "son/net"]) {
+      expect(named(key)[0]?.message, key).toMatch(/^Use lowercase letters, digits, dots/);
+    }
+    const secret = (variable: string) =>
+      draftProblems(draft({ variable }), []).filter((p) => p.path === "variable");
+    for (const variable of ["ANTHROPIC_API_KEY", "anthropic_key", "_KEY2"]) {
+      expect(secret(variable), variable).toEqual([]);
+    }
+    for (const variable of ["2KEY", "MY-KEY", "MY KEY", ""]) {
+      expect(secret(variable)[0]?.message, variable).toBe(
+        "Name the secret with letters, digits and underscores, starting with a letter or an underscore.",
+      );
+    }
+  });
+
   test("the engine's path is not read out, and its problem on a field the form flags is said once", () => {
     const engine: ConfigProblem = {
       path: "providers.llm.sonnet-key.model",

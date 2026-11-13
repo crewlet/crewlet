@@ -36,12 +36,14 @@ func TestEveryLevelGrantsAndTheProvisionerHoldsThemAll(t *testing.T) {
 		// Zone WAF; an allowlist matches on the account's IP lists.
 		config.CloudflareLevelRead: {
 			"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
-			"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read", "Account Analytics Read",
+			"Zone Transform Rules Read", "Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read", "Account Analytics Read",
 			"Account Rule Lists Read", "Account Settings Read",
 		},
-		config.CloudflareLevelOperate:   {"Cache Purge", "Cache Settings Write"},
-		config.CloudflareLevelConfigure: {"Zone Settings Write", "Response Compression Write"},
-		config.CloudflareLevelSecure:    {"Zone WAF Write", "Account Rule Lists Write"},
+		config.CloudflareLevelOperate: {"Cache Purge", "Cache Settings Write"},
+		config.CloudflareLevelConfigure: {
+			"Zone Settings Write", "Response Compression Write", "Zone Transform Rules Write",
+		},
+		config.CloudflareLevelSecure: {"Zone WAF Write", "Account Rule Lists Write"},
 	}
 	prov := cloudflare.ProvisionerGroups()
 	var below []string

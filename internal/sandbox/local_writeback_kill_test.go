@@ -59,7 +59,7 @@ func TestABoxTeardownKilledPartWayNeverLeavesHalfALogin(t *testing.T) {
 			_ = cmd.Wait()
 			t.Fatalf("trial %d: the boxes did not start (%q, %v): %s", trial, line, err, stderr.String())
 		}
-		time.Sleep(time.Duration(rand.IntN(30_000)) * time.Microsecond)
+		time.Sleep(time.Duration(rand.IntN(30_000)) * time.Microsecond) //fixedwait:simulated a crash landing at a random instant of the boxes' loop; the kills that landed mid-write are counted below
 		if err := cmd.Process.Kill(); err != nil {
 			t.Fatal(err)
 		}

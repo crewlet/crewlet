@@ -44,16 +44,22 @@ import {
 import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
-import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
+import { ARTIFACT_LABEL_MAX_BYTES, DOC_INDEX_PATH } from "~/contract/artifactsworkspace.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { clashesOf } from "~/lib/merge.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKindControls } from "~/lib/artifacts/kindControls.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  writeTo,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
 import {
-  DOC_INDEX,
   addTab,
   addTabProblem,
   docChanged,
@@ -161,9 +167,9 @@ export function DocEditor({
   const toast = useToast();
   const save = useKeyedGesture();
   const base = useMemo(() => docDraftOf(doc, version), [doc, version]);
-  const [draft, setDraft] = useState<DocDraft>(base);
+  const [draft, setDraft] = useDraftState<DocDraft>(base);
   const [merge, setMerge] = useState<DocMerge | null>(null);
-  const [label, setLabel] = useState("");
+  const [label, setLabel] = useDraftState("");
   const [saving, setSaving] = useState(false);
   const [discard, setDiscard] = useState(false);
   // WHAT THE SAVE IS AGAINST: the version opened, or the newer one a refused
@@ -215,7 +221,7 @@ export function DocEditor({
       const indexChanges = c.index || c.added.length > 0 || c.removed.length > 0;
       const indexRaw =
         against.indexed && indexChanges
-          ? await versionText(detail.id, against.base, DOC_INDEX)
+          ? await versionText(detail.id, against.base, DOC_INDEX_PATH)
           : null;
       const plan = docPublishPlan(against, d, indexRaw);
       const brought =
@@ -287,13 +293,13 @@ export function DocEditor({
     scope: `Your edit of “${detail.title}” (not saved)`,
     value: { draft, label },
     fields: docEditFields(draft.order),
-    apply: (next) => {
-      if (next.draft !== draft) {
-        setDraft(next.draft);
-        setLoaded((n) => n + 1);
-      }
-      if (next.label !== label) setLabel(next.label);
-    },
+    write: writeParts(
+      { draft, label },
+      {
+        draft: writeTo(setDraft, { also: () => setLoaded((n) => n + 1) }),
+        label: setLabel,
+      },
+    ),
     blocked: () =>
       busy
         ? "Saving the doc."

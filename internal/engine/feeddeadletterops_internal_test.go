@@ -48,8 +48,8 @@ func newSubjectBox() *subjectBox {
 	return &subjectBox{held: map[string][]queue.Kept{}, fails: map[string]error{}}
 }
 
-func (b *subjectBox) KeepDeadLetter(context.Context, string, []byte, []byte) error {
-	return errors.New("no case here keeps through the box: it dates its entries itself")
+func (b *subjectBox) KeepDeadLetter(context.Context, string, string, []byte, []byte) (bool, error) {
+	return false, errors.New("no case here keeps through the box: it dates its entries itself")
 }
 
 func (b *subjectBox) DeadLettersOn(_ context.Context, subject string) ([]queue.Kept, error) {
@@ -306,7 +306,8 @@ func TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt(t *testing.T) {
 		chat:     {letterBytes(t, letterOn(chatFeed, 77, now)), []byte("sealed frame")},
 		poisonOn: {nil, []byte("a poison message")},
 	} {
-		if err := q.KeepDeadLetter(t.Context(), subject, entry.header, entry.body); err != nil {
+		if _, err := q.KeepDeadLetter(t.Context(), subject, "the entry on "+subject, entry.header,
+			entry.body); err != nil {
 			t.Fatalf("keep on %s: %v", subject, err)
 		}
 	}

@@ -126,6 +126,7 @@ is a table ("Agents"), and one record is its values and the lists it holds
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
 | Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
+| Atlas (needs `atlas`) | The company's [atlas](atlas.md): search its entries (domains and host names, services, servers, databases, repositories, monitors, vendor accounts, tool servers and models) by words of a name, by kind, by the map's lane, by vendor, by confidence or by health; read one entry with every fact the atlas holds on it and where each came from; and trace what depends on an entry, or what it depends on, hop by hop, along the relations the map draws. "What do we use for monitoring?", "Where does our code live?" and "What depends on the database?" are answered this way. An entry the answer names is its chip, and **Show on the map** opens Company › Atlas with that entry's panel open, lit along the trace where the answer was one. A person without the permission is told so, as the screen tells them, and never handed an entry |
 | Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 
@@ -136,10 +137,12 @@ title says what its read was narrowed to ("Spend by agent, last 14 days",
 "Tasks, urgent, due in the next 7 days"), and a record read twice in one
 answer is one chip.
 
-**Use the names you use.** Ask about "the QA Engineer", "the Company space" or
-"the Marketing project": Ask Crewlet resolves a seat, unit, project or space
-by its name or its key, through your own reads of the chart, the projects and
-the spaces, and cards name seats by their names. A change that names something
+**Use the names you use.** Ask about "the QA Engineer", "the Company space",
+"the Marketing project" or "the orders database": Ask Crewlet resolves a seat,
+unit, project or space by its name or its key, through your own reads of the
+chart, the projects and the spaces, and an atlas entry by its exact name or
+key through your own search of the atlas, and cards name seats by their
+names. A change that names something
 that is not there, or a name two records share, is refused before any card,
 listing the choices, rather than after you approve it; every name the call got
 wrong is named at once, beside anything else wrong with it, so Ask Crewlet
@@ -172,15 +175,22 @@ be made in another screen's editor it offers that screen to open.
 
 **Work on what you have open.** Every screen with a draft or a form (the brand
 setup, the Brand page's cards, the principles, a page or a doc being written,
-the org builder, a new artifact) tells Ask Crewlet what is open: which draft,
-the step you are on, and its current values, so "check my draft" is answered
-from the draft in front of you rather than a search. Values are sent as you
-typed them, with any password, token or key left out, and only while the page
-chip is attached. A change Ask Crewlet proposes to that draft shows each
-field's value now beside the proposed one, applies to the draft once you
-approve it, and is saved when you save. On the brand screens it proposes
-colours, typefaces and the voice; a logo can be proposed only from a file in
-your own conversation, shown on the card as a thumbnail before you approve.
+the org builder, a new artifact, an integration's Agents tab and an agent's
+Access tab) tells Ask Crewlet what is open: which draft, the step you are on,
+and its current values, so "check my draft" is answered from the draft in
+front of you rather than a search. Values are sent as you typed them, with any
+password, token or key left out, and only while the page chip is attached. A
+change Ask Crewlet proposes to that draft shows each field's value now beside
+the proposed one, applies to the draft once you approve it, and is saved when
+you save. On the brand screens it proposes colours, typefaces and the voice; a
+logo can be proposed only from a file in your own conversation, shown on the
+card as a thumbnail before you approve. On an Agents or Access tab it reads
+each agent's access as the tab holds it, your changes not saved yet first, and
+proposes only what the tab's own controls offer: turning an agent on or off, a
+level from the integration's list, a GitHub permission's own values, and scope
+entries the connection reaches, or typed where the tab takes typed ones. An
+approved change lands in the tab's unsaved changes, and nothing changes at the
+vendor until you review and save them there.
 
 **Do deep work** on a task that needs research, scripts, generated files, the
 images you attached, or many steps, where your company turns it on: for

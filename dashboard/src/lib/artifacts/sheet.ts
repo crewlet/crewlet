@@ -20,7 +20,7 @@ import {
   type SheetStatusCategory,
 } from "@crewlethq/ui";
 import type { ArtifactRole, DataCollection, DataColumn, DataDoc } from "~/protocol/index.ts";
-import { STATUS_CATEGORIES } from "~/contract/artifacts.ts";
+import { STATUS_CATEGORIES } from "~/contract/artifactsworkspace.ts";
 import { roleIncludes } from "./words.ts";
 
 /** Whether a status option's category off the wire is one the engine defines, and the sheet draws. */

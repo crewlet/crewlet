@@ -187,9 +187,16 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 // output names. A turn can
 // launch more than one job, so without it a watcher could not say which of
 // them is still running.
+//
+// THE CLOCK MOVES ON BETWEEN THE TWO: the store dates the job as it opens it,
+// and the box is made after that, a second later on the rig's clock, so an
+// announcement that dated the job as it went out names another instant than
+// the row's, where the rig's clock left standing read them equal.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
+	launched := rig.now
+	rig.provider.Made = func(*FakeSandbox) { rig.now = rig.now.Add(time.Second) }
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -200,9 +207,9 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	if started.LaunchID == "" || started.LaunchID != run.LaunchID {
 		t.Errorf("the announcement names launch %q; the row holds %q", started.LaunchID, run.LaunchID)
 	}
-	if !started.StartedAt.Equal(run.Launch.StartedAt) || started.StartedAt.IsZero() {
-		t.Errorf("the announcement says the job started at %v; the row says %v",
-			started.StartedAt, run.Launch.StartedAt)
+	if !started.StartedAt.Equal(launched) || !run.Launch.StartedAt.Equal(launched) {
+		t.Errorf("the announcement says the job started at %v and the row %v; want both %v, the instant "+
+			"the store opened it", started.StartedAt, run.Launch.StartedAt, launched)
 	}
 }
 

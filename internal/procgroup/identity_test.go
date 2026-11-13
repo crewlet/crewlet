@@ -76,10 +76,10 @@ func awaitZombie(t *testing.T, pid int) Process {
 		if proc.Zombie {
 			return proc
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("pid %d never exited", pid)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -250,11 +250,11 @@ func TestAGroupOutlivingItsLeaderIsStillCurrent(t *testing.T) {
 		t.Fatalf("Kill: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: the case fails after it
 		if current, _ := leader.Current(); !current {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatal("the group is still current after its last member was killed")
 }
@@ -273,7 +273,7 @@ func TestInspectSeesAZombieAndThenNothing(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	var proc Process
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline: the zombie is asserted after it
 		var found bool
 		proc, found, err = Inspect(pid)
 		if err != nil || !found {
@@ -282,7 +282,7 @@ func TestInspectSeesAZombieAndThenNothing(t *testing.T) {
 		if proc.Zombie {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	if !proc.Zombie {
 		t.Fatal("an exited, unreaped child was never reported as a zombie")

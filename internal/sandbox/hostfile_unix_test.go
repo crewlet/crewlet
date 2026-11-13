@@ -104,7 +104,7 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 						if !errors.Is(err, sandbox.ErrNotRegularFile) || !strings.Contains(err.Error(), kind) {
 							t.Errorf("%s of a %s = %v; want ErrNotRegularFile saying what it is", read, kind, err)
 						}
-					case <-time.After(10 * time.Second):
+					case <-time.After(10 * time.Second): //fixedwait:liveness
 						// A blocked open is never released, so the test
 						// binary is what ends it; the red case is the point.
 						t.Fatalf("%s of a %s has not answered in 10s", read, kind)

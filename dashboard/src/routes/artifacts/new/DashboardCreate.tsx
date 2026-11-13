@@ -68,11 +68,12 @@ import {
 import { useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
-import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
+import { DASHBOARD_COLUMNS, DASHBOARD_SPEC_PATH } from "~/contract/artifactsworkspace.ts";
 import { createFromUpload, readCatalogue, uploadTexts } from "~/lib/artifacts/api.ts";
 import { refreshWords } from "~/lib/artifacts/dashboard.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { plural } from "~/lib/format.ts";
+import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
+import { bytesOverWords, plural, utf8Bytes } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -84,10 +85,21 @@ import {
 import { DashboardWidget } from "../DashboardWidget.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useSaveIn, useWorkItem } from "./create.ts";
-import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
+import {
+  artifactTaskBody,
+  filedTaskText,
+  UNMADE_ARTIFACT,
+  useFileArtifactTask,
+} from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -98,7 +110,6 @@ import {
 } from "./AskAgent.tsx";
 import {
   EMPTY_DRAFT,
-  SPEC_PATH,
   STARTERS,
   composeSpec,
   datasetOf,
@@ -211,9 +222,10 @@ export function DashboardCreate() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
-  const { folder } = useSaveIn();
-  const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const saveIn = useSaveIn();
+  const { folder } = saveIn;
+  const [title, setTitle] = useDraftState("");
+  const [draft, setDraft] = useDraftState<Draft>(EMPTY_DRAFT);
   const [open, setOpen] = useState<string | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -229,7 +241,7 @@ export function DashboardCreate() {
   const narrow = useNarrowerThan(root, NARROW_BELOW);
   const [pane, setPane] = useState<"board" | "data">("board");
   const panel = useAskPanel();
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useDraftState("");
   const who = useWhoBuildsIt("dashboard");
   const filer = useFileArtifactTask();
   const agentName = chosenAgent(who)?.seat.name ?? "";
@@ -268,13 +280,29 @@ export function DashboardCreate() {
     titleHold(title) ??
     (resolved.length === 0 ? "Add at least one figure to the board." : undefined) ??
     tooMany;
+  // THE TASK TEXT AS IT IS FILED: the brief, which nothing else bounds, and
+  // the board it refines where figures are on it (made at the press), else
+  // the folder a new one is filed in.
+  const taskBytes = utf8Bytes(
+    filedTaskText(
+      {
+        kind: "dashboard",
+        brief,
+        ...(resolved.length > 0 ? { artifact: madeFor.current?.id ?? UNMADE_ARTIFACT } : {}),
+      },
+      saveIn,
+    ),
+  );
   const askHold =
     filer.held ??
     (brief.trim() === "" ? "Say what the board should answer." : undefined) ??
     askTitleHold(title, "dashboard") ??
     (who.seat === "" ? "Add an agent to the chart first." : undefined) ??
     (who.project === "" ? "Choose the project to file the task in." : undefined) ??
-    tooMany;
+    tooMany ??
+    (taskBytes > TASK_BODY_MAX_BYTES
+      ? `The brief is ${bytesOverWords(taskBytes, TASK_BODY_MAX_BYTES)} for a task.`
+      : undefined);
 
   const add = (src: DashboardEngineSource, r: Recipe) => {
     if (!hasRoom(draft)) return;
@@ -284,9 +312,11 @@ export function DashboardCreate() {
     toast.ok(`Added “${r.title}” to the board`);
   };
 
+  /** What a starter's card opens the Data pane on: its first source. */
+  const openedOn = (s: Starter) => starterSources(s)[0] ?? null;
   const start = (s: Starter) => {
     setDraft(fromStarter(s, sources));
-    setOpen(starterSources(s)[0] ?? null);
+    setOpen(openedOn(s));
   };
 
   /** Make the board as composed, or answer null with the refusal said on the page. */
@@ -301,7 +331,7 @@ export function DashboardCreate() {
     if (!brought) {
       setUploading(true);
       try {
-        const got = await uploadTexts(null, [{ path: SPEC_PATH, text }], newActOpID());
+        const got = await uploadTexts(null, [{ path: DASHBOARD_SPEC_PATH, text }], newActOpID());
         brought = { text, ...got };
         uploaded.current = brought;
       } catch (err) {
@@ -317,7 +347,7 @@ export function DashboardCreate() {
         title: name,
         upload: brought.upload,
         files: brought.files,
-        entry: SPEC_PATH,
+        entry: DASHBOARD_SPEC_PATH,
         ...(workItem ? { workItem } : {}),
         ...(folder ? { folder } : {}),
       }),
@@ -390,10 +420,19 @@ export function DashboardCreate() {
           figures: resolved.map((r) => `${r.recipe.title} (${r.source.name})`),
         },
         fields: boardFields(draft.placed.length === 0),
-        apply: (next) => {
-          const chosen = STARTERS.find((st) => st.key === next.starter);
-          if (chosen) start(chosen);
-        },
+        // AS A PRESS OF THE STARTER'S CARD: the board started from it, and
+        // the Data pane opened on its first source.
+        write: writeVia(
+          setDraft,
+          (next: BoardState, now) => {
+            const chosen = STARTERS.find((st) => st.key === next.starter);
+            return chosen ? fromStarter(chosen, sources) : now;
+          },
+          (next) => {
+            const chosen = STARTERS.find((st) => st.key === next.starter);
+            if (chosen) setOpen(openedOn(chosen));
+          },
+        ),
       },
       blocked: () => (busy ? "The dashboard is being made." : null),
     }),

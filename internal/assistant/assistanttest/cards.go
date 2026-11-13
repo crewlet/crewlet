@@ -104,9 +104,12 @@ func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types Valu
 			t.Fatalf("%s reads %q from %q, a scope this walk does not know", name, p.Path,
 				p.From)
 		}
+		// THE EXPANDED LIST is read from the outer row or item.
 		if p.From == scopeRow && spec.Table != nil && p.Path == spec.Table.Expand {
-			// THE EXPANDED LIST is read from the outer row.
 			values, _ = cards.Lookup(answer, spec.Table.Rows).([]any)
+		}
+		if it := itemsOf(spec); p.From == scopeItem && it != nil && p.Path == it.Expand {
+			values, _ = cards.Lookup(answer, it.Path).([]any)
 		}
 		if heldBy(values, p.From, p.Path, consult) {
 			continue
@@ -167,18 +170,7 @@ func cardScopes(spec cards.Spec, answer any) (rows, records, items []any) {
 	if tb := spec.Table; tb != nil {
 		rows, _ = cards.Lookup(answer, tb.Rows).([]any)
 		if tb.Expand != "" {
-			var out []any
-			for _, row := range rows {
-				children, _ := cards.Lookup(row, tb.Expand).([]any)
-				for _, child := range children {
-					if fields, ok := child.(map[string]any); ok {
-						merged := maps.Clone(fields)
-						merged["parent"] = row
-						out = append(out, merged)
-					}
-				}
-			}
-			rows = out
+			rows = expanded(rows, tb.Expand)
 		}
 	}
 	if e := spec.Entity; e != nil {
@@ -187,9 +179,38 @@ func cardScopes(spec cards.Spec, answer any) (rows, records, items []any) {
 		}
 		if e.Items != nil {
 			items, _ = cards.Lookup(answer, e.Items.Path).([]any)
+			if e.Items.Expand != "" {
+				items = expanded(items, e.Items.Expand)
+			}
 		}
 	}
 	return rows, records, items
+}
+
+// itemsOf is the list spec's entity carries, nil for none.
+func itemsOf(spec cards.Spec) *cards.Items {
+	if spec.Entity == nil {
+		return nil
+	}
+	return spec.Entity.Items
+}
+
+// expanded is list with each entry's list at path flattened to entries of its
+// own, each under its parent, as cards.Build expands a table's rows and an
+// entity's items.
+func expanded(list []any, path string) []any {
+	var out []any
+	for _, entry := range list {
+		children, _ := cards.Lookup(entry, path).([]any)
+		for _, child := range children {
+			if fields, ok := child.(map[string]any); ok {
+				merged := maps.Clone(fields)
+				merged["parent"] = entry
+				out = append(out, merged)
+			}
+		}
+	}
+	return out
 }
 
 // Present reports whether path names a key of v at every step, whatever the

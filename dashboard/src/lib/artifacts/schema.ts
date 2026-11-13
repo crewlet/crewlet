@@ -12,9 +12,11 @@ import {
   COLLECTION_NAME_PATTERN,
   DATA_COLLECTIONS_MAX,
   DATA_COLUMNS_MAX,
+  DATA_OPTION_ID_CHARS,
+  DATA_OPTION_ID_MAX,
   FIELD_NAME_PATTERN,
   RESERVED_COLLECTIONS,
-} from "~/contract/artifacts.ts";
+} from "~/contract/artifactsworkspace.ts";
 import type {
   CollectionPreset,
   ColumnType,
@@ -25,6 +27,14 @@ import type {
 
 const COLLECTION = new RegExp(COLLECTION_NAME_PATTERN);
 const FIELD = new RegExp(FIELD_NAME_PATTERN);
+/** Every run of characters an option's id is not written in, which a label's become `_`. */
+const NOT_OPTION_ID = new RegExp(`[^${DATA_OPTION_ID_CHARS}]+`, "g");
+/**
+ * The room a minted option id keeps for the suffix that makes it unique, `_2`
+ * on: an underscore and up to seven digits, far past the options one column
+ * offers, so a suffixed id is still within [DATA_OPTION_ID_MAX].
+ */
+const OPTION_ID_SUFFIX_ROOM = 8;
 
 /** Why a new collection's name would be refused, or null. */
 export function collectionNameProblem(name: string, taken: readonly string[]): string | null {
@@ -67,10 +77,10 @@ export function keyFromLabel(label: string): string {
 export function optionID(label: string, taken: readonly string[]): string {
   const base =
     unaccented(label)
-      .replace(/[^A-Za-z0-9_-]+/g, "_")
+      .replace(NOT_OPTION_ID, "_")
       .replace(/^_+|_+$/g, "")
       .toLowerCase()
-      .slice(0, 56) || "option";
+      .slice(0, DATA_OPTION_ID_MAX - OPTION_ID_SUFFIX_ROOM) || "option";
   if (!taken.includes(base)) return base;
   for (let n = 2; ; n++) {
     const id = `${base}_${n}`;

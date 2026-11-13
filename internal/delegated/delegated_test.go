@@ -144,3 +144,29 @@ func TestEveryPathClassCatchesItsConventionalPlaces(t *testing.T) {
 		}
 	}
 }
+
+// A subject is what a request decides: the same fields are the same subject
+// whoever words the ask, and a different kind, field or split of the same
+// text between fields is another.
+//
+// Mutation: join the fields with a separator instead of prefixing each with
+// its length, and a command that holds the separator passes for another
+// server's.
+func TestASubjectIsWhatARequestDecidesNeverItsWording(t *testing.T) {
+	t.Parallel()
+	base := delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42", "a1", "squash")
+	if base != delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42", "a1", "squash") || len(base) != 64 {
+		t.Fatalf("the same fields gave %q, want one SHA-256 in hex each time", base)
+	}
+	for name, other := range map[string]string{
+		"another kind":         delegated.Subject(delegated.KindDeploy, "github", "acme/web#42", "a1", "squash"),
+		"another head":         delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42", "b2", "squash"),
+		"another method":       delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42", "a1", "merge"),
+		"a field moved across": delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42a1", "", "squash"),
+		"a field fewer":        delegated.Subject(delegated.KindPRMerge, "github", "acme/web#42", "a1squash"),
+	} {
+		if other == base {
+			t.Errorf("%s is the same subject as the request it differs from", name)
+		}
+	}
+}

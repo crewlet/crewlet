@@ -381,6 +381,29 @@ call to a vendor comes before the status it records. A reconcile that read a
 former leader's status there may repeat a provisioning step the fleet has
 already taken, once, inside that window.
 
+### What one key holds
+
+**A value is at most 6,290,542 bytes** (`coord.MaxValueBytes`), on every
+backend, and a write past it is refused before anything is sent: refused as
+too large (`coord.ErrValueTooLarge`), a definite answer that no retry changes,
+never as the store being unavailable. The reason is the leader read above: its
+reply carries the value base64-encoded in JSON, a third larger than the value,
+and a node without `data` reads the store across its leaf link, whose server
+closes the whole link to the fleet on any message past the transport's 8 MiB —
+every lease and mailbox the node holds going with it. So a value is held to the
+largest whose read crosses that link, less the most header a write of a key
+carries. The in-memory twin refuses exactly the same values, so a test passing
+on it passes on the store.
+
+Two kinds of value come near it, and both are held to it where they are made:
+a sandbox run's record and its tool log, budgeted field by field to it
+([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)),
+and the activation pointer, which carries the company document sealed — a
+config write whose document would make a pointer past it is refused `413`
+before the revision is stored
+([PATCH /config](../reference/api-endpoints.md#patch-config--the-narrower-write)).
+Every other record is bounded by its own fields far below it.
+
 ### A compare-and-set waits for the leader to decide
 
 A conditional write — a create, an update at a revision, a removal at a
@@ -399,10 +422,43 @@ the very version its caller had just read back was refused, so a create race
 over that record had no winner, and a budget charge spent all sixteen of its
 compare-and-set rounds on refusals no other writer had caused and reported the
 store unavailable. So every conditional write waits it out — a millisecond,
-doubling to 64 ms, within the write's own deadline or the client's five-second
-default — until the leader answers with something it decided. A write still
-undecided when that runs out is **unknown**, never a race somebody else won.
-A single node has no proposal in flight and never gives the third answer.
+doubling to 64 ms, within the write's own deadline or, where it has none, the
+budget below, which is fixed when the write starts and which no attempt moves
+— until the leader answers with something it decided. A write still undecided
+when that runs out is **unknown**, never a race somebody else won. A single
+node has no proposal in flight and never gives the third answer.
+
+A write **across a link waits as long as its bytes take to cross it.** A node
+without the `data` role reaches the coordination store across its leaf link,
+and every node on an external broker across the network, and the engine
+allows such a link to be as slow as thirty seconds a mebibyte, the
+[object store's floor](object-store.md). Held to the client's five seconds, as
+a write whose caller set no deadline was, a write whose value took longer than
+that to cross failed as the store being unavailable while its bytes were still
+on the link; and an MCP listing of up to 896 KiB, which every node with seats
+writes and which takes about 26 seconds at the floor, failed the same way
+under the fifteen seconds of the beat that wrote it, on any link below about
+60 KiB a second. So a write whose caller set no deadline waits five seconds and, across
+a link, the time its key, value and headers take at the floor for every send
+the client may make of it — the client sends a write nobody heard again,
+twice at most, inside the one wait it was given — and an attempt after an
+in-flight answer waits within that same bound, never a bound of its own, so a
+write the leader keeps answering in flight ends unknown at it; on a member's
+own connection it waits the five seconds alone. A caller's own deadline is kept, but on an
+external broker the client does not check it while a write waits for the
+connection, which a large write holds for its whole length, nor while the
+write is in the socket: a write, a lease renewal among them, is held behind
+every large write ahead of it, each for up to the client's write deadline of
+about eight minutes, and then for its own
+([Delivery Semantics](event-system.md#delivery-semantics)). Each node
+states how its connection reaches the store when it opens it, from its
+broker's kind, since the store cannot see how the connection was made. A
+node's MCP listings are written on a pass of their own beside its fifteen-second
+beat, each write waiting as long as its bytes take, so a slow listing holds up
+no beat. What this does not cover is the event system's to say, and the same:
+a link slower than the floor, a link busy with traffic ahead of the write, and
+the lease renewals a large write holds behind it
+([Delivery Semantics](event-system.md#delivery-semantics)).
 
 ---
 

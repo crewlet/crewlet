@@ -30,7 +30,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import type { AssistantActionArgs, AssistantPageDraft } from "~/contract/assistant.ts";
+import {
+  ASSISTANT_ACTION_ARGS_MAX_ENUM,
+  type AssistantActionArgs,
+  type AssistantPageDraft,
+} from "~/contract/assistant.ts";
+import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
+import { actionArgsProblem } from "~/protocol/assistantWire.ts";
 import {
   spendGroupKeys,
   spendRangeKeys,
@@ -44,6 +50,7 @@ import { builderReducer, INITIAL_BUILDER } from "~/routes/org/builder/model/redu
 import { countingKeys, fixtureCompany } from "~/routes/org/builder/model/testkit.ts";
 import { draftSetArgs, parseDraftChange, refuse, type AssistantDraftSpec } from "./draft.ts";
 import { choiceKey, parseUrlPatch, urlArgs, type UrlActionKey } from "./urlAction.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 const NOW = Date.parse("2026-10-26T12:00:00Z");
 
@@ -142,6 +149,37 @@ describe("the Budgets ceiling's arguments are what its parser takes", () => {
     }
   });
 
+  // PAST WHAT AN ENUM MAY LIST, a seat is held to a handle's grammar rather
+  // than listed: an enum of every seat past the engine's bound was a page
+  // context it refused, and every question asked on Budgets with it. The
+  // parser still refuses a seat the screen does not draw. Mutation: list
+  // every seat whatever their number, and this schema is one the frame must
+  // leave out.
+  test("a company past an enum's bound has its seat held to a handle's grammar", () => {
+    const most = new Set(
+      Array.from({ length: ASSISTANT_ACTION_ARGS_MAX_ENUM }, (_, i) => `agent-${i + 1}`),
+    );
+    expect(ceilingPrefillArgs(most).properties?.seat?.enum).toHaveLength(
+      ASSISTANT_ACTION_ARGS_MAX_ENUM,
+    );
+    const many = new Set([...most, "zz-last"]);
+    const wide = ceilingPrefillArgs(many);
+    expect(wide.properties?.seat).toEqual({
+      type: "string",
+      pattern: SEAT_HANDLE,
+      maxLength: MAX_LOGIN,
+      description: "The seat's handle. Leave it out for the company's own ceiling.",
+    });
+    expect(actionArgsProblem(wide)).toBeNull();
+    for (const raw of wide.examples ?? []) {
+      const parsed = parseCeilingPrefill(raw, many);
+      expect(parsed.ok, `${JSON.stringify(raw)}: ${parsed.ok ? "" : parsed.reason}`).toBe(true);
+    }
+    expect(parseCeilingPrefill({ seat: "nobody", period: "day", ceiling: "1M" }, many).ok).toBe(
+      false,
+    );
+  });
+
   test("a screen with no seats offers the company alone", () => {
     const none = ceilingPrefillArgs(new Set());
     expect(none.properties?.seat).toBeUndefined();
@@ -195,7 +233,7 @@ const SPEC: AssistantDraftSpec<string> = {
       write: (_, next) => (typeof next === "string" && next !== "lots" ? next : refuse("No.")),
     },
   ],
-  apply: () => {},
+  write: heldWrite(),
 };
 
 const DRAFT: AssistantPageDraft = {
@@ -219,6 +257,7 @@ describe("an open draft's arguments are its editable fields", () => {
   test("its example sets the draft's own field", () => {
     const args = draftSetArgs(DRAFT);
     expect(Object.keys(args.properties?.values?.properties ?? {})).toEqual(["ceiling"]);
+    expect(args.examples).toHaveLength(1);
     for (const raw of args.examples ?? []) {
       const parsed = parseDraftChange(SPEC, raw);
       expect(parsed.ok, parsed.ok ? "" : parsed.reason).toBe(true);
@@ -241,7 +280,13 @@ test("the engine's fixture is every declaration as the dashboard emits it", () =
   const emitted: Record<string, AssistantActionArgs> = {
     ...Object.fromEntries(Object.entries(URL_KEYS).map(([id, keys]) => [id, urlArgs(keys)])),
     "work.filters.clear": urlArgs({}, true),
-    "budgets.ceiling.prefill": ceilingPrefillArgs(new Set(["qa", "engineer"])),
+    // PAST AN ENUM'S BOUND, so the engine's reader holds the seat's pattern
+    // and the examples to it too; the windows are still an enum.
+    "budgets.ceiling.prefill": ceilingPrefillArgs(
+      new Set(
+        Array.from({ length: ASSISTANT_ACTION_ARGS_MAX_ENUM + 1 }, (_, i) => `seat-${i + 1}`),
+      ),
+    ),
     "org.draft.apply_ops": orgOpsArgs(
       builderReducer(INITIAL_BUILDER, {
         type: "load",

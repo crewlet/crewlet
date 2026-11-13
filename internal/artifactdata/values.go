@@ -69,7 +69,20 @@ const (
 	// MaxLabelBytes bounds a column's or an option's label, and a
 	// collection's title.
 	MaxLabelBytes = 120
+
+	// MaxOptionIDBytes bounds an option's stable id, written in
+	// [OptionIDChars].
+	MaxOptionIDBytes = 64
 )
+
+// OptionIDChars is what an option's stable id is written in, as the body of a
+// character class: letters, digits, `_` and `-`.
+//
+// EXPORTED FOR THE DASHBOARD's copy (`DATA_OPTION_ID_CHARS`, held equal with
+// [MaxOptionIDBytes] by TestTheDashboardMintsAnOptionIDByTheEnginesGrammar):
+// the schema editor mints an option's id from its label, every other character
+// of it written `_`, so an id it mints is one this grammar takes.
+const OptionIDChars = "A-Za-z0-9_-"
 
 // StatusCategories are the categories every status option names one of.
 var StatusCategories = []string{"todo", "in_progress", "done", "blocked"}
@@ -80,7 +93,7 @@ var (
 	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	optionIDPattern = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+		return regexp.MustCompile(fmt.Sprintf(`^[%s]{1,%d}$`, OptionIDChars, MaxOptionIDBytes))
 	})
 	// Compiled at first use, not at init: Gitlet's push hook is this
 	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { CANVAS_MAX_NOTES } from "~/contract/artifactsworkspace.ts";
 import {
-  CANVAS_MAX_NOTES,
   CanvasUnreadable,
   addNote,
   boardItems,

@@ -16,6 +16,9 @@ const (
 	KindHostname Kind = "hostname"
 	// KindEndpoint is an address something answers on, without credentials.
 	KindEndpoint Kind = "endpoint"
+	// KindCertificate is a TLS certificate a vendor holds for the company's
+	// names: what it covers, who issued it and when it lapses.
+	KindCertificate Kind = "certificate"
 	// KindService is something the company runs: an app, an API, a worker.
 	KindService Kind = "service"
 	// KindHost is a server, a virtual machine or an instance.
@@ -40,7 +43,7 @@ const (
 
 // Kinds is every kind, in the order the map reads its lanes.
 var Kinds = []Kind{
-	KindDomain, KindHostname, KindEndpoint,
+	KindDomain, KindHostname, KindEndpoint, KindCertificate,
 	KindService,
 	KindHost,
 	KindDatastore, KindQueue, KindBucket,
@@ -83,20 +86,21 @@ func (l Lane) Valid() bool { return slices.Contains(Lanes, l) }
 func (l Lane) Band() bool { return l == LaneCode || l == LaneObservability || l == LaneTools }
 
 var laneOf = map[Kind]Lane{
-	KindDomain:     LaneEntry,
-	KindHostname:   LaneEntry,
-	KindEndpoint:   LaneEntry,
-	KindService:    LaneServices,
-	KindHost:       LaneRuntime,
-	KindDatastore:  LaneData,
-	KindQueue:      LaneData,
-	KindBucket:     LaneData,
-	KindAccount:    LanePlatforms,
-	KindRepository: LaneCode,
-	KindPipeline:   LaneCode,
-	KindMonitor:    LaneObservability,
-	KindToolServer: LaneTools,
-	KindModel:      LaneTools,
+	KindDomain:      LaneEntry,
+	KindHostname:    LaneEntry,
+	KindEndpoint:    LaneEntry,
+	KindCertificate: LaneEntry,
+	KindService:     LaneServices,
+	KindHost:        LaneRuntime,
+	KindDatastore:   LaneData,
+	KindQueue:       LaneData,
+	KindBucket:      LaneData,
+	KindAccount:     LanePlatforms,
+	KindRepository:  LaneCode,
+	KindPipeline:    LaneCode,
+	KindMonitor:     LaneObservability,
+	KindToolServer:  LaneTools,
+	KindModel:       LaneTools,
 }
 
 // Lane is the lane k is drawn in, "" for a kind outside the set.

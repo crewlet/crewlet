@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // leaderReadsToken is what accountQueue's broker requires: the dial refuses an
@@ -32,6 +33,26 @@ const leaderReadsToken = "leader-reads"
 // one domain log provisioned, so [jsapitest] can stand between the queue's
 // reads and the broker.
 func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
+	t.Helper()
+	ns := accountBroker(t)
+	q, err := Open(t.Context(), Config{URL: ns.ClientURL(), Token: leaderReadsToken})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+	if err := q.EnsureDomainStream(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	return ns, q
+}
+
+// accountBroker is [accountQueue]'s broker: JetStream with no domain, holding
+// a message to the transport, and requiring leaderReadsToken.
+func accountBroker(t *testing.T) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
 		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
@@ -52,19 +73,7 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 	if !ns.ReadyForConnections(30 * time.Second) {
 		t.Fatal("the broker never became ready")
 	}
-	q, err := Open(t.Context(), Config{URL: ns.ClientURL(), Token: leaderReadsToken})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
-			t.Errorf("Stop: %v", err)
-		}
-	})
-	if err := q.EnsureDomainStream(t.Context(), spec); err != nil {
-		t.Fatalf("EnsureDomainStream: %v", err)
-	}
-	return ns, q
+	return ns
 }
 
 // THE APPLIER'S PENDING COUNT ASKS THE BROKER NOTHING.
@@ -794,26 +803,69 @@ func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
 	}
 }
 
-// ONLY A CONNECTION TO THE NODE'S OWN MEMBER CROSSES NO LINK — the fact the
-// engine hands the object store as its AcrossLink, read here off how the
-// queue's connection was made — and a member's record read asks at the read
-// term, its reply crossing at most a cluster route.
+// A QUEUE'S LINK IS READ OFF HOW ITS OWN CONNECTION WAS MADE, where the queue
+// is built.
+//
+// The reading itself is held below (linkOf); this holds the one site that
+// hands it to a queue, on real queues: a member's own client, a leaf's, and a
+// client of an external cluster, each opened as a node opens one. A member
+// paced as though it crossed a link would hold its reads and writes to
+// crossings they never make; a leaf or an external client left unpaced would
+// hold a large write to the request term alone; a leaf taken for no leaf's
+// link would ask the leader for a reply its link closes on; and an external
+// client taken for a leaf's would read through consumers what one request of
+// the leader answers.
+//
+// Mutation: build a queue with any link but its connection's reading, and its
+// row goes red.
+func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
+	t.Parallel()
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	for _, c := range []struct {
+		name string
+		q    *Queue
+		want link
+	}{
+		{"a member's own client", openForTest(t, Config{}), link{}},
+		{"a leaf's client", openLeafForTest(t, Config{}), link{pace: objstore.MiBPace, leaf: true}},
+		{"a client of an external cluster", newQueueWith(t, Config{URL: srv.URL(),
+			Token: externaltest.Token}), link{pace: objstore.MiBPace}},
+	} {
+		if c.q.link != c.want {
+			t.Errorf("%s crosses %+v, want %+v", c.name, c.q.link, c.want)
+		}
+	}
+}
+
+// ONLY A CONNECTION TO THE NODE'S OWN MEMBER CROSSES NO LINK, AND ONLY A
+// LEAF'S CROSSES A LEAF'S — the facts the engine hands the object store as
+// its AcrossLink, and the copy reads decide by, read here off how the queue's
+// connection was made. A member's own connection alone is given no pace, and
+// a member's record read asks at the read term, its reply crossing at most a
+// cluster route. A leaf's and an external cluster's client are paced at the
+// object store's floor, the slowest a link is allowed to be; and only the
+// leaf's has a server on its side of the link that holds what crosses it to
+// its max_payload, which no server holds a delivery to its own client to.
+//
+// Mutation: pace a member's own connection, leave a leaf's or an external
+// cluster's unpaced, take an external dial for a leaf's link or a leaf's for
+// none, and its row goes red.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name   string
-		q      *Queue
-		across bool
+		name     string
+		embedded *embeddedServer
+		want     link
 	}{
-		{"a member's own client", &Queue{embedded: &embeddedServer{}}, false},
-		{"a leaf's client", &Queue{embedded: &embeddedServer{leaf: true}}, true},
-		{"a client of an external cluster", &Queue{}, true},
+		{"a member's own client", &embeddedServer{}, link{}},
+		{"a leaf's client", &embeddedServer{leaf: true}, link{pace: objstore.MiBPace, leaf: true}},
+		{"a client of an external cluster", nil, link{pace: objstore.MiBPace}},
 	} {
-		if got := c.q.acrossLink(); got != c.across {
-			t.Errorf("%s: across a link = %v, want %v", c.name, got, c.across)
+		if got := linkOf(c.embedded); got != c.want {
+			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}
-	if got := (&Queue{embedded: &embeddedServer{}}).recordCrossing(nil); got != 0 {
+	if got := (&Queue{link: linkOf(&embeddedServer{})}).recordCrossing(nil); got != 0 {
 		t.Errorf("a member's record read is given %v beyond the read term, want none", got)
 	}
 }

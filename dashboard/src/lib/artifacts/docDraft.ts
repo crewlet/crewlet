@@ -22,13 +22,14 @@
 
 import { merge3, mergedText, type Merge, type Resolution } from "../merge.ts";
 import { overWords, utf8Bytes } from "../format.ts";
-import { DOC_MAX_TABS, DOC_TAB_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
+import {
+  DOC_INDEX_PATH,
+  DOC_MAX_TABS,
+  DOC_TAB_TITLE_MAX_BYTES,
+} from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDoc } from "~/protocol/index.ts";
 import { editOf, type DocEdit } from "./doc.ts";
 import { mergeOrder, placeAfter } from "./orderMerge.ts";
-
-/** A tabbed doc's index, its entry (`docindex.IndexPath`). */
-export const DOC_INDEX = "doc.json";
 
 /** One tab as a draft holds it. */
 export interface DraftTab {
@@ -229,11 +230,11 @@ export function docPublishPlan(
     if (base.indexed) {
       if (indexRaw === null)
         throw new Error("the doc's index was not read, so its edit has nothing to replace");
-      const e = editOf(DOC_INDEX, indexRaw, next);
+      const e = editOf(DOC_INDEX_PATH, indexRaw, next);
       if (e) plan.edits.push(e);
     } else {
-      plan.uploads.push({ path: DOC_INDEX, text: next });
-      plan.entry = DOC_INDEX;
+      plan.uploads.push({ path: DOC_INDEX_PATH, text: next });
+      plan.entry = DOC_INDEX_PATH;
     }
   }
   return plan;

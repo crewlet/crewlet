@@ -64,10 +64,10 @@ func unsignalled(t *testing.T, cmd *exec.Cmd, path, what string) {
 		if _, err := os.Stat(path + ".witness"); err == nil {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("waited 5s for the trapper to write %s.witness", path)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -79,10 +79,10 @@ func awaitFile(t *testing.T, path, what string) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("waited 5s for %s", what)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 

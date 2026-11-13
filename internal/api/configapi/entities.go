@@ -716,6 +716,10 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 		return true, nil
 	}
 	if e.dryRun {
+		if err = s.checks(prepared, e.summary); err != nil {
+			s.refuseApply(w, r, err)
+			return true, nil
+		}
 		writeChecked(w, prepared)
 		return true, nil
 	}

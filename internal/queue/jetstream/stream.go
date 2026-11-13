@@ -68,6 +68,58 @@
 // refusals, and a second classification beneath it would be a second answer
 // to one question.
 //
+// # A write across a link is given the time its bytes take to cross
+//
+// A write here — a Publish, a dead letter's keep (KeepDeadLetter, or the
+// delivery budget's), a state log's Append — returns once its stream has
+// acknowledged it, and the stream acknowledges a message only once its last
+// byte is in. A member's own connection reaches its broker in its own process,
+// but a leaf's crosses its link to the members and an external cluster's
+// client crosses the network to it, and the engine allows such a link to be as
+// slow as the object store's floor, a mebibyte in thirty seconds
+// (objstore.MiBPace). The connection's pace is decided once, where it is made
+// (linkOf), and every crossing on it reads it: a read's reply (DomainLog.At,
+// the dead letters' frames) and a write's request alike. So a write whose
+// caller set no deadline waits the request term (jsapi.RequestTerm, five
+// seconds) and, where its connection crosses a link, its bytes at that pace
+// for each of its first three sends (jsapi.WriteSends; Queue.writing,
+// jsapi.Budget): a write is sent again — the client's own re-sends turned off
+// and made here, so each is a send of the queue's (sendWithin) — where nobody
+// heard it, and an append again where the leader refused it while another
+// write to its subject was in flight, and each send carries the whole message
+// across the link again; a send past the third waits in the budget as it
+// stands. A
+// caller's own deadline is kept, never extended: a caller that cannot wait for
+// a slow link says so. On an external broker the client does not check that
+// deadline while the request waits for the connection's lock, which a large
+// write holds for its whole socket Write, nor while its own write is in the
+// socket, so the caller is held behind every large write ahead of it, each up
+// to the dial's write deadline (externalWriteDeadline, about eight minutes),
+// and then for its own; bounding that needs the write windowed
+// (crewlet/crewlet#1035).
+//
+// Held to the five seconds alone, a write at the transport's eight-mebibyte
+// ceiling could not be acknowledged on any link slower than 1.6 MiB/s and
+// failed as queue.ErrUnavailable while the link was still carrying it — and a
+// keeper retries an unavailable broker for ever, each copy of the entry
+// crossing and landing behind the last (crewlet/crewlet#1005).
+//
+// WHAT THAT GIVES, AND WHAT IT DOES NOT. A write is given its own bytes at the
+// floor, so a link that carries it alone at the floor or faster never fails
+// it — an external dial's socket write deadline included, which is the
+// largest write its client makes at the floor (externalWriteDeadline). A link
+// slower than the floor still fails it, and so can a link busy
+// with something ahead of it — another large write, an object store put's
+// window — whose bytes no budget here counts. And the worst case is long, and
+// not only for the write: one at the ceiling across a link at the floor waits
+// five seconds and about four minutes a send before it reads as an outage —
+// up to three sends, about twelve minutes, for a write whose answer decided
+// nothing, the bound its budget is fixed at when it starts (jsapi.WriteSends)
+// — and everything the node sends behind it on that link waits as long, its
+// lease renewals among them, which at the shipped lease lapse long before it
+// is in. That is a defect of its own (crewlet/crewlet#1035), which these
+// budgets do not fix.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a
@@ -240,6 +292,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -498,9 +551,9 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// A seat's memory, one subject per row, ONE MESSAGE PER
 			// SUBJECT. That is what makes this a keyed table rather
 			// than a log: the stream holds the current value of every
-			// row, so a node acquiring a seat replays it in a single
-			// pass and gets the memory as it stands rather than every
-			// write that ever produced it.
+			// row, so a node acquiring a seat reads each row once, a
+			// table at a time, and gets the memory as it stands rather
+			// than every write that ever produced it.
 			//
 			// No maxAge. A seat's memory has no horizon here — what
 			// bounds it is the learning subsystem's own lifecycle,
@@ -508,6 +561,14 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// still remember belongs. An age bound on this stream
 			// would silently delete memory the seat still holds
 			// locally, and the two would disagree about the past.
+			//
+			// Nor a byte or a message-count limit, for the same
+			// reason and one more: the discard policy is old, so
+			// either would drop the oldest row to make room for any
+			// message, a hydration's barrier among them, where the
+			// limit of one per subject drops only the message a newer
+			// one on its own subject replaces
+			// (topics.MemoryBarrierToken).
 			name:          streamMemory,
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,
@@ -531,10 +592,22 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// Dead letters are kept by age, not by interest: nothing
 			// consumes them automatically, and an operator investigating
 			// poison needs them to still be there.
-			name:      streamDeadLetter,
-			subjects:  []string{topics.DeadLetterPrefix + ">"},
-			retention: jetstream.LimitsPolicy,
-			maxAge:    eventRetention,
+			//
+			// AND A KEEP OF ONE IDENTITY IS ONE ENTRY: a keep carries its
+			// identity as its message id (letterMsg), and this window is
+			// the contract's (queue.DeadLetterWindow, fifteen minutes) —
+			// the longest a keep waits, at the transport's ceiling across a
+			// link at the floor, is the request term and a crossing of
+			// eight mebibytes at thirty seconds a mebibyte for each of the
+			// three sends a write may make, 5 s + 3 × 240 s, about twelve
+			// minutes, so a second copy still crossing when the first
+			// landed is stored as nothing. A retention shorter than the
+			// window is refused by the broker, and by Tier A before it.
+			name:       streamDeadLetter,
+			subjects:   []string{topics.DeadLetterPrefix + ">"},
+			retention:  jetstream.LimitsPolicy,
+			maxAge:     eventRetention,
+			duplicates: queue.DeadLetterWindow,
 		},
 	}
 }

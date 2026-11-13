@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/learning/memsync`
-- **Enforced-by:** `internal/learning/memsync.TestASeatsMemoryCrossesToANodeThatHasNeverRunIt`
+- **Enforced-by:** `internal/learning/memsync.TestASeatsMemoryCrossesToANodeThatHasNeverRunIt`, and for the ordering row below `internal/learning/memsync.TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat`, which holds that a hydration writes a skill before its versions whatever order the changelog keeps them in, and `internal/learning/memsync.TestAReplayServedByACopyThatIsBehindIsNeverAShortHydration`, which holds the one order a hydration relies on: a replay that reads to its barrier has passed every row acknowledged before it
 - **Cost-when-tried:** the three-answer rule was applied to a seat's memory and returned the wrong answer. Its stated test — "would a peer reading this change any answer?" — was answered *no*, because a seat's memory is read by the node running that seat. The node running that seat CHANGES: placement converges in both directions, so a seat moves on a node joining, leaving, draining or upgrading, and its rows do not move with it. The seat kept working, silently having forgotten everything it learned somewhere else, and on a node that died, forgotten it permanently.
 - **Tag-status:** unreleased
 
@@ -27,13 +27,21 @@ difference is what a reader has to know:
 | The stream holds | every record, in order | the current value of each subject |
 | A new node | replays from a checkpoint | replays the subjects it needs |
 | Identity | a checkpoint and a generation answer a recreation | there is none — a recreated stream is simply EMPTY |
-| Ordering | strict, and an applier depends on it | none across subjects, and nothing may |
+| Ordering | strict, and an applier depends on it | none among its rows that a republish leaves standing, and nothing may depend on one |
 
 That third row is the one that bites, and `internal/learning` declares it
 rather than assuming it. A recreated changelog is empty, so hydrating from one
 reports success and hands every seat on the node a blank diary. A compacted
 stream has no checkpoint and no generation with which to notice, so its only
 honest move is to REFUSE the seat.
+
+The ordering row says what compaction takes away, not that the stream keeps no
+order at all. A row published again moves past every row after it, so no order
+among a seat's rows survives, and nothing may rely on one. The stream still
+numbers each message as it acknowledges it, and that is the one order a
+hydration relies on: a message published after a row was acknowledged lies
+past it, until the row is published again. How a hydration uses it, and what
+the republish costs it, is the authority's to say.
 
 Deletes deliberately do not travel. The lifecycle drops rows constantly and a
 tombstone protocol would be a second thing to keep correct for ever; a hydrated

@@ -175,7 +175,7 @@ func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("encode the poison: %v", err)
 	}
-	if err := older.q.KeepDeadLetter(ctx, notify.DeadLetterSubject(), nil, poison); err != nil {
+	if _, err := older.q.KeepDeadLetter(ctx, notify.DeadLetterSubject(), "the poison", nil, poison); err != nil {
 		t.Fatalf("KeepDeadLetter: %v", err)
 	}
 

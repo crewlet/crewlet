@@ -703,6 +703,17 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 					"same would be replaced by it in the box. Rename the server",
 				name)
 		}
+		if name == claudeContainerServer {
+			// Claude Code's own name for its container's tools, whose calls'
+			// results it has cleared from a session it continues as its
+			// built-ins' own. See [claudeContainerServer].
+			p.add(at(path, "name"), ErrConflict,
+				"%q is reserved: Claude Code takes a server of that name for its "+
+					"own container's tools, and has the results of their calls "+
+					"cleared from a long session as its built-in tools' own, so "+
+					"a run continuing the session would lose them. Rename the server",
+				name)
+		}
 		seen[name] = struct{}{}
 	}
 

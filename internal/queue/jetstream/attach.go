@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // defaultFetchWait bounds one Fetch call. Short enough that quiesce, pause
@@ -1129,7 +1130,7 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 		// Terminated here, so nothing will redeliver this sequence and
 		// its failure count is dead weight.
 		a.settled(md.Sequence.Stream)
-		a.deadLetter(ctx, msg.Data(), md.NumDelivered, letter)
+		a.deadLetter(ctx, msg.Data(), md, letter)
 		// Term, not Ack: the message is being discarded from this
 		// subscription deliberately, and Term says so to anyone reading
 		// consumer state.
@@ -1149,16 +1150,29 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 	}
 }
 
-// deadLetter keeps data, the copy of a message whose budget delivered spent,
-// as its subscription's dead letter: under letter where its return was a pass
-// ([queue.PassedLetter]), and with no header otherwise.
+// deadLetter keeps data, the copy of the message md delivered, whose budget
+// that delivery spent, as its subscription's dead letter: under letter where
+// its return was a pass ([queue.PassedLetter]), and with no header otherwise
+// ([Queue.deadLetter]). A keep that fails is logged here, and the caller
+// terminates the message even so ([attachment.returnMsg]).
+//
+// A PASSED COPY GOES THROUGH THE CONTRACT'S OWN KEEP ([Queue.KeepDeadLetter]):
+// its header rides as the keeper's header of the entry, so a reader of the
+// group lists it as it lists any keeper's and finds the passed copies by it.
+// So it names an identity, as every keep through the contract does: the
+// message its stream stored ([storedID]), never this delivery of it, so the
+// copy is one entry however many keeps of it are made. The broker hands the
+// message to no second node ([Queue.deadLetter] says why), so no peer keeps it
+// too; and a keep answered already kept found an entry of the copy stored
+// inside the window, which is what it asked for, so it is settled as one that
+// stored it.
 //
 // A PASSED COPY THAT LEAVES ITS HEADER NO ROOM — within a few hundred bytes of
 // the transport's ceiling ([queue.LetterFits]) — is kept with none, as the
 // contract has it: every byte of the copy kept beats a mark nothing can carry,
 // and the line below says that no reader of the group will find it as a pass.
-func (a *attachment) deadLetter(ctx context.Context, data []byte, delivered uint64, letter []byte) {
-	attrs := []any{"deliveries", delivered}
+func (a *attachment) deadLetter(ctx context.Context, data []byte, md *jetstream.MsgMetadata, letter []byte) {
+	attrs := []any{"deliveries", md.NumDelivered}
 	if reason, passed := queue.PassedReason(letter); passed {
 		attrs = append(attrs, "passed", reason)
 		if !queue.LetterFits(letter, data) {
@@ -1170,7 +1184,31 @@ func (a *attachment) deadLetter(ctx context.Context, data []byte, delivered uint
 		}
 	}
 	a.log.Error("dead_lettered", attrs...)
-	a.q.deadLetter(ctx, a.key.topic, a.key.group, letter, data)
+	var err error
+	if len(letter) > 0 {
+		_, err = a.q.KeepDeadLetter(ctx, topics.DeadLetter(a.key.topic, a.key.group), storedID(md),
+			letter, data)
+	} else {
+		err = a.q.deadLetter(ctx, a.key.topic, a.key.group, data)
+	}
+	if err != nil {
+		a.log.Error("dead_letter_failed", "error", err.Error())
+	}
+}
+
+// storedID is the identity a passed copy is kept under
+// ([queue.EventQueue.KeepDeadLetter]): the message its stream stored — the
+// stream, its sequence there and the broker's own instant for it, in
+// nanoseconds since the epoch — which every member of the group reads off
+// whichever delivery of it reached them, as a wake feed names its record's
+// (internal/changefeed's keepID). Never the delivery: its count and the
+// consumer's sequence move with every hand. The instant tells one incarnation
+// of a stream from the next, which numbers its messages again. The group is
+// left out because the dead-letter subject names it, and the keep scopes its
+// identity to that subject ([letterID]). Quoted, so no stream's name runs into
+// the numbers.
+func storedID(md *jetstream.MsgMetadata) string {
+	return fmt.Sprintf("%q %d %d", md.Stream, md.Sequence.Stream, md.Timestamp.UnixNano())
 }
 
 // --- the four attachment verbs -------------------------------------------

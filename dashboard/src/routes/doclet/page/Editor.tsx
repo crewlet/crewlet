@@ -60,7 +60,7 @@ import type { PageDetail } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { linkPageCommand } from "./LinkPicker.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import { refuse, useAssistantDraft } from "~/app/assistant/draft.ts";
+import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { pageBodyProblem } from "./assistantAction.ts";
 
 export function PageEditor({
@@ -78,7 +78,7 @@ export function PageEditor({
   // WHAT THIS EDIT IS AGAINST, its version and that version's body, held
   // apart from the page the screen polls. See the header.
   const [base, setBase] = useState({ version: page.version, body: page.body ?? "" });
-  const [draft, setDraft] = useState(page.body ?? "");
+  const [draft, setDraft] = useDraftState(page.body ?? "");
   const [message, setMessage] = useState("");
   const [theirs, setTheirs] = useState(false);
   const [discard, setDiscard] = useState(false);
@@ -126,7 +126,7 @@ export function PageEditor({
         summary: (body) => plural(markdownWords(typeof body === "string" ? body : ""), "word"),
       },
     ],
-    apply: setDraft,
+    write: writeTo(setDraft),
     blocked: () =>
       merging
         ? "Settle where both edits changed the same lines first."

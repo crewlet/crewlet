@@ -17,6 +17,13 @@
 /** The longest brand name, in UTF-8 bytes (`brandformat.MaxNameBytes`). */
 export const BRAND_NAME_MAX_BYTES = 80;
 
+/**
+ * A brand kit's index: its entry, and the one file every version holds
+ * (`brandformat.EntryPath`). Held by
+ * `internal/api/artifactsapi.TestTheDashboardNamesEachFormatsFilesAsTheEngineDoes`.
+ */
+export const BRAND_ENTRY_PATH = "brand.json";
+
 /** The longest brand tagline, in UTF-8 bytes (`brandformat.MaxTaglineBytes`). */
 export const BRAND_TAGLINE_MAX_BYTES = 140;
 

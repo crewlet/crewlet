@@ -181,8 +181,33 @@ func canonicalKey(k Kind, key string) (string, error) {
 		return pathKey(key, ModelLLMPrefix)
 	case KindToolServer:
 		return pathKey(key, ToolServerPrefix)
+	case KindCertificate:
+		return vendorKey(key)
 	}
 	return pathKey(key, "")
+}
+
+// vendorKey reads key as a vendor's own identifier for one of its resources:
+// the vendor's word, '/' and the identifier, so two sources that meet the
+// same certificate at one vendor name one entry.
+func vendorKey(key string) (string, error) {
+	vendor, _, ok := strings.Cut(key, "/")
+	if !ok || !Vendor(vendor).Valid() {
+		return "", fmt.Errorf("%w: the key is a vendor, '/' and the vendor's own identifier", ErrInvalid)
+	}
+	return pathKey(key, vendor)
+}
+
+// AddressHostKey is the key of a server known by its address alone: what a
+// DNS record points at before anything else names it. Canonical, so the
+// same address written two ways names one server, and one that an SSH
+// server declares as its address merges with it on the fold's address key.
+func AddressHostKey(raw string) (string, error) {
+	ip, err := address(raw)
+	if err != nil {
+		return "", err
+	}
+	return HostAddrPrefix + "/" + ip.String(), nil
 }
 
 // The namespaces of the keys the engine itself mints.
@@ -196,6 +221,9 @@ const (
 	// HostSSHPrefix starts the key of a server the SSH settings declare:
 	// ssh/<host id>.
 	HostSSHPrefix = "ssh"
+	// HostAddrPrefix starts the key of a server known by its address alone,
+	// as a DNS record names one: addr/<ip address>.
+	HostAddrPrefix = "addr"
 	// GitletPrefix starts the key of a repository on Gitlet: gitlet/<name>.
 	GitletPrefix = "gitlet"
 )

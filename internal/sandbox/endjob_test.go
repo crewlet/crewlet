@@ -493,6 +493,10 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 // end at its bound is given its whole budget all the same; and a collection of
 // a turn with no cap, which ends nothing, waits what it waited.
 //
+// THE TAKE'S BUDGET IS READ IN A BUBBLE, where the clock stands still between
+// the read's deadline, the take's and the reading of what is left: the budget
+// is held exactly, never to the second a loaded runner may lose between them.
+//
 // Mutation: one budget for every read, and the take after an end at its bound
 // is cut short of its own; read the budget off the read alone, and a capped
 // collection's take after the end its host makes is cut short too.
@@ -530,17 +534,21 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 
 	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND and the read's own
 	// poll beside it, still hands its take the take's whole budget.
-	share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
-	spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
-	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
-	defer cancel()
-	rig := newCoordRig(t)
-	take, cancelTake, _ := rig.coordinator.takeContext(ctx)
-	defer cancelTake()
-	deadline, _ := take.Deadline()
-	if left := time.Until(deadline); left < SessionTakeBudget-time.Second {
-		t.Fatalf("a take after an end at its bound is given %v, want its whole %v", left, SessionTakeBudget)
-	}
+	inBubble(t, func(t *testing.T) {
+		rig := newCoordRig(t)
+		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
+		spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
+		defer cancel()
+		take, cancelTake, _ := rig.coordinator.takeContext(ctx)
+		defer cancelTake()
+		deadline, _ := take.Deadline()
+		// Less the nanosecond the share's float rounding takes off the read's
+		// own deadline, as above.
+		if left := time.Until(deadline); left < SessionTakeBudget-time.Nanosecond {
+			t.Fatalf("a take after an end at its bound is given %v, want its whole %v", left, SessionTakeBudget)
+		}
+	})
 }
 
 // A READ CUT SHORT IS NO JOB THAT OUTLIVED ITS END. The read that ends a job

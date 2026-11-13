@@ -34,8 +34,9 @@ const (
 	// StateStale is a discovered entry only agents report, none of them for
 	// [StaleAfter].
 	StateStale State = "stale"
-	// StateRetired is an entry a person retired. It leaves the map and stays
-	// in history.
+	// StateRetired is an entry a person retired, or one an integration's read
+	// stopped seeing that nobody else stands behind. It leaves the map and
+	// stays in history.
 	StateRetired State = "retired"
 )
 
@@ -120,6 +121,9 @@ type FactView struct {
 	// has given: shown as a suggestion until a person sets it.
 	Suggested bool      `json:"suggested,omitempty"`
 	Others    []Claimed `json:"others,omitempty"`
+	// Of is the member a fact of each host is of ([Spec.PerHost]): which
+	// host's visibility this is. Zero for every other fact.
+	Of Ref `json:"of,omitzero"`
 }
 
 // Edge is one relation from an entry: to another entry by its id, or to an

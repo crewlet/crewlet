@@ -355,6 +355,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 	if recs[0].InputTokens != 500 || recs[1].InputTokens != 800 {
 		t.Errorf("tokens = %d, %d; want each job's own", recs[0].InputTokens, recs[1].InputTokens)
 	}
+	//fixedwait:stated the rig's stepped clock stamped both launches, the second a minute past the first
 	if !recs[1].StartedAt.Equal(second.Launch.StartedAt) || !recs[1].StartedAt.After(recs[0].StartedAt) {
 		t.Errorf("the second span starts at %s, want its own launch at %s", recs[1].StartedAt, second.Launch.StartedAt)
 	}
@@ -581,10 +582,10 @@ func TestAnExhaustedRunReachesTheRelayAsItsClass(t *testing.T) {
 		if len(rows) == 1 && rows[0].Status == "filed" {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("no report settled: %+v", rows)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 	mu.Lock()
 	defer mu.Unlock()

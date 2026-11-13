@@ -33,7 +33,11 @@ import {
   type Tone,
 } from "@crewlethq/ui";
 import { PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
-import { COLLECTION_PRESETS, COLUMN_TYPES, STATUS_CATEGORIES } from "~/contract/artifacts.ts";
+import {
+  COLLECTION_PRESETS,
+  COLUMN_TYPES,
+  STATUS_CATEGORIES,
+} from "~/contract/artifactsworkspace.ts";
 import type {
   ArtifactDetail,
   ArtifactRole,
@@ -44,7 +48,13 @@ import type {
   DataOption,
 } from "~/protocol/index.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeTo,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { configureSchema } from "~/lib/artifacts/api.ts";
 import {
   PRESET_WORDS,
@@ -138,7 +148,7 @@ export function SchemaEditor({
   role: ArtifactRole;
   onSaved: () => void;
 }) {
-  const [draft, setDraft] = useState<DataCollection[]>(collections);
+  const [draft, setDraft] = useDraftState<DataCollection[]>(collections);
   const [picked, setPicked] = useState(collections[0]?.name ?? "");
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [newName, setNewName] = useState("");
@@ -170,7 +180,7 @@ export function SchemaEditor({
           scope: `The schema of “${detail.title}” (not saved)`,
           value: draft,
           fields: schemaFields(draft.length),
-          apply: setDraft,
+          write: writeTo(setDraft),
           blocked: () => (gesture.busy ? "The schema is being saved." : null),
         }
       : null,

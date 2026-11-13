@@ -296,16 +296,16 @@ const (
 
 	// What one widget draws: a chart's series, a share's parts, a list's
 	// bars and a table's columns and rows, each past what a reader takes in
-	// at a glance, and a note's and a unit's text.
-	MaxChartSeries   = 6
-	MaxShareParts    = 8
-	MaxBarRows       = 50
-	DefaultBarRows   = 10
-	MaxTableColumns  = 16
-	MaxTableRows     = 500
-	DefaultTableRows = 100
-	MaxNoteBytes     = 2000
-	MaxUnitBytes     = 16
+	// at a glance, and a note's and a unit's text. How many a widget that
+	// names no `limit` draws is the dashboard's, which draws it
+	// (docs/reference/dashboard-spec.md): no engine path draws a widget.
+	MaxChartSeries  = 6
+	MaxShareParts   = 8
+	MaxBarRows      = 50
+	MaxTableColumns = 16
+	MaxTableRows    = 500
+	MaxNoteBytes    = 2000
+	MaxUnitBytes    = 16
 
 	// MinRefreshSeconds is the shortest interval an engine dataset may
 	// declare (D63): a minute keeps a board of thirty-two datasets inside
