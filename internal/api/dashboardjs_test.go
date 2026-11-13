@@ -1407,7 +1407,11 @@ const (
 	// pointed row, which ride it by rule while the map's code is the atlas
 	// chunk's) and the kit's shared chunks about +310. Every screen's module
 	// of it is lazy. So it moved to 407 KiB, 2.22 seconds.
-	initialBudget = 407 << 10
+	// The advisor's two sentences for an atlas it could not read, which the
+	// attention queue says to an administrator and so the entry carries,
+	// took it to 407.02 KiB (416,788 bytes), 20 bytes past it: 408 KiB,
+	// 2.23 seconds.
+	initialBudget = 408 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2353,7 +2357,11 @@ const (
 	// set added 2,322 bytes, script +2,286 and the atlas sheet +36. Built
 	// beside Sources the tree measures 5957.8 KiB (6,100,752 bytes, 6 over
 	// the sum of the two): 5958 KiB.
-	treeBudget = 5<<20 + 838<<10
+	// The setup advisor's atlas findings (the fix dialog in the atlas chunk,
+	// with its owner, monitor, decision and read-now rows, and the advisor's
+	// row, lazy mount and unread words) added 4,452 bytes, all script, and
+	// took it to 5962.1 KiB (6,105,204 bytes): 5963 KiB.
+	treeBudget = 5<<20 + 843<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

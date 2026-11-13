@@ -69,6 +69,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "Company › Atlas's Add entry, and the dialog every atlas write is made in",
     suite: "routes/atlas/writes.test.tsx",
   },
+  "routes/atlas/AdvisorFix.tsx": {
+    why: "an atlas finding's fix in Settings › Advisor: an owner, a monitor or a read asked for, one press per entry",
+    suite: "routes/atlas/AdvisorFix.test.tsx",
+  },
   "routes/atlas/Decisions.tsx": {
     why: "the decisions a disagreement or a waiting entry allows, on an entry's Sources tab and in Review",
     suite: "routes/atlas/writes.test.tsx",

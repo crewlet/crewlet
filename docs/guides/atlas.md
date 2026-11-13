@@ -290,6 +290,13 @@ leaves the Inbox as soon as somebody decides. Everything else waits in Review
 for every holder of Atlas together, so the Inbox does not fill with
 infrastructure changes.
 
+**What has waited too long reaches the Setup Advisor.** A disagreement nobody
+has decided in 7 days is listed in [Settings › Advisor](advisor.md#what-the-atlas-shows)
+with the entries it is on, beside a service nobody owns, an owner that left the
+chart, a service open to the internet that nothing watches, and a source that
+stopped reading. Each is fixed from there or from the entry's own page: both
+send the same change.
+
 ## Sources and Refresh now
 
 **Sources** (from the band, `#/company/atlas/sources`) lists each integration
