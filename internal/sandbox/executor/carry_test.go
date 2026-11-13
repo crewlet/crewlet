@@ -130,8 +130,8 @@ func TestTheWrapperPinsClaudeCodesSessionLayout(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "x"})
-	unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT "+
-		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
+	unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE CLAUDE_CODE_REMOTE "+
+		"DISABLE_AUTO_COMPACT DISABLE_COMPACT CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
 	pinned := strings.Index(script, "export CLAUDE_CONFIG_DIR=")
 	start := strings.Index(script, "claude -p ")
 	if unset < 0 || pinned < unset || start < pinned {
