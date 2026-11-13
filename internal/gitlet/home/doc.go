@@ -21,8 +21,10 @@
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
 // for every [Worker] registered with it: the changes worker
 // ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
-// ([WorkerQueue]), and the imports and pull mirrors (internal/gitlet/mirror,
-// which the engine registers), each a listing of the
+// ([WorkerQueue]), the imports and pull mirrors (internal/gitlet/mirror,
+// which the engine registers), and the atlas's read of a repository's deploy
+// and dependency files (internal/atlas/codescan, registered the same way),
+// each a listing of the
 // repositories it has work in (Worker.Due) and the work of one
 // (Worker.Work), each read from the rows. A repository is worked by ONE turn
 // of a worker at a time; asked again while it is being worked, it

@@ -321,7 +321,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+
@@ -368,7 +368,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
@@ -466,7 +466,7 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_queued", q.ChecksQueued != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_running read lists the repositories holding a running attempt, or "+

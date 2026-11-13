@@ -129,6 +129,7 @@ func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 		{Kind: gitlet.GitLandedIn, RepoID: repo, Asker: person, LandedIn: &gitlet.LandedInQuery{Commit: oid,
 			Target: "refs/heads/main", TargetOID: oid, At: statelog.Position{Stream: "s", Generation: 1, Seq: 1}}},
 		{Kind: gitlet.GitChecksFile, RepoID: repo, ChecksFile: &gitlet.ChecksFileQuery{Commit: oid}},
+		{Kind: gitlet.GitCodeFiles, RepoID: repo, CodeFiles: &gitlet.CodeFilesQuery{Commit: oid}},
 	} {
 		q.Unstamped = true
 		if err := q.Validate(); !errors.Is(err, gitlet.ErrInvalid) {
