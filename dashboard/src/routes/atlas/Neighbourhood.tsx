@@ -14,7 +14,6 @@ import {
   type GraphNode,
 } from "@crewlethq/ui";
 import type { AtlasMapEdge, AtlasSummary, AtlasTraceAnswer } from "~/contract/atlas.ts";
-import { useNow } from "~/lib/clock.ts";
 import { MAP_LABELS, cardOf, lineOf } from "./graph.tsx";
 
 type Cluster = "used" | "self" | "uses" | "runs" | "around";
@@ -47,6 +46,26 @@ function clusterOf(edge: AtlasMapEdge, self: string): Cluster {
   if (edge.to === self) return "used";
   return edge.family === "runs_on" ? "runs" : "uses";
 }
+
+/** How many neighbours the diagram stands in each of its clusters. */
+export interface Touching {
+  /** The entries that rely on this one. */
+  usedBy: number;
+  /** The entries it relies on: what it depends on and what it runs on. */
+  reliesOn: number;
+  /** The entries around it: its account, its monitors, what it is built from. */
+  around: number;
+}
+
+/** A diagram's neighbours counted by the cluster each stands in. */
+export function touching(nodes: readonly GraphNode[]): Touching {
+  const count = (...lanes: Cluster[]) =>
+    nodes.filter((node) => (lanes as string[]).includes(node.lane)).length;
+  return { usedBy: count("used"), reliesOn: count("uses", "runs"), around: count("around") };
+}
+
+/** The diagram of one entry: its cards and its lines. */
+export type Near = ReturnType<typeof neighbourhood>;
 
 /** The entry and everything one step from it as the diagram's cards and lines. */
 export function neighbourhood(
@@ -90,20 +109,16 @@ export function neighbourhood(
 
 export function Neighbourhood({
   self,
-  down,
-  up,
+  near,
   stacked = false,
 }: {
   self: AtlasSummary;
-  /** One step along every relation from the entry. */
-  down: AtlasTraceAnswer | null;
-  /** One step along every relation into the entry. */
-  up: AtlasTraceAnswer | null;
+  /** The entry and what stands one step from it ([neighbourhood]). */
+  near: Near;
   /** One cluster under another, for a sheet too narrow for the path across. */
   stacked?: boolean;
 }) {
-  const now = useNow();
-  const { nodes, edges } = useMemo(() => neighbourhood(self, down, up, now), [self, down, up, now]);
+  const { nodes, edges } = near;
   // A CLUSTER NOTHING STANDS IN IS LEFT OUT rather than drawn empty: a still
   // diagram is short of room, and the sections beside it say what is missing.
   const bands = useMemo<GraphBand[]>(() => {

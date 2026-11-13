@@ -1,6 +1,6 @@
 // The company's atlas, read: its entries as a list, as a map, one entry, a
-// trace of what depends on one, the counts a filter menu offers, and its own
-// log as lines and as daily counts. Every
+// trace of what depends on one, the counts a filter menu offers, its own
+// log as lines and as daily counts, and what waits for a person. Every
 // question takes the atlas app (ADR-0127) and reads the atlas as its asker:
 // Gitlet's repositories only for a holder of Gitlet, and an integration's
 // standing or a connection test only for an administrator, so the atlas is
@@ -119,6 +119,17 @@ type AtlasActivityAnswer struct {
 	Entries []AtlasEntryActivity `json:"entries"`
 }
 
+// AtlasReviewAnswer is one page of what waits for a person in the atlas:
+// what its sources disagree on, and the entries nobody stands behind yet.
+// Total counts every item of the asked kind, Counts each kind's.
+type AtlasReviewAnswer struct {
+	AtlasRead
+	Items      []atlas.ReviewItem       `json:"items"`
+	NextCursor string                   `json:"next_cursor,omitempty"`
+	Total      int                      `json:"total"`
+	Counts     map[atlas.ReviewKind]int `json:"counts"`
+}
+
 // registerAtlas registers the atlas's questions, each on the atlas app.
 func registerAtlas(r *Registry, s Sources) {
 	app := Requires(iam.GrantAtlas)
@@ -129,6 +140,7 @@ func registerAtlas(r *Registry, s Sources) {
 	r.Register("atlas_facets", app, s.atlasFacets)
 	r.Register("atlas_log", app, s.atlasLog)
 	r.Register("atlas_activity", app, s.atlasActivity)
+	r.Register("atlas_review", app, s.atlasReview)
 }
 
 // atlasView is the atlas as the question's asker reads it, and what the read
@@ -329,6 +341,24 @@ func (s Sources) atlasFacets(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	return AtlasFacetsAnswer{AtlasRead: read, Facets: view.Facets(q), Total: len(view.Select(q))}, nil
+}
+
+// atlasReview is what waits for a person, computed on this read and stored
+// nowhere: the facts and relations the sources disagree on, then the entries
+// only an agent reported. It reads the atlas as its asker does, so it never
+// lists an entry the asker's catalogue would not.
+func (s Sources) atlasReview(ctx context.Context, p Params) (any, error) {
+	view, read, err := s.atlasView(ctx, "atlas_review")
+	if err != nil {
+		return nil, err
+	}
+	limit := Clamp(p.Int("limit", atlas.PageDefault), atlas.PageDefault, atlas.PageMax)
+	page, err := view.Review(atlas.ReviewKind(p.String("kind")), p.String("cursor"), limit)
+	if err != nil {
+		return nil, badAtlas(err)
+	}
+	return AtlasReviewAnswer{AtlasRead: read, Items: page.Items, NextCursor: page.Next, Total: page.Total,
+		Counts: page.Counts}, nil
 }
 
 // atlasLogScans is how many pages of the log one question reads to fill its

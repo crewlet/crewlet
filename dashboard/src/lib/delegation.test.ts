@@ -14,6 +14,7 @@ import {
   releaseAllowWords,
   releaseApproverWords,
   releaseRequestOf,
+  soleEscalation,
   verdictWords,
   withDelegateWords,
   writeDismissed,
@@ -70,7 +71,11 @@ describe("who escalated a call", () => {
         },
       ],
     });
-    expect(escalatedByWords(one, name)).toBe("Escalated by Security Engineer (rule 1)");
+    // A SOLE ESCALATION SAYS ITS CONFIDENCE HERE, once: its answer has no line of its own.
+    expect(escalatedByWords(one, name)).toBe(
+      "Escalated by Security Engineer (rule 1), high confidence",
+    );
+    expect(soleEscalation(one)).toBe(one.given[0]);
     const overruled = delegation({
       escalated: ESCALATED,
       given: [
@@ -85,6 +90,11 @@ describe("who escalated a call", () => {
       ],
     });
     expect(escalatedByWords(overruled, name)).toBe("Escalated by Crewlet (rule 1)");
+    // AN ANSWER THE ENGINE OVERRULED, or one of a panel's, keeps a line of its own.
+    expect(soleEscalation(overruled)).toBeNull();
+    const panel = delegation({ escalated: ESCALATED, given: [one.given[0]!, one.given[0]!] });
+    expect(soleEscalation(panel)).toBeNull();
+    expect(escalatedByWords(panel, name)).toBe("Escalated by Security Engineer (rule 1)");
     expect(escalatedByWords(delegation({ escalated: ESCALATED }), name)).toBe(
       "Escalated by Crewlet (rule 1)",
     );

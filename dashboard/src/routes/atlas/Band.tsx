@@ -14,6 +14,7 @@ import {
   ActivityStrip,
   Card,
   Legend,
+  Link,
   Skeleton,
   StackedBar,
   StackedRing,
@@ -22,10 +23,12 @@ import {
 import type {
   AtlasActivityAnswer,
   AtlasFacetsAnswer,
+  AtlasReviewKind,
   AtlasSummary,
   AtlasVendor,
   AtlasWord,
 } from "~/contract/atlas.ts";
+import { href } from "~/app/router.tsx";
 import { fmtCountShort, fmtDate } from "~/lib/format.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import { EntryDisc } from "./parts.tsx";
@@ -44,6 +47,7 @@ export function Band({
   facets,
   attention,
   activity,
+  waiting,
   onShow,
   beside = false,
 }: {
@@ -52,6 +56,8 @@ export function Band({
   /** The most urgent entries, the most urgent first. */
   attention: readonly AtlasSummary[];
   activity: QueryResult<AtlasActivityAnswer>;
+  /** How many items wait for a person, by reason; null until the engine has counted. */
+  waiting: Partial<Record<AtlasReviewKind, number>> | null;
   /** Select an entry on the map. */
   onShow: (id: string) => void;
   /** A sheet stands beside the page: the band keeps to its first two tiles, on one row. */
@@ -79,7 +85,9 @@ export function Band({
         <div className="atlas-band__ring">
           <StackedRing segments={health}>{fmtCountShort(facets.total)}</StackedRing>
           <div className="atlas-band__words">
-            <Text variant="label">The company runs on</Text>
+            <Text variant="label" className="atlas-band__title">
+              The company runs on
+            </Text>
             <Text variant="heading">{entries(facets.total)}</Text>
             <Legend items={health.map((one) => ({ ...one, value: one.value.toLocaleString() }))} />
           </div>
@@ -88,7 +96,9 @@ export function Band({
       <Card padding="md" className="atlas-band__tile atlas-band__tile--attention">
         <div className="atlas-band__words">
           <div className="atlas-band__head">
-            <Text variant="label">Needs attention now</Text>
+            <Text variant="label" className="atlas-band__title">
+              Needs attention now
+            </Text>
             {wrong > 0 && (
               <Text variant="caption" tone="tertiary">
                 {wrong.toLocaleString()} in all
@@ -131,7 +141,9 @@ export function Band({
       </Card>
       <Card padding="md" className="atlas-band__tile atlas-band__tile--sources">
         <div className="atlas-band__words">
-          <Text variant="label">Where it comes from</Text>
+          <Text variant="label" className="atlas-band__title">
+            Where it comes from
+          </Text>
           {marks.length > 0 && (
             <span className="atlas-band__marks">
               {marks.map(([vendor]) => {
@@ -144,9 +156,24 @@ export function Band({
           )}
           <StackedBar segments={sources} />
           <Legend items={sources.map((one) => ({ ...one, value: one.value.toLocaleString() }))} />
+          {waiting && <ReviewLink waiting={waiting} />}
         </div>
       </Card>
     </div>
+  );
+}
+
+/** The way to Review, saying how much waits for a person there. */
+function ReviewLink({ waiting }: { waiting: Partial<Record<AtlasReviewKind, number>> }) {
+  const count = Object.values(waiting).reduce((sum, one) => sum + (one ?? 0), 0);
+  return (
+    <Link
+      href={href(["company", "atlas", "review"])}
+      className="atlas-band__link"
+      title="What waits for a person: disagreements, and entries nobody has confirmed"
+    >
+      {count === 0 ? "Review: none waiting" : `Review: ${count.toLocaleString()} waiting`}
+    </Link>
   );
 }
 
@@ -156,7 +183,9 @@ function Week({ activity }: { activity: QueryResult<AtlasActivityAnswer> }) {
   if (!answer) {
     return (
       <div className="atlas-band__words">
-        <Text variant="label">Recorded this week</Text>
+        <Text variant="label" className="atlas-band__title">
+          Recorded this week
+        </Text>
         {activity.loading ? (
           <Skeleton variant="text" rows={2} label="Loading the atlas log" />
         ) : (
@@ -171,7 +200,9 @@ function Week({ activity }: { activity: QueryResult<AtlasActivityAnswer> }) {
   const week = answer.days.slice(-7).reduce((sum, day) => sum + day, 0);
   return (
     <div className="atlas-band__words">
-      <Text variant="label">Recorded this week</Text>
+      <Text variant="label" className="atlas-band__title">
+        Recorded this week
+      </Text>
       <span className="atlas-band__figure">
         <Text variant="display" numeric>
           {week.toLocaleString()}
@@ -186,6 +217,9 @@ function Week({ activity }: { activity: QueryResult<AtlasActivityAnswer> }) {
         reading={{ formatTime: (at) => fmtDate(new Date(at).toISOString()) }}
         emptyLabel="Nothing recorded in the window."
       />
+      <Link href={href(["company", "atlas", "changes"])} className="atlas-band__link">
+        Every change
+      </Link>
     </div>
   );
 }

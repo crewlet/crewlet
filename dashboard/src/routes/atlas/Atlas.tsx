@@ -12,13 +12,16 @@
  */
 
 import { useMemo, useState } from "react";
-import { PageNote, Skeleton } from "@crewlethq/ui";
+import { Button, PageNote, Skeleton } from "@crewlethq/ui";
+import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { AtlasFacetsAnswer } from "~/contract/atlas.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
+import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { AddEntry } from "./AddEntry.tsx";
 import { AtlasMap } from "./AtlasMap.tsx";
 import { ATTENTION_SHOWN, Band } from "./Band.tsx";
 import { Catalogue } from "./Catalogue.tsx";
@@ -36,9 +39,10 @@ import { coverageLine, coverageNotes } from "./parts.tsx";
 
 /** What fills the atlas in this build, said where it is empty. */
 export const FILLS =
-  "It fills from what the company settings declare, from Gitlet, from what the engine already records about the integrations, servers, tool servers and models it uses, and from what people add by asking Ask Crewlet.";
+  "It fills from what the company settings declare, from Gitlet, from what the engine already records about the integrations, servers, tool servers and models it uses, and from what people add here with Add entry.";
 
 const NO_PARAMS = {};
+const ONE = { limit: 1 };
 
 export function Atlas() {
   const filters = useAtlasFilters();
@@ -52,6 +56,11 @@ export function Atlas() {
   // THE ENTRY EITHER SURFACE POINTS AT, lit on the other: a pointer's rest,
   // not a place, so it lives here and never in the address.
   const [pointedId, setPointedId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const add = useWriteAccess("atlas_add_entry");
+  // WHAT WAITS FOR A PERSON, counted by the engine on the read: one item is
+  // asked for, since the band says the count and Review lists the rest.
+  const waiting = useQuery("atlas_review", ONE, { pollMs: ATLAS_POLL_MS });
 
   // THE BAND IS ABOUT THE COMPANY, so it reads the atlas whole (with the
   // unconfirmed entries when they are shown); the menus and the coverage line
@@ -83,6 +92,7 @@ export function Atlas() {
           facets={company.data}
           attention={attention}
           activity={activity}
+          waiting={waiting.data ? waiting.data.counts : null}
           onShow={select}
           beside={sheet}
         />
@@ -90,7 +100,20 @@ export function Atlas() {
       <PageToolbar>
         <SearchBox q={filters.q} />
         <FilterControl filters={filters} facets={facets.data} />
+        <span className="atlas-toolbar__end">
+          <Button
+            variant="primary"
+            size="small"
+            leadingIcon={<PlusGlyph />}
+            disabledReason={add.can ? undefined : add.reason}
+            title={add.can ? undefined : add.reason}
+            onClick={() => setAdding(true)}
+          >
+            Add entry
+          </Button>
+        </span>
       </PageToolbar>
+      {adding && <AddEntry onClose={() => setAdding(false)} />}
       <ActiveFilters filters={filters} />
       <Coverage facets={facets.data} narrowed={narrowed} />
       <MapPart

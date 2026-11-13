@@ -2325,7 +2325,24 @@ const (
 	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
 	// sheets about +28,100, the kit's layered service map in the one sheet
 	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
-	treeBudget = 5<<20 + 776<<10
+	// Kit 0.124.0 and the decision rows read in product words took it to
+	// 5898.0 KiB (6,039,547 bytes, +2,441: script +1,811, a held call's
+	// title from its own arguments, the one escalation heading and the row's
+	// detail; the sheets +630, the kit's quiet callout and compact finding
+	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
+	// moves this budget with a reason of its own.
+	// Adding, correcting and confirming in the atlas (Add entry, an entry's
+	// actions and their dialogs, History, Changes, Review and its bulk
+	// decision, and the vocabulary's fact and relation tables the dialogs
+	// offer from), merged on top of it, added 48,677 bytes, nearly all of it
+	// the atlas chunk's script. The SSH integration's Servers section (each
+	// server's "Read for Atlas" switch and the dialog that lists the commands
+	// first) and the atlas's workload kind, image and open ports, named in
+	// the atlas words, added 3,572, all script. A repository's files as an
+	// atlas source, with the workload's rows in the tables the dialogs offer
+	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
+	// +52,609): 5950 KiB.
+	treeBudget = 5<<20 + 830<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

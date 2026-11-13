@@ -13,7 +13,9 @@ An **entry** is one thing the company runs on. Its kind is one of a closed set, 
 | `domain` | Domain | Entry | `acme.example` |
 | `hostname` | Hostname | Entry | `api.acme.example` |
 | `endpoint` | Endpoint | Entry | `https://api.acme.example/v1` |
+| `certificate` | Certificate | Entry | a certificate pack a vendor holds for the company's names |
 | `service` | Service | Services | `checkout-api` |
+| `workload` | Workload | Services | the container `acme-api` on the server `web-1` |
 | `host` | Server | Runtime | `web-1` |
 | `datastore` | Database | Data | `orders-db` |
 | `queue` | Queue | Data | `orders` |
@@ -29,7 +31,7 @@ What a vendor does for the company (chat, tracking, code hosting, CI, monitoring
 
 **Relations** always point from the thing that relies to the thing relied on, so "what depends on X" is one walk against the arrows: `runs_on`, `depends_on`, `exposes`, `resolves_to`, `in_zone` and `fronted_by` are drawn on the map at rest; `served_by`, `built_from`, `deployed_by`, `monitored_by`, `belongs_to`, `documented_in` (a Doclet page) and `owned_by` (a seat or a unit) appear when an entry is selected.
 
-**Facts** are a closed list per kind, each with a value type: a host name, an IP address, an address without credentials, a port, a version, a region, an account's own id, a branch, a short label, a word from a closed set. Facts of **meaning** (purpose, environment, importance, and the owner) are decided only by people and the settings; an integration or an agent can only suggest them.
+**Facts** are a closed list per kind, each with a value type: a host name, an IP address, an address without credentials, a port, a version, a region, an account's own id, a branch, a container image's reference, a short label, a word from a closed set. Facts of **meaning** (purpose, environment, importance, and the owner) are decided only by people and the settings; an integration or an agent can only suggest them.
 
 ## Where each fact comes from
 
@@ -39,13 +41,13 @@ Every fact is a claim from one source, and the atlas is one fold over all of the
 flowchart LR
     S["Company settings<br/>(the redacted copy)"] --> C["Claims, computed<br/>when the atlas is read"]
     R["The engine's own records<br/>(Gitlet's repositories and checks)"] --> C
-    P["People, agents and<br/>integration reads"] --> L["Claims, recorded<br/>on the atlas's own log"]
+    P["People, agents, integration reads<br/>and repositories' files"] --> L["Claims, recorded<br/>on the atlas's own log"]
     C --> F["One fold"]
     L --> F
     F --> V["The atlas: entries, facts,<br/>relations, sources"]
 ```
 
-What the engine **already keeps** is computed every time the atlas is read and never stored: it cannot drift from where it lives, and it needs nothing written. What only **somebody can tell** the engine (a person's correction, an agent's observation, an integration's read beyond what the engine keeps) is recorded on the atlas's own log ([What integrations read](#what-integrations-read)).
+What the engine **already keeps** is computed every time the atlas is read and never stored: it cannot drift from where it lives, and it needs nothing written. What only **somebody can tell** the engine (a person's correction, an agent's observation, an integration's read beyond what the engine keeps, what a repository's files declare) is recorded on the atlas's own log ([What integrations read](#what-integrations-read), [What a repository's files declare](#what-a-repositorys-files-declare)).
 
 Each claim carries a confidence the engine derives from its source and the evidence it checked. Nobody, and no model, chooses it.
 
@@ -54,6 +56,7 @@ Each claim carries a confidence the engine derives from its source and the evide
 | The company settings, or the engine's own records | Confirmed |
 | A person | Confirmed |
 | An integration's read with the company's credential | Confirmed |
+| A repository's deploy and dependency files, read at its default branch | Likely |
 | An agent, backed by a server's or a vendor's own answer to a tool call in the same turn | Likely |
 | An agent, backed by a repository file it read in the same turn | Likely |
 | An agent, backed only by text anybody could have written (a message, a page, a work item) | Unconfirmed |
@@ -120,11 +123,39 @@ The read is the `atlas-collect` duty, one node of the fleet at a time ([singleto
 
 **An integration says an entry exists only where the entry lives at its vendor.** A Datadog monitor lives at Datadog; the service it watches does not, so the read relates the service to the monitor without claiming the service. A monitor somebody deletes therefore takes its relations with it after the same two reads, and retires nothing: an entry only its relations named leaves the map, and one another source or a person stands behind stays as it was.
 
+**A server is read only where the company opts it in.** The SSH integration is the one source that runs commands rather than calling a vendor, so it reads nothing by default. On a server whose `inventory` is on, the engine itself runs a closed set of two read-only commands, each on a certificate signed for that one command and recorded as an agent's command is ([let the atlas read a server](../integrations/ssh.md#let-the-atlas-read-a-server), ADR-0134). The ports the server listens on beyond its loopback address become its `open_port` facts, and each running container becomes a `workload`, keyed by the server and its name there, with its image, running on the server. The server itself stays the settings' entry: the read names it and never claims it. A container's command line, its ports and its state are dropped as the answer is parsed, and what a command printed reaches no record. Each server is two parts of the read, its ports and its containers; one the engine could not read is a finding with what to do about it, and what an earlier read recorded for it stands.
+
 **A listing the credential may not read is a finding, never a failed read.** A vendor puts each listing behind a permission of its own, and the company's credential may hold some and not others. The read completes with the listings it may read, and the source's standing names each one it was refused with the permission that restores it. What an earlier read of a refused listing recorded stays exactly as it was: nothing is withdrawn, nothing is missed and nothing is retired, however long the refusal lasts. Any other failure of a listing fails the whole read.
 
 **Nothing a vendor returns reaches the atlas as text.** Every value a read reports goes through the vocabulary's grammars, which refuse a value or a key shaped like a credential; what is refused is counted on the source, never shown. A source maps a vendor's answer into closed fields and reads no field nobody mapped.
 
 Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, which listings it was refused, and which entries it has stopped seeing since when.
+
+### What a repository's files declare
+
+A repository says what it runs as and what its code calls, often before anything is deployed. The engine reads a **closed list** of deploy and dependency files from each Gitlet repository the whole company may read, at its default branch, and records what they declare in that repository's own voice ([ADR-0133](../../adr/0133-a-repositorys-deploy-and-dependency-files-are-read-from-a-closed-list-and-what-they-declare-is-likely.md)).
+
+**It is a suggestion until a person confirms it.** A file states what somebody meant to run, not what runs, so everything read this way is **likely**, shown with the repository whose files said it, and the entry is **discovered**. It is never confirmed by the files alone, it never outvotes what an integration read or a person said, and it never sends an entry to Review. A person who confirms an entry makes it their own claim. A file sets no purpose, environment, importance or owner, and removes nothing: when a file stops declaring something, what it said is withdrawn, and whoever else stands behind the entry still does.
+
+| File | What it declares |
+|---|---|
+| `Dockerfile` and `Procfile`, at the repository's root | by being there, never by being read: a service named for the repository, built from it. Their lines are build arguments, environment values and commands |
+| `compose.yaml`, `docker-compose.yml` and their overrides | each service, keyed `<project>-<service>` the way compose names its containers (the project is the file's `name`, or the directory it is in, or the repository); a service whose image is a well-known database or queue (Postgres, MySQL, MariaDB, Redis, Valkey, MongoDB, Elasticsearch, OpenSearch, ClickHouse, NATS, Kafka, RabbitMQ) as that database or queue, keyed `<project>/<service>`, with its engine and the version its tag starts with; `built from` this repository where the service has a `build`, or from the forge repository where its image sits in that forge's registry (`ghcr.io`, `registry.gitlab.com`); and `depends on` for each `depends_on` between services of the file |
+| Kubernetes manifests under a directory named `k8s`, `kubernetes`, `manifests` or `deploy` | each Deployment, StatefulSet, DaemonSet and CronJob as a service by its name, or as the database or queue its first container's image is known to run; and the database, queue or bucket a well-known operator's resource asks for (CloudNativePG, Zalando Postgres, MySQL, MariaDB, MongoDB, Redis, Elasticsearch, OpenSearch, ClickHouse, Strimzi Kafka, RabbitMQ, object bucket claims and Crossplane buckets), keyed `<repository>/<name>` |
+| `Chart.yaml` of a Helm chart | the chart as a service built from this repository, and each dependency that is a well-known database or queue chart as one the service depends on. A values file is never read |
+| `*.tf` and `*.tofu` | the vendors its providers name, and what its resource types say each is used for (compute, a database, object storage, DNS, a CDN, email, monitoring). No attribute's value is read, and variable and state files never are |
+| `fly.toml`, and `render.yaml` at the root | the application as a service built from this repository and running on the company's Fly.io or Render account; a Render database as a Postgres database, and a key value service as one |
+| `package.json`, `go.mod`, `requirements.txt` and `requirements-*.txt`, `pyproject.toml`, `Gemfile`, `Cargo.toml` | the vendors whose SDKs the code depends on, from a closed table of package names per registry. A vendor the engine knows is its account keyed by the vendor alone, since a file names the vendor and never which account; any other is an account with the vendor `other` and its name |
+
+**What is never read.** A file that is not on the list is never read: an `.env` file, a values file, a variable or state file, a manifest named for the secrets it holds, anything in a directory whose name starts with a dot, and anything under a vendored, test or example tree are refused by their path, and Gitlet itself refuses a read of a file off the list. Inside a listed file, only the fields in the table are decoded: an `environment`, `env` or `env_file` block, a command, a build argument, a label, a Secret's or a ConfigMap's data, a dependency's version or address and a development dependency have no field to be read into. What is decoded reaches the atlas only through the vocabulary's grammars, which refuse a key or a value shaped like a credential and count it. A name is matched against closed tables and never guessed from a similar one.
+
+**Relations are by exact keys only.** "This repository builds this service" is said where a file says so (a `build`, a chart, a platform file, an image in a forge's registry), and "this service uses this database" where a compose file's `depends_on` or a chart's dependency says so. Nothing is related by a similar name.
+
+**When, and how much.** A repository is read when its default branch moves, never on a clock: the code log's record of the push asks for the read on the repository's home node, and a listing each minute catches a record that was missed. One read lists the tip's files in one call and reads only the files whose content changed since the last read; a push that touches no listed file reads nothing. A file past 64 KiB is counted and not read, at most 200 listed files of a repository are taken (the rest are counted), a file makes at most 128 claims, and one pass reads at most 50 files, a larger change being read over several passes and recorded only once it has been read whole.
+
+**What is not scanned.** A repository only its unit may read (`visibility: unit`) is never scanned, because what a scan records is on the company's atlas log, whose history every holder of Atlas reads. A seat's scratch repository, an archived repository and one still being imported are not scanned either. What a repository's files declared is withdrawn when it stops being scanned, and when it is renamed its claims move to the new name.
+
+Each scanned repository's standing, on the coordination store, says which commit was last read whole, how many files it listed and read and in how many calls, how many files were past a bound or were not their format, how many values were withheld, and the fault of its last read if it failed.
 
 ### What agents record
 
@@ -180,16 +211,18 @@ A key one source carries on two entries (two servers behind one load balancer, t
 
 For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. An agent's dispute never wins: it is shown beside the value it disputes. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
 
+**What waits for a person is computed on every read**, never stored: the facts and relations that are contested or disputed, and the entries only an agent reported. The dashboard's Review and the `atlas_review` question list them; a person's decision is an ordinary claim, and an item is gone from the next read once its cause is.
+
 ## Changing the atlas
 
 A person who holds Atlas changes it with eleven tools of the operator catalogue, the same catalogue the dashboard writes through ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)) and your own assistant reaches over `/operator/mcp`. Each records a claim in the person's own name, which outranks every integration and agent until they report a change, when both values are shown for review:
 
 | Tool | What it records |
 |---|---|
-| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one |
+| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one, and what the person knows of it: its purpose, the account it belongs to, its owner and the page that documents it |
 | `atlas_correct` | one fact's `value` as the person knows it (for a fact that holds many, one more value), or with `wrong`, that a value shown is wrong |
 | `atlas_confirm` | what the atlas shows, as the person's own: the entry, one fact (or another value a source reports for it) or one relation |
-| `atlas_relate`, `atlas_unrelate` | a relation between two entries, drawn or recorded as not there |
+| `atlas_relate`, `atlas_unrelate` | a relation between two entries, or from an entry to the Doclet page that documents it, drawn or recorded as not there |
 | `atlas_set_owner` | the owning `seat` (by handle) or `unit` (by key) of the chart, in place of the owner a person named before; `clear` removes it. Never free text |
 | `atlas_retire`, `atlas_restore` | an entry taken off the map, kept in its history, and brought back |
 | `atlas_merge`, `atlas_split` | two entries of one kind said to be the same thing, or not the same |
@@ -244,6 +277,9 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | What people record: entries, facts, relations, owners, "the same" and "not the same", purges, with their history | every data node identically, with history | the atlas log, `CREWLET_ATLAS_LOG`, and its replicated tables |
 | What an integration's read found that the log did not hold: a changed fact, a withdrawn one, a retirement | every data node identically, with history | the same log, one `read` record an entry, in the integration's voice |
 | What agents record: an entry, a fact, a relation or a dispute, with the turn and the evidence behind it | every data node identically, with history | the same log, one `claim` record each, in the agent's voice |
+| What a repository's deploy and dependency files declare, and what they stopped declaring | every data node identically, with history | the same log, one `read` record an entry, in the repository's voice |
+| Each scanned repository's standing: the commit last read whole, the files listed and read, the calls, and what was refused | the whole company, current value only | the coordination store, in a bucket of its own |
+| What each file declared at the content last read, so an unchanged file is not read again | the repository's home node alone, while it runs | that node's memory; a node that lost it reads the repository's listed files once more at its next move |
 | What a turn's tool calls answered, which a record cites | the node running the turn, for that turn | the turn's own memory, never written anywhere |
 | An agent's records today, against its allowance of 200 | the whole company, now | the coordination store's shared counter, a UTC day wide |
 | The log's lines, its daily counts, an entry's last change, a row's owner, purpose, relation counts and reason, and a relation's family | nobody: computed on every read, from the log's rows and the fold | the read itself |

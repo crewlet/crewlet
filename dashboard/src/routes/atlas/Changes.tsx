@@ -1,6 +1,7 @@
 /**
- * An entry's recent changes as a timeline, newest first, read from the
- * atlas's own log (`atlas_log`): what was recorded, marked as wrong or no
+ * The atlas's own log as a timeline, newest first (`atlas_log`): one entry's
+ * history, or with no entry named the company's recent changes, each line
+ * then led by the entry it is about. What was recorded, marked as wrong or no
  * longer reported, when, and in whose voice. The sentence is the engine's;
  * a value and a name beside it are somebody's words, drawn as plain text.
  */
@@ -30,7 +31,8 @@ export function Changes({
   id,
   limit,
 }: {
-  id: string;
+  /** The entry whose history this is; absent, the whole company's changes. */
+  id?: string;
   /** At most this many lines, with the way to the rest; unset, every page on request. */
   limit?: number;
 }) {
@@ -38,7 +40,7 @@ export function Changes({
   const { socket } = useClient();
   const seatBadge = useSeatBadgeOf();
   const seatName = (handle: string) => seatBadge(handle).name;
-  const asked = useMemo(() => ({ id }), [id]);
+  const asked = useMemo(() => (id ? { id } : {}), [id]);
   const first = useQuery("atlas_log", asked, { pollMs: ATLAS_POLL_MS });
   const paged = usePaged(
     first,
@@ -67,7 +69,7 @@ export function Changes({
       {lines.length === 0 ? (
         <p className="muted">
           Nothing recorded yet. What the engine reads from the settings and its own records at every
-          read leaves no line.
+          read leaves no line; what people, integrations and agents record does.
         </p>
       ) : (
         <>
@@ -75,6 +77,7 @@ export function Changes({
             {lines.map((line) => (
               <Timeline.Item key={line.id}>
                 <span className="atlas-change">
+                  {!id && <Link href={href(entryPath(line.entry))}>{line.name}</Link>}
                   <Text variant="cell">{line.text}</Text>
                   {line.value && <FactValue value={line.value} />}
                   {line.target &&
@@ -93,11 +96,21 @@ export function Changes({
           </Timeline>
           {more &&
             (limit === undefined ? (
-              <Button variant="ghost" size="small" onClick={paged.next}>
-                Show older changes
-              </Button>
+              <div>
+                <Button variant="ghost" size="small" loading={paged.paging} onClick={paged.next}>
+                  Show older changes
+                </Button>
+              </div>
             ) : (
-              <Link href={href(entryPath(id))}>Every change is on the entry&rsquo;s page</Link>
+              <Link
+                href={
+                  id
+                    ? href(entryPath(id), { tab: "history" })
+                    : href(["company", "atlas", "changes"])
+                }
+              >
+                {id ? "The whole history is on the entry’s page" : "Every change"}
+              </Link>
             ))}
         </>
       )}

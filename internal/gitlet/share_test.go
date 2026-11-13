@@ -218,6 +218,7 @@ func TestTheEnginesOwnReadsAreCountedApartFromSeats(t *testing.T) {
 	}{
 		{"a revision's facts", gitlet.GitQuery{Kind: gitlet.GitRevisionFacts}, gitlet.SeatWorkEngine},
 		{"a checks file", gitlet.GitQuery{Kind: gitlet.GitChecksFile}, gitlet.SeatWorkEngine},
+		{"a commit's deploy files", gitlet.GitQuery{Kind: gitlet.GitCodeFiles}, gitlet.SeatWorkEngine},
 		{"a read made for a check", gitlet.GitQuery{Kind: gitlet.GitBlob, Check: &gitlet.CheckKey{}}, gitlet.SeatWorkEngine},
 		{"a seat's tree", gitlet.GitQuery{Kind: gitlet.GitTree}, gitlet.SeatWorkRead},
 		{"a seat's diff", gitlet.GitQuery{Kind: gitlet.GitDiff}, gitlet.SeatWorkRead},

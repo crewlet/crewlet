@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/deployfiles"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -1070,6 +1071,13 @@ const (
 	// the repositories whose code index it may keep (M6-D12). The engine's
 	// own read, as `compaction_due` is.
 	ReadIndexed ReadKind = "indexed"
+	// ReadDefaultTips is the active project repositories, BY NAME, each by
+	// its id, its name, who may read it and its default branch's tip ("" for
+	// an empty one), a
+	// page of MaxSnapshotItems after the [ReadQuery.Cursor], the last name a
+	// page served: the listing the atlas's scan compares with the tips it
+	// last read. The engine's own read, as `indexed` is.
+	ReadDefaultTips ReadKind = "default_tips"
 	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
 	// grant: one repository's, newest ended first and every attempt not yet
 	// ended after them; one change's of it, or one commit's, by commit, name
@@ -1179,7 +1187,7 @@ func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
-		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed,
+		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed, ReadDefaultTips,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
 }
@@ -1547,6 +1555,11 @@ type ReadQuery struct {
 	// its cell resolved and its room taken for each — so it claims nothing
 	// it could not run, at the cost of reading what it skips.
 	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
+	// DefaultTips narrows a `default_tips` read to ONE repository by its id,
+	// answered with no row where it is not an active project repository;
+	// nil lists every one. Refused on every other kind. An estate request's
+	// field and no record's, so it takes no versionedFields row.
+	DefaultTips *DefaultTipsQuery `json:"default_tips,omitempty"`
 	// ExpungeTips is an `expunge_tips` read's repository and instant:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1691,12 +1704,14 @@ type ReadAnswer struct {
 	// heads' ([ReadAnswer.TipsNext]).
 	DueRepos []string `json:"due_repos,omitempty"`
 	// Indexed is an `indexed` listing's page of repositories, by name.
-	Indexed    []IndexedRepo    `json:"indexed,omitempty"`
-	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
-	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`
-	DueTips    []TipDue         `json:"due_tips,omitempty"`
-	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
-	PathOwners []PathOwner      `json:"path_owners,omitempty"`
+	Indexed []IndexedRepo `json:"indexed,omitempty"`
+	// DefaultTips is a `default_tips` listing's page of repositories, by name.
+	DefaultTips []DefaultTip     `json:"default_tips,omitempty"`
+	DueChanges  []ChangeDue      `json:"due_changes,omitempty"`
+	DueTargets  []CheckTargetDue `json:"due_targets,omitempty"`
+	DueTips     []TipDue         `json:"due_tips,omitempty"`
+	Rechecks    []ChangeDue      `json:"rechecks,omitempty"`
+	PathOwners  []PathOwner      `json:"path_owners,omitempty"`
 	// Gates is, beside PathOwners and on the same pages, the repository's
 	// rules' merge gates, each named by its rule's pattern ([RuleGate]): what
 	// its home matches the touched paths against for the human paths each
@@ -1791,6 +1806,20 @@ type ReadAnswer struct {
 type IndexedRepo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// DefaultTipsQuery is the one repository a `default_tips` read is narrowed to.
+type DefaultTipsQuery struct {
+	RepoID string `json:"repo_id"`
+}
+
+// DefaultTip is one repository a `default_tips` read lists: its default
+// branch's tip, empty for a repository whose default branch holds no commit.
+type DefaultTip struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Visibility Visibility `json:"visibility"`
+	Head       string     `json:"head,omitempty"`
 }
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
@@ -3272,6 +3301,12 @@ const (
 	// string would replace an invalid byte of, which the parse must see as
 	// git holds it.
 	GitChecksFile GitReadKind = "checks_file"
+	// GitCodeFiles is a commit's deploy and dependency files: the files of
+	// its tree on the closed list (internal/deployfiles), each by its path,
+	// its blob and its size, or ONE of them whole. THE ENGINE'S OWN READ
+	// ([GitReadKind.EnginesOwn]), which the atlas's scan makes of a default
+	// branch's tip; a path off the list is refused, never read.
+	GitCodeFiles GitReadKind = "code_files"
 	// GitSearch is the lines of a commit a code search matches — the
 	// default branch's tip through the repository's code index where its Gitlet
 	// node keeps one, and otherwise git grep — at most MaxSearchHits of
@@ -3287,7 +3322,7 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitSearch}
+		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch}
 }
 
 // Valid reports a kind this build answers.
@@ -3295,14 +3330,17 @@ func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
 // EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
 // the repository's home Gitlet node reads to record them on the change, or to
-// land it, and a commit's checks file, which it reads a change's checks'
+// land it, a commit's deploy and dependency files, which it reads for the
+// atlas, and a commit's checks file, which it reads a change's checks'
 // definitions from at its target's tip — so a read of it names NO asker and
 // no seat it reads for, is held to no grant and is recorded as nobody's read:
 // an asker there would be judged for a read it never made, and a
 // `visibility: unit` repository's readers would be told the engine read it.
 // As the duty listings of the rows are ([ReadQuery]'s `compaction_due`), and
 // for the same reason.
-func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts || k == GitChecksFile }
+func (k GitReadKind) EnginesOwn() bool {
+	return k == GitRevisionFacts || k == GitChecksFile || k == GitCodeFiles
+}
 
 // Unstampable reports a kind whose answer is a PAGE of the repository's
 // content — a listing, a file's lines, a diff, a comparison, an interdiff, a
@@ -3456,7 +3494,37 @@ type GitQuery struct {
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
+	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
+}
+
+// CodeFilesQuery reads a commit's deploy and dependency files
+// ([GitCodeFiles]). An estate request's, as every kind's query is.
+type CodeFilesQuery struct {
+	// Commit is the commit read at, its whole id: a default branch's tip, as
+	// the scan read it from the rows.
+	Commit string `json:"commit"`
+	// File is the one file to read whole, by its path from the root; empty
+	// lists the commit's files instead. A path the closed list does not
+	// admit as a file that is read ([deployfiles.Format.Parsed]) is refused.
+	File string `json:"file,omitempty"`
+}
+
+func (q *CodeFilesQuery) validate() error {
+	if err := wholeID("code_files.commit", q.Commit, false); err != nil {
+		return err
+	}
+	if q.File == "" {
+		return nil
+	}
+	if _, err := GitPath("code_files.file", q.File, "", false); err != nil {
+		return err
+	}
+	if f, ok := deployfiles.Classify(q.File); !ok || !f.Parsed() {
+		return fmt.Errorf("%w: code_files.file: not a deploy or dependency file the engine reads: a file off "+
+			"the closed list is never read", ErrInvalid)
+	}
+	return nil
 }
 
 // ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
@@ -3854,7 +3922,8 @@ func (q GitQuery) Validate() error {
 		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
-		{GitChecksFile, q.ChecksFile != nil}, {GitSearch, q.Search != nil}} {
+		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
+		{GitSearch, q.Search != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3891,6 +3960,8 @@ func (q GitQuery) Validate() error {
 		return q.Blame.validate()
 	case GitChecksFile:
 		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
+	case GitCodeFiles:
+		return q.CodeFiles.validate()
 	case GitSearch:
 		return q.Search.validate()
 	}
@@ -4275,7 +4346,34 @@ type GitAnswer struct {
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
+	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`
+}
+
+// CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at
+// most [deployfiles.MaxFiles] of them by path with the rest counted, or ONE
+// file ([CodeFilesQuery.File]). Like a checks file's, it is the engine's and
+// never held to [MaxGitAnswerBytes]: a listing at its bound is some 64 KiB of
+// JSON and a file some 88 KiB, far inside the estate's reply ([MaxPageBytes]).
+type CodeFilesAnswer struct {
+	// Commit is the commit read at, its whole id.
+	Commit string `json:"commit"`
+	// Files is a listing's files, in path order; More is how many listed
+	// files past the bound the commit holds, none of which is read.
+	Files []CodeFile `json:"files,omitempty"`
+	More  int        `json:"more,omitempty"`
+	// File is the one file asked for: absent (no OID) where the commit holds
+	// no regular file there. Raw is its bytes, whole, where its size is at
+	// most [deployfiles.MaxFileBytes]; nil otherwise, and for an empty file.
+	File *CodeFile `json:"file,omitempty"`
+	Raw  []byte    `json:"raw,omitempty"`
+}
+
+// CodeFile is one deploy or dependency file of a commit.
+type CodeFile struct {
+	Path string `json:"path"`
+	OID  string `json:"oid,omitempty"`
+	Size int64  `json:"size,omitempty"`
 }
 
 // ChecksFileAnswer is what a commit holds at [ChecksFilePath]: nothing (no

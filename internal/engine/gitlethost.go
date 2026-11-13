@@ -482,6 +482,13 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 		return gitletHostParts{}, fmt.Errorf("engine: build the imports and mirrors: %w", err)
 	}
 
+	// 10c. THE ATLAS'S READ OF A REPOSITORY'S DEPLOY AND DEPENDENCY FILES
+	// (internal/atlas/codescan), a worker of the same loop (atlascode.go).
+	if err = e.buildAtlasCodeScan(homeLoop); err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return gitletHostParts{}, fmt.Errorf("engine: build the atlas's code scan: %w", err)
+	}
+
 	// 11. THE CHECKS (internal/gitlet/checkrun): this node's runner of the
 	// company's queued checks, and its home's sweep of the checks whose
 	// runner is gone, a worker of the loop just built (codechecks.go). BUILT

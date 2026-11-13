@@ -7,8 +7,7 @@
  */
 
 import { useId, useMemo } from "react";
-import { Card, Link, Section, Skeleton, Stack, Tabs, Tag } from "@crewlethq/ui";
-import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
+import { Card, Link, Section, Skeleton, Stack, Tabs } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -32,6 +31,15 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { Changes } from "./Changes.tsx";
+import { ClaimList, DecisionButtons, type ShownClaim } from "./Decisions.tsx";
+import { EntryActions, type Names } from "./EntryActions.tsx";
+import {
+  OWNER_DECIDED_BY,
+  factDecisions,
+  relationDecisions,
+  settledElsewhere,
+  type Decision,
+} from "./writes.ts";
 import { ATLAS_POLL_MS, SELECT_KEY, TRACE_KEY } from "./filters.ts";
 import {
   EntryHead,
@@ -41,21 +49,26 @@ import {
   Touches,
   dependsOn,
   entryPath,
+  namesOf,
   selfOf,
   useEntryReads,
   usedBy,
   type EntryReads,
 } from "./entry.tsx";
-import { FactValue, sourceName, sourceSetBy } from "./parts.tsx";
+import { FactValue, sourceName } from "./parts.tsx";
 import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 
-const TABS = ["overview", "relations", "sources"] as const;
+const TABS = ["overview", "relations", "sources", "history"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Readonly<Record<Tab, string>> = {
   overview: "Overview",
   relations: "Relations",
   sources: "Sources",
+  history: "History",
 };
+
+/** At most this many changes the Overview lists before pointing at History. */
+const OVERVIEW_CHANGES = 8;
 
 export function EntryPage({ id }: { id: string }) {
   const reads = useEntryReads(id);
@@ -94,6 +107,7 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
   return (
     <div className="atlas-entry">
       <EntryHead answer={answer} self={selfOf(reads)} size="page" now={now} />
+      <EntryActions answer={answer} names={namesOf(reads)} />
       <div className="tab-detail">
         <Tabs
           variant="underline"
@@ -124,7 +138,17 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
         <div className="tabpanel" role="tabpanel" id={panelId} tabIndex={0}>
           {tab === "overview" && <Overview entry={entry} reads={reads} now={now} />}
           {tab === "relations" && <Relations answer={answer} below={below} above={above} />}
-          {tab === "sources" && <Sources entry={entry} now={now} />}
+          {tab === "sources" && <Sources entry={entry} names={namesOf(reads)} now={now} />}
+          {tab === "history" && (
+            <Section spacing="tight" headingLevel={2} title="Every change, newest first">
+              <p className="muted">
+                What people, integrations and agents recorded about this entry, kept for the
+                company&rsquo;s history period. What the engine reads from the settings and its own
+                records at every read is not recorded, so it leaves no line.
+              </p>
+              <Changes id={entry.id} />
+            </Section>
+          )}
         </div>
       </div>
     </div>
@@ -157,7 +181,7 @@ function Overview({ entry, reads, now }: { entry: AtlasEntry; reads: EntryReads;
         </Section>
       )}
       <Section spacing="tight" headingLevel={2} title="Recent changes">
-        <Changes id={entry.id} />
+        <Changes id={entry.id} limit={OVERVIEW_CHANGES} />
       </Section>
     </Stack>
   );
@@ -364,7 +388,7 @@ function sameSource(a: AtlasSource, b: AtlasSource): boolean {
   return a.kind === b.kind && a.name === b.name && a.turn === b.turn && a.revision === b.revision;
 }
 
-function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
+function Sources({ entry, names, now }: { entry: AtlasEntry; names: Names; now: number }) {
   const seatBadge = useSeatBadgeOf();
   const seatName = (handle: string) => seatBadge(handle).name;
   const disputed = disagreements(entry);
@@ -391,6 +415,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                   observed_at: fact.observed_at,
                 }}
                 others={fact.others ?? []}
+                decisions={factDecisions(entry, fact)}
+                held={settledElsewhere(fact, fact.others)}
                 seatName={seatName}
                 now={now}
               />
@@ -402,6 +428,15 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                 standing={edge.standing}
                 shown={{ source: edge.source, word: edge.word, observed_at: edge.observed_at }}
                 others={edge.others ?? []}
+                decisions={relationDecisions(
+                  entry,
+                  edge,
+                  edge.to ? (names.get(edge.to) ?? "it") : "it",
+                )}
+                held={
+                  settledElsewhere(edge, edge.others) ??
+                  (edge.relation === "owned_by" ? OWNER_DECIDED_BY : null)
+                }
                 seatName={seatName}
                 now={now}
               />
@@ -417,7 +452,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
         <Stack gap={3}>
           {entry.sources.map((source) => {
             const values = says(source);
-            const named = source.kind === "settings" || source.kind === "records";
+            const named =
+              source.kind === "settings" || source.kind === "records" || source.kind === "code";
             const name = sourceName(source, seatName);
             return (
               <Card
@@ -464,21 +500,24 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
   );
 }
 
-/** One fact or relation the sources disagree on: the value shown, every other beside it. */
+/** One fact or relation the sources disagree on: the value shown, every other beside it, and the decisions. */
 function Disagreement({
   label,
   standing,
   shown,
   others,
+  decisions,
+  held,
   seatName,
   now,
 }: {
   label: string;
   standing: AtlasStanding;
-  shown: Pick<AtlasFactView, "source" | "word" | "observed_at"> & {
-    value?: AtlasFactView["value"];
-  };
+  shown: ShownClaim;
   others: readonly AtlasClaimed[];
+  decisions: readonly Decision[];
+  /** Why no decision is offered here, where none is. */
+  held: string | null;
   seatName: (handle: string) => string;
   now: number;
 }) {
@@ -491,31 +530,9 @@ function Disagreement({
         <Card.Title as="h3">{label}</Card.Title>
       </Card.Header>
       <Card.Body>
-        <ul className="atlas-claims">
-          <li>
-            <span className="atlas-claims__value">
-              {shown.value ? <FactValue value={shown.value} /> : "Holds"}
-              <Tag variant="neutral" size="sm">
-                Shown
-              </Tag>
-            </span>
-            <SetByLine setBy={sourceSetBy(shown, seatName, now)} className="t-caption muted" />
-          </li>
-          {others.map((claim) => (
-            <li key={`${claim.source.kind}:${claim.source.name ?? ""}:${claim.observed_at}`}>
-              <span className="atlas-claims__value">
-                {claim.denied ? (
-                  "Says it does not hold"
-                ) : claim.value ? (
-                  <FactValue value={claim.value} />
-                ) : (
-                  "Holds"
-                )}
-              </span>
-              <SetByLine setBy={sourceSetBy(claim, seatName, now)} className="t-caption muted" />
-            </li>
-          ))}
-        </ul>
+        <ClaimList shown={shown} others={others} seatName={seatName} now={now} />
+        {held && <p className="muted">{held}</p>}
+        <DecisionButtons decisions={decisions} />
       </Card.Body>
     </Card>
   );

@@ -7,6 +7,10 @@
 // its monitors and their states, its service catalogue, its hosts and its
 // Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
 // agents' installations cover, its workflows and its deployment environments.
+// Its fourth reads the company's servers (ADR-0134): on each server that opts
+// in, the ports it listens on and the containers it runs. That one is handed
+// to the worker by the engine rather than registered, since it runs commands
+// through the node's SSH runner.
 //
 // # Its own duty, never the reconcile loop
 //
@@ -48,6 +52,13 @@
 // vendor, and otherwise only names it ([Builder.Names]); an entry the voice
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
+//
+// # Other voices use the same builder and the same diff
+//
+// A voice that is no integration's (a repository's files,
+// internal/atlas/codescan) gathers its claims through [NewBuilderFor] and
+// records them with [Replace], which withdraws at once what the voice no
+// longer says: a reading that is exact at its instant needs no second miss.
 //
 // # Values are typed, and a credential has nowhere to go
 //

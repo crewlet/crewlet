@@ -179,6 +179,14 @@ func checkSeat(handle string) error {
 	return nil
 }
 
+// checkHolder refuses a handle that is neither a seat's nor the engine's own.
+func checkHolder(handle string) error {
+	if handle == EngineHolder {
+		return nil
+	}
+	return checkSeat(handle)
+}
+
 // checkRef refuses an id a record carries beside its own outside its bounds or
 // holding what a subject or a column must not.
 func checkRef(field, value string, required bool) error {
@@ -361,10 +369,14 @@ type NewCertificate struct {
 
 // validate refuses a certificate record the log could not hold.
 func (n NewCertificate) validate() error {
-	if err := checkSeat(n.Handle); err != nil {
+	if err := checkHolder(n.Handle); err != nil {
 		return err
 	}
 	switch {
+	case (n.Handle == EngineHolder) != (n.Purpose == PurposeInventory):
+		return invalid("the engine holds the inventory's certificates, and no other")
+	case n.Purpose == PurposeInventory && (n.Turn != "" || n.HeldCall != "" || len(n.HostIDs) != 1):
+		return invalid("an inventory certificate reaches one host and serves no turn or held call")
 	case n.Serial == 0:
 		return invalid("a certificate's serial is a random non-zero number")
 	case !n.Purpose.Valid():
@@ -468,8 +480,11 @@ type NewCommand struct {
 
 // validate refuses a command record the log could not hold.
 func (n NewCommand) validate() error {
-	if err := checkSeat(n.Handle); err != nil {
+	if err := checkHolder(n.Handle); err != nil {
 		return err
+	}
+	if n.Handle == EngineHolder && (n.Level != LevelRead || n.Turn != "" || n.HeldCall != "") {
+		return invalid("the engine's own command is a read that serves no turn or held call")
 	}
 	if id, err := uuid.Parse(n.ID); err != nil || id.String() != n.ID {
 		return invalid("the command id %q is not a uuid in its canonical spelling", n.ID)

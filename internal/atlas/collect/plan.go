@@ -165,26 +165,7 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	held := group(live)
 	seen := group(read.Claims)
 	carried := carry(held, seen, read.Unread)
-	var records []EntryRead
-	for _, entry := range sortedRefs(seen) {
-		want, have := seen[entry], held[entry]
-		var rec EntryRead
-		for _, slot := range sortedSlots(want) {
-			c := want[slot]
-			if prior, ok := have[slot]; !ok || !same(prior, c) {
-				rec.Claims = append(rec.Claims, c)
-			}
-		}
-		for _, slot := range sortedSlots(have) {
-			if _, ok := want[slot]; !ok {
-				rec.Withdrawn = append(rec.Withdrawn, slot)
-			}
-		}
-		if len(rec.Claims) > 0 || len(rec.Withdrawn) > 0 {
-			rec.Entry = entry
-			records = append(records, rec)
-		}
-	}
+	records := moved(held, seen)
 	since := status.missedSince()
 	var missing []missed
 	retired := 0
@@ -245,6 +226,52 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	status.Unread = findings(read.Unread)
 	status.Recorded, status.Retired = len(records), retired
 	return Plan{Records: records, Status: status}
+}
+
+// moved is one record per entry of seen whose claims differ from the ones
+// held on it: the claims that are new or changed, and the held slots seen no
+// longer holds. An entry seen does not list is not its concern.
+func moved(held, seen map[atlas.Ref]map[string]atlas.Claim) []EntryRead {
+	var records []EntryRead
+	for _, entry := range sortedRefs(seen) {
+		want, have := seen[entry], held[entry]
+		var rec EntryRead
+		for _, slot := range sortedSlots(want) {
+			c := want[slot]
+			if prior, ok := have[slot]; !ok || !same(prior, c) {
+				rec.Claims = append(rec.Claims, c)
+			}
+		}
+		for _, slot := range sortedSlots(have) {
+			if _, ok := want[slot]; !ok {
+				rec.Withdrawn = append(rec.Withdrawn, slot)
+			}
+		}
+		if len(rec.Claims) > 0 || len(rec.Withdrawn) > 0 {
+			rec.Entry = entry
+			records = append(records, rec)
+		}
+	}
+	return records
+}
+
+// Replace is the records that make a voice's live claims exactly want, AT
+// ONCE: what is new or changed is claimed, and every other slot the voice
+// holds is withdrawn, an entry want no longer lists released whole. For a
+// voice whose reading is exact at the instant it is made, as a repository's
+// files at one commit are: a vendor's listing is not, and takes [Decide],
+// whose retirement waits for two complete misses. Nothing is denied: the
+// voice stops saying it, and whoever else holds the entry still does. PURE.
+func Replace(live, want []atlas.Claim) []EntryRead {
+	held, seen := group(live), group(want)
+	records := moved(held, seen)
+	for _, entry := range sortedRefs(held) {
+		if _, listed := seen[entry]; listed {
+			continue
+		}
+		records = append(records, EntryRead{Entry: entry, Withdrawn: sortedSlots(held[entry])})
+	}
+	return records
 }
 
 // carry adds to seen every claim the voice holds that a refused part covers,

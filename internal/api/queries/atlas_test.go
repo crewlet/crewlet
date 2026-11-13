@@ -405,7 +405,8 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 	repo := askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": entryID(atlas.KindRepository, "gitlet/api")})
 	trace := askAtlas(ctx, t, s, "atlas_trace", map[string]any{"id": entryID(atlas.KindDomain, "acme.example")})
 	facets := askAtlas(ctx, t, s, "atlas_facets", nil)
-	answers := []map[string]any{entries, mp, cf, trace, facets, log, activity}
+	review := askAtlas(ctx, t, s, "atlas_review", nil)
+	answers := []map[string]any{entries, mp, cf, trace, facets, log, activity, review}
 	lines := append(listOf(t, log["lines"]), pluck2(t, listOf(t, activity["entries"]), "last")...)
 
 	richEntries := listOf(t, asMap(t, rich(t))["entries"])
@@ -422,6 +423,13 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		}
 		return out
 	}
+	// The review of the rich fold beside acme's: a fact and a relation the
+	// sources disagree on, which acme's own claims never do.
+	waiting, err := rich(t).Review("", "", atlas.PageMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := append(listOf(t, review["items"]), listOf(t, asMap(t, map[string]any{"items": waiting.Items})["items"])...)
 	facts, edges := pluck(full, "facts"), pluck(full, "relations")
 	summaries := append(append(listOf(t, entries["rows"]), listOf(t, mp["nodes"])...), pluck(listOf(t, cf["used_by"]), "entry")...)
 	for iface, rows := range map[string][]map[string]any{
@@ -455,6 +463,8 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"AtlasLogAnswer":      {log},
 		"AtlasEntryActivity":  listOf(t, activity["entries"]),
 		"AtlasActivityAnswer": {activity},
+		"AtlasReviewItem":     items,
+		"AtlasReviewAnswer":   {review, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", map[string]any{"limit": 1})},
 	} {
 		holdShape(t, iface, rows, iface == "AtlasRead")
 	}
@@ -470,6 +480,80 @@ func pluck2(t *testing.T, rows []map[string]any, member string) []map[string]any
 		}
 	}
 	return out
+}
+
+// waitingAtlas is acme's atlas with more waiting for a person than acme's own
+// log leaves: an agent's backed report of a repository on Gitlet, and an
+// integration's later name for the service a person named.
+func waitingAtlas(t *testing.T) queries.Sources {
+	t.Helper()
+	log := acmeLog(t)
+	for _, c := range []func() (atlas.Claim, error){
+		func() (atlas.Claim, error) {
+			return atlas.Says(atlasRepo, atlas.FactDefaultBranch, "trunk",
+				atlas.AgentSource("sre", "turn-2", atlas.EvidenceCall), atlasNow.Add(-time.Hour))
+		},
+		func() (atlas.Claim, error) {
+			return atlas.Says(atlasCheckout, atlas.FactName, "Checkout", atlas.PersonSource("ada"), atlasNow.Add(-2*time.Hour))
+		},
+		func() (atlas.Claim, error) {
+			return atlas.Says(atlasCheckout, atlas.FactName, "Checkout API", atlas.IntegrationSource("datadog"),
+				atlasNow.Add(-time.Hour))
+		},
+	} {
+		claim, err := c()
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.live = append(log.live, claim)
+	}
+	return atlasSourcesWith(atlasCode(), log)
+}
+
+// THE REVIEW IS READ AS ITS ASKER READS THE ATLAS, and computed on the read:
+// what the sources disagree on first, then the entry only an agent reported,
+// which the catalogue leaves out until somebody confirms it here. A holder
+// without Gitlet is shown nothing that waits on a repository, and nobody
+// without the atlas app is answered at all.
+//
+// Mutation: read the review off the whole view rather than the asker's
+// (gather's Gitlet read) and a holder without Gitlet reads the repository's
+// disputed branch.
+func TestTheAtlasReviewIsWhatWaitsAsItsAskerReadsTheAtlas(t *testing.T) {
+	t.Parallel()
+	s := waitingAtlas(t)
+	waits := func(ctx context.Context, params map[string]any) []string {
+		var out []string
+		for _, item := range listOf(t, askAtlas(ctx, t, s, "atlas_review", params)["items"]) {
+			out = append(out, item["kind"].(string)+" "+item["entry"].(map[string]any)["key"].(string))
+		}
+		return out
+	}
+	member, coder := asAtlasReader(t), asAtlasReader(t, iam.GrantGitlet)
+	if got, want := waits(member, nil), []string{"disagreement checkout-api", "unconfirmed addr/8.8.8.8"}; !slices.Equal(got, want) {
+		t.Errorf("a holder without Gitlet is shown %v waiting, want %v", got, want)
+	}
+	got := waits(coder, nil)
+	if len(got) != 3 || !slices.Contains(got, "disagreement gitlet/api") {
+		t.Errorf("a holder of Gitlet is shown %v waiting, want the repository's disputed branch among three", got)
+	}
+	if got := waits(coder, map[string]any{"kind": "unconfirmed"}); !slices.Equal(got, []string{"unconfirmed addr/8.8.8.8"}) {
+		t.Errorf("asked for the unconfirmed ones the review lists %v", got)
+	}
+	whole := askAtlas(coder, t, s, "atlas_review", map[string]any{"kind": "unconfirmed"})
+	if whole["total"] != float64(1) || whole["counts"].(map[string]any)["disagreement"] != float64(2) {
+		t.Errorf("the review counts %v in all and %v by kind", whole["total"], whole["counts"])
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	if _, err := r.Answer(member, "atlas_review", map[string]any{"kind": "drift"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("a review of a kind there is none of answered %v, want bad params", err)
+	}
+	outsider := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "bo", Kind: iam.KindPerson,
+		Seat: "bo", Stage: iam.StageActive})
+	if _, err := r.Answer(outsider, "atlas_review", nil); err == nil {
+		t.Error("the review answered a person who does not hold the atlas app")
+	}
 }
 
 // THE ATLAS'S LOG SHOWS A READER ONLY WHAT THEIR ATLAS SHOWS THEM: a line on
@@ -622,6 +706,7 @@ func TestTheDashboardNamesEveryAtlasWord(t *testing.T) {
 		"AtlasCoverageSource": strs(gather.SourceNames),
 		"AtlasFamily":         strs(atlas.Families),
 		"AtlasChange":         strs(atlas.Changes),
+		"AtlasReviewKind":     strs(atlas.ReviewKinds),
 	} {
 		declared, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
@@ -634,6 +719,99 @@ func TestTheDashboardNamesEveryAtlasWord(t *testing.T) {
 		want := slices.Sorted(slices.Values(set))
 		if !slices.Equal(declared, want) {
 			t.Errorf("the dashboard's %s is %v, and the engine's %v", name, declared, want)
+		}
+	}
+}
+
+// THE DASHBOARD KNOWS WHAT EACH FACT AND RELATION ADMITS: the tables its
+// correction and relation dialogs offer from are the vocabulary's own, fact by
+// fact and pair by pair, both ways. A fact offered on a kind that does not
+// carry it, or a word outside its set, would be a control whose every press
+// the engine refuses.
+func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	strs := func(set any) []string {
+		raw, _ := json.Marshal(set)
+		out := []string{}
+		_ = json.Unmarshal(raw, &out)
+		return out
+	}
+	list := func(row clientsource.Body, key string) []string {
+		body, missing := clientsource.Property(row, key)
+		if missing != nil {
+			t.Fatalf("%s: %v", key, missing)
+		}
+		if got := clientsource.Strings(body); got != nil {
+			return got
+		}
+		return []string{}
+	}
+	facts, err := clientsource.Literal(tree, "ATLAS_FACT_SPECS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := clientsource.Keys(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strs(atlas.Facts); !slices.Equal(named, want) {
+		t.Fatalf("ATLAS_FACT_SPECS names %v, and the engine's facts are %v", named, want)
+	}
+	for _, f := range atlas.Facts {
+		row, missing := clientsource.Property(facts, string(f))
+		if missing != nil {
+			t.Fatal(missing)
+		}
+		spec := f.Spec()
+		traits := []string{}
+		for trait, held := range map[string]bool{"many": spec.Many, "meaning": spec.Meaning, "per_host": spec.PerHost} {
+			if held {
+				traits = append(traits, trait)
+			}
+		}
+		slices.Sort(traits)
+		for key, want := range map[string][]string{"type": {string(spec.Type)}, "traits": traits,
+			"words": strs(spec.Words), "kinds": strs(spec.Kinds)} {
+			var got []string
+			if key == "type" {
+				got = clientsource.Field(row, key)
+			} else {
+				got = list(row, key)
+			}
+			if !slices.Equal(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Errorf("ATLAS_FACT_SPECS.%s.%s is %v, and the engine's is %v", f, key, got, want)
+			}
+		}
+	}
+	pairs, err := clientsource.Literal(tree, "ATLAS_RELATION_PAIRS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	related, err := clientsource.Keys(pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strs(atlas.Relations); !slices.Equal(related, want) {
+		t.Fatalf("ATLAS_RELATION_PAIRS names %v, and the engine's relations are %v", related, want)
+	}
+	for _, r := range atlas.Relations {
+		row, missing := clientsource.Property(pairs, string(r))
+		if missing != nil {
+			t.Fatal(missing)
+		}
+		from, to, externals := list(row, "from"), list(row, "to"), list(row, "externals")
+		for _, a := range atlas.Kinds {
+			for _, b := range atlas.Kinds {
+				if said := slices.Contains(from, string(a)) && slices.Contains(to, string(b)); said != r.Joins(a, b) {
+					t.Errorf("ATLAS_RELATION_PAIRS says %s runs from %s to %s: %v, and the engine: %v", r, a, b, said, r.Joins(a, b))
+				}
+			}
+			for _, x := range atlas.Externals {
+				if said := slices.Contains(from, string(a)) && slices.Contains(externals, string(x)); said != r.Names(a, x) {
+					t.Errorf("ATLAS_RELATION_PAIRS says %s names a %s from %s: %v, and the engine: %v", r, x, a, said, r.Names(a, x))
+				}
+			}
 		}
 	}
 }

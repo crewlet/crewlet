@@ -44,9 +44,15 @@
 }
 @container page (width >= 68rem) {
   .atlas-band {
-    grid-template-columns: 16.5rem minmax(0, 1fr) 10.75rem 11.5rem;
+    grid-template-columns: 16.5rem minmax(0, 1fr) minmax(10.75rem, max-content) 11.5rem;
     grid-template-areas: "entries attention week sources";
   }
+}
+/* A TILE'S TITLE IS ONE LINE AT EVERY WIDTH: the week's column grows to its
+   title's words on the wide row, and every narrower layout gives a tile more
+   room than its title takes. */
+.atlas-band__title {
+  white-space: nowrap;
 }
 /* BESIDE A SHEET the page is a third narrower: the band keeps to one row of
    its first two tiles, so the map under it keeps its height. The week and
@@ -321,4 +327,109 @@
   align-items: center;
   gap: var(--spacing-2);
   min-width: 0;
+}
+
+/* A TILE'S WAY ON: one link under its figures, which wraps inside its tile
+   rather than widening it. */
+.atlas-band__link {
+  justify-self: start;
+  min-width: 0;
+}
+
+/* THE TOOLBAR'S END: Add entry, pushed to the far edge of its row. */
+.atlas-toolbar__end {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+
+/* AN ENTRY'S ACTIONS: one row under its header, then what the engine said of
+   the last press. */
+.atlas-actions,
+.atlas-decide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.atlas-actions__row,
+.atlas-decide__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.atlas-decide {
+  margin-block-start: var(--spacing-3);
+}
+
+/* WHAT THE ATLAS SHOWS, beside the field that corrects it. */
+.atlas-compare {
+  display: grid;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* A MERGE OR A SPLIT BEFORE IT APPLIES: the two sides abreast where there is
+   room, one under the other on a phone. */
+.atlas-preview {
+  display: grid;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+.atlas-preview p {
+  margin: 0;
+}
+.atlas-preview__sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-3);
+}
+.atlas-side {
+  display: grid;
+  gap: var(--spacing-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* REVIEW: one card an item, its box beside what it is about. */
+.atlas-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.atlas-review__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: start;
+}
+.atlas-review__body {
+  display: grid;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.atlas-review__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+/* CHANGES: the days as one strip, no wider than its bars read well at. */
+.atlas-days {
+  max-inline-size: 40rem;
+}
+
+/* ON A SHEET the actions stand between the header and the first section; on
+   the page the column's own gap already keeps them apart. */
+.atlas-actions {
+  margin-block: var(--spacing-3);
+}
+.atlas-entry > .atlas-actions {
+  margin-block: 0;
 }

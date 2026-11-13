@@ -23,6 +23,8 @@ import type {
   AtlasMapAnswer,
   AtlasMapEdge,
   AtlasRead,
+  AtlasReviewAnswer,
+  AtlasReviewItem,
   AtlasRelation,
   AtlasSummary,
   AtlasTraceAnswer,
@@ -39,6 +41,7 @@ const LANE_OF: Readonly<Record<AtlasKind, AtlasLane>> = {
   endpoint: "entry",
   certificate: "entry",
   service: "services",
+  workload: "services",
   host: "runtime",
   datastore: "data",
   queue: "data",
@@ -700,4 +703,30 @@ export function generatedCompany(count: number): AtlasFixture {
     a.forEach((node, i) => edges.push(edge(node, relation, b[(i * 5) % b.length]!)));
   }
   return counted({ nodes, edges });
+}
+
+/** A review answer over `items`, counted by their kinds. */
+export function reviewAnswer(items: AtlasReviewItem[]): AtlasReviewAnswer {
+  const counts: AtlasReviewAnswer["counts"] = {};
+  for (const item of items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
+  return { ...read(), items, total: items.length, counts };
+}
+
+/**
+ * What waits for a person in the grown company: the server's address two
+ * sources disagree on, and a service only an agent reported.
+ */
+export function waitingItems(company: GrownCompany): AtlasReviewItem[] {
+  const address = disputedServer(company).entry.facts[0]!;
+  const guess = summary("service", "ledger", { word: "unconfirmed", state: "discovered" });
+  return [
+    {
+      id: `${company.web1.id}/disagreement/fact/address`,
+      kind: "disagreement",
+      entry: company.web1,
+      fact: address,
+      since: "2026-11-11T10:30:00Z",
+    },
+    { id: `${guess.id}/unconfirmed`, kind: "unconfirmed", entry: guess, since: SEEN },
+  ];
 }

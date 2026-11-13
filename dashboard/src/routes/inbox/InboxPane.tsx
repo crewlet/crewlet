@@ -59,7 +59,7 @@ import { askStateWords } from "~/lib/askState.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
+import { HeldCallTitle, holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
 import { accessNote, type SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
@@ -77,6 +77,7 @@ import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { heldCallTitle, heldRunCall, type HeldCallSubject } from "~/lib/heldCall.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { useFocusLanding } from "~/lib/focusLanding.ts";
 import { RunQuestion } from "~/components/RunQuestion.tsx";
@@ -1454,6 +1455,8 @@ function HeldRunPane({
   // them, each value as text, and else by the engine's words like any call.
   const release = isReleaseAct(held.act) ? held.act : null;
   const request = releaseRequestOf(held.act, run.held_arguments);
+  const call: HeldCallSubject = heldRunCall(run) ?? { tool: held.tool, server: held.server };
+  const title = heldCallTitle(call);
   return (
     <TokenScope texts={runAskTexts(run)}>
       <>
@@ -1467,11 +1470,13 @@ function HeldRunPane({
         {escalated && (
           <EscalationNote delegation={escalated} name={(h) => index.byHandle.get(h)?.name ?? h} />
         )}
-        {question ? (
+        {/* ONE TITLE FOR A HELD CALL, the list's and Home's (`heldCallTitle`);
+            the engine's own question keeps its marks and links. */}
+        {title === question ? (
           <RunQuestion question={question} />
         ) : (
           <ReadingPaneTitle>
-            Call <span className="mono">{held.tool}</span> on {held.server}?
+            <HeldCallTitle call={call} />
           </ReadingPaneTitle>
         )}
         {request ? (

@@ -38,6 +38,7 @@ export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName 
   endpoint: { word: "Endpoint", glyph: "waypoints" },
   certificate: { word: "Certificate", glyph: "badge-check" },
   service: { word: "Service", glyph: "layers" },
+  workload: { word: "Workload", glyph: "container" },
   host: { word: "Server", glyph: "server" },
   datastore: { word: "Database", glyph: "database" },
   queue: { word: "Queue", glyph: "list-ordered" },
@@ -84,7 +85,8 @@ export const LANES: Readonly<
   services: {
     label: "Services",
     columns: 3,
-    empty: "Services appear when a person adds one, by asking Ask Crewlet.",
+    empty:
+      "Services appear when a person adds one, with Add entry, and containers from the servers the SSH integration reads for Atlas.",
   },
   runtime: {
     label: "Runtime",
@@ -95,7 +97,7 @@ export const LANES: Readonly<
   data: {
     label: "Data",
     columns: 2,
-    empty: "Databases, queues and buckets appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Databases, queues and buckets appear when a person adds one, with Add entry.",
   },
   platforms: {
     label: "Platforms",
@@ -112,7 +114,7 @@ export const LANES: Readonly<
   observability: {
     label: "Observability",
     columns: 2,
-    empty: "Monitors appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Monitors appear when a person adds one, with Add entry.",
   },
   tools: {
     label: "Tools and models",
@@ -228,6 +230,8 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   address: "Address",
   port: "Port",
   containers: "Runs containers",
+  open_port: "Open ports",
+  image: "Image",
   engine: "Engine",
   engine_version: "Engine version",
   default_branch: "Default branch",
@@ -331,6 +335,7 @@ export const SOURCE_KINDS: Readonly<Record<AtlasSourceKind, string>> = {
   settings: "The company settings",
   records: "The engine's records",
   integration: "An integration",
+  code: "A repository's deploy and dependency files",
   agent: "An agent",
   person: "A person",
 };

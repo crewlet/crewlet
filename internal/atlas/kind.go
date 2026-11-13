@@ -21,6 +21,9 @@ const (
 	KindCertificate Kind = "certificate"
 	// KindService is something the company runs: an app, an API, a worker.
 	KindService Kind = "service"
+	// KindWorkload is one running unit of a service where it runs: a
+	// container on a server, keyed by that server and its name there.
+	KindWorkload Kind = "workload"
 	// KindHost is a server, a virtual machine or an instance.
 	KindHost Kind = "host"
 	// KindDatastore is a database or a cache.
@@ -44,7 +47,7 @@ const (
 // Kinds is every kind, in the order the map reads its lanes.
 var Kinds = []Kind{
 	KindDomain, KindHostname, KindEndpoint, KindCertificate,
-	KindService,
+	KindService, KindWorkload,
 	KindHost,
 	KindDatastore, KindQueue, KindBucket,
 	KindAccount,
@@ -91,6 +94,7 @@ var laneOf = map[Kind]Lane{
 	KindEndpoint:    LaneEntry,
 	KindCertificate: LaneEntry,
 	KindService:     LaneServices,
+	KindWorkload:    LaneServices,
 	KindHost:        LaneRuntime,
 	KindDatastore:   LaneData,
 	KindQueue:       LaneData,
