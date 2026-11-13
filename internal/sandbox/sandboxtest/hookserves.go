@@ -865,13 +865,15 @@ func testALaunchRemovesEveryItemOfTheJobBeforeIt(t *testing.T, s sandbox.Pending
 }
 
 // A CALL PAST ITS BOUND IS RECORDED AS NO CALL. A serve keeps the call it
-// answered whole within [sandbox.MaxNoteCallBytes], and as none past it or
-// where it names no session or no id: never cut, since two calls cut alike
-// would be one, and a cancel of either would lose the other's serve. A serve
-// kept with no call is settled by its job's session alone.
+// answered whole within [sandbox.MaxNoteCallBytes], a string id's quotes
+// counted, and as none past it or where it names no session or no id: never
+// cut, since two calls cut alike would be one, and a cancel of either would
+// lose the other's serve. A serve kept with no call is settled by its job's
+// session alone.
 //
 // Mutation: cut a call past its bound rather than drop it, and a cancel of
-// the call it was cut to loses its serve too.
+// the call it was cut to loses its serve too; count a string id's quotes out
+// of its bound, and the one past it is kept.
 func testACallPastItsBoundIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-call-bound"
 	launch := mustLaunched(t, s, run(turn))
@@ -880,6 +882,7 @@ func testACallPastItsBoundIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStor
 		"at-bound":       atBound,
 		"session-past":   {Session: atBound.Session + "s", ID: "7"},
 		"id-past":        {Session: "mcp-session-1", ID: strings.Repeat("9", sandbox.MaxNoteCallBytes+1)},
+		"id-quoted-past": {Session: "mcp-session-1", ID: `"` + strings.Repeat("q", sandbox.MaxNoteCallBytes-1) + `"`},
 		"session-absent": {ID: "7"},
 	} {
 		mustFile(t, s, turn, id)
@@ -889,7 +892,7 @@ func testACallPastItsBoundIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStor
 	if call := notes["at-bound"].Serves[0].Call; call == nil || call.Session != atBound.Session || call.ID != atBound.ID {
 		t.Errorf("a call at its bound is kept as %+v, want it whole", call)
 	}
-	for _, id := range []string{"session-past", "id-past", "session-absent"} {
+	for _, id := range []string{"session-past", "id-past", "id-quoted-past", "session-absent"} {
 		if call := notes[id].Serves[0].Call; call != nil {
 			t.Errorf("serve %s keeps the call %+v, want none", id, call)
 		}
@@ -901,6 +904,111 @@ func testACallPastItsBoundIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStor
 	}
 	if got := servesOf(notes["at-bound"]); !slices.Equal(got, []string{"take-at-bound:cancelled"}) {
 		t.Errorf("a cancel of the call at the bound left its own serve %v, want it lost", got)
+	}
+}
+
+// A SESSION OR AN ID OUTSIDE THE CHARSET IS RECORDED AS NO CALL. A serve keeps
+// the call it answered only where its session is of the id charset (letters,
+// digits, `-` and `_`) and its id a JSON integer's text or a JSON string of
+// that charset, and records any other as none, as it does one past its bound:
+// so no byte of a kept call is one the store's encoder escapes, and the row's
+// worst serve keeps a call at its length. A session holding a character the
+// encoder escapes, or any other outside the charset, and an id that is a word,
+// a fraction, an exponent, a leading zero, a minus alone, null or a string
+// never closed, are each no call.
+//
+// Mutation: let a session of any character through, or an id of any text,
+// and its serve keeps the call.
+func testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-call-charset"
+	launch := mustLaunched(t, s, run(turn))
+	for id, call := range map[string]sandbox.NoteCall{
+		"session-markup":  {Session: "mcp<session>", ID: "7"},
+		"session-space":   {Session: "mcp session", ID: "7"},
+		"id-word":         {Session: "mcp-session-1", ID: "seven"},
+		"id-fraction":     {Session: "mcp-session-1", ID: "7.5"},
+		"id-exponent":     {Session: "mcp-session-1", ID: "7e3"},
+		"id-leading-zero": {Session: "mcp-session-1", ID: "07"},
+		"id-minus":        {Session: "mcp-session-1", ID: "-"},
+		"id-null":         {Session: "mcp-session-1", ID: "null"},
+		"id-unclosed":     {Session: "mcp-session-1", ID: `"seven`},
+	} {
+		mustFile(t, s, turn, id)
+		mustServe(t, s, turn, hookServe(launch, "take-"+id, &call, id), id)
+	}
+	for id, n := range notesByID(t, s, turn) {
+		if call := n.Serves[0].Call; call != nil {
+			t.Errorf("serve %s keeps the call %+v, want none", id, call)
+		}
+	}
+}
+
+// AN INTEGER ID AND A QUOTED ID OF THE CHARSET ARE KEPT, whole: a JSON
+// integer's text, as Claude Code's ids are, zero and a negative one among
+// them, and a JSON string of the id charset, up to [sandbox.MaxNoteCallBytes]
+// with its quotes, each beside a session of every kind of character the
+// charset holds. Kept whole, each is the call a cancel names, and a cancel of
+// it loses its serve.
+//
+// Mutation: refuse an integer's text or a quoted string, or read a string's
+// quotes as characters outside the charset, and its serve keeps no call.
+func testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-call-kept"
+	launch := mustLaunched(t, s, run(turn))
+	const session = "Mcp-Session_09az"
+	calls := map[string]sandbox.NoteCall{
+		"integer":      {Session: session, ID: "7"},
+		"zero":         {Session: session, ID: "0"},
+		"negative":     {Session: session, ID: "-12"},
+		"quoted":       {Session: session, ID: `"call-7_A"`},
+		"quoted-bound": {Session: session, ID: `"` + strings.Repeat("q", sandbox.MaxNoteCallBytes-2) + `"`},
+	}
+	var cancelled []sandbox.NoteCall
+	for id, call := range calls {
+		mustFile(t, s, turn, id)
+		mustServe(t, s, turn, hookServe(launch, "take-"+id, &call, id), id)
+		cancelled = append(cancelled, call)
+	}
+	for id, n := range notesByID(t, s, turn) {
+		if call := n.Serves[0].Call; call == nil || call.Session != session || call.ID != calls[id].ID {
+			t.Errorf("serve %s keeps the call %+v, want %+v whole", id, call, calls[id])
+		}
+	}
+	mustSettle(t, s, turn, sandbox.HookSettle{Launch: launch, Cancelled: cancelled})
+	for id, n := range notesByID(t, s, turn) {
+		if got := servesOf(n); !slices.Equal(got, []string{"take-" + id + ":cancelled"}) {
+			t.Errorf("a cancel of serve %s's call left it %v, want it lost", id, got)
+		}
+	}
+}
+
+// A QUOTED ID HOLDING A CHARACTER OUTSIDE THE CHARSET IS RECORDED AS NO CALL:
+// a JSON string is kept only of letters, digits, `-` and `_`, none of which
+// the store's encoder escapes, so neither a character it escapes, nor any
+// other outside the charset, nor an escape of the string's own, nor a quote
+// inside it, is kept.
+//
+// Mutation: hold a quoted id to its two quotes alone, and its serve keeps it.
+func testAQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-call-quoted"
+	launch := mustLaunched(t, s, run(turn))
+	for id, text := range map[string]string{
+		"markup":     `"call<7>"`,
+		"space":      `"call 7"`,
+		"dot":        `"call.7"`,
+		"accent":     `"callé7"`,
+		"escape":     `"call\"7"`,
+		"its-escape": `"call\` + `u003c7"`,
+		"quote":      `"call"7"`,
+	} {
+		mustFile(t, s, turn, id)
+		call := sandbox.NoteCall{Session: "mcp-session-1", ID: text}
+		mustServe(t, s, turn, hookServe(launch, "take-"+id, &call, id), id)
+	}
+	for id, n := range notesByID(t, s, turn) {
+		if call := n.Serves[0].Call; call != nil {
+			t.Errorf("serve %s keeps the call %+v, want none", id, call)
+		}
 	}
 }
 

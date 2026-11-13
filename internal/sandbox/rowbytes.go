@@ -249,12 +249,15 @@ const (
 	MaxNoteServes = 3
 
 	// MaxNoteCallBytes bounds each half of the call a hook's serve answered
-	// ([NoteCall]): its MCP session's id and its JSON-RPC id, raw. SIXTY-FOUR
-	// BYTES: the session is the bridge's own (go-sdk mints it as rand.Text, 26
-	// characters) and the id a harness's counter, so an ordinary call is a
-	// fraction of it. A call past it is kept as none, never cut, so a cut call
-	// can never match another cut alike: its serve is then settled only by the
-	// job's own session.
+	// ([NoteCall]): its MCP session's id and its JSON-RPC id, raw, a string
+	// id's quotes counted. SIXTY-FOUR BYTES: the session is the bridge's own
+	// (go-sdk mints it as rand.Text, 26 characters) and the id a harness's
+	// counter, so an ordinary call is a fraction of it. A call past it is kept
+	// as none, never cut, so a cut call can never match another cut alike: its
+	// serve is then settled only by the job's own session. And so is a call
+	// outside the id charset ([keptCallOf]), so a kept half is written as
+	// itself, between the two quotes every string takes, and a string id's own
+	// two quotes at two bytes each.
 	MaxNoteCallBytes = 64
 
 	// MaxJobItems bounds the items for one job a run's row holds
@@ -266,7 +269,7 @@ const (
 	// most ten tool calls at once by default
 	// (CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, which nothing in this tree sets).
 	// Ten at the widest seal ([MaxNoteSealedBytes]), each served
-	// [MaxNoteServes] times and read, are about a quarter of a mebibyte of the
+	// [MaxNoteServes] times and read, are under a quarter of a mebibyte of the
 	// row, which TestTheWholeRowFitsItsBudget holds.
 	MaxJobItems = 10
 

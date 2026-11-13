@@ -71,6 +71,10 @@ var noteCases = []struct {
 	{"AJobsItemsAreBoundedApartFromAPersonsNotes", testAJobsItemsAreBoundedApartFromAPersonsNotes},
 	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
 	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
+	{"ASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall", testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall},
+	{"AnIntegerIDAndAQuotedIDOfTheCharsetAreKept", testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept},
+	{"AQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall",
+		testAQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall},
 }
 
 // noteRawCases are the note cases that read the raw record.

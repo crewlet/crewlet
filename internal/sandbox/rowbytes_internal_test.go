@@ -407,8 +407,14 @@ func worstRow(t *testing.T) PendingRun {
 	// own: every field of both reads at its widest, marked restarted too. And
 	// each served to one job's hooks as often as a note may be
 	// ([MaxNoteServes]), every serve lost to a cancel, at the widest step, and
-	// keeping the call it answered at the widest the store keeps one: each
-	// half at [MaxNoteCallBytes] in the bytes that escape the most.
+	// keeping the call it answered at the widest the store keeps one, through
+	// the rule that keeps it ([keptCallOf]): each half at [MaxNoteCallBytes]
+	// in the id charset, which the encoder writes as itself, the id a JSON
+	// string, whose two quotes are the only bytes of a kept call it escapes.
+	widest := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
+	if keptCallOf(&widest) == nil {
+		t.Fatalf("the store keeps no call at its widest, %+v", widest)
+	}
 	read := func() *NoteRead {
 		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
 			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
@@ -418,8 +424,7 @@ func worstRow(t *testing.T) PendingRun {
 		out := make([]HookServed, MaxNoteServes)
 		for i := range out {
 			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
-				Iteration: 99, At: worstAt, Lost: ServeCancelled,
-				Call: &NoteCall{Session: markup(MaxNoteCallBytes), ID: markup(MaxNoteCallBytes)}}
+				Iteration: 99, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widest)}
 		}
 		return out
 	}

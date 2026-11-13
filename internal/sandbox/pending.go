@@ -3561,9 +3561,10 @@ type PendingStore interface {
 	//     holds no live serve to it and fewer than [MaxNoteServes] serves to it
 	//     (a list of another job's counting none, and replaced) is served: the
 	//     serve appended at the writer's clock, its call kept whole within
-	//     [MaxNoteCallBytes] or as none, [RunNote.Served] naming the job, and a
-	//     note no hook was served before placed at the write's own place among
-	//     the reads ([RunNote.Place]), the record's count of them moved once.
+	//     [MaxNoteCallBytes] and the id charset or as none ([NoteCall]),
+	//     [RunNote.Served] naming the job, and a note no hook was served before
+	//     placed at the write's own place among the reads ([RunNote.Place]),
+	//     the record's count of them moved once.
 	//
 	// [RunNote.Served] is cleared wherever the first two steps leave no live
 	// serve to the job, and the record is written where any step changed it.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -244,8 +245,9 @@ type HookServed struct {
 	At time.Time `json:"at"`
 
 	// Call is the call the serve answered, as the harness names it when it
-	// gives the call up; nil where the bridge could not read it, so only the
-	// job's session can settle the serve.
+	// gives the call up; nil where the bridge could not read it, or the store
+	// keeps none of its shape ([keptCallOf]), so only the job's session can
+	// settle the serve.
 	Call *NoteCall `json:"call,omitempty"`
 
 	// Lost is why the harness is known not to hold the note from this serve;
@@ -266,9 +268,9 @@ func (s HookServed) MayHold() bool { return s.Lost != ServeAbsent }
 
 // NoteCall is the call a hook's serve answered, as its harness names it when it
 // gives the call up: the MCP session the call came on, and the call's JSON-RPC
-// id as canonical JSON text (7, or "a"). Each at most [MaxNoteCallBytes]: a
-// longer one, like one that names no session or no id, is recorded as no call,
-// never cut, so two calls cut alike are never one.
+// id as canonical JSON text (7, or "a"). A serve keeps one only in the shape
+// every real call has, and records any other as no call, never cut
+// ([keptCallOf]).
 //
 // A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a serve is.
 type NoteCall struct {
@@ -284,16 +286,63 @@ type NoteCall struct {
 // a harness numbers its calls per session.
 func (c NoteCall) is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
 
-// keptCallOf is call as a serve keeps it: whole, or none where it names no
-// session or no id, or either is past [MaxNoteCallBytes]. Never cut: a cut
-// call could match another call cut alike, and lose a serve its harness kept.
+// keptCallOf is call as a serve keeps it: whole where its session is of the id
+// charset (letters, digits, `-` and `_`, [ValidCallID]'s) and its id is a JSON
+// integer's text or a JSON string of that charset, each at most
+// [MaxNoteCallBytes], a string's quotes counted; and NONE otherwise, as where
+// it names no session or no id.
+//
+// ONE RULE, THE STORE'S. The call is the box's word, which the bridge hands on
+// as it read it, so the write that serves holds every writer to the rule,
+// whatever bridge, or build, handed the call, as the log holds the id a
+// bridged call keeps ([keptCallID]).
+//
+// THE CHARSET REFUSES NOTHING REAL, AND HOLDS THE ROW. Claude Code numbers its
+// JSON-RPC calls with integers, and the session is the bridge's own, which
+// go-sdk mints as rand.Text, in base32. A kept call is then written as itself,
+// each half costing the row its length and a string id's two quotes a byte
+// more each, where the store's encoder writes a byte it escapes as six
+// (`\u003c`): so the row's worst serve carries a call at its length
+// (TestTheWholeRowFitsItsBudget).
+//
+// NEVER CUT: a cut call could match another call cut alike, and lose a serve
+// its harness kept. A serve kept with no call is settled by its job's session
+// alone.
 func keptCallOf(call *NoteCall) *NoteCall {
-	if call == nil || call.Session == "" || call.ID == "" ||
-		len(call.Session) > MaxNoteCallBytes || len(call.ID) > MaxNoteCallBytes {
+	if call == nil || !validNoteSession(call.Session) || !validNoteCallID(call.ID) {
 		return nil
 	}
 	kept := *call
 	return &kept
+}
+
+// validNoteSession reports whether session is a call's session a serve keeps:
+// of the id charset, at most [MaxNoteCallBytes] of it.
+func validNoteSession(session string) bool {
+	return session != "" && len(session) <= MaxNoteCallBytes && !strings.ContainsFunc(session, outsideIDCharset)
+}
+
+// validNoteCallID reports whether id is a call's id a serve keeps: a JSON
+// integer's text or a JSON string of the id charset, at most
+// [MaxNoteCallBytes] with its quotes.
+func validNoteCallID(id string) bool {
+	return len(id) <= MaxNoteCallBytes && (jsonInteger(id) || idString(id))
+}
+
+// jsonInteger reports whether text is a JSON integer's: an optional minus,
+// then digits with no leading zero but a lone one.
+func jsonInteger(text string) bool {
+	digits := strings.TrimPrefix(text, "-")
+	return digits != "" && (digits == "0" || digits[0] != '0') &&
+		!strings.ContainsFunc(digits, func(r rune) bool { return r < '0' || r > '9' })
+}
+
+// idString reports whether text is a JSON string of the id charset: two
+// quotes around letters, digits, `-` and `_`, none of which JSON escapes.
+func idString(text string) bool {
+	inner, opened := strings.CutPrefix(text, `"`)
+	inner, closed := strings.CutSuffix(inner, `"`)
+	return opened && closed && !strings.ContainsFunc(inner, outsideIDCharset)
 }
 
 // ServeLoss is why a hook's serve is known not to have reached its job's
@@ -625,8 +674,9 @@ type HookServe struct {
 
 	// Serve is the serve as the record keeps it ([HookServed]): its Take,
 	// fresh for every take, and the step it answers; and the Call it answers,
-	// held to [MaxNoteCallBytes] and kept as none past it. The store stamps
-	// its job (Launch) and its At, and no loss.
+	// held to [MaxNoteCallBytes] and the id charset and kept as none outside
+	// them ([keptCallOf]). The store stamps its job (Launch) and its At, and
+	// no loss.
 	Serve HookServed
 
 	// Cancelled are the calls the serving inbox heard its harness cancel:
