@@ -14,7 +14,8 @@
 // project of the company's group, its pipeline and its environments.
 // Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
 // project as an account, and what a Google Cloud project's enabled APIs say
-// it is used for.
+// it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
+// organization as an account, and each product as what its account does.
 //
 // # Its own duty, never the reconcile loop
 //

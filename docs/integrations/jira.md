@@ -225,6 +225,33 @@ That an addressed wake may not end in silence, and that a decline names the righ
 
 ---
 
+## What the atlas reads of the organization
+
+On Jira Cloud, the engine reads the Atlassian organization's products for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads under `integrations.atlassian.api_key`, the organization API key the agents' accounts are made with, and needs no other key or scope. Nothing at Atlassian is changed. A company on Data Center has no organization, and nothing is read.
+
+| Part | Calls | Key | What the atlas gains |
+|---|---|---|---|
+| Workspaces | `POST /admin/v2/orgs/{org}/workspaces`, a query, followed to the listing's end | the organization API key, created without scopes | each site as an account, with its cloud id, and what each product makes of the account it is on |
+
+**A product is what an account does.** The atlas shows a site, not a card per product:
+
+| Capability | Product |
+|---|---|
+| `tracker` | every Jira: Jira, Jira Service Management, Jira Product Discovery |
+| `knowledge` | Confluence |
+| `code_hosting` | Bitbucket |
+| `alerting` | Opsgenie |
+
+A product on a site is said of that site's account. A product on no site (Bitbucket) is said of the organization's account. Any other product says nothing, and no product's name is recorded.
+
+**The site the engine works in is one entry.** A site is keyed by its address's host, which is how the settings key the site `integrations.jira` and `integrations.confluence` work in, so the two are one account. The read names a site, and places it at its address, only where the settings name no site at that host: a sandbox site, or a second site the engine does not work in.
+
+**Nobody is read.** Each row of the listing names who created the workspace and who owns it. The engine reads the workspace's identifier, its product and its address, and nothing else.
+
+**A refusal is a finding, never a failed read.** Where Atlassian refuses the listing with a `403` (a key created with scopes that leave it out), the source's standing on the atlas says which key to use, and the sites an earlier read recorded stay as they were. A key Atlassian does not know fails the read as a rejected credential.
+
+**Cost and limits.** A read costs one call per page of the listing. When Atlassian answers with its rate limit, the call waits as long as Atlassian asks (five seconds where it names no wait), up to three times and thirty seconds a wait; past that, or when the listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A site that two complete reads at least a day apart both miss is retired from the atlas.
+
 ## Per-agent access
 
 Each agent seat that works in Jira or Confluence gets one Atlassian service
