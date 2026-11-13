@@ -81,7 +81,7 @@ func refreshAs(p iam.Principal) context.Context {
 	return builtin.OutsideAnyTurn(iam.WithPrincipal(context.Background(), p))
 }
 
-func callRefresh(t *testing.T, tool tools.Callable, ctx context.Context, source string) (tools.Result, map[string]any) {
+func callRefresh(ctx context.Context, t *testing.T, tool tools.Callable, source string) (tools.Result, map[string]any) {
 	t.Helper()
 	res, err := tool.Call(ctx, map[string]any{"integration": source})
 	if err != nil {
@@ -105,7 +105,7 @@ func TestARefreshIsAskedOnceInTheAskersName(t *testing.T) {
 	t.Parallel()
 	desk, tool := refreshRig(t)
 	ada := refreshAs(boundTo("ada", iam.GrantAtlas))
-	res, out := callRefresh(t, tool, ada, "Cloudflare")
+	res, out := callRefresh(ada, t, tool, "Cloudflare")
 	if res.Failed || out["changed"] != true || out["requested_by"] != "ada" {
 		t.Fatalf("the first ask answered %q", res.Output)
 	}
@@ -116,7 +116,7 @@ func TestARefreshIsAskedOnceInTheAskersName(t *testing.T) {
 	if got := asked[integration.KindCloudflare]; !got.RequestedAt.Equal(refreshNow) || got.By != "ada" {
 		t.Fatalf("the ask on record is %+v", got)
 	}
-	res, out = callRefresh(t, tool, refreshAs(boundTo("jane", iam.GrantAtlas)), "cloudflare")
+	res, out = callRefresh(refreshAs(boundTo("jane", iam.GrantAtlas)), t, tool, "cloudflare")
 	if res.Failed || out["changed"] != false || out["requested_by"] != "ada" || desk.asks != 1 {
 		t.Errorf("a second ask answered %q after %d writes, want the first ask and one write", res.Output, desk.asks)
 	}
@@ -140,13 +140,13 @@ func TestARefreshInsideTheFloorIsRefusedWithItsInstant(t *testing.T) {
 		}
 	}
 	ada := refreshAs(boundTo("ada", iam.GrantAtlas))
-	res, _ := callRefresh(t, tool, ada, "cloudflare")
+	res, _ := callRefresh(ada, t, tool, "cloudflare")
 	want := read.Add(collect.RefreshFloor).Format(time.RFC3339)
 	if !res.Failed || !strings.Contains(res.Output, want) || desk.asks != 0 {
 		t.Errorf("an ask inside the floor answered %q after %d writes, want a refusal naming %s", res.Output,
 			desk.asks, want)
 	}
-	if res, out := callRefresh(t, tool, ada, "datadog"); res.Failed || out["changed"] != true {
+	if res, out := callRefresh(ada, t, tool, "datadog"); res.Failed || out["changed"] != true {
 		t.Errorf("an ask at the floor answered %q", res.Output)
 	}
 }
@@ -157,16 +157,16 @@ func TestARefreshInsideTheFloorIsRefusedWithItsInstant(t *testing.T) {
 func TestARefreshNamesAConnectedSourceAndIsAHoldersAndAPersons(t *testing.T) {
 	t.Parallel()
 	desk, tool := refreshRig(t)
-	res, _ := callRefresh(t, tool, refreshAs(boundTo("ada", iam.GrantAtlas)), "github")
+	res, _ := callRefresh(refreshAs(boundTo("ada", iam.GrantAtlas)), t, tool, "github")
 	if !res.Failed || !strings.Contains(res.Output, `"cloudflare" and "datadog"`) {
 		t.Errorf("a source the company does not connect answered %q", res.Output)
 	}
-	if res, _ := callRefresh(t, tool, refreshAs(boundTo("eve")), "cloudflare"); !res.Failed {
+	if res, _ := callRefresh(refreshAs(boundTo("eve")), t, tool, "cloudflare"); !res.Failed {
 		t.Errorf("somebody without the atlas asked for a read: %q", res.Output)
 	}
 	agent := iam.Principal{ID: boundTo("x").ID, Kind: iam.KindSeat, Seat: "agent-cto", Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAtlas}}
-	if res, _ := callRefresh(t, tool, refreshAs(agent), "cloudflare"); !res.Failed {
+	if res, _ := callRefresh(refreshAs(agent), t, tool, "cloudflare"); !res.Failed {
 		t.Errorf("an agent asked for a read: %q", res.Output)
 	}
 	if desk.asks != 0 {
