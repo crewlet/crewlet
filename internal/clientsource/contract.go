@@ -953,6 +953,7 @@ var contract = []Entry{
 	{"AtlasLogAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasEntryActivity", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasActivityAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
+	{"AtlasReport", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasReviewItem", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasReviewAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasSourceFinding", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},

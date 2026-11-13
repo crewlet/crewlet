@@ -8,7 +8,15 @@
 import { VendorMark } from "@crewlethq/icons";
 import { ArrowUpRightGlyph, CornerDownLeftGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { EmptyValue, EntityChip, IconTile, StatusDot, Tag, VisuallyHidden } from "@crewlethq/ui";
+import {
+  EmptyValue,
+  EntityChip,
+  IconTile,
+  StatusDot,
+  Tag,
+  Text,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import type {
   AtlasCoverage,
@@ -25,7 +33,17 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { seatPath, unitByKey, useOrgIndex } from "~/lib/seats.ts";
 import { andList } from "~/lib/words.ts";
-import { COVERAGE, HEALTH, KINDS, RECORDS, VENDORS, WORDS, entries, valueWord } from "./words.ts";
+import {
+  COVERAGE,
+  EVIDENCE,
+  HEALTH,
+  KINDS,
+  RECORDS,
+  VENDORS,
+  WORDS,
+  entries,
+  valueWord,
+} from "./words.ts";
 // THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
 import "~/styles/atlas.css";
 
@@ -233,6 +251,27 @@ export function sourceSetBy(
     actorKind: source.kind === "agent" ? "agent" : source.kind === "person" ? "human" : "system",
     turnId: source.turn,
   };
+}
+
+/**
+ * The call an agent's claim rests on, under its by-line: the tool it cited,
+ * as the turn recorded it, and what a call of that tool is evidence of. A
+ * record made before the engine kept the tool's name says only the class.
+ */
+export function Cited({ source }: { source: AtlasSource }) {
+  if (source.kind !== "agent" || !source.evidence) return null;
+  return (
+    <Text variant="caption" tone="secondary" className="atlas-cited">
+      {source.tool ? (
+        <>
+          Cited its call of <span className="mono">{source.tool}</span>: {EVIDENCE[source.evidence]}
+          .
+        </>
+      ) : (
+        <>Cited {EVIDENCE[source.evidence]}.</>
+      )}
+    </Text>
+  );
 }
 
 /** At most this many vendors are named in the coverage line before "and N more". */

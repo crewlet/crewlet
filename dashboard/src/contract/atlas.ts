@@ -152,7 +152,7 @@ type AtlasValueType =
 export type AtlasSourceKind = "settings" | "records" | "integration" | "code" | "agent" | "person";
 
 /** What backs an agent's claim, as the engine checked it (`atlas.Evidence`). */
-type AtlasEvidence = "call" | "file" | "none";
+export type AtlasEvidence = "call" | "file" | "none";
 
 /** How far a claim can be trusted, derived from its source (`atlas.Confidence`),
  *  the most trusted first. */
@@ -366,6 +366,15 @@ export interface AtlasSource {
   revision?: string;
   turn?: string;
   evidence?: AtlasEvidence;
+  /** An agent's alone: the tool whose answer the claim cited, by name. */
+  tool?: string;
+}
+
+/** One agent's word on an entry (`atlas.Report`): who reported it, in which
+ *  turn, citing which call, and when. */
+export interface AtlasReport {
+  source: AtlasSource;
+  observed_at: string;
 }
 
 /** Another source's live claim beside the value the atlas holds. */
@@ -624,6 +633,9 @@ export interface AtlasReviewItem {
   fact?: AtlasFactView;
   relation?: AtlasEdge;
   target?: AtlasLineTarget;
+  /** For an entry that waits as a whole: each agent's newest word on it,
+   *  newest first, at most five. */
+  reports?: AtlasReport[];
   /** The newest claim the item rests on. */
   since: string;
 }

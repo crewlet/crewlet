@@ -2347,7 +2347,12 @@ const (
 	// band's link and the question's and the action's declarations) added
 	// 6,268 bytes, script +6,171 and the atlas sheet +97, and took it to
 	// 5955.5 KiB (6,098,424 bytes): 5956 KiB.
-	treeBudget = 5<<20 + 836<<10
+	// An agent's evidence in Review (each report's by-line and the call it
+	// cited, under a waiting entry and beside an agent's value), the bulk
+	// dialog's reporter and the Inbox's notice of drift on what the reader
+	// set added 2,322 bytes, script +2,286 and the atlas sheet +36, and took
+	// it to 5957.8 KiB (6,100,746 bytes): 5958 KiB.
+	treeBudget = 5<<20 + 838<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

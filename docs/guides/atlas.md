@@ -265,6 +265,9 @@ is gone the moment its cause is:
   is drawn: it is settled where it is declared, and the item says so.
 - **Unconfirmed**: an entry only an agent reported, with nothing the engine
   could check. It stays off the map until you **Confirm** it, or **Retire** it.
+  Under it is what the agent said: which agent, in which turn (the link opens
+  the run, where the call's own answer is), the tool whose call it cited, and
+  what a call of that tool is evidence of.
 - **Likely**: an entry an agent backed with a call or a file, that no person,
   integration or setting stands behind yet. It stays here, even after
   somebody corrects one fact on it, until somebody confirms the entry itself.
@@ -275,7 +278,17 @@ Pick several with their boxes to decide them together: **Accept as shown**
 confirms each entry and keeps each shown value, and **Retire** retires the
 picked entries. A bulk decision lists what it decides in a dialog and sends
 only when you press again there; what the engine refused stays picked, with
-its reason.
+its reason. An entry an agent reported is listed there with who reported it.
+
+An agent's value beside a person's, in a disagreement, names the call it cited
+in the same way.
+
+**One thing in Review also reaches your Inbox:** a newer report that differs
+from a value you set or confirmed yourself. It appears under **Needs you**
+with both values and opens the entry's Sources tab, where you keep one. It
+leaves the Inbox as soon as somebody decides. Everything else waits in Review
+for every holder of Atlas together, so the Inbox does not fill with
+infrastructure changes.
 
 ## Sources and Refresh now
 

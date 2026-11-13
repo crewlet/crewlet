@@ -175,6 +175,8 @@ Agents meet the company's systems while they work: a server over SSH, a vendor t
 
 **Only what a tool call of the same turn showed.** A record names, in `seen_in`, a tool the agent called in that turn, and the engine reads that call's own answer: a new entry's identifier, every fact's value and the entry a relation points at must stand in the answer, whole, or the call must have been an SSH call made on the server the relation points at. A value the cited answer does not show is refused, so an agent cannot record a host no tool returned. The engine keeps a turn's answers in memory for that turn alone, so a call of an earlier turn cannot be cited: the agent makes the read again.
 
+**The record keeps which call it cited.** Each claim an agent records names its seat, the turn, what the cited call is evidence of, and the cited call's tool by name, as the turn recorded it and never as the agent typed it. The answer itself is not copied: it stays in the turn, which the claim links to. A tool server names its own tools, so a name outside the tool-name grammar, or shaped like a credential, is kept by no record, and the claim then names its turn alone.
+
 **The engine decides how far the record is trusted**, from the tool the cited call was made with. The agent passes no confidence.
 
 | The cited call | The record |
@@ -188,6 +190,12 @@ Agents meet the company's systems while they work: a server over SSH, a vendor t
 **What an agent never does.** It never removes or retires anything: a dispute stands beside what the atlas holds, never replaces it, and sends the entry to Review only where the cited call was a read of a server, a vendor or a repository. It never sets a purpose, an environment, an importance, an owner or what depends on what; those are a person's. It never says two entries are the same. It records nothing in a turn somebody outside the company woke, or a person without Atlas ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)). A value or a key shaped like a credential is refused, even where a server printed it, and the refusal never repeats it.
 
 **The caps.** A turn records at most 20 times, and an agent at most 200 times in a UTC day across its turns, counted for the whole fleet. A record of what the atlas already holds (the agent's own backed claim from the last week, or the same value from the settings, the engine's records, a person or an integration) writes nothing and counts against neither. After a week the agent's claim is written again, so a fact it keeps meeting does not go stale.
+
+## What waits for a person, and what reaches an Inbox
+
+What waits is computed on every read and stored nowhere ([Review](../guides/atlas.md#review)): a fact or a relation the sources disagree on, and an entry only an agent reported. An entry that waits carries what each agent said behind it, newest first: the seat, the turn, the cited call's tool and what that call is evidence of.
+
+**Only drift on what a person set reaches that person's Inbox.** Where a newer report from an integration, an agent or the engine differs from a value a person set or confirmed, the atlas shows both and settles neither, and the person who said it is told under Needs you. Nothing else in Review reaches an Inbox: a disagreement nobody's word is part of, and an entry waiting to be confirmed, belong to every holder of the atlas together and wait in Review with its count. The notice is read off the same computation (`atlas_review` asked with `mine`), so it is gone the moment somebody keeps one of the two values.
 
 ## Reading the atlas
 
