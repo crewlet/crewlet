@@ -67,9 +67,13 @@ import (
 // way. In a subagent's thread either leaves the thread not whole. A record of
 // no lowercase canonical uuid, a uuid held twice, or more records than
 // [holdingsMaxRecords] is no reading of a main thread and leaves a subagent's
-// not whole. And recovery is read only through a result's parent: the
-// harness also recovers a result through the call its id names, behind a flag,
-// which the reading leaves told.
+// not whole; and so is a progress record, a legacy shape, which the
+// harness's load drops, handing each record after it that names its uuid to
+// the progress record's own parent ([recordProgress]): followed as written, a
+// record naming one could read as the child of a record carrying the same
+// uuid, which that load skips. And recovery is read only through a result's
+// parent: the harness also recovers a result through the call its id names,
+// behind a flag, which the reading leaves told.
 //
 // A subagent's thread can name a parent that comes later in the file (the
 // attachments of its start: 74 of the 89 subagent threads the probes kept),

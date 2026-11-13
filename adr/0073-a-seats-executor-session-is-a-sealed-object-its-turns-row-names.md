@@ -2414,7 +2414,10 @@ never crosses the last restart, since a compaction that kept a segment deletes
 what lies before its boundary from what the resume walks. Where the walk cannot
 be read (a parent naming no record, which the harness replaces by a guess from
 timestamps, or a record already walked), it ends there and what lies past it is
-told; a record of no lowercase canonical uuid, or of another's, is no reading.
+told; a record of no lowercase canonical uuid, or of another's, is no reading,
+and so is a progress record, a legacy shape none of the files the probes kept
+holds, whose uuid Claude Code's load hands the records after it that name it
+to the progress record's own parent, a link the reading does not follow.
 A subagent's thread is walked from its last record of its own, what its model
 had seen when it answered, and a walk that does not reach its root leaves it
 not whole. A result is live only past its call's use in its own thread, since

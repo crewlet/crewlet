@@ -954,6 +954,13 @@ const (
 	recordAttachment = "attachment"
 	recordSystem     = "system"
 
+	// recordProgress is a record of a tool's progress, a legacy shape:
+	// Claude Code's load drops it, and hands each record after it that names
+	// its uuid as a parent to the progress record's own parent instead
+	// (2.1.310 and 2.1.322, their legacy progress bridge). No release the
+	// probes ran writes one: none of the 778 files they kept holds one.
+	recordProgress = "progress"
+
 	// recordContentReplacement is the record of the results a reply's calls
 	// returned that the harness hands its model replaced
 	// ([threadLine.ReplacedResults]), and replacementToolResult the kind of

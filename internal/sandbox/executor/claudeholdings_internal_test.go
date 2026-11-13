@@ -664,6 +664,15 @@ func hsCheckpoint(t *testing.T, leaf, beside string) string {
 	return ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, `"leafUuid":`+leaf+beside)
 }
 
+// hsProgress is a progress record, uuid, chained to parent: a legacy shape
+// none of the files the probes kept holds, as Claude Code's load knows one (a
+// `type` "progress" and a string uuid), its other keys a shell call's.
+func hsProgress(parent, uuid string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"progress","data":{"type":"bash_progress"},` +
+		`"toolUseID":"toolu_test_progress","parentToolUseID":"toolu_test_progress","uuid":"` + uuid +
+		`","timestamp":"` + ctStamp + `",` + ctTail("2.1.322") + `}`
+}
+
 // A RESULT IS LIVE ONLY WHERE THE RESUME HANDS ITS MODEL ITS RECORDS, as
 // Claude Code's resume builds the conversation (2.1.310 and 2.1.322): the
 // chain walked from the thread's leaf, the nearest user or assistant record up
@@ -832,18 +841,21 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 // session's last record's place; a reply whose content is a string, which its
 // load drops where it is blank and rewrites where it is not; a user or
 // assistant record its walk never counts whose message does not decode, which
-// its load drops; and a record of no uuid, of an uppercase one, or of one
-// another record carries. None is in a main thread the probes kept. The thread
-// itself is read and holds its call, and so does it beside a checkpoint its
-// last record descends from, one naming no record, one naming no canonical
-// uuid, and one a compaction's boundary cleared.
+// its load drops; a record of no uuid, of an uppercase one, or of one another
+// record carries; and a progress record, which its load drops, handing each
+// record after it that names its uuid to the progress record's own parent, so
+// a result naming one carried by its call's record too reads past that call
+// (the chain critique's probe P5). None is in a main thread the probes kept.
+// The thread itself is read and holds its call, and so does it beside a
+// checkpoint its last record descends from, one naming no record, one naming
+// no canonical uuid, and one a compaction's boundary cleared.
 //
 // Mutation: read past a marked checkpoint, one whose leaf is no string, or one
 // the last record does not descend from; file a sidechain's record, a fork's
 // briefing or a file's snapshot as any other; take a reply of string content
 // for one of blocks, or a message that does not decode for none on a record
-// the walk does not count; or file a record of no lowercase canonical uuid, or
-// of another's, and each such thread is read.
+// the walk does not count; file a record of no lowercase canonical uuid, or of
+// another's; or pass a progress record over, and each such thread is read.
 func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 	t.Parallel()
 	const x, out = "toolu_leaf", "leaf done"
@@ -887,6 +899,9 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 			ctTokens, ctTokensRendered))},
 		"a record of a uuid another carries": {lines: with(ctAttachment(ctUUID(3), ctUUID(2), ctTokens,
 			ctTokensRendered))},
+		"a progress record": {lines: with(hsProgress(ctUUID(3), ctUUID(4)))},
+		"a progress record of its call's uuid, before it": {lines: []string{hsProgress(ctUUID(1), ctUUID(2)), pair[0],
+			pair[1]}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1810,7 +1825,8 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // answered by the resume's own result (condition 3), are not. Built, each
 // otherwise reportable: a subagent whose metadata is missing, names a call of
 // another tool, or names an id a second Agent call carries; whose thread
-// restarts, holds a record of another agent's, marks an API error or names the
+// restarts, holds a record of another agent's or a progress record, which
+// Claude Code's load drops and links past, marks an API error or names the
 // model of a reply in no shape Claude Code writes, opens on a record that
 // roots no chain, ends on an empty reply, on the text of a reply cut before
 // its call, on a reply its harness wrote itself (a failed request's error,
@@ -1840,7 +1856,7 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // unfinished rather than not whole; or drop any other part of a condition
 // (the answer's liveness, its failure, its count, the metadata's one call, a
 // Task call as a start, a notification's status or agent, a record of another
-// agent's), and the subagent its case built is reported.
+// agent's, a progress record), and the subagent its case built is reported.
 func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
 	t.Parallel()
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
@@ -1877,6 +1893,9 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		}), hsUnlinked},
 		"a restart in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread = append(s.thread, hsSide(t, ctMicrocompactBoundary(ctUUID(104), ctUUID(105))))
+		}), hsNotWhole},
+		"a progress record in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread = append(s.thread, hsSide(t, hsProgress(ctUUID(104), ctUUID(105))))
 		}), hsNotWhole},
 		"its first chained record roots no chain": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread[0] = ctReplace(t, s.thread[0], `"parentUuid":null`, `"parentUuid":"`+ctUUID(100)+`"`)

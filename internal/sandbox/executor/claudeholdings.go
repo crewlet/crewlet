@@ -148,11 +148,11 @@ import (
 //     that started it (`toolUseId`, an id the log keeps), a depth of exactly
 //     the integer 1, a request shape, and a description or none; and that
 //     call is exactly one counted Agent or Task call of the main thread.
-//  2. WHOLE: no line of its thread is no record; every user and assistant
-//     record is its own, its `agentId` and `isSidechain` true, and its
-//     message, its stop reason, its mark of an API error and the model of its
-//     reply decode; no record names another agent; and its thread never
-//     restarts, so its first chained record roots its chain.
+//  2. WHOLE: no line of its thread is no record, or a progress record; every
+//     user and assistant record is its own, its `agentId` and `isSidechain`
+//     true, and its message, its stop reason, its mark of an API error and
+//     the model of its reply decode; no record names another agent; and its
+//     thread never restarts, so its first chained record roots its chain.
 //  3. EVERY LEG ANSWERED, LIVE IN THE MAIN THREAD. Its legs are the call that
 //     started it, and every SendMessage call of the main thread to it, but one
 //     its own result refused (`success`, the literal false); a SendMessage
@@ -204,8 +204,10 @@ import (
 // is no gzip or no tar, or inflates past its bound; a member is named
 // absolutely or through `..`; a member it reads is held twice; the main thread
 // is no regular file, or is not there; a line of it is past its bound or is no
-// record, a user or assistant record's message does not decode, or a record
-// replaces results in no shape Claude Code writes; the main thread's leaf may
+// record, a user or assistant record's message does not decode, a record
+// replaces results in no shape Claude Code writes, or a progress record, which
+// Claude Code's load drops and links the records after it past
+// ([recordProgress]), is among them; the main thread's leaf may
 // not be the one the reading walks from (a checkpoint a rewind, a withdrawal
 // or a fork marked, or that names its leaf in no shape Claude Code writes, or
 // that names a record its last record does not descend from; a sidechain's
@@ -700,8 +702,11 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 // record's place (a sidechain's, a fork's briefing, a file's snapshot), a
 // user or assistant record whose message does not decode, which its load
 // drops, or a reply whose content is a string, which its load drops where it
-// is blank and rewrites where it is not; or where chain cannot walk to it
-// ([threadChain.add]). No main thread the probes kept holds any of these.
+// is blank and rewrites where it is not; where it is a progress record, whose
+// uuid that load hands each record after it that names it to the progress
+// record's own parent, a link the reading does not follow
+// ([recordProgress]); or where chain cannot walk to it ([threadChain.add]). No
+// main thread the probes kept holds any of these.
 func (w *holdingsWalk) mainLine(chain *threadChain, line threadLine) (threadMessage, int32, error) {
 	refused := func(what string, cause error) error {
 		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread %s", line.N, what), cause: cause}
@@ -713,6 +718,9 @@ func (w *holdingsWalk) mainLine(chain *threadChain, line threadLine) (threadMess
 		err     error
 	)
 	switch {
+	case head.Type == recordProgress:
+		return threadMessage{}, -1, refused("is a progress record, which Claude Code's load drops, handing each "+
+			"record after it that names it to its parent, a link the reading does not follow", nil)
 	case head.Type != recordUser && head.Type != recordAssistant && head.Type != recordAttachment &&
 		head.Type != recordSystem:
 		return threadMessage{}, -1, nil
@@ -1121,6 +1129,10 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 	}
 	if head.AgentID != "" && head.AgentID != agent {
 		a.notWhole(fmt.Sprintf("line %d of its thread is another agent's record", line.N), nil)
+	}
+	if head.Type == recordProgress {
+		a.notWhole(fmt.Sprintf("line %d of its thread is a progress record, which Claude Code's load drops, "+
+			"handing each record after it that names it to its parent", line.N), nil)
 	}
 	if err := line.ReplacedResults(w.replaced); err != nil {
 		a.notWhole(fmt.Sprintf("line %d of its thread replaces results in no shape Claude Code writes", line.N),
