@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -26,6 +27,12 @@ type DigitalOceanProvisioning struct {
 	// Team is the team's name as the control panel's team menu shows it.
 	Team string `yaml:"team,omitempty" json:"team,omitempty" desc:"The DigitalOcean team the agents' tokens act in, by its name as the control panel's team menu shows it. The first agent's token proves it."`
 }
+
+// DigitalOceanTeamRef is a team's name as the atlas keys the team's account:
+// lowercase, every run of other characters one hyphen. A team's name may hold
+// a space and an account's key may not, so the settings and the read of the
+// team both key it through here.
+func DigitalOceanTeamRef(team string) string { return org.Slugify(team) }
 
 // The levels a seat's DigitalOcean token holds, least access first. Each is a
 // fixed set of DigitalOcean's custom scopes, which internal/digitalocean holds.
