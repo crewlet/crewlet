@@ -1681,6 +1681,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	if !res.Success {
 		res.Error = msg.failure()
 		res.ContextExhausted = msg.contextExhausted()
+		res.RequestRefused = msg.requestRefused()
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
@@ -1722,6 +1723,9 @@ type claudeResult struct {
 	// "completed" for a loop that finished, and [claudeHookStopped] for one a
 	// hook stopped. Absent on a harness that does not report it.
 	TerminalReason string
+	// APIErrorStatus is the HTTP status the provider answered the run's last
+	// request with, where that request failed; zero otherwise.
+	APIErrorStatus int
 	// Usage is the session's tokens, in the keys a message's usage has
 	// ([claudeUsage]); nil where the result carries none, or none that is an
 	// object.
@@ -1758,6 +1762,7 @@ type claudeResultWire struct {
 	TotalCostUSD    json.RawMessage `json:"total_cost_usd"`
 	NumTurns        json.RawMessage `json:"num_turns"`
 	TerminalReason  json.RawMessage `json:"terminal_reason"`
+	APIErrorStatus  json.RawMessage `json:"api_error_status"`
 	Usage           json.RawMessage `json:"usage"`
 	SinceLastResult json.RawMessage `json:"model_usage_since_last_result"`
 }
@@ -1772,6 +1777,7 @@ func (w claudeResultWire) result() claudeResult {
 		Result: looseString(w.Result), Errors: w.Errors, SessionID: looseString(w.SessionID),
 		TotalCostUSD: looseFloat(w.TotalCostUSD), NumTurns: int(looseInt(w.NumTurns)),
 		TerminalReason: looseString(w.TerminalReason), SinceLastResult: w.SinceLastResult,
+		APIErrorStatus: int(looseInt(w.APIErrorStatus)),
 	}
 	if wireObject(w.Usage) {
 		usage := looseUsage(w.Usage)
@@ -1995,6 +2001,21 @@ func (r claudeResult) contextExhausted() bool {
 	return slices.ContainsFunc(claudeContextSentences, func(sentence string) bool {
 		return strings.Contains(said, sentence)
 	})
+}
+
+// claudeRefusedStatuses are the statuses a provider answers a request it will
+// not take as it was built: invalid (400), too large (413) and unprocessable
+// (422). The same request is refused again, so no retry of it cures one.
+var claudeRefusedStatuses = []int{400, 413, 422}
+
+// requestRefused is whether the run ended on a request its provider refused as
+// built ([sandbox.Result.RequestRefused]): the harness's own failure flag with
+// one of [claudeRefusedStatuses], and not a conversation past its context,
+// which is a 400 too and has its own word ([claudeResult.contextExhausted]).
+// Measured on 2.1.322: a tool definition whose name breaks the provider's
+// pattern ends `is_error` with `api_error_status` 400, its result the sentence.
+func (r claudeResult) requestRefused() bool {
+	return r.IsError && slices.Contains(claudeRefusedStatuses, r.APIErrorStatus) && !r.contextExhausted()
 }
 
 // succeeded is whether the run finished its work. EVERY FIELD MUST SAY SO: a

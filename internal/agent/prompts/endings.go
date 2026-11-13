@@ -345,7 +345,7 @@ func endingAccounts(seat string, t TurnEnding) []account {
 		{"Why it was stopped, as whoever stopped it said:", label(), t.StopReason},
 		{"What failed, as the engine recorded it:", engine, t.Failure},
 		{"Its newest session was not kept:", engine, t.Unkept},
-		{"Its executor ran out of its model's context:", engine, t.Exhausted},
+		{"Its executor's session could not go on:", engine, t.Exhausted},
 	}
 	var out []account
 	for _, a := range all {

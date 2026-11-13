@@ -456,6 +456,18 @@ type Resume struct {
 	// [Rotated]), unless the round's calls already hold its submission.
 	Rotated *Rotated
 
+	// Refused is set when the run's job ended on a request its provider
+	// refused, in a session the job continued: the turn carries the round on
+	// once, in a fresh session, rather than collecting the refusal (see
+	// [Refused]), unless the round's calls already hold its submission.
+	Refused *Refused
+
+	// RequestRefused is the provider's message where the job this resume
+	// COLLECTS ended on a request its provider refused: in a session it
+	// started, or after the round was already carried on once. The round then
+	// ends the turn with it ([turn.Work.RequestRefused]). Empty otherwise.
+	RequestRefused string
+
 	// Steered is every note the turn had read when the run was collected,
 	// and where, in the order read — off the run's record, which every read
 	// is written on: a brief's, the run's own and a reviewer's. The
