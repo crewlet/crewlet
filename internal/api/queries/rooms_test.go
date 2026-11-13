@@ -359,6 +359,14 @@ func (emptyWork) Search(context.Context, worklet.SearchQuery) (worklet.SearchAns
 	return worklet.SearchAnswer{}, nil
 }
 
+func (emptyWork) EntryMarks(context.Context, statelog.ReadLevel) (worklet.EntryMarks, error) {
+	return worklet.EntryMarks{Open: map[string]int{}}, nil
+}
+
+func (emptyWork) EntryWork(context.Context, worklet.EntryWorkQuery, time.Time) (worklet.EntryWork, error) {
+	return worklet.EntryWork{Open: []worklet.TaskRow{}, Recent: []worklet.TaskRow{}}, nil
+}
+
 func (emptyWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return worklet.WorkPatterns{}, nil
 }

@@ -209,7 +209,7 @@ What waits is computed on every read and stored nowhere ([Review](../guides/atla
 
 ## Reading the atlas
 
-People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through nine questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, that log counted a day at a time, what waits for a person, and each source's standing ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through twelve questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, that log counted a day at a time, what waits for a person, each source's standing, the open work on each entry, one entry's work, and the entries a list of ids names ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
 
 An entry, a fact or a relation only an agent reported, with nothing the engine could check behind it, is **unconfirmed**. A list and the map leave it out unless the read asks for it (`unconfirmed`), and one entry read in full shows it marked as such: it stays hidden until a person confirms it. An agent is never shown it.
 
@@ -296,7 +296,18 @@ An agent seat holds the Atlas permission as it holds every app, and the same thr
 - **Nothing only an agent's unbacked report says.** An entry, a fact or a relation an agent recorded with no evidence the engine could check is left out of every agent's read, so one agent's report never reaches another as a fact.
 - **Text somebody else wrote.** Every answer carries who wrote what it holds, and is read at the least trust any of them earns: the settings, the engine's records, a person and an agent as a colleague's, and a vendor's listing, which names no writer, as an outside party's.
 
-A turn whose ask names an entry exactly is also handed a few lines about it before it starts, so a seat asked about `orders-db` reads what the company knows before it probes a server ([Systems in this work](agent-runtime.md#systems-in-this-work)).
+A turn whose work item names entries, or whose ask names one exactly, is also handed a few lines about each before it starts, the work item's first, so a seat asked about `orders-db` reads what the company knows before it probes a server ([Systems in this work](agent-runtime.md#systems-in-this-work)).
+
+## Work that touches an entry
+
+A task in Worklet names the entries it touches: the server a change is rolled out to, the database a migration runs on, the domain a certificate is renewed for. A person links them on the task, and an agent with `update_work_item`'s `linked_entries` ([the Worklet guide](../guides/worklet.md#the-atlas-entries-a-task-touches)).
+
+- **The link is the task's, and the atlas is never written.** It is a relation on the task's own record, on the tracker's log, kept by the entry's id and never by its name or key. An entry does not know which tasks name it, a link is no claim about the entry, and it changes neither the entry's confidence nor its health.
+- **Read when the atlas is read.** The open work on each entry and one entry's tasks are read from the tracker's rows on every read, through whichever entry each id merged into. An entry that is retired or purged keeps no trace of the work; the task still says it names one entry more than its reader's atlas holds.
+- **Each permission decides its own half.** The work on an entry is shown only to a reader who uses Worklet, as on Worklet's own screens, and the entries on a task only to a reader who holds Atlas. Without Atlas a task says how many entries it names and nothing else: an entry's id is derived from its kind and key, so the id is withheld with the name it would confirm.
+- **An agent's turn reads them first.** A turn on a task that names entries is told about those before anything its ask names.
+
+[ADR-0140](../../adr/0140-a-task-names-the-atlas-entries-it-touches-by-id-on-its-own-record.md) records the decision.
 
 ## Every piece of state, and who has to agree on it
 
@@ -312,6 +323,8 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | Each scanned repository's standing: the commit last read whole, the files listed and read, the calls, and what was refused | the whole company, current value only | the coordination store, in a bucket of its own |
 | Each forge's standing for its repositories' files: what its last pass listed, read, refused and left waiting, and what it cost | the whole company, current value only | the same bucket, under keys of its own |
 | What each file declared at the content last read, so an unchanged file is not read again | the node that reads the repository alone (its Gitlet home, or the holder of the collect duty for a forge's), while it runs | that node's memory; a node that lost it reads the repository's listed files once more at its next move |
+| Which entries a task touches | every data node identically, with the task and its history | Worklet's own log and its replicated rows, a relation on the task (ADR-0140); nothing in the atlas |
+| The open work on each entry, and one entry's tasks | nobody: computed on every read, from the tracker's rows | the read itself |
 | What a turn's tool calls answered, which a record cites | the node running the turn, for that turn | the turn's own memory, never written anywhere |
 | An agent's records today, against its allowance of 200 | the whole company, now | the coordination store's shared counter, a UTC day wide |
 | The log's lines, its daily counts, an entry's last change, a row's owner, purpose, relation counts and reason, and a relation's family | nobody: computed on every read, from the log's rows and the fold | the read itself |

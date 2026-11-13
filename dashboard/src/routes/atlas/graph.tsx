@@ -10,7 +10,16 @@ import type { GraphAttentionTone, GraphCanvasLabels, GraphEdge, GraphNode } from
 import type { AtlasMapEdge, AtlasSummary } from "~/contract/atlas.ts";
 import { relTime } from "~/lib/format.ts";
 import { KindGlyph } from "./parts.tsx";
-import { FAMILIES, HEALTH, KINDS, RELATIONS, VENDORS, entries } from "./words.ts";
+import {
+  FAMILIES,
+  HEALTH,
+  KINDS,
+  RELATIONS,
+  VENDORS,
+  WORKED_ON,
+  entries,
+  openTasks,
+} from "./words.ts";
 
 /** The words the map says on its own, in the atlas's word for one item. */
 export const MAP_LABELS: Partial<GraphCanvasLabels> = {
@@ -21,18 +30,25 @@ export const MAP_LABELS: Partial<GraphCanvasLabels> = {
   keys: "Arrow keys move between entries and lanes, Enter selects an entry or opens a group, and Escape clears the selection. Plus and minus zoom, and zero fits the map in view.",
 };
 
-/** The word of each tone the map keys: the engine's two healths that are not quiet. */
-export const MAP_TONES: Partial<Record<GraphAttentionTone, string>> = {
+/** The word of each health tone the map keys: the engine's two healths that are not quiet. */
+export const HEALTH_TONES: Partial<Record<GraphAttentionTone, string>> = {
   danger: HEALTH.alerting.label,
   warning: HEALTH.needs_look.label,
+};
+
+/** The tones the map keys for a reader whose work is read: the healths, and the mark of open work. */
+export const MAP_TONES: Partial<Record<GraphAttentionTone, string>> = {
+  ...HEALTH_TONES,
+  info: WORKED_ON,
 };
 
 /**
  * One entry as a card: its kind's glyph in the ruled cell, its vendor's mark
  * on the corner, its name, and a notch with its health word when it is not
- * quiet. Its key, or how long since it was seen, is read after the name.
+ * quiet. A quiet entry that `open` tasks name carries the notch of open work
+ * instead. Its key, or how long since it was seen, is read after the name.
  */
-export function cardOf(summary: AtlasSummary, now: number): Omit<GraphNode, "lane"> {
+export function cardOf(summary: AtlasSummary, now: number, open = 0): Omit<GraphNode, "lane"> {
   const dot = HEALTH[summary.health].dot;
   const mark = summary.vendor ? VENDORS[summary.vendor].mark : undefined;
   return {
@@ -51,7 +67,13 @@ export function cardOf(summary: AtlasSummary, now: number): Omit<GraphNode, "lan
     kind: KINDS[summary.kind].word,
     glyph: <KindGlyph kind={summary.kind} />,
     mark: mark ? <VendorMark vendor={mark} size="xs" /> : undefined,
-    attention: dot ? { tone: dot, label: HEALTH[summary.health].label } : undefined,
+    // A CARD HAS ONE NOTCH, and health keeps it: what is wrong with an entry
+    // outranks that somebody is working on it, which its hover card still says.
+    attention: dot
+      ? { tone: dot, label: HEALTH[summary.health].label }
+      : open > 0
+        ? { tone: "info", label: `${WORKED_ON}, ${openTasks(open)}` }
+        : undefined,
     unconfirmed: summary.word === "unconfirmed",
   };
 }

@@ -437,6 +437,14 @@ func (filledWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 	return filled[map[string]worklet.TurnPlace](), nil
 }
 
+func (filledWork) EntryMarks(context.Context, statelog.ReadLevel) (worklet.EntryMarks, error) {
+	return filled[worklet.EntryMarks](), nil
+}
+
+func (filledWork) EntryWork(context.Context, worklet.EntryWorkQuery, time.Time) (worklet.EntryWork, error) {
+	return filled[worklet.EntryWork](), nil
+}
+
 func (filledWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return worklet.WorkPatterns{}, nil
 }

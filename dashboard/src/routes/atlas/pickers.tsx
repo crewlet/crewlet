@@ -32,8 +32,8 @@ export function EntryPicker({
   helper?: string;
   /** The kinds that may be picked; every kind where absent. */
   kinds?: readonly AtlasKind[];
-  /** An entry left out: the one the write is about. */
-  exclude?: string;
+  /** The entries left out: the one the write is about, or the ones it already names. */
+  exclude?: string | readonly string[];
   value: string;
   onChange: (id: string, entry: AtlasSummary | null) => void;
   optional?: boolean;
@@ -52,13 +52,12 @@ export function EntryPicker({
     [one, q],
   );
   const found = useQuery("atlas_entries", asked);
-  const rows = useMemo(
-    () =>
-      (found.data?.rows ?? []).filter(
-        (row) => row.id !== exclude && (!kinds || kinds.includes(row.kind)),
-      ),
-    [found.data, exclude, kinds],
-  );
+  const rows = useMemo(() => {
+    const left = new Set(typeof exclude === "string" ? [exclude] : exclude);
+    return (found.data?.rows ?? []).filter(
+      (row) => !left.has(row.id) && (!kinds || kinds.includes(row.kind)),
+    );
+  }, [found.data, exclude, kinds]);
   const options: SelectOption[] = rows.map((row) => ({
     value: row.id,
     label: row.name,

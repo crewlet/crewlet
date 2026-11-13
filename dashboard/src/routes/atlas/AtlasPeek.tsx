@@ -1,8 +1,9 @@
 /**
  * An entry's sheet, beside the map and the catalogue: its identity and its
  * health, what is wrong with it, the entry among its neighbours in the map's
- * own look, its facts and where each came from, its neighbours by name, and
- * its recent changes. The rail draws the way to its page.
+ * own look, its facts and where each came from, its neighbours by name, the
+ * open tasks that name it, and its recent changes. The rail draws the way to
+ * its page.
  */
 
 import { EmptyState, Link, Section, Skeleton, Stack } from "@crewlethq/ui";
@@ -28,6 +29,7 @@ import {
 } from "./entry.tsx";
 import { EntryActions } from "./EntryActions.tsx";
 import { SELECT_KEY } from "./filters.ts";
+import { PeekWork, useEntryWork } from "./Work.tsx";
 
 /** At most this many changes a sheet lists before pointing at the page. */
 const PEEK_CHANGES = 6;
@@ -63,6 +65,7 @@ function EntryPeek({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryRe
   const self = selfOf(reads);
   const below = dependsOn(entry, reads.next.data);
   const above = usedBy(answer);
+  const work = useEntryWork(entry.id);
   return (
     <>
       <EntryHead answer={answer} self={self} size="peek" now={now} />
@@ -87,6 +90,7 @@ function EntryPeek({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryRe
         >
           <RelatedList related={above} limit={PEEK_RELATED} none="No other entry depends on it." />
         </Section>
+        <PeekWork id={entry.id} reading={work} />
         <Section spacing="tight" headingLevel={3} title="Recent changes">
           <Changes id={entry.id} limit={PEEK_CHANGES} />
         </Section>

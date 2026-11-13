@@ -145,6 +145,16 @@ func (w Work) OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time
 	return call(ctx, w.r, opOwnAsks, nil, ownAsksArgs{Query: q, Now: now})
 }
 
+// EntryMarks answers how many open tasks name each atlas entry (ADR-0140).
+func (w Work) EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error) {
+	return call(ctx, w.r, opEntryMarks, nil, level)
+}
+
+// EntryWork answers the open and recently finished tasks naming an atlas entry.
+func (w Work) EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now time.Time) (worklet.EntryWork, error) {
+	return call(ctx, w.r, opEntryWork, nil, entryWorkArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
