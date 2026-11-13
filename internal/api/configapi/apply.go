@@ -669,6 +669,37 @@ func carried(document, payload []byte, summary string, at time.Time, origin coor
 	return nil
 }
 
+// sealed is a prepared write's document sealed as its revision stores it, and
+// the origin its pointer carries, written at the instant at with summary — and
+// refused where that pointer is past what one key of the coordination store
+// holds ([carried]).
+func (s *Service) sealed(p *prepared, summary string, at time.Time) ([]byte, coord.RevisionOrigin, error) {
+	payload, err := secrets.Seal(s.cipher, p.document)
+	if err != nil {
+		return nil, coord.RevisionOrigin{}, fmt.Errorf("configapi: seal the config: %w", err)
+	}
+	origin := coord.RevisionOrigin{
+		Author: p.by.Name, AuthorKind: p.by.Kind, OperatorID: p.by.OperatorID,
+		Source: p.source, CreatedAt: at,
+	}
+	if err = carried(p.document, payload, summary, at, origin); err != nil {
+		return nil, coord.RevisionOrigin{}, err
+	}
+	return payload, origin, nil
+}
+
+// checks is a dry run's last check of a prepared write: the one [Service.commit]
+// makes before it stores anything, that the document, sealed with summary into
+// its activation pointer, is no larger than the pointer carries
+// ([DocumentTooLargeError]). A dry run is the same request checked the same
+// way, so one that passes is a write the commit takes: the pointer is sized
+// with both its instants at their widest ([coord.ActivationBytes]), never at
+// the instant the dry run happened to run.
+func (s *Service) checks(p *prepared, summary string) error {
+	_, _, err := s.sealed(p, summary, s.now())
+	return err
+}
+
 // commit seals, stores and points the fleet at a prepared write.
 //
 // Stored FIRST, then pointed at: a crash between the two leaves a revision
@@ -702,16 +733,9 @@ func carried(document, payload []byte, summary string, at time.Time, origin coor
 // a revision is stored under is the one [Service.Authorize] judged.
 func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
 	by := p.by
-	payload, err := secrets.Seal(s.cipher, p.document)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
-	}
 	at := s.now()
-	origin := coord.RevisionOrigin{
-		Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
-		Source: p.source, CreatedAt: at,
-	}
-	if err = carried(p.document, payload, summary, at, origin); err != nil {
+	payload, origin, err := s.sealed(p, summary, at)
+	if err != nil {
 		return Applied{}, err
 	}
 	r := store.Revision{

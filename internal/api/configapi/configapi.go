@@ -896,6 +896,10 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dryRun {
+		if err = s.checks(prepared, summary); err != nil {
+			s.refuseWrite(w, r, err, cond.createOnly)
+			return
+		}
 		writeChecked(w, prepared)
 		return
 	}
@@ -983,6 +987,10 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dryRun {
+		if err = s.checks(prepared, summary); err != nil {
+			s.refuseApply(w, r, err)
+			return
+		}
 		writeChecked(w, prepared)
 		return
 	}
