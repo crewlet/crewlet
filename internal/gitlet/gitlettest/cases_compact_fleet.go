@@ -44,6 +44,17 @@ func memberNode(t *testing.T, c Cluster, id string) Node {
 	return nil
 }
 
+// fleetAppends is how many records every member's committer has appended
+// (Cluster.Appends), the members down included: a dead member's count is what
+// it appended before it died.
+func fleetAppends(c Cluster) int {
+	n := 0
+	for _, m := range c.Members() {
+		n += c.Appends(m)
+	}
+	return n
+}
+
 // pushN makes n pushes to main through member node, each one commit adding a
 // small file.
 func (rc *repoCase) pushN(p *Person, work, node string, n int) {
@@ -58,6 +69,29 @@ func (rc *repoCase) pushN(p *Person, work, node string, n int) {
 func outcomes(n Node, outcome compact.Outcome) uint64 {
 	return counterOf(n, metrics.CodeCompactRuns, "outcome", string(outcome))
 }
+
+// landing is how many compactions a member's compactor answered with their
+// record LANDED, by what each was answered: applied, or pending or unknown —
+// the record appended and not yet known applied where it was decided. A pass
+// counts the three alike as compacted (compact.Compactor.Poll), because which
+// of them a compaction is answered says how far the deciding member's applier
+// had got, not whether the compaction landed.
+type landing struct{ applied, pending, unknown uint64 }
+
+// landingOn is what node n's compactor has answered so far.
+func landingOn(n Node) landing {
+	return landing{applied: outcomes(n, compact.OutcomeApplied), pending: outcomes(n, compact.OutcomePending),
+		unknown: outcomes(n, compact.OutcomeUnknown)}
+}
+
+// since is what l counted past before.
+func (l landing) since(before landing) landing {
+	return landing{applied: l.applied - before.applied, pending: l.pending - before.pending,
+		unknown: l.unknown - before.unknown}
+}
+
+// landed is how many compactions landed, whatever each was answered.
+func (l landing) landed() uint64 { return l.applied + l.pending + l.unknown }
 
 // heldPass runs passes of node's compactor on a goroutine until one is held at
 // CompactAfterUpload — its outputs stored, nothing proposed — while each before
@@ -212,40 +246,122 @@ func twoMaintainersLandOneCompaction(t *testing.T, c Cluster) {
 
 // F29: a committer that dies after a compaction's outputs are stored and
 // before its proposal is asked of its repository's runner-up, under the same
-// compaction id: the compaction is applied once, and the dead committer, back,
-// applies the one record and holds the rows every member does.
+// compaction id: the compaction LANDS ONCE — one record, the runner-up's, the
+// only one the fleet appends, which retires every input and adds the one
+// output on every member — and the dead committer, back, applies that record
+// and holds the rows every member does.
+//
+// LANDED, NOT APPLIED. A pass counts a compaction compacted once its record
+// landed, whatever the member that decided it answered ([landing]): applied
+// where that member's own applier reached the record in time, pending or
+// unknown where it had not. The leader change the kill causes stalls the
+// survivors' appliers for as long as it lasts, and once that outlasted the
+// five seconds the runner-up waits for its own record
+// (statelog.DefaultResolveBudget) the answer was pending, so a case that
+// counted applied alone read a failover that worked as one that never
+// happened (#1130). So the case makes that stall CERTAIN — every survivor's
+// applier held from before the kill until the pass has returned, so the
+// record cannot apply where it was decided and the runner-up answers pending
+// (or unknown), never applied — and it reads what the record did only once
+// every running member has applied it, waiting on each as the case's end does
+// (Fleet.Level, bounded by the case's own context alone), never on how soon a
+// leader election ends on a loaded runner.
+//
+// Mutation: count applied alone and the case fails on every run, where main's
+// failed on a run whose election outlasted the pass.
 func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f29")
 	committer := rc.committer()
 	x := rc.other(committer)
+	survivors := []string{x, rc.other(committer, x)}
 	// THE MAINTAINER IS NOT THE COMMITTER, so killing the committer leaves
 	// the compaction's builder running.
 	c.SplitMaintainers(t, rc.id, x)
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	rc.pushN(p, work, x, gitlet.CompactMinMerge)
+	before := rc.rows()
 	nx := memberNode(t, c, x)
-	appliedBefore := outcomes(nx, compact.OutcomeApplied)
+	landedBefore := landingOn(nx)
 
 	release, done := heldPass(t, c, nx)
-	c.Kill(t, committer)
-	restarted := false
+	// THE HELD PASS ENDS WITH THE CASE, however the case ends: held, it keeps
+	// its member's compactor — one compaction at a time a node — from every
+	// later case's pass. Let go last, once whatever the case stopped is back,
+	// and waited for.
 	defer func() {
-		if !restarted {
+		release()
+		<-done
+	}()
+	down := false
+	defer func() {
+		if down {
 			c.Restart(t, committer)
 		}
 	}()
+	var held []func()
+	resume := func() {
+		for _, r := range held {
+			r()
+		}
+		held = nil
+	}
+	defer resume()
+	// EVERY SURVIVOR'S APPLIER HELD BEFORE THE KILL: each is levelled with
+	// the log first (Cluster.PauseApplier), which after the kill would wait
+	// on the very leader change this hold makes certain.
+	for _, s := range survivors {
+		held = append(held, c.PauseApplier(t, s))
+	}
+	appendedBefore := fleetAppends(c)
+	c.Kill(t, committer)
+	down = true
+	runnerUp := rc.committer()
 	release()
 	<-done
-	if got := outcomes(nx, compact.OutcomeApplied) - appliedBefore; got != 1 {
-		t.Fatalf("the compaction whose committer died before its proposal was applied %d times, want once "+
-			"by the runner-up", got)
+	if got := landingOn(nx).since(landedBefore); got.landed() != 1 {
+		t.Fatalf("the compaction whose committer died before its proposal landed %d times (applied %d, "+
+			"pending %d, unknown %d), want once, by the runner-up %s", got.landed(), got.applied, got.pending,
+			got.unknown, runnerUp)
 	}
-	if after := rc.rows(); len(after.Packs) != 1 {
+	if n := fleetAppends(c) - appendedBefore; n != 1 {
+		t.Errorf("the fleet's committers appended %d records for one compaction, want one", n)
+	}
+
+	// EVERY RUNNING MEMBER HOLDS THE RECORD before anything reads what it
+	// did: the survivors let go, and each level with the code log.
+	resume()
+	for _, m := range c.DataNodes() {
+		if err := c.Level(rc.ctx, m); err != nil {
+			t.Fatalf("%s applying the compaction's record: %v", m, err)
+		}
+	}
+	retired := retiredSince(&Case{T: t, Fleet: c, Ctx: rc.ctx}, rc.id, before.Position)
+	if len(retired) != len(before.Packs) {
+		t.Fatalf("%d retirements, want one compaction's %d", len(retired), len(before.Packs))
+	}
+	at := retired[0].Position
+	for _, r := range retired[1:] {
+		if r.Position != at {
+			t.Errorf("the retirements landed at %s and %s: two compaction records", at, r.Position)
+			break
+		}
+	}
+	switch writer, err := c.RecordWriter(rc.ctx, at); {
+	case err != nil:
+		t.Errorf("the writer of the compaction's record at %s: %v", at, err)
+	case writer != runnerUp:
+		t.Errorf("the compaction's record at %s is %s's, want the runner-up %s's", at, writer, runnerUp)
+	}
+	switch after := rc.rows(); {
+	case len(after.Packs) != 1:
 		t.Errorf("the rows hold %d live packs, want the one output", len(after.Packs))
+	case after.Packs[0].Added != at:
+		t.Errorf("the one live pack was added at %s, and the compaction's record is at %s",
+			after.Packs[0].Added, at)
 	}
 	c.Restart(t, committer)
-	restarted = true
+	down = false
 	if err := c.Settle(rc.ctx); err != nil {
 		t.Fatal(err)
 	}

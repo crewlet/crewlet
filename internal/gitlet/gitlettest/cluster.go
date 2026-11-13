@@ -205,7 +205,7 @@ func quorum(c Cluster) error {
 // (SplitMaintainers), so a case whose maintenance leaked past its own
 // repositories (Cluster.ConfineMaintenance) fails on it whichever members it
 // runs its passes on: F28's held compaction is this one's, F29's compactor
-// applies two. Declared before any case, it is no case's own.
+// lands two. Declared before any case, it is no case's own.
 func dueThroughout(t *testing.T, c Cluster) {
 	t.Helper()
 	rc := newRepoCase(t, c, "fleet-due")
