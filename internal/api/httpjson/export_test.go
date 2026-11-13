@@ -8,7 +8,7 @@ import (
 // PackagePrefixes is [goPackages] for the external test that holds it to the
 // tree, sorted.
 func PackagePrefixes() []string {
-	return slices.Sorted(maps.Keys(goPackages))
+	return slices.Sorted(maps.Keys(goPackages()))
 }
 
 // UnauthorizedReasons are the reasons `unauthorized` has a sentence of its own

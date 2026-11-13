@@ -2029,7 +2029,7 @@ func Sentence(text string) string {
 // and an identifier.
 func plainWord(s string) bool {
 	word, _, _ := strings.Cut(s, " ")
-	if name, prefixed := strings.CutSuffix(word, ":"); prefixed && goPackages[name] {
+	if name, prefixed := strings.CutSuffix(word, ":"); prefixed && goPackages()[name] {
 		return false
 	}
 	word = strings.TrimRight(word, ",:;")
