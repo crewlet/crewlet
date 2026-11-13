@@ -63,6 +63,10 @@ type OperatorDeps struct {
 	// as Atlas reads it. The zero value omits the tools.
 	AtlasWrite AtlasWriteDeps
 
+	// AtlasRefresh is what a person asks for a read of one atlas source
+	// through. The zero value omits the tool.
+	AtlasRefresh AtlasRefreshDeps
+
 	// Readers is `code_repo_readers`' half beside Code — who read a
 	// `visibility: unit` repository — served only where Code serves the
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
@@ -200,6 +204,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			deps.Atlas.Settings != nil},
 		{&atlasTrace{atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}},
 			deps.Atlas.Settings != nil},
+		// NOR IS A SEAT GIVEN THE ASK THAT A SOURCE BE READ NOW: a read of
+		// a vendor is spent against the company's rate limit, so it is a
+		// person's to ask for (see atlasrefresh.go).
+		{&atlasRefresh{deps: deps.AtlasRefresh}, deps.AtlasRefresh.serves()},
 		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
 		// person's to answer, and a seat that could answer its own
 		// executor's question would be one guessing on its own behalf.

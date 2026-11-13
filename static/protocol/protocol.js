@@ -4602,6 +4602,13 @@ var ACTIONS = {
 		refreshes: ATLAS_READS,
 		scope: "person"
 	},
+	atlas_refresh: {
+		args: ["integration"],
+		domain: null,
+		apps: ["atlas"],
+		refreshes: ["atlas_sources"],
+		scope: "person"
+	},
 	atlas_purge: {
 		args: ["atlas_entry", "value"],
 		domain: null,

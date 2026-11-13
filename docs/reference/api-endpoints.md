@@ -6843,7 +6843,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6851,7 +6851,8 @@ Plus **twenty-six no seat is given**: `list_work_views`, `save_work_view`,
 [`answer_executor`](#answering-a-parked-executor),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
 [`steer_turn`](#steering-a-running-turn),
-[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
+[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge),
+[`atlas_refresh`](#asking-for-a-read-of-an-atlas-source), and
 [the eight chat gestures only a person makes](#the-chat-gestures-only-a-person-makes),
 and, beside the code reads and on their terms,
 [`code_repo_readers`](#get-gitletreposnamereaders), who read a `visibility: unit`
@@ -6881,6 +6882,25 @@ that could steer a colleague's turn would be directing it past the person who
 asked for the work. And who read a unit's code is an audit of the people who
 read it — an admin's, which no other person is answered either: a seat that
 could ask would be a model watching the people it works for.
+
+### Asking for a read of an atlas source
+
+`atlas_refresh` asks that one integration be read for the atlas now rather than
+on its next scheduled read ([Sources](../guides/atlas.md#sources-and-refresh-now)).
+It takes `atlas` and is a person's: an agent is refused it whatever it holds.
+
+| Tool | Arguments |
+|---|---|
+| `atlas_refresh` | `integration`, one the company connects that the atlas reads, as [`atlas_sources`](#the-atlas) lists them |
+
+It answers `source`, `requested_at`, `requested_by` and `changed`: `false` where
+an ask already waited on the source, which it answers with instead of writing
+a second one. The ask is a record in the coordination store, which the node
+holding the collect duty honours on its next tick, within a minute; what the
+read found is the source's standing. A source read less than five minutes ago
+is refused `conflict`, naming the instant it can be asked from, and a name
+that is no source the company connects is refused `not_found`, naming the ones
+that are. It writes no state log, so its answer carries no `position`.
 
 ### Changing the atlas
 
@@ -8066,7 +8086,7 @@ roster is everybody's overview.
 
 ## The atlas
 
-The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through eight questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
+The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through nine questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
 
 | Question | Route | Parameters | Answer |
 |---|---|---|---|
@@ -8077,6 +8097,7 @@ The company's [atlas](../concepts/atlas.md), the map and catalogue of everything
 | `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
 | `atlas_log` | `GET /atlas/log`, `GET /atlas/{id}/log` | `id`, for one entry's lines rather than the company's; `cursor`; `limit` (50 by default, at most 200); `unconfirmed` | `lines`, newest first; `next_cursor`, absent on the last page |
 | `atlas_review` | `GET /atlas/review` | `kind` (`disagreement`, `unconfirmed` or `likely`; every kind by default); `cursor`; `limit` (50 by default, at most 500) | `items`, what waits for a person, computed on the read and stored nowhere: the facts and relations the sources disagree on first (each with its `fact` or `relation`, every other value beside the one shown, and the `target` a relation points at), then the entries only an agent reported, the ones with nothing the engine could check before the ones backed by a call or a file; each item's `entry` summary and `since`, its newest claim; `next_cursor`, absent on the last page; `total` of the asked kind and `counts` of each kind |
+| `atlas_sources` | `GET /atlas/sources` | none | `sources`, one per integration the atlas reads that the company connects, in the order of their names: its `kind`; its `state` (`never`, `read`, `partial` where the read finished and was refused some part, or `failed`); `last_attempt_at` and `last_complete_at`; the last whole read's `entries`, `calls` and `withheld` (values left out for their shape, counted and never sent); what the last attempt wrote (`recorded`, `retired`, `purged`); `missing`, the entries complete reads have stopped seeing and not retired yet; `unread`, each part it was refused with its `detail` and, for a server's part, its `scope`, and `unread_overflow`, how many more there were; `scopes`, for the servers each server's `id`, its `last_read_at` (its last whole read) and `unread`; `next_read_at`, absent where it is due now; `refresh_requested_at` and `refresh_requested_by` while an ask waits on it; `refreshable_at`, the first instant an ask is honoured, absent where that is now; and `last_error`, the fault of a failed read, sent to an administrator alone. Beside them `refresh_interval_seconds` and `refresh_floor_seconds`. It carries none of the read members below: it reads the coordination store, never the atlas |
 | `atlas_activity` | `GET /atlas/activity` | `unconfirmed` | `from`, the first instant of the window; `days`, the company's lines on each of its 14 UTC days, oldest first and today last; `entries`, one per entry the log holds a line of: its `id`, its own `days` (absent where it took none in the window) and `last`, its newest line however old |
 
 The filters are `q` (part of a name or a key, or an entry's id), `kind`, `lane`, `vendor`, `confidence` (`confirmed`, `likely` or `unconfirmed`), `health` (`alerting`, `needs_look` or `quiet`), `show` (`current`, every entry but the retired, by default; `retired`; `all`) and `unconfirmed` (`true` to take in the entries only an agent reported with nothing the engine could check; they are left out by default until a person confirms them, and `confidence=unconfirmed` takes them in too). The `words` facet counts the unconfirmed entries either way, so a screen can say what showing them adds. A value outside its set is refused with `bad_params`, naming the parameter and the values it takes; an `id` no entry answers to is `not_found`. An entry merged into another by an exact key is found by its own id too.

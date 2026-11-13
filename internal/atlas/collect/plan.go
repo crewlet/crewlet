@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -63,7 +64,16 @@ type Status struct {
 	// Unread is every part of the vendor the last complete read was refused,
 	// with what to grant: the entries of such a part are as an earlier read
 	// left them.
-	Unread []Finding `json:"unread,omitempty"`
+	// UnreadOverflow is how many more parts were refused than [MaxUnread]
+	// findings name.
+	Unread         []Finding `json:"unread,omitempty"`
+	UnreadOverflow int       `json:"unread_overflow,omitempty"`
+
+	// Scopes is every part of the world the last complete read visited that
+	// keeps a standing of its own, as each server of the SSH source does:
+	// when it was last read whole, and how many of its parts the last
+	// complete read was refused.
+	Scopes []Scope `json:"scopes,omitempty"`
 
 	// Missing is every entry the voice holds that complete reads have
 	// stopped seeing, grouped by the instant of the first read that missed
@@ -74,10 +84,29 @@ type Status struct {
 }
 
 // Finding is one part of a vendor a source may not read, and what to grant.
+// Scope names the scope the part belongs to ([Scope]), where it has one.
 type Finding struct {
 	Part   string `json:"part"`
+	Scope  string `json:"scope,omitempty"`
 	Detail string `json:"detail,omitempty"`
 }
+
+// Scope is one part of a source's world with a standing of its own: one
+// server of the SSH source.
+type Scope struct {
+	ID string `json:"id"`
+
+	// LastReadAt is the last complete read that read every part of the
+	// scope, zero where none has yet; Unread how many of its parts the last
+	// complete read was refused.
+	LastReadAt time.Time `json:"last_read_at,omitzero"`
+	Unread     int       `json:"unread,omitempty"`
+}
+
+// MaxScopes bounds the scopes a standing carries. A standing is one
+// coordination record: 2,048 scopes with a 64-byte id each encode to about
+// 250 KiB, and a company declares its servers by hand, far below that.
+const MaxScopes = 2048
 
 // MaxUnread bounds the findings a standing carries, and MaxFindingLength the
 // text of each: a source reads a handful of listings, and the standing is one
@@ -99,19 +128,65 @@ type Missing struct {
 // smallest cadence a company may choose.
 const RetryAfter = 5 * time.Minute
 
-// Due reports whether the source is due a read at now, given the company's
-// refresh interval: never read, read a whole interval ago, or read less than
-// whole [RetryAfter] ago. Judged against the interval in force rather than
-// one recorded, so a shortened interval applies at once.
-func (s Status) Due(now time.Time, interval time.Duration) bool {
+// RefreshFloor is the least time between two reads of one source a person
+// can ask for: the floor of the refresh interval, so "Refresh now" reads a
+// vendor no more often than the smallest cadence a company may set.
+const RefreshFloor = config.MinAtlasRefreshInterval
+
+// Request is a person's ask that a source be read now, waiting for the duty.
+type Request struct {
+	RequestedAt time.Time `json:"requested_at"`
+	// By is the handle or login of whoever asked.
+	By string `json:"by,omitempty"`
+}
+
+// MaxRequestByLength bounds who a request names: one handle or login.
+const MaxRequestByLength = 128
+
+// Waits reports whether the request asks for a read the standing has not
+// made yet: one made at or after the ask has answered it.
+func (r Request) Waits(s Status) bool {
+	return !r.RequestedAt.IsZero() && r.RequestedAt.After(s.LastAttemptAt)
+}
+
+// RefreshableAt is the first instant a person's ask for a read is honoured:
+// [RefreshFloor] after the last attempt, and at once for a source never read.
+func (s Status) RefreshableAt() time.Time {
 	if s.LastAttemptAt.IsZero() {
-		return true
+		return time.Time{}
+	}
+	return s.LastAttemptAt.Add(RefreshFloor)
+}
+
+// NextReadAt is when the source is next read on its own, given the company's
+// refresh interval; zero for a source never read, which is due now.
+func (s Status) NextReadAt(interval time.Duration) time.Time {
+	if s.LastAttemptAt.IsZero() {
+		return time.Time{}
 	}
 	wait := interval
 	if !s.Completed {
 		wait = min(interval, RetryAfter)
 	}
-	return !now.Before(s.LastAttemptAt.Add(wait))
+	return s.LastAttemptAt.Add(wait)
+}
+
+// Due reports whether the source is due a read at now, given the company's
+// refresh interval: never read, read a whole interval ago, or read less than
+// whole [RetryAfter] ago. Judged against the interval in force rather than
+// one recorded, so a shortened interval applies at once.
+func (s Status) Due(now time.Time, interval time.Duration) bool {
+	return !now.Before(s.NextReadAt(interval))
+}
+
+// DueFor reports whether the source is due a read at now: on its own
+// cadence ([Status.Due]), or because a person asked ([Request]) and
+// [RefreshFloor] has passed since the last attempt.
+func (s Status) DueFor(now time.Time, interval time.Duration, asked Request) bool {
+	if s.Due(now, interval) {
+		return true
+	}
+	return asked.Waits(s) && !now.Before(s.RefreshableAt())
 }
 
 // missedSince is each missed entry's first-missed instant.
@@ -223,7 +298,8 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	status.Missing, status.MissingOverflow = groupMissed(missing), overflow
 	status.Entries, status.Calls, status.Withheld = len(seen), read.Calls, len(read.Withheld)
 	status.Digest = digest(read.Claims)
-	status.Unread = findings(read.Unread)
+	status.Unread, status.UnreadOverflow = findings(read.Unread)
+	status.Scopes = scopes(status.Scopes, read, now)
 	status.Recorded, status.Retired = len(records), retired
 	return Plan{Records: records, Status: status}
 }
@@ -296,19 +372,57 @@ func carry(held, seen map[atlas.Ref]map[string]atlas.Claim, unread []Unread) map
 }
 
 // findings is the refused parts as a standing keeps them: bounded, in a fixed
-// order, each part once.
-func findings(unread []Unread) []Finding {
+// order, each part once, and how many more there were than it keeps.
+func findings(unread []Unread) ([]Finding, int) {
 	var out []Finding
 	for _, u := range unread {
 		if slices.ContainsFunc(out, func(f Finding) bool { return f.Part == u.Part }) {
 			continue
 		}
 		out = append(out, Finding{Part: textcut.Within(u.Part, MaxFindingLength),
+			Scope:  textcut.Within(u.Scope, MaxFindingLength),
 			Detail: textcut.Within(u.Detail, MaxFindingLength)})
 	}
 	slices.SortFunc(out, func(a, b Finding) int { return cmp.Compare(a.Part, b.Part) })
 	if len(out) > MaxUnread {
-		out = out[:MaxUnread]
+		return out[:MaxUnread], len(out) - MaxUnread
+	}
+	return out, 0
+}
+
+// scopes is each scope the read visited, in the order of their ids: read
+// whole at now where the read was refused none of its parts, and otherwise
+// as last read whole, with how many parts were refused. A scope the read no
+// longer visits has no standing. Counted from the read rather than from the
+// findings, which are bounded.
+func scopes(prior []Scope, read Read, now time.Time) []Scope {
+	last := map[string]time.Time{}
+	for _, s := range prior {
+		last[s.ID] = s.LastReadAt
+	}
+	refused := map[string]map[string]bool{}
+	for _, u := range read.Unread {
+		if u.Scope == "" {
+			continue
+		}
+		if refused[u.Scope] == nil {
+			refused[u.Scope] = map[string]bool{}
+		}
+		refused[u.Scope][u.Part] = true
+	}
+	ids := slices.Clone(read.Scopes)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	if len(ids) > MaxScopes {
+		ids = ids[:MaxScopes]
+	}
+	var out []Scope
+	for _, id := range ids {
+		s := Scope{ID: id, LastReadAt: last[id], Unread: len(refused[id])}
+		if s.Unread == 0 {
+			s.LastReadAt = now
+		}
+		out = append(out, s)
 	}
 	return out
 }

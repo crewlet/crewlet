@@ -293,6 +293,8 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		// AND ITS WRITES, over the same log and the chart an owner is named
 		// from.
 		AtlasWrite: builtin.AtlasWriteDeps{Log: ledger, Actor: builtin.PrincipalActor, Org: orgOf},
+		// AND THE ASK THAT ONE OF ITS SOURCES BE READ NOW.
+		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
 		// THE CODE TOOLS, over the seams the seat's registry is built with —
 		// Gitlet, its writes, and the requester ceiling's halves —
 		// read as the request's principal as the surface reads them.

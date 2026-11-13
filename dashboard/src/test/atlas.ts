@@ -25,6 +25,8 @@ import type {
   AtlasRead,
   AtlasReviewAnswer,
   AtlasReviewItem,
+  AtlasSourceStanding,
+  AtlasSourcesAnswer,
   AtlasRelation,
   AtlasSummary,
   AtlasTraceAnswer,
@@ -729,4 +731,82 @@ export function waitingItems(company: GrownCompany): AtlasReviewItem[] {
     },
     { id: `${guess.id}/unconfirmed`, kind: "unconfirmed", entry: guess, since: SEEN },
   ];
+}
+
+/** One source's standing, read whole ten minutes before [SEEN] unless `over` says otherwise. */
+export function sourceStanding(
+  kind: string,
+  over: Partial<AtlasSourceStanding> = {},
+): AtlasSourceStanding {
+  return {
+    kind,
+    state: "read",
+    last_attempt_at: "2026-11-11T08:50:00Z",
+    last_complete_at: "2026-11-11T08:50:00Z",
+    entries: 12,
+    calls: 5,
+    withheld: 0,
+    recorded: 0,
+    retired: 0,
+    purged: 0,
+    missing: 0,
+    unread: [],
+    unread_overflow: 0,
+    scopes: [],
+    next_read_at: "2026-11-11T09:50:00Z",
+    ...over,
+  };
+}
+
+/**
+ * The sources of a company that connects four: Cloudflare read whole with two
+ * values withheld, Datadog refused one listing, GitHub's last read failed,
+ * and two servers, one of them unreachable.
+ */
+export function sourcesAnswer(over: Partial<AtlasSourcesAnswer> = {}): AtlasSourcesAnswer {
+  return {
+    sources: [
+      sourceStanding("cloudflare", { entries: 48, calls: 9, withheld: 2, recorded: 3, retired: 1 }),
+      sourceStanding("datadog", {
+        state: "partial",
+        entries: 14,
+        calls: 6,
+        missing: 2,
+        unread: [
+          {
+            part: "monitors",
+            detail: "Grant the application key the monitors_read scope, so the monitors are read.",
+          },
+        ],
+      }),
+      sourceStanding("github", {
+        state: "failed",
+        last_attempt_at: "2026-11-11T08:58:00Z",
+        last_complete_at: "2026-11-11T07:50:00Z",
+        next_read_at: "2026-11-11T09:03:00Z",
+        refreshable_at: "2026-11-11T09:03:00Z",
+      }),
+      sourceStanding("ssh", {
+        state: "partial",
+        entries: 5,
+        calls: 4,
+        unread: [
+          {
+            part: "web-2 ports",
+            scope: "web-2",
+            detail:
+              "The engine could not reach the server. Let the engine's address through its firewall.",
+          },
+        ],
+        unread_overflow: 1,
+        scopes: [
+          { id: "web-1", last_read_at: "2026-11-11T08:50:00Z" },
+          { id: "web-2", last_read_at: "2026-11-10T08:50:00Z", unread: 2 },
+        ],
+      }),
+    ],
+    refresh_interval_seconds: 3600,
+    refresh_floor_seconds: 300,
+    ...over,
+  };
 }

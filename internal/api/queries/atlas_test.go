@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
@@ -189,7 +190,8 @@ func atlasSourcesWith(code queries.CodeSource, log *atlasLog) queries.Sources {
 				return builtin.AtlasSettings{Company: atlasCompany(), Revision: "r9",
 					Deployment: derive.Deployment{APIAddress: "https://crewlet.acme.example"}}, true
 			},
-			Log: func(context.Context) (builtin.AtlasLogReads, bool) { return log, log != nil },
+			Log:     func(context.Context) (builtin.AtlasLogReads, bool) { return log, log != nil },
+			Sources: atlasDesk{},
 			Records: func(context.Context) gather.Sources {
 				var recorded gather.Log
 				if log != nil {
@@ -204,6 +206,70 @@ func atlasSourcesWith(code queries.CodeSource, log *atlasLog) queries.Sources {
 				}
 			},
 		},
+	}
+}
+
+// atlasDesk is acme's sources as the coordination store holds them: its
+// servers read with one part refused, Cloudflare read whole and asked for
+// again, Datadog's last read failed, and GitHub never read.
+type atlasDesk struct{}
+
+func (atlasDesk) AtlasSourceReport(_ context.Context, now time.Time) (collect.Report, bool, error) {
+	read := now.Add(-10 * time.Minute)
+	standings := map[integration.Kind]collect.Status{
+		integration.KindCloudflare: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 12,
+			Calls: 5, Withheld: 2, Recorded: 1, Retired: 1, Purged: 1,
+			Missing: []collect.Missing{{Since: read, Entries: []string{"a"}}}},
+		integration.KindDatadog: {LastAttemptAt: now.Add(-time.Minute), LastCompleteAt: read,
+			LastError: "datadog: 503 from the vendor"},
+		integration.KindSSH: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 3, Calls: 4,
+			Unread:         []collect.Finding{{Part: "web-2 ports", Scope: "web-2", Detail: "The engine could not reach the server."}},
+			UnreadOverflow: 1,
+			Scopes:         []collect.Scope{{ID: "web-1", LastReadAt: read}, {ID: "web-2", Unread: 1}}},
+	}
+	asked := map[integration.Kind]collect.Request{integration.KindCloudflare: {RequestedAt: now.Add(-time.Minute), By: "ada"}}
+	return collect.Describe([]integration.Kind{integration.KindCloudflare, integration.KindDatadog,
+		integration.KindGitHub, integration.KindSSH}, standings, asked, time.Hour, now), true, nil
+}
+
+func (atlasDesk) AskAtlasRefresh(context.Context, integration.Kind, collect.Request) error {
+	return nil
+}
+
+// A FAULT'S OWN TEXT IS AN ADMINISTRATOR'S: every holder is told a source's
+// last read failed, and only an administrator is sent why, as on every other
+// screen an integration's fault is shown.
+//
+// Mutation: send the report as it was read, and a member is sent the vendor's
+// error.
+func TestASourcesFaultIsSentToAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+	s := atlasSources(atlasCode())
+	failed := func(ctx context.Context) map[string]any {
+		for _, row := range listOf(t, askAtlas(ctx, t, s, "atlas_sources", nil)["sources"]) {
+			if row["kind"] == "datadog" {
+				return row
+			}
+		}
+		t.Fatal("the answer names no datadog source")
+		return nil
+	}
+	member := failed(asAtlasReader(t))
+	if member["state"] != "failed" {
+		t.Errorf("a member is not told the read failed: %v", member)
+	}
+	if _, sent := member["last_error"]; sent {
+		t.Errorf("a member was sent the fault's text: %v", member["last_error"])
+	}
+	if admin := failed(asAtlasReader(t, iam.GrantAdmin)); admin["last_error"] != "datadog: 503 from the vendor" {
+		t.Errorf("an administrator was sent %v, want the fault", admin["last_error"])
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	outsider := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "eve", Kind: iam.KindPerson,
+		Seat: "eve", Stage: iam.StageActive})
+	if _, err := r.Answer(outsider, "atlas_sources", nil); err == nil {
+		t.Error("somebody without the atlas read its sources")
 	}
 }
 
@@ -406,6 +472,8 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 	trace := askAtlas(ctx, t, s, "atlas_trace", map[string]any{"id": entryID(atlas.KindDomain, "acme.example")})
 	facets := askAtlas(ctx, t, s, "atlas_facets", nil)
 	review := askAtlas(ctx, t, s, "atlas_review", nil)
+	sources := askAtlas(ctx, t, s, "atlas_sources", nil)
+	standings := listOf(t, sources["sources"])
 	answers := []map[string]any{entries, mp, cf, trace, facets, log, activity, review}
 	lines := append(listOf(t, log["lines"]), pluck2(t, listOf(t, activity["entries"]), "last")...)
 
@@ -465,6 +533,10 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"AtlasActivityAnswer": {activity},
 		"AtlasReviewItem":     items,
 		"AtlasReviewAnswer":   {review, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", map[string]any{"limit": 1})},
+		"AtlasSourceFinding":  pluck(standings, "unread"),
+		"AtlasSourceScope":    pluck(standings, "scopes"),
+		"AtlasSourceStanding": standings,
+		"AtlasSourcesAnswer":  {sources},
 	} {
 		holdShape(t, iface, rows, iface == "AtlasRead")
 	}
@@ -707,6 +779,7 @@ func TestTheDashboardNamesEveryAtlasWord(t *testing.T) {
 		"AtlasFamily":         strs(atlas.Families),
 		"AtlasChange":         strs(atlas.Changes),
 		"AtlasReviewKind":     strs(atlas.ReviewKinds),
+		"AtlasSourceState":    strs(collect.States),
 	} {
 		declared, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {

@@ -420,6 +420,15 @@
   min-width: 0;
 }
 
+/* SOURCES: one card a source, and inside a card its readings a step apart. */
+.atlas-sources,
+.atlas-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
 /* CHANGES: the days as one strip, no wider than its bars read well at. */
 .atlas-days {
   max-inline-size: 40rem;

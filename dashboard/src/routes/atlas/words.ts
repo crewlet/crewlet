@@ -165,6 +165,12 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   other: { name: "Other" },
 };
 
+/** What a source of the atlas is called: its vendor's name, and the servers by what they are. */
+export function sourceName(kind: string): string {
+  if (kind === "ssh") return "Servers";
+  return (VENDORS as Readonly<Record<string, { name: string }>>)[kind]?.name ?? kind;
+}
+
 /** The three words a confidence reads as. */
 export const WORDS: Readonly<Record<AtlasWord, string>> = {
   confirmed: "Confirmed",
