@@ -1902,6 +1902,74 @@ func TestAReplySaysWhetherItsHarnessWroteItForAFailedRequest(t *testing.T) {
 	}
 }
 
+// ctReplacement is a content-replacement record of entries, each a JSON value,
+// in ctSession's thread of agent, "" for the main thread, whose record names
+// none. No run reached one, which waits on a flag only Anthropic's servers
+// set: its keys and their order are read from 2.1.310's and 2.1.322's code.
+func ctReplacement(agent string, entries ...string) string {
+	named := ""
+	if agent != "" {
+		named = `"agentId":"` + agent + `",`
+	}
+	return `{"type":"content-replacement","sessionId":"` + ctSession + `",` + named + `"replacements":[` +
+		strings.Join(entries, ",") + `]}`
+}
+
+// ctReplaced is the entry of a content-replacement record that replaces call
+// id's result, its preview abridged.
+func ctReplaced(id string) string {
+	return `{"kind":"tool-result","toolUseId":"` + id + `","replacement":"<persisted-output>\nOutput too large ` +
+		`(212.4KB). Full output saved to: /tmp/box/tool-results/` + id + `.txt\n</persisted-output>"}`
+}
+
+// A CONTENT-REPLACEMENT RECORD NAMES THE RESULTS IT REPLACED: ReplacedResults
+// hands the id of each entry of a content-replacement record whose kind is
+// "tool-result", in order, the main thread's record and a subagent's alike;
+// passes over an entry of another kind, as the harness's resume does; reads
+// nothing off a record of another type, though it lists replacements; and is
+// an error where the record lists them in no shape the harness writes: no
+// list, an object in its place, an entry that is no object, a kind that is no
+// string, and a tool's result named by no string.
+//
+// Mutation: read the ids off every record that lists replacements, or take
+// every entry for a tool's result whatever its kind, and a record that
+// replaces no result names a call.
+func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
+	t.Parallel()
+	other := `{"kind":"image","toolUseId":"` + ctCall + `","replacement":"x"}`
+	listed := ctReplacement("", ctReplaced(ctCall))
+	for name, tc := range map[string]struct {
+		record string
+		ids    []string
+	}{
+		"the main thread's":   {ctReplacement("", ctReplaced(ctCall), ctReplaced(ctMCPCall)), []string{ctCall, ctMCPCall}},
+		"a subagent's":        {ctReplacement(ctAgent, ctReplaced(ctCall)), []string{ctCall}},
+		"one of another kind": {ctReplacement("", other, ctReplaced(ctMCPCall)), []string{ctMCPCall}},
+		"one of no entries":   {ctReplacement(""), nil},
+		"a result listing replacements": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"replacements":[`+ctReplaced(ctCall)+`],"type":"user"`), nil},
+	} {
+		var got []string
+		err := ctLine(t, tc.record).ReplacedResults(func(id string) { got = append(got, id) })
+		if err != nil || !slices.Equal(got, tc.ids) {
+			t.Errorf("%s names the results %q, %v; want %q", name, strings.Join(got, ","), err,
+				strings.Join(tc.ids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"no list":                    `{"type":"content-replacement","sessionId":"` + ctSession + `"}`,
+		"an object for its list":     strings.Replace(listed, `"replacements":[`, `"replacements":{"x":[`, 1) + "}",
+		"an entry that is no object": ctReplacement("", `"x"`),
+		"a kind that is no string":   ctReplacement("", `{"kind":1,"toolUseId":"`+ctCall+`"}`),
+		"a result naming no call":    ctReplacement("", `{"kind":"tool-result","replacement":"x"}`),
+		"a call named by null":       ctReplacement("", `{"kind":"tool-result","toolUseId":null}`),
+	} {
+		if err := ctLine(t, record).ReplacedResults(func(string) {}); err == nil {
+			t.Errorf("a record of %s replaces results with no error; want one", name)
+		}
+	}
+}
+
 // ctUsage is the usage ctAssistant's message carries, as written.
 const ctUsage = `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
 	`"output_tokens":20}`

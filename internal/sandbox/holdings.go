@@ -165,7 +165,8 @@ type CallRecords struct {
 	Results int
 
 	// Of its one result, where Results is 1: Live, whether its session hands
-	// it to its model when the session is continued; Failed, its is_error,
+	// it to its model whole when the session is continued, which a result its
+	// harness hands its model replaced by a preview is not; Failed, its is_error,
 	// absent read as false; TextBytes, its text's length, -1 where its
 	// content is neither a string nor one text block; and Opening, the
 	// SHA-256 of its text's first min([HoldingsOpeningBytes], TextBytes)

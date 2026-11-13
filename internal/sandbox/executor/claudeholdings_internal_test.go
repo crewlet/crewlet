@@ -448,6 +448,72 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 	}
 }
 
+// A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model
+// a preview in a result's place, it records the replacement beside the
+// result's own record, which keeps the whole output, and a resume hands its
+// model the preview again, so a call whose result such a record names is
+// told, whatever its result's own record holds and wherever the record lies;
+// a record replacing another call's result, or naming the call in an entry of
+// another kind, leaves it held. In a subagent's thread its own record tells
+// its call the same way, the subagent still reported. A record listing its
+// replacements in no shape Claude Code writes is no reading in the main
+// thread, and leaves a subagent's thread not whole.
+//
+// Mutation: pass every content-replacement record over, or keep a replaced
+// result live, and the replaced call is held; or read past a record of no
+// shape, and the main thread's reading stands.
+func TestAResultItsHarnessReplacedIsNotLive(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_replaced", "replaced done"
+	call := hsLogged(id, out)
+	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
+	after := func(record string) []string { return append(slices.Clone(pair), record) }
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		"no record replaces it":           {pair, true},
+		"a record replaces it, after it":  {after(ctReplacement("", ctReplaced(id))), false},
+		"a record replaces it, before it": {append([]string{ctReplacement("", ctReplaced(id))}, pair...), false},
+		"a record replaces another call":  {after(ctReplacement("", ctReplaced("toolu_other"))), true},
+		"a record names it in an entry of another kind": {after(ctReplacement("",
+			`{"kind":"image","toolUseId":"`+id+`","replacement":"x"}`)), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			records := got.Calls[id]
+			if held, _ := got.Holds(call); held != tc.held || records.Results != 1 || records.Live != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want held %t, its one result live %t", held, records,
+					tc.held, tc.held)
+			}
+		})
+	}
+	t.Run("a record in no shape Claude Code writes", func(t *testing.T) {
+		t.Parallel()
+		got, err := hsRead(t, hsArchive(t, hsThread(after(ctReplacement("", `"x"`))...)), ctSession, hsAsk(call))
+		hsNoReading(t, got, err)
+	})
+	t.Run("a subagent's record replaces its call", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.thread = append(s.thread, ctReplacement(ctAgent, ctReplaced(hsSubCall)))
+		got := hsSubagentRead(t, s)
+		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
+			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+		}
+	})
+	t.Run("a subagent's record in no shape Claude Code writes", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.thread = append(s.thread, ctReplacement(ctAgent, `"x"`))
+		hsReports(t, s, hsNotWhole)
+	})
+}
+
 // PARALLEL RESULTS AFTER THE LAST RESTART ARE LIVE, off the chain or on it.
 // Measured (probe T, 2.1.310 and 2.1.322): parallel calls leave a tree, the
 // thread's last record descending from the last result, so the first result

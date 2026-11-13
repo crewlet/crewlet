@@ -458,7 +458,7 @@ type threadLine struct {
 	// Head is what every reader needs of the line.
 	Head threadHead
 
-	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError json.RawMessage
+	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError, replacements json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -480,6 +480,7 @@ type threadWire struct {
 	ToolUseID     json.RawMessage `json:"toolUseID"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	APIError      json.RawMessage `json:"isApiErrorMessage"`
+	Replacements  json.RawMessage `json:"replacements"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -506,7 +507,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	return threadLine{
 		N: n, Raw: raw, Head: head,
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
+		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError, replacements: w.Replacements,
 	}, nil
 }
 
@@ -662,7 +663,8 @@ func wireDecode(raw []byte, v any) error {
 // anything refused the first. Its readers: a message's content
 // ([threadLine.Message]), a reply's applied context edits
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
-// ([threadLine.Usage]), the lists a run's event stream and a person's
+// ([threadLine.Usage]), the results a content-replacement record replaces
+// ([threadLine.ReplacedResults]), the lists a run's event stream and a person's
 // transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
 // tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
 // a run's result's errors, [claudeResult.errorsSaid]), and a call's result
@@ -940,6 +942,13 @@ const (
 	recordAssistant  = "assistant"
 	recordAttachment = "attachment"
 	recordSystem     = "system"
+
+	// recordContentReplacement is the record of the results a reply's calls
+	// returned that the harness hands its model replaced
+	// ([threadLine.ReplacedResults]), and replacementToolResult the kind of
+	// its entry that replaces a tool's result.
+	recordContentReplacement = "content-replacement"
+	replacementToolResult    = "tool-result"
 
 	// subtypeCompactBoundary is a compaction's boundary ([threadRestarts]).
 	subtypeCompactBoundary = "compact_boundary"
@@ -1413,6 +1422,66 @@ func (l threadLine) APIError() (bool, error) {
 		return false, nil
 	}
 	return wireBool("isApiErrorMessage", l.apiError)
+}
+
+// ReplacedResults hands each, in order, the id of every tool result a
+// content-replacement record says its harness hands its model replaced: each
+// entry of the record's `replacements` whose `kind` is "tool-result", by its
+// `toolUseId`. Nothing, and no error, on every record of another type.
+//
+// WHAT THE RECORD SAYS. Behind a flag Anthropic's servers set
+// (tengu_hawthorn_steeple), Claude Code holds the tool results a reply's
+// calls returned to a budget of characters (200,000), and past it saves the
+// largest to a file and hands its model a preview in each one's place. The
+// result's own record keeps the whole output; the replacement is recorded
+// beside it as this record, in the thread whose result it replaces (no
+// `agentId` in the main thread's file, the subagent's in a subagent's), as
+// 2.1.310 and 2.1.322 write it, and a resume hands its model the recorded
+// preview again wherever the flag is on. So a result such a record names is
+// one its session's model was not handed whole, whatever its own record
+// holds.
+//
+// ITS READER is the one that tells a relaunch which of its calls a kept
+// session holds (exact telling), which reads every result such a record
+// names as not handed to the continued session's model, whether or not the
+// flag is on there.
+//
+// HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
+// `replacements` a list that is there, walked an element at a time
+// ([eachElement]); each element an object whose `kind` is a string and,
+// where that is "tool-result", whose `toolUseId` is a string. Anything else
+// is this accessor's error, never the line's. An entry of another kind is
+// passed over, as the harness's resume passes it over, and the preview itself
+// is never read.
+//
+// Read off the line's one decode, its raw `replacements`, never a second read
+// of the line.
+func (l threadLine) ReplacedResults(each func(id string)) error {
+	if l.Head.Type != recordContentReplacement {
+		return nil
+	}
+	return eachElement(l.replacements, func(raw json.RawMessage) error {
+		if !wireObject(raw) {
+			return fmt.Errorf("a replacement is %s, not an object", wireKind(raw))
+		}
+		var entry struct {
+			Kind      json.RawMessage `json:"kind"`
+			ToolUseID json.RawMessage `json:"toolUseId"`
+		}
+		if err := wireDecode(raw, &entry); err != nil {
+			return fmt.Errorf("a replacement: %w", err)
+		}
+		kind, err := wireRequiredString("replacements.kind", entry.Kind)
+		if err != nil || kind != replacementToolResult {
+			return err
+		}
+		id, err := wireRequiredString("replacements.toolUseId", entry.ToolUseID)
+		if err != nil {
+			return err
+		}
+		each(id)
+		return nil
+	})
 }
 
 // threadUsage is what a model's reply says of the request it answered

@@ -104,6 +104,16 @@ import (
 // leaves the subagent unreported (rule 2), so its results matter only where
 // none is, and its parallel results need no rule of their own.
 //
+// A RESULT ITS HARNESS REPLACED IS NOT LIVE, in whichever thread: behind a
+// flag Anthropic's servers set, Claude Code hands its model a preview in
+// place of the largest of the results a reply's calls returned past a budget,
+// records the replacement beside the result's own record, which keeps the
+// whole output, and hands it again on resume ([threadLine.ReplacedResults]).
+// So a result such a record names was never handed whole, and its call is
+// told, which is no more than telling again where a continuation's flag is
+// off. A record that replaces in no shape Claude Code writes is no reading in
+// the main thread, and leaves a subagent's thread not whole.
+//
 // RULE 4, THE LOGGED RESULT: a call is held only through its one result, whose
 // is_error is the log's failure and whose text ([resultText]) is as long as the
 // log's output and opens alike ([sandbox.HoldingsOpeningBytes]); a result
@@ -174,7 +184,8 @@ import (
 // is no gzip or no tar, or inflates past its bound; a member is named
 // absolutely or through `..`; a member it reads is held twice; the main thread
 // is no regular file, or is not there; a line of it is past its bound or is no
-// record, or a counted record's message does not decode; a subagent's thread
+// record, a counted record's message does not decode, or a record replaces
+// results in no shape Claude Code writes; a subagent's thread
 // is past its bound, or its metadata past the archive's budget; more
 // subagents than [holdingsMaxAgents], or more legs than [holdingsMaxLegs]; or
 // the stream does not end at io.EOF. The error says which, in words a relaunch
@@ -401,6 +412,10 @@ type callFacts struct {
 	failed       bool
 	textBytes    int
 	opening      [32]byte
+	// replaced is whether a content-replacement record of a thread read
+	// names it: its harness hands its model a preview in its result's place
+	// ([threadLine.ReplacedResults]).
+	replaced bool
 }
 
 // subagentFacts is what a reading gathered of one subagent: its metadata, and
@@ -570,6 +585,10 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		}
 		if w.restarts.See(line.Head) {
 			w.lastRestart = line.N
+		}
+		if err := line.ReplacedResults(w.replaced); err != nil {
+			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread replaces results in no "+
+				"shape Claude Code writes", line.N), cause: err}
 		}
 		if head := line.Head; (head.Type != recordUser && head.Type != recordAssistant) || !head.Chained() ||
 			!head.Main() {
@@ -806,6 +825,10 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 	if head.AgentID != "" && head.AgentID != agent {
 		a.notWhole(fmt.Sprintf("line %d of its thread is another agent's record", line.N), nil)
 	}
+	if err := line.ReplacedResults(w.replaced); err != nil {
+		a.notWhole(fmt.Sprintf("line %d of its thread replaces results in no shape Claude Code writes", line.N),
+			err)
+	}
 	if head.Type != recordUser && head.Type != recordAssistant {
 		return
 	}
@@ -840,6 +863,15 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 	a.open = true
 	a.finished = head.Type == recordAssistant && stopErr == nil && apiErr == nil &&
 		finishedReply(message.Kinds(), stop, apiError)
+}
+
+// replaced files id, a call's whose result a content-replacement record says
+// its harness hands its model replaced ([threadLine.ReplacedResults]), where
+// that call is asked: its result is not live.
+func (w *holdingsWalk) replaced(id string) {
+	if facts := w.calls[id]; facts != nil {
+		facts.replaced = true
+	}
 }
 
 // notWhole says why a's thread is not whole, where nothing has yet.
@@ -1086,8 +1118,9 @@ func (w *holdingsWalk) failed(ctx context.Context, err error) error {
 }
 
 // holdings is what the reading found: every asked call some counted record
-// names, live where its first result is ([holdingsWalk.live]), and every
-// subagent whose thread names one, reported or not (rule 2).
+// names, live where its first result is ([holdingsWalk.live]) and no record
+// replaced it ([callFacts.replaced]), and every subagent whose thread names
+// one, reported or not (rule 2).
 func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 	calls := make(map[string]sandbox.CallRecords, len(w.calls))
 	for id, f := range w.calls {
@@ -1099,7 +1132,7 @@ func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 		if f.threads == 1 {
 			records.Thread = f.thread
 		}
-		records.Live = f.results > 0 && w.live(f.resultThread, f.line)
+		records.Live = f.results > 0 && !f.replaced && w.live(f.resultThread, f.line)
 		calls[id] = records
 	}
 	sends := w.sendsTo()

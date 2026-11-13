@@ -2380,7 +2380,12 @@ chain) starts what a resumed session is handed over, and a result is live by
 FILE ORDER in the main thread, past its last restart: probe T measured every
 continuation hand its model every whole-line result after the last restart,
 verbatim and with its call, the results off the chain that parallel calls leave
-among them. Rule 4: a call is held only through its one counted result, whose
+among them. A result its harness replaced for its model is live in no thread:
+behind a flag Anthropic's servers set, Claude Code hands its model a preview in
+place of the largest results a reply's calls returned past a budget, records
+the replacement beside the result's own record, which keeps the whole output,
+and hands the preview again on resume. Rule 4: a call is held only through its
+one counted result, whose
 `is_error` is the log's failure and whose text is as long as the output the log
 took and opens alike, compared by a SHA-256 of its first 256 bytes, inside the
 672 bytes of its opening the log always keeps (`HoldingsOpeningBytes`), so no
