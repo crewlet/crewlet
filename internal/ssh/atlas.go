@@ -77,6 +77,7 @@ func (s AtlasSource) Collect(ctx context.Context, in collect.Input) (collect.Rea
 		if !ok {
 			continue
 		}
+		b.Scope(h.ID)
 		for _, command := range commands {
 			if err := ctx.Err(); err != nil {
 				return collect.Read{}, err
@@ -94,7 +95,7 @@ func (s AtlasSource) Collect(ctx context.Context, in collect.Input) (collect.Rea
 				detail = part.read(b, where, host, h.ID, res.Stdout)
 			}
 			if detail != "" {
-				b.Unread(collect.Unread{Part: h.ID + " " + part.name, Detail: detail, Holds: part.holds(host, h.ID)})
+				b.Unread(collect.Unread{Part: h.ID + " " + part.name, Scope: h.ID, Detail: detail, Holds: part.holds(host, h.ID)})
 			}
 		}
 	}
