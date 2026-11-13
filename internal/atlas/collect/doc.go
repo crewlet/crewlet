@@ -10,7 +10,8 @@
 // Its fourth reads the company's servers (ADR-0134): on each server that opts
 // in, the ports it listens on and the containers it runs. That one is handed
 // to the worker by the engine rather than registered, since it runs commands
-// through the node's SSH runner.
+// through the node's SSH runner. Its fifth reads GitLab (ADR-0135): every
+// project of the company's group, its pipeline and its environments.
 //
 // # Its own duty, never the reconcile loop
 //
