@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
+	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -66,6 +67,48 @@ type AtlasDeps struct {
 	// per call, Gitlet aside: each caller adds Gitlet as itself. A source this
 	// node does not reach is nil, which the read reports as unread.
 	Records func(ctx context.Context) gather.Sources
+	// Log is the atlas's own log as this node reaches it, read per call, and
+	// false where it reaches no copy. Nil serves no question about the log.
+	Log func(ctx context.Context) (AtlasLogReads, bool)
+}
+
+// AtlasLogReads is the atlas's log read as lines and counted
+// (atlasdomain.Reader, or the estate router's reads of one).
+type AtlasLogReads interface {
+	Log(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error)
+	Activity(ctx context.Context, since time.Time, fresh statelog.Freshness) (atlasdomain.Activity, error)
+}
+
+// atlasLog is the log this node reaches, or [gather.ErrNoSource].
+func (d AtlasDeps) atlasLog(ctx context.Context) (AtlasLogReads, error) {
+	if d.Log != nil {
+		if log, ok := d.Log(ctx); ok {
+			return log, nil
+		}
+	}
+	return nil, fmt.Errorf("the atlas's log: %w", gather.ErrNoSource)
+}
+
+// AtlasLog is one page of the atlas's log as this node reaches it. Whose
+// lines a reader is shown is the caller's to decide, against the atlas it
+// reads for them.
+func (d AtlasDeps) AtlasLog(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error) {
+	log, err := d.atlasLog(ctx)
+	if err != nil {
+		return atlasdomain.LogPage{}, err
+	}
+	return log.Log(ctx, q)
+}
+
+// AtlasActivity is the atlas's log counted since an instant, and each entry's
+// newest record, as this node reaches it.
+func (d AtlasDeps) AtlasActivity(ctx context.Context, since time.Time,
+	fresh statelog.Freshness) (atlasdomain.Activity, error) {
+	log, err := d.atlasLog(ctx)
+	if err != nil {
+		return atlasdomain.Activity{}, err
+	}
+	return log.Activity(ctx, since, fresh)
 }
 
 // AtlasRead is one read of the atlas for one caller: Gitlet read as asker
@@ -172,10 +215,12 @@ func (a atlasRead) attribute(entries []atlas.Entry) {
 }
 
 // AtlasForSeat is v as an agent seat reads it: no signal only administrators
-// read, and a private address only of an entry its own access reaches
-// (ADR-0109). It answers how many private values it left out.
+// read, a private address only of an entry its own access reaches (ADR-0109),
+// and nothing only an agent's unbacked report says ([atlas.Vouched]), so one
+// agent's report never reaches another as a fact (ADR-0132). It answers how
+// many private values it left out.
 func AtlasForSeat(v atlas.View, c *config.Company, seat *org.Role) (atlas.View, int) {
-	return atlas.Within(atlas.For(v, atlas.Reader{}), seatReach(c, seat))
+	return atlas.Within(atlas.Vouched(atlas.For(v, atlas.Reader{})), seatReach(c, seat))
 }
 
 // seatReach is which entries an agent seat's own access reaches: the servers

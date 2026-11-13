@@ -324,12 +324,13 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
-	// pace is the slowest nc may carry a mebibyte either way: the object
-	// store's floor where it crosses a link, none on a member's own
-	// connection ([linkPaceOf]). Decided once, where the connection is made,
-	// and read by every crossing on it, a read's reply and a write's request
-	// alike.
-	pace time.Duration
+	// link is what stands between nc and the streams it reaches: the
+	// slowest it may carry a mebibyte either way, the object store's floor
+	// where it crosses a link and none on a member's own connection, and
+	// whether a leaf's link is part of it ([linkOf]). Decided once, where
+	// the connection is made, and read by every crossing on it, a read's
+	// reply and a write's request alike.
+	link link
 
 	// lost is where this queue's own connection, and every second one
 	// dialled through [Queue.DialWatched], records being closed for good.
@@ -439,7 +440,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
-		pace:        linkPaceOf(embedded),
+		link:        linkOf(embedded),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},

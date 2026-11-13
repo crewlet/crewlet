@@ -104,6 +104,11 @@ var markerCases = []fleetCase{{
 		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
 			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
 		}
+		h.putAtlasCodeScan("repo-a", `{"tip":"1"}`)
+		h.putAtlasCodeScan("repo-b", `{"tip":"1"}`)
+		if err := h.f.DeleteAtlasCodeScan(h.ctx, "repo-a"); err != nil {
+			h.t.Fatalf("DeleteAtlasCodeScan: %v", err)
+		}
 		h.putHold("node-a/backup")
 		h.putHold("node-b/snapshot")
 		if err := h.f.ReleaseHold(h.ctx, "node-a/backup"); err != nil {
@@ -163,6 +168,9 @@ var markerCases = []fleetCase{{
 		}
 		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"datadog"}) {
 			h.t.Errorf("atlas source standings after the sweep = %v, want [datadog]", got)
+		}
+		if got := h.atlasCodeScanRepos(); !slices.Equal(got, []string{"repo-b"}) {
+			h.t.Errorf("atlas code scan standings after the sweep = %v, want [repo-b]", got)
 		}
 		if got := h.holdOwners(); !slices.Equal(got, []string{"node-b/snapshot"}) {
 			h.t.Errorf("trim holds after the sweep = %v, want [node-b/snapshot]", got)

@@ -23,7 +23,9 @@ import (
 // reaches across a link — a leaf and its member's leaf listener, a client and
 // an external server — which carries what the NODE sends at rate bytes a
 // second and what the broker sends back at once: the direction a write's
-// bytes cross is the slow one, and its acknowledgement comes straight back.
+// bytes cross is the slow one, and its acknowledgement comes straight back —
+// unless the case holds the broker's bytes back for a while ([Link.Delay]), as
+// a reply is held on a slow link behind what was sent ahead of it.
 //
 // # It reads what the node sends as fast as it comes
 //
@@ -52,6 +54,9 @@ type Link struct {
 	mu    sync.Mutex
 	shut  bool
 	conns []net.Conn
+	// heldUntil is when what the broker sends stops being held back
+	// ([Link.Delay]); zero for never held.
+	heldUntil time.Time
 }
 
 // Slow listens on a loopback port and carries every connection made to it on
@@ -77,6 +82,25 @@ func Slow(t testing.TB, target string, rate int64) *Link {
 
 // Addr is the host and port the node dials to cross the link.
 func (l *Link) Addr() string { return l.ln.Addr().String() }
+
+// Delay holds back every byte the broker sends towards the node from now until
+// d has passed, and then carries them on at once and in order: what a reply
+// meets on a slow link behind a whole message the broker sent ahead of it —
+// it was sent, and arrives late. What reached the link before Delay was
+// called is carried at once, as before.
+func (l *Link) Delay(d time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.heldUntil = time.Now().Add(d)
+}
+
+// held is how long what the broker sends now is still to be held back
+// ([Link.Delay]).
+func (l *Link) held() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return time.Until(l.heldUntil) //fixedwait:measure the instant a case's Delay ends, which the relay holds bytes to rather than decides by
+}
 
 // accept carries every connection the listener takes, until it is closed,
 // dialling the target for each in ctx.
@@ -137,9 +161,35 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 	})
 	wg.Go(func() {
 		defer closeBoth()
-		_, _ = io.Copy(in, out)
+		l.answer(in, out)
 	})
 	wg.Wait()
+}
+
+// answer carries what the broker sends to the node as it comes, each read held
+// back first for as long as a [Link.Delay] says, until either side ends.
+func (l *Link) answer(node io.Writer, broker io.Reader) {
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := broker.Read(buf)
+		if n > 0 {
+			if wait := l.held(); wait > 0 {
+				late := time.NewTimer(wait) //fixedwait:simulated bytes queued on the link behind others the broker sent first
+				select {
+				case <-late.C:
+				case <-l.done:
+					late.Stop()
+					return
+				}
+			}
+			if _, werr := node.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // close ends the link: no connection is taken or carried after it, and it

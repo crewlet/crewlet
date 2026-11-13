@@ -41,7 +41,7 @@
 
 import { firstLine } from "~/lib/format.ts";
 import { useMemo, useState, type ReactNode } from "react";
-import { CodeBlock, Disclosure, Text } from "@crewlethq/ui";
+import { CodeBlock, Disclosure, Stack, Text } from "@crewlethq/ui";
 import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
@@ -63,6 +63,7 @@ import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
 import { EscalationNote, ReleaseRequestFacts } from "./Delegation.tsx";
 import { delegationEscalated, releaseRequestOf } from "~/lib/delegation.ts";
+import { heldCallNamed, heldCallTitle, type HeldCallSubject } from "~/lib/heldCall.ts";
 import type { DelegatedAct, HeldDelegation } from "~/contract/delegated.ts";
 
 /**
@@ -327,7 +328,12 @@ function DecisionHead({
 
 /**
  * One decision that is not an ask: the seat it is about on the head, then
- * what it is and the buttons that make it, on one row.
+ * what it is and the buttons that make it on one row, and under them, across
+ * the row's whole width, whatever the decision is read from (`detail`).
+ *
+ * THE DETAIL IS A ROW OF ITS OWN, never a third line of the words: held to
+ * the words' column it left the column under the buttons empty for as long
+ * as it ran, and moved the buttons as it opened.
  *
  * THE ROW'S STATE TWICE, in two forms: the glyph on the seat's badge, and the
  * same state as the first words of the line under the title. An ask and a
@@ -342,29 +348,41 @@ function Row({
   title,
   sub,
   line,
-  meta,
+  detail,
+  item,
+  at,
+  now,
   actions,
-  pinned = false,
 }: {
   who: Who;
   status: "needs" | "stopped";
   title: ReactNode;
   sub: ReactNode[];
+  /** One more line of words under the title: how long a box is held. */
   line?: ReactNode;
-  /** What the head says after the name: how long ago. */
-  meta: ReactNode[];
+  /** Blocks under the row, across its whole width: an escalation, the arguments. */
+  detail?: ReactNode;
+  /** The item it is on, said on the head as an asker's questions say theirs. */
+  item: ItemRef | null;
+  /** Since when, said on the head after the item. */
+  at: string | undefined;
+  now: number;
   actions: ReactNode;
-  /**
-   * The controls stand on the title's line rather than centred on the
-   * words, for a row whose words open (a held call's arguments): centred,
-   * the buttons moved under the pointer as the arguments opened.
-   */
-  pinned?: boolean;
 }) {
+  const meta = joined([
+    item ? (
+      <span key="k">
+        on <Key item={item} />
+      </span>
+    ) : (
+      ""
+    ),
+    at ? relTime(at, now) : "",
+  ]);
   return (
     <li className="decision-group">
       <DecisionHead who={who} status={status} meta={meta} />
-      <div className={pinned ? "decision-item is-pinned" : "decision-item"}>
+      <div className="decision-item">
         <div className="decision-text">
           <span className="decision-title">{title}</span>
           <span className="decision-sub">
@@ -376,7 +394,8 @@ function Row({
           </span>
           {line && <span className="decision-line">{line}</span>}
         </div>
-        <div className="decision-actions">{actions}</div>
+        {actions ? <div className="decision-actions">{actions}</div> : null}
+        {detail ? <div className="decision-detail">{detail}</div> : null}
       </div>
     </li>
   );
@@ -552,7 +571,6 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
   const since = run.paused_at || run.updated_at;
   const question = (run.question ?? "").trim();
   const sub = joined([
-    item ? <Key key="k" item={item} /> : "",
     // WHO ASKS BEFORE WHAT, so a long question that takes a line of its own
     // ends the sentence rather than splitting it.
     audienceOf(run, index),
@@ -572,9 +590,11 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
       status="needs"
       title="Executor parked on a question"
       sub={sub}
-      meta={joined([relTime(since, now)])}
+      item={item}
+      at={since}
+      now={now}
       line={holdLine(run, now)}
-      actions={<AnswerRunButton run={run} seat={who.name} />}
+      actions={<AnswerRunButton run={run} seat={who.name} variant="primary" />}
     />
   );
 }
@@ -617,6 +637,8 @@ export interface HeldCall {
   delegation?: HeldDelegation | null;
   /** What approving it does: a merge's or a deploy's arguments are drawn as its request. */
   act?: DelegatedAct;
+  /** The engine's own question for it, where the caller has the run's (`heldCallTitle`). */
+  question?: string | undefined;
 }
 
 /** The decision a held call carries out: the question asked, and the answer given. */
@@ -652,7 +674,22 @@ export function heldCallOf(run: ExecutorRow): HeldCall | null {
     approvers: held.approvers,
     delegation: held.delegation,
     act: held.act,
+    question: run.question,
   };
+}
+
+/**
+ * A held call's title as a heading draws it ([heldCallTitle]): its product
+ * words, or, for a call only its tool names, the tool in the mono face.
+ */
+export function HeldCallTitle({ call }: { call: HeldCallSubject }) {
+  const title = heldCallTitle(call);
+  if (title !== heldCallNamed(call)) return <>{title}</>;
+  return (
+    <>
+      Call <span className="mono">{call.tool}</span> on {call.server}?
+    </>
+  );
 }
 
 /**
@@ -690,34 +727,42 @@ export function HeldCallRow({
   const escalated = delegationEscalated(call);
   // A MERGE OR A DEPLOY READ WHOLE is drawn as its request, each value as text.
   const request = releaseRequestOf(call.act, call.args);
+  const title = heldCallTitle(call);
+  // THE CALL AS IT WAS MADE stays a press away where the title says it in
+  // product words, with what it would send where this reader is shown that.
+  const named = heldCallNamed(call);
+  const raw = title === named ? null : named.replace(/\?$/, "");
   const args =
-    call.args === undefined ? null : (
+    call.args === undefined && raw === null ? null : (
       <Disclosure title="Arguments" size="compact" headingLevel="none" flush>
-        {call.args === null ? (
-          "What it would send could not be opened on this node."
-        ) : request ? (
-          <ReleaseRequestFacts request={request} />
-        ) : (
-          <CodeBlock language="json" code={JSON.stringify(call.args, null, 2)} />
-        )}
+        <Stack gap={2}>
+          {raw ? (
+            <Text as="p" variant="caption" mono>
+              {raw}
+            </Text>
+          ) : null}
+          {call.args === undefined ? null : call.args === null ? (
+            <Text as="p" variant="caption">
+              What it would send could not be opened on this node.
+            </Text>
+          ) : request ? (
+            <ReleaseRequestFacts request={request} />
+          ) : (
+            <CodeBlock language="json" code={JSON.stringify(call.args, null, 2)} />
+          )}
+        </Stack>
       </Disclosure>
     );
   return (
     <Row
       who={who}
       status="needs"
-      pinned
-      title={
-        <>
-          Call <span className="mono">{call.tool}</span> on {call.server}?
-        </>
-      }
-      sub={joined([
-        call.item ? <Key key="k" item={call.item} /> : "",
-        settled ? "" : "its run is parked",
-      ])}
-      meta={joined([relTime(call.at, now)])}
-      line={
+      title={<HeldCallTitle call={call} />}
+      sub={joined([settled ? "" : "its run is parked"])}
+      item={call.item}
+      at={call.at}
+      now={now}
+      detail={
         said || call.extra || args || call.acting || escalated ? (
           <>
             {escalated ? (
@@ -796,19 +841,26 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   const who = seatOf(index, handle);
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
-  const sub = joined([item ? <Key key="k" item={item} /> : "", item ? "stopped mid-turn" : ""]);
+  const sub = joined([item ? "stopped mid-turn" : ""]);
   return (
     <Row
       who={who}
       status="stopped"
       title={`Stopped: ${period ? `${period} ` : ""}token budget exhausted`}
       sub={sub}
-      meta={joined([seat.at ? relTime(seat.at, now) : ""])}
+      item={item}
+      at={seat.at}
+      now={now}
       actions={
         <>
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
               that is refusing this seat, the stopped window focused. */}
-          <RaiseBudgetButton handle={handle} name={who.name} window={seat.window} />
+          <RaiseBudgetButton
+            handle={handle}
+            name={who.name}
+            window={seat.window}
+            variant="primary"
+          />
           {item && <ReassignItem item={itemAddress(item)} />}
         </>
       }

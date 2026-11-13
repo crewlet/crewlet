@@ -1401,7 +1401,13 @@ const (
 	// held in branded state, merged on top of it, to 402.5 KiB (412,161
 	// bytes, -3), 1,535 bytes inside it: the next addition to the entry moves
 	// this budget only with a reason of its own.
-	initialBudget = 404 << 10
+	// Kit 0.123.0 and the one-page Company › Atlas took it to 406.1 KiB
+	// (about +3,690 gzipped): the one sheet +3,376 (the kit's layered service
+	// map, its colour steps per palette and mode, the ring, the disc and the
+	// pointed row, which ride it by rule while the map's code is the atlas
+	// chunk's) and the kit's shared chunks about +310. Every screen's module
+	// of it is lazy. So it moved to 407 KiB, 2.22 seconds.
+	initialBudget = 407 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2310,7 +2316,33 @@ const (
 	// draft to (draft.ts's mints, and every declaring screen, box and store
 	// moved onto them), merged on top of it, took it to 5841.8 KiB
 	// (5,982,024 bytes, +876, all script): 5842 KiB.
-	treeBudget = 5<<20 + 722<<10
+	// A monitor's state and since when, and the three signals a monitor
+	// raises on what it watches, named in the atlas words, took it to 5842.0
+	// KiB (5,982,209 bytes, +185, all script), one byte past it: 5843 KiB.
+	// The one-page Company › Atlas on kit 0.123.0, merged on top of it, took
+	// it to 5895.6 KiB (6,037,106 bytes, +54,642: script about +26,500, of
+	// which the atlas chunk, the band, the catalogue, the neighbourhood
+	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
+	// sheets about +28,100, the kit's layered service map in the one sheet
+	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
+	// Kit 0.124.0 and the decision rows read in product words took it to
+	// 5898.0 KiB (6,039,547 bytes, +2,441: script +1,811, a held call's
+	// title from its own arguments, the one escalation heading and the row's
+	// detail; the sheets +630, the kit's quiet callout and compact finding
+	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
+	// moves this budget with a reason of its own.
+	// Adding, correcting and confirming in the atlas (Add entry, an entry's
+	// actions and their dialogs, History, Changes, Review and its bulk
+	// decision, and the vocabulary's fact and relation tables the dialogs
+	// offer from), merged on top of it, added 48,677 bytes, nearly all of it
+	// the atlas chunk's script. The SSH integration's Servers section (each
+	// server's "Read for Atlas" switch and the dialog that lists the commands
+	// first) and the atlas's workload kind, image and open ports, named in
+	// the atlas words, added 3,572, all script. A repository's files as an
+	// atlas source, with the workload's rows in the tables the dialogs offer
+	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
+	// +52,609): 5950 KiB.
+	treeBudget = 5<<20 + 830<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

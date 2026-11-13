@@ -64,6 +64,29 @@
 // minutes), and then for its own; bounding that needs the write windowed
 // (crewlet/crewlet#1035).
 //
+// # A value is held to what its leader's read carries back
+//
+// Every read of a key is the stream LEADER's message read (kv.go's "Every
+// single-key read is the leader's"), whose reply is JSON with the value
+// base64-encoded inside it, a third larger than the value — and the server on
+// a leaf's side of its link closes the WHOLE link on any message past its
+// max_payload (nats-server v2.15.2, leafnode.go, processLeafMsgArgs →
+// maxPayloadViolation), every lease and mailbox the node holds across it cut
+// off with it (crewlet/crewlet#1031). A value of more than about six
+// mebibytes, which the transport carries whole on its way in, would be one no
+// node without `data` could ever read. So every value a settled bucket writes
+// is held to the coordination store's own bound, [coord.MaxValueBytes] — the
+// largest whose message, with the most header a write carries
+// ([kvHeaderBytes]), that reply carries back (internal/jsapi's MaxReadable)
+// — refused before it is sent ([settledBucket.carriedBack]), on every node
+// alike, since a value a member wrote is one a leaf reads, and as
+// [coord.ErrValueTooLarge]: a definite answer, which no caller may read as an
+// outage. The values that come near it are the ones whose bound is that bound
+// itself — a sandbox run's row and its parts, budgeted field by field to it
+// (internal/sandbox's RowBytes), and the activation pointer, which carries the
+// company's sealed document (internal/api/configapi holds a document to it
+// before storing the revision).
+//
 // THE HANDLE IS WRAPPED ONCE, where a bucket is opened ([Open], [OpenFleet],
 // [OpenEpochs]), rather than at each call site, because how a write is decided
 // and how long it waits are properties of every write to a bucket, and a call
@@ -84,6 +107,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -196,9 +220,24 @@ func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
 	return jsapi.Budget(b.js, jsapi.Sending(len(key)+len(value)+kvHeaderBytes, b.pace))
 }
 
-// Put writes a value whatever the key holds, waiting as long as its bytes
+// carriedBack refuses value for key past what one key holds
+// ([coord.MaxValueBytes]): the largest whose stream leader's read carries it
+// back across a leaf's link — see this file's doc. Only a refusal names the
+// bucket, which a value that fits never asks the handle for.
+func (b settledBucket) carriedBack(key string, value []byte) error {
+	if len(value) <= coord.MaxValueBytes {
+		return nil
+	}
+	return coord.HoldValue(b.Bucket()+"/"+key, len(value))
+}
+
+// Put writes a value whatever the key holds, held to what its leader's read
+// carries back ([settledBucket.carriedBack]), waiting as long as its bytes
 // take to cross ([settledBucket.budget]).
 func (b settledBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	if err := b.carriedBack(key, value); err != nil {
+		return 0, err
+	}
 	send, done := b.budget(key, value).Whole(ctx)
 	defer done()
 	return b.KeyValue.Put(send, key, value)
@@ -210,8 +249,12 @@ func (b settledBucket) PutString(ctx context.Context, key string, value string) 
 	return b.Put(ctx, key, []byte(value))
 }
 
-// Update writes a value only while the key is still at revision, SETTLED.
+// Update writes a value only while the key is still at revision, SETTLED, held
+// to what its leader's read carries back ([settledBucket.carriedBack]).
 func (b settledBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if err := b.carriedBack(key, value); err != nil {
+		return 0, err
+	}
 	var rev uint64
 	err := b.settle(ctx, "update", key, value, func(ctx context.Context) error {
 		var err error

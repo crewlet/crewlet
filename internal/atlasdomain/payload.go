@@ -43,15 +43,34 @@ type Value struct {
 }
 
 // Source is who made a claim. The base format records a person, by the name
-// their record is kept under; another source joins at its own version.
+// their record is kept under; another source joins at its own version: an
+// integration's read at 2, and at 3 an agent, by its seat's handle, with the
+// turn it recorded in and the evidence the engine checked behind it.
 type Source struct {
 	Kind atlas.SourceKind `json:"kind"`
 	Name string           `json:"name"`
+
+	// Turn and Evidence are an agent's alone (ADR-0132): the run that made
+	// the claim, and the class of the call it cited, as the node that ran the
+	// turn derived it. No caller passes a confidence; it is read off these.
+	Turn     string         `json:"turn,omitempty"`
+	Evidence atlas.Evidence `json:"evidence,omitempty"`
+}
+
+// sourceOf is a vocabulary source on the wire.
+func sourceOf(s atlas.Source) Source {
+	return Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence}
+}
+
+// vocabulary is the source in the vocabulary's own type.
+func (s Source) vocabulary() atlas.Source {
+	return atlas.Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence}
 }
 
 // Claim is one claim on one entry: the entry itself, one fact, one relation,
-// or two entries a person joined or kept apart, or a person's denial of any of
-// them. It is what [atlas.Claim] says, in the log's own stable shape.
+// or two entries a person joined or kept apart, a person's denial of any of
+// them, or an agent's dispute of one. It is what [atlas.Claim] says, in the
+// log's own stable shape.
 type Claim struct {
 	V int `json:"v"`
 
@@ -94,7 +113,7 @@ func claimOf(id string, c atlas.Claim) Claim {
 		V: baseRecordVersion, ID: id, Entry: refOf(c.Subject), Slot: c.Slot(),
 		Facet: c.Facet.Kind, Fact: c.Facet.Fact, Relation: c.Facet.Relation,
 		External: c.Facet.Target.External, Name: c.Facet.Target.Name,
-		Denied: c.Denied, Source: Source{Kind: c.Source.Kind, Name: c.Source.Name},
+		Denied: c.Denied, Source: sourceOf(c.Source),
 	}
 	if t := c.Facet.Target.Entry; t != (atlas.Ref{}) {
 		out.Target = &Target{ID: t.ID().String(), Kind: t.Kind, Key: t.Key}
@@ -113,7 +132,7 @@ func (c Claim) vocabulary(observed time.Time, position uint64) atlas.Claim {
 		Facet: atlas.Facet{Kind: c.Facet, Fact: c.Fact, Relation: c.Relation,
 			Target: atlas.Target{External: c.External, Name: c.Name}},
 		Denied:     c.Denied,
-		Source:     atlas.Source{Kind: c.Source.Kind, Name: c.Source.Name},
+		Source:     c.Source.vocabulary(),
 		ObservedAt: observed,
 		Position:   position,
 	}

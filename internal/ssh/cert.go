@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -33,23 +34,27 @@ const (
 	PurposeBoxRead Purpose = "box_read"
 	PurposeOperate Purpose = "operate"
 	PurposeTest    Purpose = "test"
+	// PurposeInventory is the engine's own read of a server that opted in,
+	// for the atlas: one certificate per command, bound to that command.
+	PurposeInventory Purpose = "inventory"
 )
 
 // Valid reports whether p is a purpose this build signs for.
 func (p Purpose) Valid() bool {
-	return slices.Contains([]Purpose{PurposeRead, PurposeBoxRead, PurposeOperate, PurposeTest}, p)
+	return slices.Contains([]Purpose{PurposeRead, PurposeBoxRead, PurposeOperate, PurposeTest, PurposeInventory}, p)
 }
 
 // Validity is how long a certificate of purpose is valid after its signing.
 // Each is as short as its use allows: a read turn engine-side, a box's turn
-// between its renewals, one approved command, one press of Test connection.
+// between its renewals, one approved command, one press of Test connection,
+// one inventory command, which needs its certificate only to sign in.
 func Validity(p Purpose) time.Duration {
 	switch p {
 	case PurposeBoxRead:
 		return 30 * time.Minute
 	case PurposeOperate:
 		return 5 * time.Minute
-	case PurposeTest:
+	case PurposeTest, PurposeInventory:
 		return 2 * time.Minute
 	default:
 		return 15 * time.Minute
@@ -62,6 +67,11 @@ const clockSkew = 60 * time.Second
 
 // Principal is the principal a host's user accepts at level.
 func Principal(hostID, level string) string { return "crewlet." + hostID + "." + level }
+
+// LevelInventory is the principal word of the engine's own inventory: never a
+// level a seat holds, so no agent's certificate carries it, and a server
+// accepts it only once its setup was run with the inventory switched on.
+const LevelInventory = "inventory"
 
 // OperateCommand is the force-command an operate certificate binds: the gate,
 // handed the approved command as standard base64, which the gate decodes and
@@ -79,7 +89,8 @@ type Request struct {
 	Purpose Purpose
 
 	// Seat and Turn name the agent and its turn, HeldCall the approved call
-	// an operate certificate runs; Person and Nonce name a test's press.
+	// an operate certificate runs; Person and Nonce name a test's press, and
+	// Nonce alone one inventory command, which is nobody's.
 	Seat, Turn, HeldCall string
 	Person, Nonce        string
 
@@ -88,8 +99,8 @@ type Request struct {
 	Level string
 
 	// ForceCommand binds the command the server runs; required for an
-	// operate certificate, refused on a read one, whose server forces its
-	// own.
+	// operate certificate and an inventory one, refused on a read one, whose
+	// server forces its own.
 	ForceCommand string
 
 	// SourceAddresses, where set, are the only addresses it is used from.
@@ -111,7 +122,8 @@ type Issued struct {
 }
 
 // CertificateRecord is what the audit keeps of one certificate: never a key.
-// Seat is the agent it was signed for, or the person who pressed a test.
+// Seat is the agent it was signed for, the person who pressed a test, or
+// accessdomain.EngineHolder for the engine's own inventory.
 type CertificateRecord struct {
 	Serial          uint64
 	KeyID           string
@@ -145,13 +157,17 @@ func (r Request) KeyID() (string, error) {
 		if part(r.Person) && part(r.Nonce) {
 			return "crewlet/test/" + r.Person + "/" + r.Nonce, nil
 		}
+	case PurposeInventory:
+		if part(r.Nonce) && r.Seat == "" && r.Person == "" {
+			return KeyIDPrefix(accessdomain.EngineHolder) + "/" + string(PurposeInventory) + "/" + r.Nonce, nil
+		}
 	}
 	return "", fmt.Errorf("%w: a %s certificate names its holder in parts without slashes or spaces", ErrRequest, r.Purpose)
 }
 
 // principals is the request's principals, held to its purpose: read reaches
 // every host it names at read, operate exactly one host at operate, a test one
-// host at either level.
+// host at either level or as the inventory, the inventory one host as itself.
 func (r Request) principals() ([]string, error) {
 	for _, h := range r.Hosts {
 		if !config.SSHHostID(h) {
@@ -170,9 +186,16 @@ func (r Request) principals() ([]string, error) {
 			return nil, fmt.Errorf("%w: an operate certificate reaches exactly one host at operate", ErrRequest)
 		}
 	case r.Purpose == PurposeTest:
-		if len(r.Hosts) != 1 || !slices.Contains(config.SSHLevels(), r.Level) {
+		if len(r.Hosts) != 1 || (r.Level != LevelInventory && !slices.Contains(config.SSHLevels(), r.Level)) {
 			return nil, fmt.Errorf("%w: a test certificate reaches one host at one level", ErrRequest)
 		}
+	case r.Purpose == PurposeInventory:
+		if r.Level != LevelInventory || len(r.Hosts) != 1 {
+			return nil, fmt.Errorf("%w: an inventory certificate reaches exactly one host as the inventory", ErrRequest)
+		}
+	}
+	if r.Level == LevelInventory && r.Purpose != PurposeInventory && r.Purpose != PurposeTest {
+		return nil, fmt.Errorf("%w: only the engine's inventory holds the inventory principal", ErrRequest)
 	}
 	hosts := slices.Clone(r.Hosts)
 	slices.Sort(hosts)
@@ -200,10 +223,18 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 	// AN OPERATE PRINCIPAL ALWAYS CARRIES THE GATE: the operate user has no
 	// server-side forced command, so a certificate reaching it without one
 	// would be a shell, whatever its purpose.
+	// AN INVENTORY PRINCIPAL ALWAYS CARRIES ONE OF THE INVENTORY'S COMMANDS:
+	// the closed set is held here, so no caller can have a certificate
+	// signed for anything else, and the server's gate runs what it names.
 	options := map[string]string{}
 	switch {
 	case strings.ContainsAny(req.ForceCommand, "\r\n\x00"):
 		return Issued{}, fmt.Errorf("%w: a force-command is one line", ErrRequest)
+	case req.Level == LevelInventory && !slices.Contains(config.SSHInventoryCommands(), req.ForceCommand):
+		return Issued{}, fmt.Errorf("%w: an inventory certificate binds one of the inventory's own commands",
+			ErrRequest)
+	case req.Level == LevelInventory:
+		options["force-command"] = req.ForceCommand
 	case req.Level == config.SSHLevelOperate && req.Purpose == PurposeTest && req.ForceCommand != GateVersionCommand:
 		return Issued{}, fmt.Errorf("%w: a test certificate at operate binds only the gate's version", ErrRequest)
 	case req.Level == config.SSHLevelOperate && req.Purpose != PurposeTest && !operateBinding(req.ForceCommand):
@@ -248,9 +279,13 @@ func Sign(ca *setup.SSHCertificateAuthority, req Request) (Issued, error) {
 		return Issued{}, err
 	}
 	holder := req.Seat
-	if req.Purpose == PurposeTest {
+	switch req.Purpose {
+	case PurposeTest:
 		// A TEST IS A PERSON'S PRESS, recorded under the seat they hold.
 		holder = req.Person
+	case PurposeInventory:
+		// THE INVENTORY IS THE ENGINE'S OWN, recorded under no seat.
+		holder = accessdomain.EngineHolder
 	}
 	return Issued{Certificate: cert, Signer: certSigner, Record: CertificateRecord{
 		Serial: serial, KeyID: keyID, Seat: holder, Turn: req.Turn, HeldCall: req.HeldCall,

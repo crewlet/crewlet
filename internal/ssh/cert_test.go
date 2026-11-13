@@ -64,6 +64,14 @@ func TestACertificateCarriesTheLockedFields(t *testing.T) {
 			Hosts: []string{"api-1"}, Level: config.SSHLevelOperate, ForceCommand: sshint.GateVersionCommand, Now: now},
 			"crewlet/test/ops-lead/0011aabb", []string{"crewlet.api-1.operate"}, 2 * time.Minute,
 			map[string]string{"force-command": "/usr/local/sbin/crewlet-gate version"}},
+		{"inventory", sshint.Request{Purpose: sshint.PurposeInventory, Nonce: "0011aabb",
+			Hosts: []string{"api-1"}, Level: sshint.LevelInventory, ForceCommand: config.SSHInventoryPorts, Now: now},
+			"crewlet/_engine/inventory/0011aabb", []string{"crewlet.api-1.inventory"}, 2 * time.Minute,
+			map[string]string{"force-command": "/usr/bin/ss -tln"}},
+		{"test of the inventory", sshint.Request{Purpose: sshint.PurposeTest, Person: "ops-lead", Nonce: "0011aabb",
+			Hosts: []string{"api-1"}, Level: sshint.LevelInventory, ForceCommand: config.SSHInventoryPorts, Now: now},
+			"crewlet/test/ops-lead/0011aabb", []string{"crewlet.api-1.inventory"}, 2 * time.Minute,
+			map[string]string{"force-command": "/usr/bin/ss -tln"}},
 	} {
 		issued, err := sshint.Sign(ca, tc.req)
 		if err != nil {
@@ -147,6 +155,34 @@ func TestARequestOutsideTheLockedShapesIsNotSigned(t *testing.T) {
 				sshint.PurposeTest, "ops-lead", "01", "", "", "", config.SSHLevelRead, sshint.GateVersionCommand
 		},
 		"a source that is no range": func(r *sshint.Request) { r.SourceAddresses = []string{"203.0.113.7"} },
+		"an agent's read as the inventory": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.HeldCall, r.ForceCommand = sshint.PurposeRead, sshint.LevelInventory, "", ""
+		},
+		"an agent's read as the inventory, binding its command": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.HeldCall, r.ForceCommand =
+				sshint.PurposeRead, sshint.LevelInventory, "", config.SSHInventoryPorts
+		},
+		"the inventory for a seat": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.Nonce, r.HeldCall, r.Turn, r.ForceCommand =
+				sshint.PurposeInventory, sshint.LevelInventory, "01", "", "", config.SSHInventoryPorts
+		},
+		"the inventory at read": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.Nonce, r.Seat, r.HeldCall, r.Turn, r.ForceCommand =
+				sshint.PurposeInventory, config.SSHLevelRead, "01", "", "", "", config.SSHInventoryPorts
+		},
+		"the inventory binding a read command": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.Nonce, r.Seat, r.HeldCall, r.Turn, r.ForceCommand =
+				sshint.PurposeInventory, sshint.LevelInventory, "01", "", "", "", "/usr/bin/uptime"
+		},
+		"the inventory binding nothing": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.Nonce, r.Seat, r.HeldCall, r.Turn, r.ForceCommand =
+				sshint.PurposeInventory, sshint.LevelInventory, "01", "", "", "", ""
+		},
+		"the inventory on two hosts": func(r *sshint.Request) {
+			r.Purpose, r.Level, r.Nonce, r.Seat, r.HeldCall, r.Turn, r.ForceCommand, r.Hosts =
+				sshint.PurposeInventory, sshint.LevelInventory, "01", "", "", "", config.SSHInventoryPorts,
+				[]string{"api-1", "db-2"}
+		},
 	} {
 		req := ok
 		mutate(&req)
@@ -174,13 +210,30 @@ func TestTheSetupIsRenderedFromTheHostAlone(t *testing.T) {
 	}
 	for _, want := range []string{current + "\n" + next + "\nCREWLET_CA", "HOST_ID=api-1", "OPS_USER=crewlet-ops",
 		"Match User crewlet-read,crewlet-ops", "Match User crewlet-read\n    ForceCommand /usr/local/sbin/crewlet-gate read",
-		"crewlet-gate 2:", "/usr/bin/journalctl --no-pager -u * --since=*", "rm -f /etc/sudoers.d/crewlet-read"} {
+		"crewlet-gate 3:", "rm -f \"$DIR/inventory-allowlist\"", "/usr/bin/journalctl --no-pager -u * --since=*", "rm -f /etc/sudoers.d/crewlet-read"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
 		}
 	}
 	if strings.Contains(script, "docker") {
 		t.Error("a host without containers is given the container reads")
+	}
+	// THE INVENTORY REACHES A SERVER ONLY WHERE IT OPTS IN: its principal
+	// and its own allowlist, with the containers only where they are on.
+	if strings.Contains(script, "crewlet.%s.inventory") || strings.Contains(script, "CREWLET_INVENTORY") {
+		t.Error("a host that does not opt in is given the inventory's principal or allowlist")
+	}
+	opted := host
+	opted.Inventory = true
+	inv, err := sshint.RenderSetup(opted, []string{current})
+	if err != nil || !strings.Contains(inv, "printf 'restrict crewlet.%s.inventory\\n' \"$HOST_ID\" >>\"$DIR/principals/$READ_USER\"") ||
+		!strings.Contains(inv, "\n/usr/bin/ss -tln\nCREWLET_INVENTORY") || strings.Contains(inv, "docker") {
+		t.Errorf("a host that opts in renders %v:\n%s", err, inv)
+	}
+	opted.Containers = true
+	inv, err = sshint.RenderSetup(opted, []string{current})
+	if err != nil || !strings.Contains(inv, "/usr/bin/ss -tln\n/usr/bin/sudo -n /usr/bin/docker ps\nCREWLET_INVENTORY") {
+		t.Errorf("a host that opts in with containers renders %v:\n%s", err, inv)
 	}
 	again, _ := sshint.RenderSetup(host, []string{current, next})
 	if again != script {

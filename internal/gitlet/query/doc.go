@@ -7,6 +7,9 @@
 // revision are in another (anchor.go), and what a change changed between two
 // revisions (interdiff.go) — and the checks file a commit holds, read whole
 // for the home that queues a change's checks from its target's (checksfile.go)
+// (and a commit's deploy and dependency files, listed by the closed list
+// and read one at a time for the atlas in codefiles.go, the engine's alone as
+// a checks file is and one answer each)
 // — real git over a PINNED incarnation of the node's own cache
 // (internal/gitlet/cache), in the READ lane, every answer one page of at most
 // gitlet.MaxGitAnswerBytes of JSON with a cursor where the next begins, but a

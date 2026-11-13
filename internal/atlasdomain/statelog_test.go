@@ -196,6 +196,18 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "Op read":
 		return rawRecord(entryOn(id), "suite-node", "suite-carrying-read", atlasdomain.OpRead, sentinel(),
 			readOf(id, "suite-carrying-read"))
+	case "Claim.Source agent":
+		claim := existsClaim(id, "suite-carrying-agent")
+		claim.Source = atlasdomain.Source{Kind: atlas.SourceAgent, Name: "sre", Turn: "run-1",
+			Evidence: atlas.EvidenceCall}
+		return rawRecord(entryOn(id), "suite-node", "suite-carrying-agent", atlasdomain.OpClaim, sentinel(), claim)
+	case "Read.Source code":
+		read := readOf(id, "suite-carrying-code")
+		read.Source = atlasdomain.Source{Kind: atlas.SourceCode, Name: "shop"}
+		for i := range read.Claims {
+			read.Claims[i].Source = read.Source
+		}
+		return rawRecord(entryOn(id), "suite-node", "suite-carrying-code", atlasdomain.OpRead, sentinel(), read)
 	}
 	return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 }

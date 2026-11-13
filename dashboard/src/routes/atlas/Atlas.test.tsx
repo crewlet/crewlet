@@ -1,24 +1,16 @@
 /**
  * Company › Atlas: what the screens ask the engine for and what they say.
  * The map's drawing is measured in a real browser (`Atlas.layout.test.tsx`);
- * these suites hold the words, the filters, the list, the peek and an
- * entry's page.
+ * these suites hold the words, the band, the filters, the one selection and
+ * search the map and the catalogue share, the sheet and an entry's page.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { ToastProvider } from "@crewlethq/ui";
-import { Router } from "~/app/router.tsx";
-import { SessionReading } from "~/lib/frameSession.ts";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
-import { InertWebSocket } from "~/test/client.tsx";
 import {
   disputedServer,
-  entriesAnswer,
   entryAnswer,
-  facetsAnswer,
+  fact,
   generatedCompany,
   grownCompany,
   mapAnswer,
@@ -27,20 +19,23 @@ import {
   traceAnswer,
   type AtlasFixture,
 } from "~/test/atlas.ts";
+import { mountAtlas } from "~/test/atlasMount.tsx";
 import type { AtlasEntryAnswer } from "~/contract/atlas.ts";
 import { Atlas } from "./Atlas.tsx";
 import { AtlasPeek } from "./AtlasPeek.tsx";
 import { EntryPage } from "./EntryPage.tsx";
-import { cardOf, edgesOf } from "./AtlasMap.tsx";
+import { serviceColumns } from "./AtlasMap.tsx";
+import { bandsOf } from "./Catalogue.tsx";
 import { queryParams } from "./filters.ts";
+import { cardOf, lineOf } from "./graph.tsx";
+import { neighbourhood } from "./Neighbourhood.tsx";
 import { coverageLine, coverageNotes } from "./parts.tsx";
+import { factLabel } from "./words.ts";
 
 afterEach(() => {
   cleanup();
   location.hash = "";
 });
-
-type Asked = { what: string; params: Record<string, unknown> };
 
 /** Mount `children` over a socket that answers the atlas questions for `fixture`, recording each ask. */
 function mount(
@@ -49,60 +44,7 @@ function mount(
   fixture: AtlasFixture,
   entry: (id: string) => AtlasEntryAnswer | undefined = () => undefined,
 ) {
-  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = hash;
-  const asked: Asked[] = [];
-  const store = new Store();
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string, params?: unknown) => Promise<unknown> }).query = (
-    what,
-    raw,
-  ) => {
-    const params = (typeof raw === "string" ? JSON.parse(raw) : (raw ?? {})) as Record<
-      string,
-      unknown
-    >;
-    asked.push({ what, params });
-    const id = String(params.id ?? "");
-    const from = fixture.nodes.find((node) => node.id === id);
-    switch (what) {
-      case "atlas_facets":
-        return Promise.resolve(facetsAnswer(fixture));
-      case "atlas_map":
-        return Promise.resolve(mapAnswer(fixture));
-      case "atlas_entries":
-        return Promise.resolve(entriesAnswer(fixture));
-      case "atlas_entry": {
-        const answer = entry(id) ?? (from ? entryAnswer(from) : undefined);
-        return answer ? Promise.resolve(answer) : new Promise(() => {});
-      }
-      case "atlas_trace":
-        return from
-          ? Promise.resolve(
-              traceAnswer(
-                fixture,
-                from,
-                params.direction === "down" ? "down" : "up",
-                Number(params.depth ?? 6),
-              ),
-            )
-          : new Promise(() => {});
-      default:
-        return new Promise(() => {});
-    }
-  };
-  const view = render(
-    <ToastProvider>
-      <ClientContext.Provider value={{ store, socket }}>
-        <SessionReading>
-          <ViewerProvider>
-            <Router>{children}</Router>
-          </ViewerProvider>
-        </SessionReading>
-      </ClientContext.Provider>
-    </ToastProvider>,
-  );
-  return { view, asked };
+  return mountAtlas(hash, children, fixture, { entry });
 }
 
 describe("the coverage line", () => {
@@ -145,14 +87,32 @@ describe("the coverage line", () => {
   });
 });
 
-describe("the map's cards and edges", () => {
-  test("a card carries its health as a dot with its word, and an unconfirmed entry a dashed edge", () => {
+describe("a fact of each host", () => {
+  // A MIRRORED REPOSITORY HAS A VISIBILITY ON EACH HOST, and each row says
+  // whose it is: one "Visibility" row with two values would read as a
+  // disagreement, which it is not.
+  test("is named by its host", () => {
+    const of = (key: string) => ({
+      fact: "visibility" as const,
+      of: { kind: "repository" as const, key },
+    });
+    expect(factLabel(of("github.com/acme/api"))).toBe("Visibility on GitHub");
+    expect(factLabel(of("gitlet/api"))).toBe("Visibility in Gitlet");
+    expect(factLabel(of("gitlab.com/acme/api"))).toBe("Visibility on GitLab");
+    expect(factLabel(of("git.acme.example/acme/api"))).toBe("Visibility on git.acme.example");
+    expect(factLabel({ fact: "default_branch" })).toBe("Default branch");
+  });
+});
+
+describe("the map's cards and lines", () => {
+  test("a card carries its health as a notch with its word, and an unconfirmed entry a dashed edge", () => {
     const alerting = cardOf(
-      summary("datastore", "orders-db", { health: "alerting" }),
+      summary("datastore", "orders-db", { health: "alerting", vendor: "aws" }),
       Date.parse("2026-11-11T10:00:00Z"),
     );
     expect(alerting.attention).toEqual({ tone: "danger", label: "Alerting" });
     expect(alerting.kind).toBe("Database");
+    expect(alerting.mark).toBeTruthy();
     const quiet = cardOf(summary("host", "web-1", { word: "unconfirmed" }), 0);
     expect(quiet.attention).toBeUndefined();
     expect(quiet.unconfirmed).toBe(true);
@@ -163,19 +123,45 @@ describe("the map's cards and edges", () => {
     expect(stale.caption).toMatch(/^Last seen /);
   });
 
-  // A SELECTED ENTRY LIGHTS ITS OTHER RELATIONS, never drawn at rest, and only
-  // between cards the map draws. Mutation: drop `atRest: false` and they draw at rest.
-  test("a selection adds its relations not drawn at rest, between drawn cards only", () => {
+  // EVERY RELATION IS DRAWN IN THE FAMILY THE ENGINE NAMES: a call at rest,
+  // what a thing runs on as a trunk, the rest only for the entry stood on.
+  // Mutation: draw every line as a call and the map is a net of accounts.
+  test("a line takes the engine's family, so what stands around is not drawn at rest", () => {
     const company = grownCompany();
-    const answer = mapAnswer(company);
-    const atRest = edgesOf(answer, null);
-    expect(atRest.every((edge) => edge.atRest !== false)).toBe(true);
-    const selected = disputedServer(company);
-    const lit = edgesOf(answer, selected);
-    const added = lit.filter((edge) => edge.atRest === false);
-    expect(added.map((edge) => edge.label)).toEqual(["belongs to"]);
-    const gone = edgesOf(mapAnswer(company, { closed: ["platforms/aws"] }), selected);
-    expect(gone.some((edge) => edge.atRest === false)).toBe(false);
+    const families = new Map(
+      mapAnswer(company).edges.map((edge) => [edge.relation, lineOf(edge).family]),
+    );
+    expect(families.get("depends_on")).toBe("flow");
+    expect(families.get("runs_on")).toBe("support");
+    expect(families.get("belongs_to")).toBe("context");
+    expect(families.get("monitored_by")).toBe("context");
+  });
+
+  test("a service stands one column right of the deepest service that calls it", () => {
+    const company = grownCompany();
+    const columns = serviceColumns(mapAnswer(company));
+    const orders = company.nodes.find((node) => node.name === "orders-api")!;
+    expect(columns.get(company.checkout.id)).toBe(0);
+    expect(columns.get(orders.id)).toBe(1);
+  });
+
+  // AN ENTRY AMONG ITS NEIGHBOURS: each stands in the cluster that says how it
+  // relates, read from one step along every relation in both directions.
+  test("a neighbourhood stands each neighbour in the cluster of its relation", () => {
+    const company = grownCompany();
+    const db = company.ordersDb;
+    const near = neighbourhood(
+      db,
+      traceAnswer(company, db, "down", 1),
+      traceAnswer(company, db, "up", 1),
+      0,
+    );
+    const lane = (name: string) => near.nodes.find((node) => node.name === name)?.lane;
+    expect(lane("orders-db")).toBe("self");
+    expect(lane("orders-api")).toBe("used");
+    expect(lane("db-1")).toBe("runs");
+    expect(lane("orders-db cpu high")).toBe("around");
+    expect(near.edges).toHaveLength(near.nodes.length - 1);
   });
 });
 
@@ -204,6 +190,10 @@ describe("the filters", () => {
   test("Show unconfirmed is off by default and asks the engine for them once on", async () => {
     const company = grownCompany();
     const { asked } = mount("#/company/atlas", <Atlas />, company);
+    const control = await screen.findByRole("button", { name: "Filter" });
+    await act(async () => {
+      fireEvent.click(control);
+    });
     const toggle = await screen.findByRole("switch", { name: /Show unconfirmed \(1\)/ });
     expect((toggle as HTMLInputElement).checked).toBe(false);
     expect(
@@ -219,6 +209,36 @@ describe("the filters", () => {
     );
   });
 
+  // THE TOOLBAR ROW IS THE SEARCH AND ONE FILTER CONTROL: no menu stands on
+  // the row, the control counts what is in force, and each filter in force is
+  // a chip removed on its own. Mutation: draw the menus on the row again.
+  test("the row holds the search and one Filter control, with the filters in force as chips", async () => {
+    mount("#/company/atlas?kind=host&vendor=aws", <Atlas />, grownCompany());
+    const control = await screen.findByRole("button", { name: /^Filter/ });
+    expect(control.textContent).toContain("2");
+    expect(screen.queryByRole("combobox", { name: "Kind" })).toBeNull();
+    const chips = screen.getByRole("group", { name: "Filters in force" });
+    expect(chips.textContent).toContain("Kind is Server");
+    expect(chips.textContent).toContain("Vendor is AWS");
+    await act(async () => {
+      fireEvent.click(
+        within(chips).getByRole("button", { name: /Remove the Kind is Server filter/ }),
+      );
+    });
+    expect(location.hash).not.toContain("kind=");
+    expect(location.hash).toContain("vendor=aws");
+    await act(async () => {
+      fireEvent.click(within(chips).getByRole("button", { name: "Clear all" }));
+    });
+    expect(location.hash).not.toContain("vendor=");
+  });
+
+  test("no chip row is drawn while no filter is set, and a search is not a chip", async () => {
+    mount("#/company/atlas?q=orders", <Atlas />, grownCompany());
+    await screen.findByRole("button", { name: "Filter" });
+    expect(screen.queryByRole("group", { name: "Filters in force" })).toBeNull();
+  });
+
   test("the coverage line says how many entries and where from, and no word of complete", async () => {
     mount("#/company/atlas", <Atlas />, sparseCompany());
     const line = await screen.findByText("5 entries, from GitHub and Anthropic");
@@ -226,33 +246,135 @@ describe("the filters", () => {
     expect(document.body.textContent).not.toMatch(/complete/i);
   });
 
-  test("a kind menu offers the kinds with entries, each with its count", async () => {
+  test("the Filter control opens the menus, each offering the values with entries", async () => {
     mount("#/company/atlas?kind=host", <Atlas />, grownCompany());
+    const control = await screen.findByRole("button", { name: /^Filter/ });
+    await act(async () => {
+      fireEvent.click(control);
+    });
     const kind = await screen.findByRole("combobox", { name: "Kind" });
     expect(kind.textContent).toContain("Server");
+    expect(screen.getByRole("combobox", { name: "Vendor" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear all filters" })).toBeTruthy();
   });
 });
 
-describe("the list", () => {
-  test("is one press away, a row per entry, and says when it is all of it", async () => {
-    const company = grownCompany();
-    mount("#/company/atlas?shape=list", <Atlas />, {
-      ...company,
-      nodes: company.nodes.slice(0, 8),
-    });
-    const grid = await screen.findByRole("table", { name: "Atlas entries" });
-    expect(within(grid).getByText("acme-prod")).toBeTruthy();
-    expect(await screen.findByText("That is all of it: 8 entries")).toBeTruthy();
+describe("the page", () => {
+  // ONE ANSWER, TWO SURFACES: the map asks for every relation and never for
+  // the search, which pushes cards back instead of removing them; the
+  // catalogue asks for the same filters in the health order.
+  test("the map asks for every relation, and the catalogue for the health order", async () => {
+    const { asked } = mount("#/company/atlas", <Atlas />, grownCompany());
+    await screen.findByRole("table", { name: /Catalogue/ });
+    const map = asked.find((a) => a.what === "atlas_map");
+    expect(map?.params).toEqual({ relations: "all" });
+    expect(
+      asked.some(
+        (a) => a.what === "atlas_entries" && a.params.sort === "health" && !a.params.limit,
+      ),
+    ).toBe(true);
+    expect(asked.some((a) => a.what === "atlas_activity")).toBe(true);
   });
 
-  test("pages a large atlas, and asks in the order chosen", async () => {
-    const { asked } = mount(
-      "#/company/atlas?shape=list&order=name",
-      <Atlas />,
-      generatedCompany(120),
-    );
+  // MUTATION: send `q` with the drawn map's question and the map loses the
+  // entries a search leaves out, where it should only push them back.
+  test("a search narrows the catalogue and marks the map, which keeps every entry", async () => {
+    const { asked } = mount("#/company/atlas?q=orders", <Atlas />, grownCompany());
+    await screen.findByRole("table", { name: /Catalogue/ });
+    const maps = asked.filter((a) => a.what === "atlas_map");
+    expect(maps.some((a) => a.params.relations === "all" && !("q" in a.params))).toBe(true);
+    expect(maps.some((a) => a.params.q === "orders")).toBe(true);
+    expect(asked.some((a) => a.what === "atlas_entries" && a.params.q === "orders")).toBe(true);
+  });
+
+  test("the band counts the entries, names what needs attention with its reason, and the week", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas", <Atlas />, company);
+    expect(await screen.findByText("The company runs on")).toBeTruthy();
+    expect(screen.getAllByText(`${company.nodes.length} entries`).length).toBeGreaterThan(0);
+    expect(await screen.findByText("5 in all")).toBeTruthy();
+    const show = await screen.findByTitle("Show orders-db on the map");
+    expect(show.textContent).toContain("A standing alarm is raised");
+    expect(await screen.findByText("Recorded this week")).toBeTruthy();
+    expect(screen.getByText("Where it comes from")).toBeTruthy();
+  });
+
+  test("an empty atlas says what fills it, and draws no band of zeros", async () => {
+    mount("#/company/atlas", <Atlas />, { nodes: [], edges: [] });
+    expect(await screen.findByText(/^Nothing in the atlas yet · It fills from/)).toBeTruthy();
+    expect(screen.queryByText("The company runs on")).toBeNull();
+  });
+});
+
+describe("the catalogue", () => {
+  // THE ROWS GROUP BY HEALTH, THE MOST URGENT FIRST, each heading counting
+  // all of its group. Mutation: order the groups as the rows arrive.
+  test("groups the rows by health, the most urgent first", () => {
+    const company = grownCompany();
+    const bands = bandsOf(company.nodes, { alerting: 2, needs_look: 3, quiet: 30 });
+    expect(bands.map((band) => band.key)).toEqual(["alerting", "needs_look", "quiet"]);
+    expect(bands[0]?.total).toBe(2);
+    expect(bands[0]?.rows.every((row) => row.health === "alerting")).toBe(true);
+    expect(bandsOf([summary("host", "web-1")], undefined).map((band) => band.key)).toEqual([
+      "quiet",
+    ]);
+  });
+
+  test("lists every entry under its health and says when it is all of it", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas", <Atlas />, { ...company, nodes: company.nodes.slice(0, 12) });
+    const grid = await screen.findByRole("table", { name: /Catalogue/ });
+    expect(within(grid).getByText("acme-prod")).toBeTruthy();
+    expect(
+      within(grid).getByText("Needs a look", { selector: "[role=rowheader] *, th *" }),
+    ).toBeTruthy();
+    expect(await screen.findByText("That is all of it: 12 entries")).toBeTruthy();
+  });
+
+  test("pages a large atlas in the health order", async () => {
+    const { asked } = mount("#/company/atlas", <Atlas />, generatedCompany(120));
     expect(await screen.findByText("50 entries of 120 loaded")).toBeTruthy();
-    expect(asked.find((a) => a.what === "atlas_entries")?.params.sort).toBe("name");
+    expect(asked.find((a) => a.what === "atlas_entries" && !a.params.limit)?.params.sort).toBe(
+      "health",
+    );
+  });
+});
+
+describe("the selection", () => {
+  // ONE SELECTION FOR THE MAP AND THE CATALOGUE, in the address; the map's
+  // side of it (the lit path and the dock) is held in `Atlas.layout.test.tsx`.
+  // Mutation: keep it in the map's own state and the row below is never marked.
+  test("an entry the address selects is marked in the catalogue", async () => {
+    const company = grownCompany();
+    mount(`#/company/atlas?sel=${company.ordersDb.id}`, <Atlas />, company);
+    const grid = await screen.findByRole("table", { name: /Catalogue/ });
+    const row = within(grid).getByText("orders-db").closest(".crewlet-data-grid__row");
+    expect(row?.className).toContain("crewlet-data-grid__row--selected");
+  });
+
+  // A ROW OPENS ITS SHEET, and the sheet's entry is the selection, so closing
+  // the sheet leaves the entry lit.
+  test("pressing a row opens its sheet and selects it", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas", <Atlas />, company);
+    const grid = await screen.findByRole("table", { name: /Catalogue/ });
+    const row = within(grid).getByText("orders-db").closest(".crewlet-data-grid__row")!;
+    await act(async () => {
+      fireEvent.click(row.querySelector("a") ?? row);
+    });
+    const address = decodeURIComponent(location.hash);
+    expect(address).toContain(`peek=atlas:${company.ordersDb.id}`);
+    expect(address).toContain(`sel=${company.ordersDb.id}`);
+  });
+
+  test("the band's pointer selects an entry on the map", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas", <Atlas />, company);
+    const show = await screen.findByTitle("Show orders-db on the map");
+    await act(async () => {
+      fireEvent.click(show);
+    });
+    expect(location.hash).toContain(`sel=${company.ordersDb.id}`);
   });
 });
 
@@ -267,7 +389,21 @@ describe("an entry", () => {
     );
     expect(await screen.findByText("web-1")).toBeTruthy();
     expect(await screen.findByText("Used by (3)")).toBeTruthy();
-    expect(screen.getByText("Show what depends on it on the map")).toBeTruthy();
+    expect(screen.getByText("What it touches")).toBeTruthy();
+    expect(screen.getByText("Show it on the map")).toBeTruthy();
+  });
+
+  // THE TIMELINE IS THE ATLAS'S OWN LOG, asked for this entry alone.
+  test("its sheet reads its recent changes from the atlas log", async () => {
+    const company = grownCompany();
+    const { asked } = mount(
+      `#/company/atlas?peek=atlas:${company.ordersDb.id}`,
+      <AtlasPeek id={company.ordersDb.id} />,
+      company,
+    );
+    expect(await screen.findByText("Recent changes")).toBeTruthy();
+    expect((await screen.findAllByText("Seen by its source")).length).toBeGreaterThan(0);
+    expect(asked.find((a) => a.what === "atlas_log")?.params).toEqual({ id: company.ordersDb.id });
   });
 
   // A DISAGREEMENT IS SHOWN, NEVER SETTLED: both values, who said each, and
@@ -297,7 +433,47 @@ describe("an entry", () => {
     );
     expect(await screen.findByText("10.0.4.12")).toBeTruthy();
     expect(screen.getAllByText("Internal").length).toBeGreaterThan(0);
-    expect(screen.getByText(/seen by AWS/)).toBeTruthy();
+    expect(screen.getAllByText(/seen by AWS/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /export|print|share/i })).toBeNull();
+  });
+
+  // WHAT A REPOSITORY'S FILES DECLARE IS LIKELY, and named for the repository
+  // whose files said it. Mutation: drop the code case from sourceName and the
+  // by-line reads the bare repository name.
+  test("a fact a repository's files declared names the repository, as likely", async () => {
+    const company = grownCompany();
+    const declared = entryAnswer(company.ordersDb, {
+      facts: [
+        fact(
+          "engine",
+          { type: "word", text: "postgres" },
+          { source: { kind: "code", name: "shop" }, confidence: "inferred", word: "likely" },
+        ),
+      ],
+      entry: {
+        state: "discovered",
+        confidence: "inferred",
+        word: "likely",
+        sources: [{ kind: "code", name: "shop" }],
+      },
+    });
+    const answer = (id: string) => (id === company.ordersDb.id ? declared : undefined);
+    mount(
+      `#/company/atlas/${company.ordersDb.id}`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect((await screen.findAllByText(/set by the files of shop/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/likely/i).length).toBeGreaterThan(0);
+    cleanup();
+    mount(
+      `#/company/atlas/${company.ordersDb.id}?tab=sources`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect(await screen.findByText("The files of shop")).toBeTruthy();
+    expect(screen.getByText("A repository's deploy and dependency files")).toBeTruthy();
   });
 });

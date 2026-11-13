@@ -244,6 +244,15 @@
     "Atlas": {
       "additionalProperties": false,
       "properties": {
+        "agent_records": {
+          "description": "Whether agents record in the atlas what a tool call of their own turn showed them, and dispute what it holds (default true). false stops both; what they recorded before stays until a person retires it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "refresh_interval_seconds": {
           "description": "How often each connected integration is read whole for the atlas, in seconds. 0 takes the default of 3600; the floor is 300.",
           "minimum": 0,
@@ -5165,6 +5174,15 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "inventory": {
+          "description": "Let the engine itself read this server for the atlas on the atlas's refresh interval: its listening ports (ss -tln) and, where containers is on, its running containers (sudo -n docker ps). Each command is recorded as an agent's is, and only the ports, the container names and their images are kept. Off by default; the server accepts it after its setup is run again.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
             "null"
           ]
         },

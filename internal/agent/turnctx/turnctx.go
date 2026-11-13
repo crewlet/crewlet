@@ -337,6 +337,13 @@ type Turn struct {
 	// a turn built outside the engine.
 	Lookups *Lookups
 
+	// Seen is what this turn's tool calls answered, which a tool that cites
+	// an earlier call reads the cited answer from; see [Seen]. Shared by
+	// every Turn derived from this one, like Calls. Only grows, and nothing
+	// a model says reaches it but the answers its calls were given. Nil has
+	// seen nothing, so every citation is refused.
+	Seen *Seen
+
 	// Holds is what this turn has named that an expiry could take from under
 	// it — the scratch repositories its code tools reached — and where its
 	// hold on each is kept: in this process, and on the run row once the turn
@@ -486,6 +493,15 @@ func (t *Turn) LookedUp() *Lookups {
 		return nil
 	}
 	return t.Lookups
+}
+
+// Answers is what this turn's calls answered, or nil outside a turn; see
+// [Turn.Seen]. A nil record has seen no call.
+func (t *Turn) Answers() *Seen {
+	if t == nil {
+		return nil
+	}
+	return t.Seen
 }
 
 // WithCalls is this turn with calls as its log — a delegated worker's view of

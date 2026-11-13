@@ -667,6 +667,10 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, route rem
 		return true, nil
 	}
 	if e.dryRun {
+		if err = s.checks(prepared, e.summary); err != nil {
+			s.refuseApply(w, r, err)
+			return true, nil
+		}
 		e.req.checked(w, r, prepared)
 		return true, nil
 	}

@@ -125,6 +125,14 @@ func (o ownReads) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAns
 	return o.Estate.GitRead(ctx, q)
 }
 
+// GitRead is one of the home's own git reads made for a [Worker] the engine
+// registers: held to the same bound as the loop's own ([OwnReads]), so a
+// registered worker's reads wait here too, never ahead of the seats in the
+// node's share.
+func (l *Loop) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return l.o.Estate.GitRead(ctx, q)
+}
+
 // Worker is one kind of work a repository's home owes, from the rows: the
 // repositories it has work in (Due, every page from its cursor, read at floor
 // where floor is set and stale where it is zero) and one repository's work
@@ -307,6 +315,9 @@ func New(o Options) (*Loop, error) {
 	// the check work's facts and checks-file reads draw on the same units.
 	reads := OwnReads(o.Share.Units())
 	o.Estate = ownReads{Estate: o.Estate, reads: semaphore.NewWeighted(int64(reads)), n: reads}
+	// THE LOOP KEEPS THE BOUNDED ONE, which a registered worker reads through
+	// ([Loop.GitRead]).
+	l.o.Estate = o.Estate
 	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, chart: o.Chart,
 		metrics: o.Metrics, log: l.log, now: l.now, rechecks: newRecheckBudget()}
 	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}

@@ -1,6 +1,7 @@
 package authz_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,7 +53,24 @@ func TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass(t *testing.T) {
 		if only, _ := authz.SeatOnlyOf(a); only {
 			seatOnly++
 			class, _ := authz.ClassOf(a)
-			switch app, _ := authz.AppOf(a); {
+			app, _ := authz.AppOf(a)
+			caller := seat("sre")
+			switch {
+			case app != "" && class == authz.ClassApp:
+				// AN AGENT'S OWN VERB ON AN APP'S SHARED SURFACE (ADR-0132):
+				// a person the class refuses, one without the app, is still
+				// told the verb is an agent's, naming no permission; and a
+				// seat is admitted exactly where it holds the app.
+				stranger := authz.Decide(t.Context(), person("jane.doe"), a, object, nimbus(), decidedAt)
+				if stranger.Allowed || stranger.Reason != authz.ReasonSeatOnly || len(stranger.Grants) != 0 {
+					t.Errorf("%s: a person without %s decided %+v, want refused as seat-only "+
+						"naming nothing", a, app, stranger)
+				}
+				without := authz.Decide(t.Context(), caller, a, object, nimbus(), decidedAt)
+				if without.Allowed || !slices.Equal(without.Grants, []iam.Grant{app}) {
+					t.Errorf("%s: a seat without %s decided %+v, want refused naming it", a, app, without)
+				}
+				caller = seat("sre", app)
 			case app != "":
 				t.Errorf("%s is seat-only and decided by %s on the app %q, so the order of "+
 					"its bar is observable: add a case deciding it as a person that "+
@@ -68,10 +86,10 @@ func TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass(t *testing.T) {
 					"observable: add a case deciding it as a person that class refuses, "+
 					"who must be refused seat_only naming nothing", a, class)
 			}
-			if d := authz.Decide(t.Context(), seat("sre"), a, object, nimbus(),
+			if d := authz.Decide(t.Context(), caller, a, object, nimbus(),
 				decidedAt); !d.Allowed {
-				t.Errorf("%s: a seat holding nothing decided %+v, want admitted — "+
-					"a seat-only verb asks no permission", a, d)
+				t.Errorf("%s: a seat holding %v decided %+v, want admitted: a seat-only "+
+					"verb asks no permission beyond the app its row names", a, caller.Grants, d)
 			}
 			d := authz.Decide(t.Context(), person("jane.doe", iam.GrantAdmin), a,
 				object, nimbus(), decidedAt)

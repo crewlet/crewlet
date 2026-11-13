@@ -37,6 +37,8 @@
 // A consumer's CREATION is held the same way ([ConsumerCreate]): the broker
 // answers it only once it has found where the consumer begins, which for a
 // listing of every subject's newest message means reading the stream's blocks.
+// And so are a consumer's PULLS ([ConsumerNext]), which a cluster drops for a
+// consumer just made as it drops a leader read.
 //
 // It intercepts the ACCOUNT's own API (`$JS.API.>`) of a server with no
 // JetStream domain. A domain's API reaches JetStream through mappings of its
@@ -89,8 +91,15 @@ func ConsumerCreate(stream string) string {
 	return fmt.Sprintf(server.JSApiConsumerCreateT, stream) + "." + fullWildcard
 }
 
+// ConsumerNext is the account API subjects every consumer of stream is pulled
+// on, whatever its name: the request for its next messages, answered by the
+// consumer's own server with deliveries to the request's reply subject.
+func ConsumerNext(stream string) string {
+	return fmt.Sprintf(server.JSApiRequestNextT, stream, fullWildcard)
+}
+
 // fullWildcard is the last token of a subject that stands for every subject
-// with the tokens before it ([ConsumerCreate]).
+// with the tokens before it ([ConsumerCreate], [ConsumerNext]).
 const fullWildcard = ">"
 
 // heldSeq makes every interception's subject its own, so two in one process

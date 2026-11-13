@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -648,4 +649,110 @@ func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("adding a person's seat with no contact marks %v, want %v", got, want)
 	}
+}
+
+// A DRY RUN IS REFUSED A DOCUMENT ITS ACTIVATION CANNOT CARRY, AS ITS WRITE IS.
+//
+// Every write that stores a revision carries its document to every node sealed
+// in the activation pointer, with its summary, and the pointer is one value of
+// the coordination store, held to coord.MaxValueBytes: a write whose pointer
+// would pass it is refused 413 before anything is stored. A dry run is the
+// same request checked the same way, so on every route that answers one it is
+// refused alike and stores nothing — a dry run that passed the write it stands
+// for would tell an editor to save a change the write then refuses. A summary
+// as large as one key holds makes a pointer past it whatever the document,
+// which reaches every route alike.
+//
+// Mutation: answer any route's dry run straight after its document is checked,
+// without the check its commit makes, and that route's case answers 200.
+func TestADryRunIsRefusedADocumentItsActivationCannotCarry(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("s", coord.MaxValueBytes)
+	type request struct {
+		s                  *surface
+		method, path, body string
+		headers            map[string]string
+	}
+	for _, tc := range []struct {
+		name string
+		make func(t *testing.T) request
+	}{
+		{"a document's PUT", func(t *testing.T) request {
+			s := newSurface(t)
+			s.seed(t, companyDoc)
+			return request{s, http.MethodPut, "/config", companyDoc, nil}
+		}},
+		{"a document's PATCH", func(t *testing.T) request {
+			s := newSurface(t)
+			s.seed(t, companyDoc)
+			return request{s, http.MethodPatch, "/config", `{"mission": "checked"}`, nil}
+		}},
+		{"an entity's create", func(t *testing.T) request {
+			s := newSurface(t)
+			s.seed(t, serversDoc)
+			return request{s, http.MethodPut, "/config/llm-providers/fresh", `{"model":"m"}`,
+				map[string]string{"If-None-Match": "*"}}
+		}},
+		{"a model's removal", func(t *testing.T) request {
+			s := newSurface(t)
+			s.seed(t, removalDoc)
+			return request{s, http.MethodDelete, "/config/llm-providers/codex-review", `{"repoint": [
+				{"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
+				{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`, nil}
+		}},
+		{"a server's removal", func(t *testing.T) request {
+			return request{serverSurface(t), http.MethodDelete, "/config/mcp-servers/linear",
+				`{"clear": true}`, nil}
+		}},
+		{"the charter", func(t *testing.T) request {
+			s := newSurface(t)
+			s.seed(t, charterDoc)
+			_, tag := s.readCharter(t)
+			draft := config.Charter{Mission: "Checked, not written.", Policies: []string{}}
+			return request{s, http.MethodPut, "/config/charter", charterBody(t, draft),
+				map[string]string{"If-Match": tag}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := tc.make(t)
+			headers := maps.Clone(r.headers)
+			if headers == nil {
+				headers = map[string]string{}
+			}
+			headers["X-Summary"] = long
+			before := r.s.revisionCount(t)
+			for _, query := range []string{"?dry_run=true", ""} {
+				res := r.s.do(t, r.method, r.path+query, r.body, headers)
+				if res.Code != http.StatusRequestEntityTooLarge || decode(t, res)["error"] != "body_too_large" {
+					t.Fatalf("%s %s%s past what its activation carries = %d %.300s, want 413 body_too_large",
+						r.method, r.path, query, res.Code, res.Body.String())
+				}
+			}
+			if after := r.s.revisionCount(t); after != before {
+				t.Errorf("refused writes stored %d revisions, want none", after-before)
+			}
+		})
+	}
+
+	t.Run("a server's tool levels", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t)
+		s.seed(t, toolsDoc)
+		before := s.revisionCount(t)
+		write := configapi.MCPToolsWrite{Server: "tracker", By: valueWriter, Summary: long, DryRun: true,
+			Change: configapi.MCPToolsChange{Levels: map[string]*config.MCPToolLevel{
+				"list_projects": level(config.MCPToolAllow)}}}
+		for _, dryRun := range []bool{true, false} {
+			write.DryRun = dryRun
+			var tooLarge *configapi.DocumentTooLargeError
+			if _, err := s.service().SetMCPTools(t.Context(), write); !errors.As(err, &tooLarge) {
+				t.Fatalf("tool levels past what their activation carries (dry run %t): %v, "+
+					"want a DocumentTooLargeError", dryRun, err)
+			}
+		}
+		if after := s.revisionCount(t); after != before {
+			t.Errorf("refused writes stored %d revisions, want none", after-before)
+		}
+	})
 }

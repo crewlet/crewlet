@@ -3,7 +3,14 @@
 // own credential already holds, and records on the atlas's log what the read
 // found that the log does not hold yet (ADR-0129). Its first source reads
 // Cloudflare: the account's name, every zone, every A, AAAA and CNAME record
-// and every certificate pack.
+// and every certificate pack. Its second reads Datadog: the organization,
+// its monitors and their states, its service catalogue, its hosts and its
+// Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
+// agents' installations cover, its workflows and its deployment environments.
+// Its fourth reads the company's servers (ADR-0134): on each server that opts
+// in, the ports it listens on and the containers it runs. That one is handed
+// to the worker by the engine rather than registered, since it runs commands
+// through the node's SSH runner.
 //
 // # Its own duty, never the reconcile loop
 //
@@ -35,6 +42,24 @@
 // voice withdrawn. A read that failed or was cut short retires nothing and
 // forgets no miss, and one that lists the entry again clears its miss.
 //
+// # A source reads in parts, and denies only what it said exists
+//
+// A vendor puts each listing behind a permission of its own, and a
+// credential may hold some and not others (ADR-0130). A listing the vendor
+// refuses is [Read.Unread]: the read is still whole, [Decide] carries every
+// claim that part holds as the log has it, and the standing names the part.
+// A source claims an entry ([Builder.Ref]) only where the entry lives at its
+// vendor, and otherwise only names it ([Builder.Names]); an entry the voice
+// never claimed is released by its retirement, never denied, since a denial
+// would retire what another source holds.
+//
+// # Other voices use the same builder and the same diff
+//
+// A voice that is no integration's (a repository's files,
+// internal/atlas/codescan) gathers its claims through [NewBuilderFor] and
+// records them with [Replace], which withdraws at once what the voice no
+// longer says: a reading that is exact at its instant needs no second miss.
+//
 // # Values are typed, and a credential has nowhere to go
 //
 // Every value a source reports goes through the vocabulary's grammars
@@ -49,8 +74,8 @@
 // What a read found: every data node, identically, so it is a record on the
 // atlas log, written through [Log.Read] by the one node holding the duty.
 // Each source's standing (its last complete read, that read's digest, the
-// calls and withheld values it cost, and the entries it has stopped seeing
-// since when): the whole company, current value only, so it is a record in
+// calls and withheld values it cost, the parts it was refused, and the
+// entries it has stopped seeing since when): the whole company, current value only, so it is a record in
 // the coordination store ([CoordStore]), beside the integration statuses and
 // apart from them. Which node reads: the `worker:atlas-collect` lease, claimed
 // per tick and re-claimed before every source.
