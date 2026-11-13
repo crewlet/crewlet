@@ -486,3 +486,46 @@ func TestAReplayedWakeTheValveStillRefusesIsKept(t *testing.T) {
 			"had reopened", asked)
 	}
 }
+
+// A REPLAYED COPY THAT READS AS NO EVENT IS KEPT, never dropped by a node that
+// could not judge it: the bytes are a delivery's copy as the queue kept it,
+// and a build that reads them as one may yet come.
+//
+// Mutation: drop a copy whose body does not decode, and it is gone.
+func TestAReplayedCopyThatReadsAsNoEventIsKept(t *testing.T) {
+	newer := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+	})
+	if _, err := newer.q.KeepDeadLetter(t.Context(), notify.UnhandledSubject(), "no event", nil,
+		[]byte("this is no event")); err != nil {
+		t.Fatalf("KeepDeadLetter: %v", err)
+	}
+
+	start(t, newer.svc)
+	if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 1 {
+		t.Fatalf("after the replay the unhandled subject holds %d entries, want the copy that "+
+			"reads as no event, kept", len(left))
+	}
+	newer.quiet(t, inbox("engineering-lead"))
+}
+
+// A REPLAYED COPY A SHEDDING NODE HANDS BACK IS KEPT, for a start whose node
+// admits work: a node whose config posture sheds defers every delivery before
+// it parses anything, the replay's copies among them, and a copy it handed back
+// is one whose wake nobody delivered.
+//
+// Mutation: drop a copy the node deferred, and its wake is lost with it.
+func TestAReplayedCopyASheddingNodeDefersIsKept(t *testing.T) {
+	newer := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+	})
+	newer.admits = false
+	at := staged(t, newer, "the copy deferred", relayed("2", "op-30"))
+
+	start(t, newer.svc)
+	newer.quiet(t, inbox("engineering-lead"))
+	if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 1 || left[0].Seq != at {
+		t.Fatalf("after a shedding node's replay the unhandled subject holds %d entries, want "+
+			"the copy it deferred, kept", len(left))
+	}
+}
