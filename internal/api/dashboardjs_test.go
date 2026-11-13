@@ -2342,7 +2342,12 @@ const (
 	// atlas source, with the workload's rows in the tables the dialogs offer
 	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
 	// +52,609): 5950 KiB.
-	treeBudget = 5<<20 + 830<<10
+	// Atlas, Sources (each source's card with its last read in figures, what
+	// it was refused, the servers' table and Refresh now, with the route, the
+	// band's link and the question's and the action's declarations) added
+	// 6,268 bytes, script +6,171 and the atlas sheet +97, and took it to
+	// 5955.5 KiB (6,098,424 bytes): 5956 KiB.
+	treeBudget = 5<<20 + 836<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
