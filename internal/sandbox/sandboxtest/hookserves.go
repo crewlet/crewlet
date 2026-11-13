@@ -395,7 +395,7 @@ func testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight(t *testing.T, s san
 		settled, settleErr := s.SettleHook(ctx, turn, sandbox.HookSettle{Launch: launch,
 			Unanswered: []string{"in-flight"}})
 		if settleErr != nil || len(settled) != 0 {
-			return coord.SandboxRunChange{}, fmt.Errorf("the settle beside the serve's write = %v, %v, want nothing",
+			return coord.SandboxRunChange{}, fmt.Errorf("the settle beside the serve's write = %v, %w, want nothing",
 				idsOf(settled), settleErr)
 		}
 		var row sandbox.PendingRun
