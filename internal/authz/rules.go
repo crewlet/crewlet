@@ -255,6 +255,9 @@ const (
 	// ActionAtlasPurge is the tool `atlas_purge`: an entry or a value erased
 	// everywhere, its history included, and kept from coming back.
 	ActionAtlasPurge Action = "atlas_purge"
+	// ActionAtlasRefresh is the tool `atlas_refresh`: a person's ask that one
+	// source of the atlas be read now rather than on its next scheduled read.
+	ActionAtlasRefresh Action = "atlas_refresh"
 	// ActionAtlasRecord is the tool `atlas_record`: an agent's record of what
 	// a tool call of its own turn showed it (ADR-0132).
 	ActionAtlasRecord Action = "atlas_record"
@@ -1435,6 +1438,14 @@ var rules = map[Action]rule{
 	// included, and nothing brings it back (ADR-0127).
 	ActionAtlasPurge: {class: ClassAdmin, humanOnly: true, seated: true, irreversible: true,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
+
+	// A READ OF A SOURCE ASKED FOR NOW IS THE APP'S AND A PERSON'S: it changes
+	// nothing a person decided and is bounded by the engine's own floor, so any
+	// holder may ask, from any credential. Never an agent's: a read is spent
+	// against the company's rate limit at the vendor, and an agent that doubts
+	// an entry disputes it.
+	ActionAtlasRefresh: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- an agent's record in the atlas ------------------------------ //
 	//
