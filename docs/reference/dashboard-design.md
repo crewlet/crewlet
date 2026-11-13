@@ -3059,7 +3059,7 @@ company did.** That is Home until its reader arranges it (see
   two asks is said on the ask, and so is the channel an ask promised to post
   its answer to ("answer posted to #releases"). Each question is ONE ROW: the
   question (two lines at most on Home), and under it its key and "Recommended:
-  Hold release", with **Accept**, which sends that option, and a quiet
+  Hold release", with **Accept**, which sends that option, and an outlined
   **Change** at the row's end, centred on the words. **Change** opens every
   option as a choice with its detail line and the recommended one tagged
   (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
@@ -3084,7 +3084,13 @@ company did.** That is Home until its reader arranges it (see
   and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. A parked run and a stopped seat sit under the same head
-  as an ask, the seat's name said there and not again in the row's title. The
+  as an ask, the seat's name said there and not again in the row's title, with
+  the item it is on and how long ago beside the name, as an asker's questions
+  say theirs. EVERY ROW DRAWS ITS ANSWERS ONE WAY: the first filled
+  (**Accept**, **Answer**, **Allow once**, **Raise budget**), the others
+  outlined, all at the small size at the row's end. What a row is read from
+  (an escalation, a held call's arguments) is a row of its own under the words
+  and the answers, across the row's whole width. The
   card's foot, **Show 4 more in Inbox** (**Open inbox** where it lists them
   all), and **Review** both land on `#/inbox`, whose list opens with every one
   of them under Needs you.
@@ -10424,9 +10430,17 @@ so rather than drawing zeros.
 
 **A held call** (a run parked on a call to a tool at *Needs approval*) is one
 row wherever it waits on a person, the Inbox and Home as the run's decision
-and a server's Overview in a card: the agent, *Call `tool` on Server?*, the
-work item and that its run is parked, and for whoever may approve it what the
-call would send under **Arguments**. **Allow once**, **Always allow** and
+and a server's Overview in a card: the agent and the work item on its head,
+its title, that its run is parked, and under the row what the call would send
+under **Arguments**. THE TITLE IS IN PRODUCT WORDS, read from the call's own
+arguments where the reader is shown them: *Merge pull request 88 in
+acme/web?* (or *Merge change 42 in web?* for a Gitlet change), *Deploy web to
+production?*, *Run a command on web-1?*. A reader not shown a merge's, a
+deploy's or a command's arguments reads the engine's own question for it, and
+an MCP tool's call is *Call `tool` on Server?*. One function words it for the
+row, the Inbox's list and its pane (`heldCallTitle`), and where the title is
+in product words the call as it was made (its tool and server) is the first
+line under **Arguments**. **Allow once**, **Always allow** and
 **Deny** answer it through `POST /mcp-approvals/{id}`, never the run's own
 answer; Always allow asks the engine's recent step-up first. The row then says
 what the answer did and keeps that line until the list is drawn afresh; an
@@ -10441,12 +10455,18 @@ draws its status as **with delegate**, and its banner names the delegates and
 the rule ("With delegate Security Engineer (rule 1)") above the same answers,
 which a person who may approve it can still give. **An escalated call reads its
 delegates before the call itself**, in the Inbox's pane and on its row alike
-(`EscalationNote`): who put it to people under which rule ("Escalated by
-Security Engineer (rule 1)", or Crewlet where no delegate escalated), each
-delegate's verdict in its state's tone, its confidence, its reason and its
-findings in the order given (the kit's `FindingList`), then the engine's own
-sentences under **Why it reached you**; the call and its answers follow
-unchanged. A delegate's words are a model's, so all of them are plain text.
+(`EscalationNote`), as one quiet callout (the kit's `Callout` at
+`appearance="quiet"`: the warning on its glyph and its leading edge, the words
+in the page's own ink). Its heading says who put it to people, under which
+rule and, where one delegate's answer is the escalation, how sure it was
+("Escalated by Security Engineer (rule 1), low confidence", or Crewlet where
+no delegate escalated), so that answer has no line repeating its name, verdict
+or confidence. A panel's answers, or one the engine overruled, each keep a
+line of their own: the delegate, its verdict in its state's tone and its
+confidence. Under them the delegate's reason and its findings in the order
+given (the kit's `FindingList`, compact), then the engine's own sentences
+under **Why it reached you**; the call and its answers follow unchanged. A
+delegate's words are a model's, so all of them are plain text.
 
 **A held merge or deploy** (`ask_to_merge`, `ask_to_deploy`, `approvers:
 release`) is a fixed call, answered **Review and allow once** or **Deny**. For

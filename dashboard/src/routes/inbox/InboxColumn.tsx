@@ -69,6 +69,7 @@ import {
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { heldRunTitle } from "~/lib/heldCall.ts";
 import { runAskTexts } from "~/lib/runs.ts";
 
 /** A row dealt with here: how ("Answered"), and the answer that was given. */
@@ -373,8 +374,10 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
           return { text: askPreview(row.subject.ask) };
         case "run":
           return {
+            // A HELD CALL BY ITS TITLE, as the pane and Home word it; else
             // THE QUESTION WHOLE: the row's own clamp cuts a long one.
             text:
+              heldRunTitle(row.subject.run) ||
               (row.subject.run.question ?? "").trim() ||
               (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
           };
