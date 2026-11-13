@@ -110,6 +110,48 @@ var levels = []level{
 //nolint:gochecknoglobals // an immutable list, not state
 var provisionerOwnPermissions = []permission{accountTokensWrite, accountSettings, zoneRead}
 
+// atlasPermission is one permission group the atlas reads more with, and the
+// part of its read that needs it.
+type atlasPermission struct {
+	permission
+	part, shows string
+}
+
+// atlasPermissions is what the provisioner token MAY hold for the atlas and
+// never has to (ADR-0145): one read group per product the atlas draws beyond
+// DNS and certificates. NONE IS A PROVISIONER PERMISSION: no level grants one,
+// so no agent's token is ever minted with it, and a token without them is
+// whole.
+//
+//nolint:gochecknoglobals // an immutable table, not state
+var atlasPermissions = []atlasPermission{
+	{permission{"Workers Scripts Read", "Workers Scripts: Read", false}, partWorkers, "Workers"},
+	{permission{"Pages Read", "Cloudflare Pages: Read", false}, partPages, "Pages projects"},
+	{permission{"Workers R2 Storage Read", "Workers R2 Storage: Read", false}, partR2, "R2 buckets"},
+	{permission{"Cloudflare Tunnel Read", "Cloudflare Tunnel: Read", false}, partTunnels, "Tunnels"},
+}
+
+// AtlasGroups is every optional permission group the atlas reads more with,
+// by name.
+func AtlasGroups() []string {
+	out := make([]string, 0, len(atlasPermissions))
+	for _, p := range atlasPermissions {
+		out = append(out, p.name)
+	}
+	return out
+}
+
+// atlasPermissionOf is the optional permission a part of the atlas's read
+// needs.
+func atlasPermissionOf(part string) atlasPermission {
+	for _, p := range atlasPermissions {
+		if p.part == part {
+			return p
+		}
+	}
+	return atlasPermission{}
+}
+
 func names(ps []permission) []string {
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
@@ -182,10 +224,15 @@ func provisionerPermissions() []permission {
 }
 
 // DashboardName is a permission group as Cloudflare's token builder shows it
-// ("Cache Purge: Purge"), or the name itself for one this integration does
-// not name.
+// ("Cache Purge: Purge"), a provisioner's or one of the atlas's optional
+// ones, or the name itself for one this integration does not name.
 func DashboardName(name string) string {
 	for _, p := range provisionerPermissions() {
+		if p.name == name {
+			return p.builder
+		}
+	}
+	for _, p := range atlasPermissions {
 		if p.name == name {
 			return p.builder
 		}

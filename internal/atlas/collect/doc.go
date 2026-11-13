@@ -3,7 +3,8 @@
 // own credential already holds, and records on the atlas's log what the read
 // found that the log does not hold yet (ADR-0129). Its first source reads
 // Cloudflare: the account's name, every zone, every A, AAAA and CNAME record
-// and every certificate pack. Its second reads Datadog: the organization,
+// and every certificate pack, and its Workers, Pages projects, R2 buckets and
+// Tunnels by name where the token holds their optional read groups. Its second reads Datadog: the organization,
 // its monitors and their states, its service catalogue, its hosts and its
 // Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
 // agents' installations cover, its workflows and its deployment environments.
@@ -61,6 +62,12 @@
 // vendor, and otherwise only names it ([Builder.Names]); an entry the voice
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
+//
+// A part behind a permission nobody asked the company for is OPTIONAL
+// ([Unread.Optional], ADR-0145): a refusal of it is carried like any other,
+// and the standing names it only where the voice holds an entry the part
+// said exists. A company that never gave the permission lost nothing, so its
+// source reads as whole.
 //
 // # A person may ask for a read, and the floor is the duty's
 //

@@ -18,8 +18,9 @@ import (
 // Cloudflare's half of the atlas (ADR-0129): what the account holds, read
 // whole under the provisioner token the company already gave the engine. The
 // token holds every Read group on every zone (levels.go), so nothing here
-// needs a raise; what would (Workers, Pages, R2, Tunnels, load balancers) is
-// not read.
+// needs a raise. Workers, Pages, R2 and Tunnels are read as well where the
+// token holds their optional read groups (ADR-0145, atlasoptional.go); load
+// balancers are not read.
 
 func init() { collect.Register(atlasSource{}) }
 
@@ -119,6 +120,9 @@ func readAtlas(ctx context.Context, client *Client, now time.Time) (collect.Read
 			return collect.Read{}, fmt.Errorf("cloudflare: read the certificates of %s: %w", z.Name, reject(err))
 		}
 		readPacks(b, where, account, zone, names, packs)
+	}
+	if err := readOptional(ctx, b, client, account); err != nil {
+		return collect.Read{}, err
 	}
 	b.Calls(client.Calls())
 	return b.Read(), nil

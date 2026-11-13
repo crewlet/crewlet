@@ -22,6 +22,16 @@
 // A level is a list of Cloudflare's permission group names ([Groups]),
 // resolved to IDs from the account's own catalogue on every pass, because
 // Cloudflare treats the name as cosmetic and the ID as the contract.
+//
+// # The atlas reads more where the token may, and asks for nothing
+//
+// The atlas reads the account's names and certificates under the Read groups
+// the provisioner token already holds (ADR-0129, atlas.go). Four more read
+// groups (Workers Scripts, Pages, Workers R2 Storage, Cloudflare Tunnel) show
+// it those products by name (ADR-0145, atlasoptional.go). They are OPTIONAL:
+// no level grants one, so no agent's token carries it, the connect check and
+// the pass say a missing one as a suggestion on a token that works, and the
+// read leaves its part unread without failing.
 package cloudflare
 
 // Backend is the integration's name: the config block's key, the
