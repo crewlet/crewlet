@@ -51,16 +51,17 @@ func (s *cancelledAtTheDrain) answering() {
 // AFTER ITS READ. The bound on a collection's retries is on CONSECUTIVE failures
 // of the box, and a box that answered while a later step of its collection
 // failed uncounted (a store that did not answer the drain's watch or the record
-// of the sessions its job ran out of context in, or a drain this node cut short)
-// is a box that answered. Handed back with that run left open, the failures
-// from before were measured across every read it answered, and once the store
-// was back the first blip gave up as lost a box that had answered each time:
-// collect_unreachable, "its result is lost", or for a lost job its round
-// carried on without its read, uncharged.
+// of the sessions its job ran out of context in, or a read of what the run
+// pushed or a drain this node cut short) is a box that answered. Handed back
+// with that run left open, the failures from before were measured across every
+// read it answered, and once the store was back the first blip gave up as lost
+// a box that had answered each time: collect_unreachable, "its result is lost",
+// or for a lost job its round carried on without its read, uncharged.
 //
 // Mutation: drop the release's end of the run (the store's clear, or the field
 // from the release), or the mark the read sets on a collection or on a lost
-// job's carry: each turns a case red.
+// job's carry, or set the collection's mark only once its push read is done:
+// each turns a case red.
 func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testing.T) {
 	t.Parallel()
 	partial := Result{Text: "half way through", InputTokens: 900, OutputTokens: 100}
@@ -70,6 +71,9 @@ func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testin
 		// lost with its host (its round carried on).
 		box  Result
 		lost bool
+		// repos launches t1 with repositories on Gitlet, so its collection
+		// reads what it pushed once its box has answered.
+		repos bool
 		// arrange makes every collection after the first blip read the box
 		// and then fail at a later step, uncounted, and returns the context
 		// one such collection runs under and what has every step answer again.
@@ -81,6 +85,8 @@ func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testin
 			box:     Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"},
 			arrange: silentAfterTheRead("RetireSessions")},
 		{name: "a drain this node stopped", box: wholeAccount(), arrange: stoppedAtTheDrain},
+		{name: "a read of what the run pushed this node stopped", box: wholeAccount(), repos: true,
+			arrange: stoppedAtThePushRead},
 		{name: "a lost job's drain the store did not answer", box: partial, lost: true,
 			arrange: silentAfterTheRead("WatchLog")},
 	} {
@@ -88,7 +94,11 @@ func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testin
 			t.Parallel()
 			rig := newCoordRig(t)
 			next, heal := tc.arrange(t, rig)
-			rig.launch("t1")
+			if tc.repos {
+				rig.launchWith("t1", withNative)
+			} else {
+				rig.launch("t1")
+			}
 			rig.coordinator.countRun("swe", StatusRunning)
 			if tc.lost {
 				rig.runner.Lose(tc.box)
@@ -191,6 +201,32 @@ func stoppedAtTheDrain(t *testing.T, rig *coordRig) (func() context.Context, fun
 	store := &cancelledAtTheDrain{PendingStore: rig.coordinator.pending}
 	rig.coordinator.pending = store
 	return func() context.Context { return store.stopping(t) }, store.answering
+}
+
+// stoppedAtThePushRead has this node cancel each collection after the first
+// blip at its read of what the run pushed, which follows the box's read inside
+// the collection's own read: a drain, a restart or the seat moving away, as
+// the push read takes it ([Coordinator.readPushes]).
+func stoppedAtThePushRead(t *testing.T, rig *coordRig) (func() context.Context, func()) {
+	return func() context.Context {
+			ctx, cancel := context.WithCancel(t.Context())
+			reading := make(chan struct{})
+			rig.pushes.mu.Lock()
+			rig.pushes.held = reading
+			rig.pushes.mu.Unlock()
+			go func() {
+				select {
+				case <-reading:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			return ctx
+		}, func() {
+			rig.pushes.mu.Lock()
+			defer rig.pushes.mu.Unlock()
+			rig.pushes.held = nil
+		}
 }
 
 // A STEP BEFORE THE BOX WAS ASKED LEAVES THE RUN OF FAILURES AS IT STANDS. The

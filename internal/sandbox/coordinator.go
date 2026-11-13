@@ -1788,15 +1788,12 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 // alike, so a run ended unresumed is still charged and recorded for what its
 // job did.
 func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
-	result, ended, err := c.collect(ctx, run)
+	// THE CLAIM AS THE READ LEAVES IT, marked once its box answered
+	// ([Coordinator.collect]): every hand-back from here on is made with it.
+	run, result, ended, err := c.collect(ctx, run)
 	if err != nil {
 		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
-	// THE BOX ANSWERED, which ends the run of failed collections behind this
-	// one whatever a later step does: a step after the read that the store
-	// does not answer, or that this node cuts short, hands the claim back
-	// uncounted with that run ended ([Release.BoxAnswered]).
-	run.BoxAnswered = true
 	// THE JOB'S CALLS STILL IN FLIGHT, waited for on the run's log before
 	// anything reads what the job did ([Coordinator.drainCalls]): its session
 	// ended to new calls first — a park's and a run's ended at its cap alike —
@@ -2131,7 +2128,13 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 // stopped waiting for it. A job that finished before the cap makes no call to
 // refuse, and a turn past its cap starts no round that would open the session
 // again.
-func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool, error) {
+//
+// THE CLAIM IS ANSWERED BACK beside the result, marked the moment the box
+// answered ([PendingRun.BoxAnswered]), so a step of this read that fails after
+// the box's own (what the run pushed, read once the box answered) hands the
+// claim back with the run of failed collections behind it ended, as every step
+// after the read does ([Coordinator.collectFailed]).
+func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
 	if c.ended != nil && run.PastDeadline(c.now()) {
 		c.ended(run.TurnID)
 	}
@@ -2140,8 +2143,16 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	// under the turn the result is fitted for.
 	result, ended, err := c.boxResult(ctx, run, BoxReadCollect)
 	if err != nil {
-		return Result{}, false, err
+		return run, Result{}, false, err
 	}
+	// THE BOX ANSWERED, which ends the run of failed collections behind this
+	// one whatever a later step does: a step after the read that the store
+	// does not answer, or that this node cuts short, hands the claim back
+	// uncounted with that run ended ([Release.BoxAnswered]). Marked here, at
+	// the box's answer, and not once this read returns: what the run pushed is
+	// read after it, and a read this node cut short there is one of those
+	// steps.
+	run.BoxAnswered = true
 	if ended {
 		result = endedAtDeadline(result, run.Deadline, run.Question)
 	}
@@ -2149,11 +2160,11 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	// WHAT IT PUSHED, read here, where the result is used: the push record is
 	// Gitlet's, which the seat's node reaches ([RunPushes]).
 	if result, err = c.readPushes(ctx, run, result); err != nil {
-		return Result{}, false, err
+		return run, Result{}, false, err
 	}
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
 	// so the launch's record, the park and the run's report carry one text.
-	return c.fitText(ctx, run, result), ended, nil
+	return run, c.fitText(ctx, run, result), ended, nil
 }
 
 // noteReader is a [Runner] whose harness takes a person's notes to its run's turn

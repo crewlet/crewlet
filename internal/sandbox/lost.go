@@ -270,10 +270,11 @@ func cutOff(result Result, cause LossCause) Result {
 // whatever the window counted before it: the bound is on a box that does not
 // answer, and the store's silence says nothing about the box. The host's read
 // of the run's row comes before the box is asked at all, and every other such
-// step comes after a read the box answered, which ends the run of failures
-// behind it as the claim goes back ([Release.BoxAnswered]). Given up, a lost
-// job's round was carried on without its read ([Coordinator.carryOnLost]),
-// uncharged for what its box still held.
+// step comes after the box's read, where the job's box is read at all (a lost
+// job whose box went with its host has none); a read the box answered ends the
+// run of failures behind it as the claim goes back ([Release.BoxAnswered]).
+// Given up, a lost job's round was carried on without its read
+// ([Coordinator.carryOnLost]), uncharged for what its box still held.
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
 	switch {
 	case errors.Is(cause, ErrStoreSilent):
