@@ -1080,9 +1080,7 @@ func (w *holdingsWalk) notification(line threadLine, message threadMessage, reco
 	if !ok {
 		return nil
 	}
-	// AN ORIGIN THAT DOES NOT DECODE IS NO NOTIFICATION, the one fact it could
-	// have been, and costs the reading nothing more.
-	if kind, err := line.OriginKind(); err != nil || kind != claudeTaskNotification {
+	if originOf(line) != claudeTaskNotification {
 		return nil
 	}
 	agent, leg, ok := taskNotification(text)
@@ -1099,6 +1097,18 @@ func (w *holdingsWalk) notification(line threadLine, message threadMessage, reco
 	}
 	w.notices[key] = noticeFact{record: record}
 	return nil
+}
+
+// originOf is the kind line's origin names, "" where its origin does not
+// decode. AN ORIGIN THAT DOES NOT DECODE IS NO NOTIFICATION, the one fact it
+// could have been, and costs the reading nothing more, so its error is the
+// answer "none" rather than the reading's.
+func originOf(line threadLine) string {
+	kind, err := line.OriginKind()
+	if err != nil {
+		return ""
+	}
+	return kind
 }
 
 // subagentThread reads subagent agent's thread, whose bytes member hands out,
