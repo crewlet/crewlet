@@ -1192,11 +1192,24 @@ func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) st
 // stopNotifications takes the inbound edge down.
 func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mu.Lock()
+	service := e.notify.service
 	selfHosted := e.notify.mattermost
 	hosted := e.notify.slack
 	chatletStatus := e.notify.chatletStatus
 	e.notify.mattermost, e.notify.slack, e.notify.chatletStatus = nil, nil, nil
 	e.notify.mu.Unlock()
+	if service != nil {
+		// THE REPLAY OF THE INBOUND GROUP'S UNHANDLED DELIVERIES, which
+		// runs on a goroutine of the service's own ([notify.Service.Start])
+		// and reads the queue this teardown is about to close: ended and
+		// waited for first, so it never calls a closed queue. What it did
+		// not reach stays kept for the next start.
+		if err := service.Stop(ctx); err != nil {
+			log.WarnContext(ctx, "inbound_replay_stop_unfinished", "error", err.Error(),
+				"detail", "the replay of the inbound group's unhandled deliveries was "+
+					"still running when the stop's allowance ran out")
+		}
+	}
 	if chatletStatus != nil {
 		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the room's presence
 		// would go on showing a seat working on a turn this process is

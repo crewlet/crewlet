@@ -231,6 +231,17 @@ type Service struct {
 	// JOIN after the service is running — an extension registering a custom
 	// transport, or a backend that came up late — and the delivery path
 	// reads them on every event.
+
+	// replaying is the replay [Service.Start] began, on a goroutine of its
+	// own, until [Service.Stop] ends it: its cancel, and done, closed once
+	// it has returned. Nil before Start.
+	replaying *replayRun
+}
+
+// replayRun is one replay's goroutine, as the service that started it stops it.
+type replayRun struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New builds the inbound service.
@@ -370,14 +381,30 @@ func (s *Service) Unregister(source string) bool {
 	return true
 }
 
-// Start attaches to the inbound topic, then replays the inbound group's
-// passed wakes that no node handled while they were offered (replay.go).
+// Start attaches to the inbound topic, then begins the replay of the inbound
+// group's unhandled deliveries — the wakes no node handled while they were
+// offered (replay.go) — and returns without waiting for it.
 //
-// THE REPLAY AFTER THE SUBSCRIBE AND OUTSIDE THE LOCK. After, so this node is
-// a member of the group whatever the replay meets: a replay that failed part
-// way leaves its copies kept for the next start, and must not leave the node
-// deaf. Outside, because the replay handles each copy through [Service.Handle],
-// which takes the read lock, and Go's RWMutex is not reentrant.
+// THE REPLAY AFTER THE SUBSCRIBE, so this node is a member of the group
+// whatever the replay meets: a replay that failed part way leaves its copies
+// kept for the next start, and must not leave the node deaf.
+//
+// AND ON A GOROUTINE OF ITS OWN, which [Service.Stop] ends — as a change
+// feed's replay runs on the feed's own (internal/changefeed). Start runs in
+// the engine's boot and in a first company's apply, ahead of the epoch it
+// publishes, and the replay handles its copies one after another, each a
+// frame's read, a delivery's publishes and a drop, as many as a paused roll
+// left: run here, it held both for the whole backlog, with nothing bounding
+// it. Nothing about correctness needs it here either: the subscription is live
+// before it begins, so live deliveries run beside it. Its context is ctx's
+// values without ctx's end, because a caller's context — an apply's — ends
+// when the call does, and the replay outlives the call; what ends it is Stop.
+// A replay stopped part way keeps every copy it did not reach, and every copy
+// it was handling when stopped that it could not settle, for the next start.
+//
+// Outside the lock, because the replay handles each copy through
+// [Service.Handle], which takes the read lock, and Go's RWMutex is not
+// reentrant.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.started {
@@ -393,10 +420,45 @@ func (s *Service) Start(ctx context.Context) error {
 	// the write lock, and Go's RWMutex is not reentrant — a read lock
 	// taken by the same goroutine deadlocks the boot.
 	sources := slices.Sorted(maps.Keys(s.parsers))
+	replayCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	run := &replayRun{cancel: cancel, done: make(chan struct{})}
+	s.replaying = run
 	s.mu.Unlock()
 	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
-	s.replay(ctx)
+	go func() {
+		defer close(run.done)
+		s.replay(replayCtx)
+	}()
 	return nil
+}
+
+// Stop ends what [Service.Start] began that outlives it, the replay, and waits
+// for it to return, or for ctx to end, which it answers with ctx's error
+// wrapped: the replay is then still running. Nothing before Start, and nothing
+// more the second time.
+//
+// A REPLAY STOPPED PART WAY LOSES NOTHING: a copy it never reached is still
+// kept, and one it was handling when stopped either settled — its wakes
+// published and its entry dropped — or is kept as a delivery whose wake was not
+// published, for the next start.
+//
+// The inbound subscription is left as it is: the queue it is on ends it, as it
+// ends every subscription of the node.
+func (s *Service) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	run := s.replaying
+	s.mu.Unlock()
+	if run == nil {
+		return nil
+	}
+	run.cancel()
+	select {
+	case <-run.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("notify: stop the replay of the inbound group's unhandled "+
+			"deliveries: %w", ctx.Err())
+	}
 }
 
 // Sources lists the integrations this service can route, sorted — the

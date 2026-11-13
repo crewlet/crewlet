@@ -3,8 +3,10 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -27,8 +29,9 @@ import (
 // What lets a node read a newer record is a newer build, which arrives only
 // with a restart — the change feed's reason for replaying there too
 // (internal/changefeed's Feed.replay). So [Service.Start] lists the group's
-// unhandled subject once, after it subscribes, and handles each copy it holds
-// through [Service.Handle], the parse and the delivery a live delivery runs:
+// unhandled subject once, after it subscribes, on a goroutine of its own that
+// [Service.Stop] ends, and handles each copy it holds through
+// [Service.Handle], the parse and the delivery a live delivery runs:
 //
 //   - a copy this node handles — its wakes delivered, or parsed to nobody, or
 //     settled as any delivery is — is DROPPED;
@@ -41,6 +44,17 @@ import (
 //
 // The group's poison — a delivery a FAILURE retired — is kept on its other
 // dead-letter subject, which this never reads.
+//
+// # Each copy contained as a delivery is
+//
+// A live delivery runs [Service.Handle] inside the queue's recover, where a
+// panic is a Nak and a line, and the queue goes on with the rest. The replay
+// is no queue handler, so it contains each copy itself, the queue's way
+// ([panics.Recovered], [panics.ScopeQueue]): a copy whose handling panicked
+// is KEPT, under a line naming its sequence, and the replay goes on with the
+// next. Uncontained, a panic on one copy ended the process at every start of
+// a node of the build that reads it — the only build that gets that far —
+// since the copy, never dropped, was handled again at the next.
 //
 // # Two nodes starting together may both deliver one copy, and that is safe
 //
@@ -82,7 +96,8 @@ const (
 )
 
 // replay handles every copy the inbound group's unhandled subject holds, once,
-// at the start: see this file's head for what becomes of each.
+// at the start, until ctx ends — [Service.Stop] ends it — leaving every copy it
+// did not reach kept: see this file's head for what becomes of each.
 func (s *Service) replay(ctx context.Context) {
 	subject := UnhandledSubject()
 	kept, err := s.queue.DeadLettersOn(ctx, subject)
@@ -95,13 +110,19 @@ func (s *Service) replay(ctx context.Context) {
 		return
 	}
 	fates := map[letterFate]int{}
+	reached := 0
 	for _, entry := range kept {
+		if ctx.Err() != nil {
+			break
+		}
+		reached++
 		fates[s.replayOne(ctx, subject, entry)]++
 	}
 	if len(kept) > 0 {
 		log.InfoContext(ctx, "inbound_dead_letters_replayed", "subject", subject,
-			"listed", len(kept), "replayed", fates[letterDropped], "kept", fates[letterKept],
-			"gone", fates[letterGone])
+			"listed", len(kept), "replayed", fates[letterDropped],
+			"kept", fates[letterKept]+len(kept)-reached, "gone", fates[letterGone],
+			"stopped", reached < len(kept))
 	}
 }
 
@@ -129,7 +150,7 @@ func (s *Service) replayOne(ctx context.Context, subject string, entry queue.Kep
 			"detail", "kept for a build that reads it: its copy reads as no event here")
 		return letterKept
 	}
-	res := s.Handle(ctx, &ev)
+	res := s.handleContained(ctx, subject, entry.Seq, &ev)
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		if err := s.queue.DropDeadLetter(ctx, subject, entry.Seq); err != nil {
@@ -157,4 +178,26 @@ func (s *Service) replayOne(ctx context.Context, subject string, entry queue.Kep
 			"detail", "kept, and replayed at the next start")
 	}
 	return letterKept
+}
+
+// handleContained handles ev, the copy kept on subject as the entry seq, as
+// [Service.Handle] handles a delivery, and contains a panic the way the queue
+// contains a handler's: read through [panics.Recovered] in the queue's scope,
+// logged with the copy's sequence and its stack, and answered as a Nak — a
+// copy whose wake was not delivered, which the replay keeps.
+func (s *Service) handleContained(ctx context.Context, subject string, seq uint64,
+	ev *events.Event) (res queue.Result) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeQueue, r)
+			log.ErrorContext(ctx, "inbound_dead_letter_panicked", "subject", subject,
+				"seq", seq, "event", ev.ID, "source", ev.Source, "panic", r,
+				"stack", contained.Stack,
+				"detail", "kept, and replayed at the next start; the replay goes on with "+
+					"the copies after it")
+			res = queue.Nak(fmt.Errorf("handling the replayed copy panicked: %w", contained.Err()))
+		}
+	}()
+	return s.Handle(ctx, ev)
 }

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
@@ -90,12 +93,20 @@ func node(t *testing.T, h *harness, parser notify.Parser,
 	return svc
 }
 
-// start starts svc, failing the case on an error.
+// start starts svc and waits for the replay its start began to return, failing
+// the case on an error, and stops svc when the case ends: a replay runs on a
+// goroutine of its own, which the case must not leave running.
 func start(t *testing.T, svc *notify.Service) {
 	t.Helper()
 	if err := svc.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := svc.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+	<-svc.Replayed()
 }
 
 // inboundLetters is what one of the inbound group's dead-letter subjects
@@ -248,4 +259,135 @@ func (q failingWakes) Publish(ctx context.Context, topic string, ev *events.Even
 		return q.boom
 	}
 	return q.EventQueue.Publish(ctx, topic, ev)
+}
+
+// staged keeps ev on the inbound group's unhandled subject, as the queue keeps
+// a delivery no member handled, under id, and answers the entry's sequence.
+func staged(t *testing.T, h *harness, id string, ev *events.Event) uint64 {
+	t.Helper()
+	frame, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("encode the copy: %v", err)
+	}
+	if _, err := h.q.KeepDeadLetter(t.Context(), notify.UnhandledSubject(), id, nil, frame); err != nil {
+		t.Fatalf("KeepDeadLetter: %v", err)
+	}
+	kept := inboundLetters(t, h.q, notify.UnhandledSubject())
+	return kept[len(kept)-1].Seq
+}
+
+// panickingParser reads a relayed record as versionedParser does, and panics
+// on the one whose change is panicsOn.
+type panickingParser struct {
+	versionedParser
+	panicsOn string
+}
+
+func (p panickingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify.Registry) ([]notify.Routed, error) {
+	if change, _ := w.Body["change"].(string); change == p.panicsOn {
+		panic("the parser met a record it was never written for")
+	}
+	return p.versionedParser.Parse(ctx, w, r)
+}
+
+// A REPLAYED COPY WHOSE HANDLING PANICS IS KEPT, AND THE REPLAY GOES ON.
+//
+// A live delivery runs inside the queue's recover, where a panic is a Nak and
+// a line; the replay is no queue handler, so it contains each copy itself.
+// Uncontained, a panic on one copy ended the process at every start of a node
+// of the build that reads it — the only build that gets that far — because the
+// copy, never dropped, was handled again at the next start.
+//
+// The replay is run on the case's own goroutine (ReplayNow), as Start's
+// goroutine runs it, so a panic it fails to contain fails this case by name.
+//
+// Mutation: drop the recover from handleContained, and the panic fails the
+// case.
+func TestAReplayedCopyThatPanicsIsKeptAndTheReplayGoesOn(t *testing.T) {
+	newer := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{panickingParser{versionedParser{reads: 2}, "op-panic"}}
+	})
+	broken := relayed("2", "op-panic")
+	brokenAt := staged(t, newer, "the copy that panics", broken)
+	staged(t, newer, "the copy after it", relayed("2", "op-9"))
+
+	newer.svc.ReplayNow(t.Context())
+	woken := newer.settledN(t, inbox("engineering-lead"), 1)
+	if len(woken) != 1 || woken[0].ID != changefeed.WakeID("op-9", "engineering-lead") {
+		t.Fatalf("the seat was woken %d time(s), want once, by the copy after the one that "+
+			"panicked", len(woken))
+	}
+	left := inboundLetters(t, newer.q, notify.UnhandledSubject())
+	if len(left) != 1 || left[0].Seq != brokenAt {
+		t.Fatalf("after the replay the unhandled subject holds %d entries, want the copy that "+
+			"panicked alone, kept for a later start", len(left))
+	}
+}
+
+// blockingParser reads a relayed record as versionedParser does, and holds the
+// first one it is handed until released, saying when it has it.
+type blockingParser struct {
+	versionedParser
+	once             *sync.Once
+	entered, release chan struct{}
+}
+
+func (p blockingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify.Registry) ([]notify.Routed, error) {
+	p.once.Do(func() {
+		close(p.entered)
+		<-p.release
+	})
+	return p.versionedParser.Parse(ctx, w, r)
+}
+
+// A START RETURNS WHILE ITS REPLAY RUNS, AND A STOP ENDS THE REPLAY, KEEPING
+// WHAT IT DID NOT REACH.
+//
+// The replay handles its copies one after another, as many as a paused roll
+// left, and a start runs in the engine's boot and ahead of a first company's
+// epoch: run inside Start, it held both for the whole backlog. So it runs on a
+// goroutine of its own, which Stop ends — and a copy it never reached is still
+// kept, for the next start. In a bubble, so a Start that waited for its replay
+// is a deadlock the bubble reports, never a case that hangs.
+//
+// Mutation: replay inside Start, and every goroutine of the bubble is blocked
+// on the held copy; end the replay at Stop without waiting for it, or never
+// end it, and the second copy is replayed after the Stop returned.
+func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parser := blockingParser{versionedParser: versionedParser{reads: 2}, once: &sync.Once{},
+			entered: make(chan struct{}), release: make(chan struct{})}
+		newer := newService(t, func(o *notify.Options, _ *harness) {
+			o.Parsers = []notify.Parser{parser}
+		})
+		staged(t, newer, "the copy held", relayed("2", "op-10"))
+		secondAt := staged(t, newer, "the copy never reached", relayed("2", "op-11"))
+
+		if err := newer.svc.Start(t.Context()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		<-parser.entered
+		stopped := make(chan error, 1)
+		go func() { stopped <- newer.svc.Stop(context.Background()) }()
+		// THE STOP HAS ENDED THE REPLAY'S CONTEXT AND WAITS FOR IT, which is
+		// held on its first copy until released.
+		synctest.Wait()
+		close(parser.release)
+		if err := <-stopped; err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		left := inboundLetters(t, newer.q, notify.UnhandledSubject())
+		if len(left) == 0 || left[len(left)-1].Seq != secondAt {
+			t.Fatalf("after a stop mid-replay the unhandled subject holds %d entries, want the "+
+				"copy the replay never reached among them", len(left))
+		}
+		newer.mu.Lock()
+		woken := slices.Clone(newer.seen[inbox("engineering-lead")])
+		newer.mu.Unlock()
+		for _, ev := range woken {
+			if ev.ID == changefeed.WakeID("op-11", "engineering-lead") {
+				t.Fatal("the copy the stop came before was replayed after the stop returned")
+			}
+		}
+	})
 }
