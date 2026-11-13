@@ -54,9 +54,10 @@ import (
 //
 // A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT ([SessionHoldings.Holds]): one
 // live result, in the main thread or in the thread of a subagent the reading
-// reports, whose failure is the log's, whose text is as long as the output the
-// log took and whose opening is the log's, compared by a digest, so no tool
-// output leaves the archive. ADR-0073 records the reading.
+// reports, whose failure is the log's and whose text is the output the log
+// took: every byte of an output the log kept whole, and the size and opening
+// of one it cut, compared by digests, so no tool output leaves the archive.
+// ADR-0073 records the reading.
 
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
@@ -168,13 +169,16 @@ type CallRecords struct {
 	// it to its model whole when the session is continued, which a result its
 	// harness hands its model replaced by a preview is not; Failed, its is_error,
 	// absent read as false; TextBytes, its text's length, -1 where its
-	// content is neither a string nor one text block; and Opening, the
-	// SHA-256 of its text's first min([HoldingsOpeningBytes], TextBytes)
-	// bytes.
+	// content is neither a string nor one text block; Opening, the SHA-256 of
+	// its text's first min([HoldingsOpeningBytes], TextBytes) bytes; and
+	// Whole, the SHA-256 of its whole text where TextBytes is at most
+	// [MaxBridgeOutputBytes], the most of an output the log keeps whole, and
+	// zero where it is longer.
 	Live      bool
 	Failed    bool
 	TextBytes int
 	Opening   [32]byte
+	Whole     [32]byte
 }
 
 // SubagentThread is what a reading says of one subagent whose thread holds a
@@ -195,18 +199,20 @@ type SubagentThread struct {
 
 // HoldingsOpeningBytes is how much of a call's output, from its start,
 // [SessionHoldings.Holds] compares with the text of the result its session
-// holds, by digest ([CallRecords.Opening]), beside the whole output's length.
+// holds where the log cut the output, by digest ([CallRecords.Opening]),
+// beside the whole output's length.
 //
 // 256 BYTES, INSIDE WHAT THE LOG ALWAYS KEEPS OF AN OUTPUT: past
 // [MaxBridgeOutputBytes] the log keeps an output's opening and a marker
 // ([keptCall]), and an output whose every byte the log's encoding escapes to
 // six still keeps 672 bytes of its opening, so the first 256 bytes of every
 // kept output are the output's own (TestALoggedOutputKeepsTheOpeningAHoldingCompares
-// holds the margin). A result whose text is as long as the output and opens
-// alike for those bytes is read as the output; one its harness wrote itself,
-// without the call's outcome (a resume's for a call it found open, a stopped
-// harness's, a timed-out call's), carries the harness's own words, and is
-// told.
+// holds the margin). A result whose text is as long as an output the log cut,
+// and opens alike for those bytes, is read as the output; an output the log
+// kept whole is compared whole ([CallRecords.Whole]). One its harness wrote
+// itself, without the call's outcome (a resume's for a call it found open, a
+// stopped harness's, a timed-out call's), carries the harness's own words, and
+// is told.
 const HoldingsOpeningBytes = 256
 
 // Holds is whether the session holds c's logged result, and where it does not,
@@ -217,9 +223,12 @@ const HoldingsOpeningBytes = 256
 // ONLY THROUGH ONE LIVE RESULT THAT IS THE LOG'S: records naming c in one
 // thread alone, one use and one result there, the result live, in the main
 // thread or in the thread of a subagent the reading reports, its failure the
-// log's, its text as long as the whole output the log took, and its opening
-// the log's ([HoldingsOpeningBytes]). Its harness was handed exactly the output
-// the log took, so a result anything else wrote never matches, and is told.
+// log's, its text as long as the whole output the log took, and that text the
+// log's: every byte of it where the log kept the output whole
+// ([CallRecords.Whole]), and its opening where the log cut it
+// ([HoldingsOpeningBytes]), the most of it the log keeps for certain. Its
+// harness was handed exactly the output the log took, so a result anything
+// else wrote never matches, and is told.
 // A reading of no kind this build reads ([HoldingsKind.Valid]) holds no call.
 // Asked only of a call its reading was asked about ([LoggedCall.Asked]).
 func (h SessionHoldings) Holds(c LoggedCall) (held bool, under string) {
@@ -255,6 +264,13 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 	opening := min(HoldingsOpeningBytes, whole)
 	if whole < 0 || records.TextBytes != whole || opening > len(c.Output) {
 		return false, ""
+	}
+	// AN OUTPUT THE LOG KEPT WHOLE IS COMPARED WHOLE, never by its opening
+	// alone, which a result alike that far and otherwise past it would match.
+	// A reader keeps no whole digest of a text longer than the log keeps
+	// whole, so one logged whole and longer, which no log writes, is told.
+	if c.OutputBytes == 0 {
+		return records.Whole == sha256.Sum256([]byte(c.Output)), ""
 	}
 	return records.Opening == sha256.Sum256([]byte(c.Output[:opening])), ""
 }

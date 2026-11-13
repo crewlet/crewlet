@@ -25,8 +25,12 @@ func openingOf(text string) [32]byte {
 // recordsOf is what a reading counts of a call whose records lie in the main
 // thread: one use, and one live result holding text, failed or not.
 func recordsOf(text string, failed bool) CallRecords {
-	return CallRecords{Threads: 1, Uses: 1, Results: 1, Live: true, Failed: failed, TextBytes: len(text),
+	records := CallRecords{Threads: 1, Uses: 1, Results: 1, Live: true, Failed: failed, TextBytes: len(text),
 		Opening: openingOf(text)}
+	if len(text) <= MaxBridgeOutputBytes {
+		records.Whole = sha256.Sum256([]byte(text))
+	}
+	return records
 }
 
 // readingOf is a reading by id that counted records of the calls named.
@@ -37,19 +41,22 @@ func readingOf(records map[string]CallRecords) SessionHoldings {
 // A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT. The session holds a call's
 // logged result where the reading counted records naming it in one thread
 // alone, one use and one result there, the result live, its failure the log's
-// and its text as long as the whole output the log took and opening as the
-// log's does; then it is held, an output the log cut as much as one it kept
-// whole. Anything else is told, in the main list: a call no record names, one
-// whose id the log never recorded, records in two threads, a use or a result
-// missing or repeated, a result before a restart, a failure the log and the
-// session do not share, either way, a text of another length or another
-// opening, content that is no text, a log whose kept opening is shorter than
-// the digest or whose size is no size; and every call of no reading, or of a
-// reading of a kind this build does not read, which is by_id alone.
+// and its text the log's, every byte of an output the log kept whole and the
+// size and opening of one it cut; then it is held, an output the log cut as
+// much as one it kept whole. Anything else is told, in the main list: a call
+// no record names, one whose id the log never recorded, records in two
+// threads, a use or a result missing or repeated, a result before a restart, a
+// failure the log and the session do not share, either way, a text of another
+// length, a whole output's text otherwise anywhere, past its opening among it,
+// a cut output's text that opens otherwise, content that is no text, a log
+// whose kept opening is shorter than the digest or whose size is no size; and
+// every call of no reading, or of a reading of a kind this build does not
+// read, which is by_id alone.
 //
 // Mutation: hold a call whose failure the session and the log do not share,
-// or measure a cut output by what the log kept of it rather than by its whole
-// size, and a case goes red; drop any other condition and its case goes red.
+// measure a cut output by what the log kept of it rather than by its whole
+// size, or compare a whole output by its opening alone, and a case goes red;
+// drop any other condition and its case goes red.
 func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01H8xQ"
@@ -64,6 +71,9 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 	}
 	logged := LoggedCall{ID: id, Asked: true, Output: output}
 	failed := LoggedCall{ID: id, Asked: true, Failed: true, Output: output}
+	// AN OPENING AS LONG AS ITS DIGEST, which an output the log keeps whole
+	// and a result four bytes longer share.
+	opened := strings.Repeat("o", HoldingsOpeningBytes)
 	edited := func(edit func(*CallRecords)) SessionHoldings {
 		records := recordsOf(output, false)
 		edit(&records)
@@ -96,9 +106,17 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 		"failed in the session alone": {reading: edited(func(r *CallRecords) { r.Failed = true }), call: logged},
 		"failed in the log alone":     {reading: edited(func(*CallRecords) {}), call: failed},
 		"a text of another length":    {reading: edited(func(r *CallRecords) { r.TextBytes++ }), call: logged},
-		"a text that opens otherwise": {reading: edited(func(r *CallRecords) {
-			r.Opening = openingOf(strings.Repeat("x", len(output)))
+		"a whole output's text otherwise": {reading: edited(func(r *CallRecords) {
+			r.Whole = sha256.Sum256([]byte(strings.Repeat("x", len(output))))
 		}), call: logged},
+		"a whole output's text alike to its opening's end, and otherwise past it": {
+			reading: readingOf(map[string]CallRecords{id: recordsOf(opened+"TAIL", false)}),
+			call:    LoggedCall{ID: id, Asked: true, Output: opened + "tail"}},
+		"a cut output's text that opens otherwise": {reading: readingOf(map[string]CallRecords{id: func() CallRecords {
+			records := recordsOf(long, false)
+			records.Opening = openingOf(strings.Repeat("x", len(long)))
+			return records
+		}()}), call: LoggedCall{ID: id, Asked: true, Output: cut.Output, OutputBytes: cut.OutputBytes}},
 		"content that is no text": {reading: edited(func(r *CallRecords) { r.TextBytes = -1 }), call: logged},
 		"a kept opening shorter than the digest": {reading: readingOf(map[string]CallRecords{
 			id: recordsOf(long, false)}), call: LoggedCall{ID: id, Asked: true, Output: long[:100],

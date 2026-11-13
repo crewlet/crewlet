@@ -121,10 +121,13 @@ import (
 // the main thread, and leaves a subagent's thread not whole.
 //
 // RULE 4, THE LOGGED RESULT: a call is held only through its one result, whose
-// is_error is the log's failure and whose text ([resultText]) is as long as the
-// log's output and opens alike ([sandbox.HoldingsOpeningBytes]); a result
-// whose content is no string and no one text block has no text a log's output
-// can match. Rule 3 is met by it: a result written by a process that never saw
+// is_error is the log's failure and whose text ([resultText]) is the log's
+// output: every byte of it where the log kept the output whole, and else as
+// long as it and opening alike ([sandbox.HoldingsOpeningBytes]), compared by
+// digests the reading keeps of the text, its whole where it is no longer than
+// the log keeps an output whole ([sandbox.CallRecords.Whole]); a result whose
+// content is no string and no one text block has no text a log's output can
+// match. Rule 3 is met by it: a result written by a process that never saw
 // the call's outcome (a resume's for a call it found open, a stopped harness's
 // own, the text of a call its harness gave up on) never carries the log's
 // text, so no mark such a process writes is read.
@@ -412,8 +415,8 @@ type callFacts struct {
 	threads      int
 	thread, last string
 	// useThread and useLine are the thread and the place of its first use's
-	// line, resultThread and line its first result's; failed, textBytes and
-	// opening are that result's ([sandbox.CallRecords]).
+	// line, resultThread and line its first result's; failed, textBytes,
+	// opening and whole are that result's ([sandbox.CallRecords]).
 	useThread    string
 	useLine      int
 	resultThread string
@@ -421,6 +424,7 @@ type callFacts struct {
 	failed       bool
 	textBytes    int
 	opening      [32]byte
+	whole        [32]byte
 	// replaced is whether a content-replacement record of a thread read
 	// names it: its harness hands its model a preview in its result's place
 	// ([threadLine.ReplacedResults]).
@@ -674,6 +678,11 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int) {
 		if text, ok := resultText(call.Content); ok {
 			facts.textBytes = len(text)
 			facts.opening = sha256.Sum256([]byte(text[:min(sandbox.HoldingsOpeningBytes, len(text))]))
+			// WHOLE ONLY WHERE A LOG COULD HAVE KEPT IT WHOLE: a longer text
+			// is compared by its opening alone, so its whole is never hashed.
+			if len(text) <= sandbox.MaxBridgeOutputBytes {
+				facts.whole = sha256.Sum256([]byte(text))
+			}
 		}
 	}
 }
@@ -1141,7 +1150,7 @@ func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 			continue
 		}
 		records := sandbox.CallRecords{Threads: f.threads, Uses: f.uses, Results: f.results, Failed: f.failed,
-			TextBytes: f.textBytes, Opening: f.opening}
+			TextBytes: f.textBytes, Opening: f.opening, Whole: f.whole}
 		if f.threads == 1 {
 			records.Thread = f.thread
 		}

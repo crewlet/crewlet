@@ -723,7 +723,51 @@ func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 	})
 }
 
+// A WHOLE LOGGED OUTPUT IS HELD TO EVERY BYTE OF ITS RESULT: where the log kept
+// a call's output whole, its result's text is compared with all of it, so a
+// result as long and alike for its opening's digest, and otherwise past it,
+// is told, where the same text whole is held. A cut output is compared by its
+// size and opening, the most of it the log keeps for certain, so a result
+// alike that far is held whatever it holds past it; and a text longer than any
+// output the log keeps whole keeps no whole digest.
+//
+// Mutation: compare a whole output by its opening alone, and the result
+// otherwise past it holds its call; or keep no whole digest, and the whole
+// one is told.
+func TestAWholeLoggedOutputIsHeldToEveryByteOfItsResult(t *testing.T) {
+	t.Parallel()
+	const id = "toolu_whole_text"
+	opening := strings.Repeat("o", sandbox.HoldingsOpeningBytes)
+	long := opening + strings.Repeat("l", sandbox.MaxBridgeOutputBytes)
+	for name, tc := range map[string]struct {
+		text string
+		call sandbox.LoggedCall
+		held bool
+	}{
+		"a whole output, its result whole":              {opening + "tail", hsLogged(id, opening+"tail"), true},
+		"a whole output, its result otherwise past it":  {opening + "TAIL", hsLogged(id, opening+"tail"), false},
+		"a whole output, its result otherwise early on": {"O" + opening[1:] + "tail", hsLogged(id, opening+"tail"), false},
+		"a cut output, its result alike to its opening's end": {long, sandbox.LoggedCall{ID: id, Asked: true,
+			Output: opening + "…(marker)", OutputBytes: len(long)}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			thread := hsThread(hsCall(ctUUID(1), 2, id, hsBlock(t, tc.text))...)
+			got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(tc.call))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(tc.call); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[id], tc.held)
+			}
+			if records := got.Calls[id]; (records.Whole == [32]byte{}) != (len(tc.text) > sandbox.MaxBridgeOutputBytes) {
+				t.Errorf("a text of %d bytes keeps the whole digest %x; want one only up to %d bytes", len(tc.text),
+					records.Whole, sandbox.MaxBridgeOutputBytes)
+			}
+		})
+	}
+}
+
 // THE RESUME'S MARK DECIDES NOTHING (rule 3, met by rule 4). Measured (EK): a
+
 // resume that finds a call with no result writes one of its own, a failure in
 // its own words, marked `toolDenialKind: interrupted`; read against the
 // success the log took, its call is told. And it is told for its failure and

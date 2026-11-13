@@ -2382,16 +2382,17 @@ continuation hand its model every whole-line result after the last restart,
 verbatim and with its call, the results off the chain that parallel calls leave
 among them. A result is live only past its call's use in its own thread, since
 the API refuses a result no call of its own precedes. A result its harness
-replaced for its model is live in no thread:
-behind a flag Anthropic's servers set, Claude Code hands its model a preview in
-place of the largest results a reply's calls returned past a budget, records
-the replacement beside the result's own record, which keeps the whole output,
-and hands the preview again on resume. Rule 4: a call is held only through its
-one counted result, whose
-`is_error` is the log's failure and whose text is as long as the output the log
-took and opens alike, compared by a SHA-256 of its first 256 bytes, inside the
-672 bytes of its opening the log always keeps (`HoldingsOpeningBytes`), so no
-tool output leaves the archive. Rule 3, a result a process wrote without the
+replaced for its model is live in no thread: behind a flag Anthropic's servers
+set, Claude Code hands its model a preview in place of the largest results a
+reply's calls returned past a budget, records the replacement beside the
+result's own record, which keeps the whole output, and hands the preview again
+on resume. Rule 4: a call is held only through its one counted result, whose
+`is_error` is the log's failure and whose text is the output the log took,
+compared by SHA-256 digests so no tool output leaves the archive: every byte of
+it where the log kept the output whole (up to `MaxBridgeOutputBytes`, 4 KiB),
+and else its length and its first 256 bytes, inside the 672 bytes of its
+opening the log always keeps of an output it cut (`HoldingsOpeningBytes`).
+Rule 3, a result a process wrote without the
 call's outcome (a resume's for a call it found open, a stopped harness's, a
 call its harness gave up on), is met by rule 4, and no mark such a result
 carries is read. Rule 2: a call in a subagent's thread is held only where the
