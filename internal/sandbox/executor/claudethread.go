@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -458,7 +459,7 @@ type threadLine struct {
 	// Head is what every reader needs of the line.
 	Head threadHead
 
-	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
+	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -479,6 +480,7 @@ type threadWire struct {
 	Origin        json.RawMessage `json:"origin"`
 	ToolUseID     json.RawMessage `json:"toolUseID"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	APIError      json.RawMessage `json:"isApiErrorMessage"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -505,7 +507,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	return threadLine{
 		N: n, Raw: raw, Head: head,
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult,
+		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
 	}, nil
 }
 
@@ -1374,7 +1376,14 @@ func (m threadMessage) Calls() []threadCall { return m.calls }
 // the text's first: a thread cut between them ends on a record of text alone,
 // which reads as a finished leg. Only the stop_reason tells the two apart:
 // "tool_use" on every such text record measured, as on its call's, and
-// "end_turn" or "stop_sequence" on every other record of text alone.
+// "end_turn" or "stop_sequence" on every other record of text alone. Its
+// reader takes a leg for finished on "end_turn" alone, with no API error and
+// a model other than "<synthetic>" ([threadLine.APIError],
+// [threadLine.Model]), as Claude Code itself tests a reply with which its
+// model ended its turn: every reply the harness writes itself in place of a
+// model's, as 2.1.310 and 2.1.322 build one, is of the model "<synthetic>" and
+// stops at "stop_sequence" (a resume's "No response requested.", a failed
+// request's error) or, where it calls a tool, at "tool_use".
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // string where present. Any other type is this accessor's error, never "",
@@ -1397,6 +1406,154 @@ func (l threadLine) StopReason() (string, error) {
 		return "", fmt.Errorf("an assistant record's message: %w", err)
 	}
 	return wireString("stop_reason", message.StopReason)
+}
+
+// APIError reports whether an assistant record is the reply Claude Code wrote
+// itself where its request failed for good, in place of a model's: its
+// `isApiErrorMessage`, true where it says so; false where it is absent or
+// false, and on every record that is no assistant's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. A request that
+// fails for good (an overload past its retries, a prompt past its window, a
+// credential refused) leaves a reply of the harness's own in its thread, its
+// text the error's ("API Error: ..."), its model "<synthetic>"
+// ([threadLine.Model]), stopped at "stop_sequence", and marked true; the reply
+// a resume writes for a turn it found unanswered is marked false. The
+// harness's request skips a reply marked true and of that model (2.1.322's A8,
+// 2.1.310's mee: `isApiErrorMessage===!0`), and its resume classes a reply
+// marked anything JavaScript reads as true, or of that model, as one its
+// harness wrote (2.1.322's LE). A subagent answers the call that started it
+// with its last reply that says something (2.1.322's pkn), and a failed
+// request's reply says its error, so a subagent whose last request failed so
+// answers with that text, though no model read what the request carried.
+// Every reply the probes kept that carries the mark is of the model
+// "<synthetic>": 40 a resume wrote, false, and 2 a failed request left, true.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which reads a reply its harness wrote as the resume classes one,
+// where that class decides the leaf an unseen flag of its may move to; and
+// the reading that tells a relaunch which of its calls a kept session holds
+// (exact telling), which pairs a call only within its reply's own records
+// none of which its harness wrote, and takes a subagent's leg for finished
+// only on a reply its model wrote ([threadLine.StopReason]).
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never the line's, so a reshaped mark costs only the readers that ask
+// for it, and never false, which its readers would take for a model's reply:
+// the harness reads the one mark as JavaScript's truth where its resume
+// classes a reply and as the JSON true alone where its request skips one, and
+// only a boolean reads alike to both.
+//
+// Read off the line's one decode, its raw `isApiErrorMessage`, never a second
+// read of the line.
+func (l threadLine) APIError() (bool, error) {
+	if l.Head.Type != recordAssistant || l.apiError == nil {
+		return false, nil
+	}
+	return wireBool("isApiErrorMessage", l.apiError)
+}
+
+// Model is the model that wrote the reply an assistant record holds, its
+// message's `model` as written: "<synthetic>" where Claude Code wrote the
+// reply itself in place of a model's (a resume's "No response requested.", a
+// failed request's error); "" where the key is absent, and on every record
+// that is no assistant's, whatever its `message` carries.
+//
+// ITS READERS are [threadLine.APIError]'s, each of which asks both, as the
+// harness does: its resume classes a reply of the model "<synthetic>" as its
+// harness's own whatever its mark says (2.1.322's LE: `message.model===$i`),
+// and its request skips a reply only where both say so (2.1.322's A8,
+// 2.1.310's mee).
+//
+// HELD TO ITS TYPE HERE, for these readers, as [threadLine.Usage] holds the
+// same key for its own: a string where present. Any other type, null among
+// it, is this accessor's error, never "", which its readers would take for a
+// model's reply, and never Message's, so a reshaped model costs only the
+// readers that ask for it.
+//
+// Decoded from the line's raw `message` on each call, as
+// [threadLine.StopReason] reads its key: nothing keeps it.
+func (l threadLine) Model() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no model.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	return wireString("model", message.Model)
+}
+
+// MessageID is the id of the reply an assistant record holds, its message's
+// `id`, which every record of one reply carries, since the harness writes a
+// reply a record a block ([threadLine.StopReason]): "" where the key is
+// absent, and on every record that is no assistant's, whatever its `message`
+// carries.
+//
+// WHAT THE ID SAYS, as 2.1.310 and 2.1.322 read it. Once Claude Code's resume
+// has walked a thread's chain from its leaf, it hands its model, beside each
+// reply on that chain, the reply's other records, found by this id wherever
+// they lie, and the results whose parent is one of them (2.1.322's fWo,
+// 2.1.310's Rpo, each grouping every assistant record whose `message.id` is
+// truthy); and its request folds the records of one id into one message.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which groups a reply's records by it as the resume does, and through
+// that model the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which pairs a call by the reply its use
+// belongs to, and the one that confirms a hook's note reached the model.
+//
+// HELD TO ITS TYPE HERE, as [threadLine.Usage] holds the same key for its
+// own reader: a string where present. Any other type, null among it, is this
+// accessor's error, never "", and never Message's, so a reshaped id costs
+// only the readers that ask for it.
+//
+// AND TO A TEXT ITS READERS COMPARE AS THE HARNESS DOES: an id holding the
+// replacement character, U+FFFD, is this accessor's error too. The layer's
+// decode reads a lone surrogate and each byte that is no UTF-8 as U+FFFD
+// ([threadDecoding]), where Claude Code's JSON.parse keeps a lone surrogate
+// as the code unit written and compares ids a code unit at a time, so two ids
+// the harness holds apart (`msg_\ud800` and `msg_\ud801`) would decode as one
+// and recover each other's records, which no resume does. Refused, such an id
+// costs its readers their reading of the thread, the direction that tells,
+// never a record recovered under another reply's id. Every one of the 2,239
+// assistant records of the 521 thread files the probes kept carries an ASCII
+// id of at most 36 bytes; only a box rewriting its own file writes another.
+//
+// Decoded from the line's raw `message` on each call, as
+// [threadLine.StopReason] reads its key: nothing keeps it.
+func (l threadLine) MessageID() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no id.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	id, err := wireString("id", message.ID)
+	if err != nil {
+		return "", err
+	}
+	if strings.ContainsRune(id, utf8.RuneError) {
+		return "", errors.New("id holds the replacement character, which a lone surrogate or a byte that is " +
+			"no UTF-8 decodes as, so two ids the harness holds apart can read as one")
+	}
+	return id, nil
 }
 
 // threadUsage is what a model's reply says of the request it answered
