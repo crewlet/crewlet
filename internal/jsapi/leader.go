@@ -134,7 +134,9 @@ type Leader struct {
 	term time.Duration
 	// timeout bounds a read whose context has no deadline — the client's
 	// OWN default, taken from the client, the bound the read had while it
-	// was one request ([jsprovision.ReadBoundedWith]).
+	// was one request ([jsprovision.ReadBoundedWith]), and the time a whole
+	// message takes to cross a link where the term grows by it
+	// ([Leader.Carrying]).
 	timeout time.Duration
 	// paged is how long the last subjects page this reader asked took to
 	// be answered — or, raised by a page nobody answered, at least how
@@ -166,7 +168,21 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 // Carrying is l for a stream whose messages may be as large as messageBytes,
 // over a link that may carry a mebibyte in as long as pace: every message read
 // is presumed lost only once a reply of that size has had time to cross the
-// link, beyond the read term.
+// link, beyond the read term — and a read whose caller set no deadline is held
+// to the client's own bound AND that crossing, since a reply that takes the
+// crossing to land is never answered inside the bound alone.
+//
+// # Why the bound grows with the term
+//
+// The bound a deadline-less caller is held to is what its one request was
+// given to be answered in ([jsprovision.ReadBoundedWith]): the broker's
+// answer, with no crossing in it. Held there, a read whose term said its
+// reply took longer than five seconds to cross was cut at five every time,
+// whatever its term: a dead letter's frame read across a link by a feed's
+// replay, which sets no deadline, failed at every start for an entry whose
+// reply took that long — about six megabytes below about 13 Mbit/s — and was
+// left until it expired, its wake lost. The ceiling every read is held to
+// ([jsprovision.LookupBudget]) still bounds it, as it bounds every read.
 //
 // # Why a large reply gets a longer term
 //
@@ -184,7 +200,9 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 // asked again is a read whose reply could not have been on its way.
 func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 	c := *l
-	c.term = jsprovision.ReadTerm + Crossing(messageBytes, pace)
+	crossing := Crossing(messageBytes, pace)
+	c.term = jsprovision.ReadTerm + crossing
+	c.timeout = l.timeout + crossing
 	return &c
 }
 
