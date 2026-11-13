@@ -733,11 +733,18 @@ func hsProgress(parent, uuid string) string {
 //   - the walk stops at the last restart, so a call reached only through a
 //     record before it is told: a compaction that kept a segment deletes every
 //     record before its boundary from what the resume walks;
-//   - where the thread holds a compaction's boundary and its checkpoint is a
-//     user or assistant record before the leaf, the checkpoint is the leaf, and
-//     a call after it is told; with no boundary, the call is held; and a
-//     checkpoint naming a stop hook's summary, a system record no resume
-//     starts from, is never the leaf, and the call after it is held.
+//   - a checkpoint that is a user or assistant record before the leaf is the
+//     leaf only where a resume could start from it: where the thread holds a
+//     compaction's boundary whose kept records are all in the thread, so a
+//     resume relinks it, and the checkpoint lies before that boundary, is its
+//     anchor, or is named as its parent by no user or assistant record after
+//     it; a call after it there is told. A compacted session cut off
+//     mid-turn, its checkpoint the reply before the turn's prompt (probe T's
+//     T10 shape, the chain critique's probes P4a and P4b), holds the turn's
+//     call whether a resume relinks it or not, and so does one whose turn
+//     lies past a later restart; a checkpoint naming a stop hook's summary, a
+//     system record no resume starts from, is never the leaf; and with no
+//     boundary the call after a checkpoint is held.
 //
 // In a subagent's thread, the chain from its last record of its own: a
 // withdrawn attempt's call there is told, its subagent still reported, and so
@@ -759,8 +766,13 @@ func hsProgress(parent, uuid string) string {
 // call whose result is written first is told; recover through a reply's
 // record before the last restart, or a result whose parent lies there, and
 // its call is held; walk past the last restart, and the call reached
-// through a record before it is held; leave the checkpoint out of the leaf,
-// and the call after it is held; take a system record for a user or
+// through a record before it is held; take a compacted thread's checkpoint
+// for the leaf wherever no resume relinks the thread, or wherever a turn
+// hangs off it, and the cut-off turn's call is told; leave a relinked
+// compaction's anchor, a checkpoint no turn hangs off, or one before the
+// boundary out of the leaf, and the call after it is held; read only the
+// turns past the last restart as naming a checkpoint, and the call of the
+// turn past a later restart is told; take a system record for a user or
 // assistant record, and the call after a checkpoint naming a stop hook's
 // summary is told; walk a subagent's thread from its last
 // record of any agent, and the attempt a record of no agent hangs off is
@@ -778,6 +790,26 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 	// pair is the reply calling x, uuid 2, and its result, uuid 3.
 	pair := []string{hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_x", hsUse(x)), result(2, 3, x, outX)}
 	after := func(parent int) string { return hsReplyOf(t, ctUUID(parent), ctUUID(5), "msg_after", text) }
+	// compacted is a session a compaction cut and then cut off mid-turn, as
+	// probe T's T10 was cut, its checkpoint lagging its last record: the
+	// record the compaction kept (uuid 9) where kept, which its boundary
+	// lists, so a resume relinks the thread, its boundary (10) and summary
+	// (11, the anchor), a reply (12), a checkpoint naming checkpoint, and
+	// lines after them.
+	compacted := func(kept bool, checkpoint string, lines ...string) []string {
+		var thread []string
+		if kept {
+			thread = append(thread, hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_kept", text))
+		}
+		thread = append(thread, ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)),
+			ctCompactSummary(ctUUID(10), ctUUID(11)), hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text),
+			hsCheckpoint(t, `"`+checkpoint+`"`, ""))
+		return append(thread, lines...)
+	}
+	// turn is the turn cut off after the reply: its prompt (13), x's call
+	// (14) and x's result (15).
+	turn := []string{ctSpan(ctUUID(12), ctUUID(13), ""), hsReplyOf(t, ctUUID(13), ctUUID(14), "msg_x", hsUse(x)),
+		result(14, 15, x, outX)}
 	for name, tc := range map[string]struct {
 		lines []string
 		held  map[string]bool
@@ -851,12 +883,28 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			hsReplyOf(t, ctUUID(10), ctUUID(21), "msg_x", hsUse(x)), result(21, 22, x, outX),
 			hsReplyOf(t, ctUUID(6), ctUUID(20), "msg_after", text),
 		}, held: map[string]bool{x: false}},
-		"a checkpoint before the leaf, in a thread a compaction cut": {lines: []string{
+		"a checkpoint before the leaf, in a thread a compaction cut that no resume relinks": {lines: []string{
 			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), ctCompactSummary(ctUUID(10), ctUUID(11)),
 			hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text),
 			hsReplyOf(t, ctUUID(12), ctUUID(13), "msg_x", hsUse(x)), result(13, 14, x, outX),
 			hsCheckpoint(t, `"`+ctUUID(12)+`"`, ""),
-		}, held: map[string]bool{x: false}},
+		}, held: map[string]bool{x: true}},
+		"a compacted session cut mid-turn, its checkpoint the reply before the turn, no resume relinking it": {
+			lines: compacted(false, ctUUID(12), turn...), held: map[string]bool{x: true}},
+		"a compacted session cut mid-turn, its checkpoint the reply before the turn, a resume relinking it": {
+			lines: compacted(true, ctUUID(12), turn...), held: map[string]bool{x: true}},
+		"a relinked compaction's anchor for its checkpoint": {lines: compacted(true, ctUUID(11), turn...),
+			held: map[string]bool{x: false}},
+		"a checkpoint no user or assistant record names as its parent, a resume relinking it": {
+			lines: compacted(true, ctUUID(12), ctAttachment(ctUUID(12), ctUUID(20), ctTokens, ctTokensRendered),
+				ctSpan(ctUUID(20), ctUUID(13), ""), turn[1], turn[2]), held: map[string]bool{x: false}},
+		"a checkpoint before a relinked compaction's boundary": {lines: append([]string{
+			hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_kept", text), ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)),
+			ctCompactSummary(ctUUID(9), ctUUID(11)), hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text),
+			hsCheckpoint(t, `"`+ctUUID(9)+`"`, "")}, turn...), held: map[string]bool{x: false}},
+		"a checkpoint past a relinked compaction's boundary, the turn past a later restart": {
+			lines: compacted(true, ctUUID(12), turn[0], ctMicrocompactBoundary(ctUUID(13), ctUUID(20)),
+				hsReplyOf(t, ctUUID(20), ctUUID(14), "msg_x", hsUse(x)), turn[2]), held: map[string]bool{x: true}},
 		"a checkpoint naming a stop hook's summary before the leaf, in a thread a compaction cut": {lines: []string{
 			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), ctCompactSummary(ctUUID(10), ctUUID(11)),
 			hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text), ctSummary(ctUUID(12), ctUUID(20)),
@@ -1026,20 +1074,28 @@ func TestARecordARetractionNamesIsHandedToNoModel(t *testing.T) {
 // first the chain's order is no longer the file's (a call whose parent is its
 // own result, written after it, comes after that result, its probe P3; and so
 // does a call whose attachment names that result), and a resume that relinks
-// a compacted thread can find no leaf at all beside the second. None is in a
-// main thread the probes kept. The thread itself is read and holds its call,
-// and so does it beside a checkpoint its last record descends from, one
-// naming no record, one naming no canonical uuid, and one a compaction's
-// boundary cleared.
+// a compacted thread can find no leaf at all beside the second; and a
+// compaction's boundary that keeps a record written after it, by its list or
+// through its segment, which a resume's relink chains under the records the
+// reading walks, or that says what it kept in no shape Claude Code writes.
+// None is in a main thread the probes kept. The thread itself is read and
+// holds its call, and so does it beside a checkpoint its last record descends
+// from, one naming no record, one naming no canonical uuid, and one a
+// compaction's boundary cleared, and where its compaction lists a record
+// written after its boundary beside one no thread holds, by which no resume
+// relinks.
 //
 // Mutation: read past a marked checkpoint, one whose leaf is no string, or one
 // the last record does not descend from; file a sidechain's record, a fork's
 // briefing or a file's snapshot as any other; take a reply of string content
 // for one of blocks, or a message that does not decode for none on a record
 // the walk does not count; file a record of no lowercase canonical uuid, or of
-// another's; pass a progress record over; or follow a parent written after its
+// another's; pass a progress record over; follow a parent written after its
 // record, or take a record naming itself for a walk's end, on the walk or on
-// the leaf's search, and each such thread is read.
+// the leaf's search; or read past a relink that keeps a record after its
+// boundary, by its list or its segment, and each such thread is read. Refuse
+// a list naming a record no thread holds, and the thread no resume relinks is
+// no reading.
 func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 	t.Parallel()
 	const x, out = "toolu_leaf", "leaf done"
@@ -1048,6 +1104,10 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 	with := func(lines ...string) []string { return append(slices.Clone(pair), lines...) }
 	cleared := hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_left", `[{"type":"text","text":"left."}]`)
 	done := `[{"type":"text","text":"done."}]`
+	// answered is x's result, uuid, chained to parent.
+	answered := func(parent, uuid int) string {
+		return ctResult(ctUUID(parent), ctUUID(uuid), hsAnswer(x, hsBlock(t, out)), hsBlock(t, out))
+	}
 	for name, tc := range map[string]struct {
 		lines []string
 		read  bool
@@ -1101,6 +1161,21 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 		"a record the walk already took": {lines: with(ctSpan(ctUUID(5), ctUUID(4), ""),
 			ctAssistant(ctUUID(4), ctUUID(5), done))},
 		"a reply naming itself": {lines: with(ctAssistant(ctUUID(4), ctUUID(4), done))},
+		"a compaction keeping a record written after its boundary": {lines: []string{
+			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(12)), ctCompactSummary(ctUUID(10), ctUUID(11)),
+			ctAssistant(ctUUID(11), ctUUID(12), hsUse(x)), answered(12, 13)}},
+		"a compaction keeping a record written after its boundary beside one no thread holds": {lines: []string{
+			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(12), ctUUID(99)), ctCompactSummary(ctUUID(10), ctUUID(11)),
+			ctAssistant(ctUUID(11), ctUUID(12), hsUse(x)), answered(12, 13)}, read: true},
+		"a compaction keeping a segment through a record written after its boundary": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_kept", done),
+			ctReplace(t, ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9), ctUUID(12)),
+				ctListed(ctUUID(11), ctUUID(9), ctUUID(12)), ""),
+			ctCompactSummary(ctUUID(10), ctUUID(11)), ctAssistant(ctUUID(9), ctUUID(12), hsUse(x)), answered(12, 13)}},
+		"a compaction naming what it kept in no shape Claude Code writes": {lines: []string{
+			ctReplace(t, ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), `"uuids":["`+ctUUID(9)+`"]`,
+				`"uuids":"`+ctUUID(9)+`"`),
+			ctCompactSummary(ctUUID(10), ctUUID(11)), ctAssistant(ctUUID(11), ctUUID(12), hsUse(x)), answered(12, 13)}},
 		"an attachment naming itself on the leaf's search": {lines: with(ctAttachment(ctUUID(4), ctUUID(4), ctTokens,
 			ctTokensRendered))},
 	} {
@@ -1124,11 +1199,12 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 // it allows is walked, and one of one more is no reading; a subagent's thread
 // of one more is not whole, and files no record past it, so what the walk
 // holds stays within the bound. A uuid a record retracts counts toward the
-// bound as a record does, in either thread.
+// bound as a record does, in either thread, and so does one a main thread's
+// compaction keeps that no record before its boundary carries.
 //
 // Mutation: file a thread's records past the bound, and the longer main
 // thread is walked, and the longer subagent's thread whole; or count no
-// retracted uuid toward it, and each thread that retracts one is walked
+// retracted or kept uuid toward it, and each thread that holds one is walked
 // within one fewer.
 func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 	t.Parallel()
@@ -1144,6 +1220,8 @@ func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 		{hsThread(pair...), 3, true}, {hsThread(pair...), 2, false},
 		{hsThread(append(slices.Clone(pair), ctFallback(ctUUID(3), ctUUID(4), retraction))...), 5, true},
 		{hsThread(append(slices.Clone(pair), ctFallback(ctUUID(3), ctUUID(4), retraction))...), 4, false},
+		{hsThread(ctBoundary(ctUUID(10), ctUUID(11), retraction), ctCompactSummary(ctUUID(10), ctUUID(11))), 4, true},
+		{hsThread(ctBoundary(ctUUID(10), ctUUID(11), retraction), ctCompactSummary(ctUUID(10), ctUUID(11))), 3, false},
 	} {
 		w := newHoldingsWalk(ctSession, ask, hsBounds())
 		w.records = tc.records

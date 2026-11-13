@@ -229,9 +229,10 @@ import (
 // record, a fork's briefing, a file's snapshot or a reply whose content is a
 // string in it), or its chain cannot be walked as the resume walks it (a
 // record of no lowercase canonical uuid, a uuid held twice, more than
-// [holdingsMaxRecords] records, or a walk that meets a parent written after
-// its record or a record naming itself); a subagent's thread is past its
-// bound, or its
+// [holdingsMaxRecords] records, a walk that meets a parent written after its
+// record or a record naming itself, or a last compaction that keeps a record
+// written at or after its boundary, or says what it kept in no shape Claude
+// Code writes); a subagent's thread is past its bound, or its
 // metadata past the archive's budget; more subagents than [holdingsMaxAgents],
 // or more legs than [holdingsMaxLegs]; or the stream does not end at io.EOF.
 // The error says which, in words a relaunch logs ([holdingsError]). WHY A
@@ -455,10 +456,9 @@ type holdingsWalk struct {
 	lastRestart int
 	// checkpoint is the uuid the main thread's checkpoint names, where
 	// checkpointed: the leaf of its last last-prompt record naming one since
-	// its last compaction's boundary ([holdingsWalk.checkpointOf]); compacted
-	// is whether it holds such a boundary.
-	checkpoint              [16]byte
-	checkpointed, compacted bool
+	// its last compaction's boundary ([holdingsWalk.checkpointOf]).
+	checkpoint   [16]byte
+	checkpointed bool
 	// agents are the subagents whose members the reading read, by agent id.
 	agents map[string]*subagentFacts
 	// legs are the main thread's legs of subagents' work, by the id of the
@@ -705,6 +705,9 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		if err != nil {
 			return err
 		}
+		if err = preservedOf(chain, line, record); err != nil {
+			return err
+		}
 		if restart {
 			w.lastRestart = line.N
 			chain.restart()
@@ -802,7 +805,7 @@ func (w *holdingsWalk) mainLine(chain *threadChain, line threadLine) (threadMess
 // from wherever it names, or to nothing.
 func (w *holdingsWalk) checkpointOf(line threadLine) error {
 	if line.Head.Type == recordSystem && line.Head.Subtype == subtypeCompactBoundary {
-		w.checkpoint, w.checkpointed, w.compacted = [16]byte{}, false, true
+		w.checkpoint, w.checkpointed = [16]byte{}, false
 		return nil
 	}
 	leaf, marked, err := line.Checkpoint()
@@ -819,6 +822,30 @@ func (w *holdingsWalk) checkpointOf(line threadLine) error {
 	return nil
 }
 
+// preservedOf files in chain what line, one of the main thread's, record in
+// chain, says its compaction kept, where it is a compaction's boundary: the
+// latest boundary's says what a resume relinks the thread by
+// ([threadChain.relinks]). No reading where it says so in no shape Claude
+// Code writes, or keeps more records no record before it carries than the
+// thread has room for.
+func preservedOf(chain *threadChain, line threadLine, record int32) error {
+	if line.Head.Type != recordSystem || line.Head.Subtype != subtypeCompactBoundary {
+		return nil
+	}
+	chain.boundaryAt(record)
+	p, err := line.Preserved(chain.keep)
+	switch {
+	case errors.Is(err, errChainBound):
+		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is a record the reading "+
+			"cannot walk to as the resume does", line.N), cause: err}
+	case err != nil:
+		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread names what its compaction "+
+			"kept in no shape Claude Code writes", line.N), cause: err}
+	}
+	chain.preserved(p)
+	return nil
+}
+
 // mainEnd decides, once the main thread is read whole, which of its records
 // the resume hands its model, and in what order, and files it on each fact of
 // the main thread (claudechain.go's file comment): the chain from the leaf,
@@ -826,16 +853,23 @@ func (w *holdingsWalk) checkpointOf(line threadLine) error {
 // its last restart. No reading where the checkpoint names a record the last
 // record does not descend from, since the resume then starts from the
 // checkpoint; where a walk meets a parent written after its record, or a
-// record naming itself; the checkpoint the leaf where the thread holds a
-// compaction's boundary and it is a user or assistant record other than that
-// one; and nothing handed where no user or assistant record up from the last
-// record lies past the last restart.
+// record naming itself; or where the thread's last compaction keeps a record
+// written at or after its boundary ([threadChain.relinks]). The checkpoint is
+// the leaf where it is a user or assistant record other than that one that a
+// resume may start from instead ([threadChain.mayLead]); and nothing is
+// handed where no user or assistant record up from the last record lies past
+// the last restart.
 func (w *holdingsWalk) mainEnd(chain *threadChain) error {
 	unread := func(end chainEnd) error {
 		return &holdingsError{why: "the session's main thread holds a record whose walk to its root meets " +
 			end.String() + ", which its resume can hand its model in another order than the file's, or none"}
 	}
 	chain.resolve()
+	relinks, err := chain.relinks()
+	if err != nil {
+		return &holdingsError{why: "the session's main thread cannot be walked as a resume that relinks it walks it",
+			cause: err}
+	}
 	if last := int32(len(chain.parent)) - 1; last >= 0 {
 		userOrAssistant := func(record int32) bool { return chain.marks[record]&markUserOrAssistant != 0 }
 		leaf, end := chain.up(last, true, userOrAssistant)
@@ -849,7 +883,7 @@ func (w *holdingsWalk) mainEnd(chain *threadChain) error {
 				return &holdingsError{why: "the session's main thread holds a checkpoint its last record does not " +
 					"descend from, its walk up ending at " + ended.String() + ", so its resume starts there"}
 			}
-			if w.compacted && userOrAssistant(checkpoint) && checkpoint != leaf {
+			if userOrAssistant(checkpoint) && checkpoint != leaf && chain.mayLead(checkpoint, relinks) {
 				leaf = checkpoint
 			}
 		}

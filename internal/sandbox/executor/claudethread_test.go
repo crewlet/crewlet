@@ -1067,10 +1067,11 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // its own toolUseResult, whether it says tool results were cleared, why its
 // reply stopped, whether its harness wrote it for a failed request, the model
 // that wrote it, what its request took, the results it says its harness
-// replaced, the records it says its harness took back, the reply it is, the
-// leaf it says a resume starts from and its attachment's type, each beside
-// the error it answered. A raw value it hands
-// out is printed by [ctRaw], so an absent one and a null one never read alike.
+// replaced, the records it says its harness took back, what it says a
+// compaction kept, the reply it is, the leaf it says a resume starts from and
+// its attachment's type, each beside the error it answered. A raw value it
+// hands out is printed by [ctRaw], so an absent one and a null one never read
+// alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1123,6 +1124,12 @@ func ctAllButUUID(l threadLine) string {
 		return nil
 	})
 	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	var listed []string
+	preserved, err := l.Preserved(func(uuid string) error {
+		listed = append(listed, uuid)
+		return nil
+	})
+	fmt.Fprintf(&b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
 	reply, err := l.MessageID()
 	fmt.Fprintf(&b, "reply: %q; %v\n", reply, err)
 	leaf, marked, err := l.Checkpoint()
@@ -1150,8 +1157,9 @@ func ctRaw(v json.RawMessage) string {
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
 // own toolUseResult, a reply's mark of an API error, a record's replacements,
-// a checkpoint's leaf and its marks, the uuids a record retracts), a hook's
-// attachment, an origin, a
+// a checkpoint's leaf and its marks, the uuids a record retracts, what a
+// compaction's boundary says it kept, its list's and its segment's keys), a
+// hook's attachment, an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
@@ -1181,6 +1189,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	synthetic := ctSynthetic(ctUUID(30), ctUUID(31))
 	replacing := ctReplacement("", ctReplaced(ctCall))
 	retracting := ctFallback(ctUUID(5), ctUUID(6), ctUUID(2))
+	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
+	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1253,6 +1263,15 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to:   `"retractedMessageUuids":["` + ctUUID(2) + `"],"RetractedMessageUuids":["` + ctUUID(9) + `"]`},
 		"RETRACTEDMESSAGEUUIDS alone": {record: ctRetry(ctUUID(5), ctUUID(6)), from: `"retractedMessageUuids":[]`,
 			to: `"retractedMessageUuids":[],"RETRACTEDMESSAGEUUIDS":["` + ctUUID(9) + `"]`},
+		"a compactMetadata, then CompactMetadata": {record: compacting, from: `,"slug":"` + ctSlug + `"`,
+			to: `,"CompactMetadata":{"preservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) +
+				`"]}},"slug":"` + ctSlug + `"`},
+		"a preservedMessages, then PreservedMessages": {record: compacting, from: `,"postTokens":2602`,
+			to: `,"PreservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) + `"]},"postTokens":2602`},
+		"a list's uuids, then UUIDs": {record: compacting, from: `"allUuids":[`,
+			to: `"UUIDs":["` + ctUUID(9) + `"],"allUuids":[`},
+		"a segment's headUuid, then HeadUuid": {record: segmenting, from: `"anchorUuid":"` + ctUUID(11) + `","tailUuid"`,
+			to: `"HeadUuid":"` + ctUUID(9) + `","anchorUuid":"` + ctUUID(11) + `","tailUuid"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -2213,6 +2232,101 @@ func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
 	if !errors.Is(err, stop) || !slices.Equal(got, named[:1]) {
 		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
 			got, named[0])
+	}
+}
+
+// ctListed is the list a compaction's boundary built by ctBoundary carries,
+// as written: its `preservedMessages`, the key before it included.
+func ctListed(summary string, kept ...string) string {
+	ids := ctQuoted(kept)
+	return `,"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids + `],"allUuids":[` + ids + `]}`
+}
+
+// A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
+// it: Preserved reads a compact_boundary record's preservedMessages where it
+// carries one, its anchor and each uuid it lists handed in order, kept where
+// it lists any; else its preservedSegment, the anchor and the segment's two
+// ends; and nothing where the boundary carries neither, a null for either, or
+// no compactMetadata, null among it, or on a record of another type or
+// subtype, whatever it carries. Every other shape, a metadata, a list, an
+// anchor or an end of another type, an entry that is no string, is an error.
+// An error each returns ends the walk as it is.
+//
+// Mutation: read the segment where a list is, and the list's records go
+// unread; take a list of none for one that keeps records, and a boundary
+// that keeps nothing relinks; or read a null list as one, and a boundary
+// naming its segment alone is an error.
+func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
+	t.Parallel()
+	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
+	boundary := ctBoundary(ctUUID(7), ctUUID(8), kept...)
+	listed := ctListed(ctUUID(8), kept...)
+	segment := ctReplace(t, boundary, listed, "")
+	for name, tc := range map[string]struct {
+		record string
+		want   threadPreserved
+		uuids  []string
+	}{
+		"a boundary listing what it kept beside its segment": {boundary,
+			threadPreserved{Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary naming its segment alone": {segment, threadPreserved{Kept: true, Anchor: ctUUID(8),
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
+			`,"preservedMessages":null`), threadPreserved{Kept: true, Anchor: ctUUID(8), Segment: true,
+			Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
+			threadPreserved{Anchor: ctUUID(8)}, nil},
+		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
+		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"}`, `"preservedSegment":null`),
+			threadPreserved{}, nil},
+		"a boundary whose metadata is null": {ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{"trigger":"manual"`, `"compactMetadata":null,"was":{"trigger":"manual"`),
+			threadPreserved{}, nil},
+		"a microcompaction's boundary carrying a list": {ctReplace(t, boundary, `"subtype":"compact_boundary"`,
+			`"subtype":"microcompact_boundary"`), threadPreserved{}, nil},
+		"a stop hook's summary carrying a list": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)), `"hookCount":1`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`"]}},`+
+				`"hookCount":1`), threadPreserved{}, nil},
+	} {
+		var got []string
+		p, err := ctLine(t, tc.record).Preserved(func(uuid string) error {
+			got = append(got, uuid)
+			return nil
+		})
+		if err != nil || p != tc.want || !slices.Equal(got, tc.uuids) {
+			t.Errorf("%s keeps %+v, listing %q, %v; want %+v, listing %q", name, p, strings.Join(got, ","), err,
+				tc.want, strings.Join(tc.uuids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"a metadata that is a string": ctReplace(t, ctReplace(t, boundary, listed, ""), `"compactMetadata":{`,
+			`"compactMetadata":"kept","was":{`),
+		"a list that is a string": ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`),
+		"a list's uuids that are a string": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`),
+		"a list's uuids holding a number": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`",7]}`),
+		"a list of no anchor": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`),
+		"a segment whose head is a number": ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`, `"headUuid":3`),
+		"a segment of no tail":             ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, ""),
+	} {
+		if p, err := ctLine(t, record).Preserved(func(string) error { return nil }); err == nil {
+			t.Errorf("%s keeps %+v with no error; want one", name, p)
+		}
+	}
+	stop := errors.New("stop")
+	var got []string
+	_, err := ctLine(t, boundary).Preserved(func(uuid string) error {
+		got = append(got, uuid)
+		return stop
+	})
+	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
+		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
+			got, kept[0])
 	}
 }
 

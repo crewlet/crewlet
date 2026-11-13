@@ -460,7 +460,7 @@ type threadLine struct {
 	Head threadHead
 
 	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError, replacements json.RawMessage
-	leafUUID, explicit, rewound, retracted                                              json.RawMessage
+	leafUUID, explicit, rewound, retracted, compactMetadata                             json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -487,6 +487,7 @@ type threadWire struct {
 	Explicit      json.RawMessage `json:"explicit"`
 	Rewound       json.RawMessage `json:"rewound"`
 	Retracted     json.RawMessage `json:"retractedMessageUuids"`
+	Compacted     json.RawMessage `json:"compactMetadata"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -515,6 +516,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
 		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError, replacements: w.Replacements,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, retracted: w.Retracted,
+		compactMetadata: w.Compacted,
 	}, nil
 }
 
@@ -672,7 +674,8 @@ func wireDecode(raw []byte, v any) error {
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
 // ([threadLine.Usage]), the results a content-replacement record replaces
 // ([threadLine.ReplacedResults]), the records a refused or malformed reply's
-// retry takes back ([threadLine.Retracted]), the lists a run's event stream and a person's
+// retry takes back ([threadLine.Retracted]) and a compaction keeps
+// ([threadLine.Preserved]), the lists a run's event stream and a person's
 // transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
 // tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
 // a run's result's errors, [claudeResult.errorsSaid]), and a call's result
@@ -1623,6 +1626,146 @@ func (l threadLine) Retracted(each func(uuid string) error) error {
 		return refused
 	}
 	return fmt.Errorf("retractedMessageUuids: %w", err)
+}
+
+// threadPreserved is what a compaction's boundary says it kept of the thread
+// before it ([threadLine.Preserved]).
+type threadPreserved struct {
+	// Kept is whether it says it kept records, and Anchor names the record
+	// they hang from. Segment is whether it names them as a segment, from
+	// Tail up to Head by parent; else it lists them, each handed to
+	// Preserved's each.
+	Kept       bool
+	Anchor     string
+	Segment    bool
+	Head, Tail string
+}
+
+// Preserved is what a compact_boundary record says its compaction kept of the
+// thread before it, handing each record it lists, by uuid and in order, to
+// each. Nothing, and no error, where the record carries no
+// `compactMetadata`, or null, or keeps nothing, and on every record of
+// another type or subtype.
+//
+// WHAT THE RECORD SAYS, as 2.1.310 and 2.1.322 write and read it. A
+// compaction that kept the last stretch of the conversation before it names
+// that stretch on its boundary: `preservedMessages`, the kept records' uuids
+// in order and the record they hang from (`anchorUuid`, the summary after the
+// boundary), and `preservedSegment`, the stretch's two ends and the same
+// anchor. A resume reads the last boundary's, the list where there is one and
+// else the segment, walked from its tail up by parent to its head; and where
+// every record it names is in the thread, it RELINKS the thread: it chains
+// the kept records after the anchor, hangs the anchor's other children from
+// the last of them, and drops every other record before that boundary.
+//
+// ITS READER is the one that tells a relaunch which of its calls a kept
+// session holds (exact telling), which reads what a relink moves under the
+// records it walks, and where a relinked resume may start
+// ([threadChain.relinks]).
+//
+// HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
+// `compactMetadata` an object; its `preservedMessages`, where present and not
+// null, an object of a string `anchorUuid` and a list `uuids` of strings,
+// walked an element at a time ([eachElement]); else its `preservedSegment`,
+// where present and not null, an object of the strings `headUuid`,
+// `anchorUuid` and `tailUuid`. Anything else is this accessor's error, never
+// the line's: a resume throws on some such shapes, and relinks or drops
+// records by others in ways no reader follows. An error each returns ends the
+// walk and is returned as it is.
+//
+// Read off the line's one decode, its raw `compactMetadata`, never a second
+// read of the line.
+func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, error) {
+	if l.Head.Type != recordSystem || l.Head.Subtype != subtypeCompactBoundary || l.compactMetadata == nil ||
+		bytes.Equal(l.compactMetadata, jsonNull) {
+		return threadPreserved{}, nil
+	}
+	if !wireObject(l.compactMetadata) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata is %s, not an object", wireKind(l.compactMetadata))
+	}
+	var meta struct {
+		Messages json.RawMessage `json:"preservedMessages"`
+		Segment  json.RawMessage `json:"preservedSegment"`
+	}
+	if err := wireDecode(l.compactMetadata, &meta); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata: %w", err)
+	}
+	switch {
+	case meta.Messages != nil && !bytes.Equal(meta.Messages, jsonNull):
+		return preservedList(meta.Messages, each)
+	case meta.Segment != nil && !bytes.Equal(meta.Segment, jsonNull):
+		return preservedSegment(meta.Segment)
+	}
+	return threadPreserved{}, nil
+}
+
+// preservedList is what a compaction's `preservedMessages`, raw, says it kept
+// ([threadLine.Preserved]), each listed uuid handed to each: kept where it
+// lists any, since a resume relinks by a list of none no record.
+func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPreserved, error) {
+	if !wireObject(raw) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
+	}
+	var list struct {
+		Anchor json.RawMessage `json:"anchorUuid"`
+		UUIDs  json.RawMessage `json:"uuids"`
+	}
+	if err := wireDecode(raw, &list); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages: %w", err)
+	}
+	anchor, err := wireRequiredString("preservedMessages.anchorUuid", list.Anchor)
+	if err != nil {
+		return threadPreserved{}, err
+	}
+	var (
+		listed  int
+		refused error
+	)
+	err = eachElement(list.UUIDs, func(element json.RawMessage) error {
+		uuid, entryErr := wireRequiredString("an entry", element)
+		if entryErr != nil {
+			return entryErr
+		}
+		listed++
+		refused = each(uuid)
+		return refused
+	})
+	switch {
+	case err == nil:
+		return threadPreserved{Kept: listed > 0, Anchor: anchor}, nil
+	case refused != nil:
+		return threadPreserved{}, refused
+	}
+	return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", err)
+}
+
+// preservedSegment is what a compaction's `preservedSegment`, raw, says it
+// kept ([threadLine.Preserved]): the segment from its tail up by parent to
+// its head, which a resume relinks wherever that walk reaches its head.
+func preservedSegment(raw json.RawMessage) (threadPreserved, error) {
+	if !wireObject(raw) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedSegment is %s, not an object", wireKind(raw))
+	}
+	var segment struct {
+		Head   json.RawMessage `json:"headUuid"`
+		Anchor json.RawMessage `json:"anchorUuid"`
+		Tail   json.RawMessage `json:"tailUuid"`
+	}
+	if err := wireDecode(raw, &segment); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedSegment: %w", err)
+	}
+	p := threadPreserved{Kept: true, Segment: true}
+	var err error
+	if p.Head, err = wireRequiredString("preservedSegment.headUuid", segment.Head); err != nil {
+		return threadPreserved{}, err
+	}
+	if p.Anchor, err = wireRequiredString("preservedSegment.anchorUuid", segment.Anchor); err != nil {
+		return threadPreserved{}, err
+	}
+	if p.Tail, err = wireRequiredString("preservedSegment.tailUuid", segment.Tail); err != nil {
+		return threadPreserved{}, err
+	}
+	return p, nil
 }
 
 // MessageID is the id of the reply an assistant record holds, its message's

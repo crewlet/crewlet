@@ -2407,11 +2407,24 @@ which the resume starts from wherever nothing moves it: so a main thread where
 a checkpoint a rewind, a withdrawal or a fork marked, one its last record does
 not descend from, or a record the resume keeps out of a session's last record's
 place (a sidechain's, a fork's briefing, a file's snapshot, a reply of string
-content) could move it is no reading; where a compaction cut it, a checkpoint
-that is a user or assistant record before that leaf is taken for the leaf,
-since the resume then picks its leaf among the thread's leaves; and the walk
-never crosses the last restart, since a compaction that kept a segment deletes
-what lies before its boundary from what the resume walks. Where the walk cannot
+content) could move it is no reading. Where a compaction kept a stretch of the
+conversation, a resume relinks the thread by its last boundary's metadata (it
+chains the kept records after the summary they hang from, the anchor, hangs
+the anchor's other children from the last of them, and drops every other
+record before the boundary) and picks its leaf among the user and assistant
+records no other such record names as its parent, the checkpoint first where it
+is one: so a checkpoint that is a user or assistant record before the leaf is
+taken for the leaf where it can be one of those, where the thread relinks and
+it lies before the boundary, is the anchor, or is named as its parent by no
+user or assistant record after the boundary; elsewhere the resume starts from
+the leaf, which descends from the checkpoint through records no compaction
+drops. Every checkpoint of a session cut off mid-turn lags its last record, so
+taken for the leaf wherever the thread held a boundary, as the reading first
+did, it told every call of the turn exact telling is for. A relink that keeps a
+record at or after its boundary is no reading, since it would move the chain
+under the records the reading walks. And the walk never crosses the last
+restart, since a relink deletes what lies before its boundary from what the
+resume walks. Where the walk cannot
 be read (a parent naming no record, which the harness replaces by a guess from
 timestamps), it ends there and what lies past it is told; a main thread whose
 walk meets a parent written after its record, or a record naming itself, is no

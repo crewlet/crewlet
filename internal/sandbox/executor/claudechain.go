@@ -63,11 +63,25 @@ import (
 //   - a checkpoint (a last-prompt record) the session's last record does not
 //     descend from moves it there, and one a rewind, a withdrawal or a fork
 //     marked moves it wherever it names, or to nothing: each is no reading;
-//   - where a compaction kept a segment, the resume picks its leaf among the
-//     thread's leaves, the checkpoint first where it is one: so in a main
-//     thread holding a compaction's boundary, a checkpoint that is a user or
-//     assistant record other than the leaf is taken for the leaf, the earlier
-//     of the two the pick can land on;
+//   - where a compaction kept a stretch of the conversation, a resume RELINKS
+//     the thread by its last boundary ([threadLine.Preserved],
+//     [threadChain.relinks]): it chains the kept records after the summary
+//     they hang from (the anchor), hangs the anchor's other children from the
+//     last of them, and drops every other record before that boundary; and
+//     then picks its leaf among the user and assistant records no other such
+//     record names as its parent, the checkpoint first where it is one. So a
+//     checkpoint that is a user or assistant record other than the leaf is
+//     taken for the leaf, the earlier of the two the pick can land on,
+//     wherever it can be one of those ([threadChain.mayLead]): where the
+//     thread relinks and the checkpoint lies before the boundary, is the
+//     anchor, or is named as its parent by no user or assistant record after
+//     the boundary, which keeps naming it through the relink. Elsewhere the
+//     resume starts from the leaf, which descends from the checkpoint through
+//     records no compaction drops. Every checkpoint of a session cut off
+//     mid-turn lags its last record, naming a record its next turn descends
+//     from: taken for the leaf wherever the thread holds a boundary, it told
+//     every call of that turn (the chain critique's C2). A relink that keeps a
+//     record at or after its boundary is no reading;
 //   - a record the resume keeps out of a session's last record's place (a
 //     sidechain's, a fork's briefing, a file's snapshot), an assistant record
 //     whose content is a string, which its load drops where it is blank and
@@ -110,7 +124,8 @@ import (
 
 // holdingsMaxRecords is the most user, assistant, attachment and system
 // records of one thread a reading walks the chain of, and of the uuids those
-// records retract, counted together ([threadChain.room]).
+// records retract or its last compaction keeps that no record before that
+// compaction's boundary carries, counted together ([threadChain.room]).
 //
 // 262,144, TWICE THE LINES A THREAD AT THE PLAINTEXT'S BOUND HOLDS: 256 MiB
 // ([threadPlainMax]) of lines of 2,053 bytes, a real main thread's average
@@ -120,10 +135,10 @@ import (
 // each reply's id as a digest: at the bound, every record a reply of its own
 // id naming a parent that comes later, 35 MiB live, its heap peaking at 69 MiB
 // (BenchmarkAReadingAtItsBounds, on two cores). A uuid a record retracts is
-// held as its first ten bytes in a set, less than any record costs, so a
-// thread at the bound that retracts holds no more than that (computed, not
-// measured). Past it, a main thread is no reading and a subagent's thread not
-// whole.
+// held as its first ten bytes in a set, and one a compaction keeps as its 16
+// in another, each less than any record costs, so a thread at the bound that
+// holds either holds no more than that (computed, not measured). Past it, a
+// main thread is no reading and a subagent's thread not whole.
 const holdingsMaxRecords = 1 << 18
 
 // What a record's parent is, where it is no record of the thread
@@ -152,7 +167,16 @@ const (
 	// markRetracted is a record whose uuid a retraction names
 	// ([threadChain.retract]): handed to no model, wherever it lies.
 	markRetracted
+	// markTurnParent is a record a user or assistant record written after
+	// the thread's last compaction's boundary names as its parent: no leaf a
+	// resume that relinks the thread can pick ([threadChain.mayLead]).
+	markTurnParent
 )
+
+// errRelinkLater is a compaction's boundary whose relink keeps a record
+// written at or after it ([threadChain.relinks]).
+var errRelinkLater = errors.New("its last compaction's boundary keeps a record written at or after it, which a " +
+	"resume's relink would chain under the records the reading walks")
 
 // errChainBound is a thread holding more records than a reading walks the
 // chain of ([holdingsMaxRecords]).
@@ -176,6 +200,10 @@ type threadChain struct {
 	// they write ([threadChain.retract]), kept until the thread is read
 	// whole and its records marked by them.
 	retracted map[[10]byte]struct{}
+	// relink is what the thread's last compaction's boundary says a resume
+	// relinks it by ([threadLine.Preserved]), filed as its line is read and
+	// decided once the thread is read whole ([threadChain.relinks]).
+	relink chainRelink
 	// replies are the counted replies' records and their ids' SHA-256, in
 	// record order; a reply's id is the box's word, as long as a line, and two
 	// ids are the same reply only where the harness compares them equal, which
@@ -203,6 +231,28 @@ type chainLaterParent struct {
 	parent [16]byte
 }
 
+// chainRelink is what a thread's last compaction's boundary says a resume
+// relinks the thread by ([threadLine.Preserved]).
+type chainRelink struct {
+	// boundary is the boundary's record, -1 where the thread holds none.
+	boundary int32
+	// kept is whether it keeps records; anchor the uuid of the record they
+	// hang from, where named it is a lowercase canonical one.
+	kept   bool
+	anchor [16]byte
+	named  bool
+	// segment is whether it names them as a segment, from tail up to head by
+	// parent, both lowercase canonical uuids where ends; else it lists them,
+	// absent where one it lists is no uuid a record of the thread carries,
+	// and later holds each it lists that no record before the boundary
+	// carries ([threadChain.keep]).
+	segment    bool
+	head, tail [16]byte
+	ends       bool
+	absent     bool
+	later      map[[16]byte]struct{}
+}
+
 // chainReply is a counted reply's record and its id's digest.
 type chainReply struct {
 	record int32
@@ -212,7 +262,8 @@ type chainReply struct {
 // newThreadChain is the walk of a thread not read yet, filing at most bound
 // records.
 func newThreadChain(bound int) *threadChain {
-	return &threadChain{bound: bound, index: map[[16]byte]int32{}, retracted: map[[10]byte]struct{}{}, lastOwn: -1}
+	return &threadChain{bound: bound, index: map[[16]byte]int32{}, retracted: map[[10]byte]struct{}{},
+		relink: chainRelink{boundary: -1}, lastOwn: -1}
 }
 
 // add files line, a user, assistant, attachment or system record of the
@@ -276,15 +327,157 @@ func chainParent(head threadHead) (int32, [16]byte) {
 }
 
 // room says whether the thread has room for one more thing it files: its
-// records ([threadChain.add]) and what its records retract
-// ([threadChain.retract]) count toward one bound, c.bound, since each is kept
-// until the thread is read whole, and a retraction costs no more of it than a
-// record does.
+// records ([threadChain.add]), what its records retract
+// ([threadChain.retract]) and the records its last compaction keeps that no
+// record before it carries ([threadChain.keep]) count toward one bound,
+// c.bound, since each is kept until the thread is read whole, and each of the
+// last two costs no more of it than a record does.
 func (c *threadChain) room() error {
-	if len(c.parent)+len(c.retracted) >= c.bound {
+	if len(c.parent)+len(c.retracted)+len(c.relink.later) >= c.bound {
 		return fmt.Errorf("%w, %d", errChainBound, c.bound)
 	}
 	return nil
+}
+
+// boundaryAt starts what a compaction's boundary, record, the thread's latest,
+// says a resume relinks the thread by: nothing, until [threadChain.keep]
+// files each record it lists and [threadChain.preserved] the rest.
+func (c *threadChain) boundaryAt(record int32) {
+	c.relink = chainRelink{boundary: record}
+}
+
+// keep files uuid, a record the boundary lists as kept
+// ([threadLine.Preserved]): nothing where a record before the boundary
+// carries it, as each record the boundaries the probes kept list does; the
+// list absent where uuid is no lowercase canonical one, since no record the
+// reading files carries it, so no resume relinks by the list; and else uuid
+// itself, counted toward the thread's bound ([threadChain.room]), for
+// [threadChain.relinks] to ask once the thread is read whole whether a
+// record after the boundary carries it.
+func (c *threadChain) keep(uuid string) error {
+	id, ok := canonicalUUID(uuid)
+	if !ok {
+		c.relink.absent = true
+		return nil
+	}
+	if record, held := c.index[id]; held && record < c.relink.boundary {
+		return nil
+	}
+	if _, held := c.relink.later[id]; held {
+		return nil
+	}
+	if err := c.room(); err != nil {
+		return err
+	}
+	if c.relink.later == nil {
+		c.relink.later = map[[16]byte]struct{}{}
+	}
+	c.relink.later[id] = struct{}{}
+	return nil
+}
+
+// preserved files what the boundary [threadChain.boundaryAt] started says it
+// keeps, but for the records it lists: whether it keeps any, its anchor, and
+// its segment's ends where it names one.
+func (c *threadChain) preserved(p threadPreserved) {
+	r := &c.relink
+	r.kept, r.segment = p.Kept, p.Segment
+	r.anchor, r.named = canonicalUUID(p.Anchor)
+	if p.Segment {
+		head, headOK := canonicalUUID(p.Head)
+		tail, tailOK := canonicalUUID(p.Tail)
+		r.head, r.tail, r.ends = head, tail, headOK && tailOK
+	}
+}
+
+// relinks reports whether a resume relinks the thread by its last
+// compaction's boundary, as 2.1.310 and 2.1.322 do ([threadLine.Preserved]):
+// where the boundary keeps records, and every record it lists, or every one
+// its segment's walk from its tail up by parent to its head meets, is a
+// record of the thread. It is the thread read whole: the records the walk
+// filed, and their parents resolved.
+//
+// A RELINK THAT KEEPS A RECORD AT OR AFTER THE BOUNDARY IS errRelinkLater,
+// which its reader takes for no reading: the relink chains each kept record
+// after the one before it, the first after the anchor, so a kept record past
+// the boundary moves the chain under the records the reading walks, which it
+// does not follow. Every record a boundary the probes kept keeps lies before
+// it.
+func (c *threadChain) relinks() (bool, error) {
+	r := c.relink
+	if r.boundary < 0 || !r.kept {
+		return false, nil
+	}
+	if !r.segment {
+		if r.absent {
+			return false, nil
+		}
+		for id := range r.later {
+			if _, held := c.index[id]; !held {
+				return false, nil
+			}
+		}
+		if len(r.later) > 0 {
+			return false, errRelinkLater
+		}
+		return true, nil
+	}
+	if !r.ends {
+		return false, nil
+	}
+	record, tailHeld := c.index[r.tail]
+	head, headHeld := c.index[r.head]
+	if !tailHeld || !headHeld {
+		return false, nil
+	}
+	// BOUNDED BY THE THREAD'S RECORDS, as the harness's own walk stops at a
+	// record it already met: a segment's walk that meets one fails, and no
+	// resume relinks by it.
+	after := false
+	for range len(c.parent) {
+		after = after || record >= r.boundary
+		if record == head {
+			if after {
+				return false, errRelinkLater
+			}
+			return true, nil
+		}
+		if record = c.parent[record]; record < 0 {
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
+// mayLead reports whether a resume of the thread may start from checkpoint,
+// a user or assistant record its last record descends from, rather than
+// from the nearest user or assistant record up from that last record (the
+// file comment's THE LEAF), where the thread holds a compaction's boundary
+// and relinks says whether a resume relinks it ([threadChain.relinks]).
+//
+// NEVER WHERE NO RESUME RELINKS IT: the resume then starts from the
+// checkpoint only where the last record does not descend from it, which the
+// reading's walk would have found, or where what it drops of a compacted
+// thread breaks that descent, which drops the checkpoint too.
+//
+// WHERE ONE DOES, it picks among the user and assistant records no other such
+// record names as its parent, the checkpoint first where it is one of them;
+// so the resume may start from the checkpoint where it lies before the
+// boundary, whatever the relink makes of it; where it is the anchor, whose
+// other children the relink hangs elsewhere; and where no user or assistant
+// record after the boundary names it as its parent (markTurnParent), which
+// keeps naming it through a relink that keeps no record after the boundary.
+func (c *threadChain) mayLead(checkpoint int32, relinks bool) bool {
+	switch {
+	case !relinks:
+		return false
+	case checkpoint < c.relink.boundary:
+		return true
+	}
+	if anchor, held := c.index[c.relink.anchor]; c.relink.named && held && anchor == checkpoint {
+		return true
+	}
+	return c.marks[checkpoint]&markTurnParent == 0
 }
 
 // retract files uuid, an entry of a record's `retractedMessageUuids`
@@ -390,10 +583,12 @@ func (c *threadChain) reply(record int32, id string) {
 func (c *threadChain) restart() { c.scopeFrom = int32(len(c.parent)) }
 
 // resolve looks up the parents not read when their children were, now the
-// thread is read whole: each the record it names, or chainNowhere; and marks
-// each record whose uuid begins with a uuid's first 24 characters that a
-// record of the thread retracts ([threadChain.retract]), wherever the record
-// lies, since the resume drops it from what it walked.
+// thread is read whole: each the record it names, or chainNowhere; marks
+// each record a user or assistant record after the thread's last
+// compaction's boundary names as its parent (markTurnParent); and marks each
+// record whose uuid begins with a uuid's first 24 characters that a record of
+// the thread retracts ([threadChain.retract]), wherever the record lies,
+// since the resume drops it from what it walked.
 func (c *threadChain) resolve() {
 	for _, l := range c.later {
 		parent, held := c.index[l.parent]
@@ -403,6 +598,13 @@ func (c *threadChain) resolve() {
 		c.parent[l.record] = parent
 	}
 	c.later = nil
+	if c.relink.boundary >= 0 {
+		for record := c.relink.boundary + 1; int(record) < len(c.parent); record++ {
+			if parent := c.parent[record]; parent >= 0 && c.marks[record]&markUserOrAssistant != 0 {
+				c.mark(parent, markTurnParent)
+			}
+		}
+	}
 	if len(c.retracted) > 0 {
 		for id, record := range c.index {
 			if _, gone := c.retracted[[10]byte(id[:10])]; gone {
