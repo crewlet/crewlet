@@ -1847,6 +1847,46 @@ type AtlasCodeScans interface {
 	DeleteAtlasCodeScan(ctx context.Context, repo string) error
 }
 
+// AtlasSourceRefreshes is where a person's ask that an atlas source be read
+// now waits for the collect duty (internal/atlas/collect): who asked, and
+// when.
+//
+// # Why the fleet holds it
+//
+// The node a person asks on is rarely the node holding the duty, so the ask
+// is a record the whole company reads: the duty to honour it, every screen to
+// say that it waits. Current value only: the read it asked for is the
+// source's standing once it is made.
+//
+// # A bucket of its own
+//
+// Not the atlas sources' bucket: the duty is that bucket's one writer and
+// replaces a standing whole, so an ask written beside a visit in flight
+// would be lost to the visit's own save.
+//
+// # The value is OPAQUE, and no retention
+//
+// There is at most one key per source, dropped by the duty once the source
+// is read or the company no longer connects it, so nothing grows. An age
+// would drop an ask the duty had not reached yet without telling whoever
+// made it.
+type AtlasSourceRefreshes interface {
+	// AtlasSourceRefreshes returns every waiting ask, keyed by the source
+	// it names. RAISES rather than answering empty on an unreachable store:
+	// "nobody asked" and "the store cannot be read" are different answers
+	// to a person who just asked.
+	AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasSourceRefresh records an ask for one source, replacing any
+	// prior one. LAST WRITE WINS: two people asking at once ask for the
+	// same read.
+	PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error
+
+	// DeleteAtlasSourceRefresh drops a source's ask once it is honoured or
+	// its source is gone. One that is not there is the outcome asked for.
+	DeleteAtlasSourceRefresh(ctx context.Context, kind string) error
+}
+
 // MailboxRecord is the fleet's record of one agent seat's durable mailbox.
 //
 // # Why the fleet has to remember a mailbox at all
@@ -2028,6 +2068,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	AtlasSources
+	AtlasSourceRefreshes
 	AtlasCodeScans
 	SeatAccess
 	AccessReviews
