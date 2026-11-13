@@ -40,8 +40,8 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 			"detail", "this node has no coordination store, so there is nowhere to record a source's standing")
 		return
 	}
-	c := e.core.Load()
-	if c == nil || !e.mode.Publishes() || c.atlasReader == nil || c.atlasWriter == nil {
+	reader, writer, ok := e.atlasLogSides()
+	if !ok {
 		log.InfoContext(ctx, "atlas_collect_idle",
 			"detail", "this node holds no atlas log it publishes to, so a data node reads the vendors for the atlas")
 		return
@@ -53,7 +53,7 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 	}
 	worker, err := collect.New(collect.Options{
 		Store: store,
-		Log:   atlasCollectLog{Reader: c.atlasReader, Writer: c.atlasWriter},
+		Log:   atlasCollectLog{Reader: reader, Writer: writer},
 		// THE LIVE DOCUMENT AND THIS NODE'S RESOLVER, read on every tick:
 		// a source resolves its own credential from them, and an apply can
 		// change both.

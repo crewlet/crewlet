@@ -49,6 +49,13 @@
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
 //
+// # Other voices use the same builder and the same diff
+//
+// A voice that is no integration's (a repository's files,
+// internal/atlas/codescan) gathers its claims through [NewBuilderFor] and
+// records them with [Replace], which withdraws at once what the voice no
+// longer says: a reading that is exact at its instant needs no second miss.
+//
 // # Values are typed, and a credential has nowhere to go
 //
 // Every value a source reports goes through the vocabulary's grammars

@@ -195,6 +195,8 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
       return RECORDS[name] ?? name;
     case "integration":
       return INTEGRATION_NAMES[name] ?? VENDORS[name as AtlasVendor]?.name ?? name;
+    case "code":
+      return `the files of ${name}`;
     case "agent":
     case "person":
       return seatName(name);
@@ -202,9 +204,10 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
 }
 
 /**
- * Where a claim came from as a by-line: set by the settings or a person, seen
- * by an integration or the engine's records, observed by an agent in its turn,
- * with the confidence word after the actor and when it was last seen.
+ * Where a claim came from as a by-line: set by the settings, a person or a
+ * repository's files, seen by an integration or the engine's records,
+ * observed by an agent in its turn, with the confidence word after the actor
+ * and when it was last seen.
  */
 export function sourceSetBy(
   claim: { source: AtlasSource; word?: AtlasWord; observed_at: string },

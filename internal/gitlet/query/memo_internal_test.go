@@ -27,8 +27,8 @@ var (
 	partOf  = map[gitlet.GitReadKind]string{gitlet.GitTree: "Tree", gitlet.GitBlob: "Blob", gitlet.GitDiff: "Diff",
 		gitlet.GitCompare: "Compare", gitlet.GitLandedIn: "LandedIn", gitlet.GitRevisionFacts: "RevisionFacts",
 		gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff", gitlet.GitLog: "Log", gitlet.GitBlame: "Blame",
-		gitlet.GitChecksFile: "ChecksFile", gitlet.GitSearch: "Search"}
-	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor", "ChecksFile"}
+		gitlet.GitChecksFile: "ChecksFile", gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search"}
+	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles"}
 )
 
 // memoized is every kind memoizable answers from the memo.

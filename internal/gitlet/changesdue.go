@@ -186,7 +186,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a changes_due read lists the repositories a home owes change work in, or "+

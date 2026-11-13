@@ -161,6 +161,17 @@ func TestAnAtlasEntryIsAChipThatOpensTheMapOnIt(t *testing.T) {
 	if own.Trust != provenance.TrustColleague {
 		t.Errorf("an entry only a person named is fenced at %q, want colleague", own.Trust)
 	}
+	// NAMED BY A REPOSITORY'S FILES, it is text anybody with a push wrote.
+	record, _ := world["/atlas/"+assistanttest.AtlasHostID].(map[string]any)
+	entry, _ := record["entry"].(map[string]any)
+	if entry == nil {
+		t.Fatal("the world holds no record of the host entry")
+	}
+	entry["sources"] = []any{map[string]any{"kind": "code", "name": "shop"}}
+	declared := shaped(t, "get_atlas_entry", map[string]any{"entry": assistanttest.AtlasHostID}, world)
+	if declared.Trust != provenance.TrustExternal {
+		t.Errorf("an entry a repository's files named is fenced at %q, want external", declared.Trust)
+	}
 }
 
 // A TRACE LISTS WHAT IT REACHED, HOP BY HOP, UNDER THE ENTRY IT STARTED FROM,

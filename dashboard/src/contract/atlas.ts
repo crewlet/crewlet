@@ -145,7 +145,7 @@ type AtlasValueType =
   | "instant";
 
 /** Where a claim came from (`atlas.SourceKind`). */
-export type AtlasSourceKind = "settings" | "records" | "integration" | "agent" | "person";
+export type AtlasSourceKind = "settings" | "records" | "integration" | "code" | "agent" | "person";
 
 /** What backs an agent's claim, as the engine checked it (`atlas.Evidence`). */
 type AtlasEvidence = "call" | "file" | "none";

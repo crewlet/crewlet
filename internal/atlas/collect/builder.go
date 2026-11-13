@@ -34,7 +34,14 @@ type slotKey struct {
 
 // NewBuilder is a builder of the claims a read of kind makes at `at`.
 func NewBuilder(kind integration.Kind, at time.Time) *Builder {
-	return &Builder{src: atlas.IntegrationSource(string(kind)), at: at.UTC(), seen: map[slotKey]bool{}}
+	return NewBuilderFor(atlas.IntegrationSource(string(kind)), at)
+}
+
+// NewBuilderFor is a builder of the claims src makes at `at`: the same
+// grammars and the same refusals for a voice that is no integration's, as a
+// repository's files are.
+func NewBuilderFor(src atlas.Source, at time.Time) *Builder {
+	return &Builder{src: src, at: at.UTC(), seen: map[slotKey]bool{}}
 }
 
 // errReference is a value that is a ${VAR} reference, which a vendor never

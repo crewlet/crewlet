@@ -893,6 +893,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAns
 		return r.blameRead(ctx, objs, at, m)
 	case gitlet.GitChecksFile:
 		return r.checksFileRead(ctx, objs)
+	case gitlet.GitCodeFiles:
+		return r.codeFilesRead(ctx, objs)
 	}
 	return r.compareRead(ctx, objs, m)
 }

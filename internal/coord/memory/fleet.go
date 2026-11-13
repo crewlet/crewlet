@@ -55,6 +55,7 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	atlasSources map[string][]byte
+	atlasCode    map[string][]byte
 
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
@@ -194,6 +195,7 @@ func NewFleet() *Fleet {
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
 		atlasSources:      map[string][]byte{},
+		atlasCode:         map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
@@ -1064,6 +1066,40 @@ func (f *Fleet) DeleteAtlasSourceStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.atlasSources, kind)
+	return nil
+}
+
+// ---- the atlas code scans' standings ------------------------------------ //
+
+// AtlasCodeScans returns every recorded standing, keyed by repository, each
+// cloned on the way out.
+func (f *Fleet) AtlasCodeScans(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasCode))
+	for repo, value := range f.atlasCode {
+		out[repo] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasCodeScan records one repository's standing.
+func (f *Fleet) PutAtlasCodeScan(_ context.Context, repo string, value []byte) error {
+	if repo == "" {
+		return errors.New("coord/memory: an atlas code scan standing needs a repository")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasCode[repo] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasCodeScan drops a repository's standing; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasCodeScan(_ context.Context, repo string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasCode, repo)
 	return nil
 }
 

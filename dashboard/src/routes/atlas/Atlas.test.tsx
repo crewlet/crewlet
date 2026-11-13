@@ -9,6 +9,8 @@ import { act, cleanup, fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, test } from "vitest";
 import {
   disputedServer,
+  entryAnswer,
+  fact,
   generatedCompany,
   grownCompany,
   mapAnswer,
@@ -433,5 +435,45 @@ describe("an entry", () => {
     expect(screen.getAllByText("Internal").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/seen by AWS/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /export|print|share/i })).toBeNull();
+  });
+
+  // WHAT A REPOSITORY'S FILES DECLARE IS LIKELY, and named for the repository
+  // whose files said it. Mutation: drop the code case from sourceName and the
+  // by-line reads the bare repository name.
+  test("a fact a repository's files declared names the repository, as likely", async () => {
+    const company = grownCompany();
+    const declared = entryAnswer(company.ordersDb, {
+      facts: [
+        fact(
+          "engine",
+          { type: "word", text: "postgres" },
+          { source: { kind: "code", name: "shop" }, confidence: "inferred", word: "likely" },
+        ),
+      ],
+      entry: {
+        state: "discovered",
+        confidence: "inferred",
+        word: "likely",
+        sources: [{ kind: "code", name: "shop" }],
+      },
+    });
+    const answer = (id: string) => (id === company.ordersDb.id ? declared : undefined);
+    mount(
+      `#/company/atlas/${company.ordersDb.id}`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect((await screen.findAllByText(/set by the files of shop/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/likely/i).length).toBeGreaterThan(0);
+    cleanup();
+    mount(
+      `#/company/atlas/${company.ordersDb.id}?tab=sources`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect(await screen.findByText("The files of shop")).toBeTruthy();
+    expect(screen.getByText("A repository's deploy and dependency files")).toBeTruthy();
   });
 });

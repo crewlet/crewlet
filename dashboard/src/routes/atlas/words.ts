@@ -331,6 +331,7 @@ export const SOURCE_KINDS: Readonly<Record<AtlasSourceKind, string>> = {
   settings: "The company settings",
   records: "The engine's records",
   integration: "An integration",
+  code: "A repository's deploy and dependency files",
   agent: "An agent",
   person: "A person",
 };
