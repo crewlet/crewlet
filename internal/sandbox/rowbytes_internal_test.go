@@ -412,12 +412,21 @@ func worstRow(t *testing.T) PendingRun {
 	// the rule that keeps it ([keptCallOf]): each half at [MaxNoteCallBytes]
 	// in the id charset, which the encoder writes as itself, the id a JSON
 	// string, whose two quotes are the only bytes of a kept call it escapes.
+	//
+	// EVERY COUNTER AT THE WIDTH OF WHAT IT COUNTS. A read's and a serve's
+	// iteration is its job's, which the launch's own record below holds at
+	// math.MaxInt, turn_engine.max_iterations having no ceiling. A note's and
+	// an item's Seq is the turn's numbering ([RunSteer.Seq], at math.MaxInt
+	// below): a relaunch keeps it while its write removes every item, so the
+	// items a turn's jobs file push it past any index of the twenty the row
+	// holds. A read's round is the review's, which takes a handful, or a
+	// job's one: 99 is past both.
 	widest := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
 	if keptCallOf(&widest) == nil {
 		t.Fatalf("the store keeps no call at its widest, %+v", widest)
 	}
 	read := func() *NoteRead {
-		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
+		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: math.MaxInt, Round: 99,
 			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
 			Restarted: true}
 	}
@@ -425,7 +434,7 @@ func worstRow(t *testing.T) PendingRun {
 		out := make([]HookServed, MaxNoteServes)
 		for i := range out {
 			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
-				Iteration: 99, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widest)}
+				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widest)}
 		}
 		return out
 	}
@@ -433,14 +442,14 @@ func worstRow(t *testing.T) PendingRun {
 	for i := range notes {
 		told := read()
 		told.Retold = read()
-		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
 	}
 	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]), each sealed
 	// at a note's bound, for a job, served as often and read by its job's own
 	// step: no brief tells an item again, the next launch removing it.
 	for range MaxJobItems {
-		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: len(notes) + 1,
+		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: math.MaxInt - len(notes),
 			Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt, Served: uuid.NewString(), Place: math.MaxInt,
 			Serves: serves(), For: uuid.NewString(), Read: read()})
 	}

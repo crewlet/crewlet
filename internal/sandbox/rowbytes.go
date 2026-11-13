@@ -107,7 +107,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,951,013  (with 644,895 to spare)
+//	every other field, measured ..... 1,952,892  (with 643,016 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
