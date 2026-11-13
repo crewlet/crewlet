@@ -642,8 +642,17 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 		t.Fatalf("the record kept %+v, want the one definition the scrub did not rename", kept)
 	}
 	for _, entry := range kept.Attachment.Entries {
-		if !providerToolName.MatchString(entry.Name) {
+		if !providerToolName(entry.Name) {
 			t.Errorf("the kept record names %q, which the provider refuses", entry.Name)
+		}
+	}
+	for name, want := range map[string]bool{
+		"mcp__monitor__search": true, "a-b_C9": true, strings.Repeat("a", 128): true,
+		"": false, strings.Repeat("a", 129): false, "mcp__[REDACTED:engine-secret]__x": false,
+		"with space": false, "dot.ted": false, "caf\u00e9": false,
+	} {
+		if providerToolName(name) != want {
+			t.Errorf("providerToolName(%q) = %v, want %v", name, !want, want)
 		}
 	}
 	if rewriteLine(record, s, testBounds) != got {

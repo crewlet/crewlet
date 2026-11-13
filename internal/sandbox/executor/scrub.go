@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -734,13 +733,26 @@ func rewriteLine(line string, s scrubber, b scrubBounds) string {
 // every request it makes (measured on 2.1.322).
 const loadedToolsRecord = "deferred_tools_record"
 
-// providerToolName is the pattern the provider holds a tool's name to; a
-// request carrying a definition named outside it is refused whole.
-var providerToolName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+// providerToolName reports whether name is one the provider takes for a tool
+// (`^[a-zA-Z0-9_-]{1,128}$`); a request carrying a definition named outside
+// that is refused whole. Spelled out, not a compiled pattern: a package-level
+// one is allocated at every start of the binary, the git hooks' included.
+func providerToolName(name string) bool {
+	if len(name) < 1 || len(name) > 128 {
+		return false
+	}
+	for i := range len(name) {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // withoutBrokenDefinitions is a rewritten transcript line less every loaded
 // tool definition ([loadedToolsRecord]) whose name the rewrite left outside
-// [providerToolName]: a marker stands where part of the name was, and resent
+// what [providerToolName] takes: a marker stands where part of the name was, and resent
 // under that name the definition has every request of the restored session
 // refused. Left out, the session loads the tool again by search when it needs
 // it. Every other line, and a record the rewrite changed no name of, is
@@ -761,7 +773,7 @@ func withoutBrokenDefinitions(line string) string {
 		var definition struct {
 			Name string `json:"name"`
 		}
-		return json.Unmarshal(entry, &definition) != nil || !providerToolName.MatchString(definition.Name)
+		return json.Unmarshal(entry, &definition) != nil || !providerToolName(definition.Name)
 	})
 	if len(kept) == len(entries) {
 		return line

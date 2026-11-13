@@ -2003,19 +2003,22 @@ func (r claudeResult) contextExhausted() bool {
 	})
 }
 
-// claudeRefusedStatuses are the statuses a provider answers a request it will
-// not take as it was built: invalid (400), too large (413) and unprocessable
-// (422). The same request is refused again, so no retry of it cures one.
-var claudeRefusedStatuses = []int{400, 413, 422}
+// claudeRefusedStatus reports whether status is one a provider answers a
+// request it will not take as it was built: invalid (400), too large (413) or
+// unprocessable (422). The same request is refused again, so no retry of it
+// cures one.
+func claudeRefusedStatus(status int) bool {
+	return status == 400 || status == 413 || status == 422
+}
 
 // requestRefused is whether the run ended on a request its provider refused as
 // built ([sandbox.Result.RequestRefused]): the harness's own failure flag with
-// one of [claudeRefusedStatuses], and not a conversation past its context,
+// a status [claudeRefusedStatus] names, and not a conversation past its context,
 // which is a 400 too and has its own word ([claudeResult.contextExhausted]).
 // Measured on 2.1.322: a tool definition whose name breaks the provider's
 // pattern ends `is_error` with `api_error_status` 400, its result the sentence.
 func (r claudeResult) requestRefused() bool {
-	return r.IsError && slices.Contains(claudeRefusedStatuses, r.APIErrorStatus) && !r.contextExhausted()
+	return r.IsError && claudeRefusedStatus(r.APIErrorStatus) && !r.contextExhausted()
 }
 
 // succeeded is whether the run finished its work. EVERY FIELD MUST SAY SO: a
