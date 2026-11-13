@@ -51,6 +51,11 @@ type Workspace struct {
 	root     string
 	harness  string
 	profile  harnessprofile.Profile
+	// credentialSteps observes every write of the shared login this
+	// workspace makes ([hostbox.CredentialSteps]): nil in every workspace the
+	// engine opens. The kill matrix's writer process sets it before its first
+	// write, to park at a step and be killed there (loginset_test.go).
+	credentialSteps hostbox.CredentialSteps
 
 	mu sync.Mutex
 	// seats is each home's share, by its seat directory: a seat's login home
@@ -2047,7 +2052,7 @@ func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[
 // as [hostbox.WriteCredentials] makes it, a write that committed and could not
 // be put in place at once logged and answered as written.
 func (w *Workspace) commitLoginLocked(ctx context.Context, who string, names []string, files map[string][]byte) error {
-	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files, nil)
+	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files, w.credentialSteps)
 	if err != nil && hostbox.Committed(err) {
 		log.WarnContext(ctx, "harness_login_unapplied", "provider", who, "agent", w.harness,
 			"path", w.CredentialsDir(), "error", err)

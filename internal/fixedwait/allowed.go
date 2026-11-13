@@ -1091,7 +1091,6 @@ var allowed = []Entry{
 	{File: "internal/providers/llm/harness/fakemcp_test.go", Func: "runFakeServer", NegativeWindow: 1, ExemptWait: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/install_test.go", Func: "TestEveryLoginInstalledWritesANewRecord", ElapsedBound: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/loginset_test.go", Func: "TestASeedNeverReadsAWriteInProgress", ExemptWait: 1, Piece: 10},
-	{File: "internal/providers/llm/harness/loginset_test.go", Func: "killWriterAtRandom", ExemptWait: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/loginstatus_test.go", Func: "TestALoginStatusIsTheHarnessExitAndItsFields", ElapsedBound: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/loginstatus_test.go", Func: "TestALoginStatusPastItsBudgetIsUnknown", ElapsedBound: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/opencoderoute_test.go", Func: "opencodeClient", ExemptWait: 1, Piece: 10},
