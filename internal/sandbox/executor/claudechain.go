@@ -16,14 +16,18 @@ import (
 // A RESUME HANDS ITS MODEL A CHAIN, never the file. It walks from one record,
 // the LEAF, to the record its `parentUuid` names, and on, until a parent that
 // is null, the empty string or absent ends the walk, and reverses what it
-// walked. Off that chain it hands over only what a reply on it recovers: the
-// reply's other records, found by their `message.id`, which every record of
-// one reply carries, and the results whose parent is one of them, which is how
-// the results of calls made at once, each chained to its own call, reach the
-// model though the thread's last record descends from one of them alone
-// (probe T's trees, both releases). A record of any other reply off the chain,
-// and a user record that is no call's result, reaches the model by no path: so
-// an attempt the harness withdrew and failed to remove from the file, which no
+// walked. Off that chain it hands over only what a reply on it recovers. The
+// reading counts two of those recoveries: the reply's other records, found by
+// their `message.id`, which every record of one reply carries, and the results
+// whose parent is one of them, which is how the results of calls made at once,
+// each chained to its own call, reach the model though the thread's last
+// record descends from one of them alone (probe T's trees, both releases). The
+// resume recovers more, and every record it recovers so the reading leaves
+// told, the safe direction: a reply's tails (the attachments, system records
+// and meta user records hanging off its records), and, behind a flag on by
+// default, a result through the call its id names where that call's record is
+// not its parent. None of them reaches a record of another reply: so an
+// attempt the harness withdrew and failed to remove from the file, which no
 // later record descends from, holds a call no continuation hands over, and the
 // reading holds none of its calls.
 //
