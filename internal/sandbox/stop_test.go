@@ -710,7 +710,10 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 //
 // Mutation: bound the host's store's silence whatever the attempt's own read of
 // the row met (readStopped), or hand readStopped a read that answered whatever
-// it met (finishEnding), and the stop is said ended while its record keeps it.
+// it met (finishEnding), and nothing says the stop waits on a silence both
+// nodes share: its read is taken for a host given up, and the stop is kept
+// only by its record's write failing. (Said ended it never is, which is the
+// record's to say: [TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo].)
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *testing.T) {
@@ -742,8 +745,9 @@ func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *test
 	if strings.Contains(line, "sandbox_stop_unread") {
 		t.Fatalf("the stop kept on a shared silence was said ended all the same: %q", line)
 	}
-	if !strings.Contains(line, "sandbox_stop_read_waits") || !strings.Contains(line, "waits_for=store") {
-		t.Fatalf("nothing said the stop waits for the store: %q", line)
+	if !strings.Contains(line, "sandbox_stop_read_waits") || !strings.Contains(line, "waits_for=store") ||
+		!strings.Contains(line, "shared=true") {
+		t.Fatalf("nothing said the stop waits on a store silent to both nodes: %q", line)
 	}
 
 	hostStore.answer()
@@ -757,6 +761,101 @@ func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *test
 	}
 	if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
 		t.Fatal("the finished stop was not announced once with its turn closed once")
+	}
+}
+
+// recordUnansweredOnce is this node's own view of the run store, which does not
+// answer the first record of a stopped run's collection (CollectStop) and
+// answers every other call: a silence that began after the attempt's own read
+// of the run's row answered, and ended before the next attempt.
+type recordUnansweredOnce struct {
+	PendingStore
+	missed atomic.Bool
+}
+
+func (s *recordUnansweredOnce) CollectStop(ctx context.Context, turnID string, c StopCollection) (PendingRun, bool,
+	error) {
+	if s.missed.CompareAndSwap(false, true) {
+		return PendingRun{}, false, fmt.Errorf("sandbox: record stopped run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.CollectStop(ctx, turnID, c)
+}
+
+// A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO. A stop whose read of
+// its box comes to nothing (the box gone, or unreadable on this node's own
+// host, or its host or its host's store silent for the box timeout since the
+// stop) is ended with nothing charged by its record of that (CollectStop): a
+// write of this node's store, which can fall silent after the attempt's own
+// read of the run's row answered. The stop is then kept for this node's retry,
+// which reads the box again and charges whatever that read finds. Said before
+// the write, the log told an operator that a stop still kept had ended with
+// its spend written off, whatever its read had come to, and a stop kept on a
+// silence both nodes share was said ended all the same. So it is said once
+// the record lands, and only then, with what the read came to.
+//
+// Mutation: say it before the record is written, and the kept stop is said
+// ended; never say it, and a stop ended unread is never said to be.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// arrange launches t1 where its stop's read comes to nothing, and
+		// says is how the line names what it came to.
+		arrange func(t *testing.T, rig *coordRig)
+		says    string
+	}{
+		{"the box gone", func(_ *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.runner.CollectErr = errBoxGoneMidRead
+		}, "gone=true"},
+		{"the box unreadable on this node's host", func(_ *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.runner.CollectErr = errBoxBlip
+		}, errBoxBlip.Error()},
+		{"its host silent for the box timeout", func(t *testing.T, rig *coordRig) {
+			rig.onNode(t, "node-b", &boxAsks{err: fmt.Errorf("asking node-a: %w", ErrBoxHostSilent)}, &nudges{})
+			rig.launchedBy("t1", "node-a")
+		}, "host_silent=true"},
+		{"its host's store silent for the box timeout", func(t *testing.T, rig *coordRig) {
+			store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
+			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
+			rig.launchedBy("t1", "node-a")
+		}, "store_silent=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig := newCoordRig(t)
+			spies := watchStops(rig)
+			tc.arrange(t, rig)
+			rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
+			rig.coordinator.pending = &recordUnansweredOnce{PendingStore: rig.coordinator.pending}
+
+			rig.stop(t)
+			rig.now = rig.now.Add(DefaultBoxTimeout)
+			rig.fireRetries()
+			kept := rig.get("t1")
+			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
+				t.Fatalf("the stop whose record went unanswered reads ending %+v stop %+v; want it kept",
+					kept.Ending, kept.Stop)
+			}
+			if said := logs.String(); strings.Contains(said, "sandbox_stop_unread") {
+				t.Fatalf("the stop kept for its record was said ended all the same: %q", said)
+			}
+
+			rig.fireRetries()
+			if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+				t.Fatal("the stop was not finished once its record was answered")
+			}
+			said := logs.String()
+			if n := strings.Count(said, "sandbox_stop_unread"); n != 1 || !strings.Contains(said, tc.says) {
+				t.Fatalf("the stop ended unread was said so %d times, in %q; want once, as its record landed, "+
+					"saying %q", n, said, tc.says)
+			}
+			if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
+				t.Fatal("the stop ended unread charged, or was not announced once with its turn closed once")
+			}
+		})
 	}
 }
 
