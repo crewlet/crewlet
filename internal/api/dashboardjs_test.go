@@ -2374,7 +2374,11 @@ const (
 	// Built together, the advisor's findings and the work that touches an
 	// entry measure 5970.4 KiB (6,113,724 bytes), 51 bytes over the two
 	// added to 5958 KiB's tree: 5971 KiB.
-	treeBudget = 5<<20 + 851<<10
+	// The atlas's Home widget (its card, the two reads behind it, the board
+	// kit's shared "more on the page" link and a two-line row held to its
+	// width) added 2,283 bytes, nearly all script, and took it to 5972.7 KiB
+	// (6,116,007 bytes): 5973 KiB.
+	treeBudget = 5<<20 + 853<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
