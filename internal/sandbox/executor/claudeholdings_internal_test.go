@@ -462,15 +462,20 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 
 // A RESULT READ BEFORE ITS CALL'S USE IS NOT LIVE: what a continuation sends
 // pairs a result with the call before it in its own conversation, and the API
-// refuses a result no call precedes, so a result whose line comes before its
-// call's use, which no harness writes, is handed to no model with its call:
-// its call is told, in the main thread as in a reported subagent's. Nor is a
-// result in another thread than its call's use, though its line comes later.
-// The same records in the order written are live, and held.
+// refuses a result no call precedes, so a result the resume hands its model
+// before its call's use, which no harness writes, is handed to no model with
+// its call: its call is told, in the main thread as in a reported subagent's,
+// where its line comes before its use's, and in a subagent's thread, which
+// follows a parent written after its record, where its use's line comes
+// first but the use names it as its parent. Nor is a result in another
+// thread than its call's use, though its line comes later. The same records
+// in the order written are live, and held.
 //
 // Mutation: read a result as live wherever its call's use lies, and the result
-// before its use holds its call; or compare their lines across threads, and
-// the result after a use in another thread reads as live.
+// before its use holds its call; compare their lines alone, past a subagent's
+// first step to a parent written after its record, and the use chained after
+// its result holds its call; or compare their lines across threads, and the
+// result after a use in another thread reads as live.
 func TestAResultReadBeforeItsCallsUseIsNotLive(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_order", "order done"
@@ -507,17 +512,29 @@ func TestAResultReadBeforeItsCallsUseIsNotLive(t *testing.T) {
 			t.Errorf("its records %+v; want its one use and its one result, not live", records)
 		}
 	})
-	t.Run("in a subagent's thread, its result, then its use", func(t *testing.T) {
-		t.Parallel()
-		s := hsForeground(t)
-		s.thread[1], s.thread[2] = s.thread[2], s.thread[1]
-		got := hsSubagentRead(t, s)
-		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
-			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
-				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
-		}
-	})
+	for name, edit := range map[string]func(*testing.T, *hsSession){
+		"in a subagent's thread, its result, then its use": func(_ *testing.T, s *hsSession) {
+			s.thread[1], s.thread[2] = s.thread[2], s.thread[1]
+		},
+		"in a subagent's thread, its use written first and chained after its result": func(t *testing.T,
+			s *hsSession) {
+			s.thread = []string{s.thread[0], hsSide(t, ctAssistant(ctUUID(103), ctUUID(102), hsUse(hsSubCall))),
+				hsSide(t, hsAnswerOf(t, ctUUID(101), ctUUID(103), hsSubCall, hsSubOut, hsBlock(t, hsSubOut))),
+				hsSide(t, hsFinished(t, ctUUID(102), ctUUID(104)))}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			edit(t, &s)
+			got := hsSubagentRead(t, s)
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+					"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+			}
+		})
+	}
 }
 
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model
@@ -697,8 +714,12 @@ func hsProgress(parent, uuid string) string {
 //     or absent (S7's first shape, which a restart marks too) and under an
 //     attachment of none, which no restart marks;
 //   - a parent naming no record ends the walk there, and what lies past it is
-//     told, whatever the harness's guess by timestamp would link; a record the
-//     walk already took ends it the same way;
+//     told, whatever the harness's guess by timestamp would link;
+//   - a call is held only where the resume hands its use and then its result:
+//     a call recovered beside its reply is placed after that reply's records
+//     on the chain, so after its own result where that lies on the chain
+//     before the reply, and a result recovered beside a reply is placed after
+//     that reply's records, so before a call of a later reply; each is told;
 //   - the walk stops at the last restart, so a call reached only through a
 //     record before it is told: a compaction that kept a segment deletes every
 //     record before its boundary from what the resume walks;
@@ -715,11 +736,14 @@ func hsProgress(parent, uuid string) string {
 // attempt's call is held; recover through any reply's id, on the chain or
 // not, and so is it; recover through an id the decode replaced a character
 // of, and the call of the reply whose id differs only in a lone surrogate is
-// held; take a parent naming no record for the record before it in
-// the file, and the call past it is held; walk past the last restart, and the
-// call reached through a record before it is held; leave the checkpoint out of
-// the leaf, and the call after it is held; or read a subagent's chain that
-// breaks as whole, and its subagent is reported.
+// held; take a parent naming no record for the record before it in the file,
+// and the call past it is held; pair a recovered use with a result on the
+// chain by the file's order, and the call recovered after its own result is
+// held; pair a recovered result with a use of another reply, and the call of
+// the later reply is held; walk past the last restart, and the call reached
+// through a record before it is held; leave the checkpoint out of the leaf,
+// and the call after it is held; or read a subagent's chain that breaks as
+// whole, and its subagent is reported.
 func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 	t.Parallel()
 	const x, y, outX, outY = "toolu_chain_x", "toolu_chain_y", "chain x done", "chain y done"
@@ -765,8 +789,14 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			held: map[string]bool{x: false}},
 		"a parent naming no record": {lines: append(slices.Clone(pair), user(99, 4), after(4)),
 			held: map[string]bool{x: false}},
-		"a record the walk already took": {lines: append(slices.Clone(pair), user(5, 4), after(4)),
-			held: map[string]bool{x: false}},
+		"a call recovered beside its reply, its result on the chain before that reply": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_m", hsUse(x)), result(1, 3, x, outX),
+			hsReplyOf(t, ctUUID(3), ctUUID(4), "msg_m", text), hsReplyOf(t, ctUUID(4), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a result recovered beside a reply before its call's": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_b", text), hsReplyOf(t, ctUUID(2), ctUUID(3), "msg_c", hsUse(x)),
+			result(2, 4, x, outX), hsReplyOf(t, ctUUID(3), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: false}},
 		"a call reached only through a record before the last restart": {lines: []string{
 			user(21, 6), ctMicrocompactBoundary(ctUUID(1), ctUUID(10)),
 			hsReplyOf(t, ctUUID(10), ctUUID(21), "msg_x", hsUse(x)), result(21, 22, x, outX),
@@ -923,17 +953,25 @@ func TestARecordARetractionNamesIsHandedToNoModel(t *testing.T) {
 // record carries; and a progress record, which its load drops, handing each
 // record after it that names its uuid to the progress record's own parent, so
 // a result naming one carried by its call's record too reads past that call
-// (the chain critique's probe P5). None is in a main thread the probes kept.
-// The thread itself is read and holds its call, and so does it beside a
-// checkpoint its last record descends from, one naming no record, one naming
-// no canonical uuid, and one a compaction's boundary cleared.
+// (the chain critique's probe P5); and a walk, from the leaf or up to it, that
+// meets a parent written after its record or a record naming itself: past the
+// first the chain's order is no longer the file's (a call whose parent is its
+// own result, written after it, comes after that result, its probe P3; and so
+// does a call whose attachment names that result), and a resume that relinks
+// a compacted thread can find no leaf at all beside the second. None is in a
+// main thread the probes kept. The thread itself is read and holds its call,
+// and so does it beside a checkpoint its last record descends from, one
+// naming no record, one naming no canonical uuid, and one a compaction's
+// boundary cleared.
 //
 // Mutation: read past a marked checkpoint, one whose leaf is no string, or one
 // the last record does not descend from; file a sidechain's record, a fork's
 // briefing or a file's snapshot as any other; take a reply of string content
 // for one of blocks, or a message that does not decode for none on a record
 // the walk does not count; file a record of no lowercase canonical uuid, or of
-// another's; or pass a progress record over, and each such thread is read.
+// another's; pass a progress record over; or follow a parent written after its
+// record, or take a record naming itself for a walk's end, on the walk or on
+// the leaf's search, and each such thread is read.
 func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 	t.Parallel()
 	const x, out = "toolu_leaf", "leaf done"
@@ -941,6 +979,7 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 	pair := hsCall(ctUUID(1), 2, x, hsBlock(t, out))
 	with := func(lines ...string) []string { return append(slices.Clone(pair), lines...) }
 	cleared := hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_left", `[{"type":"text","text":"left."}]`)
+	done := `[{"type":"text","text":"done."}]`
 	for name, tc := range map[string]struct {
 		lines []string
 		read  bool
@@ -980,6 +1019,22 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 		"a progress record": {lines: with(hsProgress(ctUUID(3), ctUUID(4)))},
 		"a progress record of its call's uuid, before it": {lines: []string{hsProgress(ctUUID(1), ctUUID(2)), pair[0],
 			pair[1]}},
+		"a call whose parent, its own result, is written after it": {lines: []string{
+			ctAssistant(ctUUID(3), ctUUID(2), hsUse(x)), ctResult(ctUUID(1), ctUUID(3), hsAnswer(x, hsBlock(t, out)),
+				hsBlock(t, out)), ctAssistant(ctUUID(2), ctUUID(5), done)}},
+		"an attachment on the walk whose parent, the call's result, is written after it": {lines: []string{
+			ctAttachment(ctUUID(4), ctUUID(2), ctTokens, ctTokensRendered), ctAssistant(ctUUID(2), ctUUID(3), hsUse(x)),
+			ctResult(ctUUID(1), ctUUID(4), hsAnswer(x, hsBlock(t, out)), hsBlock(t, out)),
+			ctAssistant(ctUUID(3), ctUUID(5), done)}},
+		"an attachment on the leaf's search whose parent is written after it": {lines: with(
+			ctAttachment(ctUUID(8), ctUUID(7), ctTokens, ctTokensRendered),
+			ctAttachment(ctUUID(3), ctUUID(8), ctTokens, ctTokensRendered),
+			ctAttachment(ctUUID(7), ctUUID(9), ctTokens, ctTokensRendered))},
+		"a record the walk already took": {lines: with(ctSpan(ctUUID(5), ctUUID(4), ""),
+			ctAssistant(ctUUID(4), ctUUID(5), done))},
+		"a reply naming itself": {lines: with(ctAssistant(ctUUID(4), ctUUID(4), done))},
+		"an attachment naming itself on the leaf's search": {lines: with(ctAttachment(ctUUID(4), ctUUID(4), ctTokens,
+			ctTokensRendered))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

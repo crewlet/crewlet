@@ -2413,15 +2413,25 @@ since the resume then picks its leaf among the thread's leaves; and the walk
 never crosses the last restart, since a compaction that kept a segment deletes
 what lies before its boundary from what the resume walks. Where the walk cannot
 be read (a parent naming no record, which the harness replaces by a guess from
-timestamps, or a record already walked), it ends there and what lies past it is
-told; a record of no lowercase canonical uuid, or of another's, is no reading,
+timestamps), it ends there and what lies past it is told; a main thread whose
+walk meets a parent written after its record, or a record naming itself, is no
+reading, since past the first the chain's order is no longer the file's, and a
+resume that relinks a compacted thread can find no leaf beside the second; a
+record of no lowercase canonical uuid, or of another's, is no reading,
 and so is a progress record, a legacy shape none of the files the probes kept
 holds, whose uuid Claude Code's load hands the records after it that name it
 to the progress record's own parent, a link the reading does not follow.
 A subagent's thread is walked from its last record of its own, what its model
-had seen when it answered, and a walk that does not reach its root leaves it
-not whole. A result is live only past its call's use in its own thread, since
-the API refuses a result no call of its own precedes. A result its harness
+had seen when it answered, following a parent written after its record as its
+harness does (its start's attachments name such parents), and a walk that does
+not reach its root leaves it not whole. A result is live only where the resume
+hands it after its call's use, in the call's own thread, since the API refuses
+a result no call of its own precedes: on the chain, in the chain's order, which
+is the file's below the walk's first step to a parent written after its record,
+or recovered beside the use's own reply, which the resume places after that
+reply's records on the chain; a use it recovers beside a reply comes after the
+results that follow that reply there, so a call of that shape is told, and no
+harness writes one. A result its harness
 replaced for its model is live in no thread: behind a flag Anthropic's servers
 set, Claude Code hands its model a preview in place of the largest results a
 reply's calls returned past a budget, records the replacement beside the

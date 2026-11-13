@@ -111,11 +111,15 @@ import (
 // and lies on the chain from its last record of its own, or is recovered
 // beside it: a restart there leaves the subagent unreported (rule 2).
 //
-// AND A RESULT IS LIVE ONLY PAST ITS CALL'S USE, IN ITS OWN THREAD: what a
-// continuation sends pairs a result with the call before it in the one
-// conversation, and the API refuses a result no call of its own precedes, so
-// a result whose call's use comes after it, or lies in another thread, is
-// handed to no model with that call. No harness writes either.
+// AND A RESULT IS LIVE ONLY WHERE THE RESUME HANDS IT AFTER ITS CALL'S USE, IN
+// ITS OWN THREAD ([threadChain.answers]): what a continuation sends pairs a
+// result with the call before it in the one conversation, and the API refuses
+// a result no call of its own precedes, so a result handed before its call's
+// use, or in another thread, is handed to no model with that call. The order
+// read is the resume's, never the file's alone: the chain's, which is the
+// file's below the walk's first step to a parent written after its record,
+// and a recovered result's place after the records of its reply on the chain.
+// No harness writes a result before its use.
 //
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE, in whichever thread: behind a
 // flag Anthropic's servers set, Claude Code hands its model a preview in
@@ -170,9 +174,10 @@ import (
 //     keeps none of is a leg nothing can answer ([holdingsWalk.leg]). The
 //     call that started it is answered by its own result's record (`status`
 //     "completed" naming it, no error, of a subagent its metadata says the
-//     call waited for), the resume handing its model both that record and
-//     the call's, or by a task notification of it on the main thread's
-//     chain; a SendMessage only by a task notification of it on that chain.
+//     call waited for), the resume handing its model the call's record and
+//     then that one ([threadChain.answers]), or by a task notification of it
+//     on the main thread's chain; a SendMessage only by a task notification
+//     of it on that chain.
 //     A NOTIFICATION IS AN ANSWER: a continuation hands its model the
 //     notification's record verbatim (probe T, T10, on 2.1.310 and 2.1.322),
 //     and its lines name the subagent and the leg ([taskNotification]). An
@@ -223,8 +228,10 @@ import (
 // that names a record its last record does not descend from; a sidechain's
 // record, a fork's briefing, a file's snapshot or a reply whose content is a
 // string in it), or its chain cannot be walked as the resume walks it (a
-// record of no lowercase canonical uuid, a uuid held twice, or more than
-// [holdingsMaxRecords] records); a subagent's thread is past its bound, or its
+// record of no lowercase canonical uuid, a uuid held twice, more than
+// [holdingsMaxRecords] records, or a walk that meets a parent written after
+// its record or a record naming itself); a subagent's thread is past its
+// bound, or its
 // metadata past the archive's budget; more subagents than [holdingsMaxAgents],
 // or more legs than [holdingsMaxLegs]; or the stream does not end at io.EOF.
 // The error says which, in words a relaunch logs ([holdingsError]). WHY A
@@ -475,12 +482,11 @@ type callFacts struct {
 	// thread is a thread not counted before.
 	threads      int
 	thread, last string
-	// useThread, useLine and useRec are the thread, the line and the record
-	// in that thread's chain of its first use, and resultThread, line and
-	// resultRec its first result's; failed, textBytes, opening and whole are
-	// that result's ([sandbox.CallRecords]).
+	// useThread and useRec are the thread and the record in that thread's
+	// chain of its first use, and resultThread, line and resultRec its first
+	// result's thread, line and record; failed, textBytes, opening and whole
+	// are that result's ([sandbox.CallRecords]).
 	useThread    string
-	useLine      int
 	useRec       int32
 	resultThread string
 	line         int
@@ -489,10 +495,10 @@ type callFacts struct {
 	textBytes    int
 	opening      [32]byte
 	whole        [32]byte
-	// useHanded and resultHanded are whether the resume hands its model the
-	// first use's record and the first result's ([threadChain.handed]),
-	// filed once their thread was read whole.
-	useHanded, resultHanded bool
+	// answered is whether the resume hands its model the first use's record
+	// and then the first result's, both of one thread ([threadChain.answers]),
+	// filed once that thread was read whole.
+	answered bool
 	// replaced is whether a content-replacement record of a thread read
 	// names it: its harness hands its model a preview in its result's place
 	// ([threadLine.ReplacedResults]).
@@ -556,8 +562,8 @@ type legFact struct {
 	agent     string
 	refused   bool
 	// answered is whether the resume hands its model the first call's record
-	// and the first result's ([threadChain.handed]), filed once the main
-	// thread was read whole.
+	// and then the first result's ([threadChain.answers]), filed once the
+	// main thread was read whole.
 	answered bool
 }
 
@@ -809,26 +815,34 @@ func (w *holdingsWalk) checkpointOf(line threadLine) error {
 }
 
 // mainEnd decides, once the main thread is read whole, which of its records
-// the resume hands its model, and files it on each fact of the main thread
-// (claudechain.go's file comment): the chain from the leaf, the nearest user
-// or assistant record up from the thread's last record, past its last
-// restart. No reading where the checkpoint names a record the last record
-// does not descend from, since the resume then starts from the checkpoint;
-// the checkpoint the leaf where the thread holds a compaction's boundary and
-// it is a user or assistant record other than that one; and nothing handed
-// where no user or assistant record up from the last record lies past the
-// last restart.
+// the resume hands its model, and in what order, and files it on each fact of
+// the main thread (claudechain.go's file comment): the chain from the leaf,
+// the nearest user or assistant record up from the thread's last record, past
+// its last restart. No reading where the checkpoint names a record the last
+// record does not descend from, since the resume then starts from the
+// checkpoint; where a walk meets a parent written after its record, or a
+// record naming itself; the checkpoint the leaf where the thread holds a
+// compaction's boundary and it is a user or assistant record other than that
+// one; and nothing handed where no user or assistant record up from the last
+// record lies past the last restart.
 func (w *holdingsWalk) mainEnd(chain *threadChain) error {
+	unread := func(end chainEnd) error {
+		return &holdingsError{why: "the session's main thread holds a record whose walk to its root meets " +
+			end.String() + ", which its resume can hand its model in another order than the file's, or none"}
+	}
 	chain.resolve()
 	if last := int32(len(chain.parent)) - 1; last >= 0 {
 		userOrAssistant := func(record int32) bool { return chain.marks[record]&markUserOrAssistant != 0 }
-		leaf, _ := chain.up(last, true, userOrAssistant)
+		leaf, end := chain.up(last, true, userOrAssistant)
+		if end == endForward || end == endTaken {
+			return unread(end)
+		}
 		if checkpoint, named := chain.index[w.checkpoint]; leaf >= 0 && w.checkpointed && named {
 			// THE WHOLE WALK, past the last restart too, as the harness's own
 			// test of a last record that descends from its checkpoint walks.
-			if found, end := chain.up(last, false, func(record int32) bool { return record == checkpoint }); found < 0 {
+			if found, ended := chain.up(last, false, func(record int32) bool { return record == checkpoint }); found < 0 {
 				return &holdingsError{why: "the session's main thread holds a checkpoint its last record does not " +
-					"descend from, its walk up ending at " + end.String() + ", so its resume starts there"}
+					"descend from, its walk up ending at " + ended.String() + ", so its resume starts there"}
 			}
 			if w.compacted && userOrAssistant(checkpoint) && checkpoint != leaf {
 				leaf = checkpoint
@@ -836,20 +850,19 @@ func (w *holdingsWalk) mainEnd(chain *threadChain) error {
 		}
 		chain.done()
 		if leaf >= 0 {
-			chain.walk(leaf, true)
+			if end = chain.walk(leaf, true); end == endForward || end == endTaken {
+				return unread(end)
+			}
 		}
 	}
 	chain.done()
 	for _, f := range w.calls {
-		if f.uses > 0 && f.useThread == "" {
-			f.useHanded = chain.handed(f.useRec)
-		}
-		if f.results > 0 && f.resultThread == "" {
-			f.resultHanded = chain.handed(f.resultRec)
+		if f.uses > 0 && f.results > 0 && f.useThread == "" && f.resultThread == "" {
+			f.answered = chain.answers(f.useRec, f.resultRec)
 		}
 	}
 	for _, leg := range w.legs {
-		leg.answered = leg.results > 0 && chain.handed(leg.callRec) && chain.handed(leg.resultRec)
+		leg.answered = leg.results > 0 && chain.answers(leg.callRec, leg.resultRec)
 	}
 	for key, notice := range w.notices {
 		notice.live = chain.handed(notice.record)
@@ -907,7 +920,7 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 	case blockToolUse:
 		facts.uses++
 		if facts.uses == 1 {
-			facts.useThread, facts.useLine, facts.useRec = thread, n, record
+			facts.useThread, facts.useRec = thread, record
 		}
 	case blockToolResult:
 		facts.results++
@@ -1129,11 +1142,8 @@ func (w *holdingsWalk) subagentEnd(agent string, a *subagentFacts, chain *thread
 	}
 	chain.done()
 	for _, f := range w.calls {
-		if f.uses > 0 && f.useThread == agent {
-			f.useHanded = chain.handed(f.useRec)
-		}
-		if f.results > 0 && f.resultThread == agent {
-			f.resultHanded = chain.handed(f.resultRec)
+		if f.uses > 0 && f.results > 0 && f.useThread == agent && f.resultThread == agent {
+			f.answered = chain.answers(f.useRec, f.resultRec)
 		}
 	}
 }
@@ -1484,9 +1494,9 @@ func (w *holdingsWalk) failed(ctx context.Context, err error) error {
 }
 
 // holdings is what the reading found: every asked call some counted record
-// names, live where its first result is ([holdingsWalk.live]), its first use
-// comes before it in its thread, the resume hands its model the records of
-// both ([callFacts.useHanded]), and no record replaced it
+// names, live where its first result is ([holdingsWalk.live]), the resume
+// hands its model its first use's record and then that result's, both of one
+// thread ([callFacts.answered]), and no record replaced it
 // ([callFacts.replaced]); and every subagent whose thread names one,
 // reported or not (rule 2).
 func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
@@ -1500,8 +1510,8 @@ func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 		if f.threads == 1 {
 			records.Thread = f.thread
 		}
-		records.Live = f.results > 0 && f.uses > 0 && f.useThread == f.resultThread && f.useLine < f.line &&
-			!f.replaced && w.live(f.resultThread, f.line) && f.useHanded && f.resultHanded
+		records.Live = f.results > 0 && f.uses > 0 && f.useThread == f.resultThread && f.answered && !f.replaced &&
+			w.live(f.resultThread, f.line)
 		calls[id] = records
 	}
 	sends := w.sendsTo()

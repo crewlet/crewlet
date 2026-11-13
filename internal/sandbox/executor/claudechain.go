@@ -44,6 +44,18 @@ import (
 // reads them off the records it hands over alone, so it takes away no less
 // than the resume does.
 //
+// A CALL IS ANSWERED ([threadChain.answers]) only where the resume hands its
+// model the call's use and then its result, since the API takes a result only
+// after its call, and a result the harness's own repair finds before its call
+// it drops: both on the chain, in the chain's order, which is the file's
+// below the walk's first step to a parent written after its record; or the
+// result recovered beside the use's own reply, which the resume places after
+// every record of that reply on the chain. It places a recovered record after
+// its reply's records and after the results and the bookkeeping that follow
+// them there, so a use it recovers can come after its own result on the
+// chain, and the reading holds no call of that shape (no harness writes one:
+// a result's parent is its call's own record).
+//
 // THE LEAF of a main thread is the nearest user or assistant record up from
 // its last record, the leaf Claude Code's resume starts from wherever nothing
 // else moves it, which the reading holds to be so ([holdingsWalk.mainEnd]):
@@ -69,11 +81,18 @@ import (
 // record continues. Its walk must reach the thread's root; one that breaks
 // leaves the thread not whole.
 //
-// WHERE THE WALK CANNOT BE READ, THE READING TELLS. A parent naming no record,
-// or a record the walk already took, ends a main thread's walk, and what lies
-// past it is told: the harness takes a parent by timestamp there, which only
-// lengthens its chain, so the records walked to the break are handed either
-// way. In a subagent's thread either leaves the thread not whole. A record of
+// WHERE THE WALK CANNOT BE READ, THE READING TELLS. A parent naming no record
+// ends a main thread's walk, and what lies past it is told: the harness takes
+// a parent by timestamp there, which only lengthens its chain, so the records
+// walked to the break are handed either way. A parent written after its
+// record, and a record naming itself, on a main thread's walk are no reading:
+// past the first, the chain's order would no longer be the file's, which the
+// reading compares a call's use and its result by; and a resume that relinks
+// a compacted thread picks its leaf among the user and assistant records no
+// such record names as its parent, which a record naming itself is not, so it
+// may start from none at all. In a subagent's thread a parent naming no
+// record, or a record the walk already took, leaves the thread not whole. A
+// record of
 // no lowercase canonical uuid, a uuid held twice, or more records than
 // [holdingsMaxRecords] is no reading of a main thread and leaves a subagent's
 // not whole; and so is a progress record, a legacy shape, which the
@@ -86,7 +105,8 @@ import (
 //
 // A subagent's thread can name a parent that comes later in the file (the
 // attachments of its start: 74 of the 89 subagent threads the probes kept),
-// so a parent is looked up once the thread is read whole.
+// so a parent is looked up once the thread is read whole, in a main thread
+// too, where such a parent off its walk costs nothing.
 
 // holdingsMaxRecords is the most user, assistant, attachment and system
 // records of one thread a reading walks the chain of, and of the uuids those
@@ -169,10 +189,12 @@ type threadChain struct {
 	// broken is whether a record could not be filed ([threadChain.add]):
 	// none is filed after it, and a subagent's thread is not whole.
 	broken bool
-	// onChain marks the records walked from the leaf, and handedReplies the
+	// onChain marks the records walked from the leaf; ordered those of them
+	// below the walk's first parent written after its record, where the
+	// chain's order is the file's ([threadChain.walk]); and handedReplies the
 	// ids of the replies among them past the last restart.
-	onChain       []uint64
-	handedReplies map[[32]byte]struct{}
+	onChain, ordered []uint64
+	handedReplies    map[[32]byte]struct{}
 }
 
 // chainLaterParent is a record whose parent was not read when it was.
@@ -406,6 +428,9 @@ const (
 	endTaken
 	// endRestart is a record at or before the thread's last restart.
 	endRestart
+	// endForward is a parent written after its record, which a main
+	// thread's walk does not follow ([threadChain.walk]).
+	endForward
 )
 
 // String is what ended a walk, in words for an error.
@@ -417,16 +442,22 @@ func (e chainEnd) String() string {
 		return "a record it had already taken"
 	case endRestart:
 		return "its last restart"
+	case endForward:
+		return "a parent written after its record"
 	}
 	return "a root"
 }
 
-// up walks from record to its parents until stop holds of one, answering
-// that one, or until the walk ends, answering -1 and what ended it: a root, a
-// parent naming no record, more steps than the thread holds records (a record
-// already taken), or, where scoped, a record at or before the last restart.
+// up walks a main thread's records from record to their parents until stop
+// holds of one, answering that one, or until the walk ends, answering -1 and
+// what ended it: a root, a parent naming no record, a record naming itself (a
+// record already taken), a parent written after its record, which a main
+// thread's walk does not follow ([threadChain.walk]), or, where scoped, a
+// record at or before the last restart. Each step goes to a record written
+// before the last, so the walk ends within as many steps as the thread holds
+// records.
 func (c *threadChain) up(record int32, scoped bool, stop func(int32) bool) (int32, chainEnd) {
-	for range len(c.parent) {
+	for {
 		if scoped && record < c.scopeFrom {
 			return -1, endRestart
 		}
@@ -438,21 +469,40 @@ func (c *threadChain) up(record int32, scoped bool, stop func(int32) bool) (int3
 			return -1, endRoot
 		case parent < 0:
 			return -1, endNowhere
+		case parent == record:
+			return -1, endTaken
+		case parent > record:
+			return -1, endForward
 		default:
 			record = parent
 		}
 	}
-	return -1, endTaken
 }
 
-// walk marks the chain from leaf, as far as it can be read and, where
-// scoped, no further than the thread's last restart, and the ids of the
-// replies on it past that restart; and answers what ended it.
-func (c *threadChain) walk(leaf int32, scoped bool) chainEnd {
+// walk marks the chain from leaf, as far as it can be read, and the ids of
+// the replies on it past the last restart, and answers what ended it.
+//
+// A MAIN THREAD'S (main) stops at its last restart and at a parent written
+// after its record (endForward), which its reader takes for no reading
+// ([holdingsWalk.mainEnd]): every step then goes to a record written before
+// the last, so the chain's order is the file's, which the reading compares a
+// call's use and its result by ([threadChain.answers]), and the walk meets no
+// record twice. No main thread the probes kept names a parent written after
+// it.
+//
+// A SUBAGENT'S follows such a parent, as its harness does: the attachments a
+// subagent's start writes name parents written after them (74 of the 89
+// subagent threads the probes kept), and so does a reply that names the
+// environment its harness wrote after it (3 of them). So the walk marks
+// ordered only the records below its first step to a parent written after
+// its record, among which the chain's order is the file's; every record the
+// probes kept that holds a call or its result lies among them.
+func (c *threadChain) walk(leaf int32, main bool) chainEnd {
 	c.onChain = make([]uint64, (len(c.parent)+63)/64)
-	end := endTaken
+	c.ordered = make([]uint64, len(c.onChain))
+	end, ordered := endTaken, true
 	for record := leaf; ; {
-		if scoped && record < c.scopeFrom {
+		if main && record < c.scopeFrom {
 			end = endRestart
 			break
 		}
@@ -460,6 +510,9 @@ func (c *threadChain) walk(leaf int32, scoped bool) chainEnd {
 			break
 		}
 		c.onChain[record/64] |= 1 << (record % 64)
+		if ordered {
+			c.ordered[record/64] |= 1 << (record % 64)
+		}
 		parent := c.parent[record]
 		if parent == chainRoot {
 			end = endRoot
@@ -468,6 +521,13 @@ func (c *threadChain) walk(leaf int32, scoped bool) chainEnd {
 		if parent < 0 {
 			end = endNowhere
 			break
+		}
+		if parent > record {
+			if main {
+				end = endForward
+				break
+			}
+			ordered = false
 		}
 		record = parent
 	}
@@ -510,12 +570,63 @@ func (c *threadChain) handed(record int32) bool {
 // replyHanded reports whether a reply on the chain past the last restart
 // carries the id of record's reply.
 func (c *threadChain) replyHanded(record int32) bool {
+	id, filed := c.replyOf(record)
+	if !filed {
+		return false
+	}
+	_, handed := c.handedReplies[id]
+	return handed
+}
+
+// replyOf is the digest of the id of record's reply, where record is a
+// counted reply's record whose id was read ([threadChain.reply]).
+func (c *threadChain) replyOf(record int32) ([32]byte, bool) {
 	i, found := slices.BinarySearchFunc(c.replies, record, func(r chainReply, record int32) int {
 		return cmp.Compare(r.record, record)
 	})
 	if !found {
-		return false
+		return [32]byte{}, false
 	}
-	_, handed := c.handedReplies[c.replies[i].id]
-	return handed
+	return c.replies[i].id, true
+}
+
+// answers reports whether the resume hands its model record use, a call's
+// use, and record result, its result, the use first, as the API takes a
+// result only after its call: both handed ([threadChain.handed]), and
+//
+//   - both on the chain, below the walk's first step to a parent written
+//     after its record, where the chain's order is the file's, the use
+//     written first; or
+//   - the result recovered beside a reply whose record the use is: the resume
+//     places what it recovers beside a reply after every record of that reply
+//     on the chain, so after the use where the use is on it, and in the
+//     file's order among what it recovers where the use is recovered too.
+//
+// NO OTHER PAIR IS IN AN ORDER THE READING CAN READ: the resume places a
+// recovered record after its reply's records on the chain and after the
+// results, attachments and system records that follow them there, so a use
+// it recovers can come after its own result on the chain, and a result it
+// recovers beside another reply than the use's can come before the use.
+func (c *threadChain) answers(use, result int32) bool {
+	switch {
+	case !c.handed(use) || !c.handed(result):
+		return false
+	case c.on(result):
+		return c.on(use) && c.inOrder(use) && c.inOrder(result) && use < result
+	}
+	return c.sameReply(use, c.parent[result]) && (c.on(use) || use < result)
+}
+
+// inOrder reports whether record is on the chain below the walk's first step
+// to a parent written after its record ([threadChain.walk]).
+func (c *threadChain) inOrder(record int32) bool {
+	return c.ordered != nil && c.ordered[record/64]&(1<<(record%64)) != 0
+}
+
+// sameReply reports whether records a and b are records of one reply: each a
+// counted reply's record whose id was read, the two ids one.
+func (c *threadChain) sameReply(a, b int32) bool {
+	idA, filedA := c.replyOf(a)
+	idB, filedB := c.replyOf(b)
+	return filedA && filedB && idA == idB
 }
