@@ -99,6 +99,19 @@ type Cluster interface {
 	// the code log, and every router's memory of a member that refused or
 	// went silent lapsed, as the half minute a router keeps it does.
 	Settle(ctx context.Context) error
+	// AwaitElection waits, for as long as ctx allows, until every running
+	// member's own broker answers a read of the code log's state
+	// (DataNode.LogStats), its applier held or not: the read its committer's
+	// admission makes before every ordinary append (statelog.Reserve), asked
+	// through that member's own client as the admission asks it. A member's
+	// death takes that answer from its survivors until the elections the
+	// death causes are over — a broker whose meta group has no leader answers
+	// it 503, err_code 10008, which the committer refuses `usage_unknown` and
+	// its asker takes to the next member (F55) — so a case that holds a write
+	// to be decided by one survivor asks the write only once this has
+	// returned. Never Fleet.Level for it, which waits on each member's
+	// applier too, and so on one a case holds.
+	AwaitElection(ctx context.Context) error
 	// SplitMaintainers has every member of nodes take itself for repoID's
 	// maintainer — its compactor's Maintainers answering yes — until the case
 	// ends: a presence view split between them, which no lease or epoch

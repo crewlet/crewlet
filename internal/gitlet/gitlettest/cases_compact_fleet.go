@@ -264,8 +264,19 @@ func twoMaintainersLandOneCompaction(t *testing.T, c Cluster) {
 // record cannot apply where it was decided and the runner-up answers pending
 // (or unknown), never applied — and it reads what the record did only once
 // every running member has applied it, waiting on each as the case's end does
-// (Fleet.Level, bounded by the case's own context alone), never on how soon a
-// leader election ends on a loaded runner.
+// (Fleet.Level, bounded by the case's own context alone).
+//
+// PROPOSED ONCE THE KILL'S ELECTION IS OVER. The runner-up's admission reads
+// the code log's usage from its own broker before it appends
+// (statelog.Reserve), and a broker the kill left with no meta leader answers
+// that read 503, err_code 10008: the runner-up refuses the compaction
+// `usage_unknown`, and its asker takes it to the member after it, which
+// decides it — a record that is not the runner-up's — or refuses it too, and
+// the pass counts it failed, landed nowhere. So the held pass is let go only
+// once every survivor's own broker answers that read
+// (Cluster.AwaitElection), bounded by the case's own context alone as the
+// wait for the record is: what the case decides never turns on how soon an
+// election ends on a loaded runner.
 //
 // Mutation: count applied alone and the case fails on every run, where main's
 // failed on a run whose election outlasted the pass.
@@ -317,6 +328,13 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	c.Kill(t, committer)
 	down = true
 	runnerUp := rc.committer()
+	// THE PROPOSAL WAITS FOR THE KILL'S ELECTION: asked while it runs, the
+	// runner-up's admission cannot read the log's usage, and the compaction
+	// lands by the member after it, or nowhere. Never Fleet.Level, which
+	// would wait on the appliers held above.
+	if err := c.AwaitElection(rc.ctx); err != nil {
+		t.Fatalf("the survivors' brokers after %s's death: %v", committer, err)
+	}
 	release()
 	<-done
 	if got := landingOn(nx).since(landedBefore); got.landed() != 1 {
