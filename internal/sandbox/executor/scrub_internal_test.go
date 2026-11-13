@@ -847,6 +847,44 @@ func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 	}
 }
 
+// THE CUT READS EACH KEY BY ITS NAME EXACTLY, as JSON.parse does: an
+// `Attachment`, a `TYPE` or an `Entries` written after the record's own
+// `attachment`, `type` and `entries` is another key, which the cut reads past
+// and keeps as written, a renamed definition in it and all; and a key whose
+// name is spelled with escapes is the key the escapes spell, cut as that key
+// is. In each record below LIST is the list the cut reads, which holds a
+// renamed definition before a sound one, and only that definition goes.
+//
+// Mutation: fold a name's case, and the key written after it in another case
+// is read in its place; compare a name as written, and a name spelled with
+// escapes is read as none.
+func TestTheCutReadsEachKeyByItsExactName(t *testing.T) {
+	t.Parallel()
+	renamed := `{"name":"mcp__` + scrubMarker + `__backup_list"}`
+	described := `{"name":"mcp__seat__echo","description":"was ` + scrubMarker + `"}`
+	written, kept := `[`+renamed+`,`+described+`]`, `[`+described+`]`
+	for name, record := range map[string]string{
+		"an Attachment after the attachment": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
+			`"entries":LIST},"Attachment":{"type":"deferred_tools_record","entries":[` + renamed + `]},` +
+			`"type":"attachment"}`,
+		"a TYPE after the type": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record","entries":LIST,` +
+			`"TYPE":"deferred_tools_delta"},"type":"attachment"}`,
+		"an Entries after the entries": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
+			`"entries":LIST,"Entries":[` + renamed + `]},"type":"attachment"}`,
+		"an attachment spelled with escapes": `{"parentUuid":null,"\u0061ttachment":{"type":` +
+			`"deferred_tools_record","entries":LIST},"type":"attachment"}`,
+		"a type spelled with escapes": `{"parentUuid":null,"attachment":{"typ\u0065":"deferred_tools_record",` +
+			`"entries":LIST},"type":"attachment"}`,
+		"entries spelled with escapes": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
+			`"\u0065ntries":LIST},"type":"attachment"}`,
+	} {
+		line, want := strings.Replace(record, "LIST", written, 1), strings.Replace(record, "LIST", kept, 1)
+		if got := withoutBrokenDefinitions(line); got != want {
+			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
+		}
+	}
+}
+
 // A LOADED TOOL DEFINITION IS JUDGED BY THE NAME CLAUDE CODE SENDS IT UNDER:
 // its `name`, that key exactly and the last written of it, as JSON.parse
 // reads one, since 2.1.310 and 2.1.322 key each definition they send again by
