@@ -738,9 +738,9 @@ func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
 		return out
 	}
 	list := func(row clientsource.Body, key string) []string {
-		body, err := clientsource.Property(row, key)
-		if err != nil {
-			t.Fatalf("%s: %v", key, err)
+		body, missing := clientsource.Property(row, key)
+		if missing != nil {
+			t.Fatalf("%s: %v", key, missing)
 		}
 		if got := clientsource.Strings(body); got != nil {
 			return got
@@ -759,9 +759,9 @@ func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
 		t.Fatalf("ATLAS_FACT_SPECS names %v, and the engine's facts are %v", named, want)
 	}
 	for _, f := range atlas.Facts {
-		row, err := clientsource.Property(facts, string(f))
-		if err != nil {
-			t.Fatal(err)
+		row, missing := clientsource.Property(facts, string(f))
+		if missing != nil {
+			t.Fatal(missing)
 		}
 		spec := f.Spec()
 		traits := []string{}
@@ -796,9 +796,9 @@ func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
 		t.Fatalf("ATLAS_RELATION_PAIRS names %v, and the engine's relations are %v", related, want)
 	}
 	for _, r := range atlas.Relations {
-		row, err := clientsource.Property(pairs, string(r))
-		if err != nil {
-			t.Fatal(err)
+		row, missing := clientsource.Property(pairs, string(r))
+		if missing != nil {
+			t.Fatal(missing)
 		}
 		from, to, externals := list(row, "from"), list(row, "to"), list(row, "externals")
 		for _, a := range atlas.Kinds {

@@ -952,8 +952,8 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	step := func(name, key string) func(atlas.Claim, error) *tools.Result {
-		return func(c atlas.Claim, err error) *tools.Result {
-			claim, bad := n.claim(c, err)
+		return func(c atlas.Claim, invalid error) *tools.Result {
+			claim, bad := n.claim(c, invalid)
 			if bad != nil {
 				return bad
 			}
@@ -967,14 +967,14 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		}
 	}
 	says := func(stepName string, f atlas.Fact, raw string) *tools.Result {
-		c, err := atlas.Says(ref, f, raw, n.person, n.at)
-		if err == nil {
+		c, invalid := atlas.Says(ref, f, raw, n.person, n.at)
+		if invalid == nil {
 			plan.said[string(f)] = c.Value.Text
 			if now, held := factOn(e, ref, f, c.Value.Text); held && now.Value.Equal(c.Value) {
 				return nil
 			}
 		}
-		return step(stepName, "")(c, err)
+		return step(stepName, "")(c, invalid)
 	}
 	if name := strings.TrimSpace(argString(a, "name")); name != "" && name != ref.Key {
 		if bad := says("name", atlas.FactName, name); bad != nil {
@@ -998,8 +998,8 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		}
 		plan.said["belongs_to"] = account.entry.ID.String()
 		if _, drawn := edgeOn(e, atlas.RelationBelongsTo, account.entry.ID); !drawn {
-			if bad := step("belong", "")(atlas.Relates(ref, atlas.RelationBelongsTo, account.entry.Ref, n.person,
-				n.at)); bad != nil {
+			bad = step("belong", "")(atlas.Relates(ref, atlas.RelationBelongsTo, account.entry.Ref, n.person, n.at))
+			if bad != nil {
 				return atlasPlan{}, bad
 			}
 		}
@@ -1033,7 +1033,7 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, bad
 		}
 		plan.said["doclet_page"] = page
-		if bad := names("document", atlas.RelationDocumentedIn, atlas.ExternalPage, page); bad != nil {
+		if bad = names("document", atlas.RelationDocumentedIn, atlas.ExternalPage, page); bad != nil {
 			return atlasPlan{}, bad
 		}
 	}

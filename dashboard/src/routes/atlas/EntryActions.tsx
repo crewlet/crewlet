@@ -204,6 +204,8 @@ function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => v
   const [member, setMember] = useState(entryArg(entry.ref));
   const spec = factSpec(fact);
   const many = spec.traits.includes("many");
+  // A LABEL IS SOMEBODY'S WORDS; every other value is written as a machine reads it.
+  const prose = spec.type === "label";
   const perHost = spec.traits.includes("per_host") && entry.members.length > 1;
   const shown: AtlasFactView[] = entry.facts.filter(
     (view) => view.fact === fact && (!perHost || !view.of || entryArg(view.of) === member),
@@ -304,9 +306,7 @@ function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => v
           <FormField
             label={many ? "A value to add" : "Your value"}
             required
-            limit={
-              spec.type === "label" ? { length: [...value].length, max: LABEL_MAX } : undefined
-            }
+            limit={prose ? { length: [...value].length, max: LABEL_MAX } : undefined}
             helper={
               many
                 ? "This fact holds several values. Yours is added beside the others."
@@ -326,9 +326,9 @@ function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => v
                 <Input
                   id={field.id}
                   aria-describedby={field.describedBy}
-                  className={spec.type === "label" ? undefined : "mono"}
+                  className={prose ? undefined : "mono"}
                   autoCapitalize="none"
-                  spellCheck={spec.type === "label"}
+                  spellCheck={prose}
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
                 />

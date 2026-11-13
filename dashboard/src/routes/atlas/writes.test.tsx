@@ -353,7 +353,7 @@ describe("the band and Changes", () => {
     mountAtlas("#/company/atlas", <Atlas />, company, {
       answers: { viewer: ADA, atlas_review: reviewAnswer(waitingItems(company)) },
     });
-    const review = await screen.findByRole("link", { name: "Review: 2 wait for a person" });
+    const review = await screen.findByRole("link", { name: "Review: 2 waiting" });
     expect(review.getAttribute("href")).toBe("#/company/atlas/review");
     expect(screen.getByRole("link", { name: "Every change" }).getAttribute("href")).toBe(
       "#/company/atlas/changes",

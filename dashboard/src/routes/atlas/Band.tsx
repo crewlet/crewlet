@@ -167,10 +167,12 @@ export function Band({
 function ReviewLink({ waiting }: { waiting: Partial<Record<AtlasReviewKind, number>> }) {
   const count = Object.values(waiting).reduce((sum, one) => sum + (one ?? 0), 0);
   return (
-    <Link href={href(["company", "atlas", "review"])} className="atlas-band__link">
-      {count === 0
-        ? "Review: nothing waits"
-        : `Review: ${count.toLocaleString()} ${count === 1 ? "waits" : "wait"} for a person`}
+    <Link
+      href={href(["company", "atlas", "review"])}
+      className="atlas-band__link"
+      title="What waits for a person: disagreements, and entries nobody has confirmed"
+    >
+      {count === 0 ? "Review: none waiting" : `Review: ${count.toLocaleString()} waiting`}
     </Link>
   );
 }

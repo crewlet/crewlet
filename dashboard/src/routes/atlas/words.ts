@@ -84,7 +84,7 @@ export const LANES: Readonly<
   services: {
     label: "Services",
     columns: 3,
-    empty: "Services appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Services appear when a person adds one, with Add entry.",
   },
   runtime: {
     label: "Runtime",
@@ -95,7 +95,7 @@ export const LANES: Readonly<
   data: {
     label: "Data",
     columns: 2,
-    empty: "Databases, queues and buckets appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Databases, queues and buckets appear when a person adds one, with Add entry.",
   },
   platforms: {
     label: "Platforms",
@@ -112,7 +112,7 @@ export const LANES: Readonly<
   observability: {
     label: "Observability",
     columns: 2,
-    empty: "Monitors appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Monitors appear when a person adds one, with Add entry.",
   },
   tools: {
     label: "Tools and models",

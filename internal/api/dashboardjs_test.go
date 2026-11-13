@@ -2328,7 +2328,7 @@ const (
 	// Adding, correcting and confirming in the atlas (Add entry, an entry's
 	// actions and their dialogs, History, Changes, Review and its bulk
 	// decision, and the vocabulary's fact and relation tables the dialogs
-	// offer from) took it to 5941.9 KiB (6,084,481 bytes, +47,375, nearly all
+	// offer from) took it to 5942.0 KiB (6,084,566 bytes, +47,460, nearly all
 	// of it the atlas chunk's script): 5942 KiB.
 	treeBudget = 5<<20 + 822<<10
 )

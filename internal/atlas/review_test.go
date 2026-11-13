@@ -61,9 +61,9 @@ func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 	// One item a page, each page starting after the last.
 	var paged []string
 	for cursor, pages := "", 0; ; pages++ {
-		page, err := view.Review("", cursor, 1)
-		if err != nil || pages > 3 {
-			t.Fatalf("page %d: %v", pages, err)
+		page, failed := view.Review("", cursor, 1)
+		if failed != nil || pages > 3 {
+			t.Fatalf("page %d: %v", pages, failed)
 		}
 		for _, item := range page.Items {
 			paged = append(paged, string(item.Kind)+" "+item.Entry.Key)
@@ -80,7 +80,7 @@ func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 		t.Errorf("asked for the likely ones the review answers %+v, %v", only, err)
 	}
 	for _, bad := range []struct{ kind, cursor string }{{"drift", ""}, {"", "yesterday"}} {
-		if _, err := view.Review(ReviewKind(bad.kind), bad.cursor, PageMax); err == nil {
+		if _, refused := view.Review(ReviewKind(bad.kind), bad.cursor, PageMax); refused == nil {
 			t.Errorf("a review asked with %+v was answered", bad)
 		}
 	}

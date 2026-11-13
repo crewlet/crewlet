@@ -329,10 +329,11 @@
   min-width: 0;
 }
 
-/* A TILE'S WAY ON: one line under its figures, never wrapped mid-phrase. */
+/* A TILE'S WAY ON: one link under its figures, which wraps inside its tile
+   rather than widening it. */
 .atlas-band__link {
-  white-space: nowrap;
   justify-self: start;
+  min-width: 0;
 }
 
 /* THE TOOLBAR'S END: Add entry, pushed to the far edge of its row. */
@@ -422,4 +423,13 @@
 /* CHANGES: the days as one strip, no wider than its bars read well at. */
 .atlas-days {
   max-inline-size: 40rem;
+}
+
+/* ON A SHEET the actions stand between the header and the first section; on
+   the page the column's own gap already keeps them apart. */
+.atlas-actions {
+  margin-block: var(--spacing-3);
+}
+.atlas-entry > .atlas-actions {
+  margin-block: 0;
 }
