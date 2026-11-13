@@ -1030,6 +1030,16 @@ func keptShadowingATempDir(t *testing.T) {
 	}
 }
 
+type holder struct{ dir string }
+
+func pick(h holder) string { return h.dir }
+
+func keptPastAKeyNamedLikeALocal(t *testing.T) {
+	dir := t.TempDir()
+	_ = dir
+	_ = &natsserver.Options{StoreDir: pick(holder{dir: brokertest.TempDir(t)}), JetStreamMaxStore: 1 << 34}
+}
+
 func ownTempDirMethod() {
 	var o ownTempDir
 	_ = &natsserver.Options{StoreDir: o.TempDir(), JetStreamMaxStore: 1 << 34}
@@ -1087,8 +1097,8 @@ var (
 	serverStoreFixtureUntyped = []string{
 		"internal/b.untypedTempDir",
 	}
-	// servers_test.go's ten stores, and stores_test.go's five kept ones.
-	serverStoreFixtureKept = 15
+	// servers_test.go's ten stores, and stores_test.go's six kept ones.
+	serverStoreFixtureKept = 16
 )
 
 // serverSizeFixtureHits, serverSizeFixtureUntyped and
@@ -1115,9 +1125,9 @@ var (
 	serverSizeFixtureDeclared = map[string]int{
 		// declaredLiteral, elidedDeclared and declaredByItsLiteral's own;
 		// every literal of stores_test.go that gives a store or enables
-		// JetStream, sixteen, all sized, since that file's subject is the
+		// JetStream, seventeen, all sized, since that file's subject is the
 		// store; untypedTempDir's; and scratchStore's own.
-		shapeLiteral: 3 + 16 + 1 + 1,
+		shapeLiteral: 3 + 17 + 1 + 1,
 		// declaredAssignment, declaredByItsLiteral and limitOnlyLiteral, the
 		// last by a literal that gives no store itself; storeAssigned and
 		// keptThroughLocals; and scratchStore.

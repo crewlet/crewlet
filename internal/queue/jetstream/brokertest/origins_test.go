@@ -26,13 +26,11 @@ type storeOrigins struct {
 	// os.TempDir makes is a case's own, removed by the case.
 	test bool
 	// given is every value each local of the file is given — by :=, =, a
-	// var declaration or a range clause — by the local's object, which the
-	// parser's resolution makes one per declaration, so a local shadowing
-	// another is followed as its own.
-	given map[*ast.Object][]ast.Expr
+	// var declaration or a range clause.
+	given map[local][]ast.Expr
 	// params is the function and position of every parameter of the file's
-	// function declarations, by its object.
-	params map[*ast.Object]paramAt
+	// function declarations.
+	params map[local]paramAt
 	// calls is every call the file makes, for what a parameter is passed.
 	calls []*ast.CallExpr
 	// sets is every assignment to a selector the file makes, and literals
@@ -42,6 +40,26 @@ type storeOrigins struct {
 	sets     []fieldSet
 	literals []*ast.CompositeLit
 	fields   map[fieldOf][]ast.Expr
+}
+
+// local is a variable or a parameter of the file: the declaration the
+// parser's resolution names for an identifier, and the name. It is what an
+// *ast.Object stands for, spelled as decltype spells it rather than by the
+// type go/ast deprecates, since what that deprecation warns of — a composite
+// literal's key, which only types can tell a field from a variable — is never
+// followed here ([storeOrigins.follow]). One declaration declares a name once,
+// so a local shadowing another is its own.
+type local struct {
+	decl any
+	name string
+}
+
+// localOf is the local id names, where the parser resolved it to one.
+func localOf(id *ast.Ident) (local, bool) {
+	if id.Obj == nil || id.Obj.Decl == nil {
+		return local{}, false
+	}
+	return local{decl: id.Obj.Decl, name: id.Name}, true
 }
 
 // paramAt is a parameter: its function, and its position among the
@@ -85,7 +103,7 @@ type tempMaker struct {
 // originsIn reads the file f for [storeOrigins.made].
 func originsIn(w *decltype.World, f *decltype.File) *storeOrigins {
 	o := &storeOrigins{w: w, f: f, test: strings.HasSuffix(f.Path, "_test.go"),
-		given: map[*ast.Object][]ast.Expr{}, params: map[*ast.Object]paramAt{}}
+		given: map[local][]ast.Expr{}, params: map[local]paramAt{}}
 	for _, decl := range f.AST.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
@@ -98,8 +116,8 @@ func originsIn(w *decltype.World, f *decltype.File) *storeOrigins {
 				continue
 			}
 			for _, name := range field.Names {
-				if name.Obj != nil {
-					o.params[name.Obj] = paramAt{fn: fn, index: index}
+				if l, ok := localOf(name); ok {
+					o.params[l] = paramAt{fn: fn, index: index}
 				}
 				index++
 			}
@@ -149,8 +167,8 @@ func originsIn(w *decltype.World, f *decltype.File) *storeOrigins {
 
 // give records that the local id names is given value.
 func (o *storeOrigins) give(id *ast.Ident, value ast.Expr) {
-	if id.Obj != nil && id.Obj.Kind == ast.Var {
-		o.given[id.Obj] = append(o.given[id.Obj], value)
+	if l, ok := localOf(id); ok {
+		o.given[l] = append(o.given[l], value)
 	}
 }
 
@@ -177,15 +195,22 @@ func (o *storeOrigins) follow(e ast.Expr, seen map[any]bool, out *storeMade) {
 					o.follow(v, seen, out)
 				}
 			}
+		case *ast.KeyValueExpr:
+			// A COMPOSITE LITERAL'S KEY IS NEVER FOLLOWED, only its value:
+			// in a struct's literal the key is a field's name, which the
+			// parser's resolution may have bound to a local of that name.
+			o.follow(x.Value, seen, out)
+			return false
 		case *ast.Ident:
-			if x.Obj == nil || seen[x.Obj] {
+			l, ok := localOf(x)
+			if !ok || seen[l] {
 				break
 			}
-			seen[x.Obj] = true
-			for _, v := range o.given[x.Obj] {
+			seen[l] = true
+			for _, v := range o.given[l] {
 				o.follow(v, seen, out)
 			}
-			if p, ok := o.params[x.Obj]; ok {
+			if p, ok := o.params[l]; ok {
 				for _, arg := range o.argsTo(p) {
 					o.follow(arg, seen, out)
 				}
