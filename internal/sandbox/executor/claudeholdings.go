@@ -603,7 +603,7 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		if w.restarts.See(line.Head) {
 			w.lastRestart = line.N
 		}
-		if err := line.ReplacedResults(w.replaced); err != nil {
+		if err = line.ReplacedResults(w.replaced); err != nil {
 			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread replaces results in no "+
 				"shape Claude Code writes", line.N), cause: err}
 		}
