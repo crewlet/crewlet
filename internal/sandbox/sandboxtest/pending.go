@@ -231,8 +231,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
-			vanishing := &vanishingRuns{records: runs}
-			tc.fn(t, vanishing, over(vanishing))
+			overtaking := &overtakingRuns{records: runs}
+			tc.fn(t, overtaking, over(overtaking))
 		})
 	}
 }

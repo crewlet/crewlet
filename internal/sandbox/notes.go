@@ -1134,7 +1134,9 @@ func (s *CoordStore) ServeHook(ctx context.Context, turnID string, serve HookSer
 	})
 	if err != nil || !won {
 		// NOT SERVED unless the write landed: what a decision chose before it
-		// lost a race, to a record that then went, was never recorded served.
+		// lost a race, to a record that then went or to the run's ending
+		// decided under it (which mutate answers as nothing won, never an
+		// error), was never recorded served.
 		return nil, err
 	}
 	return served, nil

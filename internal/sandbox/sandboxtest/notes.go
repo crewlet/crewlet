@@ -65,6 +65,7 @@ var noteCases = []struct {
 	{"ARestartedTakeIsReadMarkedSo", testARestartedTakeIsReadMarkedSo},
 	{"AVerdictLosesAServeItIsToldIsAbsent", testAVerdictLosesAServeItIsToldIsAbsent},
 	{"AHeldTakeOutranksACancel", testAHeldTakeOutranksACancel},
+	{"AVerdictLandsWhateverTheRunsStatusOrEnding", testAVerdictLandsWhateverTheRunsStatusOrEnding},
 	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
 	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
 	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
@@ -1642,39 +1643,55 @@ func testASettleOfATakeThatRecordedNothingFencesItsWrite(t *testing.T, s sandbox
 
 // noteStagedCases are the note cases whose subject is a write another party
 // lands under one of the store's own decisions, which only the records it is
-// built on can stage ([vanishingRuns]).
+// built on can stage ([overtakingRuns]).
 var noteStagedCases = []struct {
 	name string
-	fn   func(*testing.T, *vanishingRuns, sandbox.PendingStore)
+	fn   func(*testing.T, *overtakingRuns, sandbox.PendingStore)
 }{
 	{"ASettleOfARecordRemovedUnderItAnswersNothing", testASettleOfARecordRemovedUnderItAnswersNothing},
+	{"AVerdictOfARecordRemovedUnderItAnswersNothing", testAVerdictOfARecordRemovedUnderItAnswersNothing},
+	{"AServeOfARecordRemovedUnderItServesNothing", testAServeOfARecordRemovedUnderItServesNothing},
+	{"AServeTheRunsEndingOvertookServesNothing", testAServeTheRunsEndingOvertookServesNothing},
 }
 
-// vanishingRuns is a coordination store's run records that, once armed, remove
-// a run's record between one decision of the store's and its write — the
-// run's ending deleting it under a write it lost to.
-type vanishingRuns struct {
+// overtakingRuns is a coordination store's run records that, once armed, land
+// another party's write on a run's record between one decision of the store's
+// and that decision's own write, which then loses its race to it: the run's
+// ending deleting the record ([overtakingRuns.removed]), or deciding the
+// ending, after which a live run's write takes the record no more.
+type overtakingRuns struct {
 	records
-	armed atomic.Bool
+	under atomic.Pointer[overtake]
 }
 
-// MutateSandboxRun makes the read-decide-write as the records would, the
-// record removed under the first decision once armed.
-func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
+// overtake is a write another party lands on turnID's record.
+type overtake func(ctx context.Context, turnID string) error
+
+// arm lands write under the store's next decision, once.
+func (r *overtakingRuns) arm(write overtake) { r.under.Store(&write) }
+
+// MutateSandboxRun makes the read-decide-write as the records would, the armed
+// write landed under the first decision once armed.
+func (r *overtakingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
 	return r.records.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
 		change, err := decide(read)
-		if r.armed.CompareAndSwap(true, false) {
-			if _, _, removeErr := r.records.MutateSandboxRun(ctx, turnID,
-				func(coord.Record) (coord.SandboxRunChange, error) {
-					return coord.SandboxRunChange{Delete: true}, nil
-				}); removeErr != nil {
-				return coord.SandboxRunChange{}, removeErr
+		if write := r.under.Swap(nil); write != nil {
+			if writeErr := (*write)(ctx, turnID); writeErr != nil {
+				return coord.SandboxRunChange{}, writeErr
 			}
 		}
 		return change, err
 	})
+}
+
+// removed removes turnID's record: the run's ending deleting it.
+func (r *overtakingRuns) removed(ctx context.Context, turnID string) error {
+	_, _, err := r.records.MutateSandboxRun(ctx, turnID, func(coord.Record) (coord.SandboxRunChange, error) {
+		return coord.SandboxRunChange{Delete: true}, nil
+	})
+	return err
 }
 
 // A SETTLE OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A settle that marks
@@ -1687,14 +1704,14 @@ func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 //
 // Mutation: answer what an earlier attempt decided where the last found no
 // record, and the settle answers notes marked by a write that never landed.
-func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanishingRuns, s sandbox.PendingStore) {
+func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-vanish"))
 	mustFile(t, s, "t-vanish", "n-1")
 	if _, err := s.TakeNotes(ctx, "t-vanish", namedTake(launch, "lost", "n-1")); err != nil {
 		t.Fatal(err)
 	}
-	runs.armed.Store(true)
+	runs.arm(runs.removed)
 	settled, err := s.SettleTake(ctx, "t-vanish", sandbox.NoteSettle{Take: "lost", Unanswered: true})
 	if err != nil || len(settled) != 0 {
 		t.Errorf("a settle of a record removed under it = %+v, %v, want nothing", settled, err)

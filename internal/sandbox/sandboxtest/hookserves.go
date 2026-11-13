@@ -13,8 +13,8 @@ import (
 )
 
 // A hook's serves of a person's notes, its session's verdict on them, and a
-// job's items: the cases [Run] drives for them, through noteCases and
-// noteRawCases.
+// job's items: the cases [Run] drives for them, through noteCases,
+// noteRawCases and noteStagedCases.
 //
 // A HOOK'S SERVE IS NO READ. A harness answered its notes by a hook is served
 // them by a write before its answer, and a note so served is read only once the
@@ -673,6 +673,48 @@ func testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob(t *testing.T, s san
 	}
 }
 
+// A VERDICT LANDS WHATEVER THE RUN'S STATUS OR ITS ENDING. What a hook's serve
+// handed over is a fact about the job, true whoever holds the record: the
+// verdict of a stopped or lost job's session is written by its run's ending,
+// whose ending is decided, and a collection's on the record its resume
+// claimed. So a verdict on either record reads the note its session shows the
+// hook took, off that serve, loses the one it proves absent, and answers both.
+//
+// Mutation: write the verdict as a write a live run takes, refused once its
+// ending is decided, or pin it to a job's working statuses, and a check goes
+// red.
+func testAVerdictLandsWhateverTheRunsStatusOrEnding(t *testing.T, s sandbox.PendingStore) {
+	for name, after := range map[string]func(t *testing.T, turnID string){
+		"its ending decided": func(t *testing.T, turnID string) {
+			decide(t, s, turnID, everyJob(sandbox.Fence{}, sandbox.Active))
+		},
+		"claimed": func(t *testing.T, turnID string) { mustClaim(t, s, turnID) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			turn := "t-verdict-" + strings.ReplaceAll(name, " ", "-")
+			launch := mustLaunched(t, s, run(turn))
+			mustFile(t, s, turn, "n-1")
+			mustFile(t, s, turn, "n-2")
+			mustServe(t, s, turn, hookServe(launch, "take-1", callNo(1), "n-1"), "n-1")
+			mustServe(t, s, turn, hookServe(launch, "take-2", callNo(2), "n-2"), "n-2")
+			after(t, turn)
+			settled, err := s.SettleHook(t.Context(), turn, sandbox.HookSettle{Launch: launch,
+				Held: []string{"take-1"}, Absent: []string{"take-2"}})
+			if err != nil || !slices.Equal(idsOf(settled), []string{"n-1", "n-2"}) {
+				t.Errorf("the verdict on a run %s answered %v, %v, want both notes", name, idsOf(settled), err)
+			}
+			notes := notesByID(t, s, turn)
+			if read := notes["n-1"].Read; read == nil || read.Take != "take-1" || read.Launch != launch {
+				t.Errorf("the verdict on a run %s left the held note read %+v, want it read off take-1", name, read)
+			}
+			if n := notes["n-2"]; !slices.Equal(servesOf(n), []string{"take-2:absent"}) || !n.Waiting() {
+				t.Errorf("the verdict on a run %s left the absent note served %v (waiting %v), want its serve "+
+					"lost absent", name, servesOf(n), n.Waiting())
+			}
+		})
+	}
+}
+
 // A CANCEL AND A VERDICT COMMUTE. The harness's cancel is heard by the inbox
 // and settled off the hook's path, and the session's verdict is written at the
 // job's collection, by two parties in either order: each decides on the record
@@ -1145,5 +1187,94 @@ func testEveryWriteHandsAnItemOnlyToItsJob(t *testing.T, s sandbox.PendingStore,
 	}
 	if got := idsOf(mustGet(t, s, turn).Steer.Notes); !slices.Equal(got, []string{"n-1"}) {
 		t.Errorf("the next launch left notes %v, want the person's note alone", got)
+	}
+}
+
+// A VERDICT OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A hook's verdict
+// decides to write where it finds a note its session shows the hook took, and
+// can then lose its race to the record's removal, the run's ending deleting it,
+// and the store asks again and finds no record. That attempt's decision
+// recorded nothing, so it is no answer, as a record gone before the verdict is
+// none: a collection that published it would record a note delivered that the
+// ending which deleted the record reported unconfirmed.
+//
+// Mutation: answer what an earlier attempt decided where the last found no
+// record, and the verdict answers a note read by a write that never landed.
+func testAVerdictOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-verdict-removed"
+	launch := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	mustServe(t, s, turn, hookServe(launch, "take-1", callNo(1), "n-1"), "n-1")
+	runs.arm(runs.removed)
+	settled, err := s.SettleHook(ctx, turn, sandbox.HookSettle{Launch: launch, Held: []string{"take-1"}})
+	if err != nil || len(settled) != 0 {
+		t.Errorf("a verdict of a record removed under it = %v, %v, want nothing", idsOf(settled), err)
+	}
+	if _, found, getErr := s.Get(ctx, turn); getErr != nil || found {
+		t.Errorf("the record is found (%v, %v) after its removal", found, getErr)
+	}
+}
+
+// A SERVE OF A RECORD REMOVED UNDER IT SERVES NOTHING. A hook's serve decides
+// on the record as it stands, and can then lose its race to the record's
+// removal, the run's ending deleting it, and the store asks again and finds no
+// record. That attempt's decision recorded nothing, so it is no answer: a take
+// that handed the hook what it decided would hand a harness notes no record
+// says were served.
+//
+// Mutation: answer what an earlier attempt decided where the write never
+// landed, and the serve answers a note no write served.
+func testAServeOfARecordRemovedUnderItServesNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-serve-removed"
+	launch := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	runs.arm(runs.removed)
+	served, err := s.ServeHook(ctx, turn, hookServe(launch, "take-1", callNo(1), "n-1"))
+	if err != nil || len(served) != 0 {
+		t.Errorf("a serve of a record removed under it = %v, %v, want nothing served", idsOf(served), err)
+	}
+	if _, found, getErr := s.Get(ctx, turn); getErr != nil || found {
+		t.Errorf("the record is found (%v, %v) after its removal", found, getErr)
+	}
+}
+
+// A SERVE THE RUN'S ENDING OVERTOOK SERVES NOTHING. A hook's serve is a write a
+// live run takes, and can lose its race to the run's ending being decided, a
+// person stopping the run while the hook's take is in flight: the store asks
+// again, finds the ending decided, and serves nothing more. That attempt's
+// decision recorded nothing, so it is no answer, and the note is left as the
+// ending found it, served to no hook: a take that handed the hook what it
+// decided would hand a harness a note the record never says was served, which
+// the ending reports expired.
+//
+// Mutation: answer what an earlier attempt decided where the write never
+// landed, and the serve answers a note no write served.
+func testAServeTheRunsEndingOvertookServesNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-serve-ending"
+	launch := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	runs.arm(func(ctx context.Context, turnID string) error {
+		decided, ok, err := s.DecideEnding(ctx, turnID,
+			sandbox.Decision{License: everyJob(sandbox.Fence{}, sandbox.Active)})
+		if err != nil {
+			return fmt.Errorf("decide the run's ending under the serve: %w", err)
+		}
+		if !ok || decided.Ending == nil {
+			return fmt.Errorf("decide the run's ending under the serve: decided %v", ok)
+		}
+		return nil
+	})
+	served, err := s.ServeHook(ctx, turn, hookServe(launch, "take-1", callNo(1), "n-1"))
+	if err != nil || len(served) != 0 {
+		t.Errorf("a serve the run's ending overtook = %v, %v, want nothing served", idsOf(served), err)
+	}
+	if row := mustGet(t, s, turn); row.Ending == nil {
+		t.Fatal("the premise: the run's ending was not decided under the serve")
+	}
+	if n := notesByID(t, s, turn)["n-1"]; len(n.Serves) != 0 || n.Served != "" || n.Place != 0 || !n.Waiting() {
+		t.Errorf("the serve the run's ending overtook left the note %+v, want it waiting, served to no hook", n)
 	}
 }
