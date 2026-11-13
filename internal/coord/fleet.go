@@ -1694,6 +1694,44 @@ type AtlasSources interface {
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
 }
 
+// AtlasCodeScans is where the atlas's scan of each Gitlet repository's deploy
+// and dependency files keeps its standing (internal/atlas/codescan): the
+// default branch's tip it last read whole, how many files it listed and
+// read, and what it refused.
+//
+// # Why the fleet holds it
+//
+// A repository's home moves between Gitlet nodes, and the node taking it over
+// must know which tip was read so it reads nothing again for a branch that
+// has not moved. The whole company needs the current value only: what the
+// files declared is on the atlas log.
+//
+// # A bucket of its own
+//
+// Not the atlas sources' bucket: its reader forgets every key that is no
+// source of its build, which is what a repository's id is to it.
+//
+// # The value is OPAQUE, and no retention, for the atlas sources' reasons
+//
+// There is one key per scanned repository, dropped when the repository is no
+// longer scanned, so nothing grows past the repositories the company has.
+type AtlasCodeScans interface {
+	// AtlasCodeScans returns every recorded standing, keyed by the
+	// repository's id. RAISES rather than answering empty on an unreachable
+	// store: "never scanned" would read every repository again.
+	AtlasCodeScans(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasCodeScan records one repository's standing, replacing any
+	// prior one. LAST WRITE WINS: a repository's home is its one writer, and
+	// two nodes that each take themselves for home write the same reading
+	// of the same commit.
+	PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error
+
+	// DeleteAtlasCodeScan drops a repository's standing once it is no longer
+	// scanned. One that is not there is the outcome asked for.
+	DeleteAtlasCodeScan(ctx context.Context, repo string) error
+}
+
 // MailboxRecord is the fleet's record of one agent seat's durable mailbox.
 //
 // # Why the fleet has to remember a mailbox at all
@@ -1875,6 +1913,7 @@ type Fleet interface {
 	Secrets
 	Integrations
 	AtlasSources
+	AtlasCodeScans
 	SeatAccess
 	AccessReviews
 	ConversationHolds
