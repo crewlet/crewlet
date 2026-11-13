@@ -147,8 +147,17 @@ type Recipient struct {
 // real notifications; an implementation is therefore free to return the false
 // that comes naturally when it cannot read a count, and does not have to
 // remember to invent a true.
+//
+// AND IT SAYS WHEN A REFUSAL ENDS: Reopens is the end of the window containing
+// now, the first instant a bucket it refused at now is counted afresh. The live
+// path never asks it — a refused notification is dropped there, which is what a
+// safety valve is for — but the replay of the inbound group's unhandled
+// deliveries does (replay.go): its copies piled up over a roll and arrive in
+// one burst the live path would have spread, so it waits a refused seat's wake
+// out to the window's end rather than lose it.
 type Valve interface {
 	Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error)
+	Reopens(now time.Time) time.Time
 }
 
 // Admitter reports whether this node may take inbound work right now.
@@ -501,6 +510,13 @@ func (s *Service) Sources() []string {
 // next node that reads it replays it at its start (replay.go), through this
 // same handling.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
+	return s.handle(ctx, ev, false)
+}
+
+// handle routes one delivery, as [Service.Handle] does; paced is the replay's
+// (replay.go), whose wake the rate valve refuses waits for the valve's window
+// to reopen and asks once more, rather than being dropped ([Service.deliver]).
+func (s *Service) handle(ctx context.Context, ev *events.Event, paced bool) queue.Result {
 	if s.admits != nil && !s.admits() {
 		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
 			"event", ev.ID, "reason", "config posture is shedding")
@@ -576,7 +592,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 
 	var errs []error
 	for _, r := range routed {
-		if err := s.deliver(ctx, prompts, reg, ev, w.Trigger, r); err != nil {
+		if err := s.deliver(ctx, prompts, reg, ev, w.Trigger, r, paced); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -592,7 +608,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 
 // deliver resolves one recipient and wakes them, or records why not.
 func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, ev *events.Event,
-	trigger string, r Routed) error {
+	trigger string, r Routed, paced bool) error {
 	party, ok := s.resolve(reg, r)
 	if !ok {
 		log.WarnContext(ctx, "notification_undeliverable", "source", r.Source,
@@ -634,12 +650,24 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// [Valve], and the reason a safety valve is allowed to exist on this
 	// path at all — was unreachable code the whole time.
 	allowed, err := s.allow(ctx, party)
+	if err == nil && !allowed && paced {
+		// A REPLAYED WAKE IS PACED, NOT DROPPED: the replay's copies piled
+		// up over a roll and come in one burst, which the live path would
+		// have spread over it, so the burst waits for the valve's window
+		// to reopen and asks once more ([Service.allowReopened]).
+		allowed, err = s.allowReopened(ctx, party)
+	}
 	switch {
 	case err != nil:
 		// FAILED OPEN: the notification is going through. Logged so an
 		// operator can see the valve is blind rather than idle.
 		log.WarnContext(ctx, "notification_valve_unavailable", "handle", party.Handle,
 			"error", err.Error())
+	case !allowed && paced:
+		// STILL REFUSED once the window reopened: the seat's own live mail
+		// fills its limit. The copy is KEPT for a later start, its wake
+		// undelivered, never skipped as the live path skips one.
+		return fmt.Errorf("notify: wake %s: %w", party.Handle, errValveRefused)
 	case !allowed:
 		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
 		s.skip(ctx, r.Source, party.Handle, ReasonRateLimited, nil)
@@ -837,6 +865,34 @@ func (s *Service) resolve(reg *Registry, r Routed) (Party, bool) {
 		}
 	}
 	return Party{}, false
+}
+
+// errValveRefused is a replayed wake the rate valve refused even once its
+// window had reopened ([Service.allowReopened]): the copy is kept, and its
+// wake delivered by a later start.
+var errValveRefused = errors.New("the notification rate limit refused the wake")
+
+// allowReopened waits for the end of the valve's window that refused party's
+// wake ([Valve.Reopens]) and asks the valve once more: a burst paced at the
+// valve's own rate. A context that ends while it waits answers refused, never
+// a failure, which fails open: a replay that stops keeps the copy.
+//
+// ONCE, AND NOT UNTIL ADMITTED. The replay's own copies are asked one after
+// another, so the window that opens holds none of them yet, and a refusal
+// there is the seat's live mail filling its limit — the storm or the loop the
+// valve exists for, which a replay waiting it out would join, holding every
+// other seat's copies behind it.
+func (s *Service) allowReopened(ctx context.Context, party Party) (bool, error) {
+	if wait := s.valve.Reopens(s.now()).Sub(s.now()); wait > 0 {
+		reopened := time.NewTimer(wait)
+		defer reopened.Stop()
+		select {
+		case <-ctx.Done():
+			return false, nil
+		case <-reopened.C:
+		}
+	}
+	return s.allow(ctx, party)
 }
 
 // allow consults the per-seat valve.

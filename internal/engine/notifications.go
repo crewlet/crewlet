@@ -1048,6 +1048,12 @@ func (v *notifyValve) Allow(ctx context.Context, bucket string, limit int, now t
 	return v.counter.Allow(ctx, bucket, limit, coord.RateWindow, now)
 }
 
+// Reopens implements [notify.Valve]: the end of the fixed window containing
+// now, which the counter truncates from the zero time ([coord.Counter]).
+func (v *notifyValve) Reopens(now time.Time) time.Time {
+	return now.Truncate(coord.RateWindow).Add(coord.RateWindow)
+}
+
 // admits reports whether this node may take inbound work, deferring to the
 // caller-supplied posture. Nil admits everything.
 func (e *Engine) admits() bool {

@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -151,6 +152,13 @@ func (s *Service) replayOne(ctx context.Context, subject string, entry queue.Kep
 		return letterKept
 	}
 	res := s.handleContained(ctx, subject, entry.Seq, &ev)
+	if res.Outcome == queue.OutcomeNak && errors.Is(res.Err, errValveRefused) {
+		log.InfoContext(ctx, "inbound_dead_letter_rate_limited", "subject", subject,
+			"seq", entry.Seq, "event", ev.ID, "source", ev.Source, "error", res.Err.Error(),
+			"detail", "kept, and replayed at the next start: the notification rate limit "+
+				"still refused a wake once its window had reopened")
+		return letterKept
+	}
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		if err := s.queue.DropDeadLetter(ctx, subject, entry.Seq); err != nil {
@@ -199,5 +207,5 @@ func (s *Service) handleContained(ctx context.Context, subject string, seq uint6
 			res = queue.Nak(fmt.Errorf("handling the replayed copy panicked: %w", contained.Err()))
 		}
 	}()
-	return s.Handle(ctx, ev)
+	return s.handle(ctx, ev, true)
 }

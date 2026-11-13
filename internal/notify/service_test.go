@@ -70,6 +70,10 @@ func (v *countingValve) Allow(context.Context, string, int, time.Time) (bool, er
 	return v.allow, v.err
 }
 
+// Reopens implements notify.Valve: at once, since this valve's answer is the
+// case's and no window of time decides it.
+func (v *countingValve) Reopens(now time.Time) time.Time { return now }
+
 func (v *countingValve) seen() int {
 	v.mu.Lock()
 	defer v.mu.Unlock()

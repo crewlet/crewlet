@@ -391,3 +391,98 @@ func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
 		}
 	})
 }
+
+// windowValve counts each bucket in fixed windows a second wide, truncated from
+// the zero time, as the fleet's counter behind the engine's valve does
+// (internal/coord's Counter, at coord.RateWindow).
+type windowValve struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (v *windowValve) Allow(_ context.Context, bucket string, limit int, now time.Time) (bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := bucket + "@" + now.Truncate(time.Second).String()
+	v.counts[key]++
+	return v.counts[key] <= limit, nil
+}
+
+func (v *windowValve) Reopens(now time.Time) time.Time {
+	return now.Truncate(time.Second).Add(time.Second)
+}
+
+// A REPLAYED BURST IS PACED BY THE RATE VALVE, AND LOSES NO WAKE.
+//
+// A seat's copies piled up over a roll and are replayed one after another, a
+// burst the live path would have spread over the roll; the valve drops what a
+// live burst sends past its limit, so the replay waits each refused wake out to
+// the window's end instead. Five copies for one seat limited to two a second
+// reach it, all five, over three windows, and every copy is dropped. In a
+// bubble, so the windows pass on the bubble's clock.
+//
+// Mutation: ask the valve once and skip the wake it refuses, as the live path
+// does, and three wakes are lost with their copies; ask again without waiting
+// for the window, and they are kept undelivered.
+func TestAReplayedBurstIsPacedByTheValveAndLosesNoWake(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		newer := newService(t, func(o *notify.Options, _ *harness) {
+			o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+			o.Valve = &windowValve{counts: map[string]int{}}
+			// The bubble's clock, which its timers move.
+			o.Now = nil
+		})
+		newer.limit = 2
+		const copies = 5
+		for i := range copies {
+			staged(t, newer, fmt.Sprintf("copy %d", i), relayed("2", fmt.Sprintf("op-%d", i)))
+		}
+
+		start(t, newer.svc)
+		woken := newer.settledN(t, inbox("engineering-lead"), copies)
+		ids := map[string]bool{}
+		for _, ev := range woken {
+			ids[ev.ID.String()] = true
+		}
+		for i := range copies {
+			if id := changefeed.WakeID(fmt.Sprintf("op-%d", i), "engineering-lead"); !ids[id.String()] {
+				t.Errorf("the wake of op-%d never reached the seat: the valve's refusal lost it", i)
+			}
+		}
+		if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 0 {
+			t.Errorf("after the replay the unhandled subject holds %d copies, want none: every "+
+				"wake was delivered", len(left))
+		}
+		newer.quiet(t, skipTopic)
+	})
+}
+
+// A REPLAYED WAKE THE VALVE STILL REFUSES IS KEPT, NEVER SKIPPED.
+//
+// Once its window has reopened, a refusal is the seat's own live mail filling
+// its limit — the storm the valve is for — and the replay neither joins it nor
+// waits it out: it keeps the copy for a later start, records no skip, and goes
+// on. The valve is asked twice, before the window reopens and after.
+//
+// Mutation: skip a replayed wake the valve refuses, as the live path does, and
+// its copy is dropped with the wake never delivered.
+func TestAReplayedWakeTheValveStillRefusesIsKept(t *testing.T) {
+	newer := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+	})
+	newer.limit = 1
+	newer.valve.allow = false
+	at := staged(t, newer, "the copy refused", relayed("2", "op-20"))
+
+	start(t, newer.svc)
+	newer.quiet(t, inbox("engineering-lead"))
+	newer.quiet(t, skipTopic)
+	if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 1 || left[0].Seq != at {
+		t.Fatalf("after the replay the unhandled subject holds %d copies, want the one the "+
+			"valve refused, kept", len(left))
+	}
+	if asked := newer.valve.seen(); asked != 2 {
+		t.Errorf("the valve was asked %d time(s), want twice: once, and once its window "+
+			"had reopened", asked)
+	}
+}
