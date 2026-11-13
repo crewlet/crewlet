@@ -26,6 +26,7 @@ type Builder struct {
 	seen   map[slotKey]bool
 	held   []derive.Withheld
 	unread []Unread
+	scopes []string
 }
 
 // slotKey is one entry's one slot: a read holds each at most once.
@@ -180,7 +181,11 @@ func (b *Builder) Deployed(where string, pipeline atlas.Ref, raw string) {
 // Unread records one part of the vendor the credential may not read.
 func (b *Builder) Unread(u Unread) { b.unread = append(b.unread, u) }
 
+// Scope records one part of the world the read visits that keeps a standing
+// of its own, as each server of the SSH source does.
+func (b *Builder) Scope(id string) { b.scopes = append(b.scopes, id) }
+
 // Read is what the builder gathered.
 func (b *Builder) Read() Read {
-	return Read{Claims: b.claims, Withheld: b.held, Calls: b.calls, Unread: b.unread}
+	return Read{Claims: b.claims, Withheld: b.held, Calls: b.calls, Unread: b.unread, Scopes: b.scopes}
 }
