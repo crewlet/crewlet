@@ -265,6 +265,37 @@ No level ever grants a role that mints or reveals a credential outliving the age
 
 Each prepared project's conditions refuse these to the provisioner too, so it cannot grant one even if asked.
 
+## What the atlas reads
+
+The engine reads the company's projects for its [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads as the provisioner, through the same federation, and needs no role beyond the ones the two setup blocks grant. Every call it adds is a `GET`, and nothing at Google Cloud is changed.
+
+| Part | Calls | Role | What the atlas gains |
+|---|---|---|---|
+| Projects | `GET /v3/projects:search`, 100 a page | whatever lets the provisioner see the project | each active project as an account, with its id and its display name. The identity project is the account the settings already name |
+| Services | `GET /v1/projects/{id}/services` for the enabled ones, once per project | Service Usage Viewer on the project, which the [Prepare a project](#prepare-a-project-for-crewlet) block grants | what the project is used for |
+
+**What an enabled API says.** Each enabled API is read as one of the atlas's capabilities, and its own name is never recorded:
+
+| Capability | Enabled API |
+|---|---|
+| `compute` | Compute Engine, Cloud Run, Kubernetes Engine, Cloud Functions, App Engine, Batch |
+| `database` | Cloud SQL, Spanner, Firestore, Memorystore for Redis and for Memcached, AlloyDB, Bigtable |
+| `dns` | Cloud DNS |
+| `model_api` | Vertex AI, the Gemini API |
+| `ci` | Cloud Build, Cloud Deploy |
+| `code_hosting` | Cloud Source Repositories, Secure Source Manager |
+| `identity` | Identity Platform, Identity-Aware Proxy |
+
+An API that is not in the table says nothing. That includes every API a new project has enabled before anybody uses it (Cloud Storage, BigQuery, Datastore, Cloud Logging and Cloud Monitoring): being enabled is no sign that the project uses them.
+
+**A project that is being deleted is not read.** Google keeps a deleted project for thirty days in a state other than active. The atlas leaves it out from the first read after the deletion and retires it a day later.
+
+**A refusal is a finding, never a failed read.** Where Google refuses a project's services (the provisioner lacks Service Usage Viewer there, as on a project the Prepare a project block never ran on), the project is still read as an account, the source's standing on the atlas counts the projects and names the block, and what an earlier read said those projects are used for stays as it was. A provisioner Google refuses the listing of projects itself, or does not trust at federation or impersonation, fails the read as a rejected credential.
+
+**What is never read.** A project's labels and tags, its IAM policy, its organization or folder, and everything inside it: no instance, database, cluster, bucket or address. Reading those takes an identity made for the atlas, which this integration does not create.
+
+**Cost and limits.** A read costs one call per hundred projects and one per active project, beside the two that mint the provisioner's token once an hour. When Google answers a read with its rate limit, the call waits as long as Google asks (five seconds where it names no wait), up to three times and thirty seconds a wait; past that, or when any listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A provisioner that can read more than 1,000 projects is not read: the standing says so, and nothing is retired. A project that two complete reads at least a day apart both miss is retired from the atlas.
+
 ## Google Cloud's limits worth knowing
 
 These are Google's, not Crewlet's.
@@ -276,6 +307,7 @@ These are Google's, not Crewlet's.
 | Roles in one grant condition | 10 | Why each level has its own condition |
 | Keys on a workload identity provider | 8 | Reconnecting updates the key in place |
 | Token lifetime | 1 hour | Crewlet renews before expiry |
+| Rate limits | A `429`, with `Retry-After` on some limits | A read waits as long as Google asks, or 5 seconds where it names no wait, up to 30 seconds and up to 3 times; a longer wait is left to the next pass. A write is never sent again: Google answers a spent quota with the same status |
 
 ## What is not supported yet
 
