@@ -95,9 +95,10 @@ type NotificationWriter struct {
 	// write wakes works for them, composed again on the node that runs it as a
 	// colleague's ask's carrier is, and never for the writing seat, which holds
 	// every app; and since the partition splits on it (notify.KeyOf), every
-	// constituent of one turn carries the same. An older notify parser ignores
-	// it, and a turn it wakes then works for the writing seat until the roll
-	// completes.
+	// constituent of one turn carries the same. An older notify parser cannot
+	// read the record that carries it, a version past its build's, so it
+	// passes the wake to a node of the newer build rather than wake anybody
+	// for the writing seat (internal/notify's Deferral).
 	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 
