@@ -790,19 +790,22 @@ func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	}
 }
 
-// A LINE THE CUT HAS NOTHING TO TAKE FROM IS HANDED ON AS IT CAME: a record
-// whose definitions keep their names (a marker in a description renames
-// nothing), an empty list and a null one, and every line that is not the
-// loaded tools' record as JSON.parse reads it: a list that is an object,
-// another attachment's list, a record with no attachment or one that is a
-// string, a torn line, a line of two values, a list of records, and a record
-// whose key is written twice, which JSON.parse reads by its last value (a
-// list or an attachment the record reads past, a type that is another's).
-// Where the list it reads is written twice, only the one JSON.parse reads is
-// cut, and the one it reads past stays as written.
+// A LINE THE CUT HAS NOTHING TO TAKE FROM IS HANDED ON AS IT CAME: a line
+// that holds no marker, which the rewrite renamed nothing in, even where its
+// writer named a definition outside the pattern; a record whose definitions
+// keep their names (a marker in a description renames nothing), an empty list
+// and a null one, and every line that is not the loaded tools' record as
+// JSON.parse reads it: a list that is an object, another attachment's list, a
+// record with no attachment or one that is a string, a torn line, a line of
+// two values, a list of records, and a record whose key is written twice,
+// which JSON.parse reads by its last value (a list or an attachment the
+// record reads past, a type that is another's). Where the list it reads is
+// written twice, only the one JSON.parse reads is cut, and the one it reads
+// past stays as written.
 //
-// Mutation: read a key by its first value, or cut a line that is more than
-// one object, and a case goes red.
+// Mutation: judge the definitions of a line that holds no marker, read a key
+// by its first value, or cut a line that is more than one object, and a case
+// goes red.
 func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 	t.Parallel()
 	renamed := `{"name":"mcp__` + scrubMarker + `__backup_list"}`
@@ -812,6 +815,8 @@ func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 	}
 	cuttable := loaded(`{"type":"deferred_tools_record","entries":[` + renamed + `]}`)
 	for name, line := range map[string]string{
+		"no marker, a name its writer wrote outside the pattern": loaded(
+			`{"type":"deferred_tools_record","entries":[{"name":"dot.ted"},{"name":"mcp__seat__echo"}]}`),
 		"no name renamed":          loaded(`{"type":"deferred_tools_record","entries":[` + described + `]}`),
 		"an empty list":            loaded(`{"type":"deferred_tools_record","entries":[],"note":"` + scrubMarker + `"}`),
 		"a null list":              loaded(`{"type":"deferred_tools_record","entries":null,"note":"` + scrubMarker + `"}`),

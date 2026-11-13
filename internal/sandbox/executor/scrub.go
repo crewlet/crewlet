@@ -762,11 +762,13 @@ func providerToolName(name string) bool {
 // what [providerToolName] takes: a marker stands where part of the name was,
 // and resent under that name the definition has every request of the restored
 // session refused. Left out, the session loads the tool again by search when
-// it needs it. Every other line is returned as it is: a record the rewrite
-// changed no name of, and a line that is not one JSON object [threadDecoding]
-// reads. The record is read as Claude Code's JSON.parse reads it, its
-// attachment, the attachment's type and its list each the last value written
-// under its key.
+// it needs it. A line that holds no marker is returned as it is, since the
+// rewrite renamed nothing in it, a definition its writer named outside the
+// pattern included; one that holds a marker loses every definition named
+// outside the pattern, whoever named it so. A line that is not one JSON object
+// [threadDecoding] reads is returned as it is too. The record is read as
+// Claude Code's JSON.parse reads it, its attachment, the attachment's type and
+// its list each the last value written under its key.
 //
 // CUT OUT OF THE LINE AS WRITTEN, each definition with the comma that joined
 // it to its list, every other byte of the line left where it was: never the
