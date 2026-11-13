@@ -438,6 +438,90 @@ func TestAHostsSilentStoreCrossesTheWireAsOne(t *testing.T) {
 	}
 }
 
+// A REPLY'S FLAG IS SAID ONCE, AS WHAT IT IS. A failure the host flags crosses
+// in the host's own words, which already hold the sentinel's sentence wherever
+// its error wrapped the sentinel, and the asker's reading of the flag added it
+// again: its log said the box was gone, the read refused or the store silent
+// twice in one line, and a silent store's reply read "could not read the box",
+// the box's failure, which is exactly what the flag exists to say it is not.
+// So each flagged reply reads as what its flag names, the sentinel's sentence
+// once, the host's words kept whole, and errors.Is still answering the
+// sentinel and no other.
+//
+// Mutation: word an unsettled reply as the box's failure again, or append a
+// flag's sentence whatever the host's words hold, and its case goes red.
+func TestAReplySaysWhatItsFlagNamesOnce(t *testing.T) {
+	t.Parallel()
+	kinds := []error{ErrBoxGone, ErrBoxNotHosted, ErrBoxHostSilent, ErrStoreSilent}
+	for _, tc := range []struct {
+		name string
+		// arrange stages the host's failure, returning the host's view of
+		// the rig's store and whether its context ends before the read.
+		arrange   func(rig *coordRig) (store PendingStore, stopped bool)
+		claimed   bool
+		kind      error
+		says      string
+		hostWords string
+	}{
+		{"the box found gone", func(rig *coordRig) (PendingStore, bool) {
+			rig.runner.CollectErr = errBoxGoneMidRead
+			return rig.pending, false
+		}, true, ErrBoxGone, "node node-a found the box gone", errBoxGoneMidRead.Error()},
+		{"the read refused", func(rig *coordRig) (PendingStore, bool) {
+			return rig.pending, false
+		}, false, ErrBoxNotHosted, "node node-a refused the read", "a collection reads the box of a run whose completion is claimed"},
+		{"the host stopping as it read", func(rig *coordRig) (PendingStore, bool) {
+			return &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}, true
+		}, true, ErrBoxHostSilent, "node node-a stopped as it read the box", errStoreUnanswered.Error()},
+		{"the host's store silent", func(rig *coordRig) (PendingStore, bool) {
+			return &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}, false
+		}, true, ErrStoreSilent, "node node-a's coordination store did not answer", errStoreUnanswered.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			store, stopped := tc.arrange(rig)
+			host := rig.hostOn(t, "node-a", store)
+			run := rig.launchedBy("t1", "node-a")
+			if tc.claimed {
+				if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID),
+					rigLease); err != nil || !won {
+					t.Fatalf("ClaimForResume = %v, %v", won, err)
+				}
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if stopped {
+				cancel()
+			}
+			got, err := crossed(AnswerBoxRead(ctx, host, BoxReadRequest{Version: BoxReadWireVersion, ID: "read-1",
+				Node: "node-a", TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID,
+				Read: BoxReadCollect}))
+			if err != nil {
+				t.Fatalf("the reply did not cross: %v", err)
+			}
+			err = got.Err()
+			if err == nil {
+				t.Fatal("the reply reads as an account of the run")
+			}
+			said := err.Error()
+			for _, kind := range kinds {
+				if errors.Is(err, kind) != (kind == tc.kind) {
+					t.Errorf("the asker reads %q as %v: %v; want %v alone", said, kind, errors.Is(err, kind), tc.kind)
+				}
+			}
+			if n := strings.Count(said, tc.kind.Error()); n != 1 {
+				t.Errorf("the asker reads %q, saying %q %d times; want once", said, tc.kind.Error(), n)
+			}
+			if !strings.Contains(said, tc.says) || !strings.Contains(said, tc.hostWords) ||
+				strings.Contains(said, "could not read the box") {
+				t.Errorf("the asker reads %q; want it to say %q, in the host's words (%q), and never that the "+
+					"box could not be read", said, tc.says, tc.hostWords)
+			}
+		})
+	}
+}
+
 // A BOX ITS HOST FOUND GONE IS SETTLED AT ONCE, as one this node's own backend
 // found gone is: no attempt can read it.
 func TestABoxItsHostFoundGoneIsSettledAtOnce(t *testing.T) {

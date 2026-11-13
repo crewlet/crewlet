@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -291,17 +292,21 @@ type BoxReadReply struct {
 func (r BoxReadReply) Answers() string { return r.Request }
 
 // Err is the reply as the asker acts on it (see [BoxReader] for the four kinds
-// of failure), or nil for a reply carrying the run's account.
+// of failure), or nil for a reply carrying the run's account. A failure the
+// reply flags reads as what its flag names, in the host's own words, with the
+// sentinel's sentence said once ([hostSaid]).
 func (r BoxReadReply) Err() error {
 	switch {
 	case r.Gone:
-		return fmt.Errorf("sandbox: node %s found the box gone: %s: %w", r.Node, r.Error, ErrBoxGone)
+		return hostSaid("sandbox: node "+r.Node+" found the box gone", r.Error, ErrBoxGone)
 	case r.Refused != "":
-		return fmt.Errorf("%w: node %s: %s", ErrBoxNotHosted, r.Node, r.Refused)
+		return hostSaid("sandbox: node "+r.Node+" refused the read", r.Refused, ErrBoxNotHosted)
 	case r.Withdrawn:
-		return fmt.Errorf("sandbox: node %s stopped as it read the box: %s: %w", r.Node, r.Error, ErrBoxHostSilent)
+		return hostSaid("sandbox: node "+r.Node+" stopped as it read the box", r.Error, ErrBoxHostSilent)
 	case r.Unsettled:
-		return fmt.Errorf("sandbox: node %s could not read the box: %s: %w", r.Node, r.Error, ErrStoreSilent)
+		// THE HOST'S STORE, NEVER THE BOX: the row that licenses the read
+		// was not read, so no read of the box was made to fail.
+		return hostSaid("sandbox: node "+r.Node+"'s coordination store did not answer", r.Error, ErrStoreSilent)
 	case r.Error != "":
 		return fmt.Errorf("sandbox: node %s could not read the box: %s", r.Node, r.Error)
 	case r.Result == nil:
@@ -309,6 +314,33 @@ func (r BoxReadReply) Err() error {
 	}
 	return nil
 }
+
+// hostSaid is a failure a host's reply flags, as its asker reads it: lead, what
+// the flag names, then the host's own words, then kind's sentence, ONLY where
+// those words do not hold it already. A host's words are its error's text,
+// which holds the sentinel's sentence wherever its error wrapped the sentinel,
+// as a box found gone, a refused read and the store's silence always do; the
+// sentence added again made the asker's log say each failure twice in one
+// line. errors.Is answers kind, and no other sentinel, either way: the words
+// are text, and only the flag says what they are.
+func hostSaid(lead, words string, kind error) error {
+	text := lead + ": " + words
+	if !strings.Contains(words, kind.Error()) {
+		text += ": " + kind.Error()
+	}
+	return &flaggedFailure{text: text, kind: kind}
+}
+
+// flaggedFailure is a failure a host's reply flags ([hostSaid]): its text, and
+// the sentinel the flag stands for.
+type flaggedFailure struct {
+	text string
+	kind error
+}
+
+func (f *flaggedFailure) Error() string { return f.text }
+
+func (f *flaggedFailure) Unwrap() error { return f.kind }
 
 // AnswerBoxRead is a host's reply to one admitted box read: the read made by
 // host ([Coordinator.ReadHostedBox]), or why it was not.
