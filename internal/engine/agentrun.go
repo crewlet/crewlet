@@ -851,8 +851,11 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 		return nil
 	}
 	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead}
-	if c.SignInReplaced {
+	switch {
+	case c.SignInReplaced:
 		out.Reason = sandbox.FollowUpSignInReplaced
+	case c.RequestRefused:
+		out.Reason = sandbox.FollowUpRequestRefused
 	}
 	return out
 }

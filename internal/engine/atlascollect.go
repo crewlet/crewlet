@@ -187,8 +187,8 @@ func (e *Engine) AtlasSourceReport(ctx context.Context, now time.Time) (collect.
 	}
 	var kinds []integration.Kind
 	for _, src := range e.atlasSources() {
-		if kind := src.Kind(); company.Config.DeclaresIntegration(kind.String()) {
-			kinds = append(kinds, kind)
+		if collect.Connected(src, company.Config) {
+			kinds = append(kinds, src.Kind())
 		}
 	}
 	return collect.Describe(kinds, standings, asked, company.Config.Atlas.RefreshInterval(), now), true, nil

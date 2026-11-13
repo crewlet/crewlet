@@ -209,3 +209,62 @@ func TestAWSSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.T) {
 		}
 	}
 }
+
+// THE OUTPUT CARRIES THE ATLAS'S ROLE WHERE THE STACK HOLDS IT: seven ARNs
+// are held to the same company, account and home Region as five, the atlas's
+// profile is its own, and its role is nobody else's.
+func TestParseAWSConnectionReadsTheAtlasRoleWhereTheStackHoldsIt(t *testing.T) {
+	t.Parallel()
+	const (
+		atlasProfile = "arn:aws:rolesanywhere:us-east-2:123456789012:profile/20010203-0405-4607-8809-0a0b0c0d0e0f"
+		atlasRole    = "arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-atlas"
+	)
+	with := func() config.AWSConnection {
+		c := awsConnection()
+		c.AtlasProfileARN, c.AtlasRoleARN = atlasProfile, atlasRole
+		return c
+	}
+	if five, err := config.ParseAWSConnection("acme", "us-east-2", awsConnection().String()); err != nil || five.HasAtlas() {
+		t.Fatalf("five ARNs read %+v, %v, want a stack without the atlas's role", five, err)
+	}
+	got, err := config.ParseAWSConnection("acme", "us-east-2", with().String())
+	if err != nil || !got.HasAtlas() || got.AtlasProfileARN != atlasProfile || got.AtlasRoleARN != atlasRole ||
+		got.String() != with().String() || strings.Count(got.String(), ",") != 6 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	for name, mutate := range map[string]func(*config.AWSConnection){
+		"the provisioner's profile": func(c *config.AWSConnection) { c.AtlasProfileARN = c.ProvisionerProfileARN },
+		"the agents' profile":       func(c *config.AWSConnection) { c.AtlasProfileARN = c.SeatProfileARN },
+		"the broker as the atlas":   func(c *config.AWSConnection) { c.AtlasRoleARN = c.BrokerRoleARN },
+		"the atlas as the broker":   func(c *config.AWSConnection) { c.BrokerRoleARN = c.AtlasRoleARN },
+		"another company's role":    func(c *config.AWSConnection) { c.AtlasRoleARN = strings.ReplaceAll(c.AtlasRoleARN, "acme", "other") },
+		"another account's role": func(c *config.AWSConnection) {
+			c.AtlasRoleARN = strings.Replace(c.AtlasRoleARN, "123456789012", "210987654321", 1)
+		},
+		"another Region's profile": func(c *config.AWSConnection) {
+			c.AtlasProfileARN = strings.Replace(c.AtlasProfileARN, "us-east-2", "eu-west-1", 1)
+		},
+		"another partition's role": func(c *config.AWSConnection) {
+			c.AtlasRoleARN = strings.Replace(c.AtlasRoleARN, "arn:aws:", "arn:aws-cn:", 1)
+		},
+		"a role that is not a role": func(c *config.AWSConnection) { c.AtlasRoleARN = c.TrustAnchorARN },
+		"a seat's role as the atlas": func(c *config.AWSConnection) {
+			c.AtlasRoleARN = strings.Replace(c.AtlasRoleARN, "acme/crewlet", "acme/seat/crewlet", 1)
+		},
+	} {
+		c := with()
+		mutate(&c)
+		if _, err := config.ParseAWSConnection("acme", "us-east-2", c.String()); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := config.ParseAWSConnection("acme", "us-east-2", with().String()+","+atlasRole); err == nil {
+		t.Error("eight ARNs: accepted")
+	}
+	doc := "name: Acme\nintegrations:\n  aws:\n" + strings.Replace(completeAWS, awsConnection().String(), with().String(), 1) +
+		"\n      atlas_read: true\n"
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil || !c.Integrations.AWS.Provisioning.AtlasRead {
+		t.Fatalf("a block with the atlas's role = %v", err)
+	}
+}

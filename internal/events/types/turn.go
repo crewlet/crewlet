@@ -52,6 +52,10 @@ const (
 	GuardUnhandledException GuardKind = "unhandled_exception"
 	// GuardScheduledTimeout means a scheduled turn exceeded its wall-clock cap.
 	GuardScheduledTimeout GuardKind = "scheduled_timeout"
+	// GuardRequestRefused means the model's provider refused the request the
+	// turn's executor made as built, again in a session of its own: Detail
+	// carries the provider's message. No round of the turn is judged on it.
+	GuardRequestRefused GuardKind = "request_refused"
 )
 
 // ToolSkillGuardBlocked fires when the required-skill guard rejects a tool call

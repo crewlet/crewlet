@@ -17,7 +17,17 @@
 // it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
 // organization as an account, and each product as what its account does.
 // Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
-// own id and name, with a bot token one of the agents already holds.
+// own id and name, with a bot token one of the agents already holds. Its
+// eleventh reads AWS (ADR-0148), as a role of its own that the company adds
+// to its stack by choice: the Regions in use, instances, databases, load
+// balancers, queues, buckets and public DNS.
+//
+// # A source may be the company's choice
+//
+// A source that reads under an identity the company adds by choice (AWS's
+// atlas role) is [Optional]: while the company has not asked for it, it is
+// not read and not listed among the sources, though its integration is
+// connected ([Connected], the one rule the duty and the report both read).
 //
 // # Its own duty, never the reconcile loop
 //

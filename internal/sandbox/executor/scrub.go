@@ -724,7 +724,75 @@ func rewriteLine(line string, s scrubber, b scrubBounds) string {
 	if err := rewriteDocument(&out, strings.NewReader(line), s, b); err != nil {
 		return redact.Secrets(s.apply(line))
 	}
-	return out.String()
+	return withoutBrokenDefinitions(out.String())
+}
+
+// loadedToolsRecord is the `type` of the attachment Claude Code keeps in its
+// transcript for the tool definitions a session loaded through tool search.
+// A session resumed from the transcript sends each one again as a tool of
+// every request it makes (measured on 2.1.322).
+const loadedToolsRecord = "deferred_tools_record"
+
+// providerToolName reports whether name is one the provider takes for a tool
+// (`^[a-zA-Z0-9_-]{1,128}$`); a request carrying a definition named outside
+// that is refused whole. Spelled out, not a compiled pattern: a package-level
+// one is allocated at every start of the binary, the git hooks' included.
+func providerToolName(name string) bool {
+	if len(name) < 1 || len(name) > 128 {
+		return false
+	}
+	for i := range len(name) {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// withoutBrokenDefinitions is a rewritten transcript line less every loaded
+// tool definition ([loadedToolsRecord]) whose name the rewrite left outside
+// what [providerToolName] takes: a marker stands where part of the name was, and resent
+// under that name the definition has every request of the restored session
+// refused. Left out, the session loads the tool again by search when it needs
+// it. Every other line, and a record the rewrite changed no name of, is
+// returned as it is.
+func withoutBrokenDefinitions(line string) string {
+	if !strings.Contains(line, loadedToolsRecord) || !strings.Contains(line, redact.Marker) {
+		return line
+	}
+	var record, attachment map[string]json.RawMessage
+	var entries []json.RawMessage
+	if json.Unmarshal([]byte(line), &record) != nil ||
+		json.Unmarshal(record["attachment"], &attachment) != nil ||
+		looseString(attachment["type"]) != loadedToolsRecord ||
+		json.Unmarshal(attachment["entries"], &entries) != nil {
+		return line
+	}
+	kept := slices.DeleteFunc(slices.Clone(entries), func(entry json.RawMessage) bool {
+		var definition struct {
+			Name string `json:"name"`
+		}
+		return json.Unmarshal(entry, &definition) != nil || !providerToolName(definition.Name)
+	})
+	if len(kept) == len(entries) {
+		return line
+	}
+	if kept == nil {
+		kept = []json.RawMessage{}
+	}
+	var err error
+	if attachment["entries"], err = plainjson.Marshal(kept, ""); err != nil {
+		return line
+	}
+	if record["attachment"], err = plainjson.Marshal(attachment, ""); err != nil {
+		return line
+	}
+	rewritten, err := plainjson.Marshal(record, "")
+	if err != nil {
+		return line
+	}
+	return string(rewritten)
 }
 
 // rewriteDocument streams one JSON value from src to dst a token at a time,

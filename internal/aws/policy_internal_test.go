@@ -67,6 +67,31 @@ func TestReadReadsNoDataNoSecretsNoIAMNoBilling(t *testing.T) {
 	}
 }
 
+// THE READ LEVEL NO LONGER READS A FUNCTION'S CONFIGURATION, which carries
+// its environment: not by the action of that name, and not by the two
+// listings that answer the same configuration.
+func TestReadReadsNoFunctionConfiguration(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"lambda:GetFunctionConfiguration", "lambda:ListFunctions",
+		"lambda:ListVersionsByFunction", "lambda:GetFunction"} {
+		if grants(readActions, action) {
+			t.Errorf("Read grants %s, which answers a function's environment", action)
+		}
+	}
+	for _, action := range readActions {
+		if strings.HasPrefix(action, "lambda:") && strings.ContainsAny(action, "*?") {
+			t.Errorf("Read grants %s: a Lambda wildcard reaches the listings that answer the environment", action)
+		}
+	}
+	// What says how a function is wired, and no value it holds, stays.
+	for _, action := range []string{"lambda:ListAliases", "lambda:ListEventSourceMappings", "lambda:GetPolicy",
+		"lambda:GetRuntimeManagementConfig", "lambda:GetFunctionUrlConfig"} {
+		if !grants(readActions, action) {
+			t.Errorf("Read lacks %s", action)
+		}
+	}
+}
+
 // OPERATE CREATES NO PERSISTENT ACCESS: the credential rule.
 func TestOperateCreatesNoPersistentAccess(t *testing.T) {
 	t.Parallel()

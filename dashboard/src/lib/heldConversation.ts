@@ -1,7 +1,8 @@
 /**
  * A conversation the engine holds (ADR-0117): it failed the same way twice in a
- * row (its context did not fit the seat's models, or its work ran out of its
- * sandbox's memory), so the engine stopped starting turns on it. The advisor's
+ * row (its context did not fit the seat's models, its work ran out of its
+ * sandbox's memory, or the models' provider refused the request its runs make),
+ * so the engine stopped starting turns on it. The advisor's
  * notices name each hold by its seat and its conversation, and say its cause.
  */
 
@@ -13,16 +14,31 @@ export const HELD_CLASS = "conversation.held";
 /** The cause of a hold whose work ran out of its sandbox's memory. */
 export const HELD_OUT_OF_MEMORY = "out_of_memory";
 
+/** The cause of a hold whose runs' requests the models' provider refused. */
+export const HELD_REQUEST_REFUSED = "request_refused";
+
 /** Why the engine holds a conversation, in the words the item and Inbox say. */
 export function heldReason(n: AdvisorNotice): string {
-  return n.cause === HELD_OUT_OF_MEMORY
-    ? "its work ran out of its sandbox's memory"
-    : "its context did not fit its models";
+  switch (n.cause) {
+    case HELD_OUT_OF_MEMORY:
+      return "its work ran out of its sandbox's memory";
+    case HELD_REQUEST_REFUSED:
+      return "its models' provider refused the request its runs make";
+    default:
+      return "its context did not fit its models";
+  }
 }
 
 /** What a person changes to release a hold, beside writing on it. */
 export function heldSetting(n: AdvisorNotice): string {
-  return n.cause === HELD_OUT_OF_MEMORY ? "sandbox" : "models";
+  switch (n.cause) {
+    case HELD_OUT_OF_MEMORY:
+      return "sandbox";
+    case HELD_REQUEST_REFUSED:
+      return "models or tool servers";
+    default:
+      return "models";
+  }
 }
 
 /** The conversation key the engine gives a work item's own thread. */

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`
+- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestTheSecondRequestItsProviderRefusesHoldsTheConversation`, `internal/engine.TestARunWhoseContinuedSessionWasRefusedIsRelaunchedFreshOnce`, `internal/agent/turn.TestARoundItsProviderRefusedEndsTheTurnWithItsMessage`, `internal/sandbox.TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 
@@ -55,9 +55,22 @@ rather than its models, so a person writing on the conversation, or a change of
 the box (its size among them), lifts it. Every collected run says the kills its
 job saw and its domain's ceiling, a run that survived a killed command included.
 
+**A conversation whose provider refuses its request is held the same way.** A
+run whose harness reports that the model's provider refused the request as it
+was built (`request_refused`: the harness's failure flag with status 400, 413
+or 422, and not a context that did not fit) did no work a reviewer could judge.
+Its session is retired as one out of context is, its round is carried on once
+in a fresh session where it had continued one, and a refusal a fresh session
+does not cure ends the turn with a guard breach of that kind carrying the
+provider's message, rather than being sent back until the stall guard names
+it. A second such run in a row on a fresh session holds the conversation,
+judged against the seat's models and the company's tool servers, which are
+what a request is built from. A schedule's fires are one conversation, so a
+schedule whose every fire is refused is held and told after its second.
+
 **A held conversation is told, and is never released by a timer.** Each hold is
 a platform notice of the engine's cause (ADR-0116, class `conversation.held`,
-with its `cause`: `context_exhausted` or `out_of_memory`),
+with its `cause`: `context_exhausted`, `out_of_memory` or `request_refused`),
 which reaches every administrator while the hold stands and leaves with it, and
 the item a held conversation is about says "Held by the engine" on its page.
 There is nothing to decide: the notice says what releases it. A timed release

@@ -110,6 +110,13 @@ type Work struct {
 	// its [Reply.Item] names, read after the phase off the tracker's rows
 	// (ADR-0122). Unread, and empty, where the reply names no item.
 	Answer types.PickupAnswer
+
+	// RequestRefused is the provider's own message where the round's run
+	// ended on a request its provider refused as built, and a fresh session
+	// could not cure it. Such a round holds no work of a model's: it is never
+	// checked, reviewed or compared as an artifact, and it ends the turn
+	// ([types.GuardRequestRefused]). Empty for every other round.
+	RequestRefused string
 }
 
 // RefusedReply is a reply to a question the round's run asked that the engine
@@ -617,6 +624,23 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 			res.Suspended = true
 			res.Decision = phase.SelfIterate
 			res.Artifact = work.Text
+			return res, nil
+		}
+
+		if work.RequestRefused != "" {
+			// NO WORK OF A MODEL'S TO JUDGE: the provider refused the request
+			// before the model read it, and the next launch sends it again. A
+			// round sent back here would repeat the refusal word for word, and
+			// the stall guard would name the turn's failure for it.
+			log.WarnContext(ctx, "turn_request_refused", "turn_id", in.RunID, "round", round,
+				"detail", work.RequestRefused)
+			res.LastWork = &work
+			res.Decision = phase.Failed
+			res.Breach = &Breach{
+				Kind: types.GuardRequestRefused,
+				Detail: "the model's provider refused the request the executor made, which a retry " +
+					"sends again: " + work.RequestRefused,
+			}
 			return res, nil
 		}
 

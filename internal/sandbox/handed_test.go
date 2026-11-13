@@ -781,3 +781,30 @@ func TestATokenTheLaunchWritesInAKeptBoxIsSealedWithItsJob(t *testing.T) {
 		}
 	})
 }
+
+// THE NAME OF AN MCP SERVER THE LAUNCH DECLARES IS NEVER TAKEN OUT BY VALUE,
+// whatever credential position also holds the same word: it is part of every
+// tool name of that server, and scrubbed out of a kept session it left the
+// tool definitions the harness restores named outside the provider's pattern.
+//
+// Mutation: collect the values without withoutServerNames, and it goes red.
+func TestAServerNameALaunchDeclaresIsNeverTakenOutByValue(t *testing.T) {
+	t.Parallel()
+	req := LaunchRequest{
+		Secrets: []string{"cloudhost", `{"profile":"cloudhost","secret":"a-real-secret-value"}`},
+		MCPServers: map[string]MCPServer{
+			"cloudhost": {Name: "cloudhost", Transport: TransportStdio, Command: "cloud",
+				Env: map[string]string{"CLOUD_PROFILE": "cloudhost", "CLOUD_KEY": "an-env-secret-value"}},
+		},
+	}
+	handed := handedSecrets(req, nil)
+	if slices.Contains(handed.Values, "cloudhost") {
+		t.Errorf("the handed set %q holds the server's own name, which every tool name of it carries",
+			handed.Values)
+	}
+	for _, want := range []string{"a-real-secret-value", "an-env-secret-value"} {
+		if !slices.Contains(handed.Values, want) {
+			t.Errorf("the handed set %q lost %q with the server's name", handed.Values, want)
+		}
+	}
+}

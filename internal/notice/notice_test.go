@@ -148,10 +148,13 @@ func TestAHeldConversationIsANotice(t *testing.T) {
 	holds := []coord.ConversationHold{
 		{Seat: dev, Conversation: "task:t-1", Kind: notice.CauseContextExhausted, Basis: "b", At: t0},
 		{Seat: dev, Conversation: "task:t-3", Kind: notice.CauseOutOfMemory, Basis: "b", At: t0},
+		{Seat: dev, Conversation: "schedule/role/r-1/check", Kind: notice.CauseRequestRefused, Basis: "b", At: t0},
 		{Seat: gone, Conversation: "task:t-2", Kind: notice.CauseContextExhausted, Basis: "b", At: t0},
 	}
 	got := notice.FromConversationHolds(holds, func(seat uuid.UUID) (string, bool) { return "dev", seat == dev })
 	want := []notice.Notice{
+		{Class: notice.ClassConversationHeld, Since: t0, Cause: notice.CauseRequestRefused,
+			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "schedule/role/r-1/check"}},
 		{Class: notice.ClassConversationHeld, Since: t0, Cause: notice.CauseContextExhausted,
 			Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev", Name: "task:t-1"}},
 		{Class: notice.ClassConversationHeld, Since: t0, Cause: notice.CauseOutOfMemory,

@@ -116,7 +116,7 @@ export interface AdvisorNotice {
   since?: string;
   /** The nodes an alarm stands on. */
   nodes?: string[];
-  /** How a held conversation failed: `context_exhausted` or `out_of_memory`. */
+  /** How a held conversation failed: `context_exhausted`, `out_of_memory` or `request_refused`. */
   cause?: string;
   /** The alarm kind that raised a finding's notice, for a reader without the finding. */
   alarm?: string;
