@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -1565,6 +1566,18 @@ func (l threadLine) ReplacedResults(each func(id string)) error {
 // accessor's error, never "", and never Message's, so a reshaped id costs
 // only the readers that ask for it.
 //
+// AND TO A TEXT ITS READER COMPARES AS THE HARNESS DOES: an id holding the
+// replacement character, U+FFFD, is this accessor's error too. The layer's
+// decode reads a lone surrogate and each byte that is no UTF-8 as U+FFFD
+// ([threadDecoding]), where Claude Code's JSON.parse keeps a lone surrogate
+// as the code unit written and compares ids a code unit at a time, so two ids
+// the harness holds apart (`msg_\ud800` and `msg_\ud801`) would decode as one
+// and recover each other's records, which no resume does. Refused, such an id
+// costs its reader only what it recovers: the reply recovers no record and no
+// record recovers it, the direction that tells. Every reply the probes kept
+// carries an ASCII id (1,763 of them, at most 36 bytes); only a box
+// rewriting its own file writes another.
+//
 // Decoded from the line's raw `message` on each call, as
 // [threadLine.StopReason] reads its key: nothing keeps it.
 func (l threadLine) MessageID() (string, error) {
@@ -1582,7 +1595,15 @@ func (l threadLine) MessageID() (string, error) {
 	if err := wireDecode(l.message, &message); err != nil {
 		return "", fmt.Errorf("an assistant record's message: %w", err)
 	}
-	return wireString("id", message.ID)
+	id, err := wireString("id", message.ID)
+	if err != nil {
+		return "", err
+	}
+	if strings.ContainsRune(id, utf8.RuneError) {
+		return "", errors.New("id holds the replacement character, which a lone surrogate or a byte that is " +
+			"no UTF-8 decodes as, so two ids the harness holds apart can read as one")
+	}
+	return id, nil
 }
 
 // Checkpoint is what a last-prompt record says of the leaf Claude Code's

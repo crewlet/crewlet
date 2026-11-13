@@ -679,7 +679,10 @@ func hsCheckpoint(t *testing.T, leaf, beside string) string {
 //   - an attempt the harness withdrew and left in the file, its reply's id on
 //     no record of the chain, is handed to no model with the result after it,
 //     and its call is told, though both lie past every restart; the same
-//     attempt the thread goes on from is held;
+//     attempt the thread goes on from is held; and an attempt whose id
+//     differs from a reply's on the chain only in a lone surrogate, which the
+//     harness compares a code unit at a time and the layer's decode reads as
+//     U+FFFD, is told as the withdrawn one is;
 //   - a record of no parentUuid ends the walk, so what lies before it is off the
 //     chain and told, under a user record whose parentUuid is the empty string
 //     or absent (S7's first shape, which a restart marks too) and under an
@@ -701,7 +704,9 @@ func hsCheckpoint(t *testing.T, leaf, beside string) string {
 //
 // Mutation: hand over every record past the last restart, and the withdrawn
 // attempt's call is held; recover through any reply's id, on the chain or
-// not, and so is it; take a parent naming no record for the record before it in
+// not, and so is it; recover through an id the decode replaced a character
+// of, and the call of the reply whose id differs only in a lone surrogate is
+// held; take a parent naming no record for the record before it in
 // the file, and the call past it is held; walk past the last restart, and the
 // call reached through a record before it is held; leave the checkpoint out of
 // the leaf, and the call after it is held; or read a subagent's chain that
@@ -735,6 +740,10 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			held: map[string]bool{x: false}},
 		"the same attempt, the thread going on from it": {lines: append(slices.Clone(pair), after(3)),
 			held: map[string]bool{x: true}},
+		"an attempt whose id differs from the chain's reply's only in a lone surrogate": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), `msg_\ud800`, hsUse(x)), result(2, 3, x, outX),
+			hsReplyOf(t, ctUUID(1), ctUUID(5), `msg_\ud801`, text),
+		}, held: map[string]bool{x: false}},
 		"a user record whose parentUuid is the empty string": {lines: append(slices.Clone(pair),
 			ctReplace(t, user(3, 4), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":""`), after(4)),
 			held: map[string]bool{x: false}},

@@ -2396,7 +2396,9 @@ past its thread's last restart, and only WHERE CLAUDE CODE'S RESUME HANDS ITS
 MODEL the records of its call and its result, as both releases build what a
 resumed model is handed: the chain the resume walks from its leaf, parent by
 parent, until a parent that is null, empty or absent; and off it only the other
-records of a reply on it, found by the reply's id, and a result whose parent is
+records of a reply on it, found by the reply's id (an id holding the
+replacement character, which the decode makes of a lone surrogate the harness
+compares as written, recovers nothing), and a result whose parent is
 one of them, which is how the results of calls made at once reach the model
 (probe T measured them carried), and never a record of another reply, so an
 attempt the harness withdrew and left in the file holds nothing. The leaf of a

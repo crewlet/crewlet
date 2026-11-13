@@ -133,7 +133,9 @@ type threadChain struct {
 	later []chainLaterParent
 	// replies are the counted replies' records and their ids' SHA-256, in
 	// record order; a reply's id is the box's word, as long as a line, and two
-	// ids are the same reply only where the harness compares them equal.
+	// ids are the same reply only where the harness compares them equal, which
+	// holds of every id filed: [threadLine.MessageID] hands out none holding
+	// the replacement character the decode makes of a lone surrogate.
 	replies []chainReply
 	// scopeFrom is the first record past the thread's last restart.
 	scopeFrom int32

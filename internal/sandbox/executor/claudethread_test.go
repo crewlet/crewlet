@@ -2150,11 +2150,15 @@ func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
 // the key is absent; nothing on a record that is no assistant's, whatever its
 // message carries; and an error where the id is no string, null among it, or
 // the record's message is no object, never "", which its reader would take
-// for a reply that recovers nothing.
+// for a reply that recovers nothing. And an error where the id holds the
+// replacement character, as written or as the layer's decode reads a lone
+// surrogate or a byte that is no UTF-8: Claude Code compares ids a code unit
+// at a time, so two it holds apart could read here as one.
 //
 // Mutation: read the id off every record's message, and a result carrying one
-// is a reply; read it as any JSON value, and a number reads as ""; or read it
-// as "" whatever it holds, and no reply recovers its siblings.
+// is a reply; read it as any JSON value, and a number reads as ""; read it as
+// "" whatever it holds, and no reply recovers its siblings; or hand out an id
+// holding the replacement character, and `msg_\ud800` is `msg_\ud801`.
 func TestAReplySaysWhichReplyItIs(t *testing.T) {
 	t.Parallel()
 	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
@@ -2174,7 +2178,9 @@ func TestAReplySaysWhichReplyItIs(t *testing.T) {
 			t.Errorf("%s is the reply %q, %v; want %q", name, id, err, tc.id)
 		}
 	}
-	for name, id := range map[string]string{"null": `null`, "a number": `7`, "an object": `{"id":"msg_test"}`} {
+	for name, id := range map[string]string{"null": `null`, "a number": `7`, "an object": `{"id":"msg_test"}`,
+		"a string holding a lone surrogate": `"msg_\ud800"`, "a string holding a byte that is no UTF-8": "\"msg_\xff\"",
+		"a string holding the replacement character": `"msg_�"`} {
 		if got, err := ctLine(t, ctReplace(t, call, `"id":"msg_test"`, `"id":`+id)).MessageID(); err == nil {
 			t.Errorf("a reply whose id is %s is the reply %q, want an error", name, got)
 		}
