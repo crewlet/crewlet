@@ -56,7 +56,7 @@ func accountBroker(t *testing.T) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
 		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
-		JetStream: true, StoreDir: t.TempDir(),
+		JetStream: true, StoreDir: brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 		MaxPayload:        int32(queue.MaxPayloadBytes),
 		// An external server authenticates somebody, or the dial refuses it.

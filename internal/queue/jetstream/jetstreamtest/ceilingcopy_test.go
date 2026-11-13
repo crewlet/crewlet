@@ -42,7 +42,7 @@ func TestAPassedCopyAtTheTransportsCeilingIsKeptWhole(t *testing.T) {
 			// A MEMBER THAT SERVES LEAVES PERSISTS, and the leaf is the
 			// broker the case's queue is a client of.
 			member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-				LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+				LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 				StoreMaxBytes: brokertest.StoreMaxBytes, MaxDeliver: attempts, FleetAuth: fleetAuth()})
 			if err != nil {
 				t.Fatalf("start a member that serves leaves: %v", err)

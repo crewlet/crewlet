@@ -46,7 +46,7 @@ func scheduledEngine(t *testing.T, c *config.Company) *engine.Engine {
 	t.Helper()
 	return newEngine(t, engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		}),
 		Company: c,
 	})

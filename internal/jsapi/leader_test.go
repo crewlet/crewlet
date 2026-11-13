@@ -38,7 +38,7 @@ func leaderServerFor(t *testing.T, opts ...jetstream.JetStreamOpt) (*server.Serv
 		ServerName:        "jsapi-leader-test",
 		JetStream:         true,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

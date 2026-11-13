@@ -129,7 +129,7 @@ func takeBackup(t *testing.T, n *node, dir string) backup.Manifest {
 // over an existing stream is refused.
 func restoreInto(t *testing.T, dir string, m backup.Manifest, opts ...backuptest.Option) string {
 	t.Helper()
-	into := t.TempDir()
+	into := brokertest.TempDir(t)
 	nodePath := filepath.Join(into, "crewlet.db")
 	for _, copied := range m.Stores {
 		var to string
@@ -241,7 +241,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 
 	ring := fleetRing(t)
 	fakeA := s3fake.Start(t, restoreBucket)
-	a := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeA.URL, t.TempDir(), ring)})
+	a := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeA.URL, brokertest.TempDir(t), ring)})
 	awaitRepo(t, repo, gitlet.RepoStatusActive, a)
 
 	// FOUR PUSHES, SO FOUR PACKS — one object each: three commits on main,

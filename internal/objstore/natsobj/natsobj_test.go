@@ -708,7 +708,7 @@ func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
 	t.Parallel()
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -2030,7 +2030,7 @@ func memberClient(t testing.TB) jetstream.JetStream { return memberClientAt(t, j
 // store's sync among it, is the caller's.
 func memberClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.ServerName, base.StoreDir = "member", brokertest.TempDir(t)
 	base.StoreMaxBytes = brokertest.StoreMaxBytes
 	srv, err := js.StartServer(t.Context(), base)
 	if err != nil {
@@ -2057,7 +2057,7 @@ func leafClient(t testing.TB) jetstream.JetStream { return leafClientAt(t, js.Co
 // [memberClientAt] starts one.
 func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
-	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.ServerName, base.StoreDir = "member", brokertest.TempDir(t)
 	base.StoreMaxBytes = brokertest.StoreMaxBytes
 	base.LeafHost, base.LeafPort = "127.0.0.1", js.AnyPort
 	base.FleetAuth = linkFleetAuth()
@@ -2153,7 +2153,7 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)

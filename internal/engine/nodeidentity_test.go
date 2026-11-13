@@ -56,7 +56,7 @@ func TestTheBrokerTakesTheRESOLVEDNodeID(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	// Deliberately unset, which is the whole point: the id lives only in
 	// the environment.
 	b.Node.ID = ""
@@ -87,7 +87,7 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	b.Node.ID = ""
 	b.Coordination.Type = config.CoordinationEmbeddedKV
 	// A cluster port with no peers: enough to make this a clustered member
@@ -129,7 +129,7 @@ func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	b.Node.ID = ""
 
 	engine.SeedStore(t, &b)

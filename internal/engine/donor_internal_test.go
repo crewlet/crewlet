@@ -74,7 +74,7 @@ func TestADonorThatStoppedDialsAgainOnItsOwnSchedule(t *testing.T) {
 // comes.
 func TestADonorWhoseConnectionIsClosedUnderItServesAgain(t *testing.T) {
 	t.Parallel()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir(),
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)

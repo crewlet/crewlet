@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // inlineKey is the credential a company that has not adopted the secret store
@@ -52,7 +53,7 @@ func storeWithInlineKey(t *testing.T, dir string) (cfg, redacted string) {
 // edited one is stored with the credential it hid rather than the marker.
 func TestARedactedReadImportsOverTheCompanyItWasReadFrom(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg, redacted := storeWithInlineKey(t, dir)
 
 	unchanged := filepath.Join(dir, "copy.yaml")
@@ -98,7 +99,7 @@ func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 
 	t.Run("an empty store", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
+		dir := brokertest.TempDir(t)
 		cfg := bootstrapForStore(t, dir)
 		masked := companyFile(t, dir, "masked.yaml", func(doc string) string {
 			return strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`, `"`+config.Redacted+`"`, 1)
@@ -114,7 +115,7 @@ func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 
 	t.Run("an entry renamed in the copy", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
+		dir := brokertest.TempDir(t)
 		cfg, redacted := storeWithInlineKey(t, dir)
 		before := bootRevisionID(t, cfg)
 		renamed := strings.NewReplacer("main:", "primary:", "llm: main", "llm: primary",
@@ -138,7 +139,7 @@ func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 // the redacted copy travels as it is: a check here first would hold it to the
 // rules before any restore and refuse it for its masks.
 func TestARedactedCopyIsSentToTheNodeToRestore(t *testing.T) {
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	masked := companyFile(t, dir, "masked.yaml", func(doc string) string {
 		return strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`, `"`+config.Redacted+`"`, 1)
@@ -178,7 +179,7 @@ func TestARedactedCopyIsSentToTheNodeToRestore(t *testing.T) {
 // booted with the marker as a credential.
 func TestARedactedSeedIsRestoredFromThisNodesActiveRevision(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg, redacted := storeWithInlineKey(t, dir)
 	copyPath := filepath.Join(dir, "copy.yaml")
 	if err := os.WriteFile(copyPath, []byte(redacted), 0o600); err != nil {
@@ -214,7 +215,7 @@ func TestARedactedSeedIsRestoredFromThisNodesActiveRevision(t *testing.T) {
 // than boot a harness on the literal marker.
 func TestARedactedSeedOnAnEmptyStoreIsRefusedNamingItsField(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	masked := companyFile(t, dir, "masked.yaml", func(doc string) string {
 		return strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`, `"`+config.Redacted+`"`, 1)

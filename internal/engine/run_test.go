@@ -35,7 +35,7 @@ func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 	t.Helper()
 	if opts.Bootstrap == nil {
 		opts.Bootstrap = bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		})
 	}
 	if opts.Company == nil {
@@ -68,7 +68,7 @@ func unconfiguredEngineWith(t *testing.T, opts engine.Options) *engine.Engine {
 	}
 	if opts.Bootstrap == nil {
 		opts.Bootstrap = bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		})
 	}
 	e, err := engine.New(t.Context(), opts)
@@ -161,7 +161,7 @@ func TestAKeylessNodeIsRefusedBeforeAnythingOpens(t *testing.T) {
 	_, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
 			b.Store.Path = storePath
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 			b.Secrets = config.Secrets{}
 		}),
 	})
@@ -229,7 +229,7 @@ func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 			// UNSEEDED: that nothing is at the store's path afterwards
 			// is the assertion.
 			boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
-				brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+				brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 				tc.mutate(b)
 			})
 			_, err := engine.New(t.Context(), engine.Options{
@@ -416,7 +416,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	// record read back). An engine that closed what it was lent would take
 	// the caller's broker with it.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
@@ -452,7 +452,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, nil, nil)
 	if err != nil {
@@ -488,7 +488,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 func TestASecondStopTearsNothingDownAgain(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
@@ -538,7 +538,7 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
@@ -574,7 +574,7 @@ func TestOwnedBackendsCloseWithTheEngine(t *testing.T) {
 	// just as well by "never closes anything", which leaks a broker and a
 	// database file per engine.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc),
@@ -643,7 +643,7 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 		},
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Dispatch: d,
@@ -697,7 +697,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 		},
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Dispatch: d,
@@ -791,7 +791,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc),
@@ -902,7 +902,7 @@ const startedLeaseTTL = config.MinLeaseTTL
 func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b})

@@ -32,7 +32,7 @@ import (
 func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	t.Parallel()
 	storeDir := func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	}
 	want := map[string]time.Duration{
 		"iam_sweep": engine.IdentitySweepInterval,
@@ -80,7 +80,7 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 func TestEveryIdentityDutyIsALeaseClaimedSingleton(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})})
 	armed := e.IdentityDuties()
 	if len(armed) == 0 {
@@ -121,7 +121,7 @@ func TestTheDutyRosterIsReadableWhileTheNodeStops(t *testing.T) {
 	t.Parallel()
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		}),
 		Company: parsedCompany(t, companyDoc),
 	})

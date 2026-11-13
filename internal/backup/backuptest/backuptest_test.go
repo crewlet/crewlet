@@ -54,7 +54,7 @@ func opID(i int) string { return fmt.Sprintf("op-%04d", i) }
 // for exactly the reason a snapshot does.
 func broker(t *testing.T, name string) *nats.Conn {
 	t.Helper()
-	return brokerIn(t, name, t.TempDir()).conn
+	return brokerIn(t, name, brokertest.TempDir(t)).conn
 }
 
 // soloBroker is one running broker and the connection to it.
@@ -257,7 +257,7 @@ func TestARestoredStreamHoldsWhatWasSnapshotted(t *testing.T) {
 	revision := source(t, src)
 	dir, manifest := backUp(t, src)
 
-	dstDir := t.TempDir()
+	dstDir := brokertest.TempDir(t)
 	restored := brokerIn(t, "restored", dstDir)
 	dst := restored.conn
 	if err := backuptest.RestoreStreams(ctx, dst, jsapi.Embedded(), dir, manifest); err != nil {
