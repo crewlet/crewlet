@@ -1301,6 +1301,19 @@ func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
 	}
 }
 
+// declaredInboundSources is every source this BUILD's own producers write an
+// inbound delivery under, marked first-party (types.RawWebhook.FirstParty):
+// the alarms' wakes, the access reviews, the atlas's drift wakes, and each
+// native half's change feed — whether or not the running company uses it.
+// [Engine.nativeParsers] routes exactly these, each where its half runs, and
+// the notification service passes a first-party delivery from any OTHER source
+// to a peer, as a newer build's (notify.DeferNewerSource), where it
+// acknowledges a declared one this company does not run.
+func declaredInboundSources() []string {
+	return []string{alarmwake.Source, accessreview.Source, atlaswake.Source, worklet.Source,
+		doclet.Source, chatlet.Source, gitlet.Source}
+}
+
 // nativeParsers is what the engine's own sources contribute to the inbound
 // edge: the native backends' parsers, the alarms' (internal/alarmwake), the
 // access reviews' (internal/accessreview) and the atlas's drift wakes'

@@ -282,3 +282,35 @@ func TestANodeInAMaintenanceModeHandsOutNoWriterWhateverItHolds(t *testing.T) {
 		}
 	}
 }
+
+// EVERY FIRST-PARTY SOURCE THE ENGINE ROUTES IS ONE IT DECLARES, AND NO OTHER.
+//
+// The notification service passes a first-party delivery from a source this
+// build does not declare to a peer, as a newer build's (notify.DeferNewerSource),
+// and acknowledges one from a declared source this company does not run. So
+// the declared sources must be exactly the sources the engine's own producers
+// write under: one routed and not declared is passed round its group for ten
+// minutes and waits in the dead letters for a build that already runs; one
+// declared and never routed is a newer build's source acknowledged away. Read
+// off a node running every half, whose parsers are every source there is.
+//
+// Mutation: leave a source out of declaredInboundSources, or add one no parser
+// routes, and the two sets differ.
+func TestEveryFirstPartySourceTheEngineRoutesIsDeclared(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	e.remote.Store(&remoteNative{tracker: true, wiki: true, chat: true,
+		built: builtWith{code: config.CodeGitlet}})
+	var routed []string
+	parsers, _ := e.nativeParsers(&Company{Config: &config.Company{
+		Knowledge: config.Knowledge{Backend: config.KnowledgeDoclet},
+	}})
+	for _, p := range parsers {
+		routed = append(routed, p.Source())
+	}
+	slices.Sort(routed)
+	declared := slices.Sorted(slices.Values(declaredInboundSources()))
+	if !slices.Equal(routed, declared) {
+		t.Errorf("the engine routes the first-party sources %v and declares %v", routed, declared)
+	}
+}

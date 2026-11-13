@@ -24,12 +24,18 @@ func request() accessreview.Request {
 // and a request no wake can be derived from is refused at both ends.
 //
 // Mutation: drop a field from the check and a request naming no told record
-// is published.
+// is published; leave the delivery unmarked, and an older build acknowledges
+// it away.
 func TestARequestIsItsDeliverysOneShape(t *testing.T) {
 	t.Parallel()
 	w, err := accessreview.Encode(request())
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
+	}
+	// FIRST-PARTY, so a node of a build that has no parser for the source
+	// passes it to a peer rather than acknowledge it away.
+	if !w.FirstParty {
+		t.Error("the request's delivery is not marked first-party")
 	}
 	got, err := accessreview.Decode(w)
 	if err != nil || got.Handle != "sre" || got.Baseline != "t-told" || got.Digest != "d-new" ||

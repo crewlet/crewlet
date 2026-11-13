@@ -12685,7 +12685,11 @@ letter** in `CREWLET_DLQ`, its sealed frame inside, until the first node whose
 feed starts able to read it replays it or the stream's age bound lets it go
 ([Dead letters](../concepts/event-system.md#dead-letters)). These two routes
 are an operator's view of those entries, and the one decision about them a
-person makes.
+person makes. A wake the notification service's inbound group passed and no
+node took is that subscription's dead letter rather than a feed's, so neither
+route lists or discards it. Every node able to read it replays it: one already
+running within a few seconds of its keep, and otherwise the next such node to
+start; `inbound_dead_lettered` is raised while it waits.
 
 **`GET /feeds/dead-letters`** answers every wake feed this build declares, in
 one order, whatever logs the answering node is running: the entries are the

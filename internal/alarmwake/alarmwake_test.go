@@ -275,7 +275,10 @@ func TestAnAlarmWakeSendsItsSeatToTheFleetsCurrentState(t *testing.T) {
 // nothing a seat could look up, so each is refused as a parse failure, which
 // the spine records. A change this build does not know is a newer node's word
 // for what its alarm did and is read, and the parsed body serves where a
-// delivery carries no bytes.
+// delivery carries no bytes. Every delivery is marked first-party.
+//
+// Mutation: leave the delivery unmarked, and an older build acknowledges it
+// away.
 func TestADeliveryThatIsNoTransitionWakesNobody(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
@@ -299,6 +302,11 @@ func TestADeliveryThatIsNoTransitionWakesNobody(t *testing.T) {
 	w, err := alarmwake.Encode(whole)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// FIRST-PARTY, so a node of a build that has no parser for the source
+	// passes it to a peer rather than acknowledge it away.
+	if !w.FirstParty {
+		t.Error("the transition's delivery is not marked first-party")
 	}
 	w.BodyRaw = []byte(strings.Replace(string(w.BodyRaw), `"`+whole.ID+`"`, `""`, 1))
 	if routed, err := p.Parse(context.Background(), w, nil); !errors.Is(err, alarmwake.ErrNotATransition) {

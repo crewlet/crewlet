@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // drain delivers from a subscription's mailbox while some attachment can take
@@ -198,6 +197,28 @@ func deliverableLocked(m *consumer) bool {
 	return !quiesced
 }
 
+// blockedByLocked names what stops m taking a delivery ([deliverableLocked]):
+// the reason the twin's own hand-back of what a blocked drain never dispatched
+// is logged with, should that hand-back spend a delivery's budget — the words
+// the JetStream backend names its own blocked hand-backs by.
+func blockedByLocked(m *consumer) string {
+	c := m.client
+	switch {
+	case m.detached:
+		return "detached"
+	case c == nil || !c.running || c.broker.down:
+		return "stopping"
+	case c.paused:
+		return "paused"
+	case len(c.pauses[m.key]) > 0:
+		return "held"
+	}
+	if _, quiesced := c.quiescing[m.key]; quiesced {
+		return "quiesced"
+	}
+	return "blocked"
+}
+
 // takeChunkLocked removes up to max_batch events from the head of the mailbox.
 //
 // Draining everything already waiting into ONE delivery per partition is the
@@ -253,8 +274,9 @@ func takeOneLocked(sub *subscription) *events.Event {
 func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer, ev *events.Event) {
 	b.invoke(ctx, sub, m, []*events.Event{ev},
 		func(hctx context.Context) queue.Result { return m.handler(hctx, ev) },
-		"handler_failed",
-		[]any{"topic", sub.topic, "group", sub.group, "event_type", ev.Type},
+		func(lctx context.Context, res queue.Result) {
+			queue.LogResult(lctx, log, sub.topic, sub.group, ev, res)
+		},
 	)
 }
 
@@ -270,11 +292,12 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 	// The identities of this chunk's events, so a mid-batch quiesce can
 	// tell what a deferral pushed back to the FRONT from what was already
 	// queued behind it — and slot the undispatched partitions between the
-	// two. A partition that FAILED leaves this set as soon as it does: a
-	// failure goes to the BACK ([Broker.retryLaterLocked]), and on a mailbox
-	// that held nothing else it would otherwise read as part of the leading
-	// run a deferral made, so the undispatched partitions were spliced in
-	// behind a retry the broker serves after them.
+	// two. A partition that FAILED leaves this set as soon as it does, and
+	// one that PASSED with it: each goes to the BACK
+	// ([Broker.retryLaterLocked]), and on a mailbox that held nothing else it
+	// would otherwise read as part of the leading run a deferral made, so the
+	// undispatched partitions were spliced in behind a retry the broker
+	// serves after them.
 	inChunk := make(map[*events.Event]struct{}, len(chunk))
 	for _, ev := range chunk {
 		inChunk[ev] = struct{}{}
@@ -322,7 +345,8 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			for _, rest := range parts[i:] {
 				undrainLocked(sub, rest.Items)
 			}
-			dead := b.restoreLocked(sub, parts[i:], inChunk, m.client.maxRedeliveries)
+			dead := b.restoreLocked(sub, parts[i:], inChunk, m.client.maxRedeliveries,
+				blockedByLocked(m))
 			b.mu.Unlock()
 			b.logDeadLetters(ctx, sub, dead)
 			return
@@ -334,24 +358,15 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		evs := part.Items
 		outcome := b.invoke(ctx, sub, m, evs,
 			func(hctx context.Context) queue.Result { return m.batchHandler(hctx, evs) },
-			// The same machine-parsable failure event a real backend
-			// emits for batch partitions: log consumers must not see
-			// different names per backend.
-			"batch_handler_failed",
-			[]any{
-				"topic", sub.topic, "group", sub.group,
-				// firstType, not evs[0].Type: this is a LOG FIELD, and
-				// indexing here happens outside the recover that contains
-				// a handler panic, so an empty partition would take the
-				// process down to decorate a log line. PartitionByKey
-				// cannot produce one today — which is exactly why the
-				// index looked safe, and why it would only ever fire on a
-				// day something upstream was already wrong.
-				"batch_key", part.Key, "event_type", firstType(evs),
-				"event_count", len(evs),
+			// THE CONTRACT'S PARTITION LINE, the one the backend that
+			// ships emits: a log consumer must not see a partition's
+			// outcome under a single delivery's name on one backend and
+			// under its own on the other.
+			func(lctx context.Context, res queue.Result) {
+				queue.LogBatchResult(lctx, log, sub.topic, sub.group, part.Key, evs, res)
 			},
 		)
-		if outcome == queue.OutcomeNak {
+		if outcome == queue.OutcomeNak || outcome == queue.OutcomePass {
 			for _, ev := range evs {
 				delete(inChunk, ev)
 			}
@@ -386,6 +401,12 @@ func undrainLocked(sub *subscription, evs []*events.Event) {
 // made to cost what the broker's does, left standing for every partition of
 // the drain but the one that stopped it.
 //
+// SETTLED UNDER THE LOCK IT IS TAKEN UNDER, its dead letters' keeps included,
+// so no drain ever reads it in flight: the contract counts a backend's own
+// hand-back in flight until it is settled ([queue.EventQueue.WaitForHandlers]),
+// which on the broker is a keep crossing a link and here is nothing to wait
+// for.
+//
 // The splice point is found by SCANNING the leading run of chunk events, not by
 // a length delta. A delta assumes the mailbox only grew at the front, and
 // publishing appends at the TAIL — a handler that publishes lets one land
@@ -396,6 +417,7 @@ func (b *Broker) restoreLocked(
 	remaining []queue.Partition[*events.Event],
 	inChunk map[*events.Event]struct{},
 	budget int,
+	reason string,
 ) []deadLetter {
 	var undispatched []*events.Event
 	for _, part := range remaining {
@@ -405,7 +427,7 @@ func (b *Broker) restoreLocked(
 	// an event whose budget the hand-back just spent belongs on the
 	// dead-letter subject, not at the head of a mailbox no budget can ever
 	// retire it from.
-	keep, dead := b.chargeLocked(sub, undispatched, budget)
+	keep, dead := b.chargeLocked(sub, undispatched, budget, queue.OutcomeDefer, reason)
 	restored := 0
 	for _, ev := range sub.mail {
 		if _, fromChunk := inChunk[ev]; !fromChunk {
@@ -424,9 +446,9 @@ func (b *Broker) restoreLocked(
 // invoke runs one delivery and applies the handler's outcome.
 //
 // Ack drops the events — they were removed from the mailbox before the call.
-// The two returns put them back in DIFFERENT places, because that is what the
+// The returns put them back in DIFFERENT places, because that is what the
 // only broker this engine ships does and the contract now states it (see
-// queue.OutcomeNak and queue.OutcomeDefer):
+// queue.OutcomeNak, queue.OutcomePass and queue.OutcomeDefer):
 //
 //   - A NAK — a failure — goes BEHIND every event that was waiting when it
 //     failed. JetStream withholds a failed delivery for its redelivery backoff
@@ -437,6 +459,10 @@ func (b *Broker) restoreLocked(
 //     retried a failure before a newer message of the same conversation, which
 //     production never does — the order a parked executor's answer route
 //     and the ordinary turn's retry were both written against.
+//   - A PASS — a hand-back for a peer — goes BEHIND them too, and quiesces
+//     nothing: JetStream withholds it for the failure path's backoff, by its
+//     delivery count, while the attachment that passed it goes on taking
+//     mail.
 //   - A DEFER — a hand-back — goes back at the HEAD, which is where JetStream
 //     puts a plain Nak (it serves redeliveries before new mail): measured 100
 //     of 100, 60 of them under CPU pressure, in 76ad6f656.
@@ -468,8 +494,7 @@ func (b *Broker) invoke(
 	m *consumer,
 	evs []*events.Event,
 	call func(context.Context) queue.Result,
-	failureEvent string,
-	attrs []any,
+	logResult func(context.Context, queue.Result),
 ) queue.Outcome {
 	client := m.client
 
@@ -501,7 +526,6 @@ func (b *Broker) invoke(
 	res := runHandler(ctx, call)
 
 	b.mu.Lock()
-	client.exitHandlerLocked()
 	var dead []deadLetter
 	switch res.Outcome {
 	case queue.OutcomeDefer:
@@ -515,13 +539,39 @@ func (b *Broker) invoke(
 		// dead-letter that ends it is the contract's too: a message whose
 		// deliveries went on handoffs is dead-lettered with a line rather
 		// than circling a mailbox no budget can ever retire it from.
-		dead = b.handBackLocked(sub, evs, client.maxRedeliveries)
+		dead = b.handBackLocked(sub, evs, client.maxRedeliveries, res.Reason)
 	case queue.OutcomeNak:
-		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
+		// A FAILURE OF THE MESSAGE IS REMEMBERED until the message
+		// leaves, so a later return that spends its budget — a
+		// hand-back, a node's own failure — keeps it with the poison
+		// ([queue.RetiredTo]); a node's own failure ([queue.NakNode]) is
+		// not.
+		if res.FailsMessage() {
+			for _, ev := range evs {
+				sub.failed[ev.ID] = struct{}{}
+			}
+		}
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.OutcomeNak, "")
+	case queue.OutcomePass:
+		// BEHIND THE WAITING MAIL, AS A FAILURE, AND NOTHING QUIESCED: the
+		// broker withholds a pass for the failure path's backoff, and the
+		// attachment that passed goes on taking mail — see the doc above.
+		// And a pass that spends the budget keeps its copy where the broker
+		// keeps it, with its group's unhandled deliveries unless the
+		// message failed as itself before ([queue.RetiredTo]).
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.OutcomePass, res.Reason)
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
-		// is nothing to put back.
+		// is nothing to put back, and nothing of them to remember.
+		for _, ev := range evs {
+			delete(sub.failed, ev.ID)
+		}
 	}
+	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, a dead letter's
+	// keep included ([queue.EventQueue.WaitForHandlers]): instant here,
+	// under the lock, where the broker's keep is a write that can cross a
+	// link.
+	client.exitHandlerLocked()
 	b.mu.Unlock()
 
 	// Logging happens OUTSIDE the critical section. A log call is a write
@@ -532,13 +582,13 @@ func (b *Broker) invoke(
 	// every attachment change — for as long as one write takes. It is the
 	// oldest way to turn a slow logger into an outage, and the reason
 	// nothing here logs while holding the lock.
-	switch res.Outcome {
-	case queue.OutcomeDefer:
-		log.InfoContext(ctx, "delivery_deferred", append(attrs, "reason", deferralReason(res))...)
-	case queue.OutcomeNak:
-		log.WarnContext(ctx, failureEvent, append(attrs, "error", errText(res.Err))...)
-	case queue.OutcomeAck:
-	}
+	//
+	// AND THROUGH THE CONTRACT'S OWN LINE ([queue.LogResult],
+	// [queue.LogBatchResult]), never one spelled here: the twin wrote its
+	// own, and logged a partition's deferral as a single delivery's,
+	// `delivery_deferred`, where the backend that ships says
+	// `batch_delivery_deferred`.
+	logResult(ctx, res)
 	b.logDeadLetters(ctx, sub, dead)
 	return res.Outcome
 }
@@ -547,10 +597,14 @@ func (b *Broker) invoke(
 // lock RELEASED for the reason [Broker.invoke] gives above: a log write this
 // package does not control must not be made while holding the mutex that
 // guards every subscription and every peer on this broker.
+//
+// THROUGH THE CONTRACT'S OWN LINE ([queue.LogDeadLettered]), never one spelled
+// here: the twin's was `event_dead_lettered`, with its redeliveries, where the
+// backend that ships logs `dead_lettered` with its deliveries.
 func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []deadLetter) {
 	for _, d := range dead {
-		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
-			"event_type", d.ev.Type, "redeliveries", d.redeliveries)
+		queue.LogDeadLettered(ctx, log, sub.topic, sub.group, d.ev, d.deliveries, d.spent, d.reason,
+			d.failed)
 	}
 }
 
@@ -584,8 +638,16 @@ func headroomLocked(sub *subscription, evs []*events.Event, budget int) []queue.
 // deadLetter is one event that exhausted its budget, carried back out of the
 // critical section so it can be logged without the broker lock held.
 type deadLetter struct {
-	ev           *events.Event
-	redeliveries int
+	ev *events.Event
+	// deliveries is how many times it was delivered, the last included.
+	deliveries int
+	// spent is the return that spent its budget and reason why, which its
+	// line says; failed is whether the message failed as itself at any of
+	// its deliveries, which decides where its copy is kept
+	// ([queue.RetiredTo]).
+	spent  queue.Outcome
+	reason string
+	failed bool
 }
 
 // runHandler recovers a panicking handler into a Nak, preserving "an
@@ -612,24 +674,28 @@ func runHandler(ctx context.Context, call func(context.Context) queue.Result) (r
 // elsewhere — see [Broker.restoreLocked] — and a failure goes to the back
 // ([Broker.retryLaterLocked]), which is why the charge itself is
 // [Broker.chargeLocked] and no path owns it.
-func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
-	keep, dead := b.chargeLocked(sub, evs, budget)
+func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget int,
+	reason string) []deadLetter {
+
+	keep, dead := b.chargeLocked(sub, evs, budget, queue.OutcomeDefer, reason)
 	sub.mail = prepend(keep, sub.mail)
 	return dead
 }
 
-// retryLaterLocked charges a FAILURE and returns the events BEHIND everything
-// already waiting, which is where the shipped broker's redelivery backoff puts
-// them: see [Broker.invoke] for why, and for what the virtual backoff does and
-// does not reproduce.
+// retryLaterLocked charges a FAILURE, or a PASS — spent, for reason — and
+// returns the events BEHIND everything already waiting, which is where the
+// shipped broker's redelivery backoff puts them: see [Broker.invoke] for why,
+// and for what the virtual backoff does and does not reproduce.
 //
 // A failure that is the only thing in the mailbox therefore comes straight
 // back, exactly as it would on the broker once its backoff elapsed with
 // nothing else to serve — the virtual backoff has no wall clock, so a poison
 // message still reaches its dead-letter boundary inside one drain rather than
 // across minutes of timers.
-func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
-	keep, dead := b.chargeLocked(sub, evs, budget)
+func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget int,
+	spent queue.Outcome, reason string) []deadLetter {
+
+	keep, dead := b.chargeLocked(sub, evs, budget, spent, reason)
 	sub.mail = append(sub.mail, keep...)
 	return dead
 }
@@ -644,7 +710,15 @@ func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget
 // deciding the boundary is a second answer to where the dead-letter line is.
 // It does not touch the mailbox: where the survivors go back is the caller's,
 // and the two callers differ precisely there.
-func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int) ([]*events.Event, []deadLetter) {
+//
+// spent is the return being charged — a Nak, a Defer or a Pass — and reason
+// why, for the line; a retired event's copy is kept where the contract keeps
+// the copy of a message that did or did not fail as itself
+// ([queue.RetiredTo]), which [subscription.failed] remembers — the caller
+// records a failure of the message there before it charges one.
+func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int,
+	spent queue.Outcome, reason string) ([]*events.Event, []deadLetter) {
+
 	var keep []*events.Event
 	var dead []deadLetter
 	for _, ev := range evs {
@@ -655,16 +729,20 @@ func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int
 		count := sub.redeliveries[ev.ID] + 1
 		if count > budget {
 			delete(sub.redeliveries, ev.ID)
-			// KEPT AS ITS WIRE BYTES, beside every other dead letter, as
-			// the broker this twin stands for republishes the message's
-			// own data to the dead-letter stream with no header of its
-			// own: so DeadLettersOn lists it, DeadLetterFrame reads its
-			// bytes and DropDeadLetter removes it exactly as there. The
-			// event was decoded from JSON, so it encodes again.
+			// KEPT AS ITS WIRE BYTES, with no header, beside every other
+			// dead letter and on the subject the contract keeps the copy
+			// of a message that did or did not fail as itself on, as the
+			// broker this twin stands for republishes the message's own
+			// data there: so DeadLettersOn lists it, DeadLetterFrame reads
+			// its bytes and DropDeadLetter removes it exactly as there.
+			// The event was decoded from JSON, so it encodes again.
+			_, failed := sub.failed[ev.ID]
+			delete(sub.failed, ev.ID)
 			if wire, err := json.Marshal(ev); err == nil {
-				b.keepLocked(topics.DeadLetter(sub.topic, sub.group), nil, wire)
+				b.keepLocked(queue.RetiredTo(sub.topic, sub.group, failed), nil, wire)
 			}
-			dead = append(dead, deadLetter{ev: ev, redeliveries: count - 1})
+			dead = append(dead, deadLetter{ev: ev, deliveries: count, spent: spent, reason: reason,
+				failed: failed})
 			continue
 		}
 		sub.redeliveries[ev.ID] = count
@@ -816,26 +894,3 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 // --- small helpers --------------------------------------------------------
 
 func sameEvent(ev *events.Event) *events.Event { return ev }
-
-// firstType names a batch for a log line, tolerating a batch with nothing in
-// it. Diagnostics must not be able to fail louder than what they describe.
-func firstType(evs []*events.Event) string {
-	if len(evs) == 0 || evs[0] == nil {
-		return ""
-	}
-	return evs[0].Type
-}
-
-func deferralReason(res queue.Result) string {
-	if res.Reason == "" {
-		return "unspecified"
-	}
-	return res.Reason
-}
-
-func errText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}

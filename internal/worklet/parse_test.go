@@ -2,6 +2,7 @@ package worklet_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -235,6 +236,33 @@ func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 			t.Errorf("%s's wake is stamped %s, want the record's %s",
 				r.To.Handle, r.WakeAt, record.CreatedAt)
 		}
+	}
+}
+
+// A RELAYED RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER THAT READS IT, on
+// the parser's side of the relay as on the feed's.
+//
+// The feed on a newer node relays the record's wake, and whichever node wins
+// the delivery parses it, so an older node meets the record here too. Refused
+// as a payload nobody can read, the notify service acked it on the one group
+// every node takes inbound mail from, and the assignee's wake was gone for the
+// fleet (crewlet#993); answered with the spine's deferral, the service passes
+// it to a peer on the newer build.
+//
+// Mutation: return the decode's error as it is, and no deferral reaches the
+// service.
+func TestARelayedRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
+	t.Parallel()
+	w := delivery(t, parseRecord(&worklet.Notify{Kind: worklet.ChangeStatus,
+		Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy"}}))
+	w.Body["v"] = worklet.RecordVersion + 1
+
+	_, err := worklet.NewParser(worklet.ParserOptions{}).Parse(t.Context(), w,
+		registry(t, "ana", "cy"))
+	var deferral *notify.Deferral
+	if !errors.As(err, &deferral) || deferral.Reason != notify.DeferNewerRecord {
+		t.Fatalf("a relayed record a newer build wrote answered %v, want it deferred "+
+			"to a peer on that build (%s)", err, notify.DeferNewerRecord)
 	}
 }
 
