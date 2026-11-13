@@ -2780,6 +2780,7 @@ answers). The answer's `reload` is one of:
 | `{"revision_id": "…", "epoch": 42}` | The revision that re-published the company, and the epoch every node converges on |
 | `{"error": "revision_advanced", "detail": "…", "stored_revision_id": "…", "node": "…"}` | Another configuration write activated first. The value is sealed; `POST /config/reload` re-activates the company that runs now |
 | `{"error": "validation_error", "detail": "…"}` | The active company does not pass this build's validation, so it was not re-published |
+| `{"error": "body_too_large", "detail": "…"}` | The active company, sealed into the activation pointer beside this re-activation's summary, makes a pointer past what one key of the coordination store holds ([Coordination](../concepts/coordination.md#what-one-key-holds)), so it was not re-published: make the document smaller, then `POST /config/reload` |
 | `{"error": "unavailable", "detail": "…", "stored_revision_id": "…", "node": "…"}` | The re-activation was stored and the coordination store did not answer it: whether the fleet runs it is unknown |
 | `{"error": "no_active_revision" \| "internal_error", "detail": "…"}` | Nothing to re-activate, or a failure this node's log names |
 
