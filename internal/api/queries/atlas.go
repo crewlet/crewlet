@@ -347,13 +347,34 @@ func (s Sources) atlasFacets(ctx context.Context, p Params) (any, error) {
 // nowhere: the facts and relations the sources disagree on, then the entries
 // only an agent reported. It reads the atlas as its asker does, so it never
 // lists an entry the asker's catalogue would not.
+//
+// `mine` narrows it to what contradicts the asker's own word: a fact or a
+// relation they set or confirmed that a newer report differs from. It is what
+// a person's Inbox is told of, so a credential acting as no seat, whose word
+// no claim carries, is answered none.
 func (s Sources) atlasReview(ctx context.Context, p Params) (any, error) {
+	mine, err := atlasFlag(p, "mine")
+	if err != nil {
+		return nil, err
+	}
 	view, read, err := s.atlasView(ctx, "atlas_review")
 	if err != nil {
 		return nil, err
 	}
-	limit := Clamp(p.Int("limit", atlas.PageDefault), atlas.PageDefault, atlas.PageMax)
-	page, err := view.Review(atlas.ReviewKind(p.String("kind")), p.String("cursor"), limit)
+	q := atlas.ReviewQuery{Kind: atlas.ReviewKind(p.String("kind")), After: p.String("cursor"),
+		Limit: Clamp(p.Int("limit", atlas.PageDefault), atlas.PageDefault, atlas.PageMax)}
+	if mine {
+		var principal iam.Principal
+		if principal, err = caller(ctx, "atlas_review"); err != nil {
+			return nil, err
+		}
+		if principal.Seat == "" {
+			return AtlasReviewAnswer{AtlasRead: read, Items: []atlas.ReviewItem{},
+				Counts: map[atlas.ReviewKind]int{}}, nil
+		}
+		q.ContradictedFor = principal.Seat
+	}
+	page, err := view.ReviewOf(q)
 	if err != nil {
 		return nil, badAtlas(err)
 	}

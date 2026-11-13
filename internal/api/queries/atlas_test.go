@@ -430,22 +430,30 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := append(listOf(t, review["items"]), listOf(t, asMap(t, map[string]any{"items": waiting.Items})["items"])...)
+	// And acme's own queue with more waiting: an agent's fact that names the
+	// tool it cited, and the entry only an agent reported, with its reports.
+	queued := listOf(t, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", nil)["items"])
+	items = append(items, queued...)
+	reports := pluck(items, "reports")
+	cited := append(pluck(pluck(queued, "fact"), "source"), pluck(pluck(pluck(queued, "fact"), "others"), "source")...)
 	facts, edges := pluck(full, "facts"), pluck(full, "relations")
 	summaries := append(append(listOf(t, entries["rows"]), listOf(t, mp["nodes"])...), pluck(listOf(t, cf["used_by"]), "entry")...)
 	for iface, rows := range map[string][]map[string]any{
-		"AtlasRead":           answers,
-		"AtlasCoverage":       pluck(answers, "coverage"),
-		"AtlasSummary":        summaries,
-		"AtlasEntriesAnswer":  {entries},
-		"AtlasMapLane":        listOf(t, mp["lanes"]),
-		"AtlasMapGroup":       listOf(t, mp["groups"]),
-		"AtlasMapEdge":        append(listOf(t, mp["edges"]), listOf(t, trace["edges"])...),
-		"AtlasMapAnswer":      {mp},
-		"AtlasEntry":          full,
-		"AtlasRef":            append(pluck(full, "ref"), pluck(full, "members")...),
-		"AtlasFactView":       facts,
-		"AtlasValue":          append(pluck(facts, "value"), pluck(pluck(facts, "others"), "value")...),
-		"AtlasSource":         append(pluck(facts, "source"), pluck(full, "sources")...),
+		"AtlasRead":          answers,
+		"AtlasCoverage":      pluck(answers, "coverage"),
+		"AtlasSummary":       summaries,
+		"AtlasEntriesAnswer": {entries},
+		"AtlasMapLane":       listOf(t, mp["lanes"]),
+		"AtlasMapGroup":      listOf(t, mp["groups"]),
+		"AtlasMapEdge":       append(listOf(t, mp["edges"]), listOf(t, trace["edges"])...),
+		"AtlasMapAnswer":     {mp},
+		"AtlasEntry":         full,
+		"AtlasRef":           append(pluck(full, "ref"), pluck(full, "members")...),
+		"AtlasFactView":      facts,
+		"AtlasValue":         append(pluck(facts, "value"), pluck(pluck(facts, "others"), "value")...),
+		"AtlasSource": append(append(pluck(facts, "source"), pluck(full, "sources")...),
+			append(pluck(reports, "source"), cited...)...),
+		"AtlasReport":         reports,
 		"AtlasClaimed":        pluck(append(facts, edges...), "others"),
 		"AtlasEdge":           edges,
 		"AtlasUse":            pluck(full, "use"),
@@ -491,7 +499,7 @@ func waitingAtlas(t *testing.T) queries.Sources {
 	for _, c := range []func() (atlas.Claim, error){
 		func() (atlas.Claim, error) {
 			return atlas.Says(atlasRepo, atlas.FactDefaultBranch, "trunk",
-				atlas.AgentSource("sre", "turn-2", atlas.EvidenceCall), atlasNow.Add(-time.Hour))
+				atlas.AgentSource("sre", "turn-2", atlas.EvidenceCall).Citing("ssh_read"), atlasNow.Add(-time.Hour))
 		},
 		func() (atlas.Claim, error) {
 			return atlas.Says(atlasCheckout, atlas.FactName, "Checkout", atlas.PersonSource("ada"), atlasNow.Add(-2*time.Hour))
@@ -543,6 +551,22 @@ func TestTheAtlasReviewIsWhatWaitsAsItsAskerReadsTheAtlas(t *testing.T) {
 	whole := askAtlas(coder, t, s, "atlas_review", map[string]any{"kind": "unconfirmed"})
 	if whole["total"] != float64(1) || whole["counts"].(map[string]any)["disagreement"] != float64(2) {
 		t.Errorf("the review counts %v in all and %v by kind", whole["total"], whole["counts"])
+	}
+	// NARROWED TO THE ASKER'S OWN WORD: ada named the service and a later read
+	// differs, so she alone is told; a colleague, and a credential acting as
+	// no seat, are told nothing.
+	if got, want := waits(member, map[string]any{"mine": true}), []string{"disagreement checkout-api"}; !slices.Equal(got, want) {
+		t.Errorf("asked what contradicts her own word ada is shown %v, want %v", got, want)
+	}
+	grace := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "grace", Kind: iam.KindPerson,
+		Seat: "grace", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAtlas}})
+	token := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "token:ops", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAtlas}})
+	for who, ctx := range map[string]context.Context{"a colleague": grace, "a credential acting as no seat": token} {
+		if got := askAtlas(ctx, t, s, "atlas_review", map[string]any{"mine": true}); len(listOf(t, got["items"])) != 0 ||
+			got["total"] != float64(0) {
+			t.Errorf("%s is told %v contradicts their word", who, got["items"])
+		}
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
