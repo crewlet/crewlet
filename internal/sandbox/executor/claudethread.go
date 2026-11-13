@@ -593,9 +593,23 @@ type threadHead struct {
 // null or not.
 func (h threadHead) Chained() bool { return h.Parent != nil }
 
-// Root reports whether the record roots a chain: `parentUuid` present and
-// literally null.
-func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
+// Parentless reports whether the record names no parent AS CLAUDE CODE'S
+// RESUME READS ONE: its `parentUuid` absent, null or the empty string, each
+// falsy to JavaScript, where every walk the resume makes up a thread's chain
+// stops, as at a root (2.1.310's w$t and 2.1.322's A7t, `if(!H)break`, and the
+// walk to a turn record behind 2.1.322's leaf set, Cjt, alike). Any other
+// `parentUuid` is a string that names the record's parent, whichever record
+// that is.
+//
+// IT SAYS NOTHING OF WHETHER THE RECORD IS IN A CHAIN: the harness's
+// bookkeeping carries no `parentUuid` and is parentless, and is in no chain
+// ([threadHead.Chained], [threadRestarts.See]). Its readers: the restart rule
+// ([threadRestarts.See]), and the model of which records Claude Code's resume
+// hands its model, which reads a parent by this one rule, so the two never
+// part.
+func (h threadHead) Parentless() bool {
+	return h.Parent == nil || bytes.Equal(h.Parent, jsonNull) || string(h.Parent) == `""`
+}
 
 // Main reports whether the record is the main thread's own: `isSidechain`
 // present and false, and no `agentId`. A record that says neither is no main
@@ -1764,9 +1778,8 @@ type threadRestarts struct {
 // See reports whether the record with head h, the thread's next, is a
 // RESTART: a record of subtype compact_boundary; a system record of subtype
 // microcompact_boundary; a user record whose `replacesSpan` is true; one
-// rooting a chain (`parentUuid` literally null) that is not the thread's
-// first chained record; or the thread's first chained record where it roots
-// no chain.
+// rooting a chain (below) that is not the thread's first chained record; or
+// the thread's first chained record where it roots no chain.
 //
 // THE FIRST CHAINED RECORD, never the first record or the first root: a
 // thread's bookkeeping before its brief is no chain's, and its brief roots the
@@ -1799,11 +1812,46 @@ type threadRestarts struct {
 // alone, never a Stop's note, so each reader it concerns asks
 // [threadLine.ToolResultsCleared] of the records it reads.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE. Its resume loads every user,
+// assistant, attachment and system record of a thread into the one map it
+// walks, whatever `parentUuid` the record carries (2.1.310's and 2.1.322's
+// test of a record is its type alone), and walks a chain back from a record,
+// parent by parent, to the first that is parentless ([threadHead.Parentless]):
+// its `parentUuid` null, the empty string or absent, each falsy to it alike.
+// So such a record is in a chain, and roots one, whichever of the three it
+// carries, and what lies before it is in no chain a resume walks through it. A
+// record of another type is the harness's bookkeeping, in no chain, where it
+// carries no `parentUuid` (every kind measured, at [threadHead.Parent]); one
+// that carries one is read by it as written, null and the empty string a
+// root. No release measured writes a user, assistant, attachment or system
+// record with no `parentUuid` or an empty one (none of the 11,727 such records
+// of the 521 thread files the probes kept), so the rule moves nothing
+// measured; a later release, or a box that rewrote its file, that writes one
+// restarts the thread there, where read by the literal null alone, what lies
+// before it would be counted as handed on.
+//
+// ITS READERS: the resumed count, which bounds what a continued session's
+// harness counts before its first request and reads a restart as where the
+// job may have started its context over; the reading that tells a relaunch
+// which of its calls a kept session holds (exact telling), which counts a
+// result, a subagent's answer and its notice only past the main thread's last
+// restart, and reads a subagent's thread that restarts anywhere as not whole;
+// and the one that confirms a hook's note reached the model, which holds a
+// note only where no restart follows it. The model of which records Claude
+// Code's resume hands its model reads a root by the same rule, through
+// [threadHead.Parentless].
+//
 // A thread with no chained record restarts nowhere: it holds no chain to
 // start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
-	first := h.Chained() && !r.chained
-	r.chained = r.chained || h.Chained()
+	chained := h.Chained()
+	switch h.Type {
+	case recordUser, recordAssistant, recordAttachment, recordSystem:
+		chained = true
+	}
+	root := chained && h.Parentless()
+	first := chained && !r.chained
+	r.chained = r.chained || chained
 	switch {
 	case h.Subtype == subtypeCompactBoundary:
 		return true
@@ -1812,7 +1860,7 @@ func (r *threadRestarts) See(h threadHead) bool {
 	case h.ReplacesSpan:
 		return true
 	case first:
-		return !h.Root()
+		return !root
 	}
-	return h.Root()
+	return root
 }

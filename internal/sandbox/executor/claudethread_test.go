@@ -1333,15 +1333,17 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 }
 
 // ABSENT IS NOT NULL: a record outside the chain carries no parentUuid and is
-// neither chained nor a root, the brief's null roots the chain, and a chained
-// record's parent is its quoted uuid, each handed over as written. Every kind
-// of the harness's bookkeeping measured is outside the chain, the nine of
-// them: queue-operation, atis-latch, api-request-shape, api-request-blob,
-// api-request, last-prompt, cost-state, mode, and tools-used, which 2.1.322
-// writes whenever the tools a session has used grow, and 2.1.310 never does.
+// not chained, its parent absent, the brief's null roots the chain, and a
+// chained record's parent is its quoted uuid, each handed over as written.
+// Every kind of the harness's bookkeeping measured is outside the chain, the
+// nine of them: queue-operation, atis-latch, api-request-shape,
+// api-request-blob, api-request, last-prompt, cost-state, mode, and
+// tools-used, which 2.1.322 writes whenever the tools a session has used grow,
+// and 2.1.310 never does. Each of the three is parentless as Claude Code's
+// resume reads a parent but the chained record, which names the brief.
 //
 // Mutation: read an absent parentUuid as null, and the bookkeeping before the
-// brief, and every kind of it, reads as chained, and as roots.
+// brief, and every kind of it, reads as chained, its parent null.
 func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 	t.Parallel()
 	bookkeeping := []string{ctAtisLatch, ctRequestShape, ctRequestBlob, ctRequest, ctLastPrompt, ctCostState,
@@ -1352,18 +1354,18 @@ func TestAnAbsentParentIsNotANullOne(t *testing.T) {
 		t.Fatalf("%d lines read and %d broken, want %d and none", len(got.lines), len(got.broken), 4+len(bookkeeping))
 	}
 	for _, line := range append(got.lines[:2:2], got.lines[4:]...) {
-		if h := line.Head; h.Chained() || h.Root() || h.Parent != nil {
-			t.Errorf("line %d, a %s, carries no parentUuid and reads as chained %t, a root %t, its parent %s",
-				line.N, h.Type, h.Chained(), h.Root(), h.Parent)
+		if h := line.Head; h.Chained() || h.Parent != nil || !h.Parentless() {
+			t.Errorf("line %d, a %s, carries no parentUuid and reads as chained %t, parentless %t, its parent %s",
+				line.N, h.Type, h.Chained(), h.Parentless(), h.Parent)
 		}
 	}
-	if h := got.lines[2].Head; !h.Chained() || !h.Root() || string(h.Parent) != "null" {
-		t.Errorf("the brief reads as chained %t, a root %t, its parent %s; want a root, its parent null",
-			h.Chained(), h.Root(), h.Parent)
+	if h := got.lines[2].Head; !h.Chained() || !h.Parentless() || string(h.Parent) != "null" {
+		t.Errorf("the brief reads as chained %t, parentless %t, its parent %s; want a root, its parent null",
+			h.Chained(), h.Parentless(), h.Parent)
 	}
-	if h := got.lines[3].Head; !h.Chained() || h.Root() || string(h.Parent) != `"`+ctUUID(1)+`"` {
-		t.Errorf("a chained record reads as chained %t, a root %t, its parent %s; want chained to the brief",
-			h.Chained(), h.Root(), h.Parent)
+	if h := got.lines[3].Head; !h.Chained() || h.Parentless() || string(h.Parent) != `"`+ctUUID(1)+`"` {
+		t.Errorf("a chained record reads as chained %t, parentless %t, its parent %s; want chained to the brief",
+			h.Chained(), h.Parentless(), h.Parent)
 	}
 }
 
@@ -1437,6 +1439,16 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // its type: a model's reply whose replacesSpan is a string, and an attachment
 // whose replacesSpan is null, each read whole, and restart nothing.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE: a user, assistant,
+// attachment or system record whose parentUuid is the empty string, and one
+// that carries no parentUuid at all, each falsy to the walk as null is, roots
+// a chain, so each restarts the thread where it follows its first chained
+// record; a brief of no parentUuid that opens the thread is its first chained
+// record, which roots it, and restarts nothing. A record of another type that
+// carries no parentUuid is the harness's bookkeeping, in no chain, and
+// restarts nothing, and one that carries a null parentUuid roots a chain as
+// written.
+//
 // Mutation: count every root, and the brief restarts every thread; count every
 // root but the first one seen, and the first root of a thread whose start is
 // gone is none; read a thread whose start is gone as whole, and one that never
@@ -1447,7 +1459,12 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // replacesSpan by its presence, and one that is false restarts the thread;
 // read either kind off any record's type, and the attachment or the reply
 // restarts it; hold replacesSpan to its type on every record, and the reply
-// and the attachment that carry one of another type are no records.
+// and the attachment that carry one of another type are no records; root a
+// chain at null alone, and the empty string and the absent parent restart
+// nothing; read an absent parent as a root on a user or assistant record
+// alone, and the parentless attachment and system record restart nothing; or
+// read a record of any type that carries no parentUuid as chained, and the
+// queue operation after the brief restarts the thread.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
@@ -1503,6 +1520,31 @@ func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 		"a null replacesSpan on an attachment": {lines: after(ctReplace(t,
 			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"type":"attachment"`,
 			`"type":"attachment","replacesSpan":null`))},
+		"a user record whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctSpan(ctUUID(3), ctUUID(7), ""), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":""`)), restarts: []int{5}},
+		"a reply whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"an attachment whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"a system record whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctSummary(ctUUID(3), ctUUID(7)), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":""`)), restarts: []int{5}},
+		"a user record with no parentUuid": {lines: after(ctReplace(t, ctSpan(ctUUID(3), ctUUID(7), ""),
+			`"parentUuid":"`+ctUUID(3)+`",`, "")), restarts: []int{5}},
+		"a reply with no parentUuid": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`",`,
+			"")), restarts: []int{5}},
+		"an attachment with no parentUuid": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`",`, "")),
+			restarts: []int{5}},
+		"a system record with no parentUuid": {lines: after(ctReplace(t, ctSummary(ctUUID(3), ctUUID(7)),
+			`"parentUuid":"`+ctUUID(3)+`",`, "")), restarts: []int{5}},
+		"a brief with no parentUuid, opening its thread": {lines: []string{ctEnqueue,
+			ctReplace(t, brief, `"parentUuid":null,`, ""), tokens, reply}},
+		"a queue operation after the brief, which carries no parentUuid": {lines: after(ctDequeue)},
+		"a queue operation after the brief whose parentUuid is null": {lines: after(ctReplace(t, ctDequeue,
+			`"type":"queue-operation"`, `"parentUuid":null,"type":"queue-operation"`)), restarts: []int{5}},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {
