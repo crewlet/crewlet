@@ -3,6 +3,7 @@ package jetstream
 import (
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/nats-io/nats.go"
@@ -93,4 +94,27 @@ func unquoted(err error) error {
 		return errors.New("it carries a malformed %-escape")
 	}
 	return parse.Err
+}
+
+// ServerHosts is the host of each server stream.url names, in the order it
+// names them and each once: no scheme, no port and nothing of the userinfo,
+// for the reasons [serverAddresses] gives. An entry that does not parse names
+// no host and is left out, since its text is where a credential would be.
+func ServerHosts(raw string) []string {
+	var hosts []string
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSuffix(strings.TrimSpace(entry), "/")
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "://") {
+			entry = "nats://" + entry
+		}
+		u, err := url.Parse(entry)
+		if err != nil || u.Hostname() == "" || slices.Contains(hosts, u.Hostname()) {
+			continue
+		}
+		hosts = append(hosts, u.Hostname())
+	}
+	return hosts
 }

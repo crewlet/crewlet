@@ -791,6 +791,15 @@ type Result struct {
 	// conversation's session, whose transcript it could spoil anyway.
 	ContextExhausted bool
 
+	// RequestRefused says the run ended because its provider refused the
+	// request the harness made as it was built (an invalid tool definition, a
+	// message the session carries that the provider no longer takes): what the
+	// same session sends again on every launch. It names such a run on its
+	// record (types.ExecutorErrorRequestRefused), and no later launch continues
+	// the session it ran ([requestRefused]). Read only on a run that did not
+	// succeed, and the box's word, as ContextExhausted is.
+	RequestRefused bool
+
 	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the

@@ -19,9 +19,8 @@ import (
 // speak a request's protocol answers nothing, which its asker reads as a node
 // that did not answer and asks the runner-up of; an asker drops a reply at a
 // protocol it does not speak. An estate request's shape and no record's, so the
-// code domain's RecordVersion does not move for it — as a STATED CONDITION
-// (M3-O84 §2 item 5), no build that carries the code domain has run without
-// it, since none of the domain is on main.
+// code domain's RecordVersion does not move for it; the domain landed on main
+// with it.
 
 // Protocol is the version of the request and reply this build writes and
 // reads.
@@ -86,7 +85,7 @@ type Assigned struct {
 	Home bool `json:"home,omitempty"`
 	// After is the place the search continues from ([Key]), set on the one
 	// repository it falls in: the node reads it at the key's commit, past
-	// the key's line. Additive, under the STATED CONDITION above.
+	// the key's line. Additive, as the rest of this shape is.
 	After *Key `json:"after,omitempty"`
 }
 

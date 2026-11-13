@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -41,11 +43,13 @@ func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest 
 
 // A LAUNCH WRITES THE JOB'S GRANTS AND ITS FLOOR ON THE ROW BEFORE ITS BOX
 // EXISTS: the row is what a box's request to Gitlet is admitted
-// against, and that request can come before the launch returns. The launch
-// floor is the floor the job opened at.
+// against, and that request can come before the launch returns — and so is
+// whom the job's pushes are made for, which a round carried on keeps with its
+// grants. The launch floor is the floor the job opened at.
 //
-// Mutation: leave Repos off the run BeginLaunch is handed — the row at the
-// box's creation carries none, red.
+// Mutations: leave Repos off the run BeginLaunch is handed — the row at the
+// box's creation carries none, red; leave whom its pushes are made for off it
+// — the row at the box's creation works for nobody, red.
 func TestALaunchWritesItsGrantsOnTheRowBeforeItsBoxExists(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -58,6 +62,8 @@ func TestALaunchWritesItsGrantsOnTheRowBeforeItsBoxExists(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID), granted("api", apiRepoID))
+	designer := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"}
+	req.CodeCeiling, req.CodeWorkingFor = "designer", designer
 	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -70,6 +76,9 @@ func TestALaunchWritesItsGrantsOnTheRowBeforeItsBoxExists(t *testing.T) {
 	if witness.seen.CodeFloor != "code@1:40" || witness.seen.CodeLaunch != "code@1:40" {
 		t.Fatalf("at the box's creation the row's floor is %q and its launch floor %q, want code@1:40 for both",
 			witness.seen.CodeFloor, witness.seen.CodeLaunch)
+	}
+	if !reflect.DeepEqual(witness.seen.CodeWorkingFor, designer) {
+		t.Fatalf("at the box's creation the row works for %+v, want %+v", witness.seen.CodeWorkingFor, designer)
 	}
 }
 
@@ -103,8 +112,9 @@ func (w *grantWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // WRITTEN: more repositories than a run is given, one that is not a RunRepo,
 // one named twice — by its name or by its id, either giving one repository two
 // grants and one checkout two clones — a floor that does not go with its
-// repositories, and a colleague's ceiling on a run given none, which would
-// bound nothing. Nothing is on the store and no box was made.
+// repositories, and a colleague's ceiling, or whom its pushes are made for, on
+// a run given none, which would bound and carry nothing. Nothing is on the
+// store and no box was made.
 //
 // Mutation: drop checkRepos from Launch — the duplicate and floor rows open a
 // row, red.
@@ -144,6 +154,11 @@ func TestALaunchRefusesGrantsItsRowCouldNotCarry(t *testing.T) {
 			r.CodeCeiling = "designer"
 			return r
 		}, "no colleague's ceiling on them"},
+		{"whom its pushes are made for with no repositories", func(t *testing.T) LaunchRequest {
+			r := launchReq("t1")
+			r.CodeWorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"}
+			return r
+		}, "has nobody its pushes are made for"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

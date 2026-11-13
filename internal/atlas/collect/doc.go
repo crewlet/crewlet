@@ -12,6 +12,22 @@
 // to the worker by the engine rather than registered, since it runs commands
 // through the node's SSH runner. Its fifth reads GitLab (ADR-0135): every
 // project of the company's group, its pipeline and its environments.
+// Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
+// project as an account, and what a Google Cloud project's enabled APIs say
+// it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
+// organization as an account, and each product as what its account does.
+// Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
+// own id and name, with a bot token one of the agents already holds. Its
+// eleventh reads AWS (ADR-0148), as a role of its own that the company adds
+// to its stack by choice: the Regions in use, instances, databases, load
+// balancers, queues, buckets and public DNS.
+//
+// # A source may be the company's choice
+//
+// A source that reads under an identity the company adds by choice (AWS's
+// atlas role) is [Optional]: while the company has not asked for it, it is
+// not read and not listed among the sources, though its integration is
+// connected ([Connected], the one rule the duty and the report both read).
 //
 // # Its own duty, never the reconcile loop
 //
@@ -54,12 +70,40 @@
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
 //
+// # A person may ask for a read, and the floor is the duty's
+//
+// A source is read on its interval, and sooner where a person asked
+// ([Status.DueFor]): on the tick after the ask, once [RefreshFloor] has passed
+// since the source's last attempt. The floor is the refresh interval's own, so
+// no gesture reads a vendor more often than the smallest cadence a company
+// may set, and it is held here as well as where the ask is made, since the
+// ask is a record anybody with the store could write. The ask is dropped when
+// its read is made, when a read already answered it, and when the company no
+// longer connects its source.
+//
+// # A source that reads in scopes keeps one last whole read each
+//
+// The servers are read one by one, and a server that could not be reached
+// says nothing of the others. Each scope the read visits ([Read.Scopes])
+// keeps the instant it was last read whole and how many of its parts the last
+// read was refused ([Scope]), counted from the read rather than from the
+// findings, which are bounded.
+//
 // # Other voices use the same builder and the same diff
 //
 // A voice that is no integration's (a repository's files,
 // internal/atlas/codescan) gathers its claims through [NewBuilderFor] and
 // records them with [Replace], which withdraws at once what the voice no
 // longer says: a reading that is exact at its instant needs no second miss.
+//
+// # A forge's repositories are a visit of their own
+//
+// A source whose vendor hosts repositories is also a [CodeHost] (ADR-0136):
+// it lists them, and serves a tree and a blob. The duty asks its [CodePass]
+// (codescan.Forges) about every such source after the source's own read; the
+// pass keeps its own standing and comes due apart from the read, and the
+// duty's lease is claimed again for it as for any visit. The seam is here so
+// a vendor implements it without importing the reader of the files.
 //
 // # Values are typed, and a credential has nowhere to go
 //
@@ -78,6 +122,9 @@
 // calls and withheld values it cost, the parts it was refused, and the
 // entries it has stopped seeing since when): the whole company, current value only, so it is a record in
 // the coordination store ([CoordStore]), beside the integration statuses and
-// apart from them. Which node reads: the `worker:atlas-collect` lease, claimed
-// per tick and re-claimed before every source.
+// apart from them. A person's ask that a source be read now ([Request]): the
+// whole company, current value only, until the duty honours it, so it is a
+// record of its own in the coordination store, never a field of the standing
+// the duty rewrites whole. Which node reads: the `worker:atlas-collect` lease,
+// claimed per tick and re-claimed before every source.
 package collect

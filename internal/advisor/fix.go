@@ -48,6 +48,8 @@ type Fix struct {
 	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
 	// the engine's words: the evidence and the change to draft, nothing more.
 	Prompt string `json:"prompt,omitempty"`
+	// Act is the atlas tool call an atlas_act fix sends, once per entry.
+	Act *AtlasAct `json:"act,omitempty"`
 }
 
 // Option is one choice of a config change.

@@ -17,10 +17,13 @@ import {
   activityAnswer,
   entriesAnswer,
   entryAnswer,
+  entryWorkAnswer,
   facetsAnswer,
   logAnswer,
   mapAnswer,
+  namedAnswer,
   traceAnswer,
+  workAnswer,
   type AtlasFixture,
 } from "./atlas.ts";
 import { InertWebSocket } from "./client.tsx";
@@ -31,7 +34,7 @@ export type Asked = { what: string; params: Record<string, unknown> };
 export interface AtlasMountOptions {
   /** One entry's own answer, where the fixture's summary is not enough. */
   entry?: (id: string) => AtlasEntryAnswer | undefined;
-  /** Answers by question, read before the fixture's: `viewer`, `atlas_review`, `pages`. */
+  /** Answers by question, read before the fixture's: `viewer`, `atlas_review`, `atlas_work`, `pages`. */
   answers?: Record<string, unknown>;
 }
 
@@ -105,6 +108,20 @@ export function mountAtlas(
               ),
             )
           : new Promise(() => {});
+      // NO TASK NAMES ANY ENTRY unless a suite brings the work that does.
+      case "atlas_work":
+        return Promise.resolve(workAnswer({}));
+      case "atlas_entry_work":
+        return from ? Promise.resolve(entryWorkAnswer()) : new Promise(() => {});
+      case "atlas_named":
+        return Promise.resolve(
+          namedAnswer(
+            fixture,
+            String(params.ids ?? "")
+              .split(",")
+              .filter(Boolean),
+          ),
+        );
       default:
         return new Promise(() => {});
     }

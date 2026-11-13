@@ -421,27 +421,33 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	// two pairs share a digest untested, and the head is documented as
 	// lossy and truncatable, so it is exactly the half that may stop
 	// separating them.
+	//
+	// AND OVER BOTH OF A PAIR'S SUBJECTS, its poison's and its unhandled
+	// deliveries' (topics.Unhandled), in one space: a pair's unhandled copy
+	// on another pair's poison subject would be replayed as the wrong
+	// subscription's, or poison replayed as a healthy delivery.
 	digests := map[string][2]string{}
 	pairs := 0
 	for _, subject := range subjects {
 		for _, group := range groups {
 			pairs++
-			dlq := topics.DeadLetter(subject, group)
-			if prev, dup := seen[dlq]; dup {
-				t.Errorf("dead letter %q is shared by (%q, %q) and (%q, %q)",
-					dlq, prev[0], prev[1], subject, group)
-				continue
-			}
-			seen[dlq] = [2]string{subject, group}
+			for _, kept := range []string{topics.DeadLetter(subject, group), topics.Unhandled(subject, group)} {
+				if prev, dup := seen[kept]; dup {
+					t.Errorf("dead letter %q is shared by (%q, %q) and (%q, %q)",
+						kept, prev[0], prev[1], subject, group)
+					continue
+				}
+				seen[kept] = [2]string{subject, group}
 
-			id := dlq[strings.LastIndex(dlq, ".")+1:]
-			if prev, dup := digests[id]; dup {
-				t.Errorf("digest %q is shared by (%q, %q) and (%q, %q); the readable "+
-					"head is what is telling these apart, and it is lossy by design",
-					id, prev[0], prev[1], subject, group)
-				continue
+				id := kept[strings.LastIndex(kept, ".")+1:]
+				if prev, dup := digests[id]; dup {
+					t.Errorf("digest %q is shared by (%q, %q) and (%q, %q); the readable "+
+						"head is what is telling these apart, and it is lossy by design",
+						id, prev[0], prev[1], subject, group)
+					continue
+				}
+				digests[id] = [2]string{subject, group}
 			}
-			digests[id] = [2]string{subject, group}
 		}
 	}
 	if pairs == 0 {
@@ -464,6 +470,7 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	for _, subject := range subjects {
 		for _, group := range groups {
 			requirePublishableSubject(t, topics.DeadLetter(subject, group))
+			requirePublishableSubject(t, topics.Unhandled(subject, group))
 		}
 	}
 
@@ -472,6 +479,9 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	// would make DeadLetters() unable to find what deadLetter() wrote.
 	if a, b := topics.DeadLetter("coll.shared", "h.i"), topics.DeadLetter("coll.shared", "h.i"); a != b {
 		t.Errorf("DeadLetter is not deterministic: %q then %q", a, b)
+	}
+	if a, b := topics.Unhandled("coll.shared", "h.i"), topics.Unhandled("coll.shared", "h.i"); a != b {
+		t.Errorf("Unhandled is not deterministic: %q then %q", a, b)
 	}
 }
 
@@ -506,6 +516,45 @@ func TestDeadLetterKeepsTheTopicGreppable(t *testing.T) {
 	}
 }
 
+// A PAIR'S UNHANDLED DELIVERIES ARE KEPT APART FROM ITS POISON, AND READ AS
+// THE PAIR'S.
+//
+// A reader that replays a group's unhandled deliveries lists one subject and
+// handles everything on it (internal/notify), so the subject must hold none of
+// the pair's poison, and an operator hunting either starts from the topic they
+// know: the head is the poison subject's, the segment after it says which of
+// the two this is, and the digest is the identity.
+//
+// Mutation: keep the unhandled copies on the pair's poison subject
+// (topics.DeadLetter), and the two are one string.
+func TestAPairsUnhandledDeliveriesAreKeptApartFromItsPoison(t *testing.T) {
+	t.Parallel()
+
+	inbox, group := topics.AgentInbox(alice), topics.AgentInboxGroup(alice)
+	poison, unhandled := topics.DeadLetter(inbox, group), topics.Unhandled(inbox, group)
+	if unhandled == poison {
+		t.Fatalf("Unhandled = DeadLetter = %q: a reader that replays the pair's unhandled "+
+			"deliveries would replay its poison", poison)
+	}
+	head := topics.DeadLetterPrefix + inbox + "." + group + ".unhandled."
+	if !strings.HasPrefix(unhandled, head) {
+		t.Errorf("Unhandled = %q, want it to start with %q", unhandled, head)
+	}
+	id := strings.TrimPrefix(unhandled, head)
+	if len(id) != 12 || strings.Trim(id, "0123456789abcdef") != "" {
+		t.Errorf("Unhandled = %q ends in %q, want 12 lowercase hex characters of digest",
+			unhandled, id)
+	}
+	if topics.Match(topics.EventsWildcard, unhandled) {
+		t.Errorf("%q is matched by %q — a kept copy would resurface as live traffic",
+			unhandled, topics.EventsWildcard)
+	}
+	if !topics.Match(topics.DeadLetterPrefix+">", unhandled) {
+		t.Errorf("%q is not matched by %q, so the DLQ stream would not carry it",
+			unhandled, topics.DeadLetterPrefix+">")
+	}
+}
+
 // A TOPIC'S DEAD LETTERS LIE UNDER ITS HEAD'S SUBTREE, AND NO OTHER TOPIC'S
 // DO.
 //
@@ -530,10 +579,11 @@ func TestATopicsDeadLettersLieUnderItsHeadsSubtree(t *testing.T) {
 	} {
 		tree := topics.DeadLettersUnder(tc.head)
 		requirePublishableSubject(t, tree)
-		subject := topics.DeadLetter(tc.topic, "grp")
-		if got := topics.Match(tree+".>", subject); got != tc.under {
-			t.Errorf("the dead letter %q of %q is under %q: %v, want %v", subject, tc.topic, tree,
-				got, tc.under)
+		for _, subject := range []string{topics.DeadLetter(tc.topic, "grp"), topics.Unhandled(tc.topic, "grp")} {
+			if got := topics.Match(tree+".>", subject); got != tc.under {
+				t.Errorf("the dead letter %q of %q is under %q: %v, want %v", subject, tc.topic,
+					tree, got, tc.under)
+			}
 		}
 	}
 }

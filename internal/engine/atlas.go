@@ -28,7 +28,18 @@ func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
 	}
-	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords, Log: e.atlasLog}
+	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords, Log: e.atlasLog, Sources: e}
+}
+
+// AtlasRefreshToolDeps is what a person asks for a read of one atlas source
+// through on this node: the coordination store, where the node holding the
+// collect duty reads the ask. Who asks is the surface's, set per call. The
+// zero value where this node has no coordination store.
+func AtlasRefreshToolDeps(e *Engine) builtin.AtlasRefreshDeps {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return builtin.AtlasRefreshDeps{}
+	}
+	return builtin.AtlasRefreshDeps{Sources: e}
 }
 
 // atlasLog is the atlas's log as this node reads it: through the router, so

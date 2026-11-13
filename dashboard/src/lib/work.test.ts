@@ -486,6 +486,19 @@ test("a body edit says so, and bookkeeping is never said", () => {
   ]);
 });
 
+// THE ENTRIES A TASK NAMES ARE THE ATLAS'S, so their delta holds two counts
+// and never an id: a reader of the task's history may not read the atlas.
+// The counts are said as counts, under the group's own name, and never
+// resolved as tasks.
+test("a change to the atlas entries a task names reads as how many it names", () => {
+  const fields = { atlas_entry: { from: "2", to: "3" } };
+  const taskKey = () => "ACME-12";
+  expect(describeChange(record({ fields }), { taskKey })).toBe("Atlas entries: 2 → 3");
+  expect(changeClauses(fields, { taskKey })).toEqual([
+    "changed the number of atlas entries it names from 2 to 3",
+  ]);
+});
+
 // A FILE'S RECORD IS ITS STORED FACTS. A hash and a content type are the record of
 // a write, not what anybody did, and they ran to four lines under one small change.
 test("a file change says which path was written or removed", () => {

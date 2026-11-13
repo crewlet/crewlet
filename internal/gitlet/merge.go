@@ -69,26 +69,20 @@ import (
 // which no correct log carries but a record the ledger would have collapsed —
 // applies as nothing, logged (code_merge_not_applied).
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// The op, its payload and every field here are in the base format: no build
-// that carries the code domain has run without them — none of the domain is on
-// main, so no image and no release holds it — and while that is so, every
-// build that meets a merge reads it. Once a build without them has run, the op
-// takes {Name: "MutationRecord.Op merge", Since: 2, Path: []string{"op"},
-// Equals: "merge"} in versionedFields, with RecordVersion at 2, its line under
-// "What each version added", a Carrying record in the statelogtest candidate
-// and the op excepted from the stamp test's base-format loop — and so do the
-// values a merge adds to closed sets older builds read: `merged_via direct` on a
-// change's row and `via merge` on a push's, which an older reader of either
-// refuses as a way it does not know (scanPush). Neither is a gate.
+// The op, its payload and every field here are in the base format
+// ([RecordVersion]): the domain landed on main with them, and with the values
+// a merge adds to closed sets (`merged_via direct` on a change's row and
+// `via merge` on a push's), so every build that meets a merge reads it — all
+// but whom an agent's merge was made for ([Merge.WorkingFor]) and its
+// routing's ([ChangeRouting.WorkingFor]), which came with version 2. It is
+// no gate.
 
 // Merge moves a change's target onto the commit its merge built: the record of
 // op merge on the repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op merge", Since: 2,
-// Path: []string{"op"}, Equals: "merge"}.
+// BASE FORMAT, as this file's head says, but for [Merge.WorkingFor].
 type Merge struct {
 	RepoID string `json:"repo_id"`
 	// MergeID is the push the merge lands as — [WritePushID] of the
@@ -129,14 +123,22 @@ type Merge struct {
 	ReceivedAt time.Time `json:"received_at"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER: the change's authors, told it merged — all but who merged
-	// it. Under the condition concerns.go states, it takes {Name:
-	// "Merge.Routing", Since: 2, Op: "merge", Path: []string{"mutation",
-	// "routing"}} once a build without it has run.
+	// it.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 	// Principal is who merged it — the proposal's asker, STAMPED by the
 	// committer: the merger its gate judged, and whom its push row and the
 	// change's row name.
 	Principal Principal `json:"principal"`
+	// WorkingFor is whom an agent's merge was made for (ADR-0109), whatever
+	// the record wakes: the carrier its proposal states
+	// ([MergeProposal.WrittenFor]), STAMPED BY THE COMMITTER beside Principal;
+	// an asker sends none. nil for a merge made for nobody — the seat's own
+	// work — and for a person's. The apply keeps it on the merge's push row
+	// (code_pushes.working_for), which the home's record of a change that
+	// push landed reads it back from (crewlet#798's piece 4c-ii).
+	//
+	// VERSION 2, as every payload's working_for is ([versionedFields]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Protected and Green are what the decide's snapshot held of the target,
 	// STAMPED BY THE DECIDE so the apply matches no pattern: Protected that a
 	// rule protects it, so the merge writes its landing row; Green that its
@@ -174,7 +176,27 @@ type MergeProposal struct {
 	// not: the decide reads it and nothing else does, so the merge record's
 	// format does not move for it.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
-	Merge     Merge `json:"merge"`
+	// WrittenFor is whom a SEAT'S merge is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asked it works
+	// for, handed on by the Gitlet node that builds the merge from the engine
+	// write it was asked ([EngineWrite.WrittenFor]), or stated nobody; a
+	// person's states nothing. Held to the asker by [writtenForInvalid]: a
+	// merge carries no ceiling, the Gitlet node that built it having held the
+	// write to its ceiling already.
+	//
+	// A proposal is no record, so this field takes no versionedFields row; the
+	// merge record carries it ([Merge.WorkingFor]) and beside the merger on its
+	// routing ([ChangeRouting.WorkingFor]), which take theirs. It crosses the
+	// estate's wire to whichever data node decides it, and a node of a build
+	// without it refuses a merge carrying somebody, naming args.written_for, so
+	// the walk asks one that reads it, and a node of a build that does not know
+	// its carrier's kind, or an app a credential's carrier names, refuses it
+	// alike, naming args.written_for.kind or args.written_for.apps[]
+	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
+	// build does. What such a build sends arrives stated nobody
+	// ([MergeProposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
+	Merge      Merge            `json:"merge"`
 }
 
 // MergeResult is what became of one merge proposal.
@@ -202,19 +224,27 @@ type MergeResult struct {
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
 // naming the field), before it is queued: an operation id this engine does not
-// accept; an asker that is no principal, or names an executor; a Seen that is
-// no position on the code log; a drop epoch below zero; a repository id that
-// is no UUID in its canonical spelling; a merge id that is not [WritePushID] of the operation
-// id; a change id that is no bare UUIDv7; a target that is no branch a change
-// may name; a method this build does not know; a base, a head or a commit
-// that is no whole object id, or a commit that is the base, which moves
-// nothing; a fast-forward to anything but the head, or carrying a pack; a merge
-// or a squash carrying none, or a commit that is the head; a pack whose row is
-// no bundle's ([PackRef.Check]) or past what an engine-built pack may store
-// ([MaxWritePackBytes]); an override past [MaxOverrideReasonBytes] or not
-// valid text; no node, or no instant it was asked at; a field the committer
-// stamps (the principal, the source, Protected and Green) set by the asker;
-// and a record past what one proposal may carry ([EntryRoom]).
+// accept; an asker that is no principal, or names an executor; whom the merge
+// is made for, where its asker may not state it so ([writtenForInvalid]); a
+// Seen that is no position on the code log; a drop epoch below zero; a
+// repository id that is no UUID in its canonical spelling; a merge id that is
+// not [WritePushID] of the operation id; a change id that is no bare UUIDv7; a
+// target that is no branch a change may name; a method this build does not
+// know; a base, a head or a commit that is no whole object id, or a commit that
+// is the base, which moves nothing; a fast-forward to anything but the head, or
+// carrying a pack; a merge or a squash carrying none, or a commit that is the
+// head; a pack whose row is no bundle's ([PackRef.Check]) or past what an
+// engine-built pack may store ([MaxWritePackBytes]); an override past
+// [MaxOverrideReasonBytes] or not valid text; no node, or no instant it was
+// asked at; a field the committer stamps (the principal, the source, Protected
+// and Green) set by the asker; and a record past what one proposal may carry
+// ([EntryRoom]).
+//
+// Before any of it, a value whom the merge is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the merge at all, and a committer of a build that
+// knows the value does.
 func (p MergeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -266,6 +296,11 @@ func (p MergeProposal) measure() (int, error) {
 
 // validFields is every rule of [MergeProposal.Validate] but the record's bytes.
 func (p MergeProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// merge (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
@@ -278,6 +313,9 @@ func (p MergeProposal) validFields() error {
 	case p.Asker.Run.RunID != "":
 		return badField("asker.run.run_id", "a merge is a tool call's, whose run is its turn: it names no "+
 			"executor")
+	}
+	if err := writtenForInvalid(p.Asker, p.WrittenFor); err != nil {
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -353,6 +391,9 @@ func (p MergeProposal) validFields() error {
 	case m.Principal != (Principal{}):
 		return badField("merge.principal", "the committer stamps who merged it from the asker, and an asker "+
 			"sends none")
+	case m.WorkingFor != nil:
+		return badField("merge.working_for", "the committer stamps whom a merge was made for from the "+
+			"proposal's written_for, and an asker sends none")
 	case m.SourceRef != "":
 		return badField("merge.source_ref", "the committer stamps the source a merge deletes from the "+
 			"change it reads, and an asker sends none")
@@ -364,10 +405,10 @@ func (p MergeProposal) validFields() error {
 }
 
 // stamped is p's record as the committer forms it before its decide: its
-// asker as the record's principal.
+// asker as the record's principal, and whom p is made for beside it.
 func (p MergeProposal) stamped() Merge {
 	m := p.Merge
-	m.Principal = p.Asker
+	m.Principal, m.WorkingFor = p.Asker, p.WrittenFor.Carrier()
 	return m
 }
 
@@ -445,7 +486,7 @@ func (c *Committer) countMerge(res MergeResult, err error) {
 	}
 	outcome := string(res.Outcome)
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		outcome = "handed_on"
 	case err != nil:
 		outcome = "failed"
@@ -621,14 +662,14 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	payload.Protected = gate.Protected()
 	payload.Green = gate.Protected() && len(gate.Checks) == 0
 	// WHOM IT CONCERNS: the change's authors, told it merged — all but who
-	// merged it, its record's actor.
+	// merged it, its record's actor, beside whom the merge was made for.
 	row, _, err := changeRowIn(ctx, tx, m.ChangeID)
 	if err != nil {
 		return mergeDecision{}, err
 	}
 	merger, mergerKind := p.Asker.party()
 	if payload.Routing, err = routingFor(ctx, tx, concerning{repoName: repo.name, change: row, actor: merger,
-		actorKind: mergerKind, authors: true, merged: true}); err != nil {
+		actorKind: mergerKind, workingFor: p.WrittenFor.Carrier(), authors: true, merged: true}); err != nil {
 		return mergeDecision{}, err
 	}
 	d.payload = &payload

@@ -3,6 +3,7 @@ package doclet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -421,6 +422,14 @@ func withVia(base notify.Inbound, via string) notify.Inbound {
 // THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote reaches
 // this parser with everything it carried: the body is exactly the record,
 // unknown fields included, and re-encoding it later must not strip them.
+//
+// A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
+// build ([notify.Defer]), never refused as a payload nobody can read: the
+// notify service acks what a parser refuses, on the ONE group every node takes
+// inbound mail from, so the wake the newer node's feed relayed was gone for
+// the whole fleet when an older node won its delivery during a roll
+// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
+// on this side of the relay.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, fmt.Errorf("doclet: the delivery carries no record")
@@ -429,7 +438,12 @@ func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if err != nil {
 		return MutationRecord{}, fmt.Errorf("doclet: read the delivery: %w", err)
 	}
-	return Decode(data)
+	record, err := Decode(data)
+	var future *ErrFutureVersion
+	if errors.As(err, &future) {
+		return MutationRecord{}, notify.Defer(notify.DeferNewerRecord, err)
+	}
+	return record, err
 }
 
 // AddressedKinds are the routing reasons that mean somebody is waiting.

@@ -169,10 +169,12 @@ func workItemName(item types.WorkItem) string {
 // name of its own.
 //
 // A SEAT'S CLOSE IS MADE FOR NOBODY ELSE ([types.ForNobody]): the queue lands
-// the change after the turn that enqueued it ended, outside any turn, and a
-// queued change carries nobody it was made for, so the turn this close wakes
-// works for the seat. That is Gitlet's edge of ADR-0109 until crewlet#798's
-// piece 4c carries a carrier on code's records, and this close with it.
+// the change after the turn that enqueued it ended, outside any turn, and the
+// close is handed nobody the enqueue was made for — the entry's row keeps
+// them (code_queue.working_for), but neither the home's read of its queue nor
+// the [gitlethome.TaskClose] it hands over carries them yet — so the turn this
+// close wakes works for the seat. That is Gitlet's edge of ADR-0109 until
+// crewlet#798's piece 4c-ii reads the entry's carrier into this close.
 func enqueuerActor(p gitlet.Principal) (builtin.Actor, error) {
 	switch {
 	case p.Kind == gitlet.PrincipalAgent && p.Seat != "":

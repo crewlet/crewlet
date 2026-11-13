@@ -123,17 +123,8 @@ const (
 // to change. Its lists are in the one order [CanonicalGate] forms, which
 // [RepoSettings.Validate] holds a record to.
 //
-// BASE FORMAT, AS A STATED CONDITION: no build that carries the code domain
-// has run without this type — none of the domain is on main, so no image and
-// no release holds it — and while that is so, every build that meets a record
-// carrying a gate reads it. Once a build without it has run, each op whose
-// payload carries settings takes {Name: "Protection.Gate", Since: 2, Op: <the
-// op: create, settings, restore>, Path: []string{"mutation", "settings",
-// "protections", "gate"}} in versionedFields, with RecordVersion at 2, its
-// line under "What each version added" and a Carrying record in the
-// statelogtest candidate — such a build would apply settings without their
-// gates, and a node running it would hold rules no gate guards that every
-// other node gates.
+// BASE FORMAT ([RecordVersion]): the domain landed on main with this type, so
+// every build that meets a record carrying a gate reads it.
 type MergeGate struct {
 	// MergeBy is who may merge.
 	MergeBy MergeBy `json:"merge_by"`
@@ -511,10 +502,9 @@ func defaultGate() MergeGate {
 //
 // A REQUEST IS NO RECORD, so this type takes no versionedFields row: the
 // record a protect request leads to carries the repository's settings whole,
-// and [MergeGate] names the row those take. It crosses the estate's wire to
-// whichever data node decides it, under the code domain's stated condition —
-// no build carrying the domain has run without it, none of the domain being
-// on main — so every node asked it reads it.
+// in the base format ([MergeGate]). It crosses the estate's wire to whichever
+// data node decides it, and every node asked it reads it: the domain landed on
+// main with it ([RecordVersion]).
 type GateChange struct {
 	// Remove takes the rule's gate away.
 	Remove    bool       `json:"remove,omitempty"`

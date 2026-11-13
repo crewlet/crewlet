@@ -210,9 +210,9 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	ld, err := s.land(ctx, landing{
 		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: features.atomic,
-		PushOptions: options, Principal: sess.principal, Via: gitlet.ViaGit, PushID: sess.pushID,
-		ReceivedAt: sess.receivedAt, Judged: sess.judged, ForcedGrant: sess.adm.grant.RefRule,
-		EngineCommitter: committer, Progress: sess.step,
+		PushOptions: options, Principal: sess.principal, WrittenFor: sess.adm.writtenFor(),
+		Via: gitlet.ViaGit, PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged,
+		ForcedGrant: sess.adm.grant.RefRule, EngineCommitter: committer, Progress: sess.step,
 	})
 	if err != nil {
 		cause := err

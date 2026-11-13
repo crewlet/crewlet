@@ -33,7 +33,8 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 		want builtin.Actor
 	}{
 		// A SEAT'S CLOSE IS MADE FOR NOBODY ELSE: the queue lands the change
-		// outside any turn, and Gitlet's records carry no carrier yet.
+		// outside any turn, and the close is handed nobody the enqueue was
+		// made for until crewlet#798's piece 4c-ii.
 		{"a seat", gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
 			builtin.Actor{Handle: "dev", Kind: worklet.AuthorAgent, WrittenFor: types.ForNobody()}},
 		{"a person", gitlet.Principal{Kind: gitlet.PrincipalOperator, Seat: "founder", OperatorID: "pat:ada"},

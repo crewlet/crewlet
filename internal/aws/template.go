@@ -17,7 +17,7 @@ const (
 	// StackVersion is the version of the stack this engine renders, tagged on
 	// every resource so the Test can name an outdated stack. Raise it with any
 	// change to what the stack creates.
-	StackVersion = "1"
+	StackVersion = "2"
 	versionTag   = "crewlet:stack-version"
 	// CloudFormation's TemplateBody cap; above it, deploy needs an S3 bucket.
 	templateBodyLimit = 51200
@@ -31,6 +31,9 @@ type StackParams struct {
 	CAPEM    string // the CA's certificate: public, never its key
 	IssuerCN string
 	Regions  []string
+	// Atlas adds the atlas's read-only role and its profile, and their two
+	// ARNs to the stack's output.
+	Atlas bool
 }
 
 // stackName is the company's stack. Every name starts with crewlet-<company>,
@@ -100,20 +103,38 @@ func RenderStack(p StackParams) ([]byte, error) {
 			"RoleArns": []any{obj{"Fn::GetAtt": []string{"BrokerRole", "Arn"}}}, "Tags": tags,
 		}},
 	}
+	output := []any{
+		obj{"Fn::GetAtt": []string{"TrustAnchor", "TrustAnchorArn"}},
+		obj{"Fn::GetAtt": []string{"ProvisionerProfile", "ProfileArn"}},
+		obj{"Fn::GetAtt": []string{"ProvisionerRole", "Arn"}},
+		obj{"Fn::GetAtt": []string{"SeatProfile", "ProfileArn"}},
+		obj{"Fn::GetAtt": []string{"BrokerRole", "Arn"}},
+	}
+	description := "Crewlet: the engine's trust anchor, its provisioner and broker roles, the agent boundary and the level policies."
+	if p.Atlas {
+		// A ROLE AND A PROFILE OF ITS OWN, as the other two identities have:
+		// rendered out, the next deploy deletes both and nothing else.
+		resources["AtlasRole"] = obj{"Type": "AWS::IAM::Role", "Properties": obj{
+			"RoleName": n(atlasName), "Path": n(crewletPath), "MaxSessionDuration": profileSeconds,
+			"Description":              "Crewlet's atlas: lists what the account runs, read-only, and can do nothing else.",
+			"AssumeRolePolicyDocument": templated(atlasTrustDoc(p.IssuerCN), p.Company),
+			"Policies":                 []obj{{"PolicyName": n(atlasName), "PolicyDocument": templated(atlasDoc(), p.Company)}},
+			"Tags":                     tags,
+		}}
+		resources["AtlasProfile"] = obj{"Type": "AWS::RolesAnywhere::Profile", "Properties": obj{
+			"Name": n("crewlet-{company}-atlas"), "Enabled": true, "DurationSeconds": profileSeconds,
+			"RoleArns": []any{obj{"Fn::GetAtt": []string{"AtlasRole", "Arn"}}}, "Tags": tags,
+		}}
+		output = append(output, obj{"Fn::GetAtt": []string{"AtlasProfile", "ProfileArn"}},
+			obj{"Fn::GetAtt": []string{"AtlasRole", "Arn"}})
+		description = "Crewlet: the engine's trust anchor, its provisioner, broker and atlas roles, the agent boundary and the level policies."
+	}
 	t := obj{
 		"AWSTemplateFormatVersion": "2010-09-09",
-		"Description":              "Crewlet: the engine's trust anchor, its provisioner and broker roles, the agent boundary and the level policies.",
+		"Description":              description,
 		"Resources":                resources,
-		// One value to paste back: the five ARNs CreateSession needs, joined.
-		"Outputs": obj{
-			config.AWSConnectionOutput: obj{"Value": obj{"Fn::Join": []any{",", []any{
-				obj{"Fn::GetAtt": []string{"TrustAnchor", "TrustAnchorArn"}},
-				obj{"Fn::GetAtt": []string{"ProvisionerProfile", "ProfileArn"}},
-				obj{"Fn::GetAtt": []string{"ProvisionerRole", "Arn"}},
-				obj{"Fn::GetAtt": []string{"SeatProfile", "ProfileArn"}},
-				obj{"Fn::GetAtt": []string{"BrokerRole", "Arn"}},
-			}}}},
-		},
+		// One value to paste back: the ARNs CreateSession needs, joined.
+		"Outputs": obj{config.AWSConnectionOutput: obj{"Value": obj{"Fn::Join": []any{",", output}}}},
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

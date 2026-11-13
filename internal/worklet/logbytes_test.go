@@ -55,55 +55,57 @@ const (
 // THE CODE LOG'S DAY, which config sizes the code log's ceiling against this
 // log's by (DerivedCodeLogNumerator's reason, and gitlet's CodeLogMaxBytes): at
 // the ratio of the two days a blocked trim fills both logs in the same time,
-// so that ratio is a figure derived from this log's published day. A push is
-// a SEAT'S, as every one of the reference company's is — a hundred seats
-// pushing thirty times a day — alone in its record, and priced as its CODING
-// BOX'S, the most a seat's push takes of the log: internal/gitlet's measured
-// figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
-// a push costs, measured") and what a box's principal — the seat, the run
-// behind it and the executor that pushed — its way and the company day its
-// quota counted it on take of the log beyond it (its push=box arm). A seat's
-// push the engine builds for a tool takes 144 bytes less (its push=agent arm),
-// and which of a company's seats push from their boxes and which through
-// their tools is no figure the reference company has, so the day prices every
-// push at the box's, at its least as at its most — as it prices the
-// compactions at the most the reference company's pushes cost them. The
-// COMPACTIONS that merge those pushes' packs take the log a push too, and so
-// do the code-retention duty's SWEEPS of the rows they retired, a day later:
-// internal/gitlet/compact's measured figures
-// (BenchmarkCompact's steady/pushes=1200/rate=1/min/min-merge=16 arm, its
-// record-B/push and sweep-B/push, in its package doc's "Measured"), a
-// repository pushed once a minute, so every merge takes the floor's
-// gitlet.CompactMinMerge packs and is about a quarter hour from the next —
-// every merge's retirements swept by a record of their own. That is the
-// reference company's shape: 3 000 pushes a day over its repositories are a
-// few a minute, which never leave a pass more than the floor to merge. A
-// merge of more costs less a push (43 bytes where a minute's merge takes
-// three hundred), and so do a quarter hour's merges swept together, so these
-// two figures are the most the reference company's pushes cost the log, and
-// the day prices both terms at them, at its least as at its most. They are a
-// MERGE's figures and nothing else's: the steady arm's compactor publishes no
-// layer, so no compaction it makes carries one. A PUBLICATION — the
-// compaction a repository's maintainer appends to publish a multi-pack-index
-// layer, naming every pack the layer covers — is a term of its own, at
-// internal/gitlet's measured figures (codeChange… below). The barriers are its
-// git clients' linearizable reads: a seat's push asks the log three times
-// (its advertisement, its receive's sync and the fetch before it), thirty
+// so that ratio is a figure derived from this log's published day. A push is a
+// SEAT'S, as every one of the reference company's is — a hundred seats pushing
+// thirty times a day — alone in its record, and priced as its CODING BOX'S, the
+// most a seat's push takes of the log: internal/gitlet's measured figure for a
+// person's push (BenchmarkPushLogBytes, its package doc's "What a push costs,
+// measured") and what a box's principal — the seat, the run behind it and the
+// executor that pushed — its way, the company day its quota counted it on and
+// whom it was made for take of the log beyond it (its push=box arm). A seat's
+// push the engine builds for a tool takes 139 bytes less (its push=agent arm),
+// and which of a company's seats push from their boxes and which through their
+// tools is no figure the reference company has, so the day prices every push at
+// the box's, at its least as at its most — as it prices the compactions at the
+// most the reference company's pushes cost them. The COMPACTIONS that merge
+// those pushes' packs take the log a push too, and so do the code-retention
+// duty's SWEEPS of the rows they retired, a day later:
+// internal/gitlet/compact's measured figures (BenchmarkCompact's
+// steady/pushes=1200/rate=1/min/min-merge=16 arm, its record-B/push and
+// sweep-B/push, in its package doc's "Measured"), a repository pushed once a
+// minute, so every merge takes the floor's gitlet.CompactMinMerge packs and is
+// about a quarter hour from the next — every merge's retirements swept by a
+// record of their own. That is the reference company's shape: 3 000 pushes a
+// day over its repositories are a few a minute, which never leave a pass more
+// than the floor to merge. A merge of more costs less a push (43 bytes where a
+// minute's merge takes three hundred), and so do a quarter hour's merges swept
+// together, so these two figures are the most the reference company's pushes
+// cost the log, and the day prices both terms at them, at its least as at its
+// most. They are a MERGE's figures and nothing else's: the steady arm's
+// compactor publishes no layer, so no compaction it makes carries one. A
+// PUBLICATION — the compaction a repository's maintainer appends to publish a
+// multi-pack-index layer, naming every pack the layer covers — is a term of its
+// own, at internal/gitlet's measured figures (codeChange… below). The barriers
+// are its git clients' linearizable reads: a seat's push asks the log three
+// times (its advertisement, its receive's sync and the fetch before it), thirty
 // people fetch every three minutes of an eight-hour day, and a CI polls ten
 // repositories a minute where one runs.
 //
 // A push's box names the work item its run was launched for by its identity
 // and its project (gitlet.RunProvenance.WorkID, a native task's UUID, and
-// .WorkProject, its project's key), which the push=box arm carries: 245 bytes
-// beside a person's push, 49 of them that identity and 21 that project.
+// .WorkProject, its project's key), and a seat's push names whom it was made
+// for (gitlet.PushEntry.WorkingFor: the person who assigned the work its run
+// does, a human seat by its handle), which the push=box arm carries: 287
+// bytes beside a person's push, 49 of them that identity, 21 that project and
+// 47 whom it was made for.
 const (
 	referencePushesADay = 3_000
-	codePushRecordBytes = 1_625
+	codePushRecordBytes = 1_667
 	// codeEnginePushRecordBytes is a seat's push the engine builds for a
 	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
 	// no term of the day, which prices every push at the box's, and printed
 	// beside it.
-	codeEnginePushRecordBytes = 1_481
+	codeEnginePushRecordBytes = 1_528
 	codeCompactionBytes       = 108
 	codeSweepBytes            = 44
 	referencePushReads        = 3 * referencePushesADay
@@ -128,23 +130,31 @@ const (
 // recheck its tip, the refresh the versions and the checks position it was
 // judged at. The refresh that turns the change ready is the full record,
 // routed to whoever may merge it.
+//
+// Every write the reference change's seats make is made for the person who
+// assigned its work item, as a pickup of an assigned item works for whom it
+// was assigned (ADR-0109): the open's, the merge's and the enqueue's payload
+// carry them, and so do the routings of the ask, the reviews and the answer,
+// each of which wakes a seat — a human seat by its handle, 47 bytes a record.
+// The home's own records carry none, and neither does the merge's routing,
+// which tells only its author, who merged it.
 const (
-	codeChangeOpenBytes           = 3_100
+	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
-	codeReviewersBytes            = 1_190
+	codeReviewersBytes            = 1_240
 	codeReviseBytes               = 1_420
 	codeMergeabilityBytes         = 1_030
 	codeMergeabilityRecheckBytes  = 880
 	codeMergeabilityRefreshBytes  = 860
 	codeMergeabilityReadyBytes    = 1_460
 	codeCheckDispatchedEmptyBytes = 840
-	codeReviewFindingsBytes       = 5_030
-	codeReviewBytes               = 2_340
-	codeAnswerBytes               = 1_290
+	codeReviewFindingsBytes       = 5_070
+	codeReviewBytes               = 2_380
+	codeAnswerBytes               = 1_340
 	codeCommentBytes              = 1_950
 	codeThreadResolveBytes        = 840
-	codeMergeBytes                = 1_990
-	codeEnqueueBytes              = 980
+	codeMergeBytes                = 2_040
+	codeEnqueueBytes              = 1_030
 	// A queued change as its home's queue worker takes it on: its train of one
 	// candidate, a check of the candidate's tip queued (its claim, its box and
 	// its ending carry a head's keys, priced at theirs), its landing, and its
@@ -433,7 +443,7 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.4 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.6 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"gitlet.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -637,21 +647,21 @@ var codeLogUnwritten = map[gitlet.OpKind]struct {
 // priced into the day or argued out of it here.
 var codeLogPushVias = map[gitlet.PushVia]string{
 	gitlet.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
-		"coding box's push (1 481 bytes alone in its record against 1 625, BenchmarkPushLogBytes), " +
+		"coding box's push (1 528 bytes alone in its record against 1 667, BenchmarkPushLogBytes), " +
 		"at which the day prices every one of the reference company's 3 000 a day, and a " +
 		"person's takes it less still, naming no run and no day",
 	gitlet.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
 		"(gitlet.Proposal.Validate), naming the executor that pushed, its harness and its work " +
 		"item's identity and project beside the turn — the push term's records (codeLogDay), at which the day " +
 		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
-		"(1 380 bytes alone in its record against a box's 1 625), and none of the reference company's " +
+		"(1 380 bytes alone in its record against a box's 1 667), and none of the reference company's " +
 		"3 000 is one; and an import's batches (crewlet gitlet import), up to gitlet.MaxCommandsPerPush " +
 		"refs a record, once a repository when a person imports it",
 	gitlet.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past gitlet.RefExpiry, on the " +
 		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +
 		"more, and up to gitlet.MaxCommandsPerPush of them a record with no pack, no run and no day — a " +
 		"deletion command takes its record under a tenth of a seat's push (a ref and two ids against " +
-		"1 625 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
+		"1 667 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
 		"fortnight earlier did, which the push term already prices",
 	gitlet.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (gitlet.OpMerge), which the day prices one a change " +
@@ -729,6 +739,10 @@ var routingReasons = map[string]string{
 	"lead":     "the effective lead of the repository's owner, which only a broken record routes",
 	"not_closed": "why a merged change's work item was left open, which only a close_settled that ended " +
 		"not_closed routes, and the reference queued change's item closes",
+	"working_for": "whom an agent's write was made for, which the writer stamps beside an agent's actor " +
+		"only where the routing wakes a seat (gitlet's routingFor): a home's own records carry none in this " +
+		"build, and a routing that tells nobody but its actor — the reference merge's, whose author merges " +
+		"it — wakes no seat to carry it to",
 }
 
 // routingAbsent is every key of a change's routing under prefix that a term's
@@ -824,7 +838,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
 			"pushes.pack.index_bytes", "pushes.pack.reverse_bytes", "pushes.pack.git_checksum",
 			"pushes.pack.objects", "pushes.introduced", "pushes.introduced_count",
-			"pushes.received_at", "pushes.day"},
+			"pushes.received_at", "pushes.day", "pushes.working_for"},
 		absent: map[string]string{
 			"pushes.principal.operator_id": "a person's credential, and a seat acts as itself",
 			"pushes.atomic": "--atomic, a client's flag for a push of several refs, and the measured " +
@@ -880,7 +894,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 	gitlet.OpChangeOpen: {
 		payload: reflect.TypeFor[gitlet.ChangeOpen](),
 		carried: []string{"repo_id", "change_id", "source_ref", "target_ref", "head", "title", "body",
-			"owner.kind", "owner.seat", "work_item", "turn_id"},
+			"owner.kind", "owner.seat", "work_item", "turn_id", "working_for"},
 		absent: absent(principalAbsent("owner", "kind", "seat"),
 			map[string]string{
 				"draft": "a draft's open, and the reference change opens ready",
@@ -897,10 +911,11 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		payload: reflect.TypeFor[gitlet.ReviewerRequest](),
 		carried: []string{"repo_id", "change_id", "by.kind", "by.seat", "request.handle", "request.kind",
 			"note", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
-			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item", "routing.requested"},
+			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item", "routing.requested",
+			"routing.working_for"},
 		absent: absent(principalAbsent("by", "kind", "seat"),
 			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item", "requested"),
+				"owner_kind", "work_item", "requested", "working_for"),
 			map[string]string{"withdraw": "an ask withdrawn, and the reference ask stands"}),
 	},
 	gitlet.OpRevise: {
@@ -969,10 +984,11 @@ var codeLogFields = map[gitlet.OpKind]struct {
 			"findings.line_end", "findings.commit_oid", "findings.blob_oid", "findings.severity",
 			"findings.category", "findings.title", "findings.body", "turn_id", "model", "routing.change_id",
 			"routing.change_ref", "routing.repo_name", "routing.title", "routing.actor", "routing.owner",
-			"routing.owner_kind", "routing.work_item", "routing.authors", "routing.verdict"},
+			"routing.owner_kind", "routing.work_item", "routing.authors", "routing.verdict",
+			"routing.working_for"},
 		absent: absent(principalAbsent("by", "kind", "seat"),
 			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item", "authors", "verdict"),
+				"owner_kind", "work_item", "authors", "verdict", "working_for"),
 			map[string]string{
 				"findings.suggestion": "a finding's suggested replacement, and the reference findings " +
 					"suggest none: at most its finding's own lines again",
@@ -987,10 +1003,10 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		carried: []string{"repo_id", "change_id", "by.kind", "by.seat", "findings.finding_id",
 			"findings.resolution", "routing.change_id", "routing.change_ref", "routing.repo_name",
 			"routing.title", "routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item",
-			"routing.raisers"},
+			"routing.raisers", "routing.working_for"},
 		absent: absent(principalAbsent("by", "kind", "seat"),
 			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item", "raisers"),
+				"owner_kind", "work_item", "raisers", "working_for"),
 			map[string]string{
 				"findings.note":   "an answer's note, and the reference answer resolves without one",
 				"findings.commit": "the commit an answer names as its fix, an object id where it names one",
@@ -1030,7 +1046,8 @@ var codeLogFields = map[gitlet.OpKind]struct {
 			"received_at", "principal.kind", "principal.seat", "principal.run.turn_id",
 			"principal.run.work_backend", "principal.run.work_key", "principal.run.model", "protected", "green",
 			"routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title", "routing.actor",
-			"routing.owner", "routing.owner_kind", "routing.work_item", "routing.authors", "routing.merged"},
+			"routing.owner", "routing.owner_kind", "routing.work_item", "routing.authors", "routing.merged",
+			"working_for"},
 		absent: absent(principalAbsent("principal", "kind", "seat", "run.turn_id", "run.work_backend",
 			"run.work_key", "run.model"),
 			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
@@ -1041,7 +1058,7 @@ var codeLogFields = map[gitlet.OpKind]struct {
 	gitlet.OpEnqueue: {
 		payload: reflect.TypeFor[gitlet.Enqueue](),
 		carried: []string{"repo_id", "entry_id", "change_id", "target_ref", "head_oid", "method",
-			"delete_source", "principal.kind", "principal.seat"},
+			"delete_source", "principal.kind", "principal.seat", "working_for"},
 		absent: absent(principalAbsent("principal", "kind", "seat"),
 			map[string]string{
 				"close_task": "a queued change closing its work item as it lands, a flag",

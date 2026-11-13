@@ -15,9 +15,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
 	"github.com/crewlet/crewlet/internal/org"
@@ -49,6 +51,9 @@ func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if answer, err = s.advisedOfAtlas(ctx, answer, now); err != nil {
+		return nil, err
+	}
 	return noticedWith(answer, fleet, fleetKnown, held, heldKnown, now), nil
 }
 
@@ -71,6 +76,49 @@ func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer
 		})
 	}
 	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), nil
+}
+
+// advisedOfAtlas is answer with what the company's atlas shows needs a
+// person, read as the question's asker reads the atlas. ONLY THIS QUESTION
+// ADDS IT: [Sources.advisorRead] is also what the insights sharer sends from,
+// and no entry of the atlas leaves the engine (ADR-0141). A node that serves
+// no atlas, or runs no company yet, has none to advise about.
+func (s Sources) advisedOfAtlas(ctx context.Context, answer advisor.Answer, now time.Time) (advisor.Answer, error) {
+	chart := s.organization()
+	if s.Atlas == nil || chart == nil {
+		return answer, nil
+	}
+	principal, err := caller(ctx, "advisor")
+	if err != nil {
+		return advisor.Answer{}, err
+	}
+	ev := advisor.AtlasEvidence{Until: now, Names: principal.Can(iam.GrantAtlas),
+		Holds: func(owner atlas.Owner) bool {
+			if owner.Kind == atlas.ExternalUnit {
+				return chart.UnitByRef(owner.Name) != nil
+			}
+			return chart.Role(owner.Name) != nil
+		}}
+	view, _, err := s.atlasView(ctx, "advisor")
+	if err != nil {
+		log.WarnContext(ctx, "advisor_atlas_unread", "error", err.Error())
+		ev.ViewUnread = true
+	}
+	ev.View = view
+	report, running, err := s.Atlas.AtlasSources(ctx, now)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "advisor_atlas_sources_unread", "error", err.Error())
+		ev.SourcesUnread = true
+	case !running:
+		ev.SourcesUnread = true
+	}
+	ev.Interval = time.Duration(report.RefreshIntervalSeconds) * time.Second
+	for _, source := range report.Sources {
+		ev.Sources = append(ev.Sources, advisor.AtlasSource{Kind: string(source.Kind),
+			Name: advisor.SurfaceName(source.Kind), LastCompleteAt: source.LastCompleteAt})
+	}
+	return advisor.WithAtlas(answer, ev), nil
 }
 
 // noticedWith is the answer with the notices its findings, the fleet's alarms

@@ -38,6 +38,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -183,6 +184,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AddCodeHoldsAddsToALiveRowOnly", testAddCodeHoldsAddsToALiveRowOnly},
 		{"RaiseCodeFloorRaisesTheCurrentLaunchOnly", testRaiseCodeFloorRaisesTheCurrentLaunchOnly},
 		{"ACheckoutIsGrantedToTheRunningJobOnly", testACheckoutIsGrantedToTheRunningJobOnly},
+		{"ARunWorksForOneRequester", testARunWorksForOneRequester},
 	}
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
@@ -5310,5 +5312,156 @@ func testACheckoutIsGrantedToTheRunningJobOnly(t *testing.T, s sandbox.PendingSt
 	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(past, "code@1:40", "")); err != nil ||
 		outcome != sandbox.GrantNotRunning {
 		t.Fatalf("a checkout on a run whose ending is decided = %q, %v, want not_running", outcome, err)
+	}
+}
+
+// A RUN WORKS FOR ONE REQUESTER (ADR-0109): whom its turn works for goes on its
+// row with its first checkout (PendingRun.CodeWorkingFor), and the box's pushes
+// and the change its collection opens carry it, so a later checkout made for
+// anybody else — another credential, a seat, nobody — is a conflict that
+// writes nothing; one made for the same credential holding fewer apps narrows
+// the row's to those, and one holding more never widens it. A launch that
+// carries a round on carries whom its job worked for with its grants, and one
+// given no repositories carries nobody. NOBODY IS ONE REQUESTER TOO: a run
+// whose grants were taken for nobody is never used for somebody, whichever
+// build wrote its row — its first checkout made for nobody, or its grants
+// carried on with no carrier at all, as a build before the carrier wrote every
+// row, here under a colleague's ceiling — so a checkout made for somebody
+// under the row's own ceiling is a conflict, of a repository the row holds
+// already as much as of another, and the row is as it was.
+//
+// Mutations: GrantRepo admitting a second requester — the seat's and nobody's
+// checkouts added, red; the narrowing left out — the row keeps doclet, red;
+// a reset keeping the previous job's — the relaunch given none reads the
+// credential, red; a row granted for nobody adopting whom a later checkout is
+// made for — the person's, the credential's and the colleague's checkouts
+// taken, red.
+func testARunWorksForOneRequester(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	web, api := runRepo("web", webID), runRepo("api", apiID)
+	ci := func(apps ...iam.Grant) *types.WorkingFor {
+		return &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: apps}
+	}
+	madeFor := func(repo sandbox.RunRepo, floor string, w *types.WorkingFor) sandbox.RepoGrant {
+		g := grantOf(repo, floor, "")
+		g.WorkingFor = w
+		return g
+	}
+	first := mustLaunched(t, s, run("t1"))
+	all := ci(iam.GrantWorklet, iam.GrantDoclet, iam.GrantGitlet)
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, madeFor(web, "code@1:10", all)); err != nil ||
+		outcome != sandbox.GrantAdded {
+		t.Fatalf("the first checkout for token:ci = %q, %v, want added", outcome, err)
+	}
+	if got := mustGet(t, s, "t1").CodeWorkingFor; !reflect.DeepEqual(got, all) {
+		t.Fatalf("the first checkout left the run working for %+v, want %+v", got, all)
+	}
+
+	// ANYBODY ELSE CONFLICTS, and the row is as it was.
+	for _, other := range []struct {
+		name string
+		w    *types.WorkingFor
+	}{
+		{"another credential", &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:deploy",
+			Apps: []iam.Grant{iam.GrantGitlet}}},
+		{"a seat", &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ceo"}},
+		{"nobody", nil},
+	} {
+		if _, outcome, err := s.GrantRepo(ctx, "t1", first, madeFor(api, "code@1:20", other.w)); err != nil ||
+			outcome != sandbox.GrantConflict {
+			t.Errorf("a checkout of api for %s = %q, %v, want a conflict", other.name, outcome, err)
+		}
+	}
+	if got := mustGet(t, s, "t1"); len(got.Repos) != 1 || !reflect.DeepEqual(got.CodeWorkingFor, all) {
+		t.Fatalf("after the conflicts the row holds %d repositories working for %+v, want web alone, for %+v",
+			len(got.Repos), got.CodeWorkingFor, all)
+	}
+
+	// THE SAME CREDENTIAL HOLDING FEWER APPS NARROWS IT, a checkout held
+	// again among them; HOLDING MORE NEVER WIDENS IT.
+	narrow := ci(iam.GrantWorklet, iam.GrantGitlet)
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, madeFor(web, "code@1:20", narrow)); err != nil ||
+		outcome != sandbox.GrantHeld {
+		t.Fatalf("web checked out again for token:ci holding fewer apps = %q, %v, want held", outcome, err)
+	}
+	if got := mustGet(t, s, "t1").CodeWorkingFor; !reflect.DeepEqual(got, narrow) {
+		t.Fatalf("a checkout for token:ci holding fewer apps left the run working for %+v, want %+v", got, narrow)
+	}
+	wider := ci(iam.GrantWorklet, iam.GrantDoclet, iam.GrantGitlet, iam.GrantAtlas)
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, madeFor(api, "code@1:20", wider)); err != nil ||
+		outcome != sandbox.GrantAdded {
+		t.Fatalf("api checked out for token:ci holding more apps = %q, %v, want added", outcome, err)
+	}
+	if got := mustGet(t, s, "t1").CodeWorkingFor; !reflect.DeepEqual(got, narrow) {
+		t.Fatalf("a checkout for token:ci holding more apps left the run working for %+v, want %+v, never "+
+			"widened", got, narrow)
+	}
+
+	// A ROUND CARRIED ON carries whom its job worked for with its grants;
+	// a relaunch given no repositories carries nobody.
+	carried := run("t1")
+	carried.Repos, carried.CodeFloor, carried.CodeWorkingFor = []sandbox.RunRepo{web}, "code@1:30", narrow
+	mustBeginLaunch(t, s, carried)
+	if got := mustGet(t, s, "t1").CodeWorkingFor; !reflect.DeepEqual(got, narrow) {
+		t.Fatalf("a round carried on works for %+v, want %+v", got, narrow)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1").CodeWorkingFor; got != nil {
+		t.Fatalf("a relaunch given no repositories works for %+v, want nobody", got)
+	}
+
+	// A SEAT IS ONE REQUESTER TOO: nobody after it conflicts.
+	second := mustLaunched(t, s, run("t2"))
+	ceo := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ceo"}
+	if _, outcome, err := s.GrantRepo(ctx, "t2", second, madeFor(web, "code@1:40", ceo)); err != nil ||
+		outcome != sandbox.GrantAdded {
+		t.Fatalf("a checkout for ceo = %q, %v, want added", outcome, err)
+	}
+	if _, outcome, err := s.GrantRepo(ctx, "t2", second, madeFor(api, "code@1:40", nil)); err != nil ||
+		outcome != sandbox.GrantConflict {
+		t.Fatalf("a checkout for nobody on a run working for ceo = %q, %v, want a conflict", outcome, err)
+	}
+	if got := mustGet(t, s, "t2").CodeWorkingFor; !reflect.DeepEqual(got, ceo) {
+		t.Fatalf("the run checked out for ceo works for %+v, want %+v", got, ceo)
+	}
+
+	// A RUN GRANTED FOR NOBODY IS NOT USED FOR SOMEBODY, whichever build
+	// wrote its row.
+	ownSeats := mustLaunched(t, s, run("t3"))
+	if _, outcome, err := s.GrantRepo(ctx, "t3", ownSeats, madeFor(web, "code@1:50", nil)); err != nil ||
+		outcome != sandbox.GrantAdded {
+		t.Fatalf("a checkout for nobody = %q, %v, want added", outcome, err)
+	}
+	older := run("t4")
+	older.Repos, older.CodeFloor, older.CodeCeiling = []sandbox.RunRepo{web}, "code@1:50", "designer"
+	carriedOn := mustBeginLaunch(t, s, older)
+	person := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	designer := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "designer"}
+	for _, granted := range []struct {
+		name, turn, launch, ceiling string
+		// somebody is whom a later checkout under ceiling is made for.
+		somebody []*types.WorkingFor
+	}{
+		{"by its first checkout, made for nobody", "t3", ownSeats, "", []*types.WorkingFor{person, all}},
+		{"by a build before the carrier, under a colleague's ceiling", "t4", carriedOn, "designer",
+			[]*types.WorkingFor{designer}},
+	} {
+		for _, w := range granted.somebody {
+			for _, repo := range []sandbox.RunRepo{web, api} {
+				g := grantOf(repo, "code@1:60", granted.ceiling)
+				g.WorkingFor = w
+				if _, outcome, err := s.GrantRepo(ctx, granted.turn, granted.launch, g); err != nil ||
+					outcome != sandbox.GrantConflict {
+					t.Errorf("a run granted for nobody %s checked %s out for %+v: %q, %v, want a conflict",
+						granted.name, repo.Repo, w, outcome, err)
+				}
+			}
+		}
+		if got := mustGet(t, s, granted.turn); !reflect.DeepEqual(got.Repos, []sandbox.RunRepo{web}) ||
+			got.CodeWorkingFor != nil || got.CodeCeiling != granted.ceiling || got.CodeFloor != "code@1:50" {
+			t.Errorf("the run granted for nobody %s holds %+v at floor %q under ceiling %q, working for %+v; "+
+				"want web alone at code@1:50 under %q, for nobody, as it was", granted.name, got.Repos,
+				got.CodeFloor, got.CodeCeiling, got.CodeWorkingFor, granted.ceiling)
+		}
 	}
 }

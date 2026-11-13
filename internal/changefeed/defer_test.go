@@ -844,7 +844,8 @@ func keptRecord(clk *clock) changefeed.Record {
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,
 // and the store keeps it; read a frame before the header says the record is
-// settled, and two are read.
+// settled, and two are read; leave the replayed wake unmarked, and it is
+// skipped past the seat's rate limit like a live one.
 func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -876,6 +877,13 @@ func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 		if want := (statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}); err != nil ||
 			at != want || w.Body["key"] != rec.Key {
 			t.Errorf("the replayed wake carries %q at %q (%v), want %s at %v", w.Body["key"], w.Trigger, err, rec.Key, want)
+		}
+		// MARKED AS A REPLAY, so the notification service paces it by the
+		// seat's rate valve rather than skip it: the entry it came from
+		// is dropped once the wake is published, so a skipped wake was
+		// lost with it.
+		if !w.Replayed {
+			t.Error("the replayed wake is not marked replayed")
 		}
 		if left := newer.kept(t); len(left) != 0 {
 			t.Errorf("%d entries are still kept after their wake was published", len(left))

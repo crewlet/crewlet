@@ -22,10 +22,58 @@ import (
 // tracker's rule and the knowledge base's, one rule across the strict domains.
 // It moves only with the table, and exactly to the table's highest version.
 //
+// # The base format
+//
+// Version 1 is what the domain landed on main with: every op, subject kind,
+// payload, field and value that crewlet#298 (merge commit 22280fcf93,
+// 2026-11-03) brought. Every build that carries the domain reads all of it,
+// and a doc here that calls a shape BASE FORMAT says so. Comments written
+// before that merge, the headers of the replicated migrations among them, rest
+// on "the domain's stated condition" instead: none of the domain was on main
+// yet, so no build of main, no image and no release carried it. The merge
+// ended the condition. What it guaranteed, that no build carrying the domain
+// has run without a shape, holds of every shape the merge brought and of
+// nothing added since: every push to main ships as the image of main, so a
+// build without a later shape may run beside one that has it.
+//
+// Anything a record gains from now on is a [versionedFields] row: a field, or
+// a new value of a closed set it carries (an op, a subject kind, a principal
+// kind, a push's way), which statelog.VersionedField.Equals names. An apply
+// that comes to derive rows from what a record already carries needs one too:
+// the record says so through the field or value that leads to them, or through
+// a field its writer stamps for them, and that takes the row. The row comes
+// with RecordVersion moved to its version, its line under "What each version
+// added", a Carrying record in the statelogtest candidate and, for a new op,
+// the op excepted from the stamp test's base-format loop. Without it, an older
+// build would apply the record short of what it gained, or fail on it where it
+// must retain it: at DecodeMutation's default arm for a new op, at Apply's
+// unknown-kind arm for a new kind. A record every build must read takes none:
+// a gate ([GateRecordVersion]), the barrier, the trimmed record and a
+// reanchor's generation are pinned at version 1, and [Encode] refuses one that
+// carries a versioned field.
+//
+// A field of an estate request or answer is no record's and takes no row: what
+// an older build makes of one is the estate wire's to decide (internal/estate,
+// wirerule.go).
+//
 // # What each version added
 //
-//   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 1: every shape this domain landed on main with.
+//   - 2: whom an agent's write was made for (ADR-0109): beside the actor its
+//     routings name ([ChangeRouting.WorkingFor]), and on an open, a reopen, a
+//     push's entry, a merge and an enqueue whatever they wake
+//     ([WorkingForVersion]).
+const RecordVersion = 2
+
+// WorkingForVersion is the version from which a record carries whom an
+// agent's write was made for — on a routing beside its actor, and on the
+// payloads the engine's later records read it back from (an open, a reopen, a
+// push's entry, a merge and an enqueue) — which the applier keeps on the rows
+// those writes make (code_revisions, code_pushes and code_queue's
+// working_for, the replicated migration
+// a_code_row_keeps_whom_an_agents_write_was_made_for). A record below it keeps
+// none, whatever it holds ([keptCarrier]).
+const WorkingForVersion = 2
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped
@@ -45,10 +93,28 @@ const GateRecordVersion = 1
 
 // versionedFields is every field a code record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-// EMPTY: every field is in the base format. Adding one is adding a row here,
-// moving [RecordVersion] to its version, and giving the statelogtest candidate
-// a record that carries it ([statelog.VersionedField]).
-var versionedFields = statelog.RecordFields{}
+// Adding one is adding a row here, moving [RecordVersion] to its version, and
+// giving the statelogtest candidate a record that carries it
+// ([statelog.VersionedField]).
+//
+// WHOM A WRITE WAS MADE FOR is version 2, on every op it rides: a routing's
+// beside its actor, which every payload about a change carries at
+// `mutation.routing` (a list of them, a queue's, walked element by element)
+// and a push's entries at `mutation.pushes.routing`; and the payload's own, an
+// open's, a reopen's, a merge's and an enqueue's at `mutation.working_for`
+// and a push entry's at `mutation.pushes.working_for`. The routing's row and
+// the payload's own are on EVERY OP rather than the ones that carry one
+// today, because every payload's working_for means one thing, and a later
+// payload that carries it is stamped by its row too.
+var versionedFields = statelog.RecordFields{
+	{Name: "ChangeRouting.WorkingFor", Since: WorkingForVersion,
+		Path: []string{"mutation", "routing", "working_for"}},
+	{Name: "PushEntry.Routing.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "routing", "working_for"}},
+	{Name: "Mutation.WorkingFor", Since: WorkingForVersion, Path: []string{"mutation", "working_for"}},
+	{Name: "PushEntry.WorkingFor", Since: WorkingForVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "working_for"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -105,37 +171,18 @@ const (
 	// on the repository's own subject ([Compaction]), decided by the
 	// repository's committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this op — none of the domain is on main, so no
-	// image and no release holds it — and while that is so, every build
-	// that meets a compact record reads it. Once a build without it has
-	// run, a new op is a versionedFields row (a new op is a VALUE of a field
-	// every record carries, statelog.VersionedField.Equals) and this one
-	// takes {Name: "RecordEnvelope.Op compact", Since: 2, Path:
-	// []string{"op"}, Equals: string(OpCompact)}, with RecordVersion at 2
-	// and its line under "What each version added", a Carrying record in
-	// the statelogtest candidate, and the op excepted from the stamp test's
-	// base-format loop — an older build would otherwise FAIL on the record
-	// at DecodeMutation's default arm rather than retain it. It is no gate:
-	// it removes no repository and drops no record.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
+	// so every build that meets a compact record reads it. It is no gate: it
+	// removes no repository and drops no record.
 	OpCompact OpKind = "compact"
 
 	// OpRetireSweep removes a repository's retired pack rows at or below a
 	// position the code-retention duty's clock put past RetireGrace, on the
 	// repository's own subject ([RetireSweep]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this op — none of the domain is on main, so no
-	// image and no release holds it — and while that is so, every build
-	// that meets a retire_sweep record reads it. Once a build without it has
-	// run, a new op is a versionedFields row (a new op is a VALUE of a field
-	// every record carries, statelog.VersionedField.Equals) and this one
-	// takes {Name: "RecordEnvelope.Op retire_sweep", Since: 2, Path:
-	// []string{"op"}, Equals: string(OpRetireSweep)}, with RecordVersion at
-	// 2 and its line under "What each version added", a Carrying record in
-	// the statelogtest candidate, and the op excepted from the stamp test's
-	// base-format loop — an older build would otherwise FAIL on the record
-	// at DecodeMutation's default arm rather than retain it. It is no gate.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
+	// so every build that meets a retire_sweep record reads it. It is no
+	// gate.
 	OpRetireSweep OpKind = "retire_sweep"
 
 	// OpExpungeRequest asks for an expunge of a repository's unreachable
@@ -144,17 +191,9 @@ const (
 	// maintainer serves it with as many begins and commits as its live packs
 	// need.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this op — none of the domain is on main, so no
-	// image and no release holds it — and while that is so, every build
-	// that meets an expunge_request record reads it. Once a build without it
-	// has run, a new op is a versionedFields row and this one takes {Name:
-	// "RecordEnvelope.Op expunge_request", Since: 2, Path: []string{"op"},
-	// Equals: string(OpExpungeRequest)}, with RecordVersion at 2 and its line
-	// under "What each version added", a Carrying record in the statelogtest
-	// candidate, and the op excepted from the stamp test's base-format loop —
-	// an older build would otherwise FAIL on the record at DecodeMutation's
-	// default arm rather than retain it. It is no gate.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
+	// so every build that meets an expunge_request record reads it. It is no
+	// gate.
 	OpExpungeRequest OpKind = "expunge_request"
 
 	// OpExpungeBegin begins an expunge: some of a repository's live packs
@@ -164,10 +203,7 @@ const (
 	// expunge is named, on the repository's own subject ([ExpungeBegin]),
 	// decided by the repository's committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// expunge_begin", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpExpungeBegin)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeBegin OpKind = "expunge_begin"
 
 	// OpExpungeCommit ends an expunge: the repository's dropping packs leave
@@ -176,10 +212,7 @@ const (
 	// the repository's own subject ([ExpungeCommit]), decided by the
 	// repository's committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// expunge_commit", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpExpungeCommit)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
 	// OpExpungeScan records that a scan on a repository's maintainer's own
@@ -188,10 +221,7 @@ const (
 	// node, on the repository's own subject, decided by the repository's
 	// committer alone. At most one a repository an ExpungeInterval.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// expunge_scan", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpExpungeScan)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpExpungeScan OpKind = "expunge_scan"
 
 	// OpImportChunk lands one chunk of a repository's import — packs fetched
@@ -199,20 +229,14 @@ const (
 	// push row `via import`, on the repository's own subject
 	// ([ImportChunk]), decided by its committer alone, in its turn.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// import_chunk", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpImportChunk)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpImportChunk OpKind = "import_chunk"
 
 	// OpImportDone ends a repository's import, making it active
 	// ([ImportDone]), on the repository's own subject, decided by its
 	// committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// import_done", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpImportDone)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpImportDone OpKind = "import_done"
 
 	// OpMirrorSync moves a pull mirror onto its source as its home fetched
@@ -220,30 +244,26 @@ const (
 	// subject, decided by its committer alone — or, carrying no pack and no
 	// command, records only that its home found the source level with it.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
-	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// mirror_sync", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpMirrorSync)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpExpungeRequest] is. It is no gate.
 	OpMirrorSync OpKind = "mirror_sync"
 
 	// OpRename claims a new name for a tool-managed repository on that name's
 	// subject, leaving the old one redirecting to it ([Rename]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: see [Rename], which names the
-	// versionedFields row it takes. It is no gate.
+	// BASE FORMAT, as [Rename] is. It is no gate.
 	OpRename OpKind = "rename"
 
 	// OpReleaseName frees a renamed repository's old name once its redirect
 	// has ended, on that name's subject ([ReleaseName]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: see [ReleaseName]. It is no gate.
+	// BASE FORMAT, as [ReleaseName] is. It is no gate.
 	OpReleaseName OpKind = "release_name"
 
 	// OpHold is a live turn's hold on a scratch repository, or on one seat's
 	// branch of any repository, on the repository's own subject, ordered
 	// against a deletion of what it holds ([Hold]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: see [Hold]. It is no gate.
+	// BASE FORMAT, as [Hold] is. It is no gate.
 	OpHold OpKind = "hold"
 
 	// OpChangeOpen opens a change (web!42) on a repository: its row, its
@@ -253,66 +273,42 @@ const (
 	// ([ChangeOpen]), decided by the repository's committer alone
 	// ([Committer.ProposeChange]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this op — none of the domain is on main, so no
-	// image and no release holds it — and while that is so, every build
-	// that meets a change_open record reads it. Once a build without it has
-	// run, a new op is a versionedFields row and this one takes {Name:
-	// "RecordEnvelope.Op change_open", Since: 2, Path: []string{"op"},
-	// Equals: string(OpChangeOpen)}, with RecordVersion at 2 and its line
-	// under "What each version added", a Carrying record in the statelogtest
-	// candidate, and the op excepted from the stamp test's base-format loop —
-	// an older build would otherwise FAIL on the record at DecodeMutation's
-	// default arm rather than retain it. It is no gate.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this op,
+	// so every build that meets a change_open record reads it. It is no gate.
 	OpChangeOpen OpKind = "change_open"
 
 	// OpChangeEdit sets a live change's title, its body or the work item it
 	// carries ([ChangeEdit]), on the repository's own subject, decided by its
 	// committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_edit", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeEdit)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeEdit OpKind = "change_edit"
 
 	// OpChangeDraft makes a live change a draft, or makes a draft ask to be
 	// merged ([ChangeDraft]), on the repository's own subject, decided by
 	// its committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_draft", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeDraft)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeDraft OpKind = "change_draft"
 
 	// OpChangeRetarget moves a live change's target to another live branch
 	// ([ChangeRetarget]), on the repository's own subject, decided by its
 	// committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_retarget", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeRetarget)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeRetarget OpKind = "change_retarget"
 
 	// OpChangeClose closes a live change without merging it ([ChangeClose]),
 	// on the repository's own subject, decided by its committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_close", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeClose)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeClose OpKind = "change_close"
 
 	// OpChangeReopen opens a closed change again ([ChangeReopen]) — with a
 	// revision of its own where its source branch moved while it was closed
 	// — on the repository's own subject, decided by its committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_reopen", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeReopen)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeReopen OpKind = "change_reopen"
 
 	// OpChangeLanded records a live change MERGED because its target came to
@@ -321,20 +317,14 @@ const (
 	// on the repository's own subject, decided by its committer alone against
 	// the change's head and the target row the home read.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// change_landed", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChangeLanded)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpChangeLanded OpKind = "change_landed"
 
 	// OpReviewers asks reviewers of a live change, or withdraws the ask
 	// ([ReviewerRequest]), on the CHANGE's own subject ([KindChange]),
 	// written by the repository's committing data node ([ChangeWriter]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// reviewers", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpReviewers)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpReviewers OpKind = "reviewers"
 
 	// OpComment says something on a change — a thread of its own, anchored
@@ -342,20 +332,14 @@ const (
 	// ([Comment]) — on the change's own subject, written by the repository's
 	// committing data node.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// comment", Since: 2, Path: []string{"op"}, Equals: string(OpComment)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpComment OpKind = "comment"
 
 	// OpThreadResolve marks a thread of a change's comments resolved, or
 	// open again ([ThreadResolve]), on the change's own subject, written by
 	// the repository's committing data node.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// thread_resolve", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpThreadResolve)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpThreadResolve OpKind = "thread_resolve"
 
 	// OpReview is a review of one revision of a change — a verdict, a
@@ -365,10 +349,7 @@ const (
 	// findings; a review of a later revision than a finding of its
 	// reviewer's supersedes that finding unless it carries it.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// review", Since: 2, Path: []string{"op"}, Equals: string(OpReview)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpReview OpKind = "review"
 
 	// OpFindingResolve answers findings of a change — resolved, won't fix
@@ -376,10 +357,7 @@ const (
 	// person ([FindingResolve]) — on the change's own subject, written by
 	// the repository's committing data node.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// finding_resolve", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpFindingResolve)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpFindingResolve OpKind = "finding_resolve"
 
 	// OpRevise records one revision's facts on its change — what its head is
@@ -389,10 +367,7 @@ const (
 	// the repository's committing data node for the home, which asks it and
 	// publishes nothing itself.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// revise", Since: 2, Path: []string{"op"}, Equals: string(OpRevise)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpRevise OpKind = "revise"
 
 	// OpMergeability records whether a change's head revision merges cleanly
@@ -402,10 +377,7 @@ const (
 	// on the change's own subject, written by the repository's committing
 	// data node for the home, which asks it and publishes nothing itself.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// mergeability", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpMergeability)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMergeability OpKind = "mergeability"
 
 	// OpMergeabilityKept records a re-evaluation of a change's mergeability
@@ -416,10 +388,7 @@ const (
 	// forms it in place of the [OpMergeability] its home sent, on the
 	// change's own subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// mergeability_kept", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpMergeabilityKept)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMergeabilityKept OpKind = "mergeability_kept"
 
 	// OpAsks settles a change's asks for review with its lifecycle — ending
@@ -428,49 +397,33 @@ const (
 	// change's own subject, written by the repository's committing data node
 	// for the home, which asks it and publishes nothing itself.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "RecordEnvelope.Op
-	// asks", Since: 2, Path: []string{"op"}, Equals: string(OpAsks)}, with
-	// the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpAsks OpKind = "asks"
 
 	// OpCheckQueued queues one attempt of one check of one commit, or records
 	// it skipped ([CheckQueued]), on the repository's CHECKS subject
 	// ([KindChecks]), its apply a join (checks.go).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as the checks subject states it;
-	// once a build without it has run, it takes {Name: "MutationRecord.Op
-	// check_queued", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCheckQueued)}, with the same companions as [OpChangeOpen]. It
-	// is no gate.
+	// BASE FORMAT, as the checks subject is (checks.go). It is no gate.
 	OpCheckQueued OpKind = "check_queued"
 
 	// OpCheckStarted claims an attempt for a runner, or names the box its
 	// holder made ([CheckStarted]), on the repository's checks subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// check_started", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCheckStarted)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckStarted OpKind = "check_started"
 
 	// OpCheckFinished ends an attempt ([CheckFinished]), on the repository's
 	// checks subject, and removes the repository's rows past [CheckHistory].
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// check_finished", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCheckFinished)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckFinished OpKind = "check_finished"
 
 	// OpChecksSweep removes a repository's check rows past [CheckHistory]
 	// where no check of its own ends to ([ChecksSweep]), on its checks
 	// subject — the code-retention duty's.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// checks_sweep", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpChecksSweep)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpChecksSweep OpKind = "checks_sweep"
 
 	// OpCheckDispatched records a repository's home's reading of a target's
@@ -480,10 +433,7 @@ const (
 	// on, and code_checks' rows the attempts make, each as a check_queued
 	// record's would (checksdispatch.go).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// check_dispatched", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCheckDispatched)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpCheckQueued] is. It is no gate.
 	OpCheckDispatched OpKind = "check_dispatched"
 
 	// OpMerge merges a change into its target ([Merge]), on the repository's
@@ -492,30 +442,21 @@ const (
 	// RECORD merges the change, moves the target onto the merge's commit and
 	// lands that move as a push.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op merge",
-	// Since: 2, Path: []string{"op"}, Equals: string(OpMerge)}, with the same
-	// companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMerge OpKind = "merge"
 
 	// OpEnqueue puts a change in its target's merge queue ([Enqueue]), on the
 	// repository's own subject, decided by its committer alone through the
 	// change's merge gate ([Committer.ProposeQueue]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// enqueue", Since: 2, Path: []string{"op"}, Equals: string(OpEnqueue)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpEnqueue OpKind = "enqueue"
 
 	// OpDequeue takes a live entry out of its target's merge queue at a
 	// principal's ask ([Dequeue]), on the repository's own subject, decided by
 	// its committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// dequeue", Since: 2, Path: []string{"op"}, Equals: string(OpDequeue)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpDequeue OpKind = "dequeue"
 
 	// OpMarks moves one person's marks over their code notices by one
@@ -524,10 +465,7 @@ const (
 	// person's own subject ([KindPerson]), written by whichever data node
 	// the mark is asked of ([Marks]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op marks",
-	// Since: 2, Path: []string{"op"}, Equals: string(OpMarks)}, with the
-	// same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpMarks OpKind = "marks"
 
 	// OpCandidate records a queue's TRAIN ([Candidate]): the
@@ -536,10 +474,7 @@ const (
 	// their objects are stored in — on the repository's own subject, decided
 	// by its committer alone ([Committer.ProposeQueue]).
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// candidate", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCandidate)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpCandidate OpKind = "candidate"
 
 	// OpEject puts live entries out of their queue ([Eject]) — a check failed
@@ -547,10 +482,7 @@ const (
 	// longer holds — on the repository's own subject, decided by its
 	// committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op eject",
-	// Since: 2, Path: []string{"op"}, Equals: string(OpEject)}, with the
-	// same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpEject OpKind = "eject"
 
 	// OpLand lands a queue's entries on their target ([Land]) — a train's
@@ -559,29 +491,20 @@ const (
 	// as the merger, on the repository's own subject, decided by its
 	// committer alone.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op land",
-	// Since: 2, Path: []string{"op"}, Equals: string(OpLand)}, with the same
-	// companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpLand OpKind = "land"
 
 	// OpGreen moves a protected target's green row onto a landing whose
 	// required checks passed ([Green]), on the repository's own subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op green",
-	// Since: 2, Path: []string{"op"}, Equals: string(OpGreen)}, with the
-	// same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpGreen OpKind = "green"
 
 	// OpBroken marks a landing above its target's green row broken, a
 	// required check of it having failed ([Broken]), on the repository's own
 	// subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// broken", Since: 2, Path: []string{"op"}, Equals: string(OpBroken)},
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpBroken OpKind = "broken"
 
 	// OpQueueSweep removes a repository's ended queue entries and its
@@ -589,10 +512,7 @@ const (
 	// [QueueHistory], where no record of its queues' own does ([QueueSweep])
 	// — the code-retention duty's, on the repository's own subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// queue_sweep", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpQueueSweep)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpQueueSweep OpKind = "queue_sweep"
 
 	// OpCloseSettled settles the closes landed queue entries owe their
@@ -600,10 +520,7 @@ const (
 	// turn of their home ended in one record ([CloseSettled]) — made as each
 	// entry's enqueuer, recorded on the repository's own subject.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
-	// a build without it has run, it takes {Name: "MutationRecord.Op
-	// close_settled", Since: 2, Path: []string{"op"}, Equals:
-	// string(OpCloseSettled)}, with the same companions. It is no gate.
+	// BASE FORMAT, as [OpChangeOpen] is. It is no gate.
 	OpCloseSettled OpKind = "close_settled"
 )
 
@@ -685,21 +602,8 @@ const (
 	// through a seat's credential. Recorded as the repository's creator where
 	// it creates one (code_repos.created_by_kind).
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this kind — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a record a seat decided reads it. Once a build without it
-	// has run, a record a seat decided takes, for each op such a record can
-	// carry (create, rename, settings, delete, restore, hold), {Name:
-	// "MutationRecord.ActorKind agent", Since: 2, Op: <the op>, Path:
-	// []string{"actor_kind"}, Equals: string(ActorAgent)} in versionedFields,
-	// with RecordVersion at 2, its line under "What each version added" and a
-	// Carrying record in the statelogtest candidate — such a build would
-	// record a seat's create as a repository nobody of any kind it knows
-	// made. A reanchor's generation takes none: every build reads it for ever
-	// ([RecordEnvelope.readByEveryBuild], so [Encode] would refuse it a
-	// versioned field), and an older build files its author from the
-	// payload's By alone, which names the seat as this build does.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// kind, so every build that meets a record a seat decided reads it.
 	ActorAgent ActorKind = "agent"
 )
 

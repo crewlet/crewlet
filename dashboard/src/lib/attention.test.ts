@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, test } from "vitest";
+import type { AtlasReviewItem } from "~/contract/atlas.ts";
 import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
@@ -72,9 +73,39 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     notices: [],
     findings: [],
     setupUnread: [],
+    atlasDrift: [],
     ...over,
   };
 }
+
+/** A value ada set in the atlas, which a newer read by an integration differs from. */
+const DRIFT_ENTRY = {
+  id: "0192f3a0-7c1e-7b3a-9d2e-5f6a7b8c9d0e",
+  name: "web-1",
+} as AtlasReviewItem["entry"];
+const DRIFT: AtlasReviewItem = {
+  id: `${DRIFT_ENTRY.id}/disagreement/fact/address`,
+  kind: "disagreement",
+  entry: DRIFT_ENTRY,
+  fact: {
+    fact: "address",
+    value: { type: "ip", text: "10.0.4.12" },
+    source: { kind: "person", name: "ada" },
+    confidence: "asserted",
+    word: "confirmed",
+    observed_at: "2026-01-01T09:00:00Z",
+    standing: "contested",
+    others: [
+      {
+        value: { type: "ip", text: "10.0.4.19" },
+        source: { kind: "integration", name: "aws" },
+        confidence: "verified",
+        observed_at: "2026-01-01T10:00:00Z",
+      },
+    ],
+  } as AtlasReviewItem["fact"],
+  since: "2026-01-01T10:00:00Z",
+};
 
 /** One MCP alarm as `mcp_servers_status` carries it, on one server. */
 function mcpAlarm(
@@ -407,6 +438,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(
       input({
         mcpAlarms: [mcpAlarm("mcp_server_failing", "github")],
+        atlasDrift: [DRIFT],
         notices: [
           SETUP_NOTICE,
           alarmNotice("backup_age"),
@@ -953,4 +985,20 @@ test("a held conversation is a row that opens its item", () => {
     "dev",
   ]);
   expect(conditionsToDecide(queue)).toContainEqual(item);
+});
+
+test("a newer report that differs from what the reader set is theirs to decide, and opens the entry", () => {
+  const queue = attentionQueue(input({ atlasDrift: [DRIFT] }));
+  const item = queue.find((a) => a.id === `atlas-drift-${DRIFT.id}`);
+  expect(item?.subject).toBe("atlas");
+  expect(item?.title).toBe("web-1: a newer report differs from what you set");
+  expect(item?.detail).toBe(
+    'You set "10.0.4.12". A newer report says "10.0.4.19". The atlas shows both until somebody decides.',
+  );
+  expect(item?.path).toEqual(["company", "atlas", DRIFT_ENTRY.id]);
+  expect(item?.query).toEqual({ tab: "sources" });
+  expect(item?.at).toBe("2026-01-01T10:00:00Z");
+  expect(conditionsToDecide(queue)).toContainEqual(item);
+  // NOTHING ELSE OF THE REVIEW REACHES AN INBOX: with no drift there is no row.
+  expect(attentionQueue(input()).some((a) => a.subject === "atlas")).toBe(false);
 });

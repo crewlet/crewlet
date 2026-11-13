@@ -209,6 +209,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "atlas-entry": "atlas",
   "atlas-changes": "atlas",
   "atlas-review": "atlas",
+  "atlas-sources": "atlas",
   budgets: "spend",
   "worklet-projects": "worklet",
   "worklet-tasks": "worklet",

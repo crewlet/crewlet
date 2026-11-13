@@ -118,25 +118,27 @@ func (q *Queue) nakCeiling() time.Duration {
 // not all come back on the same second.
 const nakJitter = 0.2
 
-// nakBackoff is how long the nth redelivery of a failing message waits: its
+// nakBackoff is how long the nth spaced return of a message waits: its
 // [Queue.nakSpacing], spread by [nakJitter].
-func (q *Queue) nakBackoff(failures uint64) time.Duration {
-	return backoff.Jitter(q.nakSpacing(failures), nakJitter)
+func (q *Queue) nakBackoff(n uint64) time.Duration {
+	return backoff.Jitter(q.nakSpacing(n), nakJitter)
 }
 
-// nakSpacing is the wait the nth redelivery is spread around.
+// nakSpacing is the wait the nth spaced return is spread around.
 //
-// The first failure waits [Queue.nakDelay] and each one after that waits
-// twice as long, up to [Queue.nakCeiling]. failures is how many times THIS
-// MESSAGE HAS FAILED, so the first is 1. See [attachment.failures] for why
-// that is not JetStream's delivery count.
+// The first waits [Queue.nakDelay] and each one after that waits twice as
+// long, up to [Queue.nakCeiling]. n counts from 1, and what it counts is the
+// caller's: for a FAILURE, how many times this message has failed HERE — see
+// [attachment.failures] for why that is not JetStream's delivery count — and
+// for a PASS, that delivery count itself — see [attachment.pass] for why it
+// is not the failures.
 //
 // The arithmetic is [backoff.Doubling]'s, which is what keeps a count off the
 // wire from overflowing into a negative wait. The count is clamped to an int
 // before it gets there, because a uint64 past the int range would convert to
-// a negative attempt and read as the first failure rather than the latest.
-func (q *Queue) nakSpacing(failures uint64) time.Duration {
-	return backoff.Doubling(int(min(failures, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
+// a negative attempt and read as the first return rather than the latest.
+func (q *Queue) nakSpacing(n uint64) time.Duration {
+	return backoff.Doubling(int(min(n, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 
 // attachment is ONE consumer this process runs for a (topic, group) pair.
@@ -247,28 +249,85 @@ type attachment struct {
 	// where the alternative was a slow first one. The budget is unchanged
 	// and still counts deliveries, because dead-lettering is about how
 	// many times a message has been handed to anybody at all.
-	failures   map[uint64]uint64
+	//
+	// # And whether a failure here was the message's own
+	//
+	// Beside the count, which a node's own failure ([queue.NakNode]) moves
+	// as much as the message's — both are spaced — each record says whether
+	// one of the failures here was the MESSAGE's, and whether this
+	// attachment wrote its failure mark on the broker (failuremarks.go):
+	// what this attachment knows of where the message is kept should a
+	// return spend its budget, without asking the broker.
+	failures   map[uint64]*failureRecord
 	failuresMu sync.Mutex
 }
 
-// failed records one failure of a message and reports the count.
-func (a *attachment) failed(seq uint64) uint64 {
+// failureRecord is what one attachment knows of one message's failures
+// ([attachment.failures]).
+type failureRecord struct {
+	// count is how many times the message failed here, the node's own
+	// failures included: what its spacing doubles by.
+	count uint64
+	// itself is whether one of them was the message's own
+	// ([queue.Result.FailsMessage]).
+	itself bool
+	// mark is the sequence the failure mark this attachment wrote of the
+	// message is stored at ([Queue.markFailure]), zero for none.
+	mark uint64
+}
+
+// failed records one failure of a message and reports the count; itself says
+// whether it was the message's own, and the record answers whether its mark is
+// still to be written — the message's own failure, here for the first time or
+// with the mark not written yet.
+func (a *attachment) failed(seq uint64, itself bool) (count uint64, mark bool) {
 	a.failuresMu.Lock()
 	defer a.failuresMu.Unlock()
 	if a.failures == nil {
-		a.failures = map[uint64]uint64{}
+		a.failures = map[uint64]*failureRecord{}
 	}
-	a.failures[seq]++
-	return a.failures[seq]
+	rec := a.failures[seq]
+	if rec == nil {
+		rec = &failureRecord{}
+		a.failures[seq] = rec
+	}
+	rec.count++
+	rec.itself = rec.itself || itself
+	return rec.count, itself && rec.mark == 0
+}
+
+// marked records that this attachment wrote seq's failure mark, stored at
+// mark.
+func (a *attachment) marked(seq, mark uint64) {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	if rec := a.failures[seq]; rec != nil {
+		rec.mark = mark
+	}
+}
+
+// failedItself reports whether a failure of seq here was the message's own.
+func (a *attachment) failedItself(seq uint64) bool {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	rec := a.failures[seq]
+	return rec != nil && rec.itself
 }
 
 // settled forgets a message that will not come back — acked, terminated, or
-// handed on. Without it the map would hold every sequence this attachment
-// ever failed for the life of the seat.
-func (a *attachment) settled(seq uint64) {
+// handed on — and answers where the failure mark this attachment wrote of it
+// is stored, zero for none, which its settling deletes. Without it the map
+// would hold every sequence this attachment ever failed for the life of the
+// seat.
+func (a *attachment) settled(seq uint64) (mark uint64) {
 	a.failuresMu.Lock()
 	defer a.failuresMu.Unlock()
+	rec := a.failures[seq]
 	delete(a.failures, seq)
+	if rec == nil {
+		return 0
+	}
+	return rec.mark
 }
 
 func (a *attachment) setQuiesced(v bool) { a.quiesced.Store(v) }
@@ -278,6 +337,27 @@ func (a *attachment) setPaused(v bool)   { a.paused.Store(v) }
 func (a *attachment) blocked() bool {
 	return a.detached.Load() || a.quiesced.Load() || a.paused.Load() || a.q.held(a.key)
 }
+
+// blockedBy names what blocks this consumer ([attachment.blocked]): the reason
+// its own hand-back of a delivery it would not hand over is logged with, should
+// that hand-back spend the delivery's budget.
+func (a *attachment) blockedBy() string {
+	switch {
+	case a.detached.Load():
+		return "detached"
+	case a.quiesced.Load():
+		return "quiesced"
+	case a.paused.Load():
+		return "paused"
+	case a.q.held(a.key):
+		return "held"
+	}
+	return "blocked"
+}
+
+// handBackStopping is the reason a delivery is handed back with when the
+// attachment stops with it in hand: teardown, its context ended.
+const handBackStopping = "stopping"
 
 // reachedTop records that the consume loop stands at the top of a cycle, with
 // its gate shut when blocked: everything it fetched before is dispatched or
@@ -878,18 +958,31 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	// A hold taken while this message was in flight must still stop it.
 	// The engine pauses a seat's inbox precisely to keep a fresh turn from
 	// starting, and a message already fetched is exactly what would start
-	// one. Returning it costs nothing: this consumer picks it up again
-	// when the hold lifts, or a successor does.
+	// one. Returning it costs a delivery, as every return does: this
+	// consumer picks it up again when the hold lifts, or a successor does.
+	//
+	// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs: the hand-back
+	// that spends the message's budget keeps its dead letter, a write that
+	// crosses a link at its bytes' pace, and a drain that did not count it
+	// stopped the queue under the keep ([queue.EventQueue.WaitForHandlers]).
 	if a.blocked() {
-		a.handBack(ctx, msg)
+		a.q.beginHandler()
+		a.handBack(ctx, msg, ev, a.blockedBy())
+		a.q.endHandler()
 		return
 	}
 	a.q.beginHandler()
 	held := delivery{msg: msg, ev: ev}
 	done := a.runningOn(ev)
 	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
-	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, not only until
+	// it returned: settling a return that spends the budget is a dead
+	// letter's keep, a write that waits as long as its bytes take to cross
+	// a link, and a drain that read the delivery as finished once the
+	// handler returned stopped the queue under it, the copy lost
+	// ([queue.EventQueue.WaitForHandlers]).
+	a.q.endHandler()
 	done()
 }
 
@@ -1004,19 +1097,21 @@ func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event,
 
 // apply turns a handler outcome into broker operations.
 func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Event, res queue.Result) {
-	queue.LogResult(a.log, a.key.topic, a.key.group, ev, res)
+	queue.LogResult(ctx, a.log, a.key.topic, a.key.group, ev, res)
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		// FORGOTTEN FIRST. A message that succeeded after failing twice
 		// must not carry those two failures into a later redelivery of
 		// the same sequence, and the map would otherwise hold every
 		// sequence this seat ever failed for the life of the attachment.
+		var mark uint64
 		if md, err := msg.Metadata(); err == nil {
-			a.settled(md.Sequence.Stream)
+			mark = a.settled(md.Sequence.Stream)
 		}
 		if err := msg.Ack(); err != nil {
 			a.log.Warn("ack_failed", "error", err.Error())
 		}
+		a.clearMark(ctx, mark)
 
 	case queue.OutcomeDefer:
 		// Defer means: this process has lost the right to do this work.
@@ -1033,15 +1128,55 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// Never republish instead: a republished event is a NEW message,
 		// and the completion ledger's idempotency plus the batch layer's
 		// aging both key on the identity a Nak preserves.
-		a.handBack(ctx, msg)
+		a.handBack(ctx, msg, ev, res.Reason)
 		// Quiescing is the other half of a deferral: continuing to fetch
 		// would hand this process more work it has equally lost the
 		// right to do.
 		a.setQuiesced(true)
 
 	case queue.OutcomeNak:
-		a.nakOrDeadLetter(ctx, msg)
+		a.nakOrDeadLetter(ctx, msg, ev, res.FailsMessage())
+
+	case queue.OutcomePass:
+		// Neither a failure nor a deferral, and the attachment goes on
+		// taking mail: see [attachment.pass].
+		a.pass(ctx, msg, ev, res.Reason)
 	}
+}
+
+// pass returns a message this node will not handle and a peer may
+// ([queue.OutcomePass]) — through the budget boundary every return crosses,
+// so a message no node reads is dead-lettered with its copy rather than handed
+// round for ever, and spaced as a failure is, by [Queue.nakBackoff].
+//
+// AS NO FAILURE, should this return be the one that spends the budget: its copy
+// is kept on its group's unhandled subject, apart from the group's poison,
+// which is where a reader that can handle it finds it again — unless one of
+// its deliveries failed as itself ([queue.RetiredTo]) — and its line names
+// reason.
+//
+// BY ITS DELIVERY COUNT, NOT [attachment.failures]. A pass is no failure, so
+// counting it as one would start this node's first genuine failure of the
+// message up the curve, which is what that map exists to prevent; and the count
+// that has to grow is the one every node shares. A group's older nodes passing
+// a message from one to the next would each bring it back at their own count:
+// four of them taking it in turn wait a second four times, then two seconds
+// four times, and give it up in about four minutes rather than the ten its
+// budget spans.
+//
+// NOT QUIESCED, which is the whole difference from a deferral: nothing is
+// wrong with this node, only with this message here, so the attachment keeps
+// taking the rest of its mail while the message waits out its spacing.
+func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
+	// A MESSAGE WHOSE METADATA WILL NOT PARSE is passed at the shortest
+	// spacing, for [attachment.nakOrDeadLetter]'s reason: returnMsg reads
+	// the same metadata for the budget and treats an unreadable one as "not
+	// yet spent".
+	var delivered uint64 = 1
+	if md, err := msg.Metadata(); err == nil {
+		delivered = md.NumDelivered
+	}
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(delivered), queue.OutcomePass, reason, false)
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
@@ -1053,19 +1188,64 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 // this is where the dead-letter subject is known and the message body is in
 // hand. MaxDeliver stays configured as a backstop so a bug here cannot
 // produce an infinite loop.
-func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
+//
+// itself is whether the failure is the MESSAGE's own ([queue.Result.FailsMessage]),
+// rather than this node's ([queue.NakNode]): the message's own is marked on
+// the broker, once, before the message goes back ([attachment.markFailed]), so
+// whichever member retires it keeps it with the poison.
+func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev *events.Event,
+	itself bool) {
+
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE STILL GOES BACK, at the
 	// shortest spacing: the alternative is dropping a delivery over a
 	// header, and returnMsg reads the same metadata for the budget and
 	// already treats an unreadable one as "not yet spent".
 	var failures uint64 = 1
 	if md, err := msg.Metadata(); err == nil {
-		failures = a.failed(md.Sequence.Stream)
+		var mark bool
+		failures, mark = a.failed(md.Sequence.Stream, itself)
+		if mark {
+			a.markFailed(ctx, md)
+		}
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(failures))
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(failures), queue.OutcomeNak, "", itself)
 }
 
-// handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown.
+// markFailed writes the failure mark of the message md describes, which failed
+// as itself here (failuremarks.go), BEFORE the message goes back, so the member
+// its next delivery reaches reads it. A mark that could not be written is
+// logged and written again at the message's next failure here; meanwhile a
+// member that retires it keeps it with the unhandled deliveries, the safe
+// direction. Under ctx's values without its cancellation, as a keep is
+// ([attachment.retire]): a stop is no reason to forget a failure.
+func (a *attachment) markFailed(ctx context.Context, md *jetstream.MsgMetadata) {
+	mark, err := a.q.markFailure(context.WithoutCancel(ctx), failureSubject(a.key, md))
+	if err != nil {
+		a.log.WarnContext(ctx, "failure_mark_unkept", "seq", md.Sequence.Stream, "error", err.Error(),
+			"detail", "the message failed as itself, and the member that retires it may not know: "+
+				"kept with the unhandled deliveries rather than the poison, should its budget be "+
+				"spent before a failure here writes the mark")
+		return
+	}
+	a.marked(md.Sequence.Stream, mark)
+}
+
+// clearMark deletes the failure mark stored at mark, zero for none, of a
+// message now settled: nothing will read it again. One that could not be
+// deleted — gone already, replaced by another member's — goes with the marks'
+// stream's age.
+func (a *attachment) clearMark(ctx context.Context, mark uint64) {
+	if mark == 0 {
+		return
+	}
+	if err := a.q.clearFailure(context.WithoutCancel(ctx), mark); err != nil {
+		a.log.DebugContext(ctx, "failure_mark_undeleted", "mark", mark, "error", err.Error(),
+			"detail", "the settled message's failure mark goes with its stream's age")
+	}
+}
+
+// handBack returns a HEALTHY message, ev — a deferral, a hold, a pause,
+// teardown — for reason, which is logged should this return spend its budget.
 //
 // IMMEDIATE, and that is the whole reason a deferral NAKs rather than letting
 // the ack timer expire: measured at about a millisecond, where the timer would
@@ -1073,28 +1253,29 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 // goes through the budget boundary, because a Nak spends a delivery whatever
 // it means — so a message whose deliveries went on handoffs is dead-lettered
 // with a line rather than discarded by the broker's backstop in silence.
-func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg) {
-	a.returnMsg(ctx, msg, 0)
+func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
+	a.returnMsg(ctx, msg, ev, 0, queue.OutcomeDefer, reason, false)
 }
 
 // returnMsg is the one place a message goes back, and the one place the
-// delivery budget is spent. delay 0 returns it immediately.
-func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration) {
+// delivery budget is spent. delay 0 returns it immediately. ev is the event it
+// carries, for the line; spent is the return it is — a failure (Nak), a
+// hand-back (Defer) or a pass — and reason why, which its line says should
+// this return spend its budget; itself is whether this return is a failure of
+// the message's own, which with the message's earlier failures decides where
+// its dead letter is kept ([attachment.retire]).
+//
+// A DELIVERY AT OR PAST THE BUDGET IS RETIRED, not only the budget's own: the
+// broker's backstop stands [keepRetries] deliveries past it ([backstopFor]),
+// so a message whose keep failed, or whose budget's delivery a node killed or
+// stopped never settled, is delivered again — to a handler first, which may
+// handle it — and retired by whichever return meets it there.
+func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *events.Event,
+	delay time.Duration, spent queue.Outcome, reason string, itself bool) {
+
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
-		// Terminated here, so nothing will redeliver this sequence and
-		// its failure count is dead weight.
-		a.settled(md.Sequence.Stream)
-		a.log.Error("dead_lettered", "deliveries", md.NumDelivered)
-		if err := a.q.deadLetter(ctx, a.key.topic, a.key.group, msg.Data()); err != nil {
-			a.log.Error("dead_letter_failed", "error", err.Error())
-		}
-		// Term, not Ack: the message is being discarded from this
-		// subscription deliberately, and Term says so to anyone reading
-		// consumer state.
-		if err := msg.Term(); err != nil {
-			a.log.Warn("term_failed", "error", err.Error())
-		}
+		a.retire(ctx, msg, ev, md, spent, reason, itself)
 		return
 	}
 	if delay <= 0 {
@@ -1106,6 +1287,135 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 	if err := msg.NakWithDelay(delay); err != nil {
 		a.log.Warn("nak_failed", "error", err.Error())
 	}
+}
+
+// retire keeps msg, the delivery md describes, as its subscription's dead
+// letter once spent — the return it was answered with — spent its budget, and
+// terminates it: on the subject the contract keeps the copy of a message that
+// did or did not fail as itself at any delivery ([queue.RetiredTo]) — with the
+// group's poison, or with its unhandled deliveries, where a reader that can
+// handle it now finds it.
+//
+// WHETHER IT FAILED IS THE MESSAGE'S, NOT THIS RETURN'S ([attachment.failedAsItself]):
+// this return a failure of its own, a failure of it here before, or the mark a
+// member it failed on wrote on the broker.
+//
+// TERMINATED ONLY ONCE THE COPY IS KEPT. A keep that fails — refused, cut by a
+// stop that closed the connection, a dead-letter stream electing its leader —
+// leaves the message to the broker, returned at the failure path's spacing,
+// and its next delivery keeps the copy: the broker's backstop stands
+// [keepRetries] deliveries past the budget for that ([backstopFor]), so the
+// delivery that spent the budget is not the broker's last. Terminated after a
+// failed keep, as it was, the message was gone with no copy, though nothing
+// was wrong with it but the moment. Only a keep that fails at the backstop's
+// own delivery, which nothing follows, loses the copy, said as such.
+//
+// KEPT UNDER THE MESSAGE'S OWN IDENTITY ([letterOf]), so a keep made again
+// after one whose answer was lost — the entry stored, the error all the
+// keeper heard — is stored as nothing and answered already kept: one entry,
+// however many keeps of it.
+//
+// KEPT WHETHER OR NOT THE LOOP IS STOPPING, under ctx's values without its
+// cancellation: a stop cancels the consume loop's context, and the copy of a
+// message whose last delivery a stop met — a hand-back of a batch taken as the
+// queue stopped, or a pass or a failure handled just before — was kept under
+// that context and lost with it, though nothing was wrong with the keep. The
+// write is bounded all the same, by its own budget ([Queue.write]); a drain
+// waits for it, since a delivery is in flight until its return is settled
+// ([attachment.dispatchOne]); and so does a stop, which closes the connection
+// only once no keep is in flight ([Queue.awaitKeeps]).
+//
+// ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), once the copy is kept,
+// never one spelled here, so both backends name one situation alike.
+func (a *attachment) retire(ctx context.Context, msg jetstream.Msg, ev *events.Event,
+	md *jetstream.MsgMetadata, spent queue.Outcome, reason string, itself bool) {
+
+	a.q.keeping.Begin()
+	defer a.q.keeping.End()
+	keep := context.WithoutCancel(ctx)
+	failed, found := a.failedAsItself(keep, md, itself)
+	subject := queue.RetiredTo(a.key.topic, a.key.group, failed)
+	if err := a.q.deadLetter(keep, subject, letterOf(md), msg.Data()); err != nil {
+		a.keepFailed(ctx, msg, md, subject, err)
+		return
+	}
+	// Terminated here, so nothing will redeliver this sequence and its
+	// failure count is dead weight.
+	own := a.settled(md.Sequence.Stream)
+	queue.LogDeadLettered(ctx, a.log, a.key.topic, a.key.group, ev,
+		int(min(md.NumDelivered, math.MaxInt32)), spent, reason, failed)
+	// Term, not Ack: the message is being discarded from this
+	// subscription deliberately, and Term says so to anyone reading
+	// consumer state.
+	if err := msg.Term(); err != nil {
+		a.log.Warn("term_failed", "error", err.Error())
+	}
+	// ITS MARKS, whoever wrote them: the message is settled.
+	a.clearMark(ctx, own)
+	if found != own {
+		a.clearMark(ctx, found)
+	}
+}
+
+// failedAsItself reports whether the message md describes failed as itself at
+// any of its deliveries: this return a failure of its own (itself), a failure
+// of it here before ([attachment.failedItself]), or a mark on the broker that
+// the member it failed on wrote (failuremarks.go), read only when neither
+// answers — and, where it read one, where that mark is stored. A mark the
+// broker could not be asked for answers no: the message is kept with the
+// unhandled deliveries, the safe direction, and the line says so.
+func (a *attachment) failedAsItself(ctx context.Context, md *jetstream.MsgMetadata,
+	itself bool) (failed bool, found uint64) {
+
+	if itself || a.failedItself(md.Sequence.Stream) {
+		return true, 0
+	}
+	found, marked, err := a.q.failureMarked(ctx, failureSubject(a.key, md))
+	if err != nil {
+		a.log.WarnContext(ctx, "failure_mark_unread", "seq", md.Sequence.Stream, "error", err.Error(),
+			"detail", "whether the message failed as itself on another member is unknown, so it "+
+				"is kept with the unhandled deliveries: a copy its reader may find failing, never "+
+				"a healthy delivery kept with the poison")
+		return false, 0
+	}
+	return marked, found
+}
+
+// keepFailed answers a retirement whose keep failed with err: the message
+// goes back, at the failure path's spacing, for its next delivery to keep —
+// unless md is the broker's last delivery of it ([backstopFor]), when nothing
+// would bring it back and the copy is lost.
+func (a *attachment) keepFailed(ctx context.Context, msg jetstream.Msg, md *jetstream.MsgMetadata,
+	subject string, err error) {
+
+	if md.NumDelivered >= uint64(backstopFor(a.q.cfg)) {
+		a.settled(md.Sequence.Stream)
+		a.log.ErrorContext(ctx, "dead_letter_failed", "subject", subject,
+			"deliveries", md.NumDelivered, "error", err.Error(),
+			"detail", "the copy is lost: this was the broker's last delivery of the message, "+
+				"the keep failed at every one of the deliveries its backstop gives past the "+
+				"budget, and nothing redelivers it")
+		if termErr := msg.Term(); termErr != nil {
+			a.log.Warn("term_failed", "error", termErr.Error())
+		}
+		return
+	}
+	a.log.WarnContext(ctx, "dead_letter_failed", "subject", subject,
+		"deliveries", md.NumDelivered, "error", err.Error(),
+		"detail", "nothing was kept: the message goes back, and its next delivery keeps the copy")
+	if nakErr := msg.NakWithDelay(a.q.nakBackoff(md.NumDelivered)); nakErr != nil {
+		a.log.Warn("nak_failed", "error", nakErr.Error())
+	}
+}
+
+// letterOf is the identity a subscription's dead letter of the delivery md
+// describes is kept under ([Queue.deadLetter]): the message the broker stored —
+// its stream, its sequence there and the broker's instant for it — which every
+// delivery of it carries alike, whichever node it reaches. The instant tells a
+// message apart from the one a stream deleted and made again stores at a
+// reused sequence. Quoted, so no stream's name runs into the numbers after it.
+func letterOf(md *jetstream.MsgMetadata) string {
+	return fmt.Sprintf("%q %d %d", md.Stream, md.Sequence.Stream, md.Timestamp.UnixNano())
 }
 
 // --- the four attachment verbs -------------------------------------------

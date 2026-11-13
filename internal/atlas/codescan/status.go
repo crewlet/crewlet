@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -31,6 +32,13 @@ type Status struct {
 	Tip   string `json:"tip,omitempty"`
 	Rules int    `json:"rules,omitempty"`
 
+	// Stamp is what a forge's listing said of the repository when it was
+	// last read whole ([collect.CodeRepository.Stamp]); a Gitlet repository
+	// has none. TooLarge is a tip whose tree the forge does not list whole,
+	// so none of its files is read.
+	Stamp    string `json:"stamp,omitempty"`
+	TooLarge bool   `json:"too_large,omitempty"`
+
 	// LastAttemptAt is when the repository was last read, Completed whether
 	// that pass read every listed file and published every record, and
 	// LastCompleteAt when one last did.
@@ -43,11 +51,13 @@ type Status struct {
 	Listed   int `json:"listed,omitempty"`
 	Unlisted int `json:"unlisted,omitempty"`
 
-	// Calls is how many git reads the last pass made, and Reads how many of
-	// them read a file. Pending is how many listed files a later pass still
-	// has to read.
+	// Calls is how many reads the last pass made at the repository's host,
+	// Reads how many of them read a file and Bytes how many bytes of files
+	// they read. Pending is how many listed files a later pass still has to
+	// read.
 	Calls   int `json:"calls,omitempty"`
 	Reads   int `json:"reads,omitempty"`
+	Bytes   int `json:"bytes,omitempty"`
 	Pending int `json:"pending,omitempty"`
 
 	// What the reading refused: Oversize files past the byte bound, Unparsed
@@ -117,6 +127,11 @@ func (s *CoordStore) Load(ctx context.Context) (map[string]Status, error) {
 	}
 	out := make(map[string]Status, len(raw))
 	for repo, value := range raw {
+		// A FORGE'S KEY IS NOT A GITLET REPOSITORY'S ([ForgeStore]): read as
+		// one, it would be a repository Gitlet no longer lists, and released.
+		if strings.HasPrefix(repo, forgePrefix) {
+			continue
+		}
 		var st Status
 		if err := json.Unmarshal(value, &st); err != nil {
 			log.WarnContext(ctx, "atlas_code_standing_undecodable", "repo", repo, "error", err,

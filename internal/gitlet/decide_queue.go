@@ -861,20 +861,25 @@ func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position 
 }
 
 // pushes is the push each of l's entries lands as, in order — its push id
-// derived from the landing's, its enqueuer its principal, `via queue`, the
-// target moved from what the entry before it left onto its commit (a
-// fast-forward, which leaves nothing behind), the change's source deleted
-// where the decide stamped it, and what it introduced: the commit a merge or
-// a squash built, none for a fast-forward, whose head its change's own pushes
-// brought. entries are the entries' rows and rows their changes', in l's
-// order.
+// derived from the landing's, its enqueuer its principal and whom its enqueue
+// was made for its carrier, `via queue`, the target moved from what the entry
+// before it left onto its commit (a fast-forward, which leaves nothing
+// behind), the change's source deleted where the decide stamped it, and what
+// it introduced: the commit a merge or a squash built, none for a
+// fast-forward, whose head its change's own pushes brought. entries are the
+// entries' rows and rows their changes', in l's order.
+//
+// THE CARRIER IS THE ENTRY'S ROW'S, never the land record's, which carries
+// none: the enqueue's own apply kept it there (code_queue.working_for), on
+// every node of this build alike, so the landing's push rows are the same on
+// every node too.
 func (l Land) pushes(entries map[string]queueEntry, rows []changeRow) []PushEntry {
 	out := make([]PushEntry, len(l.Entries))
 	from := l.BaseOID
 	for i, e := range l.Entries {
 		entry := entries[e.EntryID]
-		p := PushEntry{PushID: LandPushID(l.LandID, e.EntryID), Principal: entry.enqueuer(), Via: ViaQueue,
-			Node: l.Node, ReceivedAt: l.ReceivedAt,
+		p := PushEntry{PushID: LandPushID(l.LandID, e.EntryID), Principal: entry.enqueuer(),
+			WorkingFor: storedCarrier(entry.WorkingFor), Via: ViaQueue, Node: l.Node, ReceivedAt: l.ReceivedAt,
 			Commands: []Command{{Ref: l.TargetRef, Old: from, New: e.Commit, Result: ResultOK}}}
 		if e.DeleteSource {
 			p.Commands = append(p.Commands, Command{Ref: rows[i].source, Old: rows[i].head, New: ZeroOID,

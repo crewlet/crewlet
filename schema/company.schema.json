@@ -25,6 +25,15 @@
     "AWSProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "atlas_read": {
+          "description": "Add a read-only role for the atlas to the stack, so the atlas lists the account's Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names. Off by default. Turning it on or off changes the CloudShell block: run it again, and paste its last line when it is on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "certificate_authority": {
           "description": "The engine's certificate authority: its P-256 private key, then its certificate, both PEM. Minted by the connect form and never shown; the stack's trust anchor holds only the certificate. It can sign in as the provisioner, which can create agent roles and attach the Crewlet levels.",
           "type": [
@@ -36,7 +45,7 @@
           "x-crewlet-secret": true
         },
         "connection": {
-          "description": "The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
+          "description": "The stack's CrewletConnection output: five ARNs joined by commas, or seven where the stack holds the atlas's role, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
           "type": [
             "string",
             "number",
@@ -246,6 +255,15 @@
       "properties": {
         "agent_records": {
           "description": "Whether agents record in the atlas what a tool call of their own turn showed them, and dispute what it holds (default true). false stops both; what they recorded before stays until a person retires it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "owner_wakes": {
+          "description": "Whether the agent seat that owns an atlas entry is woken when the entry drifts: its health turns to alerting, or its sources come to disagree (default true). At most one wake an entry a day. false wakes nobody; the entry still waits in Review.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",

@@ -386,7 +386,8 @@ func fullSurface(t *testing.T) *operator.Server {
 			Atlas: builtin.AtlasDeps{Settings: func(context.Context) (builtin.AtlasSettings, bool) {
 				return builtin.AtlasSettings{}, false
 			}},
-			AtlasWrite: builtin.AtlasWriteDeps{Log: struct{ builtin.AtlasLog }{}},
+			AtlasWrite:   builtin.AtlasWriteDeps{Log: struct{ builtin.AtlasLog }{}},
+			AtlasRefresh: builtin.AtlasRefreshDeps{Sources: struct{ builtin.AtlasSourceDesk }{}},
 		}),
 		Org:    func() *org.Organization { return nil },
 		Runs:   builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}},

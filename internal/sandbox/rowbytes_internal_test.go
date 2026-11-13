@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -421,9 +422,9 @@ func worstRow(t *testing.T) PendingRun {
 	// items a turn's jobs file push it past any index of the twenty the row
 	// holds. A read's round is the review's, which takes a handful, or a
 	// job's one: 99 is past both.
-	widest := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
-	if keptCallOf(&widest) == nil {
-		t.Fatalf("the store keeps no call at its widest, %+v", widest)
+	widestCall := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
+	if keptCallOf(&widestCall) == nil {
+		t.Fatalf("the store keeps no call at its widest, %+v", widestCall)
 	}
 	// AND NONE WIDER AS WRITTEN: a call at the bound holding one byte the
 	// encoder escapes, in its session, in a quoted id or in a bare one, would
@@ -447,7 +448,7 @@ func worstRow(t *testing.T) PendingRun {
 		out := make([]HookServed, MaxNoteServes)
 		for i := range out {
 			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
-				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widest)}
+				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widestCall)}
 		}
 		return out
 	}
@@ -602,6 +603,14 @@ func worstRow(t *testing.T) PendingRun {
 		holds[i] = uuid.NewString() + ":" + fmt.Sprintf("%032x", i)
 	}
 	floor := fmt.Sprintf("%s@%d:%d", plain(64), uint64(math.MaxUint64), uint64(math.MaxUint64))
+	// WHOM THE TURN WORKS FOR, at the widest a carrier is: a credential acting
+	// as no seat by a login of iam.MaxLogin, holding every app — the turn's,
+	// as its trigger carried it, and its job's, as its checkout composed it —
+	// beside the credential's own login and apps at the same widths.
+	widest := func() *types.WorkingFor {
+		return &types.WorkingFor{Kind: types.WorkingForCredential, Login: plain(iam.MaxLogin),
+			Apps: slices.Clone(iam.Apps)}
+	}
 	run := PendingRun{
 		TurnID: plain(64), WorkKey: plain(64), WorkSince: worstAt,
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
@@ -641,8 +650,10 @@ func worstRow(t *testing.T) PendingRun {
 			Chain: handles(32), TraceID: plain(32), SpanID: plain(16), ParentSpanID: plain(16)},
 		TraceID: plain(32), SpanID: plain(16), DelegationDepth: math.MaxInt, DelegationChain: handles(32),
 		ExecuteState: json.RawMessage(state), Charged: true, CompanyCharged: true,
+		RequesterLogin: plain(iam.MaxLogin), RequesterApps: slices.Clone(iam.Apps), WorkingFor: widest(),
 		CodeHolds: holds, Repos: repos, CodeFloor: floor, CodeLaunch: floor, CodeCeiling: plain(64),
-		PauseTTLSeconds: math.MaxFloat64, PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
+		CodeWorkingFor: widest(), PauseTTLSeconds: math.MaxFloat64,
+		PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt,

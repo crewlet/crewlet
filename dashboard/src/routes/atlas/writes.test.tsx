@@ -321,6 +321,23 @@ describe("Review", () => {
     expect(screen.getByRole("button", { name: "Retire" })).toBeTruthy();
   });
 
+  test("shows an agent's record with its evidence: the seat, the turn and the call it cited", async () => {
+    const company = grownCompany();
+    mountAtlas("#/company/atlas/review", <Review />, company, {
+      answers: { viewer: ADA, atlas_review: reviewAnswer(waitingItems(company)) },
+    });
+    // THE ENTRY ONLY AN AGENT REPORTED: who said it, and the call behind it.
+    const reported = await screen.findByRole("list", {
+      name: "What was reported, and the call behind it",
+    });
+    expect(within(reported).getByText("read_channel")).toBeTruthy();
+    expect(within(reported).getByText(/the engine could check nothing behind it/)).toBeTruthy();
+    expect(within(reported).getByRole("link", { name: /turn/i })).toBeTruthy();
+    // AND THE AGENT'S VALUE BESIDE A PERSON'S names its call too.
+    expect(screen.getByText("ssh_read")).toBeTruthy();
+    expect(screen.getByText(/whose answer the engine checked the record against/)).toBeTruthy();
+  });
+
   test("a bulk decision lists what it decides and sends only on the dialog's own press", async () => {
     const company = grownCompany();
     mountAtlas("#/company/atlas/review", <Review />, company, {
@@ -331,6 +348,8 @@ describe("Review", () => {
     const dialog = await screen.findByRole("dialog", { name: "Accept 2 items as shown?" });
     expect(within(dialog).getByText(/keep 10\.0\.4\.12/)).toBeTruthy();
     expect(within(dialog).getByText(/ledger/)).toBeTruthy();
+    // AN AGENT'S ENTRY IS LISTED WITH WHO REPORTED IT, before it is confirmed.
+    expect(within(dialog).getByText(/reported by sre/)).toBeTruthy();
     // LISTED, NOT SENT: nothing leaves until the dialog's own button.
     expect(posted).toEqual([]);
     const send = within(dialog).getByRole("button", { name: "Accept as shown" });

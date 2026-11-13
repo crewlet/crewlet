@@ -136,6 +136,24 @@ import (
 // target to the head or moved it past, and a pusher IS told that the head
 // they pushed fails its checks.
 //
+// # Whom the actor acted for
+//
+// A seat acts for whoever its turn works for, and a routing that may wake a
+// seat says so beside its actor ([ChangeRouting.WorkingFor], ADR-0109): whom
+// the asker's request was made for, as every node that decides it holds it
+// (writtenForInvalid, writtenForUnder), so the turn the record wakes works for
+// them, held to what they may use, never for the writing seat alone. Only
+// beside an agent's actor, and only where the routing wakes a seat
+// ([wakesASeat]): a person, a credential and the engine write for nobody but
+// themselves, and a routing that tells only persons, who read notices, wakes
+// no turn to carry it to. The engine's records that name an earlier actor — a
+// revision's facts, a failed check of a head, the home's landing and a queue's
+// landing — carry nobody yet: the carrier that actor's act was made for is
+// kept on the rows they are read from (code_revisions, code_pushes and
+// code_queue, the replicated migration
+// a_code_row_keeps_whom_an_agents_write_was_made_for), and they read it back
+// from crewlet#798's piece 4c-ii on.
+//
 // # Who hears what the gate does
 //
 // The gate's records — a merge, a dequeue, a queue's ejection and landing, a
@@ -151,18 +169,13 @@ import (
 //
 // # The record format
 //
-// Under the code domain's stated condition (no build that carries the domain
-// has run without these fields — none of it is on main): every routing field
-// below rides the one field each payload gains, and takes no row of its own.
-// Once a build without them has run, each op's payload takes {Name:
-// "<Payload>.Routing", Since: 2, Op: "<op>", Path: []string{"mutation",
-// "routing"}} in versionedFields — a push's {Name: "PushEntry.Routing", Since:
-// 2, Op: "push", Path: []string{"mutation", "pushes", "routing"}} — while an
-// open's, an edit's, a review's and a comment's mentions ride the routing
-// alone (withRouting takes the asker's off the record) and take no row of
-// their own; with RecordVersion at 2, its line under "What each version
-// added" and a Carrying record in the statelogtest candidate: such a build
-// would apply the record and tell nobody, where it must retain it.
+// Every routing field below rides the one field each payload carries, and all
+// but one are in the base format ([RecordVersion]): the domain landed on main
+// with them. [ChangeRouting.WorkingFor] came with version 2, and a record
+// whose routing carries it is stamped there ([versionedFields]), so a build
+// before it retains the record rather than read it short of whom its actor
+// acted for. An open's, an edit's, a review's and a comment's mentions ride
+// the routing alone (withRouting takes the asker's off the record).
 
 // Reason is why one handle hears about a change (code_notifications.reason) —
 // a closed set, in precedence order ([Reasons]).
@@ -202,12 +215,9 @@ const (
 // branch stops everybody merging into it; a removal from the queue after a
 // conflict, which says why the change left it.
 //
-// BASE FORMAT, AS A STATED CONDITION: a notice row's reason is read back by
-// [Reason.Valid], and checks_failed, target_broken and dequeued are values an
-// older reader of code_notifications does not know. None of the code domain is
-// on main, so no build that carries it has run without them; once one has,
-// each record that produces one takes its routing's versionedFields row
-// (this file's head), which keeps such a build from applying the record.
+// BASE FORMAT ([RecordVersion]): the domain landed on main with every reason
+// here, checks_failed, target_broken and dequeued among them, so every build's
+// [Reason.Valid] and every reader of code_notifications knows them.
 func Reasons() []Reason {
 	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed,
 		ReasonTargetBroken, ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge,
@@ -256,8 +266,9 @@ var DefaultPrimaryReasons = []Reason{
 }
 
 // ChangeRouting is whom one record about a change concerns, as the writer's
-// snapshot and chart held them — see this file's head. A handle is a seat's,
-// or the human seat a person holds; [ChangeRouting.Persons] says which.
+// snapshot and chart held them, and who made the change it records, for whom
+// — see this file's head. A handle is a seat's, or the human seat a person
+// holds; [ChangeRouting.Persons] says which.
 type ChangeRouting struct {
 	// ChangeID is the change, and ChangeRef its name as the snapshot held it
 	// (web!42) — an open's, the number its apply will give.
@@ -274,6 +285,20 @@ type ChangeRouting struct {
 	// home's other records, which no principal's act made. Nobody hears of a
 	// change they made.
 	Actor string `json:"actor,omitempty"`
+	// WorkingFor is whom Actor made the change for (ADR-0109): whoever the
+	// turn that asked the write worked for, as the asker's request stated it
+	// — a person's seat, a colleague seat's, or a credential acting as no seat
+	// with the apps that turn was held to — so the turn the record wakes works
+	// for them, held to what they may use. STAMPED BY [routingFor], and only
+	// where Actor is an agent's seat and the routing wakes a seat
+	// ([wakesASeat]); nil on every other routing, and for a write made for
+	// nobody, the seat's own work. The engine's records that name an earlier
+	// actor carry none yet (this file's head, "Whom the actor acted for").
+	//
+	// VERSION 2 ([versionedFields]): a record whose routing carries it is
+	// stamped there, so a build before it retains the record rather than wake
+	// a turn for the writing seat alone.
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Owner is the change's owner, and OwnerKind what it is.
 	Owner     string    `json:"owner,omitempty"`
 	OwnerKind PartyKind `json:"owner_kind,omitempty"`
@@ -305,8 +330,7 @@ type ChangeRouting struct {
 	// ended not_closed, why the merged change's work item was not closed
 	// (M5-D27): its authors and its Enqueuer hear it under `merged`, the
 	// sentence beside — the excerpt of their notice, each change its own.
-	// Under the condition this file's head states, it rides
-	// CloseSettled.Routing's row.
+	// It is in the base format, as this file's head says.
 	NotClosed string `json:"not_closed,omitempty"`
 	// ChecksFailed is a check of the change's head that failed, or errored
 	// past the home's own requeue: its authors and its actor hear.
@@ -497,6 +521,21 @@ func Concerns(routings []*ChangeRouting) []Concern {
 		}
 	}
 	return out
+}
+
+// wakesASeat reports whether concerns tell a seat anything: some handle
+// hears ([Concern.Hears]) that is not a person's. THE ONE TEST of whether a
+// routing may wake a turn, which the feed relays a record by (feed.go) and
+// [routingFor] stamps whom a routing's actor acted for by, so the two never
+// disagree about a routing — the repository lead's fallback counting, as a
+// seat it may wake.
+func wakesASeat(concerns []Concern) bool {
+	for _, c := range concerns {
+		if c.Hears() && !c.Change.Person(c.Handle) {
+			return true
+		}
+	}
+	return false
 }
 
 // NoticeID is one notice's identity among its recipient's: the record that
@@ -784,6 +823,11 @@ type concerning struct {
 	// wrote what it announces.
 	actor     string
 	actorKind PartyKind
+	// workingFor is whom actor made the change for — the carrier the asker's
+	// request stated, nil for nobody and for every record no asker asked —
+	// which [routingFor] stamps beside an agent's actor alone, on a routing
+	// that wakes a seat.
+	workingFor *types.WorkingFor
 	// roster is the deciding chart: what a mention is held to and what says
 	// whether a handle is a person's. Nil only for a record that names no
 	// mention.
@@ -822,9 +866,10 @@ type concerning struct {
 // snapshot tx — THE ONE FUNCTION every writer of a change's records stamps its
 // routing by, so the committer and the change writer never disagree about whom
 // a record concerns. Each role is read in its key's order and bounded
-// ([MaxRoutedParticipants]); the result is held to [MaxRoutingBytes], which
-// those bounds keep it far inside — past it is a writer's bug, never a
-// refusal.
+// ([MaxRoutedParticipants]); whom an agent's actor made the change for is
+// stamped where the routing wakes a seat ([ChangeRouting.WorkingFor]); the
+// result is held to [MaxRoutingBytes], which those bounds keep it far inside —
+// past it is a writer's bug, never a refusal.
 func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, error) {
 	row := c.change
 	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
@@ -927,6 +972,13 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 		r.Persons = append(r.Persons, handle)
 	}
 	slices.Sort(r.Persons)
+	// AND WHOM ITS ACTOR MADE IT FOR, beside an agent's actor alone and only
+	// where the routing wakes a seat: read once the persons are named, since
+	// a handle the routing names as a person's wakes nobody, and before the
+	// routing is measured, which counts it.
+	if c.actorKind == PartyAgent && c.workingFor != nil && wakesASeat(Concerns([]*ChangeRouting{r})) {
+		r.WorkingFor = c.workingFor.Clone()
+	}
 	encoded, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("gitlet: encode change %s's routing: %w", row.id, err)

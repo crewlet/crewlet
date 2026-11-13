@@ -212,7 +212,9 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 //  5. THE PUSHES, one an entry, through the one apply every push takes
 //     ([Applier.landPushes]): the target moved from what the entry before it
 //     left onto its commit, its source deleted where the decide stamped it,
-//     a push row `via queue` naming its enqueuer and what it introduced, the
+//     a push row `via queue` naming its enqueuer, whom its enqueue was made
+//     for — read off the entry's row in this apply, which the land record
+//     does not carry ([Land.pushes]) — and what it introduced, the
 //     repository's counters, and the horizons.
 func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l Land) (int, error) {
 	named := make([]string, len(l.Entries))
@@ -832,7 +834,7 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 			return []any{e.RepoID, e.EntryID, e.TargetRef, e.ChangeID, e.Seq, e.HeadOID, string(e.Method),
 				e.DeleteSource, e.CloseTask, e.EnqueuedBy.Handle, string(e.EnqueuedBy.Kind), e.EnqueuedOperator,
 				string(e.State), e.Train, e.CandidateID, e.CommitOID, e.EnqueuedAt, e.EndedAt, e.EndedPosition,
-				string(e.EndReason), e.ejected, len(e.ejected), e.closeOp}
+				string(e.EndReason), e.WorkingFor, e.ejected, len(e.ejected), e.closeOp}
 		})
 	return err
 }
@@ -851,10 +853,12 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 // last one past the history.
 const (
 	// insertEntriesSQL and entryValuesSQL are entry rows as [writeEntries]
-	// writes them: every column [entryColumns] reads, the ejection, and the
-	// close a landing leaves owed.
+	// writes them: every column [entryColumns] reads — whom the entry's
+	// enqueue was made for among them, written back as read, which none of
+	// the upserts' conflicts sets — the ejection, and the close a landing
+	// leaves owed.
 	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes, close_op) VALUES `
-	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// settleClosesSQL clears the owed closes of a repository's entries named
 	// by a JSON list, each by its key.

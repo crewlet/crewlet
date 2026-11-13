@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -400,8 +401,8 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 		repo := fmt.Sprintf("repo-%02d", i)
 		committer := rendezvous.Order(repo, holders)[0]
 		w := gitlet.ConversationWrite{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
-			Comment: &gitlet.Comment{RepoID: repo, ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i),
-				Body: "why?"}}
+			WrittenFor: types.ForNobody(), Comment: &gitlet.Comment{RepoID: repo,
+				ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i), Body: "why?"}}
 		if _, err := r.Code().Converse(t.Context(), w); err != nil {
 			t.Fatalf("converse on %s: %v", repo, err)
 		}
@@ -423,7 +424,8 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	order := rendezvous.Order(repo, holders)
 	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = gitlet.ErrNotServing })
 	w := gitlet.ConversationWrite{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_comment_on_change",
-		Comment: &gitlet.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
+		WrittenFor: types.ForNobody(),
+		Comment:    &gitlet.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
 	if _, err := r.Code().Converse(t.Context(), w); err != nil {
 		t.Fatalf("converse: %v", err)
 	}
@@ -534,7 +536,10 @@ func (f *fleet) proposedOn(repo string) []string {
 	return out
 }
 
-// proposalTo is a push of one branch to repo under pushID.
+// proposalTo is a push of one branch to repo under pushID, stated made for
+// nobody, as a serving node reads every push it decodes — so what arrives is
+// what was sent, and a case that puts a seat in its pusher's place sends a
+// push its router asks.
 func proposalTo(repo, pushID string) gitlet.Proposal {
 	return gitlet.Proposal{
 		PushID: pushID, RepoID: repo, Node: "agent-1",
@@ -543,6 +548,7 @@ func proposalTo(repo, pushID string) gitlet.Proposal {
 		Commands: []gitlet.Command{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "1111111111111111111111111111111111111111"}},
 		ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC),
+		WrittenFor: types.ForNobody(),
 	}
 }
 
@@ -1083,6 +1089,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// field of the answer.
 	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
 	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	// WHOM EACH SEAT'S WRITE IS MADE FOR, which crosses whole beside it.
+	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "lead"})
 	item := &gitlet.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 		SourceRef: "refs/heads/fix", TargetRef: "refs/heads/main", Head: "6666666666666666666666666666666666666666",
 		Title: title, Body: body, Draft: true, Owner: seat,
@@ -1106,6 +1114,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	} {
 		p.OpID, p.Asker, p.Seen, p.ExpectedVersion = "019a0c2e-0000-7000-8000-0000000000d0.code_open_change",
 			seat, at, 4
+		p.WrittenFor = carrier
 		d.mu.Lock()
 		d.changed = gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: item.ChangeID, Number: 42,
 			Version: 5, Position: at, Unchanged: true, Refusal: gitlet.ChangeRefusalStale,
@@ -1131,7 +1140,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a dequeue": {Dequeue: &gitlet.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
 	} {
-		p.OpID, p.Asker, p.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at
+		p.OpID, p.Asker, p.Seen, p.WrittenFor = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at,
+			carrier
 		d.mu.Lock()
 		d.queued = gitlet.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			State: gitlet.QueueWaiting, Place: 3, Position: at, Refusal: gitlet.MergeRefusalGateUnmet,
@@ -1152,7 +1162,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// among them, crossing whole whoever set them — and every field of the
 	// answer, the preconditions a gate_unmet names among them.
 	merge := gitlet.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
-		Seen: at, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+		Seen: at, WrittenFor: carrier, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
 			ChangeID: item.ChangeID, Method: gitlet.MergeMethodSquash, TargetRef: "refs/heads/main",
 			BaseOID: "6666666666666666666666666666666666666666", HeadOID: "7777777777777777777777777777777777777777",
 			CommitOID: "8888888888888888888888888888888888888888",
@@ -1226,7 +1236,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 2, Node: "node-b", Refresh: true,
 			ChangeVersion: 4, ReadinessVersion: 6, Ready: true, WaitsPerson: true}},
 	} {
-		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
+		w.OpID, w.Asker, w.Seen, w.WrittenFor = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change",
+			seat, at, carrier
 		d.mu.Lock()
 		d.conversed = gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID,
 			FindingIDs: []string{"019a0c2e-0000-7000-8000-0000000000e4"}, Position: at,
@@ -1485,7 +1496,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.mu.Unlock()
 	for name, w := range map[string]gitlet.EngineWrite{
 		"a commit onto a new branch": {Kind: gitlet.WriteCommitFiles, RepoID: ref.ID, Principal: seatRun,
-			OpID: "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
+			WrittenFor: types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantGitlet}}),
+			Ceiling: &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody},
+			OpID:    "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
 			Ref: "refs/heads/seats/dev/fix", Base: "6666666666666666666666666666666666666666",
 			Message: "fix the flaky upload", Files: []gitlet.FileOp{
 				{Op: gitlet.FileOpPut, Path: "a.go", Content: &content, Mode: gitlet.ModeExecutable},
@@ -1497,7 +1511,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				{Op: gitlet.FileOpMode, Path: "g.sh", Mode: gitlet.ModeFile},
 			}},
 		"a cherry-pick onto a head": {Kind: gitlet.WriteCherryPick, RepoID: ref.ID, Principal: seatRun,
-			OpID: "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+			WrittenFor: types.ForTurn(nil),
+			OpID:       "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 			Ref: "refs/heads/seats/dev/fix", ExpectedHead: "6666666666666666666666666666666666666666",
 			Commit: "7777777777777777777777777777777777777777", Message: "pick the fix"},
 	} {
@@ -1516,7 +1531,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.err = fmt.Errorf("commit 7777777: %w", gitlet.ErrObjectNotFound)
 	d.mu.Unlock()
 	if _, err := seam.GitWrite(ctx, gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: ref.ID,
-		Principal: seatRun, OpID: "019a0c2e-0000-7000-8000-0000000000f4",
+		Principal: seatRun, WrittenFor: types.ForNobody(), OpID: "019a0c2e-0000-7000-8000-0000000000f4",
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: "refs/heads/seats/dev/new",
 		Commit: "7777777777777777777777777777777777777777"}); !errors.Is(err, gitlet.ErrObjectNotFound) {
 		t.Errorf("a served object-not-found crossed as %v", err)

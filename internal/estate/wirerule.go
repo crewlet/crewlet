@@ -77,13 +77,44 @@ import (
 // member it does not declare is dropped without a word. So a type an operation
 // takes that must decode itself does it the v2 way: the actors, each of which
 // states whom its writes are for when it arrives (ADR-0109), whatever members
-// did, and whom a write was made for (types.WrittenFor), whose fields are its
-// own. An actor carries no policy in its codec and has no encoder at all: a
-// write whose actor may write nothing is refused before it is asked anywhere
+// did; whom a write was made for (types.WrittenFor), whose fields are its own;
+// and the six requests a code write forms, which state it on arrival too. An
+// actor carries no policy in its codec and has no encoder at all: a write
+// whose actor may write nothing is refused before it is asked anywhere
 // ([actorWrites]), never in the encoder of a request that might not be made.
 // The gates hold every type an operation takes that decodes itself to saying
 // why it drops nothing (wirerule_test.go's decodesItself), and read the actors'
 // fields as any struct's, since what crosses of them is their plain encoding.
+//
+// # A kind or an app the build does not know is refused as a member is
+//
+// A code write's request refuses, beside the members its build does not
+// declare, its carrier's kind, or an app a credential's carrier names, that the
+// build does not know, with the decoder's own refusal of a name it does not
+// declare (jsonv2.ErrUnknownName, at the value's place: internal/gitlet's
+// unknownToThisBuild, the one place a build decides whether it knows what a
+// carrier names). A kind and an app are names of the build's vocabulary as a
+// member is one of a type's, and only a newer build sends one this build does
+// not know, as only a newer build sends such a member, since no sender
+// composes a kind or an app its own build does not know. So the rule answers
+// it as it answers a member: named by its place ([strikeMember]'s
+// args.written_for.kind, which it strikes as it strikes a member, and
+// args.written_for.apps[], by its list, whose element it cannot strike), and
+// nothing of the request run, so the walk asks a node that knows it — never a
+// refusal of the request as malformed, which would end the walk and tell a
+// newer build's valid request it is.
+//
+// AND IN PROCESS ALIKE, where nothing decodes the request: a code write's
+// request handed to this node's own copy meets the same value in its Validate,
+// through the same one place, FIRST, before any other rule of the request — as
+// the decoder meets it before any rule runs — and refuses it with the same
+// decoder's refusal (gitlet.IsUnknownToThisBuild), whatever else the request
+// holds, which the walk answers as the wire answers the same request — the
+// keys a serving node of this build refuses its encoding for, this node among
+// the nodes whose build does not declare them ([unreadHere]) — and moves on
+// from. A carrier a stored row holds, which another build may have written, is
+// such a request: a box's push and a run's open carry it as the run's row holds
+// it.
 //
 // # Not a refusal of a field this build retired
 //
@@ -178,7 +209,10 @@ func decodeInput(raw []byte, into any) ([]string, error) {
 }
 
 // unknownMember is where err says the decoder met an object member its type
-// does not declare, or false where err is anything else.
+// does not declare — or a name a type's own decoder refused as one its build
+// does not declare, a code write's carrier's kind or app ("A kind or an app
+// the build does not know is refused as a member is", above) — or false where
+// err is anything else.
 func unknownMember(err error) (jsontext.Pointer, bool) {
 	var semantic *jsonv2.SemanticError
 	if !errors.As(err, &semantic) || !errors.Is(err, jsonv2.ErrUnknownName) {
@@ -320,7 +354,9 @@ type ErrUnknownKeys struct {
 
 	// Keys are the keys, each by its path from the request or the reply that
 	// held it — `args.Ending.went_on`, `actor.provenance.Zone`,
-	// `result.Manifest.files[].integrity`.
+	// `result.Manifest.files[].integrity`, and `args.written_for.kind` and
+	// `args.written_for.apps[]` for a code write's carrier's kind and a
+	// credential's app that the build does not know.
 	Keys []string
 
 	// Nodes are the nodes whose build refused them: the data nodes that would

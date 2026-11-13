@@ -43,7 +43,7 @@ func parse(t *testing.T, file, body string) codescan.Parsed {
 	if !ok {
 		t.Fatalf("%s is not on the closed list", file)
 	}
-	return codescan.Parse("shop", file, format, []byte(body), scanAt)
+	return codescan.Parse(codescan.GitletRepo("shop"), file, format, []byte(body), scanAt)
 }
 
 // Each format declares what its doc says it declares, keyed exactly, and

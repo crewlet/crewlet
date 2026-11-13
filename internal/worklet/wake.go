@@ -669,8 +669,14 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	//
 	// EACH KIND IS A SET, recorded as what joined and what left it.
 	for _, kind := range RelationKinds {
-		moved.set(string(kind), relationMembers(before.Relations, kind),
-			relationMembers(after.Relations, kind))
+		was, now := relationMembers(before.Relations, kind), relationMembers(after.Relations, kind)
+		if kind == RelationEntry {
+			// HOW MANY, NEVER WHICH: an entry's id is derived from its key,
+			// and a history row is read by people who may not read the atlas.
+			moved.count(string(kind), was, now)
+			continue
+		}
+		moved.set(string(kind), was, now)
 	}
 	// AND THE MIRROR, under the word this package already uses for it:
 	// `blocking` is what [DependencyChange] calls the other direction and

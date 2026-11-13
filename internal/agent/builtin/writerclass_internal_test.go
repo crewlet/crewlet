@@ -368,6 +368,9 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a proposal the domain's own committer built wrong, decided by the applier as a fault"},
 		"TooWideError": {err: &gitlet.TooWideError{},
 			why: "a push too wide for one entry, which the client pushes in parts and a committer never builds"},
+		"ChartRefusal": {err: &gitlet.ChartRefusal{},
+			why: "the deciding chart's refusal of whom a write is made for, answered only inside the class its " +
+				"holder gives it, ErrInvalidProposal on a committer and ErrInvalid on a Gitlet node, which class it"},
 		"ErrInvalidLayer": {err: gitlet.ErrInvalidLayer, why: "a published layer a Gitlet node built wrong, the cache's fault"},
 		"ErrBadLayer":     {err: gitlet.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
 		"ErrBadBundle":    {err: gitlet.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},

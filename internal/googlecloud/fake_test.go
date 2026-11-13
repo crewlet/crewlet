@@ -1,6 +1,7 @@
 package googlecloud_test
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -97,8 +98,10 @@ type fakeAccount struct {
 // fakeProject is one project the provisioner may read.
 type fakeProject struct {
 	ID, Name, State string
-	Policy          googlecloud.Policy
-	Services        map[string]bool
+	// Parent is the organization or the folder the project sits under.
+	Parent   string
+	Policy   googlecloud.Policy
+	Services map[string]bool
 }
 
 // fakeToken is a token the fake issued, and to whom.
@@ -137,6 +140,15 @@ type fakeGoogle struct {
 	mintRefusals int
 	// page is how many projects one search page holds; zero is all.
 	page int
+	// limited answers a route 429 this many times first, by method and path.
+	limited map[string]int
+	// retryAfter is the wait a 429 names, in seconds; zero is seven.
+	retryAfter int
+	// unmapped is what every project and service row carries beside the
+	// fields a client decodes.
+	unmapped map[string]any
+	// requests is every request served, by method and path.
+	requests []string
 
 	writes   []string
 	versions []int
@@ -332,6 +344,13 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	path := r.URL.Path
 	key := r.Method + " " + path
+	f.requests = append(f.requests, key)
+	if n := f.limited[key]; n > 0 {
+		f.limited[key] = n - 1
+		w.Header().Set("Retry-After", strconv.Itoa(cmp.Or(f.retryAfter, 7)))
+		f.fail(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Read requests'.")
+		return
+	}
 	if status, ok := f.refuse[key]; ok {
 		f.fail(w, status, http.StatusText(status), "refused by the test")
 		return
@@ -497,10 +516,17 @@ func (f *fakeGoogle) delegates(a *fakeAccount) bool {
 }
 
 func (f *fakeGoogle) search(w http.ResponseWriter, r *http.Request) {
-	var out []map[string]string
+	var out []map[string]any
 	for _, id := range slices.Sorted(mapKeys(f.projects)) {
 		p := f.projects[id]
-		out = append(out, map[string]string{"projectId": p.ID, "displayName": p.Name, "state": p.State})
+		row := map[string]any{"projectId": p.ID, "displayName": p.Name, "state": p.State}
+		if p.Parent != "" {
+			row["parent"] = p.Parent
+		}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		out = append(out, row)
 	}
 	from, _ := strconv.Atoi(r.URL.Query().Get("pageToken"))
 	if f.page == 0 || from+f.page >= len(out) {
@@ -670,7 +696,11 @@ func (f *fakeGoogle) services(w http.ResponseWriter, project string) {
 	}
 	var out []map[string]any
 	for _, name := range slices.Sorted(mapKeys(p.Services)) {
-		out = append(out, map[string]any{"config": map[string]string{"name": name}, "state": "ENABLED"})
+		row := map[string]any{"config": map[string]any{"name": name, "title": f.unmapped["title"]}, "state": "ENABLED"}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		out = append(out, row)
 	}
 	f.answer(w, map[string]any{"services": out})
 }

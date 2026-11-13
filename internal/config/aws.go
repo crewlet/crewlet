@@ -45,12 +45,16 @@ type AWSProvisioning struct {
 	// IAMRead attaches the IAM read policy to every seat that is on.
 	IAMRead bool `yaml:"iam_read,omitempty" json:"iam_read,omitempty" desc:"Let every agent that is on read IAM users, groups, roles and policies. Off by default, since it shows the people in the account."`
 
+	// AtlasRead adds the atlas's own read-only role to the rendered stack,
+	// which the atlas-collect duty signs in as.
+	AtlasRead bool `yaml:"atlas_read,omitempty" json:"atlas_read,omitempty" desc:"Add a read-only role for the atlas to the stack, so the atlas lists the account's Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names. Off by default. Turning it on or off changes the CloudShell block: run it again, and paste its last line when it is on."`
+
 	// CertificateAuthority is the engine's CA: its private key, then its
 	// certificate. The trust anchor holds only the certificate.
 	CertificateAuthority string `secret:"true" yaml:"certificate_authority,omitempty" json:"certificate_authority,omitempty" desc:"The engine's certificate authority: its P-256 private key, then its certificate, both PEM. Minted by the connect form and never shown; the stack's trust anchor holds only the certificate. It can sign in as the provisioner, which can create agent roles and attach the Crewlet levels."`
 
 	// Connection is the stack's one output, pasted back.
-	Connection string `yaml:"connection,omitempty" json:"connection,omitempty" desc:"The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made."`
+	Connection string `yaml:"connection,omitempty" json:"connection,omitempty" desc:"The stack's CrewletConnection output: five ARNs joined by commas, or seven where the stack holds the atlas's role, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made."`
 }
 
 // The levels a seat's role holds, least access first. internal/aws maps each
@@ -118,22 +122,34 @@ func (a *AWS) RegionList() []string {
 // AWSConnectionOutput is the stack output whose value is pasted back.
 const AWSConnectionOutput = "CrewletConnection"
 
-// AWSConnection is the stack's CrewletConnection value, checked: its five ARNs
-// and the partition and account they share.
+// AWSConnection is the stack's CrewletConnection value, checked: its five
+// ARNs, the atlas's two where the stack holds its role, and the partition and
+// account they share.
 type AWSConnection struct {
 	TrustAnchorARN        string
 	ProvisionerProfileARN string
 	ProvisionerRoleARN    string
 	SeatProfileARN        string
 	BrokerRoleARN         string
-	Partition             string
-	Account               string
+	// AtlasProfileARN and AtlasRoleARN are both set or both empty: a stack
+	// rendered without the atlas's role prints neither.
+	AtlasProfileARN string
+	AtlasRoleARN    string
+	Partition       string
+	Account         string
 }
 
-// String is the CrewletConnection value: the five ARNs joined by commas.
+// HasAtlas reports a stack output that carries the atlas's profile and role.
+func (c AWSConnection) HasAtlas() bool { return c.AtlasRoleARN != "" }
+
+// String is the CrewletConnection value: the ARNs joined by commas.
 func (c AWSConnection) String() string {
-	return strings.Join([]string{c.TrustAnchorARN, c.ProvisionerProfileARN, c.ProvisionerRoleARN,
-		c.SeatProfileARN, c.BrokerRoleARN}, ",")
+	parts := []string{c.TrustAnchorARN, c.ProvisionerProfileARN, c.ProvisionerRoleARN,
+		c.SeatProfileARN, c.BrokerRoleARN}
+	if c.HasAtlas() {
+		parts = append(parts, c.AtlasProfileARN, c.AtlasRoleARN)
+	}
+	return strings.Join(parts, ",")
 }
 
 // The shapes AWS gives the names the stack carries.
@@ -155,7 +171,7 @@ var (
 	})
 	// The slug is read from the role ARN, path and name both.
 	awsRole = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^arn:(aws[a-z-]*):iam::(\d{12}):role/crewlet/([a-z0-9-]+)/crewlet-([a-z0-9-]+)-(provisioner|broker)$`)
+		return regexp.MustCompile(`^arn:(aws[a-z-]*):iam::(\d{12}):role/crewlet/([a-z0-9-]+)/crewlet-([a-z0-9-]+)-(provisioner|broker|atlas)$`)
 	})
 )
 
@@ -167,13 +183,15 @@ func AWSRegion(name string) bool { return awsRegion().MatchString(name) }
 
 // ParseAWSConnection checks that value is one company's stack output: the
 // trust anchor, the provisioner's profile and role, the seats' profile and the
-// broker, in one account and partition, with the trust anchor and profiles in
-// the home Region. Each refusal names what to copy again.
+// broker, then the atlas's profile and role where the stack holds them, in
+// one account and partition, with the trust anchor and profiles in the home
+// Region. Each refusal names what to copy again.
 func ParseAWSConnection(slug, homeRegion, value string) (AWSConnection, error) {
 	parts := strings.Split(strings.TrimSpace(value), ",")
-	if len(parts) != 5 {
+	if len(parts) != 5 && len(parts) != 7 {
 		return AWSConnection{}, fmt.Errorf("this is not a Crewlet stack output, which holds five ARNs "+
-			"joined by commas: copy the %s value on the stack's Outputs tab", AWSConnectionOutput)
+			"joined by commas, or seven with the atlas's role: copy the %s value on the stack's Outputs tab",
+			AWSConnectionOutput)
 	}
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
@@ -204,6 +222,25 @@ func ParseAWSConnection(slug, homeRegion, value string) (AWSConnection, error) {
 		return AWSConnection{}, errors.New("its trust anchor, profiles and roles are not in one account")
 	}
 	c.Partition, c.Account = r[1], r[2]
+	if len(parts) == 7 {
+		c.AtlasProfileARN, c.AtlasRoleARN = parts[5], parts[6]
+		ap := awsProfile().FindStringSubmatch(c.AtlasProfileARN)
+		ar := awsRole().FindStringSubmatch(c.AtlasRoleARN)
+		switch {
+		case ap == nil:
+			return AWSConnection{}, errors.New("its sixth ARN is not a Roles Anywhere profile")
+		case c.AtlasProfileARN == c.ProvisionerProfileARN || c.AtlasProfileARN == c.SeatProfileARN:
+			return AWSConnection{}, errors.New("the atlas needs a profile of its own")
+		case ar == nil || ar[5] != "atlas":
+			return AWSConnection{}, errors.New("its seventh ARN is not a role crewlet/<slug>/crewlet-<slug>-atlas")
+		case ar[3] != slug || ar[4] != slug:
+			return AWSConnection{}, fmt.Errorf("its roles are not crewlet-%s's: this output is another company's stack", slug)
+		case ap[2] != homeRegion:
+			return AWSConnection{}, fmt.Errorf("its trust anchor and profiles are not in the home Region %s", homeRegion)
+		case ap[3] != r[2] || ar[2] != r[2] || ap[1] != r[1] || ar[1] != r[1]:
+			return AWSConnection{}, errors.New("its trust anchor, profiles and roles are not in one account")
+		}
+	}
 	return c, nil
 }
 

@@ -405,6 +405,22 @@ The engine reads the group for the company's [atlas](../concepts/atlas.md#what-i
 
 A read costs two calls for the group and one more per hundred projects, one per named project outside the group, and for each project that runs pipelines two calls plus one per environment read. When GitLab answers with its rate limit, or any listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A group holding more than 1,000 projects is not read: the standing says so, and nothing is retired. A repository, a pipeline or an environment that two complete reads at least a day apart both miss is retired from the atlas.
 
+### The files the atlas reads
+
+Where Gitlet does not mirror a project, the engine also reads its deploy and dependency files through GitLab, for [what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare). The closed list of files, what is decoded from each and what is never read are the ones Gitlet's repositories are read by: GitLab is asked for a tree and for the listed files on it, and for nothing else. It is read under the same credential as the group, with `GET` alone.
+
+| Call | Role | Why |
+|---|---|---|
+| `GET /projects/{id}/repository/branches/{branch}` | Reporter, on a private project | where the default branch is, once a project a pass |
+| `GET /projects/{id}/repository/tree?recursive=true`, by keyset, 100 a page | Reporter, on a private project | the tree at that commit, asked only when the branch moved |
+| `GET /projects/{id}/repository/blobs/{sha}/raw` | Reporter, on a private project | one listed file whose content changed, by the object the tree names |
+
+**An `.env` file is never asked for.** Neither is a values file, a variable or state file, a manifest named for secrets, `.gitlab-ci.yml`, or anything else off the list. A `Dockerfile` and a `Procfile` say what they say by being there and are not read. A symbolic link is never read as a file. GitLab's tree carries no sizes, so a listed file is read up to 64 KiB and one past that is counted and dropped.
+
+**Bounds.** One pass reads at most 50 files and a mebibyte of them and lists at most 100 trees; the rest is read five minutes later. A tree past 10,000 entries has none of its files read. When GitLab answers with its rate limit the pass stops and is run again five minutes later.
+
+**What is not read.** An archived project, an empty one, one whose repository is switched off, and a project Gitlet mirrors, which Gitlet's own scan reads. A project whose code GitLab refuses the credential (its owner is below Reporter there) is left as it was. While the group or a named project is not shown to the credential, nothing a project's files declared is withdrawn.
+
 ---
 
 ## Webhooks

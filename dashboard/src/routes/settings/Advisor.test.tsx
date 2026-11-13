@@ -11,6 +11,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { overrideChunkForTest } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
 import type { AdvisorAnswer, AdvisorFinding } from "~/protocol/advisor.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -404,4 +405,92 @@ test("the go-live review says what each agent can do and where it runs", async (
     "A container on the engine host, 4 GB of memory, with a browser (chromium) and no container runtime.",
   );
   expect(sre.textContent).toContain("No tool servers");
+});
+
+/** An atlas finding as a holder of the atlas app is answered it. */
+const UNOWNED: AdvisorFinding = {
+  class: "atlas.unowned",
+  severity: "note",
+  actor: "owner",
+  source: "atlas",
+  area: "atlas",
+  subject: { kind: "atlas" },
+  title: "2 services have no owner.",
+  why: "Nobody is named as answering for a service the company runs.",
+  path: "",
+  evidence: [{ key: "entries", value: 2 }],
+  entries: [
+    {
+      id: "0195a1c0-0000-8000-8000-00000000c0de",
+      kind: "service",
+      key: "checkout-api",
+      name: "Checkout API",
+    },
+    {
+      id: "0195a1c0-0000-8000-8000-00000000b111",
+      kind: "service",
+      key: "billing",
+      name: "Billing",
+    },
+  ],
+  fix: {
+    kind: "atlas_act",
+    sentence: "Name the seat or the unit that answers for each.",
+    options: [],
+    act: { tool: "atlas_set_owner", asks: "owner" },
+  },
+};
+
+test("an atlas finding opens its fix from the atlas's own chunk, and writes no settings", async () => {
+  const restore = overrideChunkForTest("atlas", async () => ({
+    AdvisorAtlasFix: ({ finding }: { finding: AdvisorFinding }) => (
+      <div role="dialog" aria-label="atlas fix">
+        {(finding.entries ?? []).map((entry) => entry.name).join(", ")}
+      </div>
+    ),
+  }));
+  try {
+    await mount({ revision: "r1", findings: [UNOWNED], unread: [] });
+    expect(screen.getByText("2 services have no owner.")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Review the fix" }));
+      await settled();
+    });
+    expect(screen.getByRole("dialog", { name: "atlas fix" }).textContent).toBe(
+      "Checkout API, Billing",
+    );
+    expect(getEntity).not.toHaveBeenCalled();
+    expect(putEntity).not.toHaveBeenCalled();
+  } finally {
+    restore();
+  }
+});
+
+test("an atlas finding answered without its entries offers nothing to send", async () => {
+  await mount({
+    revision: "r1",
+    findings: [
+      {
+        ...UNOWNED,
+        entries: undefined,
+        fix: {
+          kind: "none",
+          sentence:
+            "Reading the atlas takes the Atlas permission. Somebody who holds it sees which, and can fix it.",
+          options: [],
+        },
+      },
+    ],
+    unread: [],
+  });
+  expect(screen.getByText("2 services have no owner.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Review the fix" })).toBeNull();
+  expect(screen.queryByText(/Checkout API/)).toBeNull();
+});
+
+test("an atlas the server couldn't read is said", async () => {
+  await mount({ revision: "r1", findings: [], unread: ["atlas", "atlas_sources"] });
+  expect(screen.getByText(/The atlas couldn't be read/)).toBeTruthy();
+  expect(screen.getByText(/The atlas's sources couldn't be read/)).toBeTruthy();
+  expect(screen.queryByText("Nothing to change")).toBeNull();
 });

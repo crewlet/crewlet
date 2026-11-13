@@ -157,6 +157,13 @@ export function Band({
           <StackedBar segments={sources} />
           <Legend items={sources.map((one) => ({ ...one, value: one.value.toLocaleString() }))} />
           {waiting && <ReviewLink waiting={waiting} />}
+          <Link
+            href={href(["company", "atlas", "sources"])}
+            className="atlas-band__link"
+            title="Each integration the atlas reads, how its last read went, and Refresh now"
+          >
+            Sources
+          </Link>
         </div>
       </Card>
     </div>

@@ -12,14 +12,14 @@ package httpjson
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
 	"a2a": true, "a2atest": true, "accessdomain": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-	"advisor": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "deployfiles": true,
+	"advisor": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
 	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
 	"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,
 	"assistanttest": true, "capability": true, "cards": true, "catalog": true, "evals": true, "exec": true,
 	"live": true, "proposal": true, "tabular": true, "wire": true,
-	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
+	"atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "backuptest": true, "brandformat": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
 	"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "chatlet": true, "checkrun": true, "edits": true,

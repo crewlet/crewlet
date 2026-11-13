@@ -275,6 +275,39 @@ func TestAPageRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
 	}
 }
 
+// A RELAYED PAGE RECORD A NEWER BUILD WROTE IS DEFERRED TO A PEER THAT READS
+// IT, on the parser's side of the relay as on the feed's.
+//
+// The feed on a newer node relays the record's wake, and whichever node wins
+// the delivery parses it, so an older node meets the record here too. Refused
+// as a payload nobody can read, the notify service acked it on the one group
+// every node takes inbound mail from, and the watcher's wake was gone for the
+// fleet (crewlet#993); answered with the spine's deferral, the service passes
+// it to a peer on the newer build.
+//
+// Mutation: return the decode's error as it is, and no deferral reaches the
+// service.
+func TestARelayedPageRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
+	t.Parallel()
+	future, err := encodeSuiteRecord(string(doclet.KindPage), "page-1", "op-1",
+		doclet.RecordVersion+1)
+	if err != nil {
+		t.Fatalf("encode a newer build's record: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(future, &body); err != nil {
+		t.Fatalf("read the record back: %v", err)
+	}
+
+	_, err = doclet.NewParser(doclet.ParserOptions{}).Parse(t.Context(),
+		types.RawWebhook{Body: body}, nil)
+	var deferral *notify.Deferral
+	if !errors.As(err, &deferral) || deferral.Reason != notify.DeferNewerRecord {
+		t.Fatalf("a relayed page record a newer build wrote answered %v, want it "+
+			"deferred to a peer on that build (%s)", err, notify.DeferNewerRecord)
+	}
+}
+
 // registry is the company roster, holding exactly these handles.
 func registry(t *testing.T, handles ...string) *notify.Registry {
 	t.Helper()

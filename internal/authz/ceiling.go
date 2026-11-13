@@ -73,13 +73,14 @@ type Ceiling struct {
 // the agent asks answers in a turn worked for whoever the asking turn worked
 // for, and the answer wakes the agent in a turn worked for them too; and what
 // the agent writes on the engine's own surfaces (a work item, a page or a
-// comment on one, a Chatlet message) wakes its colleague in a turn worked for
-// them as well (ADR-0109, internal/agent/builtin's workingForOf). The edges
-// are what carries no requester: a vendor's surface, whose wake comes back by
-// webhook with no field of the engine's, and Gitlet's records, until
-// crewlet#798's piece 4c. Nor does it reach what the agent already knows. It
-// bounds what a turn does for its requester, not what an agent may go on to
-// tell them.
+// comment on one, a Chatlet message, a change, a review, a comment or a push
+// on Gitlet) wakes its colleague in a turn worked for them as well (ADR-0109,
+// internal/agent/builtin's workingForOf). The edges are what carries no
+// requester: a vendor's surface, whose wake comes back by webhook with no
+// field of the engine's, and, until crewlet#798's piece 4c-ii, what the
+// engine records on Gitlet about an earlier write. Nor does it reach what the
+// agent already knows. It bounds what a turn does for its requester, not what
+// an agent may go on to tell them.
 //
 // # Except the edits an agent makes to its own work
 //

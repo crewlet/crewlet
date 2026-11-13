@@ -341,9 +341,9 @@ const (
 	// some thirty-three times that, which no seat working as intended meets,
 	// and it caps what a seat pushing in a loop costs the code log at a
 	// thousand push records a day — a seat's push alone in its record is
-	// at most 1 625 bytes, from its coding box (internal/gitlet's
-	// BenchmarkPushLogBytes, its push=box arm; 1 481 where the engine builds
-	// it for a tool), so about 1.6 MB a day — rather than without bound.
+	// at most 1 667 bytes, from its coding box (internal/gitlet's
+	// BenchmarkPushLogBytes, its push=box arm; 1 528 where the engine builds
+	// it for a tool), so about 1.7 MB a day — rather than without bound.
 	DefaultCodePushesPerSeatDay = 1_000
 
 	// CodeMinPushesPerSeatDay and CodePushesPerSeatDayCeiling bound

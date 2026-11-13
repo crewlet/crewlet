@@ -350,6 +350,10 @@ type RunEnding struct {
 	// Event is the harness's own terminal event — see [Result.Event].
 	Event   string
 	Success bool
+	// Refused says the run's provider refused the request its harness made
+	// as built ([requestRefused]): the resume carries its round on once in a
+	// fresh session, or ends the turn on the provider's message.
+	Refused bool
 	// At is when the run's ending was first read back from its box
 	// ([LaunchRecord.CollectedAt]), a waiter's poll at most after the run
 	// ended: what a reset the vendor names as a time of day ("resets
@@ -1774,7 +1778,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
-			Success: result.Success, At: run.Launch.CollectedAt},
+			Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
 	})
 	return err
 }
@@ -1836,7 +1840,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// collection to ask again, which changes nothing else and asks the same,
 	// uncounted, since the store's silence is no failure of the box's
 	// ([ErrStoreSilent]).
-	if ranOutOfContext(run, result) {
+	if sessionSpent(run, result) {
 		sessions := sessionsRanOutOfContext(run, result)
 		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
@@ -2337,6 +2341,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// question it asked on its way out, so judged on the row as claimed, its
 	// session was taken, kept and then retired by the same collection.
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
+	at.refused = requestRefused(asCollected(run, result, ended))
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
@@ -2758,6 +2763,8 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		switch {
 		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		case requestRefused(run, result):
+			rec.ErrorKind = types.ExecutorErrorRequestRefused
 		case result.OutOfMemory && Placement(run.Placement).OwnsMemory():
 			// A direct box's kills are the engine host's domain's, recorded
 			// below and never the run's ending.

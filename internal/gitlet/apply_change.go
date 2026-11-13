@@ -38,7 +38,8 @@ import (
 
 // applyChangeOpen opens the change o names: its row, numbered next_change and
 // advancing it; its body, where it has one; its owner as its first author; and
-// its first revision, the head its decide read off the source branch.
+// its first revision, the head its decide read off the source branch, keeping
+// whom the open was made for ([keptCarrier]).
 func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyContext, o ChangeOpen) (int, error) {
 	owner, kind := o.Owner.party()
 	if owner == "" {
@@ -83,8 +84,12 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	if _, err := tx.ExecContext(ctx, addAuthorSQL, o.ChangeID, owner, string(kind), 1, at.packed); err != nil {
 		return 0, fmt.Errorf("gitlet: write change %s's owner as its author at %s: %w", o.ChangeID, at.position, err)
 	}
+	madeFor, columnErr := carrierColumn(keptCarrier(at, o.WorkingFor))
+	if columnErr != nil {
+		return 0, columnErr
+	}
 	if _, err := tx.ExecContext(ctx, addRevisionSQL, o.ChangeID, 1, o.Head, owner, string(kind), "", at.packed,
-		at.at()); err != nil {
+		at.at(), madeFor); err != nil {
 		return 0, fmt.Errorf("gitlet: write change %s's first revision at %s: %w", o.ChangeID, at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, openedSQL, at.packed, o.RepoID); err != nil {
@@ -227,8 +232,12 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	}
 	if revision != nil {
 		by, kind := revision.By.party()
+		madeFor, columnErr := carrierColumn(keptCarrier(at, revision.WorkingFor))
+		if columnErr != nil {
+			return 0, columnErr
+		}
 		if _, err := tx.ExecContext(ctx, addRevisionSQL, changeID, next.revision, next.head, by, string(kind), "",
-			at.packed, at.at()); err != nil {
+			at.packed, at.at(), madeFor); err != nil {
 			return 0, fmt.Errorf("gitlet: write change %s's revision %d at %s: %w", changeID, next.revision,
 				at.position, err)
 		}
@@ -385,12 +394,21 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			return 0, fmt.Errorf("gitlet: %s: %w", part.what, err)
 		}
 	}
+	// WHOM EACH REVISION'S PUSH WAS MADE FOR, as its entry carries it.
+	madeFor := make([]sql.NullString, len(w.revisions))
+	for i, r := range w.revisions {
+		var err error
+		if madeFor[i], err = carrierColumn(r.workingFor); err != nil {
+			return 0, err
+		}
+	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
-		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
+		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at,
+			working_for) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
 		func(i int) []any {
 			r := w.revisions[i]
-			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at}
+			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i]}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the revisions: %w", err)
 	}
@@ -560,8 +578,9 @@ const (
 	deleteBodySQL = `DELETE FROM code_change_bodies WHERE change_id = ?`
 	addAuthorSQL  = `INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position)
 		VALUES (?, ?, ?, ?, ?) ON CONFLICT (change_id, author) DO NOTHING`
-	addRevisionSQL = `INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (change_id, n) DO NOTHING`
+	addRevisionSQL = `INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at,
+			working_for)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (change_id, n) DO NOTHING`
 
 	// insertChangesSQL and changeValuesSQL are change rows as [writeChanges]
 	// writes them, a chunk a statement: every column [changeColumns] names,

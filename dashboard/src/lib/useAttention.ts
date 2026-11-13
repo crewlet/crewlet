@@ -19,6 +19,8 @@ import { indexOrg, nameOfIn } from "./seats.ts";
 import { RUNS_POLL_MS } from "./runs.ts";
 import { MCP_STATUS_POLL_MS } from "./mcpStatusPoll.ts";
 import { useViewer } from "./viewer.ts";
+import { ATLAS, holds } from "./access.ts";
+import type { AtlasReviewItem } from "~/contract/atlas.ts";
 
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
@@ -29,6 +31,24 @@ const NO_FINDINGS: readonly AdvisorFinding[] = [];
 
 /** Nothing unread: a reader the advisor does not answer, or an answer not in yet. */
 const NO_SETUP_UNREAD: readonly string[] = [];
+
+const NO_DRIFT: readonly AtlasReviewItem[] = [];
+
+/** What contradicts the reader's own word in the atlas, and nothing else of its review. */
+const MY_DRIFT = { mine: true, kind: "disagreement" } as const;
+
+/** How often the reader's own drift is asked: the atlas moves on reads that are minutes apart. */
+export const ATLAS_DRIFT_POLL_MS = 60_000;
+
+/**
+ * Whether this reader's word can be contradicted in the atlas: a holder of
+ * Atlas who acts as a seat. A credential acting as no seat sets nothing in a
+ * person's name, and the engine answers it none.
+ */
+function useReadsAtlasDrift(): boolean {
+  const viewer = useViewer();
+  return !viewer.loading && viewer.handle !== "" && holds(viewer.grants, ATLAS);
+}
 
 /** How often the queue asks the advisor again: a setup changes by revisions. */
 export const ADVISOR_POLL_MS = 60_000;
@@ -51,7 +71,12 @@ function useReadsMcpAlarms(): boolean {
  * reader who is not asked their alarms.
  */
 export function useUnwatched(): readonly Subject[] {
-  return useReadsMcpAlarms() ? [] : ["tools", "setup", "alarms", "holds"];
+  const admin = useReadsMcpAlarms();
+  const atlas = useReadsAtlasDrift();
+  return [
+    ...(admin ? [] : (["tools", "setup", "alarms", "holds"] as const)),
+    ...(atlas ? [] : (["atlas"] as const)),
+  ];
 }
 
 export function useAttention(): Attention[] {
@@ -87,6 +112,12 @@ export function useAttention(): Attention[] {
   const notices = readsMcp && Array.isArray(advisor?.notices) ? advisor.notices : NO_NOTICES;
   const findings = readsMcp && Array.isArray(advisor?.findings) ? advisor.findings : NO_FINDINGS;
   const setupUnread = readsMcp && Array.isArray(advisor?.unread) ? advisor.unread : NO_SETUP_UNREAD;
+  const readsDrift = useReadsAtlasDrift();
+  const { data: drift } = useQuery("atlas_review", MY_DRIFT, {
+    pollMs: ATLAS_DRIFT_POLL_MS,
+    enabled: readsDrift,
+  });
+  const atlasDrift = readsDrift && Array.isArray(drift?.items) ? drift.items : NO_DRIFT;
   return useMemo(
     () =>
       attentionQueue({
@@ -102,6 +133,7 @@ export function useAttention(): Attention[] {
         notices,
         findings,
         setupUnread,
+        atlasDrift,
       }),
     [
       agents,
@@ -116,6 +148,7 @@ export function useAttention(): Attention[] {
       notices,
       findings,
       setupUnread,
+      atlasDrift,
     ],
   );
 }

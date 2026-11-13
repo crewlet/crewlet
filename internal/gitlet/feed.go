@@ -170,17 +170,6 @@ func wakesAnybody(kind ObjectKind, op OpKind) bool {
 	return false
 }
 
-// wakesASeat reports whether concerns tell a seat anything: some handle
-// hears ([Concern.Hears]) that is not a person's.
-func wakesASeat(concerns []Concern) bool {
-	for _, c := range concerns {
-		if c.Hears() && !c.Change.Person(c.Handle) {
-			return true
-		}
-	}
-	return false
-}
-
 // routedActor is who made the change a payload records — the one actor its
 // routings share — or "" for a record of several actors (a push record of
 // several pushers) or of none (the home's records but a revision's facts and

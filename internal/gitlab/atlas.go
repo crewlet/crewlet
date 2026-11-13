@@ -83,26 +83,40 @@ func atlasCredential(cfg *config.GitLab, env *config.Resolver) (token, setting s
 	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken)), settingAdminToken
 }
 
-// Collect reads the group and reports it as claims in the integration's
-// voice. It writes nothing at GitLab.
-func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
+// atlasAccess is what a read of the group is made with: the client under the
+// read's one credential, counted, and what the settings say of the group.
+type atlasAccess struct {
+	client *Client
+	calls  func() int
+	web    string
+	host   string
+	group  string
+	// setting is where the credential is held, for a finding to name.
+	setting string
+	// extras is the projects the settings name beside the group's own.
+	extras []string
+}
+
+// openAtlas resolves the access a read is made with, and answers
+// [integration.ErrNotConfigured] where the company gave none.
+func openAtlas(in collect.Input) (atlasAccess, error) {
 	if in.Config == nil {
-		return collect.Read{}, fmt.Errorf("gitlab: %w: no company document", integration.ErrNotConfigured)
+		return atlasAccess{}, fmt.Errorf("gitlab: %w: no company document", integration.ErrNotConfigured)
 	}
 	cfg := in.Config.Integrations.GitLab
 	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil || strings.TrimSpace(cfg.Provisioning.Group) == "" {
-		return collect.Read{}, fmt.Errorf("gitlab: %w: integrations.gitlab is off or names no group",
+		return atlasAccess{}, fmt.Errorf("gitlab: %w: integrations.gitlab is off or names no group",
 			integration.ErrNotConfigured)
 	}
 	token, setting := atlasCredential(cfg, in.Env)
 	if token == "" {
-		return collect.Read{}, fmt.Errorf("gitlab: %w: neither %s nor %s resolved, so there is nothing to read with",
+		return atlasAccess{}, fmt.Errorf("gitlab: %w: neither %s nor %s resolved, so there is nothing to read with",
 			integration.ErrNotConfigured, settingToken, settingAdminToken)
 	}
 	web := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(cfg.URL), "/"), APIPath)
 	at, err := url.Parse(web)
 	if err != nil || at.Hostname() == "" {
-		return collect.Read{}, errors.New("gitlab: integrations.gitlab.url is not an address with a host")
+		return atlasAccess{}, errors.New("gitlab: integrations.gitlab.url is not an address with a host")
 	}
 	base := in.HTTP
 	if base == nil {
@@ -111,32 +125,51 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 	counted, calls := collect.Counted(base)
 	client, err := NewClient(ClientOptions{URL: web, Token: token, HTTP: counted})
 	if err != nil {
-		return collect.Read{}, fmt.Errorf("%w: %w", integration.ErrNotConfigured, err)
+		return atlasAccess{}, fmt.Errorf("%w: %w", integration.ErrNotConfigured, err)
+	}
+	return atlasAccess{client: client, calls: calls, web: web, host: strings.ToLower(at.Hostname()),
+		group: strings.ToLower(strings.TrimSpace(cfg.Provisioning.Group)), setting: setting,
+		extras: cfg.Provisioning.Projects}, nil
+}
+
+// extraPaths is the projects the settings name beside the group's own, each
+// by its whole path: a bare name is one of the group's.
+func (a atlasAccess) extraPaths() []string {
+	var out []string
+	for _, path := range a.extras {
+		path = strings.Trim(strings.TrimSpace(path), "/")
+		if path != "" && !strings.Contains(path, "/") {
+			path = a.group + "/" + path
+		}
+		if path != "" {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// Collect reads the group and reports it as claims in the integration's
+// voice. It writes nothing at GitLab.
+func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
+	access, err := openAtlas(in)
+	if err != nil {
+		return collect.Read{}, err
 	}
 	r := &atlasRead{
-		b: collect.NewBuilder(integration.KindGitLab, in.Now), client: client, web: web,
-		host: strings.ToLower(at.Hostname()), group: strings.ToLower(strings.TrimSpace(cfg.Provisioning.Group)),
-		setting: setting, extras: cfg.Provisioning.Projects,
+		atlasAccess: access, b: collect.NewBuilder(integration.KindGitLab, in.Now),
 		unread: map[string]map[string]bool{partProjects: {}, partPipelines: {}, partEnvironments: {}},
 	}
 	if err := r.read(ctx); err != nil {
 		return collect.Read{}, err
 	}
-	r.b.Calls(calls())
+	r.b.Calls(access.calls())
 	return r.b.Read(), nil
 }
 
 // atlasRead is one read in flight.
 type atlasRead struct {
-	b      *collect.Builder
-	client *Client
-	web    string
-	host   string
-	group  string
-	// setting is where the read's credential is held, for a finding to name.
-	setting string
-	// extras is the projects the settings name beside the group's own.
-	extras []string
+	atlasAccess
+	b *collect.Builder
 	// unread is the repositories each part could not be read for, by key.
 	unread map[string]map[string]bool
 }
@@ -211,12 +244,8 @@ func (r *atlasRead) withExtras(ctx context.Context, projects []InventoryProject)
 	for _, p := range projects {
 		listed[strings.ToLower(p.Path)] = true
 	}
-	for _, path := range r.extras {
-		path = strings.Trim(strings.TrimSpace(path), "/")
-		if path != "" && !strings.Contains(path, "/") {
-			path = r.group + "/" + path
-		}
-		if path == "" || listed[strings.ToLower(path)] {
+	for _, path := range r.extraPaths() {
+		if listed[strings.ToLower(path)] {
 			continue
 		}
 		listed[strings.ToLower(path)] = true

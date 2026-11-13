@@ -70,7 +70,7 @@ func TestCheckStackNamesEveryDifference(t *testing.T) {
 	t.Parallel()
 	regions := []string{"us-east-2", "us-east-1"}
 	none := func(string, string, *obj, *string) {}
-	r, err := fakeStack(t, regions, none).client(t).CheckStack(context.Background(), regions)
+	r, err := fakeStack(t, regions, none).client(t).CheckStack(context.Background(), regions, false)
 	if err != nil || len(r.Drift) != 0 || len(r.Split) != 0 || r.Outdated() || r.Roles != 40 || r.RolesQuota != 1000 {
 		t.Fatalf("a rendered stack reads %+v, %v", r, err)
 	}
@@ -118,7 +118,7 @@ func TestCheckStackNamesEveryDifference(t *testing.T) {
 		if tc.grants != nil {
 			f.grants = tc.grants
 		}
-		r, err := f.client(t).CheckStack(context.Background(), regions)
+		r, err := f.client(t).CheckStack(context.Background(), regions, false)
 		if err != nil {
 			t.Errorf("%s: %v", tc.name, err)
 			continue

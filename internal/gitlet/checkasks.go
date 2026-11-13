@@ -70,7 +70,7 @@ import (
 //
 // Neither arm is a record of its own: each decides one of the subject's
 // existing records (check_queued, check_started, check_finished), whose
-// fields are in the base format under the condition the subject states. The
+// fields are in the base format, as the checks subject is (checks.go). The
 // requests are estate requests, and take no versionedFields row.
 
 // CheckRerun asks for the attempt after the latest its asker read of a check

@@ -33,6 +33,13 @@
 // any binding, disable or delete can read back stale. Every read that follows
 // the engine's own write waits through one bound ([awaitObserved]), within
 // which a stale answer is never drift and never a fault.
+//
+// # The atlas reads the projects as the provisioner
+//
+// Every active project the provisioner can read is an account of the atlas,
+// and the APIs enabled on it say what it is used for, as closed words
+// (ADR-0137, atlas.go). The read takes no role beyond the provisioner's own,
+// and a read's 429 is waited out where a write's never is ([Client.do]).
 package googlecloud
 
 import "net/url"

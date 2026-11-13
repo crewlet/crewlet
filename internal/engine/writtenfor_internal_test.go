@@ -6,6 +6,8 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -70,8 +73,9 @@ type writeFamily struct {
 	other iam.Grant
 }
 
-// writeFamilies are Worklet's, Doclet's and Chatlet's: an item assigned to the
-// woken seat, a page comment naming it, and a message asking it in a room.
+// writeFamilies are Worklet's, Doclet's, Chatlet's and Gitlet's: an item
+// assigned to the woken seat, a page comment naming it, a message asking it in
+// a room, and a comment on a change naming it.
 func writeFamilies() []writeFamily {
 	return []writeFamily{
 		{name: "an item assigned", app: iam.GrantWorklet, write: fileWork, wake: assignedWake,
@@ -80,6 +84,8 @@ func writeFamilies() []writeFamily {
 			wake: namedOnPageWake, probe: postInRoom, other: iam.GrantChatlet},
 		{name: "a message asking the seat", app: iam.GrantChatlet, write: askInRoom, wake: roomMessageWake,
 			probe: readPage, other: iam.GrantDoclet},
+		{name: "a comment on a change naming the seat", app: iam.GrantGitlet, write: commentOnChange,
+			wake: changeCommentWake, probe: postInRoom, other: iam.GrantChatlet},
 	}
 }
 
@@ -235,6 +241,62 @@ func postInRoom(t *testing.T, o *org.Organization, people personSeats, turn *tur
 		builtin.PostMessageTool), turn, map[string]any{"channel": launchRoom, "asks": false, "body": "on it"})
 }
 
+// launchChange is the change a seat's comment in these cases is said on,
+// launch!1, and its repository.
+const (
+	launchRepoID   = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d31"
+	launchChangeID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d32"
+)
+
+// changeComments is Gitlet holding launch!1 as the comment tool reads it,
+// recording every write of its conversation it is asked: the code writes no
+// case here makes are codeWriteHost's.
+type changeComments struct {
+	*codeWriteHost
+
+	mu        sync.Mutex
+	conversed []gitlet.ConversationWrite
+}
+
+func (h *changeComments) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	repo := gitlet.RepoRef{ID: launchRepoID, Name: "launch", Status: gitlet.RepoStatusActive,
+		ManagedBy: gitlet.ManagedConfig, Kind: gitlet.RepoProject,
+		Owner: gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "cto"}, Visibility: gitlet.VisibilityCompany,
+		DefaultBranch: "main", Position: codeLogAt(4)}
+	head := strings.Repeat("b", 40)
+	change := gitlet.ChangeRow{ID: launchChangeID, RepoID: launchRepoID, Number: 1, Title: "Retry the upload",
+		State: gitlet.ChangeStateOpen, SourceRef: "refs/heads/retry", TargetRef: "refs/heads/main", Head: head,
+		Revision: 1, Owner: "cto", OwnerKind: gitlet.PartyAgent}
+	revision := gitlet.RevisionRow{N: 1, Head: head, Pusher: "cto", PusherKind: gitlet.PartyAgent}
+	return gitlet.ReadAnswer{Resolved: &repo, Position: codeLogAt(5), Level: q.Fresh.Level,
+		ChangeBrief: &gitlet.ChangeSummary{ChangeRow: change, Repo: "launch", Ref: "launch!1"},
+		Revisions:   []gitlet.RevisionRow{revision}}, nil
+}
+
+func (h *changeComments) Converse(_ context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
+	error) {
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.conversed = append(h.conversed, w)
+	return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
+}
+
+// commentOnChange is code_comment_on_change in turn, naming woken on launch!1.
+func commentOnChange(t *testing.T, o *org.Organization, people personSeats, turn *turnctx.Turn,
+	woken string) *types.WorkingFor {
+
+	t.Helper()
+	host := &changeComments{codeWriteHost: newCodeWriteHost()}
+	got := called(t, seatTool(t, o, people, builtin.Deps{Code: builtin.CodeDeps{Code: host, Writer: host,
+		Holder: host, Chart: orgchart.Of(o)}}, builtin.CodeCommentOnChangeTool), turn, map[string]any{
+		"change": "launch!1", "body": "@" + woken + " is the retry loop right?"})
+	if got.Failed || len(host.conversed) != 1 || host.conversed[0].Comment == nil {
+		t.Fatalf("code_comment_on_change answered %q, writing %d times", got.Output, len(host.conversed))
+	}
+	return carrierOf(t, host.conversed[0].WrittenFor)
+}
+
 // carrierOf is whom an agent's write was made for, as the store reads it off
 // the actor ([types.WrittenFor.For]): a write whose actor states nobody fails
 // the case, as the store refuses it.
@@ -330,6 +392,43 @@ func roomMessageWake(t *testing.T, author, woken string, carrier *types.WorkingF
 		t.Fatalf("the message relayed nothing: %v", err)
 	}
 	return rawDelivery(t, chatlet.Source, delivery.Body)
+}
+
+// changeCommentWake is author's comment on launch!1 naming woken, written for
+// carrier: the record the change writer makes of [commentOnChange]'s call,
+// whose routing names author and, where it wakes a seat, whom author wrote
+// for, as gitlet's routingFor stamps them — relayed as the code feed relays
+// it.
+func changeCommentWake(t *testing.T, author, woken string, carrier *types.WorkingFor) *events.Event {
+	t.Helper()
+	comment := gitlet.Comment{RepoID: launchRepoID, ChangeID: launchChangeID,
+		CommentID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d33", ThreadID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d33",
+		By: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: author}, Body: "@" + woken + " is the retry loop right?",
+		Routing: &gitlet.ChangeRouting{ChangeID: launchChangeID, ChangeRef: "launch!1", RepoName: "launch",
+			Title: "Retry the upload", Actor: author, Owner: "cto", OwnerKind: gitlet.PartyAgent,
+			Mentions: []string{woken}, WorkingFor: carrier}}
+	body, err := json.Marshal(comment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := gitlet.MutationRecord{
+		RecordEnvelope: gitlet.RecordEnvelope{
+			OpID: "op-change-comment-" + woken, Subject: gitlet.ChangeSubject(launchChangeID), Op: gitlet.OpComment,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "node-a",
+			Scope: gitlet.Scope{gitlet.RepoPath(launchRepoID), gitlet.ChangePath(launchChangeID)},
+		},
+		Mutation: body, Actor: "node-a", ActorKind: gitlet.ActorSystem,
+	}
+	payload, err := gitlet.Encode(record)
+	if err != nil {
+		t.Fatalf("encode the comment: %v", err)
+	}
+	delivery, wake, err := gitlet.NewTranslator().Translate(t.Context(),
+		changefeed.Record{Payload: payload, Key: record.Subject.Wire()})
+	if err != nil || !wake {
+		t.Fatalf("the comment relayed nothing: %v", err)
+	}
+	return rawDelivery(t, gitlet.Source, delivery.Body)
 }
 
 // wokenTurn is the turn handle is handed for the one wake delivery puts on its
@@ -449,7 +548,7 @@ func TestARequesterRidesEveryHopOfWhatSeatsWrite(t *testing.T) {
 	reg := partyRegistry(o, nil)
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	people := personSeats{"ada": {Kind: iam.KindPerson, Seat: "ada", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet, iam.GrantChatlet}}}
+		Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet, iam.GrantChatlet, iam.GrantGitlet}}}
 	for _, family := range writeFamilies() {
 		cto := &turnctx.Turn{Org: o, Seat: o.AgentSeatByHandle("cto"), RunID: statelog.NewOpID(time.Now(), ""),
 			Requester: "ada"}
@@ -535,6 +634,8 @@ func TestAWriteWakesATurnWorkingForWhoeverItWasWrittenFor(t *testing.T) {
 		}), ada},
 		"an agent's write for nobody else": {wake(types.ExternalNotification{NotificationSource: doclet.Source,
 			Writer: by(iam.ActorAgent, nil)}), nil},
+		"an agent's code write for ada": {wake(types.ExternalNotification{NotificationSource: gitlet.Source,
+			Writer: by(iam.ActorAgent, ada)}), ada},
 		"a person's writer handed a carrier": {wake(types.ExternalNotification{
 			NotificationSource: worklet.Source, Writer: by(iam.ActorHuman, ada)}), nil},
 		"a vendor's notification": {wake(types.ExternalNotification{NotificationSource: "slack",

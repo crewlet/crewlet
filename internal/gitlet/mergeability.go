@@ -106,8 +106,8 @@ import (
 // MergeState is what a change's head revision does merged into its target's
 // tip (code_mergeability.state): a closed set ([MergeStates]).
 //
-// BASE FORMAT, under the condition [OpMergeability] states: a value only a
-// mergeability record carries, so a build that knows the op knows the set.
+// BASE FORMAT, as [OpMergeability] is: a value only a mergeability record
+// carries, so a build that knows the op knows the set.
 type MergeState string
 
 const (
@@ -214,8 +214,7 @@ func (h *ConflictsHeld) Add(p string) {
 // Mergeability records whether one revision of a change merges cleanly into
 // its target's tip, as the repository's home Gitlet node merged the two commits.
 //
-// Every field is in the base format, under the condition [OpMergeability]
-// states.
+// Every field is in the base format, as [OpMergeability] is.
 type Mergeability struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
@@ -246,12 +245,7 @@ type Mergeability struct {
 	// which the home sends none of; it names no conflicted path, which its
 	// apply leaves on the row as they are.
 	//
-	// BASE FORMAT, under the condition [OpMergeability] states: a field the
-	// op gained after it landed, so once a build without it has run it takes
-	// {Name: "Mergeability.Refresh", Since: 2, Op: "mergeability", Path:
-	// []string{"mutation", "refresh"}}, which an older build defers the
-	// record by rather than replace the row whole with a merge naming none of
-	// its conflicted paths.
+	// BASE FORMAT, as [OpMergeability] is.
 	Refresh bool `json:"refresh,omitempty"`
 	// ChangeVersion and ReadinessVersion are the versions of the change's
 	// row (code_changes.version) and of its conversation's readiness inputs
@@ -262,16 +256,7 @@ type Mergeability struct {
 	// the apply stores the answer the record was decided with and judges
 	// nothing again.
 	//
-	// BASE FORMAT, under the condition [OpMergeability] states, as Refresh
-	// is: once a build without them has run they take {Name:
-	// "Mergeability.ChangeVersion", Since: 2, Op: "mergeability", Path:
-	// []string{"mutation", "change_version"}}, {Name:
-	// "Mergeability.ReadinessVersion", Since: 2, Op: "mergeability", Path:
-	// []string{"mutation", "readiness_version"}}, {Name: "Mergeability.Ready",
-	// Since: 2, Op: "mergeability", Path: []string{"mutation", "ready"}} and
-	// {Name: "Mergeability.WaitsPerson", Since: 2, Op: "mergeability", Path:
-	// []string{"mutation", "waits_person"}}, which an older build defers the
-	// record by rather than store a merge whose readiness it dropped.
+	// BASE FORMAT, as [OpMergeability] is.
 	ChangeVersion    int64 `json:"change_version,omitempty"`
 	ReadinessVersion int64 `json:"readiness_version,omitempty"`
 	Ready            bool  `json:"ready,omitempty"`
@@ -286,11 +271,7 @@ type Mergeability struct {
 	// subject moves neither version. STAMPED BY THE WRITER, as the versions
 	// are; the home sends none.
 	//
-	// BASE FORMAT, under the condition [OpMergeability] states: once a build
-	// without it has run it takes {Name: "Mergeability.ChecksPosition", Since:
-	// 2, Op: "mergeability", Path: []string{"mutation", "checks_position"}},
-	// which an older build defers the record by rather than store a readiness
-	// whose checks it could not say it read.
+	// BASE FORMAT, as [OpMergeability] is.
 	ChecksPosition statelog.Position `json:"checks_position,omitzero"`
 	// ChartEpoch is the activation of the chart the decide judged the
 	// readiness by (configplane.ActivationStamp: [SeatRules.Epoch]), 0 for a
@@ -302,11 +283,7 @@ type Mergeability struct {
 	// ([ChangesDueQuery.ChartEpoch]). STAMPED BY THE WRITER, as the versions
 	// are; the home sends none.
 	//
-	// BASE FORMAT, under the condition [OpMergeability] states: once a build
-	// without it has run it takes {Name: "Mergeability.ChartEpoch", Since: 2,
-	// Op: "mergeability", Path: []string{"mutation", "chart_epoch"}}, which an
-	// older build defers the record by rather than store a readiness whose
-	// chart it could not say it judged by.
+	// BASE FORMAT, as [OpMergeability] is.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]) — the change's
 	// authors where it TURNED the merge into a conflict, its owner where the
@@ -335,12 +312,7 @@ type Mergeability struct {
 // ready, and a record that keeps the row's outcome turns neither. So it
 // carries no routing, and [RoutingsOf] names none for it.
 //
-// BASE FORMAT, AS A STATED CONDITION, as [OpMergeability] states it: once a
-// build without it has run, it takes {Name: "RecordEnvelope.Op
-// mergeability_kept", Since: 2, Path: []string{"op"}, Equals:
-// string(OpMergeabilityKept)}, with the same companions — which an older
-// build defers the record by rather than leave the row's tip and versions
-// behind it.
+// BASE FORMAT, as [OpMergeability] is.
 type MergeabilityKept struct {
 	// RepoID stays on the record because the deletion gate reads a change's
 	// repository off its record once a purge has removed the change's row
@@ -367,12 +339,7 @@ type MergeabilityKept struct {
 	// the change stays due at every pass, and a record moving nothing else
 	// would be a judgement the apply could not tell from none.
 	//
-	// ChartEpoch is BASE FORMAT, under the condition [OpMergeability]
-	// states: once a build without it has run it takes {Name:
-	// "MergeabilityKept.ChartEpoch", Since: 2, Op: "mergeability_kept",
-	// Path: []string{"mutation", "chart_epoch"}}, which an older build
-	// defers the record by rather than move the versions and leave the
-	// chart behind them.
+	// ChartEpoch is BASE FORMAT, as [OpMergeability] is.
 	ChangeVersion    int64             `json:"change_version,omitempty"`
 	ReadinessVersion int64             `json:"readiness_version,omitempty"`
 	ChecksPosition   statelog.Position `json:"checks_position,omitzero"`

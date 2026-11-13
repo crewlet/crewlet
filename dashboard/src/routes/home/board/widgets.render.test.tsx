@@ -260,6 +260,7 @@ describe("every widget a section offers", () => {
       "chatlet",
       "live",
       "doclet",
+      "atlas",
       "settings",
     ])
       expect(workspaces.has(w as never), w).toBe(true);
@@ -380,6 +381,33 @@ const SHORT_A_NODE = {
   ],
 };
 
+/** What every atlas answer carries, read in full. */
+const ATLAS_READ = { revision: "r1", coverage: [], withheld: 0 };
+
+/** An atlas read that could not read its own log. */
+const SHORT_A_SOURCE = [{ source: "log", complete: false, reason: "the log is behind" }];
+
+/** One entry as the atlas lists it. */
+const atlasRow = (name: string, health: string, reason?: string) => ({
+  id: `0d4b2f0e-7c1a-8b3d-9e5f-${name
+    .padEnd(12, "0")
+    .slice(0, 12)
+    .replace(/[^0-9a-f]/g, "a")}`,
+  kind: "service",
+  lane: "services",
+  name,
+  key: name,
+  relations: { depends_on: 0, used_by: 0 },
+  state: "confirmed",
+  word: "confirmed",
+  health,
+  ...(reason ? { reason } : {}),
+  signals: health === "quiet" ? 0 : 1,
+  review: false,
+  not_used_recently: false,
+  last_seen: "2026-11-13T09:00:00Z",
+});
+
 /**
  * Every question a widget reads whose answer can say it is short, answered
  * EMPTY and saying so: a record this build cannot decode met the read
@@ -389,6 +417,8 @@ const SHORT_A_NODE = {
  */
 const PARTIAL: Record<string, unknown> = {
   ...QUIET,
+  atlas_facets: { ...ATLAS_READ, health: {}, total: 0, coverage: SHORT_A_SOURCE },
+  atlas_entries: { ...ATLAS_READ, rows: [], total: 0, coverage: SHORT_A_SOURCE },
   decisions: { handle: "jane", items: [], total: 0, capped: false, complete: false },
   work_flow: { ...(QUIET.work_flow as object), complete: false },
   company_feed: { rows: [], complete: false },
@@ -735,5 +765,105 @@ describe("the People & access widget", () => {
     mount(<LeafView widget={leaf(WIDGETS.get("settings.people")!, {})} />);
     await settle();
     expect(await screen.findByText("No access problems found.")).toBeTruthy();
+  });
+});
+
+describe("the Atlas attention widget", () => {
+  const def = WIDGETS.get("atlas.attention")!;
+  const HOLDER = { ...ADMIN, grants: ["atlas"] };
+  const facets = (alerting: number, needsLook: number, quiet: number) => ({
+    ...ATLAS_READ,
+    health: { alerting, needs_look: needsLook, quiet },
+    total: alerting + needsLook + quiet,
+  });
+  const entries = (...rows: ReturnType<typeof atlasRow>[]) => ({
+    ...ATLAS_READ,
+    rows,
+    total: rows.length,
+  });
+
+  test("counts what is alerting and what needs a look, and links each entry", async () => {
+    const down = atlasRow("checkout", "alerting", "A monitor on it is alerting");
+    const odd = atlasRow(
+      "billing",
+      "needs_look",
+      "Two sources disagree, and nobody has settled it",
+    );
+    const { container } = mount(<LeafView widget={leaf(def, {})} />, HOLDER, {
+      atlas_facets: facets(1, 5, 40),
+      atlas_entries: entries(down, odd, atlasRow("search", "quiet")),
+    });
+    await settle();
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/Alerting\s*1/);
+    expect(text).toMatch(/Needs a look\s*5/);
+    expect(screen.getByText("A monitor on it is alerting")).toBeTruthy();
+    expect(screen.getByText("checkout").closest("a")?.getAttribute("href")).toBe(
+      `#/company/atlas/${down.id}`,
+    );
+    expect(screen.getByText("billing").closest("a")?.getAttribute("href")).toBe(
+      `#/company/atlas/${odd.id}`,
+    );
+    // A QUIET ENTRY A SHORT ATLAS ANSWERS IS NOT LISTED, and the rest are counted.
+    expect(screen.queryByText("search")).toBeNull();
+    expect(screen.getByText("4 more on the page").getAttribute("href")).toBe("#/company/atlas");
+  });
+
+  test("says nothing is alerting over a whole read of a quiet atlas", async () => {
+    mount(<LeafView widget={leaf(def, {})} />, HOLDER, {
+      atlas_facets: facets(0, 0, 12),
+      atlas_entries: entries(atlasRow("search", "quiet")),
+    });
+    await settle();
+    expect(screen.getByText("Nothing is alerting")).toBeTruthy();
+    expect(screen.getByText("12 entries in the atlas, all quiet.")).toBeTruthy();
+    expect(screen.queryByText("search")).toBeNull();
+  });
+
+  test("says an atlas with no entries is empty rather than quiet", async () => {
+    mount(<LeafView widget={leaf(def, {})} />, HOLDER, {
+      atlas_facets: facets(0, 0, 0),
+      atlas_entries: entries(),
+    });
+    await settle();
+    expect(screen.getByText("Nothing in the atlas yet")).toBeTruthy();
+    expect(screen.queryByText("Nothing is alerting")).toBeNull();
+  });
+
+  test("never says nothing is alerting over a read that missed a source", async () => {
+    const { container } = mount(<LeafView widget={leaf(def, {})} />, HOLDER, {
+      atlas_facets: { ...facets(0, 0, 12), coverage: SHORT_A_SOURCE },
+      atlas_entries: { ...entries(), coverage: SHORT_A_SOURCE },
+    });
+    await settle();
+    expect(screen.queryByText("Nothing is alerting")).toBeNull();
+    expect(container.textContent ?? "").toMatch(/was not read, so this may be short\./);
+  });
+
+  test("draws the refusal of a read that failed, and no count", async () => {
+    const { container } = mount(<LeafView widget={leaf(def, {})} />, HOLDER);
+    await settle();
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(BOUNDARY);
+    expect(text).not.toMatch(/Nothing is alerting|Alerting\s*0/);
+    expect(
+      container.querySelector('[role="alert"], .crewlet-callout, .crewlet-empty'),
+    ).toBeTruthy();
+  });
+
+  test("a reader without Atlas is shown no entry and asks the atlas nothing", async () => {
+    const asked: string[] = [];
+    const answer = (what: string, value: unknown) => () => {
+      asked.push(what);
+      return value;
+    };
+    const { container } = mount(<LeafView widget={leaf(def, {})} />, MEMBER, {
+      atlas_facets: answer("atlas_facets", facets(1, 0, 0)),
+      atlas_entries: answer("atlas_entries", entries(atlasRow("checkout", "alerting"))),
+    });
+    await settle();
+    expect(screen.getByText("You no longer have access to Atlas.")).toBeTruthy();
+    expect(container.textContent ?? "").not.toMatch(/checkout/);
+    expect(asked).toEqual([]);
   });
 });

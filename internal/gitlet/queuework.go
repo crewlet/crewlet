@@ -211,11 +211,9 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 // home cancels it for — [CheckReasonDequeued] where a change that candidate
 // merged left its queue, [CheckReasonAbandoned] for any other giving up.
 //
-// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
-// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
-// has run without it — none of the domain is on main — so a build answering a
-// `queue_due` read with none is one nobody ran; were one ever to run first,
-// its home would cancel nothing, which is what such a build knows.
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
+// domain landed on main with it ([RecordVersion]), so every build that answers
+// a `queue_due` read answers it.
 type AbandonedCheck struct {
 	CheckKey
 	CandidateID string      `json:"candidate_id"`

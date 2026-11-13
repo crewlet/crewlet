@@ -1,10 +1,8 @@
 package query
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/crewlet/crewlet/internal/deployfiles"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -116,12 +114,6 @@ func (r *read) codeFilesList(ctx context.Context, commit string, ans *gitlet.Cod
 	if err = r.failed(ctx, "listing of a commit's deploy and dependency files", res, err, narrow); err != nil {
 		return err
 	}
-	// BY PATH, so the files past the bound are the same ones on every node
-	// and at every read of the commit.
-	slices.SortFunc(files, func(a, b gitlet.CodeFile) int { return cmp.Compare(a.Path, b.Path) })
-	if len(files) > deployfiles.MaxFiles {
-		ans.More, files = len(files)-deployfiles.MaxFiles, files[:deployfiles.MaxFiles]
-	}
-	ans.Files = files
+	ans.Files, ans.More = deployfiles.Listed(files, func(f gitlet.CodeFile) string { return f.Path })
 	return nil
 }

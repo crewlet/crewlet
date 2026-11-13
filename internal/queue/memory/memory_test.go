@@ -67,6 +67,13 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
+			// The twin keeps no ack window: a delivery stays in flight
+			// until its handler's return is settled, however long that
+			// takes, so WithDeliveryAttempts's queue already outlasts a
+			// keep.
+			WithKeepingAckWindow: func(_ *testing.T, attempts int) queue.EventQueue {
+				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
+			},
 			// Total, so there is no failure to report — which is the
 			// point of the signature rather than an exemption from it: the
 			// twin cannot fail to answer, and the backend that can must say
@@ -387,7 +394,8 @@ func TestHistoryTrimKeepsTheNewestEntries(t *testing.T) {
 // TestABlockedDrainRestoresBeforeAFailureNotBehindIt pins the one twin
 // mechanism the shared return-order case cannot reach: a batch drain whose
 // earlier partition FAILED and whose later partition DEFERRED, on a mailbox
-// that held nothing else.
+// that held nothing else — and the same drain whose earlier partition PASSED,
+// which returns behind the waiting mail as a failure does.
 //
 // The deferral stops the drain, and what the drain never dispatched goes back
 // as a hand-back — at the head, behind the deferred partition. The failure is
@@ -398,74 +406,86 @@ func TestHistoryTrimKeepsTheNewestEntries(t *testing.T) {
 // put the undispatched partition behind a retry the broker serves after it.
 //
 // Three conversations, one event each, published while held so one chunk
-// carries all three: a fails, b defers, c is never dispatched. The mailbox
-// must then hold b (the deferral, at the head), c (handed back behind it), a
-// (the retry, behind both).
+// carries all three: a fails (or passes), b defers, c is never dispatched.
+// The mailbox must then hold b (the deferral, at the head), c (handed back
+// behind it), a (the retry, behind both).
+//
+// Mutation: leave a passed partition in the chunk's set, and c is spliced in
+// behind the passed a.
 func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	q := memory.New()
-	if err := q.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() { _ = q.Stop(ctx) })
+	for name, retry := range map[string]queue.Result{
+		"a failure": queue.Nak(errors.New("a fails once")),
+		"a pass":    queue.Pass("newer_record", errors.New("a peer reads a")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			q := memory.New()
+			if err := q.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(func() { _ = q.Stop(ctx) })
 
-	key := func(ev *events.Event) string { return ev.Type }
-	var mu sync.Mutex
-	var seen []string
-	first := map[string]bool{}
-	err := q.SubscribeBatch(ctx, "topic", "grp", func(_ context.Context, evs []*events.Event) queue.Result {
-		mu.Lock()
-		defer mu.Unlock()
-		label := evs[0].Type
-		seen = append(seen, label)
-		if first[label] {
-			return queue.Ack()
-		}
-		first[label] = true
-		switch label {
-		case "a":
-			return queue.Nak(errors.New("a fails once"))
-		case "b":
-			return queue.Defer(queue.DeferSeatMoved, "b is handed back once")
-		}
-		return queue.Ack()
-	}, key, queue.NewBatchOptions(0, 10))
-	if err != nil {
-		t.Fatalf("SubscribeBatch: %v", err)
-	}
-	if err := q.PauseTopic(ctx, "topic", "grp", "test"); err != nil {
-		t.Fatalf("PauseTopic: %v", err)
-	}
-	base := time.Now().UTC()
-	for i, label := range []string{"a", "b", "c"} {
-		if err := q.Publish(ctx, "topic", &events.Event{
-			ID: uuid.New(), Type: label, Source: "memory_test",
-			// Oldest first, so the drain dispatches a, then b, then c.
-			Timestamp: base.Add(time.Duration(i) * time.Millisecond),
-		}); err != nil {
-			t.Fatalf("Publish(%s): %v", label, err)
-		}
-	}
-	if err := q.ResumeTopic(ctx, "topic", "grp", "test"); err != nil {
-		t.Fatalf("ResumeTopic: %v", err)
-	}
-	if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
-		func(ev *events.Event, label string) bool { return ev.Type == label }) {
-		labels := make([]string, 0, len(got))
-		for _, ev := range got {
-			labels = append(labels, ev.Type)
-		}
-		t.Fatalf("mailbox after the deferral = %v, want [b c a]: the deferral at the head, "+
-			"the undispatched partition handed back behind it, and the failure behind both", labels)
-	}
-	if _, err := q.Unquiesce(ctx, "topic", "grp"); err != nil {
-		t.Fatalf("Unquiesce: %v", err)
-	}
-	// The next drain carries all three in ONE call each, ordered by their
-	// own timestamps (queue.OrderForDispatch) — the mailbox order above is
-	// what decides which DRAIN a message is in, not which call goes first.
-	if got := q.Backlog("topic", "grp"); len(got) != 0 {
-		t.Fatalf("%d message(s) still waiting after the attachment resumed", len(got))
+			key := func(ev *events.Event) string { return ev.Type }
+			var mu sync.Mutex
+			var seen []string
+			first := map[string]bool{}
+			err := q.SubscribeBatch(ctx, "topic", "grp", func(_ context.Context, evs []*events.Event) queue.Result {
+				mu.Lock()
+				defer mu.Unlock()
+				label := evs[0].Type
+				seen = append(seen, label)
+				if first[label] {
+					return queue.Ack()
+				}
+				first[label] = true
+				switch label {
+				case "a":
+					return retry
+				case "b":
+					return queue.Defer(queue.DeferSeatMoved, "b is handed back once")
+				}
+				return queue.Ack()
+			}, key, queue.NewBatchOptions(0, 10))
+			if err != nil {
+				t.Fatalf("SubscribeBatch: %v", err)
+			}
+			if err := q.PauseTopic(ctx, "topic", "grp", "test"); err != nil {
+				t.Fatalf("PauseTopic: %v", err)
+			}
+			base := time.Now().UTC()
+			for i, label := range []string{"a", "b", "c"} {
+				if err := q.Publish(ctx, "topic", &events.Event{
+					ID: uuid.New(), Type: label, Source: "memory_test",
+					// Oldest first, so the drain dispatches a, then b, then c.
+					Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+				}); err != nil {
+					t.Fatalf("Publish(%s): %v", label, err)
+				}
+			}
+			if err := q.ResumeTopic(ctx, "topic", "grp", "test"); err != nil {
+				t.Fatalf("ResumeTopic: %v", err)
+			}
+			if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
+				func(ev *events.Event, label string) bool { return ev.Type == label }) {
+				labels := make([]string, 0, len(got))
+				for _, ev := range got {
+					labels = append(labels, ev.Type)
+				}
+				t.Fatalf("mailbox after the deferral = %v, want [b c a]: the deferral at the head, "+
+					"the undispatched partition handed back behind it, and the retry behind both", labels)
+			}
+			if _, err := q.Unquiesce(ctx, "topic", "grp"); err != nil {
+				t.Fatalf("Unquiesce: %v", err)
+			}
+			// The next drain carries all three in ONE call each, ordered by
+			// their own timestamps (queue.OrderForDispatch) — the mailbox
+			// order above is what decides which DRAIN a message is in, not
+			// which call goes first.
+			if got := q.Backlog("topic", "grp"); len(got) != 0 {
+				t.Fatalf("%d message(s) still waiting after the attachment resumed", len(got))
+			}
+		})
 	}
 }

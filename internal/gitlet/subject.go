@@ -79,19 +79,9 @@ const (
 	// keep code_changes, its authors, revisions and body, and this one the
 	// conversation's tables.
 	//
-	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
-	// domain has run without this kind — none of the domain is on main, so
-	// no image and no release holds it — and while that is so, every build
-	// that meets a record on a change's subject reads it. Once a build
-	// without it has run, a new kind is a versionedFields row (a kind is a
-	// VALUE of a field every record carries, statelog.VersionedField.Equals)
-	// and this one takes {Name: "Subject.Kind change", Since: 2, Path:
-	// []string{"subject", "k"}, Equals: string(KindChange)}, with
-	// RecordVersion at 2 and its line under "What each version added", a
-	// Carrying record in the statelogtest candidate, and the kind excepted
-	// from the stamp test's base-format loop — an older build would otherwise
-	// FAIL on the record at Apply's unknown-kind arm rather than retain it.
-	// It is no gate.
+	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
+	// kind, so every build that meets a record on a change's subject reads
+	// it. It is no gate.
 	KindChange ObjectKind = "change"
 
 	// KindChecks is a repository's CHECKS, by the repository's id
@@ -104,11 +94,7 @@ const (
 	// ([joinCheck]). A table is written by the records of ONE subject:
 	// code_checks and code_check_logs by this one's.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as the checks subject's doc
-	// states it (checks.go): once a build without it has run, it takes
-	// {Name: "Subject.Kind checks", Since: 2, Path: []string{"subject",
-	// "k"}, Equals: string(KindChecks)} with the same companions as
-	// [KindChange]. It is no gate.
+	// BASE FORMAT, as the checks subject is (checks.go). It is no gate.
 	KindChecks ObjectKind = "checks"
 
 	// KindPerson is one PERSON'S CODE INBOX, by the human seat they hold
@@ -128,10 +114,7 @@ const (
 	// count in another (internal/inbox's package doc). A table is written
 	// by the records of ONE subject: code_person_marks by this one's.
 	//
-	// BASE FORMAT, AS A STATED CONDITION, as [KindChange] states it: once a
-	// build without it has run, it takes {Name: "Subject.Kind person",
-	// Since: 2, Path: []string{"subject", "k"}, Equals: string(KindPerson)}
-	// with the same companions. It is no gate.
+	// BASE FORMAT, as [KindChange] is. It is no gate.
 	KindPerson ObjectKind = "person"
 )
 

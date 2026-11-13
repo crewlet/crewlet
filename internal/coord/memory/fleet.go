@@ -56,6 +56,7 @@ type Fleet struct {
 	integrations map[string][]byte
 	atlasSources map[string][]byte
 	atlasCode    map[string][]byte
+	atlasRefresh map[string][]byte
 
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
@@ -64,6 +65,10 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
+	// atlasWakes is each owning seat's atlas wake record, by its key, and the
+	// counter its revisions are drawn from.
+	atlasWakes        map[string]coord.AtlasWake
+	atlasWakeRevision uint64
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
@@ -196,8 +201,10 @@ func NewFleet() *Fleet {
 		integrations:      map[string][]byte{},
 		atlasSources:      map[string][]byte{},
 		atlasCode:         map[string][]byte{},
+		atlasRefresh:      map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
+		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
@@ -1066,6 +1073,43 @@ func (f *Fleet) DeleteAtlasSourceStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.atlasSources, kind)
+	return nil
+}
+
+// ---- the atlas sources' refresh asks ------------------------------------ //
+
+// AtlasSourceRefreshes returns every waiting ask, keyed by source, each
+// cloned on the way out.
+func (f *Fleet) AtlasSourceRefreshes(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasRefresh))
+	for kind, value := range f.atlasRefresh {
+		out[kind] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasSourceRefresh records an ask for one source.
+func (f *Fleet) PutAtlasSourceRefresh(_ context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an atlas source refresh ask needs a source name")
+	}
+	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value)); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasRefresh[kind] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasSourceRefresh drops a source's ask; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasSourceRefresh(_ context.Context, kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasRefresh, kind)
 	return nil
 }
 

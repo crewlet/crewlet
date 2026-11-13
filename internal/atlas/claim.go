@@ -71,13 +71,17 @@ func (e Evidence) Valid() bool { return slices.Contains(Evidences, e) }
 // Source is who or what made one claim. Name is what within its kind: a
 // [Record] word for the engine's records, an integration's kind, the id of
 // the repository whose files were read, an agent's seat handle, a person's
-// handle; empty for the settings, named by Revision.
+// handle; empty for the settings, named by Revision. Turn, Evidence and Tool
+// are an agent's alone: the run it recorded in, what the call it cited is
+// evidence of, and that call's tool by name, empty where the name is not one
+// a record keeps ([CitableTool]).
 type Source struct {
 	Kind     SourceKind `json:"kind"`
 	Name     string     `json:"name,omitempty"`
 	Revision string     `json:"revision,omitempty"`
 	Turn     string     `json:"turn,omitempty"`
 	Evidence Evidence   `json:"evidence,omitempty"`
+	Tool     string     `json:"tool,omitempty"`
 }
 
 // Record is which of the engine's own records a computed claim was read from.
@@ -92,12 +96,15 @@ const (
 	RecordSSHTests     Record = "ssh_tests"
 	RecordAccessLog    Record = "access_log"
 	RecordUsage        Record = "usage"
+	// RecordFleet is the live nodes' presence rows: each node, and what it
+	// says of the broker and the object store it runs on (ADR-0142).
+	RecordFleet Record = "fleet"
 )
 
 // Records is every record family.
 var Records = []Record{
 	RecordGitlet, RecordIntegrations, RecordSeatAccess, RecordToolServers,
-	RecordSSHTests, RecordAccessLog, RecordUsage,
+	RecordSSHTests, RecordAccessLog, RecordUsage, RecordFleet,
 }
 
 // Valid reports whether r is a member of the closed set.
@@ -117,6 +124,24 @@ func PersonSource(handle string) Source { return Source{Kind: SourcePerson, Name
 // evidence.
 func AgentSource(seat, turn string, evidence Evidence) Source {
 	return Source{Kind: SourceAgent, Name: seat, Turn: turn, Evidence: evidence}
+}
+
+// toolRE is a tool's name as a record keeps it: the engine's own tools and a
+// tool server's, with the separators their names are joined by.
+var toolRE = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$`) })
+
+// CitableTool reports whether name is a tool's name a record keeps. A tool
+// server names its tools itself, so a name outside the grammar or shaped like
+// a credential is kept by no record: the claim then names its turn alone.
+func CitableTool(name string) bool { return toolRE().MatchString(name) && !redact.Contains(name) }
+
+// Citing is the agent's source s naming the tool whose answer its claim
+// cited, where the name is one a record keeps, and s as it is otherwise.
+func (s Source) Citing(tool string) Source {
+	if s.Kind == SourceAgent && CitableTool(tool) {
+		s.Tool = tool
+	}
+	return s
 }
 
 // IntegrationSource is the source of a claim an integration's read made.
@@ -161,11 +186,11 @@ func (s Source) validate() error {
 	case !s.Kind.Valid():
 		return errors.New("source: not a kind of source")
 	case s.Kind == SourceSettings:
-		if s.Name != "" || s.Turn != "" || s.Evidence != "" {
+		if s.Name != "" || s.Turn != "" || s.Evidence != "" || s.Tool != "" {
 			return errors.New("source: the settings are named by their revision alone")
 		}
 	case s.Kind == SourceRecords:
-		if !Record(s.Name).Valid() || s.Revision != "" || s.Turn != "" || s.Evidence != "" {
+		if !Record(s.Name).Valid() || s.Revision != "" || s.Turn != "" || s.Evidence != "" || s.Tool != "" {
 			return errors.New("source: not one of the engine's records")
 		}
 	case !nameRE().MatchString(s.Name):
@@ -174,8 +199,12 @@ func (s Source) validate() error {
 		if s.Turn == "" || !s.Evidence.Valid() {
 			return errors.New("source: an agent's claim names its turn and its evidence")
 		}
-	case s.Turn != "" || s.Evidence != "":
-		return fmt.Errorf("source: only an agent's claim names a turn and evidence, not a %s's", s.Kind)
+		if s.Tool != "" && !CitableTool(s.Tool) {
+			return errors.New("source: the tool an agent's claim cites is named by its name, never by a " +
+				"value shaped like a credential")
+		}
+	case s.Turn != "" || s.Evidence != "" || s.Tool != "":
+		return fmt.Errorf("source: only an agent's claim names a turn, evidence and a tool, not a %s's", s.Kind)
 	}
 	return nil
 }
@@ -316,6 +345,27 @@ func Says(subject Ref, f Fact, raw string, src Source, at time.Time) (Claim, err
 		return Claim{}, err
 	}
 	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: f}, Value: v, Source: src, ObservedAt: at})
+}
+
+// FleetAddress is the fleet's claim that subject, a node or a server of its
+// broker, answers at raw. ALWAYS PRIVATE, whatever network the address is on:
+// it is where the engine's own members reach each other, so it is marked
+// internal for every reader it is shown to, merges no two entries
+// ([joinKeysOf]) and is an administrator's alone ([For]).
+func FleetAddress(subject Ref, raw string, at time.Time) (Claim, error) {
+	v, err := FactAddress.Value(raw)
+	if err != nil {
+		return Claim{}, err
+	}
+	v.Private = true
+	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: FactAddress}, Value: v,
+		Source: RecordSource(RecordFleet), ObservedAt: at})
+}
+
+// fleetAddress reports whether a fact is an address the fleet's own records
+// say: a node's, or a server's of its broker.
+func fleetAddress(f Fact, src Source) bool {
+	return f == FactAddress && src.Kind == SourceRecords && src.Name == string(RecordFleet)
 }
 
 // Relates is the claim that from relies on the entry to through r.
@@ -503,6 +553,11 @@ func (c Claim) validateFact() error {
 	v, err := f.Value(c.Value.Text)
 	if err != nil {
 		return err
+	}
+	if fleetAddress(f, c.Source) {
+		// THE FLEET'S OWN ADDRESS IS PRIVATE BY RULE ([FleetAddress]), so a
+		// claim of one that is not marked so is not in its canonical form.
+		v.Private = true
 	}
 	if v != c.Value {
 		return fmt.Errorf("%s: the value is not in its canonical form", f)
