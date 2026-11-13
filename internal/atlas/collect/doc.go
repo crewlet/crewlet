@@ -17,15 +17,19 @@
 // project as an account, and what a Google Cloud project's enabled APIs say
 // it is used for; where a company asks, Scaleway's products are read too,
 // under an IAM application made for the atlas (ADR-0144). Its eighth reads
-// Atlassian (ADR-0138): every site of the
-// organization as an account, and each product as what its account does.
+// Atlassian (ADR-0138): every site of the organization as an account, and
+// each product as what its account does.
 // Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
 // own id and name, with a bot token one of the agents already holds. Its
 // eleventh reads AWS (ADR-0148), as a role of its own that the company adds
 // to its stack by choice: the Regions in use, instances, databases, load
 // balancers, queues, buckets and public DNS. Google Cloud's source also
 // searches what each project runs (ADR-0149), as a service account of its
-// own, where the company asks.
+// own, where the company asks. Its twelfth and thirteenth read DigitalOcean
+// and Expo (ADR-0146), each with a read-only identity a person makes for the
+// atlas alone, since neither vendor gives the company a credential of its
+// own: a team's resources and the names that point at them, and an
+// account's projects and their builds.
 //
 // # A source may be the company's choice
 //

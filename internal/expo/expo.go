@@ -8,9 +8,9 @@
 // The engine checks the token with reads only (it is a robot's, the robot holds
 // the seat's role on the account, and no other seat has it), seals it, and
 // from then on reads everything about the robot with that token. The engine
-// holds no Expo token of its own: a role change, a turned-off robot's deletion
-// and a rotate's old tokens are a person's steps at Expo, each confirmed by
-// reading the robot back.
+// holds no Expo token that manages robots: a role change, a turned-off
+// robot's deletion and a rotate's old tokens are a person's steps at Expo,
+// each confirmed by reading the robot back.
 //
 // # A robot is its ID, never its name
 //
@@ -29,6 +29,13 @@
 // Every call is one hand-written operation against [GraphQLURL]. A refusal
 // arrives as HTTP 200 with `errors`, which the client reads as an [APIError]
 // carrying the status its code stands for.
+//
+// # The atlas reads as a robot of its own
+//
+// The atlas reads the account's projects and their latest builds only where a
+// person made one more robot for it alone (`integrations.expo.atlas.token`,
+// ADR-0146): a Viewer, proven before every read to hold that role and to be
+// no agent's ([CheckAtlas]). The one query names every field it is sent.
 package expo
 
 // Backend is the integration's name: the config block's key, the integration

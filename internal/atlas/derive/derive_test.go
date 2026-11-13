@@ -174,6 +174,23 @@ func TestANamedRepositoryIsKeyedByItsForgesAddress(t *testing.T) {
 	}
 }
 
+// A DIGITALOCEAN TEAM IS KEYED BY ITS NAME'S SLUG: a team's name may hold a
+// space, which an account's key may not, and the read of the team keys it
+// the same way, so the two name one entry.
+//
+// Mutation: key the account by the name lowercased, and a team named with a
+// space is withheld, so the company's DigitalOcean account is no entry.
+func TestADigitalOceanTeamWithASpaceIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.DigitalOcean.Provisioning.Team = "Acme Labs"
+	v := read(c)
+	account := find(t, v, atlas.KindAccount, "digitalocean/acme-labs")
+	if account.Name != "DigitalOcean" {
+		t.Errorf("the team's account is named %q", account.Name)
+	}
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {
