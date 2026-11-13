@@ -462,6 +462,8 @@ type threadLine struct {
 	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
 	apiError, replacements, leafUUID, explicit, rewound         json.RawMessage
 	compactMetadata, retracted                                  json.RawMessage
+	isVirtual, interruptedByShutdown, isCompactSummary          json.RawMessage
+	taskDelivery, batchToolUses                                 json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -489,6 +491,11 @@ type threadWire struct {
 	Compacted     json.RawMessage `json:"compactMetadata"`
 	Retracted     json.RawMessage `json:"retractedMessageUuids"`
 	Replacements  json.RawMessage `json:"replacements"`
+	IsVirtual     json.RawMessage `json:"isVirtual"`
+	Shutdown      json.RawMessage `json:"interruptedByShutdown"`
+	Summary       json.RawMessage `json:"isCompactSummary"`
+	TaskDelivery  json.RawMessage `json:"taskDelivery"`
+	Batch         json.RawMessage `json:"batchToolUses"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -518,6 +525,8 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, compactMetadata: w.Compacted,
 		retracted: w.Retracted, replacements: w.Replacements,
+		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
+		taskDelivery: w.TaskDelivery, batchToolUses: w.Batch,
 	}, nil
 }
 
@@ -689,7 +698,8 @@ func wireDecode(raw []byte, v any) error {
 // ([threadLine.Message]), a reply's applied context edits
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
 // ([threadLine.Usage]), the results a content-replacement record replaces
-// ([threadLine.ReplacedResults]), the records a compaction's boundary says it
+// ([threadLine.ReplacedResults]), the calls a batch's reply was split into
+// ([threadLine.BatchToolUses]), the records a compaction's boundary says it
 // kept ([threadLine.Preserved]) and those a refused or malformed reply's
 // retry takes back ([threadLine.Retracted]), the lists a run's event stream
 // and a person's transcript of a session decode (a message's blocks,
@@ -1598,6 +1608,176 @@ func (l threadLine) MessageID() (string, error) {
 			"no UTF-8 decodes as, so two ids the harness holds apart can read as one")
 	}
 	return id, nil
+}
+
+// IsVirtual reports whether a user or assistant record is VIRTUAL: its
+// `isVirtual` the JSON true; false where it is absent or false, and on every
+// record of another type, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 read it. A virtual record is kept
+// in its thread and handed to no model: the request's fold passes over every
+// user or assistant record marked so (2.1.322's nS, 2.1.310's Vw:
+// `isVirtual===!0`), as it passes over a failed request's reply
+// ([threadLine.APIError]). No thread the probes kept holds one.
+//
+// ITS READER is the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which pairs a call only across a stretch of
+// PLAIN records, its reply's own and its results', so that the request the
+// continued session makes holds the call's use and its result in one
+// exchange: a virtual record is no plain one, and nor is one whose mark this
+// accessor cannot read. [threadLine.InterruptedByShutdown],
+// [threadLine.IsCompactSummary], [threadLine.TaskDelivery] and
+// [threadLine.BatchToolUses] each mark a record no plain one for it too.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never false: the harness reads the mark as the JSON true where its
+// request passes a record over and as JavaScript's truth in other passes, and
+// only a boolean reads alike to both.
+//
+// Read off the line's one decode, its raw `isVirtual`, never a second read of
+// the line.
+func (l threadLine) IsVirtual() (bool, error) {
+	if (l.Head.Type != recordUser && l.Head.Type != recordAssistant) || l.isVirtual == nil {
+		return false, nil
+	}
+	return wireBool("isVirtual", l.isVirtual)
+}
+
+// InterruptedByShutdown reports whether a user record says a SHUTDOWN
+// INTERRUPTED the calls its results answer: its `interruptedByShutdown` the
+// JSON true; false where it is absent or false, and on every record that is
+// no user's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. Where the
+// harness is stopped while a call runs, it writes that call's result marked
+// so, and a resume's request reads a results record marked so apart from the
+// rest (2.1.322's H3, 2.1.310's Xue: `interruptedByShutdown===!0` on a user
+// record holding a tool_result): it drops one whose results other records
+// carry (2.1.322's Iot), rewrites one whose calls nothing else answers to the
+// interrupted mark (2.1.322's Dyn), and merges none into the user message
+// beside it (2.1.322's pCo, which reads the mark as JavaScript's truth). No
+// thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record marked so is no
+// plain one, and nor is one whose mark this accessor cannot read.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as [threadLine.IsVirtual]'s mark is,
+// for its reason: a boolean where present, and any other type, null among it,
+// this accessor's error, never false.
+//
+// Read off the line's one decode, its raw `interruptedByShutdown`, never a
+// second read of the line.
+func (l threadLine) InterruptedByShutdown() (bool, error) {
+	if l.Head.Type != recordUser || l.interruptedByShutdown == nil {
+		return false, nil
+	}
+	return wireBool("interruptedByShutdown", l.interruptedByShutdown)
+}
+
+// IsCompactSummary reports whether a user record is a COMPACTION'S SUMMARY:
+// its `isCompactSummary` the JSON true; false where it is absent or false,
+// and on every record that is no user's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. A compaction
+// hands its model the conversation so far as one user record marked so,
+// chained to its boundary, and the harness reads such a record apart from the
+// prompts and results around it wherever it weighs a turn (2.1.322's LE
+// classes one that holds no result `user_summary`, before any meta mark),
+// reading the mark as the JSON true in some passes and as JavaScript's truth
+// in others. Each of the 22 compactions' summaries the probes kept carries
+// it, true.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record marked so is no
+// plain one, and nor is one whose mark this accessor cannot read.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as [threadLine.IsVirtual]'s mark is,
+// for its reason: a boolean where present, and any other type, null among it,
+// this accessor's error, never false.
+//
+// Read off the line's one decode, its raw `isCompactSummary`, never a second
+// read of the line.
+func (l threadLine) IsCompactSummary() (bool, error) {
+	if l.Head.Type != recordUser || l.isCompactSummary == nil {
+		return false, nil
+	}
+	return wireBool("isCompactSummary", l.isCompactSummary)
+}
+
+// TaskDelivery reports whether a user record carries `taskDelivery`, a
+// background task's result the harness delivers in it, whatever the key
+// holds, null among it. False where it is absent, and on every record that is
+// no user's.
+//
+// WHAT THE KEY SAYS, as 2.1.310 and 2.1.322 read it. The request's fold
+// renders a user record that carries one, by its truth, as a delivered task's
+// round (2.1.322's Fu, 2.1.310's _i): a call and its result of the harness's
+// own, spliced after the last assistant message or pushed at the end, which
+// can part a reply's message from the results that answer it; and the pass
+// that orders attachments before the fold reads the key by its presence
+// (`taskDelivery!==void 0`). No thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record that carries one is
+// no plain one. ITS PRESENCE IS THE WHOLE READING, the widest the harness
+// makes of the key, so whatever it holds this accessor has no error.
+//
+// Read off the line's one decode, its raw `taskDelivery`, never a second read
+// of the line.
+func (l threadLine) TaskDelivery() bool {
+	return l.Head.Type == recordUser && l.taskDelivery != nil
+}
+
+// BatchToolUses reports whether an assistant record carries `batchToolUses`,
+// the calls of a batch its harness split one call of the model's into, and
+// hands the `id` of each entry to each, in order. False, and nothing handed,
+// where the key is absent, and on every record that is no assistant's.
+//
+// WHAT THE KEY SAYS, as 2.1.310 and 2.1.322 write and read it. Where a model's
+// call to a tool that takes a batch of entries is split into a call an entry,
+// the harness writes the reply with the split calls, each id the batch's own
+// and a `_<n>`, and lists the batch's own calls here, `{id, name}` each
+// (2.1.322's Q0n); its request folds the split calls back into one by this
+// list (2.1.322's GWi, 2.1.310's x2s, in the fold of an assistant record),
+// and their results the same way by the digits their ids end in (2.1.322's
+// zWi). No thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a reply that carries one is no plain
+// one, and a call an entry names is one the request may fold into another,
+// which that reader reads as told.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a list
+// where present, walked an element at a time ([eachElement]), each entry an
+// object whose `id` is a string. Anything else, null among it, is this
+// accessor's error: the harness's fold matches an entry of no string id to
+// calls no batch split, and a list of no shape throws in its request. An
+// error ends the walk, and the entries before it have been handed.
+//
+// Read off the line's one decode, its raw `batchToolUses`, never a second
+// read of the line.
+func (l threadLine) BatchToolUses(each func(id string)) (bool, error) {
+	if l.Head.Type != recordAssistant || l.batchToolUses == nil {
+		return false, nil
+	}
+	if err := eachElement(l.batchToolUses, func(raw json.RawMessage, _ int) error {
+		if !wireObject(raw) {
+			return fmt.Errorf("an entry is %s, not an object", wireKind(raw))
+		}
+		var entry struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := wireDecode(raw, &entry); err != nil {
+			return fmt.Errorf("an entry: %w", err)
+		}
+		id, err := wireRequiredString("id", entry.ID)
+		if err != nil {
+			return err
+		}
+		each(id)
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("batchToolUses: %w", err)
+	}
+	return true, nil
 }
 
 // Checkpoint is what a last-prompt record says of the leaf Claude Code's

@@ -785,7 +785,10 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // alone, as a retraction list of the wrong shape leaves its retry's head and
 // message whole and is refused by Retracted alone, and a replacements list of
 // the wrong shape leaves its record's head whole and is refused by
-// ReplacedResults alone. A record's own uuid that
+// ReplacedResults alone. A mark no plain record carries that is no boolean (a
+// virtual record's, a shutdown's, a compaction's summary's), or a batch's
+// list of the wrong shape, leaves its record's head, message and usage whole
+// and is refused by its own accessor alone. A record's own uuid that
 // is no string
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
@@ -870,6 +873,39 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if h := line.Head; h.Type != recordContentReplacement || h.AgentID != ctAgent || h.Chained() {
 			t.Errorf("a record whose replacements are %s reads with the head %+v", name, h)
+		}
+	}
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record, key string
+		read        func(threadLine) error
+	}{
+		"a result's isVirtual": {record: result, key: "isVirtual",
+			read: func(l threadLine) error { _, err := l.IsVirtual(); return err }},
+		"a reply's isVirtual": {record: reply, key: "isVirtual",
+			read: func(l threadLine) error { _, err := l.IsVirtual(); return err }},
+		"a result's interruptedByShutdown": {record: result, key: "interruptedByShutdown",
+			read: func(l threadLine) error { _, err := l.InterruptedByShutdown(); return err }},
+		"a result's isCompactSummary": {record: result, key: "isCompactSummary",
+			read: func(l threadLine) error { _, err := l.IsCompactSummary(); return err }},
+		"a reply's batchToolUses": {record: reply, key: "batchToolUses",
+			read: func(l threadLine) error { _, err := l.BatchToolUses(func(string) {}); return err }},
+	} {
+		for kind, value := range map[string]string{"a string": `"true"`, "null": `null`, "a number": `1`} {
+			line := ctLine(t, ctMarked(t, tc.record, tc.key, value))
+			if err := tc.read(line); err == nil {
+				t.Errorf("%s that is %s reads with no error; want one", name, kind)
+			}
+			if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || m.Calls()[0].ID != ctCall ||
+				!line.Head.Main() || line.TaskDelivery() {
+				t.Errorf("%s that is %s reads with the head %+v and the calls %+v, %v", name, kind, line.Head,
+					m.Calls(), err)
+			}
+			usage, ok, err := line.Usage()
+			if line.Head.Type == recordAssistant && (!ok || err != nil || usage.Input != 100) {
+				t.Errorf("%s that is %s says its request took %+v (%t), %v; want its usage", name, kind, usage, ok, err)
+			}
 		}
 	}
 	summary := ctSummary(ctUUID(15), ctUUID(16))
@@ -1141,8 +1177,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // that wrote it, the reply it is, what its request took, what it says a
 // compaction kept, the leaf it says a resume starts from and whether it names
 // one at all, its attachment's type, the records it says its harness took
-// back, and the results it says its harness replaced, each beside the error it
-// answered. A
+// back, the results it says its harness replaced, and whether it is virtual,
+// interrupted by a shutdown, a compaction's summary, a task's delivery or a
+// batch's reply, the calls that batch was split into among it, each beside
+// the error it answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1211,6 +1249,16 @@ func ctAllButUUID(l threadLine) string {
 	var replaced []string
 	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
 	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
+	virtual, err := l.IsVirtual()
+	fmt.Fprintf(&b, "virtual: %t; %v\n", virtual, err)
+	shutdown, err := l.InterruptedByShutdown()
+	fmt.Fprintf(&b, "interrupted by a shutdown: %t; %v\n", shutdown, err)
+	summary, err := l.IsCompactSummary()
+	fmt.Fprintf(&b, "a compaction's summary: %t; %v\n", summary, err)
+	fmt.Fprintf(&b, "a task's delivery: %t\n", l.TaskDelivery())
+	var batch []string
+	batched, err := l.BatchToolUses(func(id string) { batch = append(batch, id) })
+	fmt.Fprintf(&b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
 	return b.String()
 }
 
@@ -1233,13 +1281,15 @@ func ctRaw(v json.RawMessage) string {
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
 // its marks, a compaction's metadata, the uuids a record retracts, a record's
-// replacements), a hook's attachment, an origin, a
+// replacements, the marks of a record no plain one, a batch's list), a hook's
+// attachment, an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
 // lists, what a compaction's metadata says it kept (its list, the list's
-// anchor and uuids, its segment and the segment's ends), and each replacement
-// a record lists (its kind and its call's id). So a line hands out
+// anchor and uuids, its segment and the segment's ends), each replacement a
+// record lists (its kind and its call's id), and each entry of a batch's list
+// (its id). So a line hands out
 // exactly what it hands out
 // without the other key, through every accessor. 2.1.322 already spells a
 // call's id `toolUseId` (a subagent's metadata names the call that started it
@@ -1267,6 +1317,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
 	retracting := ctFallback(ctUUID(5), ctUUID(6), ctUUID(2))
 	replacing := ctReplacement("", ctReplaced(ctCall))
+	batching := ctReplace(t, call, `"apiBlockIndex"`, `"batchToolUses":[{"id":"`+ctCall+`","name":"Bash"}],"apiBlockIndex"`)
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1359,6 +1410,20 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"toolUseId":"` + ctCall + `","ToolUseId":"` + other + `"`},
 		"a replacement's toolUseId written twice": {record: replacing, from: `"toolUseId":"` + ctCall + `"`,
 			to: `"toolUseId":"` + other + `","toolUseId":"` + ctCall + `"`},
+		"IsVirtual alone": {record: call, from: `"type":"assistant"`, to: `"IsVirtual":true,"type":"assistant"`},
+		"an isVirtual, then ISVIRTUAL": {record: call, from: `"type":"assistant"`,
+			to: `"isVirtual":false,"ISVIRTUAL":true,"type":"assistant"`},
+		"InterruptedByShutdown alone": {record: result, from: `"type":"user"`,
+			to: `"InterruptedByShutdown":true,"type":"user"`},
+		"an isCompactSummary, then IsCompactSummary": {record: ctCompactSummary(ctUUID(5), ctUUID(6)),
+			from: `"isCompactSummary":true`, to: `"isCompactSummary":true,"IsCompactSummary":false`},
+		"TaskDelivery alone": {record: result, from: `"type":"user"`, to: `"TaskDelivery":{},"type":"user"`},
+		"BatchToolUses alone": {record: call, from: `"type":"assistant"`,
+			to: `"BatchToolUses":[{"id":"` + ctCall + `"}],"type":"assistant"`},
+		"a batch entry's id, then Id": {record: batching, from: `{"id":"` + ctCall + `","name":"Bash"}`,
+			to: `{"id":"` + ctCall + `","Id":"` + other + `","name":"Bash"}`},
+		"a virtual mark written twice": {record: call, from: `"type":"assistant"`,
+			to: `"isVirtual":true,"isVirtual":false,"type":"assistant"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -2265,6 +2330,219 @@ func TestAReplySaysWhichReplyItIs(t *testing.T) {
 		ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
 	if got, err := ctLine(t, record).MessageID(); err == nil {
 		t.Errorf("a reply whose message is null is the reply %q, want an error", got)
+	}
+}
+
+// ctMarked is record, a user or assistant record ctAssistant, ctResult or their
+// kin builds, with the key key holding value, a JSON value, beside its
+// isSidechain.
+func ctMarked(t *testing.T, record, key, value string) string {
+	t.Helper()
+	return ctReplace(t, record, `"isSidechain":false`, `"isSidechain":false,"`+key+`":`+value)
+}
+
+// A RECORD SAYS WHETHER IT IS VIRTUAL: IsVirtual reads a user or assistant
+// record's own isVirtual as written, true where it is the JSON true, false
+// where it is false or absent; nothing on a record of another type, whatever
+// it carries; and an error where the mark is no boolean, null among it, never
+// false, which its reader would take for a plain record.
+//
+// Mutation: read the mark off every record, and an attachment carrying it is
+// virtual; read it off a reply alone, or a user record alone, and the other
+// marked one is not; read it as JavaScript's truth, and a string or a number
+// reads as true with no error; or read a null as no mark, and it is no error.
+func TestARecordSaysWhetherItIsVirtual(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record  string
+		virtual bool
+	}{
+		"a virtual reply":                {ctMarked(t, reply, "isVirtual", "true"), true},
+		"a virtual result":               {ctMarked(t, result, "isVirtual", "true"), true},
+		"a reply marked false":           {ctMarked(t, reply, "isVirtual", "false"), false},
+		"a reply as measured, with none": {reply, false},
+		"an attachment carrying the mark": {ctAttachment(ctUUID(1), ctUUID(2), ctTokens, `"isVirtual":true,`),
+			false},
+		"a system record carrying the mark": {ctMarked(t, ctSummary(ctUUID(15), ctUUID(16)), "isVirtual", "true"),
+			false},
+	} {
+		if virtual, err := ctLine(t, tc.record).IsVirtual(); virtual != tc.virtual || err != nil {
+			t.Errorf("%s reads as virtual %t, %v; want %t", name, virtual, err, tc.virtual)
+		}
+	}
+	for name, mark := range map[string]string{"null": `null`, "a string": `"true"`, "a number": `1`, "an object": `{}`} {
+		for kind, record := range map[string]string{"a reply": reply, "a result": result} {
+			if virtual, err := ctLine(t, ctMarked(t, record, "isVirtual", mark)).IsVirtual(); err == nil {
+				t.Errorf("%s whose isVirtual is %s reads as virtual %t, want an error", kind, name, virtual)
+			}
+		}
+	}
+}
+
+// A RESULT SAYS WHETHER A SHUTDOWN INTERRUPTED ITS CALLS:
+// InterruptedByShutdown reads a user record's own interruptedByShutdown as
+// written, true where it is the JSON true, false where it is false or absent;
+// nothing on a record that is no user's, whatever it carries; and an error
+// where the mark is no boolean, null among it, never false.
+//
+// Mutation: read the mark off every record, and a reply carrying it reads as
+// interrupted; read it as JavaScript's truth, and a string or a number reads
+// as true with no error; or read a null as no mark, and it is no error.
+func TestAResultSaysWhetherAShutdownInterruptedItsCalls(t *testing.T) {
+	t.Parallel()
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record      string
+		interrupted bool
+	}{
+		"a result a shutdown interrupted": {ctMarked(t, result, "interruptedByShutdown", "true"), true},
+		"a result marked false":           {ctMarked(t, result, "interruptedByShutdown", "false"), false},
+		"a result as measured, with none": {result, false},
+		"a reply carrying the mark": {ctMarked(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			"interruptedByShutdown", "true"), false},
+	} {
+		if interrupted, err := ctLine(t, tc.record).InterruptedByShutdown(); interrupted != tc.interrupted || err != nil {
+			t.Errorf("%s reads as interrupted by a shutdown %t, %v; want %t", name, interrupted, err, tc.interrupted)
+		}
+	}
+	for name, mark := range map[string]string{"null": `null`, "a string": `"true"`, "a number": `1`, "an object": `{}`} {
+		line := ctLine(t, ctMarked(t, result, "interruptedByShutdown", mark))
+		if interrupted, err := line.InterruptedByShutdown(); err == nil {
+			t.Errorf("a result whose interruptedByShutdown is %s reads as interrupted %t, want an error", name,
+				interrupted)
+		}
+	}
+}
+
+// A RECORD SAYS WHETHER IT IS A COMPACTION'S SUMMARY: IsCompactSummary reads a
+// user record's own isCompactSummary as written, true on the summary a
+// compaction hands its model, false where it is false or absent; nothing on a
+// record that is no user's, whatever it carries; and an error where the mark
+// is no boolean, null among it, never false.
+//
+// Mutation: read the mark off every record, and a reply carrying it reads as
+// a summary; read it as JavaScript's truth, and a string or a number reads as
+// true with no error; or read a null as no mark, and it is no error.
+func TestARecordSaysWhetherItIsACompactionsSummary(t *testing.T) {
+	t.Parallel()
+	summary := ctCompactSummary(ctUUID(5), ctUUID(6))
+	for name, tc := range map[string]struct {
+		record  string
+		summary bool
+	}{
+		"a compaction's summary, as 2.1.310 writes it": {summary, true},
+		"a summary marked false": {ctReplace(t, summary, `"isCompactSummary":true`, `"isCompactSummary":false`),
+			false},
+		"a result, with none": {ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), false},
+		"a reply carrying the mark": {ctMarked(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			"isCompactSummary", "true"), false},
+	} {
+		if got, err := ctLine(t, tc.record).IsCompactSummary(); got != tc.summary || err != nil {
+			t.Errorf("%s reads as a compaction's summary %t, %v; want %t", name, got, err, tc.summary)
+		}
+	}
+	for name, mark := range map[string]string{"null": `null`, "a string": `"true"`, "a number": `1`, "an object": `{}`} {
+		line := ctLine(t, ctReplace(t, summary, `"isCompactSummary":true`, `"isCompactSummary":`+mark))
+		if got, err := line.IsCompactSummary(); err == nil {
+			t.Errorf("a summary whose isCompactSummary is %s reads as one %t, want an error", name, got)
+		}
+	}
+}
+
+// ctTaskDelivery is a background task's result as a user record carries it in
+// its `taskDelivery`, abridged: its keys are those 2.1.322 reads of one.
+const ctTaskDelivery = `{"taskId":"task_test","status":"completed","result":{"content":[{"type":"text",` +
+	`"text":"the task's result"}],"isError":false}}`
+
+// A RECORD SAYS WHETHER IT DELIVERS A TASK: TaskDelivery reads whether a user
+// record carries taskDelivery at all, whatever it holds, a task's result,
+// null, false or an empty object among it, as the harness's widest reading of
+// the key does (its presence); and nothing on a record that is no user's,
+// whatever it carries.
+//
+// Mutation: read the key off every record, and a reply carrying it delivers a
+// task; or read it by its truth, as the fold does, and a record whose
+// taskDelivery is null or false delivers none, though the pass that orders
+// attachments reads it by its presence.
+func TestARecordSaysWhetherItDeliversATask(t *testing.T) {
+	t.Parallel()
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record    string
+		delivered bool
+	}{
+		"a result delivering a task":       {ctMarked(t, result, "taskDelivery", ctTaskDelivery), true},
+		"a result whose delivery is null":  {ctMarked(t, result, "taskDelivery", "null"), true},
+		"a result whose delivery is false": {ctMarked(t, result, "taskDelivery", "false"), true},
+		"a result whose delivery is empty": {ctMarked(t, result, "taskDelivery", "{}"), true},
+		"a result as measured, with none":  {result, false},
+		"a reply carrying the key": {ctMarked(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), "taskDelivery",
+			ctTaskDelivery), false},
+		"an attachment carrying the key": {ctAttachment(ctUUID(1), ctUUID(2), ctTokens,
+			`"taskDelivery":`+ctTaskDelivery+`,`), false},
+	} {
+		if delivered := ctLine(t, tc.record).TaskDelivery(); delivered != tc.delivered {
+			t.Errorf("%s reads as a task's delivery %t; want %t", name, delivered, tc.delivered)
+		}
+	}
+}
+
+// A REPLY SAYS THE CALLS ITS BATCH WAS SPLIT INTO: BatchToolUses reads whether
+// an assistant record carries batchToolUses, handing each entry's id in order,
+// an empty list carried as one that hands nothing; nothing on a record that is
+// no assistant's, whatever it carries; and an error where the key holds no
+// list, null among it, or an entry that is no object or whose id is no
+// string, never a reply that splits nothing. An error ends the walk, the
+// entries before it handed.
+//
+// Mutation: read the key off every record, and a result carrying it is a
+// batch's reply; hand entries of no string id over, and a list the harness
+// would match to calls no batch split reads; read a null list as none, and it
+// is no error; or answer no batch for an empty list, and a reply carrying the
+// key reads as one that carries none.
+func TestAReplySaysTheCallsItsBatchWasSplitInto(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	entries := `[{"id":"` + ctCall + `","name":"Bash"},{"id":"` + ctMCPCall + `","name":"mcp__crewlet__slow"}]`
+	for name, tc := range map[string]struct {
+		record  string
+		batched bool
+		ids     []string
+	}{
+		"a batch's reply":                {ctMarked(t, reply, "batchToolUses", entries), true, []string{ctCall, ctMCPCall}},
+		"a batch's reply listing none":   {ctMarked(t, reply, "batchToolUses", "[]"), true, nil},
+		"an entry of no name":            {ctMarked(t, reply, "batchToolUses", `[{"id":"`+ctCall+`"}]`), true, []string{ctCall}},
+		"a reply as measured, with none": {reply, false, nil},
+		"a result carrying the key":      {ctMarked(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), "batchToolUses", entries), false, nil},
+	} {
+		var got []string
+		batched, err := ctLine(t, tc.record).BatchToolUses(func(id string) { got = append(got, id) })
+		if batched != tc.batched || err != nil || !slices.Equal(got, tc.ids) {
+			t.Errorf("%s reads as a batch's reply %t, splitting %q, %v; want %t, splitting %q", name, batched,
+				strings.Join(got, ","), err, tc.batched, strings.Join(tc.ids, ","))
+		}
+	}
+	for name, list := range map[string]string{
+		"null":                          `null`,
+		"an object":                     `{"id":"` + ctCall + `"}`,
+		"a string":                      `"` + ctCall + `"`,
+		"a list holding a string":       `["` + ctCall + `"]`,
+		"a list holding null":           `[null]`,
+		"an entry of no id":             `[{"name":"Bash"}]`,
+		"an entry whose id is null":     `[{"id":null,"name":"Bash"}]`,
+		"an entry whose id is a number": `[{"id":7,"name":"Bash"}]`,
+	} {
+		if batched, err := ctLine(t, ctMarked(t, reply, "batchToolUses", list)).BatchToolUses(func(string) {}); err == nil {
+			t.Errorf("a reply whose batchToolUses is %s reads as a batch's reply %t, want an error", name, batched)
+		}
+	}
+	var got []string
+	_, err := ctLine(t, ctMarked(t, reply, "batchToolUses", `[{"id":"`+ctCall+`"},7]`)).BatchToolUses(
+		func(id string) { got = append(got, id) })
+	if err == nil || !slices.Equal(got, []string{ctCall}) {
+		t.Errorf("a list whose second entry is no object hands %q, %v; want its first entry, then an error", got, err)
 	}
 }
 
