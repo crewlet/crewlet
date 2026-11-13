@@ -295,7 +295,6 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f29")
 	committer := rc.committer()
 	x := rc.other(committer)
-	survivors := []string{x, rc.other(committer, x)}
 	// THE MAINTAINER IS NOT THE COMMITTER, so killing the committer leaves
 	// the compaction's builder running.
 	c.SplitMaintainers(t, rc.id, x)
@@ -321,11 +320,15 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 		held = nil
 	}
 	defer resume()
-	// EVERY SURVIVOR'S APPLIER HELD BEFORE THE KILL: each is levelled with
-	// the log first (Cluster.PauseApplier), which after the kill would wait
-	// on the very leader change this hold makes certain.
-	for _, s := range survivors {
-		held = append(held, c.PauseApplier(t, s))
+	// EVERY SURVIVOR'S APPLIER HELD BEFORE THE KILL — every running member's
+	// but the committer's, whatever the cluster's size, so the runner-up's is
+	// held whichever member it is: each is levelled with the log first
+	// (Cluster.PauseApplier), which after the kill would wait on the very
+	// leader change this hold makes certain.
+	for _, m := range c.DataNodes() {
+		if m != committer {
+			held = append(held, c.PauseApplier(t, m))
+		}
 	}
 	appendedBefore := fleetAppends(c)
 	c.Kill(t, committer)
