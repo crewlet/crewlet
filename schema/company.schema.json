@@ -1746,6 +1746,10 @@
     "DigitalOcean": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "$ref": "#/$defs/DigitalOceanAtlas",
+          "description": "Optional. The read-only token the atlas reads the team's resources with. Without it the atlas shows the DigitalOcean account alone."
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -1758,6 +1762,25 @@
         "provisioning": {
           "$ref": "#/$defs/DigitalOceanProvisioning",
           "description": "The DigitalOcean team the agents' tokens act in. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "DigitalOceanAtlas": {
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Reference to the sealed personal access token made for the atlas, with these Custom Scopes and no other: account:read, droplet:read, kubernetes:read, database:read, load_balancer:read, domain:read, app:read and project:read. A token that can change anything is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -2010,6 +2033,10 @@
     "Expo": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "$ref": "#/$defs/ExpoAtlas",
+          "description": "Optional. The view-only robot the atlas reads the account's projects and builds as. Without it the atlas shows the Expo account alone."
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -2022,6 +2049,25 @@
         "provisioning": {
           "$ref": "#/$defs/ExpoProvisioning",
           "description": "The Expo account the agents' robot users act for. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ExpoAtlas": {
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Reference to the sealed access token of a robot user made for the atlas, holding the Viewer role on the account. A robot with any other role is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [

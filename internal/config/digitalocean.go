@@ -19,6 +19,16 @@ type DigitalOcean struct {
 
 	// Provisioning names the team the agents' tokens act in.
 	Provisioning *DigitalOceanProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The DigitalOcean team the agents' tokens act in. Required when enabled."`
+
+	// Atlas is the token the atlas reads the team with; nil reads nothing.
+	Atlas *DigitalOceanAtlas `yaml:"atlas,omitempty" json:"atlas,omitempty" desc:"Optional. The read-only token the atlas reads the team's resources with. Without it the atlas shows the DigitalOcean account alone."`
+}
+
+// DigitalOceanAtlas is the atlas's own identity at DigitalOcean: a personal
+// access token a person creates for it alone, with read scopes only, so its
+// reads are no agent's and it is revoked apart from every agent's token.
+type DigitalOceanAtlas struct {
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Reference to the sealed personal access token made for the atlas, with these Custom Scopes and no other: account:read, droplet:read, kubernetes:read, database:read, load_balancer:read, domain:read, app:read and project:read. A token that can change anything is refused."`
 }
 
 // DigitalOceanProvisioning is the team every seat's token must belong to. It
