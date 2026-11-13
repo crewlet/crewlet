@@ -103,10 +103,22 @@ func (r Ref) OnGitlet() bool {
 	return (r.Kind == KindRepository || r.Kind == KindPipeline) && strings.HasPrefix(r.Key, GitletPrefix+"/")
 }
 
+// OnFleet reports an entry the fleet's own presence names: a node, the
+// embedded broker or the object store in it, each keyed crewlet/.
+func (r Ref) OnFleet() bool {
+	switch r.Kind {
+	case KindHost, KindQueue, KindBucket:
+		return strings.HasPrefix(r.Key, EnginePrefix+"/")
+	}
+	return false
+}
+
 // EngineNamed is where an entry the engine itself names is declared, and false
 // for one a person may add by hand: a model and a tool server are declared in
 // the settings, a server keyed ssh/ in the SSH settings, and a repository or a
-// check keyed gitlet/ in Gitlet. Such an entry enters the atlas from there.
+// check keyed gitlet/ in Gitlet, and a node, the broker or the object store
+// keyed crewlet/ in the fleet's own presence. Such an entry enters the atlas
+// from there.
 func (r Ref) EngineNamed() (Source, bool) {
 	switch {
 	case r.Kind == KindModel, r.Kind == KindToolServer,
@@ -114,6 +126,8 @@ func (r Ref) EngineNamed() (Source, bool) {
 		return Source{Kind: SourceSettings}, true
 	case r.OnGitlet():
 		return RecordSource(RecordGitlet), true
+	case r.OnFleet():
+		return RecordSource(RecordFleet), true
 	}
 	return Source{}, false
 }
@@ -226,6 +240,20 @@ const (
 	HostAddrPrefix = "addr"
 	// GitletPrefix starts the key of a repository on Gitlet: gitlet/<name>.
 	GitletPrefix = "gitlet"
+	// EnginePrefix starts the key of what the engine itself runs on, as its
+	// nodes' presence says it: a node (crewlet/<node id>), its broker
+	// (crewlet/broker) and the object store it keeps in that broker
+	// (crewlet/objects).
+	EnginePrefix = "crewlet"
+	// EngineService is the key of the engine itself, the service its nodes
+	// run and its broker and object store serve.
+	EngineService = "crewlet"
+	// BrokerServerPrefix starts the key of a server of an external broker:
+	// nats/<host>.
+	BrokerServerPrefix = "nats"
+	// ObjectsS3Prefix starts the key of the S3 bucket the engine keeps the
+	// company's files in: s3/<bucket>.
+	ObjectsS3Prefix = "s3"
 )
 
 // pathKey reads key as segments joined by '/', the first one prefix where

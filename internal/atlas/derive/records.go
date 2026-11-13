@@ -26,6 +26,8 @@ type Records struct {
 	ModelCalls   []ModelUse
 	Pushes       []RepoPush
 	Alarms       []Alarm
+	// Fleet is every live node as its presence row says it.
+	Fleet []FleetNode
 }
 
 // Alarm is one standing engine alarm about one model entry or one tool
@@ -288,6 +290,9 @@ func (s Settings) Records(r Records, at time.Time) (Derived, atlas.Joined) {
 	out := integrations.out
 	out.Claims = append(out.Claims, tools.out.Claims...)
 	out.Withheld = append(out.Withheld, tools.out.Withheld...)
+	own := fleet(r.Fleet, at)
+	out.Claims = append(out.Claims, own.Claims...)
+	out.Withheld = append(out.Withheld, own.Withheld...)
 	return out, j
 }
 
