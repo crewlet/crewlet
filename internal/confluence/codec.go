@@ -4,6 +4,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // The skill-page wire format.
@@ -24,16 +25,23 @@ import (
 // from an ordinary page: the registry just does not have it, and every seat
 // runs without that guidance.
 
+// The two shapes of a code block, each compiled at first use: a hook the
+// engine's binary runs for every push reads no page, and a pattern compiled
+// at init is paid for there (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
 var (
 	// codeMacro matches Confluence's own code block, CDATA and all.
-	codeMacro = regexp.MustCompile(
-		`(?is)\A\s*<ac:structured-macro[^>]*ac:name="code".*?` +
-			`<ac:plain-text-body>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</ac:plain-text-body>.*?` +
-			`</ac:structured-macro>`)
+	codeMacro = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?is)\A\s*<ac:structured-macro[^>]*ac:name="code".*?` +
+				`<ac:plain-text-body>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</ac:plain-text-body>.*?` +
+				`</ac:structured-macro>`)
+	})
 
 	// preCode matches a plain XHTML code block, tolerant of attributes.
-	preCode = regexp.MustCompile(
-		`(?is)\A\s*<pre\b[^>]*>\s*(?:<code\b[^>]*>)?(.*?)(?:</code>)?\s*</pre>`)
+	preCode = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(
+			`(?is)\A\s*<pre\b[^>]*>\s*(?:<code\b[^>]*>)?(.*?)(?:</code>)?\s*</pre>`)
+	})
 )
 
 // DecodeSkillPage turns a page's storage format into the authored skill
@@ -63,7 +71,7 @@ func DecodeSkillPage(storage string) string {
 
 // leadingCode splits a page into its leading code block and what follows.
 func leadingCode(storage string) (string, string) {
-	for _, pattern := range []*regexp.Regexp{codeMacro, preCode} {
+	for _, pattern := range []*regexp.Regexp{codeMacro(), preCode()} {
 		if loc := pattern.FindStringSubmatchIndex(storage); loc != nil {
 			block := strings.TrimSpace(html.UnescapeString(storage[loc[2]:loc[3]]))
 			if block == "" {
