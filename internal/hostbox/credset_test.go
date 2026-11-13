@@ -243,6 +243,74 @@ func TestAKilledWriterNeverLeavesHalfALogin(t *testing.T) {
 	}
 }
 
+// WHAT A KILLED WRITE STAGED IS GONE BY THE NEXT HOLD OF THE LOCK. A write
+// killed between staging a file and its rename left the staged copy, a login
+// file's inside the directory and the journal's beside it, and nothing removed
+// either, not even a logout: a token on the disk past the login it was part
+// of. The next read, write and logout each remove both, and leave alone a file
+// another writer staged beside the directory under a lock of its own.
+//
+// Mutation: sweep nothing, and both copies survive every hold; sweep the
+// directory's parent, and the other writer's staged file is gone.
+func TestWhatAKilledWriteStagedIsGoneByTheNextHold(t *testing.T) {
+	t.Parallel()
+	for name, hold := range map[string]func(dir string) error{
+		"a read": func(dir string) error {
+			_, err := ReadCredentials(dir, twoLoginNames)
+			return err
+		},
+		"a write":  func(dir string) error { return WriteCredentials(dir, twoLoginNames, twoLogins[1]) },
+		"a logout": func(dir string) error { return WriteCredentials(dir, twoLoginNames, nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			dir := filepath.Join(root, "credentials")
+			writeRaw(t, dir, map[string]string{
+				"auth.json": "a", "config.toml": "c", stagedPrefix + "killed": `{"token":"staged"}`,
+			})
+			journal, err := json.Marshal(credentialJournal{Version: journalVersion,
+				Write: map[string][]byte{"auth.json": []byte(`{"token":"staged"}`)}, Remove: []string{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(root, stagedPrefix+"another-writer")
+			writeRaw(t, root, map[string]string{filepath.Base(stagedJournal(dir)): string(journal),
+				filepath.Base(other): "another writer's"})
+			if err := hold(dir); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			for _, path := range []string{filepath.Join(dir, stagedPrefix+"killed"), stagedJournal(dir)} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Errorf("%s left %s, which a killed write staged: %v", name, path, err)
+				}
+			}
+			if raw, err := os.ReadFile(other); err != nil || string(raw) != "another writer's" {
+				t.Errorf("%s took %s, which another writer staged beside the directory: %q, %v",
+					name, other, raw, err)
+			}
+		})
+	}
+}
+
+// THE JOURNAL IS STAGED WHERE THE NEXT HOLD LOOKS FOR IT: under a name of its
+// own beside the directory, never ReplaceFile's random one, which the next
+// hold cannot tell from another writer's, so a write killed before its
+// journal's rename leaves a copy the next hold removes. Seen through an
+// obstacle at that name, which a write staged there cannot get past.
+//
+// Mutation: stage the journal through ReplaceFile, and the write lands.
+func TestTheJournalIsStagedWhereTheNextHoldLooks(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "credentials")
+	writeRaw(t, filepath.Join(stagedJournal(dir), "in-the-way"), map[string]string{"x": "x"})
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+	if err == nil || Committed(err) || !strings.Contains(err.Error(), filepath.Base(stagedJournal(dir))) {
+		t.Fatalf("a write with an obstacle where its journal is staged = %v, want a refusal naming %s",
+			err, stagedJournal(dir))
+	}
+}
+
 // A WRITE REPLACES ONE IT FINDS STANDING, unapplied — which is how a logout
 // discards a login that was never put in place, even one that CANNOT be put in
 // place — and carries over only what that write decided about files outside

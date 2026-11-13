@@ -31,8 +31,9 @@ import (
 //
 //  1. the whole new login — every file it holds, and every name it does not —
 //     is written to the directory's JOURNAL ([CredentialJournal]) through a
-//     temporary file and a rename, and the journal's directory is synced. THAT
-//     RENAME IS THE COMMIT: from here on the new login is the login of record;
+//     staged copy of its own beside it and a rename, and the journal's
+//     directory is synced. THAT RENAME IS THE COMMIT: from here on the new
+//     login is the login of record;
 //  2. each file is replaced or removed, and the credential directory is
 //     synced;
 //  3. the journal is removed.
@@ -46,6 +47,19 @@ import (
 // write states every name it knows, so the old one's decision about each of
 // them is superseded unapplied — which is what lets a logout discard a login
 // that was never put in place, rather than writing it to disk to delete it.
+//
+// WHAT A WRITE STAGED IS GONE BY THE NEXT HOLD OF THE LOCK. A file is replaced
+// through a staged copy and a rename, and a write stopped between the two by a
+// SIGKILL, an out-of-memory kill or a power loss, none of which runs the
+// deferred removal that cleans up after a failure, leaves the staged copy:
+// credential bytes under a name no reader reads, which no logout removed
+// either, since a logout removes the login's own names. So every read and every
+// write removes them first ([sweep]): each staged login file inside the
+// directory, and the journal's staged copy beside it, which has a name of its
+// own for that reason. Only a holder of the directory's lock stages either, so
+// whatever the next holder finds was left by a writer that is gone. The
+// directory's PARENT is never swept: other writers stage their own files
+// there, under other locks.
 //
 // THE OBVIOUS ALTERNATIVE, an immutable directory per login behind a symbolic
 // link swapped by one rename, is no less locked: a reader that resolved the link
@@ -62,6 +76,13 @@ import (
 // bundle or a box's seed, ever carries a write in progress along with the
 // login it is part way through replacing.
 func CredentialJournal(dir string) string { return filepath.Clean(dir) + ".pending" }
+
+// stagedJournal is where a write of dir's login stages its journal before the
+// rename that commits it: beside the journal, under a name of its own rather
+// than ReplaceFile's, because the directory beside it is where other writers
+// stage their own files under other locks, and the next holder of this lock
+// removes what a killed write left here ([sweep]).
+func stagedJournal(dir string) string { return CredentialJournal(dir) + ".tmp" }
 
 // MaxCredentialBytes bounds one file of a shared login, on its way in and out.
 //
@@ -135,6 +156,9 @@ func ReadCredentials(dir string, names []string) (map[string][]byte, error) {
 	if err := checkNames(names); err != nil {
 		return nil, err
 	}
+	if err := sweep(dir); err != nil {
+		return nil, err
+	}
 	if err := settle(dir); err != nil {
 		return nil, err
 	}
@@ -192,6 +216,9 @@ func WriteCredentials(dir string, names []string, login map[string][]byte) error
 				"hold (%s)", name, strings.Join(names, ", "))
 		}
 	}
+	if err := sweep(dir); err != nil {
+		return err
+	}
 	standing, ok, err := readJournal(dir)
 	if err != nil {
 		return err
@@ -215,11 +242,54 @@ func WriteCredentials(dir string, names []string, login map[string][]byte) error
 	if err != nil {
 		return fmt.Errorf("hostbox: encoding the login write: %w", err)
 	}
-	if err = ReplaceFile(CredentialJournal(dir), bytes.NewReader(raw)); err != nil {
+	if err = writeJournal(dir, raw); err != nil {
 		return fmt.Errorf("hostbox: recording the login write in %s: %w", CredentialJournal(dir), err)
 	}
 	if err = settle(dir); err != nil {
 		return &UnappliedError{Journal: CredentialJournal(dir), Err: err}
+	}
+	return nil
+}
+
+// writeJournal puts raw at dir's journal through its staged copy
+// ([stagedJournal]) and a rename, under dir's lock the caller holds.
+func writeJournal(dir string, raw []byte) error {
+	journal := CredentialJournal(dir)
+	parent, err := os.OpenRoot(filepath.Dir(journal))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	return replaceStaged(parent, filepath.Base(journal), filepath.Base(stagedJournal(dir)), bytes.NewReader(raw))
+}
+
+// sweep removes what a write of dir's login killed between staging a file and
+// its rename left behind: the journal's staged copy beside dir, and every file
+// staged inside it. The caller holds dir's lock, which every writer that
+// stages either holds, so nothing it removes is a write in progress. Only
+// regular files go: anything else at such a name is no copy a write made.
+func sweep(dir string) error {
+	staged := []string{stagedJournal(dir)}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("hostbox: reading %q for what a killed login write staged: %w", dir, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), stagedPrefix) {
+			staged = append(staged, filepath.Join(dir, entry.Name()))
+		}
+	}
+	for _, path := range staged {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) || (err == nil && !info.Mode().IsRegular()) {
+			continue
+		}
+		if err == nil {
+			err = os.Remove(path)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("hostbox: removing %s, a copy a killed login write staged: %w", path, err)
+		}
 	}
 	return nil
 }
