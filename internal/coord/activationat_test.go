@@ -78,3 +78,54 @@ func TestAnActivationIsSizedAtItsWidest(t *testing.T) {
 		}
 	}
 }
+
+// AN ACTIVATION'S ORIGIN IS SIZED AT ITS WIDEST TOO, so a config write's dry
+// run, which sizes the pointer its write would make, answers for that write.
+//
+// The write follows its dry run at a later instant, and the instant stamps the
+// pointer's origin as well as the pointer: an origin on a whole second is
+// "…:26Z", one a moment later "…:26.123456789Z". A pointer sized at the dry
+// run's instant is one the write's own instant cannot lengthen.
+//
+// Mutation: size the origin at its own instant, and the write a moment after
+// its dry run makes a pointer past the size the dry run passed.
+func TestAnActivationsOriginIsSizedAtItsWidest(t *testing.T) {
+	t.Parallel()
+	checked := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
+	request := coord.ActivationRequest{
+		RevisionID: "00000000-0000-0000-0000-000000000000", Summary: "a summary", At: checked,
+		Origin: coord.RevisionOrigin{AuthorKind: "operator", Source: "api", CreatedAt: checked},
+	}
+	payload := []byte(`{"__encrypted__":"enc:v1:k1:abcd"}`)
+	sized, err := coord.ActivationBytes(request, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := checked.Add(123_456_789)
+	request.At, request.Origin.CreatedAt = written, written
+	stored, err := coord.ActivationValue(request, payload, written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) > sized {
+		t.Errorf("a pointer written at %s is %d bytes, past the %d its dry run at %s sized",
+			written.Format(time.RFC3339Nano), len(stored), sized, checked.Format(time.RFC3339Nano))
+	}
+
+	// AND AN ORIGIN THAT NAMES NO INSTANT STILL ENCODES NONE: sized at the
+	// widest, a zero instant would count an instant the pointer never carries.
+	request.Origin.CreatedAt = time.Time{}
+	sized, err = coord.ActivationBytes(request, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = coord.ActivationValue(request, payload,
+		written.Truncate(time.Second).Add(time.Second-time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != sized {
+		t.Errorf("a pointer whose origin names no instant is %d bytes at its widest, sized at %d",
+			len(stored), sized)
+	}
+}

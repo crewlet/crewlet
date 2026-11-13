@@ -914,20 +914,33 @@ func ActivationValue(req ActivationRequest, payload json.RawMessage, at time.Tim
 }
 
 // ActivationBytes is how large the pointer's value for req, its body payload,
-// is at its widest: [ActivationValue] at the request's own instant written
-// with every fractional digit an instant encodes. A store moves the instant
-// forward past the pointer it replaces ([ActivationAt]), and a later instant
-// can encode longer — a millisecond on, ".1Z" is ".101Z" — so a request this
-// sizes within [MaxValueBytes] is one the store takes at whatever instant it
-// decides. For a caller holding a write to the bound before it commits to
-// anything (internal/api/configapi), which has no instant but its own.
+// is at its widest: [ActivationValue] with both its instants, the pointer's
+// and its origin's, written with every fractional digit an instant encodes. A
+// store moves the pointer's instant forward past the pointer it replaces
+// ([ActivationAt]), and a later instant can encode longer — a millisecond on,
+// ".1Z" is ".101Z" — while a config write's dry run sizes the pointer its
+// write would make at an instant before that write's own, the origin's
+// included. So a request this sizes within [MaxValueBytes] is one the store
+// takes at whatever instants it is written at. For a caller holding a write to
+// the bound before it commits to anything (internal/api/configapi), which has
+// no instant but its own.
 func ActivationBytes(req ActivationRequest, payload json.RawMessage) (int, error) {
-	widest := req.At.UTC().Truncate(time.Second).Add(time.Second - time.Nanosecond)
-	value, err := ActivationValue(req, payload, widest)
+	if !req.Origin.CreatedAt.IsZero() {
+		// A ZERO ORIGIN INSTANT STAYS ZERO: an origin that names none
+		// encodes none ([RevisionOrigin.UTC]).
+		req.Origin.CreatedAt = widestIn(req.Origin.CreatedAt)
+	}
+	value, err := ActivationValue(req, payload, widestIn(req.At))
 	if err != nil {
 		return 0, err
 	}
 	return len(value), nil
+}
+
+// widestIn is the last instant of t's second, in UTC: the instant in it that
+// encodes with every fractional digit an instant has.
+func widestIn(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Second).Add(time.Second - time.Nanosecond)
 }
 
 // ErrActivationRaced reports an activation whose Expect no longer matches.
