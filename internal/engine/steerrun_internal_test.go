@@ -955,8 +955,15 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 // served takes the write's own place, after every read, and the brief places
 // none.
 //
-// Mutation: hand the brief without a peeked note's place, or place a note no
-// hook was served, and the case goes red.
+// EVERY PEEKED NOTE A SERVE PLACED, AT ITS PLACE AND NOT AT ITS NUMBER: the
+// hook's lost answer handed two notes, which share the one place its write
+// took while their numbers among the turn's notes (sandbox.RunNote.Seq)
+// differ, and the brief places each at the place the launch's write reads it
+// at.
+//
+// Mutation: hand the brief without a peeked note's place, place one at its
+// number among the turn's notes, place only the first of them, or place a note
+// no hook was served, and the case goes red.
 func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -971,8 +978,9 @@ func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-0", Text: "run the migrations first", By: "founder"})
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-a", Text: "deploy to prod", By: "founder"})
-	serve("take-1", "n-a")
+	serve("take-1", "n-0", "n-a")
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-b", Text: "no, deploy to staging", By: "founder"})
 	serve("take-2", "n-b")
 	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
@@ -980,14 +988,21 @@ func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-c", Text: "and tag the release", By: "founder"})
+	for _, n := range mustRow(t, store, "run-1").Steer.Notes {
+		if n.ID == "n-a" && (n.Place != 1 || n.Seq == n.Place) {
+			t.Fatalf("the premise: note n-a is numbered %d among the turn's notes and placed %d among its reads, "+
+				"want it placed 1 under another number", n.Seq, n.Place)
+		}
+	}
 	source := claimedSource(t, store, runs, launch)
 	brief := source.Brief(ctx)
 	var peeked []string
 	for _, n := range brief.Notes {
 		peeked = append(peeked, n.ID)
 	}
-	if !slices.Equal(peeked, []string{"n-a", "n-c"}) {
-		t.Fatalf("the brief peeks %v, want the note a hook's serve placed and the one no hook was served", peeked)
+	if !slices.Equal(peeked, []string{"n-0", "n-a", "n-c"}) {
+		t.Fatalf("the brief peeks %v, want the two notes a hook's serve placed and the one no hook was served",
+			peeked)
 	}
 	sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
 	if err != nil {
@@ -1004,13 +1019,15 @@ func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 	for _, read := range runs.carried(mustRow(t, store, "run-1")) {
 		places[read.ID] = read.Order
 	}
-	if places["n-a"] != 1 || places["n-b"] != 2 || places["n-c"] != 3 {
-		t.Fatalf("the premise: the launch's write reads the notes at %v, want n-a at its first serve's place 1, "+
-			"ahead of the correction n-b at 2, and n-c at the write's own place 3", places)
+	if places["n-0"] != 1 || places["n-a"] != 1 || places["n-b"] != 2 || places["n-c"] != 3 {
+		t.Fatalf("the premise: the launch's write reads the notes at %v, want n-0 and n-a at their first serve's "+
+			"place 1, ahead of the correction n-b at 2, and n-c at the write's own place 3", places)
 	}
-	if got, ok := brief.Orders["n-a"]; !ok || got != places["n-a"] {
-		t.Errorf("the brief places the note a hook's serve placed at %d (placed %v), want %d, where the launch's "+
-			"write reads it, ahead of the correction at %d", got, ok, places["n-a"], places["n-b"])
+	for _, id := range []string{"n-0", "n-a"} {
+		if got, ok := brief.Orders[id]; !ok || got != places[id] {
+			t.Errorf("the brief places note %s, which a hook's serve placed, at %d (placed %v), want %d, where the "+
+				"launch's write reads it, ahead of the correction at %d", id, got, ok, places[id], places["n-b"])
+		}
 	}
 	if got, ok := brief.Orders["n-c"]; ok {
 		t.Errorf("the brief places the note no hook was served at %d, want it unplaced: the launch's write reads "+
