@@ -6,10 +6,12 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -668,5 +670,334 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 	if got := rewriteLine(call, s, testBounds); !strings.Contains(got, "tool_use") ||
 		!strings.Contains(got, scrubMarker) {
 		t.Errorf("a call's own line was not kept as rewritten: %q", got)
+	}
+}
+
+// THE LOADED-TOOLS RECORDS THE CASES BELOW CUT, shaped as Claude Code writes
+// them: the record's keys in the order 2.1.310 and 2.1.322 write them, as
+// measured on sessions driven as the engine drives a box's executor (each of
+// the 72 such records those sessions wrote, a main thread's or a subagent's,
+// is in one of the two shapes [ltRecord] writes), and each definition's as
+// its list holds one. The renamed definition is a tool of a server whose name
+// is a value the launch handed the box, which the scrub takes out of the name.
+const (
+	ltServer  = "cloudhost"
+	ltRenamed = `{"name":"mcp__cloudhost__backup_list","description":"Lists <b>backups</b> & their \"tags\".",` +
+		`"input_schema":{"type":"object","properties":{"tag":{"type":"string"}}},"defer_loading":true}`
+	ltEcho = `{"name":"mcp__seat__echo","description":"Answers after the given seconds.","input_schema":` +
+		`{"type":"object","properties":{"tag":{"type":"string"},"seconds":{"type":"number"}}},"defer_loading":true}`
+	ltSend = `{"name":"SendMessage","description":"# SendMessage\n\nSend a message to another agent.\n\n| ` +
+		"`to`" + ` | |\n|---|---|","input_schema":{"type":"object","properties":{}},"defer_loading":true}`
+)
+
+// ltRecord is a loaded-tools record holding definitions, as release writes
+// one: a main thread's, or a subagent's where agent names the subagent.
+func ltRecord(release, agent string, definitions ...string) string {
+	thread := `"isSidechain":false,`
+	if agent != "" {
+		thread = `"isSidechain":true,"agentId":"` + agent + `",`
+	}
+	return `{"parentUuid":"` + ctUUID(40) + `",` + thread + `"attachment":{"type":"deferred_tools_record",` +
+		`"entries":[` + strings.Join(definitions, ",") + `]},"type":"attachment","uuid":"` + ctUUID(41) +
+		`","timestamp":"` + ctStamp + `",` + ctTail(release) + `}`
+}
+
+// ltAnnounced is a loaded-tools record as both releases' writers also write
+// one, read from their code, since none of the measured sessions had one
+// written: the names announced to the model alone, without their definitions,
+// after the list.
+func ltAnnounced(definitions ...string) string {
+	return strings.Replace(ltRecord("2.1.322", "", definitions...), `]},"type":"attachment"`,
+		`],"nameOnlyAnnouncements":["mcp__seat__later"]},"type":"attachment"`, 1)
+}
+
+// A LOADED TOOL DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE AS WRITTEN:
+// the definition goes with the comma that joined it to its list, and every
+// other byte of the line stays where it was, the record's keys in the order
+// written above all, so a line that began `{"parentUuid":` (the bytes Claude
+// Code's prune of a session file past 5 MiB finds a record's slot by) still
+// does. Over each shape the record is written in (a main thread's and a
+// subagent's, as 2.1.310 and 2.1.322 write them; one with the names announced
+// alone after the list; and the shape the scrub's first case held), with the
+// renamed definition first, between two kept, last, alone and twice.
+//
+// Mutation: write the record again from a map, drop nothing, cut the
+// definition beside the renamed one, or cut a kept one's comma, and a case
+// goes red.
+func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{ltServer})
+	for shape, record := range map[string]func(definitions ...string) string{
+		"a main thread's, by 2.1.310": func(d ...string) string { return ltRecord("2.1.310", "", d...) },
+		"a main thread's, by 2.1.322": func(d ...string) string { return ltRecord("2.1.322", "", d...) },
+		"a subagent's":                func(d ...string) string { return ltRecord("2.1.310", ctAgent, d...) },
+		"with names announced alone":  ltAnnounced,
+		"the scrub's first case's": func(d ...string) string {
+			return `{"type":"attachment","uuid":"u-1","attachment":{"type":"deferred_tools_record","entries":[` +
+				strings.Join(d, ",") + `]}}`
+		},
+	} {
+		for placed, tc := range map[string]struct{ written, kept []string }{
+			"first":            {[]string{ltRenamed, ltEcho, ltSend}, []string{ltEcho, ltSend}},
+			"between two kept": {[]string{ltEcho, ltRenamed, ltSend}, []string{ltEcho, ltSend}},
+			"last":             {[]string{ltEcho, ltSend, ltRenamed}, []string{ltEcho, ltSend}},
+			"alone":            {[]string{ltRenamed}, nil},
+			"twice, apart":     {[]string{ltRenamed, ltEcho, ltRenamed}, []string{ltEcho}},
+			"twice, together":  {[]string{ltEcho, ltRenamed, ltRenamed, ltSend}, []string{ltEcho, ltSend}},
+		} {
+			line, want := record(tc.written...), record(tc.kept...)
+			got := rewriteLine(line, s, testBounds)
+			if got != want {
+				t.Errorf("%s, the renamed definition %s: kept\n%s\nwant\n%s", shape, placed, got, want)
+			}
+			if strings.HasPrefix(got, `{"parentUuid":`) != strings.HasPrefix(line, `{"parentUuid":`) {
+				t.Errorf("%s, the renamed definition %s: the line begins %.24q, where it began %.24q",
+					shape, placed, got, line)
+			}
+		}
+	}
+}
+
+// THE CUT TAKES NOTHING BUT THE DEFINITION AND ITS COMMA, whatever else the
+// line holds: blanks between its tokens, inside the list as much as outside
+// it, and in its other values escapes, a line separator raw and escaped, a lone
+// surrogate's escape and a byte that is no UTF-8, each kept as written and
+// never decoded and written again. A line the rewrite hands the cut is one
+// JSON.stringify could have written, with no blank between its tokens; the
+// cut is held to every byte of any line all the same.
+//
+// Mutation: write the record again from a map, or the list again from its
+// kept definitions, and the blanks or the escapes go.
+func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
+	t.Parallel()
+	renamed := `{"name": "mcp__` + scrubMarker + `__backup_list", "description": "Lists backups"}`
+	kept := `{ "name" : "ok_tool" , "input_schema" : { "type" : "object" } }`
+	other := `{"name":"SendMessage","description":"a\tb \"c\" d\\e \u00e9 \ud83d` + "\u2028 \xff" + `"}`
+	text := `"tab\there, \"quoted\", back\\slash, line\nbreak, \u2028 and ` + "\u2028" +
+		` separated, \ud83d lone, caf\u00e9, café, <&>, ` + "\xff" + `"`
+	for placed, tc := range map[string]struct{ list, cut string }{
+		"first":            {`[ ` + renamed + ` , ` + kept + ` ,` + "\t" + other + "\t]", renamed + ` , `},
+		"between two kept": {`[ ` + kept + ` , ` + renamed + ` ,` + "\t" + other + ` ]`, ` , ` + renamed},
+		"last":             {`[` + kept + `,` + other + ` , ` + renamed + ` ]`, ` , ` + renamed},
+		"alone":            {`[ ` + renamed + ` ]`, renamed},
+	} {
+		line := `{"parentUuid": "` + ctUUID(1) + `" , "isSidechain": false, "attachment": {"type": ` +
+			`"deferred_tools_record", "entries": ` + tc.list + `}, "type": "attachment", "text": ` + text + `}`
+		want := strings.Replace(line, tc.cut, "", 1)
+		if got := withoutBrokenDefinitions(line); got != want {
+			t.Errorf("the renamed definition %s: kept\n%q\nwant\n%q", placed, got, want)
+		}
+	}
+}
+
+// A LINE THE CUT HAS NOTHING TO TAKE FROM IS HANDED ON AS IT CAME: a record
+// whose definitions keep their names (a marker in a description renames
+// nothing), an empty list and a null one, and every line that is not the
+// loaded tools' record as JSON.parse reads it: a list that is an object,
+// another attachment's list, a record with no attachment or one that is a
+// string, a torn line, a line of two values, a list of records, and a record
+// whose key is written twice, which JSON.parse reads by its last value (a
+// list or an attachment the record reads past, a type that is another's).
+// Where the list it reads is written twice, only the one JSON.parse reads is
+// cut, and the one it reads past stays as written.
+//
+// Mutation: read a key by its first value, or cut a line that is more than
+// one object, and a case goes red.
+func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
+	t.Parallel()
+	renamed := `{"name":"mcp__` + scrubMarker + `__backup_list"}`
+	described := `{"name":"mcp__seat__echo","description":"was ` + scrubMarker + `"}`
+	loaded := func(attachment string) string {
+		return `{"parentUuid":null,"isSidechain":false,"attachment":` + attachment + `,"type":"attachment"}`
+	}
+	cuttable := loaded(`{"type":"deferred_tools_record","entries":[` + renamed + `]}`)
+	for name, line := range map[string]string{
+		"no name renamed":          loaded(`{"type":"deferred_tools_record","entries":[` + described + `]}`),
+		"an empty list":            loaded(`{"type":"deferred_tools_record","entries":[],"note":"` + scrubMarker + `"}`),
+		"a null list":              loaded(`{"type":"deferred_tools_record","entries":null,"note":"` + scrubMarker + `"}`),
+		"a list that is an object": loaded(`{"type":"deferred_tools_record","entries":` + renamed + `}`),
+		"another attachment's list": loaded(`{"type":"deferred_tools_delta","entries":[` + renamed +
+			`],"of":"deferred_tools_record"}`),
+		"no attachment":                  `{"type":"deferred_tools_record","entries":[` + renamed + `]}`,
+		"an attachment that is a string": loaded(`"deferred_tools_record ` + scrubMarker + `"`),
+		"a torn line":                    strings.TrimSuffix(cuttable, `}`),
+		"a line of two values":           cuttable + ` {}`,
+		"a list of records":              `[` + cuttable + `]`,
+		"a list the record reads past": loaded(`{"type":"deferred_tools_record","entries":[` + renamed +
+			`],"entries":[` + described + `]}`),
+		"a type that is another's": loaded(`{"type":"deferred_tools_record","entries":[` + renamed +
+			`],"type":"deferred_tools_delta"}`),
+		"an attachment the record reads past": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
+			`"entries":[` + renamed + `]},"attachment":{"type":"date"}}`,
+	} {
+		if got := withoutBrokenDefinitions(line); got != line {
+			t.Errorf("%s: handed on as\n%s\nwant it as it came\n%s", name, got, line)
+		}
+	}
+	twice := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + renamed + `,` +
+		described + `]}`)
+	want := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + described + `]}`)
+	if got := withoutBrokenDefinitions(twice); got != want {
+		t.Errorf("a list written twice: kept\n%s\nwant\n%s", got, want)
+	}
+}
+
+// THE SCRUB KEEPS EVERY RECORD WHERE CLAUDE CODE FINDS IT, whatever it takes
+// out of a session: each transcript keeps every line, and each line's record
+// its uuid, its parentUuid and its type as written and every key, at every
+// depth, in the order written, so a line that began `{"parentUuid":` still
+// does; what a record loses is a loaded tool definition the scrub cut, its
+// keys with it. Over a line of every record kind the thread layer's cases
+// shape as 2.1.118, 2.1.310 and 2.1.322 write them, in a main thread and a
+// subagent's, beside the loaded-tools records the probes hold, through the
+// scrub of a whole archive: it takes the session's id out of every line, as a
+// value the launch handed the box would be, so that every line is rewritten,
+// and a tool server's name out of a definition and a call.
+//
+// Mutation: write a loaded-tools record again from a map, or lose a line's
+// break, and a line here goes red.
+func TestTheScrubKeepsEveryRecordWhereClaudeCodeFindsIt(t *testing.T) {
+	t.Parallel()
+	// held is one line of a thread: as it is written, and as the scrub keeps
+	// it but for the text inside its strings.
+	type held struct{ written, kept string }
+	same := func(lines ...string) []held {
+		out := make([]held, 0, len(lines))
+		for _, line := range lines {
+			out = append(out, held{line, line})
+		}
+		return out
+	}
+	call := `[{"type":"tool_use","id":"toolu_test_c1","name":"mcp__cloudhost__backup_list","input":{"tag":"t1"}}]`
+	mainThread := append(same(ctMain...), same(
+		ctMode,
+		ctNotification(ctUUID(16), ctUUID(17)),
+		ctSkillHook(ctUUID(17), ctUUID(18)),
+		ctSkillText(ctUUID(18), ctUUID(19)),
+		ctBoundary(ctUUID(20), ctUUID(21), ctUUID(18), ctUUID(19)),
+		ctCompactSummary(ctUUID(20), ctUUID(21)),
+		ctMicrocompactBoundary(ctUUID(21), ctUUID(22)),
+		ctSpan(ctUUID(22), ctUUID(23), ""),
+		ctSynthetic(ctUUID(23), ctUUID(24)),
+		ctInterrupted(ctUUID(24), ctUUID(25)),
+		ctKilled(ctUUID(25), ctUUID(26)),
+		ctReported(t, ctEdits(ctClearing, ctThinking)),
+		ctAssistant(ctUUID(41), ctUUID(42), call),
+	)...)
+	mainThread = append(mainThread,
+		held{ltRecord("2.1.310", "", ltEcho, ltRenamed), ltRecord("2.1.310", "", ltEcho)},
+		held{ltRecord("2.1.322", "", ltRenamed, ltSend), ltRecord("2.1.322", "", ltSend)},
+		held{ltAnnounced(ltRenamed), ltAnnounced()})
+	threads := map[string][]held{
+		"projects/p/s.jsonl": mainThread,
+		"projects/p/s/subagents/agent-" + ctAgent + ".jsonl": append(
+			same(ctSubagentPrompt(ctUUID(50)), ctCoordinator(ctUUID(50), ctUUID(51))),
+			held{ltRecord("2.1.310", ctAgent, ltRenamed, ltEcho), ltRecord("2.1.310", ctAgent, ltEcho)}),
+	}
+	files := map[string]string{}
+	for name, lines := range threads {
+		var file strings.Builder
+		for _, line := range lines {
+			file.WriteString(line.written + "\n")
+		}
+		files[name] = file.String()
+	}
+	archive := tarOf(t, files)
+	var out bytes.Buffer
+	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, newScrubber([]string{ctSession, ltServer}),
+		testBounds); err != nil {
+		t.Fatalf("scrubTar: %v", err)
+	}
+	scrubbed := untarOf(t, out.Bytes())
+	for name, lines := range threads {
+		file, ok := scrubbed[name]
+		got := strings.Split(strings.TrimSuffix(file, "\n"), "\n")
+		if !ok || !strings.HasSuffix(file, "\n") || len(got) != len(lines) {
+			t.Errorf("%s: kept as %d lines (kept at all: %t), want %d, each ended by its break",
+				name, len(got), ok, len(lines))
+			continue
+		}
+		for i, line := range lines {
+			where := fmt.Sprintf("%s, line %d", name, i+1)
+			if got[i] == line.written || strings.Contains(got[i], ctSession) {
+				t.Errorf("%s: the scrub did not take the session's id out of %.100s", where, got[i])
+			}
+			keys, top := recordKeys(t, got[i])
+			wantKeys, wantTop := recordKeys(t, line.kept)
+			for _, key := range []string{"uuid", "parentUuid", "type"} {
+				value, there := top[key]
+				want, wantThere := wantTop[key]
+				if value != want || there != wantThere {
+					t.Errorf("%s: its %s is %s (written: %t), want %s (written: %t)",
+						where, key, value, there, want, wantThere)
+				}
+			}
+			if !slices.Equal(keys, wantKeys) {
+				t.Errorf("%s: its keys are\n%s\nwant\n%s", where, strings.Join(keys, " "), strings.Join(wantKeys, " "))
+			}
+			if strings.HasPrefix(got[i], `{"parentUuid":`) != strings.HasPrefix(line.kept, `{"parentUuid":`) {
+				t.Errorf("%s: it begins %.24q, where it began %.24q", where, got[i], line.kept)
+			}
+		}
+	}
+}
+
+// recordKeys is every key of a record's line, at every depth, as its path from
+// the record (`/attachment/entries/0/name`) in the order written, and the
+// value of each of the record's own keys as written, the last where a key is
+// written twice.
+func recordKeys(t *testing.T, line string) ([]string, map[string]string) {
+	t.Helper()
+	var keys []string
+	top := map[string]string{}
+	var walk func(raw json.RawMessage, path string) error
+	walk = func(raw json.RawMessage, path string) error {
+		switch wireKind(raw) {
+		case "an object":
+			return eachKey(raw, func(name []byte, value json.RawMessage) error {
+				at := path + "/" + string(name)
+				keys = append(keys, at)
+				if path == "" {
+					top[string(name)] = string(value)
+				}
+				return walk(value, at)
+			})
+		case "a list":
+			n := 0
+			return eachElement(raw, func(element json.RawMessage) error {
+				n++
+				return walk(element, path+"/"+strconv.Itoa(n-1))
+			})
+		}
+		return nil
+	}
+	if err := walk(json.RawMessage(line), ""); err != nil {
+		t.Fatalf("%.120s does not read: %v", line, err)
+	}
+	return keys, top
+}
+
+// untarOf is every file a gzipped tar holds, by its name.
+func untarOf(t *testing.T, archive []byte) map[string]string {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(zr)
+	files := map[string]string{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return files
+		}
+		if err != nil {
+			t.Fatalf("the tar does not read: %v", err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name] = string(body)
 	}
 }
