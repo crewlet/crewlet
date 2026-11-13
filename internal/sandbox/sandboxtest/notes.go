@@ -60,6 +60,7 @@ var noteCases = []struct {
 	{"AHooksServeRecordsTheServeAndNoRead", testAHooksServeRecordsTheServeAndNoRead},
 	{"AServeLosesTheCallsItsInboxHeardCancelledFirst", testAServeLosesTheCallsItsInboxHeardCancelledFirst},
 	{"AServeRemovesTheTakesItsInboxSawUnansweredFirst", testAServeRemovesTheTakesItsInboxSawUnansweredFirst},
+	{"AServeToAnotherJobReplacesTheLastJobsServes", testAServeToAnotherJobReplacesTheLastJobsServes},
 	{"AVerdictReadsAHeldServeAtItsNotesPlace", testAVerdictReadsAHeldServeAtItsNotesPlace},
 	{"ARestartedTakeIsReadMarkedSo", testARestartedTakeIsReadMarkedSo},
 	{"AVerdictLosesAServeItIsToldIsAbsent", testAVerdictLosesAServeItIsToldIsAbsent},

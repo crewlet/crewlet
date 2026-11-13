@@ -312,6 +312,66 @@ func testAServeRemovesTheTakesItsInboxSawUnansweredFirst(t *testing.T, s sandbox
 	}
 }
 
+// A SERVE TO ANOTHER JOB REPLACES THE LAST JOB'S SERVES. A note's serves are one
+// job's, at most [sandbox.MaxNoteServes]: a note served to that bound in one job,
+// which nothing read before the next job opened (its seal opening neither where
+// the review read the record nor where the next launch's brief did), is served
+// by the next job's hook as a note that job was never served. Its serves are
+// replaced by that job's one, at the place its first serve took, and the next
+// job serves it to the bound again and no further. So no note carries more
+// than one job's serves, which is the bound the row's model rests on, and no
+// reader of a note's serves reads two jobs' in one list.
+//
+// Mutation: keep the last job's serves and count only the serving job's toward
+// the bound, and a check goes red.
+func testAServeToAnotherJobReplacesTheLastJobsServes(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-serve-replaced"
+	first := mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	// SERVED TO THE FIRST JOB'S BOUND, each serve but the last lost to a
+	// cancel.
+	serveTo := func(job string, from int) {
+		t.Helper()
+		mustServe(t, s, turn, hookServe(job, fmt.Sprintf("take-%d", from), callNo(from), "n-1"), "n-1")
+		for k := from + 1; k < from+sandbox.MaxNoteServes; k++ {
+			next := hookServe(job, fmt.Sprintf("take-%d", k), callNo(k), "n-1")
+			next.Cancelled = []sandbox.NoteCall{*callNo(k - 1)}
+			mustServe(t, s, turn, next, "n-1")
+		}
+	}
+	serveTo(first, 1)
+	mustClaim(t, s, turn)
+	second := mustBeginLaunch(t, s, run(turn))
+	if n := notesByID(t, s, turn)["n-1"]; !n.Waiting() || n.Served != first ||
+		len(n.Serves) != sandbox.MaxNoteServes {
+		t.Fatalf("the premise: the relaunch whose brief named nothing left the note served %v to %q (waiting %v), "+
+			"want it waiting with the first job's %d serves", servesOf(n), n.Served, n.Waiting(), sandbox.MaxNoteServes)
+	}
+	mustServe(t, s, turn, hookServe(second, "take-11", callNo(11), "n-1"), "n-1")
+	if n := notesByID(t, s, turn)["n-1"]; !slices.Equal(servesOf(n), []string{"take-11"}) || n.Served != second ||
+		n.Place != 1 || !n.Waiting() {
+		t.Errorf("the next job's serve left the note served %v to %q at place %d (waiting %v), want its own serve "+
+			"alone, at the note's first place", servesOf(n), n.Served, n.Place, n.Waiting())
+	}
+	// THE NEXT JOB'S BOUND, its own: two more serves after cancels, and none
+	// past them.
+	for k := 12; k < 11+sandbox.MaxNoteServes; k++ {
+		next := hookServe(second, fmt.Sprintf("take-%d", k), callNo(k), "n-1")
+		next.Cancelled = []sandbox.NoteCall{*callNo(k - 1)}
+		mustServe(t, s, turn, next, "n-1")
+	}
+	past := hookServe(second, "take-past", callNo(99), "n-1")
+	past.Cancelled = []sandbox.NoteCall{*callNo(10 + sandbox.MaxNoteServes)}
+	if served, err := s.ServeHook(ctx, turn, past); err != nil || len(served) != 0 {
+		t.Errorf("a serve past the next job's bound = %v, %v, want nothing served", idsOf(served), err)
+	}
+	if got := servesOf(notesByID(t, s, turn)["n-1"]); len(got) != sandbox.MaxNoteServes ||
+		got[0] != "take-11:cancelled" {
+		t.Errorf("the next job's serves left the note served %v, want its own %d", got, sandbox.MaxNoteServes)
+	}
+}
+
 // A CANCEL LOSES ONLY A LIVE SERVE OF ITS JOB, ON ITS SESSION. A harness
 // numbers its calls per session, and a cancel names the session and the call:
 // so a settle loses a waiting note's live serve to the job it names that
@@ -797,21 +857,36 @@ func testAnItemIsFiledOnlyWhileItsJobIsTheRecords(t *testing.T, s sandbox.Pendin
 // bounded by [sandbox.MaxJobItems], which holds the row's share of them, and
 // count toward neither bound of a person's: a turn that holds its job's ten
 // still takes a person's note, five waiting, and an eleventh item is spent.
+// READ OR NOT: an item the job's own step read stays on the record until the
+// next launch's write removes it, so it counts toward the bound as a waiting
+// one does, and a job that reads each item before it files the next never
+// files past the ten the row holds.
 //
-// Mutation: ignore the items' bound, or count an item toward a person's, and a
-// filing goes wrong.
+// Mutation: ignore the items' bound, count only the waiting ones or only the
+// read ones toward it, or count an item toward a person's, and a filing goes
+// wrong.
 func testAJobsItemsAreBoundedApartFromAPersonsNotes(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-item-bound"
 	launch := mustLaunched(t, s, run(turn))
+	var read []string
 	for i := range sandbox.MaxJobItems {
-		if filed, err := fileItem(ctx, s, turn, fmt.Sprintf("i-%02d", i+1), launch); err != nil ||
-			filed != sandbox.NoteAccepted {
+		id := fmt.Sprintf("i-%02d", i+1)
+		if filed, err := fileItem(ctx, s, turn, id, launch); err != nil || filed != sandbox.NoteAccepted {
 			t.Fatalf("item %d = %s, %v, want accepted", i+1, filed, err)
 		}
+		if i < sandbox.MaxJobItems/2 {
+			read = append(read, id)
+		}
+	}
+	// HALF OF THEM READ BY THE JOB'S OWN STEP, the rest waiting.
+	if taken, err := s.TakeNotes(ctx, turn, bridgeTake(launch, read...)); err != nil ||
+		!slices.Equal(idsOf(taken), read) {
+		t.Fatalf("the job's own step read %v, %v, want %v", idsOf(taken), err, read)
 	}
 	if filed, err := fileItem(ctx, s, turn, "i-11", launch); err != nil || filed != sandbox.NoteSpent {
-		t.Errorf("the eleventh item = %s, %v, want spent", filed, err)
+		t.Errorf("the eleventh item, half of the ten before it read by the job's own step = %s, %v, want spent",
+			filed, err)
 	}
 	for i := range maxWaiting {
 		mustFile(t, s, turn, fmt.Sprintf("n-%d", i+1))
