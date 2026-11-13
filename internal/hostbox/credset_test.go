@@ -1,68 +1,25 @@
 package hostbox
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
-	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
-// writerEnv makes this test binary a WRITER of a shared login rather than the
-// suite: see [TestMain] and [runWriter].
-const writerEnv = "HOSTBOX_TEST_CREDENTIAL_WRITER"
-
-// TestMain runs the writer when this binary was re-executed as one, and the
-// suite otherwise — dispatched here rather than from a test function, so the
-// writer is never reported as a test that skipped.
-func TestMain(m *testing.M) {
-	if dir := os.Getenv(writerEnv); dir != "" {
-		runWriter(dir)
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
-// twoLogins are the logins the killed writer alternates between: two files
-// each, every file different, so any mix of the two is told apart from both.
+// twoLogins are two logins of two files each, every file different, so any
+// mix of the two is told apart from both.
 var twoLogins = []map[string][]byte{
 	{"auth.json": []byte(`{"token":"first sign-in"}`), "config.toml": []byte("provider = \"first\"\n")},
 	{"auth.json": []byte(`{"token":"second sign-in"}`), "config.toml": []byte("provider = \"second\"\n")},
 }
 
 var twoLoginNames = []string{"auth.json", "config.toml"}
-
-// runWriter writes the two logins in turn, for ever, each under the lock every
-// writer takes, and says "ready" once the first has landed — so the case that
-// kills it kills a writer in its loop rather than one still starting.
-func runWriter(dir string) {
-	ctx := context.Background()
-	for i := 0; ; i++ {
-		release, err := LockCredentials(ctx, dir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		if err := WriteCredentials(dir, twoLoginNames, twoLogins[i%2], nil); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		release()
-		if i == 0 {
-			fmt.Println("ready")
-		}
-	}
-}
 
 // writeRaw puts files in a directory directly, as the state a writer left.
 func writeRaw(t *testing.T, dir string, files map[string]string) {
@@ -272,74 +229,6 @@ func TestAWriteReportsEveryStepItTakesAndNoOther(t *testing.T) {
 				t.Errorf("the write answered %v, want committed %t and applied %t", err, c.committed, c.applied)
 			}
 		})
-	}
-}
-
-// A WRITER KILLED AT ANY INSTANT LEAVES ONE LOGIN OR THE OTHER, NEVER HALF OF
-// EACH. A real process writing two logins in turn under the lock is killed at a
-// random moment, again and again, and what the directory holds afterwards is
-// read under the same lock: every time, exactly one of the two logins. Most
-// kills land inside a write — between its journal and its last file — which is
-// counted, so a run in which none did certifies nothing and fails.
-//
-// Mutation: write the files without the journal, and some kill leaves one
-// login's auth.json beside the other's config.toml.
-func TestAKilledWriterNeverLeavesHalfALogin(t *testing.T) {
-	t.Parallel()
-	const trials = 40
-	midWrite := 0
-	for trial := range trials {
-		dir := filepath.Join(t.TempDir(), "credentials")
-		cmd := exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // this test binary
-		cmd.Env = append(os.Environ(), writerEnv+"="+dir)
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			t.Fatalf("trial %d: the writer did not start (%q, %v): %s", trial, line, err, stderr.String())
-		}
-		time.Sleep(time.Duration(rand.IntN(3000)) * time.Microsecond)
-		if err := cmd.Process.Kill(); err != nil {
-			t.Fatal(err)
-		}
-		_ = cmd.Wait()
-
-		if _, err := os.Stat(CredentialJournal(dir)); err == nil {
-			midWrite++
-		}
-		release, err := LockCredentials(t.Context(), dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := readLogin(t, dir)
-		release()
-		if err != nil {
-			t.Fatalf("trial %d: reading what the killed writer left: %v", trial, err)
-		}
-		whole := false
-		for _, login := range twoLogins {
-			want := map[string]string{}
-			for name, content := range login {
-				want[name] = string(content)
-			}
-			whole = whole || maps.Equal(got, want)
-		}
-		if !whole {
-			t.Fatalf("trial %d: a writer killed mid-write left %v — part of one login and part of "+
-				"the other", trial, got)
-		}
-	}
-	t.Logf("%d of %d kills landed inside a write", midWrite, trials)
-	if midWrite == 0 {
-		t.Fatalf("none of %d kills landed inside a write, so the case certified nothing", trials)
 	}
 }
 

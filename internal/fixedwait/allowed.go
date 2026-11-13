@@ -788,7 +788,6 @@ var allowed = []Entry{
 	{File: "internal/googlecloud/settling_test.go", Func: "TestANewAccountIsGoogleStillCreatingIt", ExemptElapsed: 2, Piece: 14},
 	{File: "internal/googlecloud/settling_test.go", Func: "syncWorld.wantWaiting", ExemptElapsed: 1, Piece: 14},
 	{File: "internal/hostbox/credlock_test.go", Func: "TestACredentialLockExcludesAnotherTakerUntilItIsReleased", HeadStart: 1, ElapsedBound: 1, Piece: 14},
-	{File: "internal/hostbox/credset_test.go", Func: "TestAKilledWriterNeverLeavesHalfALogin", ExemptWait: 1, Piece: 14},
 	{File: "internal/httprelay/relay_test.go", Func: "TestAClientThatHangsUpBeforeItsOpenIsAnsweredRunsNothing", ExemptWait: 1, ExemptElapsed: 1, Piece: 14},
 	{File: "internal/httprelay/relay_test.go", Func: "TestAClientThatHangsUpCancelsTheHoldersRequest", ExemptWait: 1, Piece: 14},
 	{File: "internal/httprelay/relay_test.go", Func: "TestAHandlerWaitsOnceAFramesWorthIsUnsent", NegativeWindow: 1, ExemptWait: 1, Piece: 14},
