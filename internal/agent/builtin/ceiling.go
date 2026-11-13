@@ -46,12 +46,14 @@ import (
 // writes for ([writtenForTurn], from the same binding), and so does every
 // request a code tool forms from its caller's actor; the store, or the node
 // deciding a code write, refuses an agent's write that states nothing
-// (types.WrittenFor), and the record carries it to the turn its wake starts.
-// The ceiling's edges are what carries no requester: a vendor's surface,
-// whose wake comes back by webhook, and, until crewlet#798's piece 4c-ii,
-// what the engine records on Gitlet about an earlier write and the merge
-// queue's close of a landed change's item; the docs say where the bound ends
-// (docs/concepts/gitlet.md, "Reads made for somebody else").
+// (types.WrittenFor), and the record carries it to the turn its wake starts,
+// as do the engine's records about a seat's earlier push on Gitlet (a
+// revision's facts, a failed check of its head, a landing its home found),
+// read back from the push's rows. The ceiling's edges are what carries no
+// requester: a vendor's surface, whose wake comes back by webhook, and, until
+// crewlet#798's piece 4c-ii, what Gitlet's merge queue records about an
+// earlier enqueue and its close of a landed change's item; the docs say where
+// the bound ends (docs/concepts/gitlet.md, "Reads made for somebody else").
 
 // Requesters composes the principal a seat's turn is acting for.
 type Requesters interface {

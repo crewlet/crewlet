@@ -1,11 +1,55 @@
 package gitlet
 
 import (
+	"database/sql"
 	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 )
+
+// A STORED CARRIER THIS BUILD CANNOT READ IS A STRANGER'S (ADR-0109): what a
+// working_for column holds is read back by the engine's later records
+// (storedCarrier) — NULL as nobody, a carrier as it was kept, and a value
+// that does not decode, or decodes to nothing (JSON's null, a fragment, a
+// list), as a stranger's, who holds no app: the closed end, never nobody,
+// which would wake the turn for the acting seat with every app. A kind this
+// build does not know is no value it cannot read: it decodes, and is read as
+// the row holds it, for the one rule to judge wherever a holder meets it
+// (KindUnknownToThisBuild) and for a node of the build that knows it to
+// compose — never rewritten to a stranger's here, which would decide for that
+// build what only it can.
+//
+// Mutations: an unreadable value read as nobody — null, the fragment and the
+// list read nil, red; a kind this build does not know rewritten to a
+// stranger's — the unit's carrier reads a stranger's, red.
+func TestAStoredCarrierThisBuildCannotReadIsAStrangers(t *testing.T) {
+	t.Parallel()
+	stranger := &types.WorkingFor{Kind: types.WorkingForStranger}
+	newer := &types.WorkingFor{Kind: "unit", Seat: "platform"}
+	if !KindUnknownToThisBuild(newer) {
+		t.Fatalf("the case's newer carrier %+v names a kind this build knows, and the case is about one it does "+
+			"not", newer)
+	}
+	for _, tc := range []struct {
+		name   string
+		column sql.NullString
+		want   *types.WorkingFor
+	}{
+		{"NULL", sql.NullString{}, nil},
+		{"a seat's carrier", sql.NullString{String: `{"kind":"seat","seat":"founder"}`, Valid: true},
+			&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}},
+		{"JSON's null", sql.NullString{String: "null", Valid: true}, stranger},
+		{"a fragment", sql.NullString{String: "{", Valid: true}, stranger},
+		{"a list", sql.NullString{String: "[]", Valid: true}, stranger},
+		{"a kind this build does not know", sql.NullString{String: `{"kind":"unit","seat":"platform"}`,
+			Valid: true}, newer},
+	} {
+		if got := storedCarrier(tc.column); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s stored reads %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
 
 // A ROUTING BESIDE A PERSON'S ACT CARRIES NOBODY (ADR-0109): routingFor stamps
 // whom a change was made for beside an agent's actor alone, and only where the

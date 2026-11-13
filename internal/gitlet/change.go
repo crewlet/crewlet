@@ -259,8 +259,8 @@ type ChangeOpen struct {
 	// ([ChangeProposal.WrittenFor]), STAMPED BY THE COMMITTER; an asker sends
 	// none. nil for an open made for nobody — the seat's own work — and for
 	// every open no agent made. The apply keeps it on revision 1's row
-	// (code_revisions.working_for), which the record of that revision's facts
-	// reads it back from (crewlet#798's piece 4c-ii).
+	// (code_revisions.working_for), which the records of that revision's facts
+	// and of a failed check of its head read it back from ([revisionPusher]).
 	//
 	// VERSION 2, as every payload's working_for is ([versionedFields]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
@@ -358,7 +358,8 @@ type ChangeReopen struct {
 	Head string `json:"head,omitempty"`
 	// WorkingFor is whom an agent's reopen was made for, as
 	// [ChangeOpen.WorkingFor] is: the apply keeps it on the revision a reopen
-	// adds where the source moved while the change was closed.
+	// adds where the source moved while the change was closed, which that
+	// revision's later records read it back from as an open's.
 	//
 	// VERSION 2, as every payload's working_for is ([versionedFields]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
@@ -401,9 +402,10 @@ type ChangeLanded struct {
 	// through the tip (internal/gitlet/home's merger). Whether one commit holds
 	// another is git's to say, so the home finds the push and the committer
 	// holds it to the rows ([landingPusher]); its pusher is the landing's
-	// actor. Both zero where the walk named no push: the head was in the
-	// target before every move the rows still keep, or before the walk's
-	// bound.
+	// actor, and the landing's routing carries whom the push's row says it
+	// was made for. Both zero where the walk named no push: the head was
+	// in the target before every move the rows still keep, or before the
+	// walk's bound.
 	//
 	// BASE FORMAT, as [OpChangeLanded] is.
 	PushID       string            `json:"push_id,omitempty"`

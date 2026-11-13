@@ -842,10 +842,13 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 // change, and a person's CI (reporter, nil for the runner's) reports onto a
 // row that names no change at all — and either one failing leaves the gate's
 // `check` term unmet. THE ACTOR is whoever made the failure news: the pusher
-// of the head the runner measured, and the person whose CI reported it, told
-// in their inbox as every person is. The routing's owner is also whose day
-// the ending counts on ([ChecksWriter.applied]), so a failure is counted
-// exactly where it is told.
+// of the head the runner measured, with whom they pushed it for as the
+// revision's row keeps it ([revisionPusher]) — so a head a seat pushed for
+// somebody fails as that somebody's errand, and every turn it wakes, the
+// pusher's own included, works for them — and the person whose CI reported
+// it, told in their inbox as every person is, who reports for nobody but
+// themselves. The routing's owner is also whose day the ending counts on
+// ([ChecksWriter.applied]), so a failure is counted exactly where it is told.
 func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksDecision,
 	reporter *Principal) (checksDecision, error) {
 
@@ -860,7 +863,8 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 	c := concerning{repoName: repoName, change: change, authors: true, checksFailed: true}
 	if reporter != nil {
 		c.actor, c.actorKind = reporter.party()
-	} else if c.actor, c.actorKind, err = revisionPusher(ctx, tx, change.id, change.revision); err != nil {
+	} else if c.actor, c.actorKind, c.workingFor, err = revisionPusher(ctx, tx, change.id,
+		change.revision); err != nil {
 		return checksDecision{}, err
 	}
 	if f.Routing, err = routingFor(ctx, tx, c); err != nil {

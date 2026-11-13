@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -124,8 +125,17 @@ func (n *node) facts(change string, rev int64) storedFacts {
 
 // ownedChange is a change opened by dev from feature into main on a fresh
 // repository named name — Engineering's, as changeRepo makes them — whose
-// path owners are owners.
+// path owners are owners, made for nobody but dev.
 func ownedChange(t *testing.T, n *node, name string, owners ...gitlet.PathOwner) (repo, change string) {
+	t.Helper()
+	return ownedChangeFor(t, n, name, types.ForNobody(), owners...)
+}
+
+// ownedChangeFor is [ownedChange] opened in a turn that worked for whom f
+// carries: dev's open, made for them.
+func ownedChangeFor(t *testing.T, n *node, name string, f types.WrittenFor,
+	owners ...gitlet.PathOwner) (repo, change string) {
+
 	t.Helper()
 	s := suiteSettings()
 	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
@@ -134,7 +144,9 @@ func ownedChange(t *testing.T, n *node, name string, owners ...gitlet.PathOwner)
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, gitlet.ZeroOID, oidOf("A")),
 		set(featureRef, gitlet.ZeroOID, oidOf("B")), set(releaseRef, gitlet.ZeroOID, oidOf("R"))))
 	c, _ := committerOn(t, n, n.pub)
-	opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
+	open := opening(repo, featureRef, mainRef, dev)
+	open.WrittenFor = f
+	opened, err := c.ProposeChange(t.Context(), open)
 	requireChanged(t, opened, err)
 	return repo, opened.ChangeID
 }
@@ -684,21 +696,13 @@ func TestARevisionsFactsAreItsPushersErrand(t *testing.T) {
 	repo, change := ownedChange(t, n, "web", owners...)
 	w, _ := writerOn(t, n, n.pub)
 	ctx := t.Context()
-	wokenBy := func(p statelog.Position, want string) notify.Routed {
-		t.Helper()
-		_, relayed, routed := wakesOf(t, feedRecord(t, n, p))
-		if !relayed || !slices.Equal(woken(routed), []string{want}) {
-			t.Fatalf("the facts at %s wake %v (relayed %v), want %s", p, woken(routed), relayed, want)
-		}
-		return routed[0]
-	}
 
 	first, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
 	requireConversed(t, first, err)
 	if r := decodedRevise(t, n, first.Position).Routing; r == nil || r.Actor != "dev" || r.Person("dev") {
 		t.Fatalf("revision 1's facts route %+v, want the seat dev, who opened the change, as their actor", r)
 	}
-	asked := wokenBy(first.Position, "plat-lead:review_requested")
+	asked := factsWake(t, n, first.Position, "plat-lead:review_requested")
 	if asked.Sender != "dev" || asked.Writer == nil || asked.Writer.Kind != iam.ActorAgent ||
 		asked.Writer.Seat != "dev" {
 		t.Errorf("the path owner's wake is sent by %q, written by %+v; want the seat dev, whose revision it is",
@@ -714,11 +718,108 @@ func TestARevisionsFactsAreItsPushersErrand(t *testing.T) {
 		t.Fatalf("revision 2's facts route %+v, want the person on the seat harness, who pushed it, as their "+
 			"actor", r)
 	}
-	again := wokenBy(second.Position, "plat-lead:re_review")
+	again := factsWake(t, n, second.Position, "plat-lead:re_review")
 	if again.Sender != "harness" || again.Writer == nil || again.Writer.Kind != iam.ActorHuman ||
 		again.Writer.Seat != "harness" {
 		t.Errorf("the reviewer's wake to look again is sent by %q, written by %+v; want the person on the "+
 			"seat harness, whose push it is", again.Sender, again.Writer)
+	}
+}
+
+// factsWake is the one wake the facts at p send, which must be want
+// ("handle:reason"), failing t where they wake anybody else or nobody.
+func factsWake(t *testing.T, n *node, p statelog.Position, want string) notify.Routed {
+	t.Helper()
+	_, relayed, routed := wakesOf(t, feedRecord(t, n, p))
+	if !relayed || !slices.Equal(woken(routed), []string{want}) {
+		t.Fatalf("the facts at %s wake %v (relayed %v), want %s", p, woken(routed), relayed, want)
+	}
+	return routed[0]
+}
+
+// A REVISION'S FACTS WAKE FOR WHOM ITS REVISION WAS PUSHED (ADR-0109): the
+// facts are their pusher's errand (TestARevisionsFactsAreItsPushersErrand),
+// and a seat's push made in a turn it worked for somebody is that somebody's,
+// so the facts carry whom the revision's row says the revision was made for
+// beside its pusher, and the turn they wake works for them. Revision 1, which
+// the seat dev opened in a turn founder woke, has its facts ask Platform's
+// lead to review in a wake written by dev for founder, the record at version
+// 2. A change nobody who may review it is asked about, opened the same way,
+// has its first facts tell one seat, the lead of the repository's owner, cto,
+// through the lead's fallback, and the routing that tells only that lead
+// carries founder too, so cto's wake is written by dev for founder. Revision
+// 2, which the person on harness pushed, is a person's push, made for nobody
+// but themselves: its facts carry nobody, at version 1, and the reviewer they
+// ask to look again is woken by harness for nobody.
+//
+// Mutations: the open's revision kept without its carrier, or revisionPusher
+// reading none — revision 1's wakes are written for nobody, red; the stamp's
+// wakesASeat skipping the lead's fallback — cto's wake is written for nobody,
+// red.
+func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	byDevForFounder := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "dev", WorkingFor: founder}
+	owners := []gitlet.PathOwner{pathOwner(gitlet.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChangeFor(t, n, "web", types.ForTurn(founder), owners...)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	// carried is whom the facts at p route for, and the version they are
+	// stamped at.
+	carried := func(p statelog.Position) (*types.WorkingFor, int) {
+		t.Helper()
+		r := decodedRevise(t, n, p).Routing
+		if r == nil {
+			t.Fatalf("the facts at %s carry no routing, and the case reads whom it is for", p)
+		}
+		return r.WorkingFor, n.recordAt(p).V
+	}
+
+	first, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, first, err)
+	if f, v := carried(first.Position); !reflect.DeepEqual(f, founder) || v != gitlet.WorkingForVersion {
+		t.Errorf("revision 1's facts route for %+v at version %d, want founder, for whom dev opened the change, "+
+			"at %d", f, v, gitlet.WorkingForVersion)
+	}
+	if asked := factsWake(t, n, first.Position, "plat-lead:review_requested"); asked.Writer == nil ||
+		!reflect.DeepEqual(*asked.Writer, byDevForFounder) {
+		t.Errorf("the path owner's wake is written by %s, want %s: the review dev's push asks for is founder's "+
+			"errand", writtenBy(asked.Writer), writtenBy(&byDevForFounder))
+	}
+
+	// THE LEAD'S FALLBACK, the one seat a change nobody may review tells.
+	fallback, fallbackChange := ownedChangeFor(t, n, "api", types.ForTurn(founder))
+	res, err := w.Converse(ctx, n.revising(fallback, fallbackChange, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
+	requireConversed(t, res, err)
+	if r := decodedRevise(t, n, res.Position).Routing; r == nil || r.LeadFallback != "cto" || len(r.PathOwners) != 0 ||
+		len(r.ReReview) != 0 {
+		t.Fatalf("the first facts of a change nobody may review route %+v, want Engineering's lead, cto, "+
+			"alone, through the lead's fallback", r)
+	}
+	if f, _ := carried(res.Position); !reflect.DeepEqual(f, founder) {
+		t.Errorf("the facts telling the lead alone route for %+v, want founder: the lead's fallback is a seat "+
+			"they wake", f)
+	}
+	if lead := factsWake(t, n, res.Position, "cto:lead_fallback"); lead.Writer == nil ||
+		!reflect.DeepEqual(*lead.Writer, byDevForFounder) {
+		t.Errorf("the lead's wake is written by %s, want %s", writtenBy(lead.Writer), writtenBy(&byDevForFounder))
+	}
+
+	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil))
+	requireReviewed(t, review, err)
+	n.revise(repo, "B", "B2")
+	second, err := w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, second, err)
+	if f, v := carried(second.Position); f != nil || v != 1 {
+		t.Errorf("revision 2's facts route for %+v at version %d, want nobody at 1: the person on harness "+
+			"pushed it for nobody but themselves", f, v)
+	}
+	byHarness := types.NotificationWriter{Kind: iam.ActorHuman, Seat: "harness"}
+	if again := factsWake(t, n, second.Position, "plat-lead:re_review"); again.Writer == nil ||
+		!reflect.DeepEqual(*again.Writer, byHarness) {
+		t.Errorf("the reviewer's wake to look again is written by %s, want %s", writtenBy(again.Writer),
+			writtenBy(&byHarness))
 	}
 }
 

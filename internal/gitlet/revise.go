@@ -643,9 +643,14 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	// a reviewer states that principal as its writer, so the woken seat's
 	// reads are decided for both grants (the requester ceiling); named as
 	// nobody, a seat that may push one repository could have a reviewer
-	// that may read a `visibility: unit` one read for it unbounded. The pusher
-	// hears nothing of their own revision, as every actor.
-	if d.concern.actor, d.concern.actorKind, err = revisionPusher(ctx, tx, row.id, r.N); err != nil {
+	// that may read a `visibility: unit` one read for it unbounded. AND FOR
+	// WHOM: a seat's push made in a turn it worked for somebody is that
+	// somebody's errand, which the revision's row keeps (concerns.go's head,
+	// "Whom the actor acted for"), so the wake states them beside the pusher
+	// and the woken seat reads for them, as the push's own wake would have.
+	// The pusher hears nothing of their own revision, as every actor.
+	if d.concern.actor, d.concern.actorKind, d.concern.workingFor, err = revisionPusher(ctx, tx, row.id,
+		r.N); err != nil {
 		return conversationDecision{}, err
 	}
 	d.payload = r

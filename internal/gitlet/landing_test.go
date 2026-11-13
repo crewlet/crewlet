@@ -3,6 +3,7 @@ package gitlet_test
 import (
 	"database/sql"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -114,6 +117,89 @@ func TestALandingIsDecidedAgainstTheTipItsHomeRead(t *testing.T) {
 	before = n.end()
 	res, err = chartless.ProposeChange(ctx, landing(repo, opened.ChangeID, 1, oidOf("R"), mainRef, oidOf("M")))
 	requireRefused(t, n, before, res, err, gitlet.ChangeRefusalChangeClosed, "closed")
+}
+
+// A LANDING THE HOME FOUND WAKES FOR WHOM ITS MERGING PUSH WAS MADE (ADR-0109):
+// the landing names whoever made the push its home found bringing the change's
+// head into its target (TestALandingIsMadeByThePushThatBroughtItsHeadIn), and
+// that push is the change's merge, so where a seat made it in a turn it worked
+// for somebody, the change's other authors are told it merged for that
+// somebody, as the push's own merge would have told them. dev's change from
+// feature into release lands by a push of a merge commit onto release: the
+// seat cto's, made in a turn founder woke, lands it through a routing carrying
+// founder beside cto, at version 2, and dev, its owner, is woken by cto for
+// founder; cto's made for nobody, and a person's, carry nobody, at version 1,
+// and dev is woken by the pusher alone.
+//
+// Mutations: landingPusher reading no carrier, or the landing's decide handing
+// its routing none — the landing made for founder carries nobody and dev is
+// woken for nobody, red.
+func TestALandingTheHomeFoundWakesForWhomItsMergingPushWasMade(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	cto := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "cto",
+		Run: gitlet.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String()}}
+	for _, tc := range []struct {
+		name, repo string
+		// pusher is who pushes the merge commit onto release, and f whom
+		// they push it for.
+		pusher gitlet.Principal
+		via    gitlet.PushVia
+		f      types.WrittenFor
+		// carries is whom the landing's routing carries, at version v, and
+		// writer who the wake that tells dev of it is written by.
+		carries *types.WorkingFor
+		v       int
+		writer  types.NotificationWriter
+	}{
+		{"cto's merging push made for founder", "web", cto, gitlet.ViaEngine, types.ForTurn(founder), founder,
+			gitlet.WorkingForVersion,
+			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto", WorkingFor: founder}},
+		{"cto's merging push made for nobody", "app", cto, gitlet.ViaEngine, types.ForTurn(nil), nil, 1,
+			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto"}},
+		{"a person's merging push", "api", ada, gitlet.ViaGit, types.ForNobody(), nil, 1,
+			types.NotificationWriter{Kind: iam.ActorHuman, Seat: "founder"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := changeRepo(t, n, tc.repo)
+			opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, releaseRef, dev))
+			requireChanged(t, opened, err)
+			merge := proposal(repo, update(releaseRef, oidOf("R"), oidOf("M1")))
+			merge.Principal, merge.Via, merge.WrittenFor = tc.pusher, tc.via, tc.f
+			pushed, err := c.Propose(t.Context(), merge)
+			requireOK(t, answer{pushed, err})
+			if routings := routingAt(t, n, pushed.Position); len(routings) != 0 {
+				t.Fatalf("a push past the head routes %+v, want nothing: no push's own apply sees the change "+
+					"merged", routings)
+			}
+
+			p := landing(repo, opened.ChangeID, 1, oidOf("B"), releaseRef, oidOf("M1"))
+			p.Landed.PushID, p.Landed.PushPosition = merge.PushID, pushed.Position
+			res, err := c.ProposeChange(t.Context(), p)
+			if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged {
+				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
+			}
+			routings := routingAt(t, n, res.Position)
+			if len(routings) != 1 || !routings[0].Merged || routings[0].Actor != tc.writer.Seat {
+				t.Fatalf("the landing carries %+v, want the change merged by %s", routings, tc.writer.Seat)
+			}
+			if f, v := routings[0].WorkingFor, n.recordAt(res.Position).V; !reflect.DeepEqual(f, tc.carries) ||
+				v != tc.v {
+				t.Errorf("the landing's routing carries %+v at version %d, want %+v at %d", f, v, tc.carries, tc.v)
+			}
+			_, relayed, routed := wakesOf(t, feedRecord(t, n, res.Position))
+			switch {
+			case !relayed || !slices.Equal(woken(routed), []string{"dev:merged"}):
+				t.Fatalf("the landing wakes %v (relayed %v), want dev, its owner, told it merged", woken(routed),
+					relayed)
+			case routed[0].Writer == nil || !reflect.DeepEqual(*routed[0].Writer, tc.writer):
+				t.Errorf("dev's wake is written by %s, want %s", writtenBy(routed[0].Writer), writtenBy(&tc.writer))
+			}
+		})
+	}
 }
 
 // dueChanges is every due change of repo the reader lists, every page, and the

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -64,6 +65,19 @@ func woken(routed []notify.Routed) []string {
 		out = append(out, r.To.Handle+":"+r.Metadata[gitlet.MetaVia])
 	}
 	return out
+}
+
+// writtenBy is a wake's writer as a case says it: its kind and its seat, and
+// whom it wrote for, nobody where it carries none.
+func writtenBy(w *types.NotificationWriter) string {
+	if w == nil {
+		return "no writer"
+	}
+	whom := "nobody"
+	if w.WorkingFor != nil {
+		whom = fmt.Sprintf("%+v", *w.WorkingFor)
+	}
+	return fmt.Sprintf("%s %q for %s", w.Kind, w.Seat, whom)
 }
 
 // THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a record about a change

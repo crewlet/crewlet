@@ -265,9 +265,12 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 // them, held to what they may use. Handed for an agent's actor alone, and
 // FirstPartyWriter keeps it for nobody else: a person and the engine write
 // for nobody but themselves, so a carrier on such a routing is no request
-// this wake works for. The engine's records that name an earlier actor carry
-// none yet (concerns.go's head, "Whom the actor acted for"), so the turn
-// such a record wakes works for that actor's seat.
+// this wake works for. The engine's records that name an earlier actor — a
+// revision's facts, a failed check of a head, the home's landing — carry it
+// beside that actor as the act's row kept it (concerns.go's head, "Whom the
+// actor acted for"), so the turn such a record wakes works for whom the act
+// was made for, as the act's own wake did; a queue's landing carries none
+// yet, and the turn it wakes works for the enqueuer's seat.
 func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	switch {
 	case r.Actor == "":

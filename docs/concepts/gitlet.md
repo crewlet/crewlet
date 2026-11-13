@@ -4980,12 +4980,14 @@ its home's own records name nobody — but a revision's facts, which its home re
 which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
-colleague's revision reads for both grants — and a change it found landed:
-the push after which the target held the change's head merged it, which the
-home finds by walking the target's moves back from the tip, since a push on
-top of the merge may have moved the target since; the landing names whoever
-made that push, and the change's other authors told it merged read for that
-pusher's grant too. A
+colleague's revision reads for both grants or, where the colleague pushed it
+in a turn it worked for somebody, for that somebody, by the table above — and
+a change it found landed: the push after which the target held the change's
+head merged it, which the home finds by walking the target's moves back from
+the tip, since a push on top of the merge may have moved the target since; the
+landing names whoever made that push, and the change's other authors told it
+merged read for that pusher's grant too or, where the pusher made it for
+somebody, for that somebody. A
 credential acting as no seat is the requester by its own login: it reads every
 repository itself and pushes to none, so the turn its change wakes reads as the
 seat may and writes only the seat's own work
@@ -5070,14 +5072,17 @@ each wake their seat in a turn worked for whoever the writing turn worked for
 for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)):
 a code record carries them on each routing that may wake a seat, beside the
 seat that made the write ([How a seat is woken](#how-a-seat-is-woken)).
-**What the engine records about a seat's earlier write does not carry them
-yet**, until crewlet#798's piece 4c-ii reads whom that write was made for back
-from the rows that keep it: a revision's facts, a failed check of a change's
-head, a landing its home found and the merge queue's landing each wake their
-seat in a turn worked for the seat that made the write, the queue's removal of
-a change and a close it could not make wake the seats they tell in turns worked
-for those seats, and the merge queue's close of a landed change's work item is
-written for nobody, so the turn it wakes works for the enqueuer's seat. The
+**So does what the engine records about a seat's earlier push**: a revision's
+facts, a failed check of a change's head and a landing its home found each read
+whom that push was made for back from the rows that keep it, and wake their
+seat in a turn worked for them, as the push's own wake would have.
+**What the merge queue records about a seat's enqueue does not carry them
+yet**, until crewlet#798's piece 4c-ii reads whom the enqueue was made for back
+from its entry: the merge queue's landing wakes its seat in a turn worked for
+the seat that enqueued the change, the queue's removal of a change and a close
+it could not make wake the seats they tell in turns worked for those seats,
+and the merge queue's close of a landed change's work item is written for
+nobody, so the turn it wakes works for the enqueuer's seat. The
 home's own records that name no earlier write — a conflict, a change ready to
 merge — stay nobody's, as the table above says; nor does what a seat writes on
 a vendor's surface carry anybody. Nor does the ceiling reach what a seat
@@ -7205,10 +7210,11 @@ stops after its record committed loses no wake.
   that somebody's errand, and the turn works for them
   ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
-  a revision's facts are whoever pushed the revision, and a change it found
-  landed whoever made the push that brought the change's head into its
-  target, each the pusher's alone until crewlet#798's piece 4c-ii carries
-  whom the push was made for.
+  a revision's facts and a failed check of its head are whoever pushed the
+  revision, and a change it found landed whoever made the push that brought
+  the change's head into its target, each the pusher's errand or, where the
+  pusher made that push in a turn it worked for somebody, that somebody's,
+  which the routing carries beside the pusher as it does beside a writer.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

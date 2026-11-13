@@ -146,13 +146,25 @@ import (
 // beside an agent's actor, and only where the routing wakes a seat
 // ([wakesASeat]): a person, a credential and the engine write for nobody but
 // themselves, and a routing that tells only persons, who read notices, wakes
-// no turn to carry it to. The engine's records that name an earlier actor — a
-// revision's facts, a failed check of a head, the home's landing and a queue's
-// landing — carry nobody yet: the carrier that actor's act was made for is
-// kept on the rows they are read from (code_revisions, code_pushes and
-// code_queue, the replicated migration
-// a_code_row_keeps_whom_an_agents_write_was_made_for), and they read it back
-// from crewlet#798's piece 4c-ii on.
+// no turn to carry it to.
+//
+// THE ENGINE'S RECORDS THAT NAME AN EARLIER ACTOR carry whom that actor's act
+// was made for, as the row the act left keeps it (code_revisions and
+// code_pushes, the replicated migration
+// a_code_row_keeps_whom_an_agents_write_was_made_for), under the same two
+// conditions: a revision's facts and a failed check of a change's head the
+// carrier of the open or the push that made the revision ([revisionPusher]),
+// and the home's landing the carrier of the push it found merging the change
+// ([landingPusher]), each read by the statement that reads the actor, in the
+// deciding snapshot. The facts ask for the review the push asked for, the
+// failure is news about the push, and the landing is that push's merge, so the
+// turn each wakes works for whom the push was made for, as the push's own wake
+// did — never for the pushing seat alone. A row that keeps nobody — a push
+// made for nobody, a person's, or one applied before the carrier's build
+// filled the column — carries nobody, and the turn works for the actor's seat,
+// as before the carrier. A queue's landing names each entry's enqueuer and
+// carries nobody yet: the merge queue reads whom its entry's enqueue was made
+// for (code_queue) from crewlet#798's piece 4c-ii on.
 //
 // # Who hears what the gate does
 //
@@ -293,7 +305,9 @@ type ChangeRouting struct {
 	// where Actor is an agent's seat and the routing wakes a seat
 	// ([wakesASeat]); nil on every other routing, and for a write made for
 	// nobody, the seat's own work. The engine's records that name an earlier
-	// actor carry none yet (this file's head, "Whom the actor acted for").
+	// actor carry whom that actor's act was made for, as the act's row keeps
+	// it, under the same two conditions (this file's head, "Whom the actor
+	// acted for").
 	//
 	// VERSION 2 ([versionedFields]): a record whose routing carries it is
 	// stamped there, so a build before it retains the record rather than wake
@@ -816,17 +830,18 @@ type concerning struct {
 	// change is the change's row as the record leaves it: its id, number,
 	// title, owner and work item.
 	change changeRow
-	// actor is who made the change — for a revision's facts, its pusher, and
-	// for a landing, the pusher of the push the home found merging it — ""
-	// for the home's other records, and actorKind what it is: a person's
-	// actor is named among the routing's persons, so a wake says a person
-	// wrote what it announces.
+	// actor is who made the change — for a revision's facts and a failed
+	// check of a head, its pusher, and for a landing, the pusher of the push
+	// the home found merging it — "" for the home's other records, and
+	// actorKind what it is: a person's actor is named among the routing's
+	// persons, so a wake says a person wrote what it announces.
 	actor     string
 	actorKind PartyKind
 	// workingFor is whom actor made the change for — the carrier the asker's
-	// request stated, nil for nobody and for every record no asker asked —
-	// which [routingFor] stamps beside an agent's actor alone, on a routing
-	// that wakes a seat.
+	// request stated, and for a record naming an earlier actor the carrier
+	// that actor's act left on its row ([revisionPusher], [landingPusher]);
+	// nil for nobody and for the home's other records — which [routingFor]
+	// stamps beside an agent's actor alone, on a routing that wakes a seat.
 	workingFor *types.WorkingFor
 	// roster is the deciding chart: what a mention is held to and what says
 	// whether a handle is a person's. Nil only for a record that names no
@@ -1087,16 +1102,22 @@ func stampedRouting(what string, r *ChangeRouting) error {
 
 // revisionPusher is who pushed revision n of changeID, as a routing's actor
 // names them — the opener for revision 1, whoever moved the head for every
-// later one — and "" where tx holds no such revision.
-func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (string, PartyKind, error) {
+// later one — and whom they pushed it for, as the revision's row keeps it
+// (code_revisions.working_for, [storedCarrier]): nil for a revision made for
+// nobody, a person's, and one applied before the carrier's build. "" and nil
+// where tx holds no such revision.
+func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (string, PartyKind,
+	*types.WorkingFor, error) {
+
 	var pusher, kind string
-	switch err := tx.QueryRowContext(ctx, headPusherSQL, changeID, n).Scan(&pusher, &kind); {
+	var madeFor sql.NullString
+	switch err := tx.QueryRowContext(ctx, headPusherSQL, changeID, n).Scan(&pusher, &kind, &madeFor); {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", "", nil
+		return "", "", nil, nil
 	case err != nil:
-		return "", "", fmt.Errorf("gitlet: read who pushed revision %d of %s: %w", n, changeID, err)
+		return "", "", nil, fmt.Errorf("gitlet: read who pushed revision %d of %s: %w", n, changeID, err)
 	}
-	return pusher, PartyKind(kind), nil
+	return pusher, PartyKind(kind), storedCarrier(madeFor), nil
 }
 
 // landingPusher is who merged change changeID of repoID that its home found
@@ -1105,10 +1126,13 @@ func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (
 // a commit and lies where a merge of the change's head revision can — at or
 // after the record of that revision, before which no move brought its head in
 // as this change's, and at or before moved, the record the target's row says
-// last moved it, past which nothing has. "" where l names no push (its home's
-// walk found none), where the push is none of that, where its row is gone
-// (past the history's horizon, or purged), and where its principal names no
-// party (a token bound to nobody, the engine's own expiry).
+// last moved it, past which nothing has — and whom they made that push for, as
+// its row keeps it (code_pushes.working_for, [storedCarrier]): nil for a push
+// made for nobody, a person's, and one applied before the carrier's build. ""
+// and nil where l names no push (its home's walk found none), where the push
+// is none of that, where its row is gone (past the history's horizon, or
+// purged), and where its principal names no party (a token bound to nobody,
+// the engine's own expiry), which made it for nobody else either.
 //
 // WHY THE PUSH THE HOME NAMES, AND NEVER THE ONE AT THE TARGET'S POSITION:
 // the record that last moved the target holds whoever moved it LAST, and the
@@ -1124,42 +1148,48 @@ func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (
 // revisions' key and one of the pushes' — as it holds the tip the home names
 // to the target's row.
 func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l ChangeLanded, moved int64) (string,
-	PartyKind, error) {
+	PartyKind, *types.WorkingFor, error) {
 
 	pushed := l.PushPosition.Packed()
 	if l.PushID == "" || pushed > moved {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	var revised int64
 	switch err := tx.QueryRowContext(ctx, revisionPositionSQL, changeID, l.Revision).Scan(&revised); {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", "", nil
+		return "", "", nil, nil
 	case err != nil:
-		return "", "", fmt.Errorf("gitlet: read where revision %d of %s was pushed: %w", l.Revision, changeID, err)
+		return "", "", nil, fmt.Errorf("gitlet: read where revision %d of %s was pushed: %w", l.Revision, changeID,
+			err)
 	}
 	if pushed < revised {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	var actorKind, seat, encoded string
+	var madeFor sql.NullString
 	switch err := tx.QueryRowContext(ctx, landingPushSQL, l.PushID, repoID, pushed).Scan(&actorKind, &seat,
-		&encoded); {
+		&encoded, &madeFor); {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", "", nil
+		return "", "", nil, nil
 	case err != nil:
-		return "", "", fmt.Errorf("gitlet: read push %s of repository %s, which merged %s: %w", l.PushID, repoID,
-			changeID, err)
+		return "", "", nil, fmt.Errorf("gitlet: read push %s of repository %s, which merged %s: %w", l.PushID,
+			repoID, changeID, err)
 	}
 	var cmds []Command
 	if err := json.Unmarshal([]byte(encoded), &cmds); err != nil {
-		return "", "", fmt.Errorf("gitlet: decode push %s's commands of repository %s: %w", l.PushID, repoID, err)
+		return "", "", nil, fmt.Errorf("gitlet: decode push %s's commands of repository %s: %w", l.PushID, repoID,
+			err)
 	}
 	if !slices.ContainsFunc(cmds, func(c Command) bool {
 		return c.Ref == l.TargetRef && c.Result == ResultOK && c.New != ZeroOID
 	}) {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	who, kind := Principal{Kind: PrincipalKind(actorKind), Seat: seat}.party()
-	return who, kind, nil
+	if who == "" {
+		return "", "", nil, nil
+	}
+	return who, kind, storedCarrier(madeFor), nil
 }
 
 // The routing's reads, each registered in plan_test.go: a change's authors and
@@ -1170,18 +1200,20 @@ const (
 		ORDER BY author LIMIT ?`
 	routingWatchersSQL = `SELECT handle, kind FROM code_participants WHERE change_id = ?
 		ORDER BY handle LIMIT ?`
-	// headPusherSQL is who pushed a change's revision — the actor of a failed
-	// check of its head and of the revision's facts ([revisionPusher]) — one
-	// seek of the revisions' key.
-	headPusherSQL = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
+	// headPusherSQL is who pushed a change's revision, and whom they pushed it
+	// for — the actor of a failed check of its head and of the revision's
+	// facts, and whom it acted for ([revisionPusher]) — one seek of the
+	// revisions' key, the carrier read off the row the seek finds.
+	headPusherSQL = `SELECT pusher, pusher_kind, working_for FROM code_revisions WHERE change_id = ? AND n = ?`
 	// revisionPositionSQL is where a change's revision was pushed — the
 	// oldest record a push that merged it can be in ([landingPusher]) — one
 	// seek of the revisions' key; landingPushSQL is the push a landing names
-	// as its merger, with its commands, one seek of the pushes' key — held to
-	// the repository and the position named, so a push of another record or
-	// another repository is no push of this landing's.
+	// as its merger, with its commands and whom it was made for, one seek of
+	// the pushes' key — held to the repository and the position named, so a
+	// push of another record or another repository is no push of this
+	// landing's.
 	revisionPositionSQL = `SELECT position FROM code_revisions WHERE change_id = ? AND n = ?`
-	landingPushSQL      = `SELECT actor_kind, actor_seat, commands FROM code_pushes
+	landingPushSQL      = `SELECT actor_kind, actor_seat, commands, working_for FROM code_pushes
 		WHERE push_id = ? AND repo_id = ? AND position = ?`
 	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
 		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`

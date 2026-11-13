@@ -632,10 +632,12 @@ in a turn somebody woke, carries that somebody: the engine composes them from
 the writing turn's own ceiling, never from the tool's arguments, and records
 them on every write a later turn reads: a work item's creation and every move
 of its assignee, whatever they wake, since an idle agent's pickup of its next
-work item reads both; a change's open and reopen, a push, a merge and an
-enqueue, whatever they wake, which the engine's later records about them read
-back from crewlet#798's piece 4c-ii on; and any other write where it may wake
-another agent.
+work item reads both; a change's open and reopen, a push and a merge, whatever
+they wake, which the engine's later records about them read back — a
+revision's facts, a failed check of its head and a landing the change's home
+found each wake the agent they tell for whom the push was made; an enqueue,
+whatever it wakes, which the merge queue reads back from crewlet#798's piece
+4c-ii on; and any other write where it may wake another agent.
 The agent it wakes works for them, composed again on its own node, and so does
 every agent a chain of writes reaches; two writes one agent makes for two
 different people wake its colleague in two turns wherever the wake asks
@@ -652,12 +654,11 @@ wakes works for it, as before.
 **Where the bound ends.** What an agent writes on a vendor's surface (Slack,
 Mattermost, Jira, GitHub, GitLab, Confluence) comes back as that vendor's
 webhook, which carries nobody, so the agent it wakes works for the agent that
-wrote it. On Gitlet, what the engine records itself about an agent's earlier
-write — a revision's facts, a failed check of a change, a landing it found, and
-the merge queue's landing, its removal of a change and a close it could not
-make — does not carry the requester yet (crewlet#798's piece 4c-ii), nor does
-the merge queue's close of a landed change's work item, so the agent such a
-record wakes works for the agent that made the write, or for itself. To keep
+wrote it. On Gitlet, what the merge queue records itself about an agent's
+enqueue — its landing, its removal of a change and a close it could not make —
+does not carry the requester yet (crewlet#798's piece 4c-ii), nor does its
+close of a landed change's work item, so the agent such a record wakes works
+for the agent that enqueued the change, or for itself. To keep
 the bound, keep agents' work for each other on the engine's own surfaces:
 Worklet, Doclet, Chatlet, Gitlet and `a2a_ask`. During a rolling upgrade a
 node of the older build cannot read a record the newer build wrote with its
@@ -702,7 +703,10 @@ checked out for nobody, and a run checked out for nobody is never used for
 somebody: once a node of the newer build carries it on in a turn worked for
 somebody, every checkout the run asks for is refused, of a repository it
 already has as much as of another, and the agent is told that a turn worked for
-somebody starts a new run.
+somebody starts a new run. A revision's facts, a failed check of a change's
+head and a landing its home found that a node of the older build records carry
+no requester, since it reads none back from the push, so the agent such a
+record wakes works for the agent that pushed until the roll completes.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

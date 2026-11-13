@@ -23,7 +23,9 @@ import (
 // BenchmarkPushLogBytes measures a push. Every write a seat makes here is made
 // for the person who assigned the change's work item, so the records that
 // carry a carrier — the open's, the merge's and the enqueue's payload, and the
-// routings of the ask, the reviews and the answer — carry theirs:
+// routings of the ask, the reviews and the answer — carry theirs, and the
+// home's records that read it back carry it only where they wake a seat,
+// which the reference revision's facts and passing checks do not:
 //
 //   - open: a seat's code_open_change, its title a short sentence and its
 //     description the reference text's 2 KiB, carrying the turn and its
@@ -193,7 +195,9 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	// for whom it was assigned (ADR-0109). Every write a seat forms here is
 	// made for them, so each record that carries a carrier — an open's, a
 	// merge's and an enqueue's payload, and the routing of an ask, a review
-	// and an answer, each of which wakes a seat — carries theirs.
+	// and an answer, each of which wakes a seat — carries theirs. The home's
+	// facts of the revision read the open's back and carry it only where they
+	// wake a seat, which the reference facts, asking nobody, do not.
 	founder := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"})
 	forFounder := func(w gitlet.ConversationWrite) gitlet.ConversationWrite {
 		w.WrittenFor = founder

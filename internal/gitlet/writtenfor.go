@@ -290,12 +290,13 @@ func handedOn(err error) bool { return errors.Is(err, ErrNotServing) || IsUnknow
 // keep the carrier of the write that made it — an open's or a push's for a
 // revision, a push's, a merge's or a landing's for a push, an enqueue's for an
 // entry — as its JSON, and NULL for nobody, the writing seat's own work. The
-// engine's later records name an earlier actor — a revision's facts its pusher,
-// a failed check of a head its pusher, the home's landing the push that merged
-// the change, a queue's landing each entry's enqueuer — and they read the
-// carrier back from these rows from crewlet#798's piece 4c-ii on. Until then
-// the one reader is a landing's own apply, which fills the push rows it lands
-// from its entries' rows ([Land.pushes]).
+// engine's later records name an earlier actor, and read whom that actor's
+// act was made for back from its row ([storedCarrier]) in the statement that
+// reads the actor: a revision's facts and a failed check of a head the
+// revision's ([revisionPusher]), and the home's landing the push's that merged
+// the change ([landingPusher]). A queue's landing names each entry's enqueuer
+// and reads its entry's from crewlet#798's piece 4c-ii on; its own apply fills
+// the push rows it lands from its entries' rows already ([Land.pushes]).
 //
 // FILLED FROM THE CARRIER'S FIRST BUILD ON, before most of them are read: a
 // replicated migration runs on each node when it opens, not at a log position,
@@ -334,6 +335,15 @@ func carrierColumn(f *types.WorkingFor) (sql.NullString, error) {
 // or decodes to nothing — a stranger's, who holds no app, the closed end, as
 // internal/worklet reads its history rows. No apply of this build writes such
 // a value: [carrierColumn] encodes every carrier it keeps.
+//
+// A KIND THIS BUILD DOES NOT KNOW IS READ AS THE ROW HOLDS IT, never rewritten
+// to a stranger's: it decodes, so it is no value this build cannot read but
+// one it cannot judge, and a carrier read from a stored row is, in that, as
+// one off the wire — another build may have written it (this file's head). So
+// a record that reads it carries it as kept, a holder that must judge it asks
+// the one rule ([KindUnknownToThisBuild]), and the turn a record's wake starts
+// composes it on its own node: as it is where that node's build knows the
+// kind, and as a stranger's, the closed end, where it does not.
 func storedCarrier(column sql.NullString) *types.WorkingFor {
 	if !column.Valid {
 		return nil
