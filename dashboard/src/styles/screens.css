@@ -6868,6 +6868,11 @@ a.work-cal-chip {
   align-items: flex-start;
   min-width: 0;
 }
+/* A column sizes each line to its words, so a line is held to the row's
+   width here: a name is cut with its ellipsis, and a sentence wraps. */
+.home-widget-line > * {
+  max-width: 100%;
+}
 /* A seat's own card is the widget, so it fills the cell it is placed in. */
 .home-agents-seat {
   display: flex;
