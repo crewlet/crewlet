@@ -2,12 +2,16 @@ package mcpbridge_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -17,6 +21,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -933,6 +938,268 @@ func TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A REQUEST THAT OPENS A SESSION ON AN OPENING ITS END OVERTOOK IS TURNED AWAY
+// TO ASK AGAIN, a 503 with a Retry-After, on this node's own route and on a
+// call relayed to it alike, as a notes call is
+// (TestANotesCallReachingItsOpeningAsItEndsIsTurnedAwayToAskAgain). The routing
+// found the opening and held it to the session the job's box started, and the
+// opening ended before the MCP handler served the request: the run ended, the
+// seat left this node, or a recovery opened the job again. The handler read the
+// token a second time and found no opening, and the SDK answered 400 "no server
+// available", which a harness takes for its own malformed request, never for
+// one to make again; after a recovery it found the recovery's opening instead,
+// and served the request there, on an opening no step had held to the session
+// the box started. So the handler is handed the opening the routing found and
+// reads the token no more: a token that expires while its request waits is
+// still the credential the request was admitted under. After the recovery the
+// box's next connect is served by the opening that serves it now. And a
+// request that is truly malformed keeps its 400: one that names a server the
+// opening does not serve.
+//
+// Mutation: serve a request that opens a session whatever its opening's state,
+// and every ending answers it 200, on an opening that has ended; read the token
+// again for the handler, and the request whose token expired on its way in is
+// answered 400; answer a server the opening does not serve 503, and the
+// malformed request goes red.
+func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testing.T) {
+	t.Parallel()
+	for _, route := range []struct {
+		name string
+		// url is the job's endpoint as the case's box dials it.
+		url func(o *parkedOpening) string
+	}{
+		{"on this node's own route", func(o *parkedOpening) string { return o.url }},
+		{"relayed to this node", func(o *parkedOpening) string { return o.relayed }},
+	} {
+		for _, end := range []struct {
+			name string
+			end  func(t *testing.T, o *parkedOpening)
+			// recovers is an end after which this node serves the box's next
+			// request itself, from the opening that replaced the ended one.
+			recovers bool
+		}{
+			{name: "the run ends", end: func(_ *testing.T, o *parkedOpening) { o.bridge.Close("run-1") }},
+			{name: "the seat leaves this node",
+				end: func(_ *testing.T, o *parkedOpening) { o.bridge.ReleaseSeat(seat()) }},
+			{name: "a recovery opens the job again", recovers: true, end: func(t *testing.T, o *parkedOpening) {
+				if o.bridge.Open(t.Context(), o.session) == "" {
+					t.Fatal("the recovery minted no endpoint")
+				}
+			}},
+		} {
+			t.Run(route.name+", "+end.name, func(t *testing.T) {
+				t.Parallel()
+				o := openParked(t, nil)
+				url := route.url(o)
+				o.parked.arm()
+				answered := make(chan openedSession, 1)
+				go func() { answered <- openSession(t.Context(), t, o.client, url) }()
+				// THE ROUTING FOUND THE OPENING, and the request waits as the
+				// opening is told which session the box started, short of the
+				// handler that serves it.
+				<-o.parked.entered
+				end.end(t, o)
+				o.parked.letGo()
+				got := <-answered
+				if got.res == nil {
+					t.Fatal("a request opening a session as its opening ended failed on the wire")
+				}
+				if got.res.StatusCode != http.StatusServiceUnavailable {
+					t.Fatalf("a request opening a session as its opening ended was answered %d %q, "+
+						"want a 503 to ask again", got.res.StatusCode, strings.TrimSpace(got.body))
+				}
+				wantTurnedAway(t, polled{res: got.res, refusal: got.refusal}, "unavailable")
+				if end.recovers {
+					if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+						t.Errorf("the box's next connect was not served by the recovery's opening: %s", text(res))
+					}
+				}
+			})
+		}
+	}
+	t.Run("a token that expires on its way in", func(t *testing.T) {
+		t.Parallel()
+		var now atomic.Int64
+		now.Store(time.Now().UnixNano())
+		o := openParked(t, func() time.Time { return time.Unix(0, now.Load()) })
+		o.parked.arm()
+		answered := make(chan openedSession, 1)
+		go func() { answered <- openSession(t.Context(), t, o.client, o.url) }()
+		<-o.parked.entered
+		now.Add(int64(2 * time.Minute))
+		o.parked.letGo()
+		got := <-answered
+		if got.status() != http.StatusOK || !strings.Contains(got.body, `"protocolVersion"`) {
+			t.Errorf("a request admitted under a token that expired while it waited was answered %d %q, "+
+				"want its session opened", got.status(), strings.TrimSpace(got.body))
+		}
+	})
+	t.Run("a server the opening does not serve", func(t *testing.T) {
+		t.Parallel()
+		o := openParked(t, nil)
+		got := openSession(t.Context(), t, o.client, mcpbridge.ServerURL(o.url, "slack"))
+		if got.status() != http.StatusBadRequest {
+			t.Errorf("a request opening a session on a server the opening does not serve was answered %d %q, "+
+				"want a 400", got.status(), strings.TrimSpace(got.body))
+		}
+	})
+}
+
+// AN OPENING'S END WAITS FOR THE ANSWER OF A REQUEST THAT OPENED A SESSION ON IT
+// BEFORE THE END, AND THEN CLOSES THAT SESSION. The request was let through
+// while the opening served, and the SDK opens its session as it serves it, so
+// the end holds its close of the box's sessions until the request is over, as
+// it does for the answer of a call it refused
+// (TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses): the
+// session is then one of those it closes, and the request's answer reaches the
+// box. A close that came first cut that answer; or, where the SDK had not yet
+// opened the session, missed it altogether, and left it live on an opening
+// that refuses every call made on it, where a box told to make a call again
+// makes it on that same session.
+//
+// Mutation: let a request that opens a session through without holding it for
+// the end (`false &&` before the hold), and the end's close waits out the
+// request instead, whose answer is then never written.
+func TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	url := f.open(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	enter := sync.OnceFunc(func() { close(entered) })
+	// THE REQUEST'S ANSWER IS STILL BEING MADE as the end comes: its
+	// initialize is held on the opening's own server, after the SDK opened its
+	// session.
+	mcpbridge.OpeningServers(f.session)[0].AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "initialize" {
+				enter()
+				<-release
+			}
+			return next(ctx, method, req)
+		}
+	})
+	answered := make(chan openedSession, 1)
+	go func() { answered <- openSession(t.Context(), t, f.server.Client(), url) }()
+	<-entered
+
+	// THE END RETURNS once it has waited its bound for that answer, and leaves
+	// its close of the box's sessions behind it.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		f.bridge.Close("run-1")
+	}()
+	select {
+	case <-ended:
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("the end never returned: its close waited out the request's answer")
+	}
+	close(release)
+	got := <-answered
+	if got.status() != http.StatusOK || !strings.Contains(got.body, `"protocolVersion"`) {
+		t.Fatalf("the request that opened a session before the end was answered %d %q, want its "+
+			"initialize's answer", got.status(), strings.TrimSpace(got.body))
+	}
+	mcpbridge.AwaitClosing(f.bridge)
+	if n := f.session.Connections(); n != 0 {
+		t.Errorf("%d MCP sessions survive the end, the one the request opened among them", n)
+	}
+}
+
+// parkedOpening is a seat's job opened on a bridge that serves the job's
+// endpoint and each server beneath it, on this node's own route and relayed to
+// it, whose box's first request waits, once parked is armed, as the opening is
+// told which session the box started (after the routing found the opening, and
+// before the handler serves the request) until parked lets it go.
+type parkedOpening struct {
+	*fixture
+	parked *parkedFence
+	// url is the job's endpoint on this node's own route, and relayed the same
+	// endpoint on the handler a call relayed to this node is served by.
+	url     string
+	relayed string
+	client  *http.Client
+}
+
+// openParked opens the fixture's job, its bridge reading the clock now where one
+// is given, under a token of a minute.
+func openParked(t *testing.T, now func() time.Time) *parkedOpening {
+	t.Helper()
+	o := &parkedOpening{fixture: newFixture(t), parked: newParkedFence()}
+	t.Cleanup(o.parked.letGo)
+	o.session.Started = func(context.Context, bool) { _ = o.parked.fence() }
+	opts := mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: o.server.URL}
+	if now != nil {
+		opts.Now, opts.TTL = now, time.Minute
+	}
+	o.bridge = bridgeFor(t, opts)
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", o.bridge.Handler())
+	mux.Handle(mcpbridge.ServerPattern, o.bridge.Handler())
+	o.server.Config.Handler = mux
+	if o.url = o.bridge.Open(t.Context(), o.session); o.url == "" {
+		t.Fatal("no endpoint was minted")
+	}
+	// THE RELAY'S ADMISSION FINDS THE OPENING HERE: this node has finished
+	// taking the seat, and holds the job's opening.
+	o.bridge.SeatReady(seat())
+	relay := httptest.NewServer(mcpbridge.Relayed(o.bridge))
+	t.Cleanup(relay.Close)
+	o.relayed = relay.URL + strings.TrimPrefix(o.url, o.server.URL)
+	o.client = httpxtest.Pool(t)
+	return o
+}
+
+// initializeRequest is the request a harness's MCP client opens a session with:
+// an initialize, on a POST naming no session.
+const initializeRequest = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":` +
+	`"2025-06-18","capabilities":{},"clientInfo":{"name":"coding-agent","version":"1"}}}`
+
+// openedSession is one request that opens a session, read whole: the response,
+// its body, and the error code of a refusal in the engine's envelope.
+type openedSession struct {
+	res     *http.Response
+	body    string
+	refusal string
+}
+
+// status is the answer's status, or 0 where the request failed on the wire.
+func (o openedSession) status() int {
+	if o.res == nil {
+		return 0
+	}
+	return o.res.StatusCode
+}
+
+// openSession posts an initialize to url through client as a harness's MCP
+// client opens a session, naming none, and reads the answer whole.
+func openSession(ctx context.Context, t *testing.T, client *http.Client, url string) openedSession {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(initializeRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	res, err := client.Do(req)
+	if err != nil {
+		return openedSession{}
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Errorf("read the answer to a request opening a session: %v", err)
+	}
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &refusal)
+	return openedSession{res: res, body: string(raw), refusal: refusal.Error}
 }
 
 // A BRIDGE AWAITS EVERY CALL IT RUNS UNTIL IT IS RECORDED. A call its opening's

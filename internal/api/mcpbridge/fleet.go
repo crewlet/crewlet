@@ -120,11 +120,12 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 // that holds it to the session the job's box started ([Bridge.serveBegun]): a
 // relayed request is as much the run's first as one that reached this node's
 // own route, and the MCP handler alone would serve it before that is told.
+// And the MCP handler on that opening as this node's own route serves it
+// ([Bridge.serveMCP]): never on a second reading of the token, and a request
+// opening a session only while the opening has not ended.
 func (b *Bridge) relayed() http.Handler {
 	mux := http.NewServeMux()
-	streamable := b.heldOnly(func(w http.ResponseWriter, r *http.Request, _ *binding) {
-		b.streamable.ServeHTTP(w, r)
-	})
+	streamable := b.heldOnly(b.serveMCP)
 	mux.Handle(PathPrefix+"{token}", streamable)
 	mux.Handle(ServerPattern, streamable)
 	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))

@@ -293,7 +293,8 @@ func (b *Bridge) AwaitCalls(ctx context.Context) {
 // request is over ([toolsession.Call.Over]) — or until bound fires, and
 // reports whether it found none on its way. A nil bound waits as long as that
 // takes. A hook's call is one it answered without running
-// ([binding.holdHook]).
+// ([binding.holdHook]), and a request it let open a session is held so too
+// ([binding.holdSessionOpen]).
 //
 // EACH PASS READS THE OPENING AGAIN, under its lock, so an answer given while
 // it waited — the refusal of a call that reached the opening after its end —
@@ -361,7 +362,9 @@ func (o *binding) end(how ending) { o.endKeeping(nil, how) }
 // it, and writes no answer once it has begun. Past that bound the sessions are
 // closed behind it ([bridgedCalls]), once those answers are out, and the end
 // returns. A hook's answer is one the opening gave without running a call, and
-// is waited for so ([binding.holdHook]).
+// is waited for so ([binding.holdHook]); and so is a request the opening let
+// open a session before its end ([binding.holdSessionOpen]), whose session is
+// then among those it closes.
 //
 // NOTHING IS OWED THE RUN'S LOG AS IT ENDS: every call the opening ran has its
 // identity there from before it ran ([Ledger.Begin]), and a call still running
@@ -466,6 +469,33 @@ func (o *binding) holdRefusalLocked(over <-chan struct{}) {
 	if over != nil {
 		o.refusals = append(o.refusals, over)
 	}
+}
+
+// holdSessionOpen holds a request that opens a session on the opening
+// ([opensSession]) for the opening's end until the request is over, as the
+// answer of a call it refuses is held ([binding.holdRefusalLocked]), and
+// reports whether the opening may serve it: false, holding nothing, once the
+// opening has ended. over is the request's context's Done, closed once its
+// handler has returned.
+//
+// THE SDK OPENS THE SESSION AS IT SERVES THE REQUEST, and the end closes the
+// sessions the opening's servers hold as it finds them once the answers it
+// waits for are out ([binding.closeSessions]). So the end waits for the request:
+// its session is then one of those it closes, and the request's answer, an
+// initialize's, reaches the box before the close, which writes none. A
+// session opened after the close began would be one nothing ever closed.
+//
+// UNDER ONE LOCK WITH THE END, which marks the opening ended under it before
+// it waits for anything ([binding.endKeeping]): a request either came first,
+// and the end waits for it, or finds the opening ended, and is never served.
+func (o *binding) holdSessionOpen(over <-chan struct{}) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ended {
+		return false
+	}
+	o.holdRefusalLocked(over)
+	return true
 }
 
 // holdHook holds the answer of a hook's call for the opening's end until the
