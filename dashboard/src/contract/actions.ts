@@ -55,6 +55,18 @@
  * rather than a button the tools' own gate refuses `invalid_body` — an
  * argument the tool does not declare — the first time somebody presses it.
  */
+/** Every question the atlas's screens ask, each moved by any write to it. */
+const ATLAS_READS = [
+  "atlas_entries",
+  "atlas_map",
+  "atlas_entry",
+  "atlas_trace",
+  "atlas_facets",
+  "atlas_log",
+  "atlas_activity",
+  "atlas_review",
+] as const;
+
 export const ACTIONS = {
   create_work_item: {
     // THE PALETTE'S TWO CREATES: "Create task" (a title, filed where the
@@ -621,6 +633,95 @@ export const ACTIONS = {
     apps: ["gitlet"],
     refreshes: [],
     scope: "person",
+  },
+  // COMPANY › ATLAS (`routes/atlas`): what a holder of Atlas adds, corrects and
+  // decides. THE ATLAS'S LOG IS NO SESSION DOMAIN: its questions read at the
+  // dashboard's level and take no floor, so each row names them as
+  // `refreshes` and they are asked again once the write is answered.
+  //
+  // ADD ENTRY records the entry with what its dialog knows of it, in one call.
+  atlas_add_entry: {
+    args: ["kind", "key", "name", "purpose", "belongs_to", "seat", "unit", "doclet_page"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  // A FACT'S VALUE as the person knows it, or `wrong` for the value shown.
+  atlas_correct: {
+    args: ["atlas_entry", "fact", "value", "wrong"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  // CONFIRM: the entry, or in Review one value or one relation its sources
+  // disagree on.
+  atlas_confirm: {
+    args: ["atlas_entry", "fact", "value", "relation", "to"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  // A RELATION DRAWN to another entry, or to the Doclet page that documents it.
+  atlas_relate: {
+    args: ["atlas_entry", "relation", "to", "doclet_page"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_unrelate: {
+    args: ["atlas_entry", "relation", "to", "doclet_page"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_set_owner: {
+    args: ["atlas_entry", "seat", "unit", "clear"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_retire: {
+    args: ["atlas_entry"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_restore: {
+    args: ["atlas_entry"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_merge: {
+    args: ["atlas_entry", "other"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  atlas_split: {
+    args: ["atlas_entry", "other"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ATLAS_READS,
+    scope: "person",
+  },
+  // A PURGE IS AN ADMINISTRATOR'S, after a fresh sign-in check the transport
+  // asks for (`protocol/rest.ts`).
+  atlas_purge: {
+    args: ["atlas_entry", "value"],
+    domain: null,
+    apps: [],
+    refreshes: ATLAS_READS,
+    scope: "company",
   },
 } as const;
 

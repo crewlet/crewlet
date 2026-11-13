@@ -65,6 +65,18 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "with the reason it cannot act as its hint",
     suite: "app/palette/Palette.test.tsx",
   },
+  "routes/atlas/AddEntry.tsx": {
+    why: "Company › Atlas's Add entry, and the dialog every atlas write is made in",
+    suite: "routes/atlas/writes.test.tsx",
+  },
+  "routes/atlas/Decisions.tsx": {
+    why: "the decisions a disagreement or a waiting entry allows, on an entry's Sources tab and in Review",
+    suite: "routes/atlas/writes.test.tsx",
+  },
+  "routes/atlas/EntryActions.tsx": {
+    why: "an entry's Confirm, Correct and More menu, and the dialog each opens",
+    suite: "routes/atlas/writes.test.tsx",
+  },
   "routes/inbox/Inbox.tsx": {
     why: "the Inbox's Mark all read, which reads through the newest notice loaded",
     suite: "routes/inbox/Inbox.test.tsx",

@@ -17,11 +17,12 @@ import type {
   AtlasSummary,
   AtlasTraceAnswer,
 } from "~/contract/atlas.ts";
+import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
-import { Neighbourhood } from "./Neighbourhood.tsx";
+import { Neighbourhood, neighbourhood, touching, type Touching } from "./Neighbourhood.tsx";
 import {
   EntryDisc,
   FactValue,
@@ -68,6 +69,15 @@ export function useEntryReads(id: string, enabled = true): EntryReads {
     next: useQuery("atlas_trace", down, { enabled, pollMs: ATLAS_POLL_MS }),
     prev: useQuery("atlas_trace", up, { enabled, pollMs: ATLAS_POLL_MS }),
   };
+}
+
+/** The names of the entries one step from an entry, by id: what a write's words call them. */
+export function namesOf(reads: Pick<EntryReads, "next" | "prev">): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const trace of [reads.next.data, reads.prev.data]) {
+    for (const summary of trace?.hops[0]?.entries ?? []) names.set(summary.id, summary.name);
+  }
+  return names;
 }
 
 /** The entry as a row shows it (its owner, its purpose, its counts), once either trace answers. */
@@ -134,8 +144,21 @@ export function EntryHead({
 }
 
 /**
- * What an entry touches: how many entries rely on it and how many it relies
- * on, in the engine's own counts, over the entry among its neighbours.
+ * What a diagram shows, in a sentence: how many entries rely on the entry, how
+ * many it relies on, and how many stand around it. COUNTED OFF THE DIAGRAM'S
+ * OWN CARDS, so the words and the picture under them never disagree.
+ */
+export function touchingSentence({ usedBy, reliesOn, around }: Touching): string {
+  const first = `${entries(usedBy)} ${usedBy === 1 ? "relies" : "rely"} on it`;
+  if (around === 0) return `${first}, and it relies on ${reliesOn.toLocaleString()}.`;
+  return `${first}, it relies on ${reliesOn.toLocaleString()}, and ${around.toLocaleString()} ${
+    around === 1 ? "stands" : "stand"
+  } around it.`;
+}
+
+/**
+ * What an entry touches: how many entries rely on it, how many it relies on
+ * and how many stand around it, over the entry among those neighbours.
  */
 export function Touches({
   self,
@@ -149,9 +172,16 @@ export function Touches({
   headingLevel: 2 | 3;
 }) {
   const settled = !reads.next.loading && !reads.prev.loading;
+  const now = useNow();
+  const down = reads.next.data;
+  const up = reads.prev.data;
+  const near = useMemo(
+    () => (self ? neighbourhood(self, down, up, now) : null),
+    [self, down, up, now],
+  );
   return (
     <Section spacing="tight" headingLevel={headingLevel} title="What it touches">
-      {!self ? (
+      {!self || !near ? (
         settled ? (
           <p className="muted">Its relations could not be read.</p>
         ) : (
@@ -159,16 +189,8 @@ export function Touches({
         )
       ) : (
         <>
-          <p>
-            {entries(self.relations.used_by)} {self.relations.used_by === 1 ? "relies" : "rely"} on
-            it, and it relies on {self.relations.depends_on.toLocaleString()}.
-          </p>
-          <Neighbourhood
-            self={self}
-            down={reads.next.data}
-            up={reads.prev.data}
-            stacked={stacked}
-          />
+          <p>{touchingSentence(touching(near.nodes))}</p>
+          <Neighbourhood self={self} near={near} stacked={stacked} />
         </>
       )}
     </Section>

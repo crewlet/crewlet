@@ -2331,7 +2331,12 @@ const (
 	// detail; the sheets +630, the kit's quiet callout and compact finding
 	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
 	// moves this budget with a reason of its own.
-	treeBudget = 5<<20 + 778<<10
+	// Adding, correcting and confirming in the atlas (Add entry, an entry's
+	// actions and their dialogs, History, Changes, Review and its bulk
+	// decision, and the vocabulary's fact and relation tables the dialogs
+	// offer from) took it to 5943.1 KiB (6,085,783 bytes, +48,677, nearly all
+	// of it the atlas chunk's script): 5944 KiB.
+	treeBudget = 5<<20 + 824<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

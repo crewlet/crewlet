@@ -20,11 +20,13 @@ import {
   Signals,
   Touches,
   dependsOn,
+  namesOf,
   selfOf,
   useEntryReads,
   usedBy,
   type EntryReads,
 } from "./entry.tsx";
+import { EntryActions } from "./EntryActions.tsx";
 import { SELECT_KEY } from "./filters.ts";
 
 /** At most this many changes a sheet lists before pointing at the page. */
@@ -64,6 +66,7 @@ function EntryPeek({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryRe
   return (
     <>
       <EntryHead answer={answer} self={self} size="peek" now={now} />
+      <EntryActions answer={answer} names={namesOf(reads)} />
       <Stack gap={4}>
         <Signals entry={entry} now={now} />
         <Touches self={self} reads={reads} stacked headingLevel={3} />

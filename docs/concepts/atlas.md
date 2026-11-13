@@ -180,16 +180,18 @@ A key one source carries on two entries (two servers behind one load balancer, t
 
 For each fact, a source's newest claim stands for it, and across sources the most trusted wins, then the newest. A person's value is shown over every inference. An agent's dispute never wins: it is shown beside the value it disputes. When a newer report from an integration, an agent or the engine contradicts a person, the fact is **contested**; when two sources the engine trusts alike disagree with no person to settle it, it is **disputed**. Either way both values are shown, and the entry waits for a person; nothing is settled in silence.
 
+**What waits for a person is computed on every read**, never stored: the facts and relations that are contested or disputed, and the entries only an agent reported. The dashboard's Review and the `atlas_review` question list them; a person's decision is an ordinary claim, and an item is gone from the next read once its cause is.
+
 ## Changing the atlas
 
 A person who holds Atlas changes it with eleven tools of the operator catalogue, the same catalogue the dashboard writes through ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)) and your own assistant reaches over `/operator/mcp`. Each records a claim in the person's own name, which outranks every integration and agent until they report a change, when both values are shown for review:
 
 | Tool | What it records |
 |---|---|
-| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one |
+| `atlas_add_entry` | an entry no source reports, by its `kind` and `key`, with a `name` where the key is not one, and what the person knows of it: its purpose, the account it belongs to, its owner and the page that documents it |
 | `atlas_correct` | one fact's `value` as the person knows it (for a fact that holds many, one more value), or with `wrong`, that a value shown is wrong |
 | `atlas_confirm` | what the atlas shows, as the person's own: the entry, one fact (or another value a source reports for it) or one relation |
-| `atlas_relate`, `atlas_unrelate` | a relation between two entries, drawn or recorded as not there |
+| `atlas_relate`, `atlas_unrelate` | a relation between two entries, or from an entry to the Doclet page that documents it, drawn or recorded as not there |
 | `atlas_set_owner` | the owning `seat` (by handle) or `unit` (by key) of the chart, in place of the owner a person named before; `clear` removes it. Never free text |
 | `atlas_retire`, `atlas_restore` | an entry taken off the map, kept in its history, and brought back |
 | `atlas_merge`, `atlas_split` | two entries of one kind said to be the same thing, or not the same |

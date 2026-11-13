@@ -6899,11 +6899,11 @@ also takes back the `op_id` its answer carried, as the tracker's writes do.
 
 | Tool | Arguments |
 |---|---|
-| `atlas_add_entry` | `kind`, `key` in its kind's grammar, and an optional `name`. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
+| `atlas_add_entry` | `kind`, `key` in its kind's grammar, and optionally what is known of it: a `name`, a one-line `purpose`, the vendor account it belongs to (`belongs_to`, an entry), its owner (`seat` or `unit`) and the Doclet page that documents it (`doclet_page`, the page's id). Each is a record of its own after the entry's, and the same call made again finishes one that stopped part of the way. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
 | `atlas_correct` | `atlas_entry`, `fact` (one its kind carries), and `value` in the fact's grammar, which a fact holding many values gains as one more; or `wrong: true`, saying the `value` shown (the one value of a fact of one) is wrong. A fact the settings, Gitlet or the engine's own records declare is refused `conflict` |
 | `atlas_confirm` | `atlas_entry`, and either `fact` (with `value` for a fact holding many, or to confirm another value a source reports) or `relation` and `to`; neither confirms the entry itself |
-| `atlas_relate` | `atlas_entry`, `relation` (any but `owned_by` and `documented_in`), `to` |
-| `atlas_unrelate` | `atlas_entry`, `relation`, `to`: a relation the settings declare is refused `conflict` |
+| `atlas_relate` | `atlas_entry`, `relation` (any but `owned_by`), and `to`; with `documented_in`, `doclet_page` (a Doclet page's id) in place of `to`. The page is not read: whether it exists and who may read it is Doclet's to say on every read |
+| `atlas_unrelate` | `atlas_entry`, `relation`, and `to` or, with `documented_in`, `doclet_page`: a relation the settings declare is refused `conflict` |
 | `atlas_set_owner` | `atlas_entry`, and one of `seat` (a handle of the chart), `unit` (a unit's key) or `clear: true`. The owner a person named before is withdrawn; an owner Gitlet declares is refused `conflict` |
 | `atlas_retire`, `atlas_restore` | `atlas_entry`. An entry the settings declare is refused `conflict` |
 | `atlas_merge`, `atlas_split` | `atlas_entry` and `other`, of one kind. A merge withdraws a "not the same" that stands between them first |
@@ -8065,7 +8065,7 @@ roster is everybody's overview.
 
 ## The atlas
 
-The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through seven questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
+The company's [atlas](../concepts/atlas.md), the map and catalogue of everything it runs on, is read through eight questions, each on the socket and as a REST route. **Every one needs the `atlas` permission** ([ADR-0127](../../adr/0127-reading-the-atlas-takes-the-atlas-permission.md)); a person without it is refused, as an agent's turn is when the person who woke it does not hold it.
 
 | Question | Route | Parameters | Answer |
 |---|---|---|---|
@@ -8075,6 +8075,7 @@ The company's [atlas](../concepts/atlas.md), the map and catalogue of everything
 | `atlas_trace` | `GET /atlas/{id}/trace` | `id`; `direction` (`up`, what depends on it, by default; `down`, what it depends on); `depth` (1 to 6, 6 by default); `relations` (`structural`, by default, or `all`) | `from`, `direction`, `hops` by distance, `edges`, `truncated` |
 | `atlas_facets` | `GET /atlas/facets` | the filters below | how many entries each `kinds`, `lanes`, `vendors`, `words` and `health` value leaves, each counted over every other filter, and `total` |
 | `atlas_log` | `GET /atlas/log`, `GET /atlas/{id}/log` | `id`, for one entry's lines rather than the company's; `cursor`; `limit` (50 by default, at most 200); `unconfirmed` | `lines`, newest first; `next_cursor`, absent on the last page |
+| `atlas_review` | `GET /atlas/review` | `kind` (`disagreement`, `unconfirmed` or `likely`; every kind by default); `cursor`; `limit` (50 by default, at most 500) | `items`, what waits for a person, computed on the read and stored nowhere: the facts and relations the sources disagree on first (each with its `fact` or `relation`, every other value beside the one shown, and the `target` a relation points at), then the entries only an agent reported, the ones with nothing the engine could check before the ones backed by a call or a file; each item's `entry` summary and `since`, its newest claim; `next_cursor`, absent on the last page; `total` of the asked kind and `counts` of each kind |
 | `atlas_activity` | `GET /atlas/activity` | `unconfirmed` | `from`, the first instant of the window; `days`, the company's lines on each of its 14 UTC days, oldest first and today last; `entries`, one per entry the log holds a line of: its `id`, its own `days` (absent where it took none in the window) and `last`, its newest line however old |
 
 The filters are `q` (part of a name or a key, or an entry's id), `kind`, `lane`, `vendor`, `confidence` (`confirmed`, `likely` or `unconfirmed`), `health` (`alerting`, `needs_look` or `quiet`), `show` (`current`, every entry but the retired, by default; `retired`; `all`) and `unconfirmed` (`true` to take in the entries only an agent reported with nothing the engine could check; they are left out by default until a person confirms them, and `confidence=unconfirmed` takes them in too). The `words` facet counts the unconfirmed entries either way, so a screen can say what showing them adds. A value outside its set is refused with `bad_params`, naming the parameter and the values it takes; an `id` no entry answers to is `not_found`. An entry merged into another by an exact key is found by its own id too.

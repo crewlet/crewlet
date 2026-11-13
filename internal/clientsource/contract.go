@@ -916,6 +916,9 @@ var contract = []Entry{
 	{"AtlasCoverageSource", ReadUnion, "internal/api/queries.TestTheDashboardNamesEveryAtlasWord"},
 	{"AtlasFamily", ReadUnion, "internal/api/queries.TestTheDashboardNamesEveryAtlasWord"},
 	{"AtlasChange", ReadUnion, "internal/api/queries.TestTheDashboardNamesEveryAtlasWord"},
+	{"ATLAS_FACT_SPECS", ReadLiteral, "internal/api/queries.TestTheDashboardKnowsWhatEachFactAndRelationAdmits"},
+	{"ATLAS_RELATION_PAIRS", ReadLiteral, "internal/api/queries.TestTheDashboardKnowsWhatEachFactAndRelationAdmits"},
+	{"AtlasReviewKind", ReadUnion, "internal/api/queries.TestTheDashboardNamesEveryAtlasWord"},
 	{"AtlasRead", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasCoverage", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasSummary", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
@@ -946,6 +949,8 @@ var contract = []Entry{
 	{"AtlasLogAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasEntryActivity", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AtlasActivityAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
+	{"AtlasReviewItem", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
+	{"AtlasReviewAnswer", ReadInterface, "internal/api/queries.TestTheAtlasAnswersAreTheirDeclaredShapes"},
 	{"AccessManagedBy", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 	{"AccessRefusalField", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 
