@@ -70,6 +70,7 @@ function queue(agents: AgentRow[]) {
     notices: [],
     findings: [],
     setupUnread: [],
+    atlasDrift: [],
   };
   return attentionQueue(input);
 }

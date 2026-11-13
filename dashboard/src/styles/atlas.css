@@ -329,6 +329,11 @@
   min-width: 0;
 }
 
+/* THE CALL A CLAIM CITED, under its by-line: a long tool name wraps. */
+.atlas-cited {
+  overflow-wrap: anywhere;
+}
+
 /* A TILE'S WAY ON: one link under its figures, which wraps inside its tile
    rather than widening it. */
 .atlas-band__link {

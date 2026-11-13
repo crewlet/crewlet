@@ -567,7 +567,13 @@ export function disputedServer(company: GrownCompany): AtlasEntryAnswer {
           others: [
             {
               value: { type: "ip", text: "10.0.4.19", private: true },
-              source: { kind: "agent", name: "sre", turn: idFor("turn"), evidence: "call" },
+              source: {
+                kind: "agent",
+                name: "sre",
+                turn: idFor("turn"),
+                evidence: "call",
+                tool: "ssh_read",
+              },
               confidence: "observed",
               observed_at: "2026-11-11T10:30:00Z",
             },
@@ -727,6 +733,25 @@ export function waitingItems(company: GrownCompany): AtlasReviewItem[] {
       fact: address,
       since: "2026-11-11T10:30:00Z",
     },
-    { id: `${guess.id}/unconfirmed`, kind: "unconfirmed", entry: guess, since: SEEN },
+    {
+      id: `${guess.id}/unconfirmed`,
+      kind: "unconfirmed",
+      entry: guess,
+      // WHAT THE AGENT SAID BEHIND IT: a message it read, which the engine
+      // could check nothing behind.
+      reports: [
+        {
+          source: {
+            kind: "agent",
+            name: "sre",
+            turn: idFor("turn-2"),
+            evidence: "none",
+            tool: "read_channel",
+          },
+          observed_at: SEEN,
+        },
+      ],
+      since: SEEN,
+    },
   ];
 }
