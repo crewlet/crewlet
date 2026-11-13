@@ -1388,6 +1388,43 @@ func (s *suite) runBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("a_drain_the_backend_hands_back_itself_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
+		t.Parallel()
+		// WHERE THE BACKEND'S OWN HAND-BACK KEEPS A MESSAGE IT SPENT. A
+		// partition the consumer was told mid-drain it may not run — here,
+		// by the deferral of the partition before it — is handed back by
+		// the backend itself, no handler run, and that hand-back spends a
+		// delivery as every return does (an_undispatched_partition_pays_for_
+		// its_hand_back). On the budget's last delivery it retires the
+		// message, and a hand-back is no failure: the copy is kept with the
+		// group's unhandled deliveries, where a reader that can handle it
+		// finds it, beside the deferred partition's own.
+		//
+		// A BUDGET OF ONE, so the drain's one delivery of each is its last.
+		// Filled while held, for an_undispatched_partition_pays_for_its_
+		// hand_back's reason, so the two are one drain.
+		//
+		// Mutation: charge the backend's own hand-back of an undispatched
+		// partition as a failure (the twin's restoreLocked, JetStream's
+		// handBackUndispatched), and b's copy is kept with the poison.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
+
+		const topic, group = "topic.handed_drain", "grp"
+		fill := holdForOneBatch(ctx, t, q, topic, group)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(_ context.Context, evs []*events.Event) queue.Result {
+				j.record(firstConv(t, evs))
+				return queue.Defer(queue.DeferShedding, "the node sheds")
+			}, queue.NewBatchOptions(lingerFor.Seconds(), 20))
+
+		fill("a", "b")
+		j.awaitLabels(t, "the first partition to be deferred", "a")
+		keptAs(ctx, t, q, topic, group, false, "a", "b")
+		j.staysAt(ctx, t, 1, "a partition the backend handed back was run")
+	})
+
 	t.Run("a_publish_during_the_batch_does_not_move_the_splice", func(t *testing.T) {
 		t.Parallel()
 		// The restore point for the undispatched partitions is found by
