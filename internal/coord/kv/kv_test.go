@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
@@ -54,6 +55,11 @@ func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 		DontListen:        true,
 		StoreDir:          dir,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
+		// THE TRANSPORT'S CEILING, as every server the engine starts holds
+		// its connections to: a value at what a key holds
+		// (coord.MaxValueBytes) is a message of six mebibytes, past the
+		// server's own default of one.
+		MaxPayload: int32(queue.MaxPayloadBytes),
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)
@@ -512,7 +518,7 @@ func TestFleetContract(t *testing.T) {
 // here: the pointer's own record carries the body as an object, beside the
 // origin the contract requires.
 //
-// Mutation: carry the payload as []byte in activationRecord and the field is a
+// Mutation: carry the payload as []byte in coord.ActivationRecord and the field is a
 // string.
 func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 	t.Parallel()

@@ -1,1 +1,0 @@
-import{r as e}from"./rolldown-runtime-XKyaHtl9.js";import{ii as t}from"./chunk-M2M6ZD7P-Vq6raJiq.js";import{i as n}from"./react-C1iE8mnY.js";var r=e(n(),1);function i({onNode:e}){let n=t(),i=(0,r.useRef)(e);return i.current=e,(0,r.useLayoutEffect)(()=>{i.current(n&&n!==document.body?n:null)},[n]),null}export{i as t};

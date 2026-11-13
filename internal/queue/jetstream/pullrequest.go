@@ -591,13 +591,21 @@ func pullStatus(msg *nats.Msg) (string, error) {
 	case statusHeartbeat, statusNoMsgs, statusTimeout:
 		return code, nil
 	case statusConflict:
-		lower := strings.ToLower(description)
-		if strings.Contains(lower, "exceeds maxbytes") || strings.Contains(lower, "batch completed") {
+		if pastMaxBytes(msg) || strings.Contains(strings.ToLower(description), "batch completed") {
 			return code, nil
 		}
 	}
 	return code, fmt.Errorf("%w: the server ended the pull with %s %s",
 		errPullRefused, code, description)
+}
+
+// pastMaxBytes reports a status that ended a pull because the next record
+// would pass the pull's byte bound — the `409` whose text says so, which the
+// server sends in place of that record rather than deliver it (nats-server
+// v2.15.2, consumer.go's nextWaiting: "Message Size Exceeds MaxBytes").
+func pastMaxBytes(msg *nats.Msg) bool {
+	return msg.Header.Get(statusHeader) == statusConflict &&
+		strings.Contains(strings.ToLower(msg.Header.Get(descriptionHeader)), "exceeds maxbytes")
 }
 
 // errPullRefused is a pull the server ended as a failure rather than by

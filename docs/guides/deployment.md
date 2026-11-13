@@ -1033,6 +1033,20 @@ limits of the account the engine signs in to and of its user — an account's
 account's or a user's JWT on an operator-mode deployment — so where either
 states one, raise it to 8 MiB or leave it unlimited too.
 
+**And no leaf node between the engine and the cluster that carries less than
+a leader's reply.** A node reads a state log's records and the dead letters
+with the stream leader's message read, whose reply carries the message
+base64-encoded in JSON: about 11.2 MB for a message at 8 MiB. A route between
+the cluster's servers and a server's delivery to its own client carry any size,
+so `stream.url` naming the cluster's own servers needs nothing more. A NATS
+leaf node standing between them is another matter: a leaf server holds every
+message its link carries to its own `max_payload` and closes the whole link on
+one larger, every lease and mailbox the node holds across it going with it.
+Dial the cluster's servers directly, or give such a leaf node a `max_payload`
+of at least 12 MB. The engine's own leaves — its nodes without `data` on an
+[embedded fleet](#every-node-embeds-a-member-of-one-cluster) — read a message that large raw instead,
+since their links are the engine's.
+
 **And the same limit on every node's connection.** A seat's memory rows are
 bounded by nothing but the limit of the connection that published them, and a
 node reads them in pulls no larger than its own connection's limit

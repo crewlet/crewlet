@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the upload reservations ------------------------------------------ //
@@ -35,6 +37,9 @@ func (f *Fleet) UploadLedger(context.Context) ([]byte, uint64, error) {
 func (f *Fleet) SwapUploadLedger(_ context.Context, value []byte, revision uint64) (uint64, error) {
 	if len(value) == 0 {
 		return 0, errors.New("coord/memory: an upload ledger needs a value")
+	}
+	if err := coord.HoldValue("the upload ledger", len(value)); err != nil {
+		return 0, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -68,6 +73,9 @@ func (f *Fleet) SwapUploadRecord(_ context.Context, upload string, value []byte,
 		return 0, errors.New("coord/memory: an upload record needs an upload")
 	case len(value) == 0:
 		return 0, errors.New("coord/memory: an upload record needs a value")
+	}
+	if err := coord.HoldValue("the upload record "+upload, len(value)); err != nil {
+		return 0, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

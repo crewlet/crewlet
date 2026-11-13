@@ -74,6 +74,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
@@ -118,8 +119,10 @@ var errCreateUnanswered = errors.New("the create was sent and its answer was not
 // have landed. Unmarked: the leader reader could not be built (before any
 // write), a refused round could not read the key again, or every round was
 // refused ([contended]) — after each of which every write this call made had
-// been refused, so nothing was written. See the file doc for why this is not
-// the bucket handle's own Create.
+// been refused, so nothing was written. And a value past what a key holds
+// ([coord.ErrValueTooLarge]) is refused before it is sent, so it is returned
+// as it is, neither marked nor unavailable: nothing went out. See the file
+// doc for why this is not the bucket handle's own Create.
 func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	key string, value []byte) (uint64, error) {
 
@@ -136,6 +139,10 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		switch {
 		case err == nil:
 			return revision, nil
+		case errors.Is(err, coord.ErrValueTooLarge):
+			// REFUSED BEFORE IT WAS SENT: nothing went out, so nothing
+			// may have landed.
+			return 0, err
 		case !isWrongLastSequence(err):
 			// NOT A REFUSAL, so nothing says the broker did not take it:
 			// the request went out and what came back — most often

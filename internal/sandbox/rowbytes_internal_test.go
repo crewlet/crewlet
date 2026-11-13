@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -673,6 +674,27 @@ func worstLog(t *testing.T) BridgeLog {
 
 // elidedWorst is how many calls the worst log drops.
 const elidedWorst = 100
+
+// A RUN'S VALUES ARE BUDGETED TO WHAT ONE KEY OF THE STORE HOLDS.
+//
+// Every share in rowbytes.go is a share of what one value of a run may weigh,
+// and the coordination store refuses a value past what one of its keys holds
+// (coord.MaxValueBytes) — the largest whose leader's read crosses a leaf's
+// link, about a quarter under the transport's eight mebibytes. Closed at the
+// transport instead, the shares passed a row of seven megabytes, and every
+// write of its run — its lease, its status, each call its log appended — was
+// refused in the store; the budget tests below hold a row and a log to these
+// shares, so they hold them to the store.
+//
+// Mutation: budget a value to the transport's ceiling rather than to what one
+// key holds, and it is past the store's bound.
+func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
+	t.Parallel()
+	if RowBytes > coord.MaxValueBytes {
+		t.Errorf("a run's value may weigh %d bytes, past the %d one key of the store holds: every "+
+			"write of a value between the two is refused", RowBytes, coord.MaxValueBytes)
+	}
+}
 
 // THE WHOLE ROW FITS ITS BUDGET: the arithmetic in rowbytes.go, held to the
 // row's own encoder. Every field is at its bound in the bytes that escape the

@@ -214,6 +214,9 @@ function heldRun() {
       raw: "ssh_operate",
       fixed: true,
       approvers: "ssh",
+      // AS THE ENGINE SENDS IT: the act is what a held call's title is read by.
+      act: "ssh_operate",
+      delegation: null,
     },
     started_at: at,
     updated_at: at,

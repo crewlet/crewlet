@@ -1655,15 +1655,15 @@ Every flip of the run is a compare-and-set of that record **whole**, and every l
 
 ### What a run's record and its log keep
 
-A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and one value is one broker message: at most 8 MiB (`queue.MaxPayloadBytes`), its headers included. So each is held to a byte budget, **8,384,512 bytes** (`sandbox.RowBytes`: the payload bound less 4 KiB for the broker's headers), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
+A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and the store holds one key to **6,290,542 bytes** (`coord.MaxValueBytes`): the largest value whose read a node without `data` takes back across its leaf link, where the stream leader's reply carries it base64-encoded, a third larger, under the transport's 8 MiB. The store refuses a write past it before sending anything. So each is held to that byte budget (`sandbox.RowBytes`), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
 
 | Value | Share | Bytes | Held by |
 |---|---|---|---|
 | The tool log | Its calls: `calls`, `elided`, `elided_calls`, `absorbed_calls` | 3,473,408 (3.3125 MiB) | each call's own share, two hundred calls, and the identities of the calls the log counts without listing them |
 | The tool log | Its calls in flight: `in_flight` | 1,048,576 (1 MiB) | 256 entries, each its call's identity and the id its harness gave it, at most 4 KiB |
-| The tool log | Everything else: the tool names of the turn's earlier rounds, the log's own fields, and room for what a later version adds | 3,862,528 (3.68 MiB) | each field's own bound |
+| The tool log | Everything else: the tool names of the turn's earlier rounds, the log's own fields, and room for what a later version adds | 1,768,558 (1.69 MiB) | each field's own bound |
 | The record | The parked turn's state (`execute_state`) | 2,097,152 (2 MiB) | the park, which condenses it to fit and refuses it past that |
-| The record | Everything else, and 256 KiB for fields a later version adds | 6,287,360 (6 MiB less 4 KiB) | each field's own bound, held by the write that puts it on the record |
+| The record | Everything else, and 256 KiB for fields a later version adds | 4,193,390 (4 MiB less 914 bytes) | each field's own bound, held by the write that puts it on the record |
 
 The sealed set of secrets beside them is the third value, a fraction of the same budget: at most 64 KiB before sealing.
 

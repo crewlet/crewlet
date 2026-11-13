@@ -1,19 +1,27 @@
 #!/bin/sh
-# crewlet-gate 2: the only program a Crewlet certificate runs on this server.
+# crewlet-gate 3: the only program a Crewlet certificate runs on this server.
 set -eu
 set -f
-GATE_VERSION=2
+GATE_VERSION=3
 ALLOWLIST=/etc/ssh/crewlet/read-allowlist
+INVENTORY=/etc/ssh/crewlet/inventory-allowlist
 
 say() { logger -t crewlet-gate -p authpriv.notice -- "$(printf '%s' "$*" | tr '\n\r' '  ')" 2>/dev/null || :; }
 
-key_id() {
+# certificate prints the certificate this session signed in with, as
+# ssh-keygen describes it.
+certificate() {
   if [ -n "${SSH_USER_AUTH:-}" ] && [ -r "$SSH_USER_AUTH" ]; then
     sed -n 's/^publickey //p' "$SSH_USER_AUTH" | head -n 1 |
-      ssh-keygen -L -f /dev/stdin 2>/dev/null |
-      sed -n 's/^[[:space:]]*Key ID: "\(.*\)"$/\1/p'
+      ssh-keygen -L -f /dev/stdin 2>/dev/null
   fi
 }
+
+key_id() { certificate | sed -n 's/^[[:space:]]*Key ID: "\(.*\)"$/\1/p'; }
+
+# bound_command is the command the certificate itself names, empty for a
+# certificate that names none.
+bound_command() { certificate | sed -n 's/^[[:space:]]*force-command //p' | head -n 1; }
 
 # matches RULE ARG...: RULE's first word is an absolute path, matched by the
 # path or its base name; where the rule runs a program through "sudo -n", the
@@ -69,6 +77,17 @@ case "$mode" in
     ;;
   read)
     cmd=${SSH_ORIGINAL_COMMAND:-}
+    list=$ALLOWLIST
+    name="read allowlist"
+    # A certificate that names its command runs that command, whatever the
+    # client asked for, and only where the inventory's own list holds it.
+    bound=$(bound_command)
+    if [ -n "$bound" ]; then
+      cmd=$bound
+      list=$INVENTORY
+      name="inventory allowlist"
+      [ -r "$list" ] || refuse "$cmd" "this server's inventory is not switched on"
+    fi
     case "$cmd" in
       '') refuse "" "no interactive shell; name one allowlisted command" ;;
       'crewlet-gate version') echo "crewlet-gate $GATE_VERSION"; exit 0 ;;
@@ -84,8 +103,8 @@ case "$mode" in
         say "read id=$(key_id) cmd=$cmd"
         exec "$bin" "$@"
       fi
-    done <"$ALLOWLIST"
-    refuse "$cmd" "not on this server's read allowlist"
+    done <"$list"
+    refuse "$cmd" "not on this server's $name"
     ;;
   operate)
     [ $# -eq 2 ] || refuse "" "malformed operate command"

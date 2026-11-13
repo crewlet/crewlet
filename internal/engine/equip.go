@@ -138,6 +138,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// AND THE ATLAS TOOLS, on the same deps the operator catalogue builds
 	// per call: a seat reads the atlas within whoever woke its turn.
 	deps.Atlas = AtlasToolDeps(e)
+	// AND WHAT AN AGENT RECORDS IN IT, from a call of its own turn: written
+	// through the router, counted against the seat's day on the fleet's
+	// counter (ADR-0132).
+	deps.AtlasRecord = AtlasRecordToolDeps(e)
 	deps.Delegated = DelegatedToolDeps(e)
 	// AND THE RELEASE REQUESTS' PULL REQUESTS, where the company runs GitHub:
 	// read and merged as the requesting seat's own app (releasepulls.go).

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The instants the apply cases store records at.
@@ -226,8 +227,12 @@ func TestAVoicesNewerClaimReplacesItsOlderOne(t *testing.T) {
 	if len(history) != 3 {
 		t.Fatalf("%d claims in the history, want 3", len(history))
 	}
-	if oldest := history[2]; !oldest.Replaced || oldest.ReplacedBy != position(2) || !oldest.ReplacedAt.Equal(t1) {
-		t.Errorf("ada's first purpose is %+v, want replaced by her second at %s", oldest, t1)
+	if oldest := history[2]; oldest.Withdrawn || oldest.Claim.Value.Text != "Takes payments" || !oldest.At.Equal(t0) {
+		t.Errorf("the oldest line is %+v, want ada's first purpose as she recorded it", oldest)
+	}
+	if got := e.count(`SELECT COUNT(*) FROM atlas_claims WHERE replaced = 1 AND superseded_position = ?
+		AND superseded_at = ?`, position(2).Packed(), store.EncodeTime(t1)); got != 1 {
+		t.Errorf("%d claims replaced by ada's second at %s, want her first", got, t1)
 	}
 	if v := atlas.Fold(live, t3); len(v.Entries) != 1 || v.Entries[0].Facts[0].Value.Text != "Bills customers" {
 		t.Errorf("the fold reads %+v, want the newest person's purpose", v.Entries)
@@ -601,20 +606,20 @@ func TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode(t *testing.T) {
 			t.Errorf("the live origin is %s, want the newer read's", c.Facet.Target.Entry)
 		}
 	}
-	history, err := a.reader().History(t.Context(), apiHost.ID().String(), "", atlasdomain.MaxPageSize,
-		statelog.Freshness{Level: statelog.ReadStale})
+	history, err := a.reader().Log(t.Context(), atlasdomain.LogQuery{Entries: []string{apiHost.ID().String()},
+		Limit: atlasdomain.MaxPageSize, Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced := 0
-	for _, row := range history.Claims {
-		if row.Replaced {
-			replaced++
+	var withdrawn []atlasdomain.LogLine
+	for _, line := range history.Lines {
+		if line.Withdrawn {
+			withdrawn = append(withdrawn, line)
 		}
 	}
-	if len(history.Claims) != 4 || replaced != 1 {
-		t.Errorf("the history holds %d claims, %d replaced; want 4 with the old origin replaced",
-			len(history.Claims), replaced)
+	if len(history.Lines) != 5 || len(withdrawn) != 1 || withdrawn[0].Claim.Facet.Target.Entry != originA {
+		t.Errorf("the log holds %d lines, %d withdrawn; want the 4 claims and the old origin's withdrawal",
+			len(history.Lines), len(withdrawn))
 	}
 	before := a.dump()
 	a.redeliver()
@@ -667,7 +672,9 @@ func TestOnlyTheEngineRecordsAnIntegrationsRead(t *testing.T) {
 		t.Errorf("a person's read: %v, want ErrInvalid", err)
 	}
 	for name, bad := range map[string]atlasdomain.ReadInput{
-		"a person's voice":      {Source: asPerson, Entry: apiHost, Claims: []atlas.Claim{exists}},
+		"a person's voice": {Source: asPerson, Entry: apiHost, Claims: []atlas.Claim{exists}},
+		"an agent's voice": {Source: atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), Entry: apiHost,
+			Claims: []atlas.Claim{exists}},
 		"another entry's claim": {Source: cloudflare, Entry: acmeZone, Claims: []atlas.Claim{exists}},
 		"a credential as a key": {Source: cloudflare, Entry: apiHost, Claims: []atlas.Claim{
 			m(atlas.Relates(apiHost, atlas.RelationResolvesTo, atlas.Ref{Kind: atlas.KindHostname, Key: tokenHost()},
@@ -686,6 +693,51 @@ func TestOnlyTheEngineRecordsAnIntegrationsRead(t *testing.T) {
 	n.drain()
 	if _, err := n.writer.Read(t.Context(), engineCall(), in); !errors.Is(err, atlasdomain.ErrPurged) {
 		t.Errorf("a read of a purged entry: %v, want ErrPurged", err)
+	}
+}
+
+// A REPOSITORY'S FILES ARE READ IN THEIR OWN VOICE (ADR-0133): what they
+// declare lands on every node as an integration's read does, reads as likely,
+// and is gone, never retired, once the files stop saying it; a denial in the
+// voice is refused.
+//
+// Mutation: refuse a code source in Writer.Read, and nothing a file declares
+// is ever recorded.
+func TestARepositorysFilesAreReadInTheirOwnVoice(t *testing.T) {
+	t.Parallel()
+	log := openAtlasLog(t)
+	a, b := newWriteNode(t, log, "data-1"), newWriteNode(t, log, "data-2")
+	m := must(t)
+	code := atlas.CodeSource("shop")
+	svc := atlas.MustRef(atlas.KindService, "shop-api")
+	repo := atlas.MustRef(atlas.KindRepository, "gitlet/shop")
+	exists := m(atlas.Exists(svc, code, writerClock))
+	built := m(atlas.Relates(svc, atlas.RelationBuiltFrom, repo, code, writerClock))
+	a.readAs(code, svc, writerClock, nil, exists, built)
+	a.drain()
+	b.drain()
+	if got, want := a.dump(), b.dump(); !maps.EqualFunc(got, want, func(x, y []string) bool {
+		return strings.Join(x, "\n") == strings.Join(y, "\n")
+	}) {
+		t.Fatalf("two nodes on one log hold different rows:\n%v\n%v", got, want)
+	}
+	if e, ok := b.view().Find(svc.ID()); !ok || e.Word != atlas.WordLikely || e.State != atlas.StateDiscovered {
+		t.Fatalf("what the files declare reads as %+v, want a likely, discovered service", e)
+	}
+	mine, err := a.reader().LiveOf(t.Context(), code, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil || len(mine.Claims) != 2 {
+		t.Fatalf("LiveOf(code/shop) = %d claims, %v; want the two the files made", len(mine.Claims), err)
+	}
+	gone := exists
+	gone.Denied = true
+	if _, err := a.writer.Read(t.Context(), engineCall(), atlasdomain.ReadInput{Source: code, Entry: svc,
+		Claims: []atlas.Claim{gone}}); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a denial in the code voice: %v, want ErrInvalid", err)
+	}
+	a.readAs(code, svc, writerClock.Add(time.Hour), []string{exists.Slot(), built.Slot()})
+	a.drain()
+	if e, ok := a.view().Find(svc.ID()); ok {
+		t.Errorf("a service the files stopped declaring still reads as %+v", e)
 	}
 }
 

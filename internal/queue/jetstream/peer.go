@@ -278,30 +278,19 @@ func (q *Queue) peek(
 	from uint64,
 	limit int,
 ) ([]*events.Event, error) {
-	q.noteConsumerProposal()
-	cons, err := q.js.CreateConsumer(ctx, stream, jetstream.ConsumerConfig{
+	cons, drop, err := q.throwaway(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubject: subject,
 		// By sequence rather than DeliverAll, so a caller that knows what
 		// it has already finished with can say so. A filtered consumer
 		// starts at the first MATCHING message at or after the sequence,
 		// so a floor pointing at another subject's message is harmless.
-		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
-		OptStartSeq:       from,
-		AckPolicy:         jetstream.AckNonePolicy,
-		InactiveThreshold: peekBackstop,
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:   from,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("peek consumer: %w", err)
 	}
-	defer func() {
-		// WithoutCancel because a cleanup that inherits the cancellation
-		// it is cleaning up after does nothing at all — and then its OWN
-		// bound, because WithoutCancel drops the deadline along with the
-		// cancellation.
-		cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), peekCleanup)
-		defer stop()
-		_ = q.js.DeleteConsumer(cleanupCtx, stream, cons.CachedInfo().Name)
-	}()
+	defer drop()
 
 	var out []*events.Event
 	for len(out) < limit {

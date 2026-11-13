@@ -1,5 +1,9 @@
 // Package github is the hosted code-host integration: github.com or an
 // Enterprise Server, on the same terms the self-hosted one is served on.
+//
+// It is also the atlas's read of the organization (ADR-0131, atlas.go): every
+// repository, its workflows and its deployment environments, read through the
+// agents' own installations under a token minted Read-only for the read.
 package github
 
 import (

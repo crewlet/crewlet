@@ -193,13 +193,14 @@ func atlasScope(a Args) string {
 }
 
 // atlasEntryTrust is how far the model may rely on an entry's answer: external
-// where an integration is among the sources that named it, since a vendor's
-// users name what it reports; the company's own words otherwise, by the one
-// rule for a surface the engine hosts.
+// where an integration or a repository's files are among the sources that
+// named it, since a vendor's users name what it reports and anybody with a
+// push writes a file; the company's own words otherwise, by the one rule for
+// a surface the engine hosts.
 func atlasEntryTrust(answer any) provenance.Trust {
 	sources, _ := cards.Lookup(answer, "entry.sources").([]any)
 	for _, src := range sources {
-		if value(src, "kind") == string(atlas.SourceIntegration) {
+		if kind := value(src, "kind"); kind == string(atlas.SourceIntegration) || kind == string(atlas.SourceCode) {
 			return provenance.TrustExternal
 		}
 	}

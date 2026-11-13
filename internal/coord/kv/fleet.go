@@ -14,7 +14,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
 )
@@ -403,7 +402,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why TWENTY-ONE buckets and not one
+// # Why TWENTY-TWO buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -483,6 +482,9 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           standing is what its last complete read established, and one
 //	           that expired would read as a source never read, so the
 //	           collect duty would retire nothing and read everything at once
+//	atlasCode  none at all, for the atlas sources' reason: one that expired
+//	           would read as a repository never scanned, and its files
+//	           would be read again for a branch that has not moved
 //	mailboxes  none at all, for the channels' reason: a record's age cannot
 //	           tell a seat still in the company from one that left, so an
 //	           age would forget a mailbox that still exists and leave it
@@ -539,12 +541,13 @@ const (
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	atlasSourcesSuffix = "_atlas_sources"
+	atlasCodeSuffix    = "_atlas_code_scans"
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
 	custodySuffix      = "_custody"
 	uploadsSuffix      = "_uploads"
 	// activationKey holds the pointer AND the current revision's sealed
-	// body, in one record — see [activationRecord].
+	// body, in one record — see [coord.ActivationRecord].
 	activationKey = "activation"
 )
 
@@ -693,6 +696,7 @@ type FleetStore struct {
 	runs         jetstream.KeyValue
 	integrations jetstream.KeyValue
 	atlasSources jetstream.KeyValue
+	atlasCode    jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
 	custody      jetstream.KeyValue
@@ -770,7 +774,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, twenty-one buckets in a row, and a boot that nobody meant to allow ten
+// bucket, twenty-two buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -877,6 +881,8 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 		{&store.atlasSources, atlasSourcesSuffix,
 			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0},
+		{&store.atlasCode, atlasCodeSuffix,
+			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 		{&store.objects, objectsSuffix,
@@ -996,7 +1002,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	}
 	// THE BUCKET WHOSE AGE OUTLASTS THE WINDOW, and no longer than it must:
 	// the valve's windows in rate, aged a few of them, and a window up to a
-	// day in windows, aged a few days — see "Why TWENTY-ONE buckets". A window
+	// day in windows, aged a few days (see "Why TWENTY-TWO buckets"). A window
 	// in a bucket that reaped it before it closed would restart its count
 	// mid-window and pass far more than its caller asked for, so a longer
 	// one is refused loudly rather than counted.
@@ -1702,63 +1708,6 @@ func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.
 
 // ---- the config plane -------------------------------------------------- //
 
-// activationRecord is the pointer's stored form. The EPOCH IS NOT IN IT: the
-// key's revision is the epoch, so storing one too would give two answers that
-// could disagree.
-//
-// The ORIGIN fields travel beside the revision so a peer adopting it records
-// who wrote it. The record evolves additively: a later build must keep every
-// key here with the meaning it has here, because this build reads its pointer
-// during a rolling upgrade. See [coord.RevisionOrigin].
-type activationRecord struct {
-	RevisionID string    `json:"revision_id"`
-	At         time.Time `json:"at"`
-	Summary    string    `json:"summary,omitempty"`
-
-	// The revision's ORIGIN — see [coord.RevisionOrigin] — plus the
-	// credential it was written through. The kind is read as the value it
-	// is: an unknown spelling stays unknown ([iam.ActorKind.Valid]).
-	Author     string        `json:"author,omitempty"`
-	AuthorKind iam.ActorKind `json:"author_kind,omitempty"`
-	OperatorID string        `json:"operator_id,omitempty"`
-	Source     string        `json:"source,omitempty"`
-	CreatedAt  time.Time     `json:"created_at,omitzero"`
-
-	// Payload is the revision's sealed body, IN the pointer so the two are
-	// one write (see [coord.Plane.Activate] for the race two writes lost),
-	// and as the JSON object it is rather than as bytes, which the record
-	// would encode as base64 over an envelope whose ciphertext is base64
-	// already. Every pointer carries one: an activation is refused
-	// without a body ([coord.CanonicalPayload]).
-	Payload json.RawMessage `json:"payload,omitempty"`
-
-	// Restored is [coord.Activation.Restored]. Absent on a choice, which is
-	// every pointer but a boot's restore.
-	Restored bool `json:"restored,omitempty"`
-}
-
-// origin is the record's revision origin.
-func (r activationRecord) origin() coord.RevisionOrigin {
-	return coord.RevisionOrigin{
-		Author: r.Author, AuthorKind: r.AuthorKind, OperatorID: r.OperatorID,
-		Source: r.Source, CreatedAt: r.CreatedAt,
-	}
-}
-
-// encodeActivation is the record's wire form, with the payload embedded
-// VERBATIM: encoding/json HTML-escapes what it embeds unless told not to, and
-// a body that came back with `<` spelled `\u003c` would be a different body
-// from the one [coord.CanonicalPayload] promised.
-func encodeActivation(record activationRecord) ([]byte, error) {
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(record); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
-}
-
 // Activate publishes a new target revision.
 func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
@@ -1808,36 +1757,20 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		RevisionID: req.RevisionID,
 		At:         at,
 		Summary:    req.Summary,
-		Origin:     utcOrigin(req.Origin),
+		Origin:     req.Origin.UTC(),
 		Restored:   req.Restore,
 	}, nil
 }
 
-// pointerBytes is the pointer's stored form for req — its origin and its body
-// with it — at the instant at, which is decided against the pointer the write
-// replaces ([coord.ActivationAt]) and so is known only inside the write.
+// pointerBytes is the pointer's stored form for req ([coord.ActivationValue])
+// at the instant at, which is decided against the pointer the write replaces
+// ([coord.ActivationAt]) and so is known only inside the write.
 func pointerBytes(req coord.ActivationRequest, payload json.RawMessage, at time.Time) ([]byte, error) {
-	origin := utcOrigin(req.Origin)
-	raw, err := encodeActivation(activationRecord{
-		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
-		Author: origin.Author, AuthorKind: origin.AuthorKind, OperatorID: origin.OperatorID,
-		Source: origin.Source, CreatedAt: origin.CreatedAt,
-		Payload: payload, Restored: req.Restore,
-	})
+	raw, err := coord.ActivationValue(req, payload, at)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: encode the activation: %w", err)
+		return nil, fmt.Errorf("coord/kv: %w", err)
 	}
 	return raw, nil
-}
-
-// utcOrigin is an origin with its instant in UTC, as every other time this
-// store keeps; a zero instant stays zero, so an origin that named none still
-// encodes without one.
-func utcOrigin(o coord.RevisionOrigin) coord.RevisionOrigin {
-	if !o.CreatedAt.IsZero() {
-		o.CreatedAt = o.CreatedAt.UTC()
-	}
-	return o
 }
 
 // expectedSeq resolves the caller's expectation to the KV sequence to
@@ -1885,17 +1818,17 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 
 // pointer reads the activation pointer: its record, the KV sequence to
 // compare-and-set against, and whether there is one at all.
-func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
+func (f *FleetStore) pointer(ctx context.Context) (coord.ActivationRecord, uint64, bool, error) {
 	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return activationRecord{}, 0, false, nil
+		return coord.ActivationRecord{}, 0, false, nil
 	}
 	if err != nil {
-		return activationRecord{}, 0, false, unavailable("read the activation to compare against", err)
+		return coord.ActivationRecord{}, 0, false, unavailable("read the activation to compare against", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err = json.Unmarshal(entry.Value(), &record); err != nil {
-		return activationRecord{}, 0, false, fmt.Errorf("coord/kv: decode the activation: %w", err)
+		return coord.ActivationRecord{}, 0, false, fmt.Errorf("coord/kv: decode the activation: %w", err)
 	}
 	return record, entry.Revision(), true, nil
 }
@@ -2040,7 +1973,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMe
 	if err != nil {
 		return nil, false, unavailable("read the activation pointer", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return nil, false, unavailable("decode the activation pointer", err)
 	}
@@ -2063,7 +1996,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 	if err != nil {
 		return coord.Activation{}, false, unavailable("read the activation pointer", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return coord.Activation{}, false, unavailable("decode the activation pointer", err)
 	}
@@ -2072,7 +2005,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		RevisionID: record.RevisionID,
 		At:         record.At,
 		Summary:    record.Summary,
-		Origin:     record.origin(),
+		Origin:     record.Origin(),
 		Restored:   record.Restored,
 	}, true, nil
 }
@@ -2889,6 +2822,46 @@ func (f *FleetStore) DeleteAtlasSourceStatus(ctx context.Context, kind string) e
 	err := f.atlasSources.Purge(ctx, encodeKey(kind))
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("delete the atlas source standing", err)
+	}
+	return nil
+}
+
+// ---- the atlas code scans' standings ------------------------------------ //
+
+// AtlasCodeScans returns every recorded standing, keyed by repository.
+func (f *FleetStore) AtlasCodeScans(ctx context.Context) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	err := f.each(ctx, f.atlasCode, func(kve jetstream.KeyValueEntry) error {
+		// A key this backend did not write is skipped, and the value is
+		// copied, as the atlas sources' are.
+		if repo, ok := decodeKey(kve.Key()); ok {
+			out[repo] = bytes.Clone(kve.Value())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PutAtlasCodeScan records one repository's standing.
+func (f *FleetStore) PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error {
+	if repo == "" {
+		return errors.New("coord/kv: an atlas code scan standing needs a repository")
+	}
+	if _, err := f.atlasCode.Put(ctx, encodeKey(repo), value); err != nil {
+		return unavailable("record the atlas code scan standing", err)
+	}
+	return nil
+}
+
+// DeleteAtlasCodeScan drops a repository's standing: PURGED, as every removal
+// from an ageless bucket is (markers.go).
+func (f *FleetStore) DeleteAtlasCodeScan(ctx context.Context, repo string) error {
+	err := f.atlasCode.Purge(ctx, encodeKey(repo))
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("delete the atlas code scan standing", err)
 	}
 	return nil
 }

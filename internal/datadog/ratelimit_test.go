@@ -321,6 +321,23 @@ func TestEveryCallWaitsOutARateLimit(t *testing.T) {
 			_, err := c.RetireKeys(ctx, pair, account, "k-new")
 			return err
 		},
+		"CanList": func(ctx context.Context, c *datadog.Client) error { return c.CanList(ctx, pair, datadog.ListHosts) },
+		"Monitors": func(ctx context.Context, c *datadog.Client) error {
+			_, err := c.Monitors(ctx, pair)
+			return err
+		},
+		"ServiceDefinitions": func(ctx context.Context, c *datadog.Client) error {
+			_, err := c.ServiceDefinitions(ctx, pair)
+			return err
+		},
+		"Hosts": func(ctx context.Context, c *datadog.Client) error {
+			_, err := c.Hosts(ctx, pair)
+			return err
+		},
+		"SyntheticTests": func(ctx context.Context, c *datadog.Client) error {
+			_, err := c.SyntheticTests(ctx, pair)
+			return err
+		},
 	}
 	contextType := reflect.TypeFor[context.Context]()
 	client := reflect.TypeFor[*datadog.Client]()

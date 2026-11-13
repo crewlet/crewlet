@@ -355,6 +355,8 @@ var filed = []struct {
 	{AtlasSearchTool, GroupAtlas, GateAtlas, reachesNoVendor},
 	{AtlasGetTool, GroupAtlas, GateAtlas, reachesNoVendor},
 	{AtlasTraceTool, GroupAtlas, GateAtlas, reachesNoVendor},
+	{AtlasRecordTool, GroupAtlas, GateAtlas, reachesNoVendor},
+	{AtlasDisputeTool, GroupAtlas, GateAtlas, reachesNoVendor},
 
 	{SSHReadTool, GroupServers, GateSSHRead, reachesNoVendor},
 	{SSHOperateTool, GroupServers, GateSSHOperate, reachesNoVendor},

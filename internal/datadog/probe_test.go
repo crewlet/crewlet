@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -293,9 +294,15 @@ func TestADatadogCheckOnlyReadsAndKeepsTheKeysInHeaders(t *testing.T) {
 			t.Error("the API key's own stage carried the application key")
 		}
 	}
+	// The staged reads in their order, then the atlas's four listings,
+	// which are read together and so arrive in any order.
 	want := []string{validatePath, orgPath, usersPath, rolesPath, webhookPath}
-	if strings.Join(paths, " ") != strings.Join(want, " ") {
-		t.Errorf("the stages read %v, want %v", paths, want)
+	if len(paths) < len(want) || strings.Join(paths[:len(want)], " ") != strings.Join(want, " ") {
+		t.Fatalf("the stages read %v, want %v first", paths, want)
+	}
+	listed := slices.Sorted(slices.Values(paths[len(want):]))
+	if listings := []string{hostsPath, monitorsPath, syntheticsPath, servicesPath}; !slices.Equal(listed, listings) {
+		t.Errorf("after its stages the check read %v, want the atlas's listings %v", listed, listings)
 	}
 }
 

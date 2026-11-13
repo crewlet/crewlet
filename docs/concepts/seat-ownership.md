@@ -331,12 +331,15 @@ leader, and its answer to a read of a row is the row itself, whole and a third
 larger. On a `[seats]` satellite that answer crosses the leaf link, which the
 satellite's broker holds to its 8 MiB `max_payload`, and a row of some 6 MiB or
 more in it closes the link, the satellite's lease renewals with it
-([#1031](https://github.com/crewlet/crewlet/issues/1031)). No consumer can
-answer for the leader instead: the server places a consumer on whichever
-member it chooses, and its count is that member's copy's. A barrier whose
-publish a member drops, as one that still believes it leads after an election
-does, is published again two seconds later, as a read the leader did not
-answer is asked again; published twice, it is one barrier, the later.
+([#1031](https://github.com/crewlet/crewlet/issues/1031)). A consumer answers
+for the leader only when the server has placed it on the leader's own server:
+the server places a consumer on whichever member it chooses, and its count is
+that member's copy's. A read has to check that, and make the consumer again
+until it lands there, each attempt a metadata proposal. The barrier needs
+neither. A barrier whose publish a member drops, as one that still believes it
+leads after an election does, is published again two seconds later, as a read
+the leader did not answer is asked again; published twice, it is one barrier,
+the later.
 
 The fifteen seconds are the whole hydration's. Two round trips read the
 changelog's identity, before the barrier and after the last table, and one

@@ -34,6 +34,9 @@ type atlasLedger struct {
 	ops      map[string]statelog.Result
 	purges   []string
 	calls    []atlasdomain.Call
+	// failAt refuses the record that would be the log's failAt-th claim, once,
+	// as a node that lost its broker part of the way through a write does.
+	failAt int
 }
 
 func newAtlasLedger() *atlasLedger {
@@ -78,6 +81,10 @@ func (l *atlasLedger) Record(_ context.Context, c atlasdomain.Call, claim atlas.
 	}
 	if res, ok := l.ops[c.OpID]; ok {
 		return res, nil
+	}
+	if l.failAt == len(l.claims)+1 {
+		l.failAt = 0
+		return statelog.Result{}, errors.New("the broker went away")
 	}
 	id := claim.Subject.ID().String()
 	switch {
@@ -207,6 +214,12 @@ var atlasWriteAt = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 // every surface decides, keyed by name.
 func atlasWrites(t *testing.T, ledger *atlasLedger) map[string]tools.SeatCallable {
 	t.Helper()
+	return atlasWritesAt(t, ledger, func() time.Time { return atlasWriteAt })
+}
+
+// atlasWritesAt is [atlasWrites] reading its claims' instant off now.
+func atlasWritesAt(t *testing.T, ledger *atlasLedger, now func() time.Time) map[string]tools.SeatCallable {
+	t.Helper()
 	chart := organization(t)
 	deps := codeDeps(newGitletHost())
 	deps.Actor = builtin.PrincipalActor
@@ -215,7 +228,7 @@ func atlasWrites(t *testing.T, ledger *atlasLedger) map[string]tools.SeatCallabl
 		Code: deps, Authorize: builtin.Decide(chartLeads),
 		Atlas: builtin.AtlasDeps{Settings: atlasSettingsWithServer, Records: atlasLogOnly(ledger)},
 		AtlasWrite: builtin.AtlasWriteDeps{Log: ledger, Actor: builtin.PrincipalActor,
-			Org: func() *org.Organization { return chart }, Now: func() time.Time { return atlasWriteAt }},
+			Org: func() *org.Organization { return chart }, Now: now},
 	}) {
 		out[tool.Name()] = tool.(tools.SeatCallable)
 	}
@@ -595,5 +608,257 @@ func TestNoAgentChangesTheAtlasThroughAPersonsTools(t *testing.T) {
 		if within.Allowed {
 			t.Errorf("an agent woken by a person holding atlas was admitted to %s", name)
 		}
+	}
+}
+
+// AN ADD RECORDS WHAT ITS CALLER KNOWS OF THE ENTRY, AND THE SAME CALL FINISHES
+// ONE THAT STOPPED PART OF THE WAY: the entry, its name, its purpose, the
+// account it belongs to, its owner and the page that documents it, each a
+// claim of the caller's own. A second add that would record nothing is refused.
+//
+// Mutation: refuse an add of an entry the caller's own claim stands on, as an
+// add of anybody's is, and the call that stopped can never be finished.
+func TestAnAddRecordsWhatIsKnownAndFinishesWhereItStopped(t *testing.T) {
+	t.Parallel()
+	ledger := newAtlasLedger()
+	w := atlasWrites(t, ledger)
+	mustWrite(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "vendor_account", "key": "other/acme-cdn",
+		"name": "Acme CDN"})
+	const page = "0b9d2f0e-6a57-4c58-9d0b-3f1f0a2b7c11"
+	args := map[string]any{"kind": "datastore", "key": "acme/orders-db", "name": "Orders", "purpose": "Holds every order",
+		"belongs_to": "vendor_account:other/acme-cdn", "seat": "agent-cto", "doclet_page": page}
+	// The entry and its name land, and the third record is lost.
+	ledger.failAt = len(ledger.recorded()) + 3
+	stopped, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], args)
+	if !stopped.Failed || !strings.Contains(stopped.Output, "The first 2 of its 6 records landed") {
+		t.Fatalf("an add that lost its third record answered %q", stopped.Output)
+	}
+	finished := mustWrite(t, w[builtin.AtlasAddEntryTool], args)
+	if finished["outcome"] != string(statelog.OutcomeApplied) || finished["purpose"] != "Holds every order" {
+		t.Fatalf("the same call again answered %v", finished)
+	}
+	orders := atlas.MustRef(atlas.KindDatastore, "acme/orders-db")
+	e := entryNamed(t, viewOf(t, w), orders)
+	said := map[string]bool{}
+	for _, f := range e.Facts {
+		said[string(f.Fact)+"="+f.Value.Text] = f.Source.Kind == atlas.SourcePerson
+	}
+	for _, ed := range e.Relations {
+		target := string(ed.External) + ":" + ed.Name
+		if ed.External == "" {
+			target = ed.To.String()
+		}
+		said[string(ed.Relation)+"="+target] = ed.Source.Kind == atlas.SourcePerson
+	}
+	for _, want := range []string{"name=Orders", "purpose=Holds every order", "owned_by=seat:agent-cto",
+		"documented_in=page:" + page, "belongs_to=" + atlas.MustRef(atlas.KindAccount, "other/acme-cdn").ID().String()} {
+		if !said[want] {
+			t.Errorf("the added entry does not say %s as a person's claim: %v", want, said)
+		}
+	}
+	if n := len(ledger.recorded()); n != 2+6 {
+		t.Errorf("the log holds %d claims, want the account's two and the entry's six, none twice", n)
+	}
+	if again, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], args); !again.Failed ||
+		!strings.Contains(again.Output, "in the atlas already") {
+		t.Errorf("an add that would record nothing answered %q, want the refusal of a second add", again.Output)
+	}
+	for _, bad := range []map[string]any{
+		{"kind": "service", "key": "ledger", "seat": "agent-cto", "unit": "nimbus"},
+		{"kind": "service", "key": "ledger", "doclet_page": "the runbook"},
+		{"kind": "service", "key": "ledger", "belongs_to": "datastore:acme/orders-db"},
+		{"kind": "service", "key": "ledger", "purpose": atlasToken()},
+	} {
+		if got, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], bad); !got.Failed {
+			t.Errorf("an add with %v was recorded", bad)
+		}
+	}
+	if _, found := atlasFind(viewOf(t, w), atlas.MustRef(atlas.KindService, "ledger")); found {
+		t.Error("a refused add left its entry in the atlas")
+	}
+}
+
+// atlasFind is the entry ref names in a, where it shows one.
+func atlasFind(a atlasAnswer, ref atlas.Ref) (atlas.Entry, bool) {
+	for _, e := range a.Entries {
+		if slices.Contains(e.Members, ref) {
+			return e, true
+		}
+	}
+	return atlas.Entry{}, false
+}
+
+// THE PAGE THAT DOCUMENTS AN ENTRY IS NAMED BY ITS ID AND REMOVED THE SAME WAY,
+// through the relation tools, and is never an entry: a page's id in `to`, an
+// entry's relation with a `page`, and anything that is not an id are refused.
+//
+// Mutation: send documented_in down the entry-to-entry path in planRelate and
+// the page is refused as an entry the atlas does not hold.
+func TestAPageDocumentsAnEntryByItsIdAndIsRemovedTheSameWay(t *testing.T) {
+	t.Parallel()
+	w := atlasWrites(t, seededAtlasLedger())
+	const page = "0b9d2f0e-6a57-4c58-9d0b-3f1f0a2b7c11"
+	documented := func() bool {
+		e := entryNamed(t, viewOf(t, w), atlas.MustRef(atlas.KindService, "billing"))
+		return slices.ContainsFunc(e.Relations, func(ed atlas.Edge) bool {
+			return ed.Relation == atlas.RelationDocumentedIn && ed.External == atlas.ExternalPage && ed.Name == page
+		})
+	}
+	for _, bad := range []map[string]any{
+		{"atlas_entry": "service:billing", "relation": "documented_in", "doclet_page": "Runbook"},
+		{"atlas_entry": "service:billing", "relation": "documented_in", "doclet_page": page, "to": "service:billing-api"},
+		{"atlas_entry": "service:billing", "relation": "depends_on", "to": "service:billing-api", "doclet_page": page},
+		{"atlas_entry": "service:billing", "relation": "documented_in"},
+	} {
+		if got, _ := atlasCall(t, w[builtin.AtlasRelateTool], bad); !got.Failed {
+			t.Errorf("a relation named %v was recorded", bad)
+		}
+	}
+	link := map[string]any{"atlas_entry": "service:billing", "relation": "documented_in", "doclet_page": page}
+	if drawn := mustWrite(t, w[builtin.AtlasRelateTool], link); drawn["doclet_page"] != page || !documented() {
+		t.Fatalf("the page was not drawn: %v", drawn)
+	}
+	if again := mustWrite(t, w[builtin.AtlasRelateTool], link); again["unchanged"] != true {
+		t.Errorf("the same page drawn again answered %v, want unchanged", again)
+	}
+	mustWrite(t, w[builtin.AtlasUnrelateTool], link)
+	if documented() {
+		t.Error("the page is still shown after it was removed")
+	}
+}
+
+// CONFIRMING A VALUE A NEWER REPORT CONTRADICTS SAYS IT AGAIN, so the entry
+// stops waiting: a person's value is contested by an integration's later
+// report, the entry waits for review, and the person's confirmation is a new
+// claim newer than the report, which settles it.
+//
+// Mutation: answer a confirmation of the person's own shown value as changing
+// nothing whatever its standing, and the entry waits for good.
+func TestConfirmingAContestedValueSettlesIt(t *testing.T) {
+	t.Parallel()
+	ledger := newAtlasLedger()
+	now := atlasWriteAt
+	w := atlasWritesAt(t, ledger, func() time.Time { return now })
+	service := atlas.MustRef(atlas.KindService, "checkout-api")
+	mustWrite(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "service", "key": "checkout-api",
+		"name": "Checkout"})
+	reported, err := atlas.Says(service, atlas.FactName, "Checkout API", atlas.IntegrationSource("datadog"),
+		atlasWriteAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.mu.Lock()
+	reported.Position = uint64(len(ledger.claims) + 1)
+	ledger.claims = append(ledger.claims, reported)
+	ledger.versions[service.ID().String()] = reported.Position
+	ledger.mu.Unlock()
+	name := func() atlas.FactView {
+		e := entryNamed(t, viewOf(t, w), service)
+		i := slices.IndexFunc(e.Facts, func(f atlas.FactView) bool { return f.Fact == atlas.FactName })
+		if i < 0 {
+			t.Fatalf("the entry shows no name: %+v", e.Facts)
+		}
+		if e.Review != (e.Facts[i].Standing != atlas.StandingSettled) {
+			t.Errorf("the entry waits for review: %v, and its name is %s", e.Review, e.Facts[i].Standing)
+		}
+		return e.Facts[i]
+	}
+	now = atlasWriteAt.Add(2 * time.Hour)
+	if got := name(); got.Standing != atlas.StandingContested || got.Value.Text != "Checkout" || len(got.Others) != 1 {
+		t.Fatalf("the name reads %+v, want the person's value contested by the report beside it", got)
+	}
+	kept := mustWrite(t, w[builtin.AtlasConfirmTool], map[string]any{"atlas_entry": "service:checkout-api",
+		"fact": "name", "value": "Checkout"})
+	if kept["unchanged"] == true {
+		t.Fatalf("confirming a contested value recorded nothing: %v", kept)
+	}
+	if got := name(); got.Standing != atlas.StandingSettled || got.Value.Text != "Checkout" {
+		t.Errorf("after the confirmation the name reads %+v, want the person's value, settled", got)
+	}
+	// And the other value is taken the same way: it becomes the person's own.
+	mustWrite(t, w[builtin.AtlasConfirmTool], map[string]any{"atlas_entry": "service:checkout-api",
+		"fact": "name", "value": "Checkout API"})
+	if got := name(); got.Standing != atlas.StandingSettled || got.Value.Text != "Checkout API" ||
+		got.Source.Kind != atlas.SourcePerson {
+		t.Errorf("after taking the report's value the name reads %+v", got)
+	}
+}
+
+// A PERSON IS TOLD AN ATLAS REFUSAL IN WORDS OF THEIR OWN (ADR-0060): what a
+// screen draws under the control names what was refused and what to do, never
+// a tool or an argument, and a credential's shape is refused without the
+// value being said again.
+//
+// Mutation: answer the vocabulary's refusal without a person's phrasing and
+// the dashboard draws only its code's generic sentence under Add entry.
+func TestAnAtlasRefusalIsWordedForThePersonWhoPressed(t *testing.T) {
+	t.Parallel()
+	w := atlasWrites(t, seededAtlasLedger())
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": atlasToken()}, "looks like a credential"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "Not A Slug"}, "1 to 40 lowercase letters"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "billing"}, "holds an entry with this kind and key already"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "bucket", "key": "acme/my bucket"}, "letters, digits and . _ ~ : + -"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "host", "key": "ssh/web-9"}, "declared by the company's settings"},
+		{builtin.AtlasCorrectTool, map[string]any{"atlas_entry": "host:ssh/web-1", "fact": "address", "value": "10.0.0.5", "wrong": true},
+			"declared by the company's settings"},
+		{builtin.AtlasCorrectTool, map[string]any{"atlas_entry": "service:billing", "fact": "purpose", "value": atlasToken()},
+			"looks like a credential"},
+	} {
+		got, _ := atlasCall(t, w[c.tool], c.args)
+		said := got.PersonRefusal.Person()
+		if !got.Failed || !strings.Contains(said, c.want) {
+			t.Errorf("%s %v told a person %q, want words holding %q", c.tool, c.args, said, c.want)
+		}
+		if strings.Contains(said, atlasToken()) || strings.Contains(said, "atlas_") || strings.Contains(said, "`") {
+			t.Errorf("%s told a person %q, which repeats the value or names a tool or an argument", c.tool, said)
+		}
+	}
+}
+
+// AN ENTRY WAITS UNTIL SOMEBODY SAYS IT IS THERE: one an agent reported stays
+// likely after a person corrects a fact on it, a confirmation of it then
+// records the person's own word for the entry, and only the caller's own add
+// is finished by adding again.
+//
+// Mutation: answer a confirmation by the entry's state alone and the entry a
+// person corrected one fact of stays likely for good, with nothing to press.
+func TestConfirmingAnEntrySomebodyOnlyCorrectedMakesItConfirmed(t *testing.T) {
+	t.Parallel()
+	ledger := newAtlasLedger()
+	w := atlasWrites(t, ledger)
+	cache := atlas.MustRef(atlas.KindDatastore, "acme/cache")
+	reported, err := atlas.Exists(cache, atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), atlasWriteAt.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.mu.Lock()
+	reported.Position = uint64(len(ledger.claims) + 1)
+	ledger.claims = append(ledger.claims, reported)
+	ledger.versions[cache.ID().String()] = reported.Position
+	ledger.mu.Unlock()
+	shown := func() atlas.Entry {
+		return entryNamed(t, viewOf(t, w), cache)
+	}
+	mustWrite(t, w[builtin.AtlasCorrectTool], map[string]any{"atlas_entry": "datastore:acme/cache", "fact": "purpose",
+		"value": "Sessions"})
+	if e := shown(); e.Word != atlas.WordLikely {
+		t.Fatalf("after a person corrected one fact the entry reads %s, %s; the case needs it still likely", e.State, e.Word)
+	}
+	// Adding it again is no way to finish an add the caller never made.
+	if got, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "datastore", "key": "acme/cache",
+		"name": "Cache"}); !got.Failed {
+		t.Errorf("an add of an entry an agent reported, by a person who only corrected it, answered %s", got.Output)
+	}
+	confirmed := mustWrite(t, w[builtin.AtlasConfirmTool], map[string]any{"atlas_entry": "datastore:acme/cache"})
+	if confirmed["unchanged"] == true {
+		t.Fatalf("confirming a likely entry recorded nothing: %v", confirmed)
+	}
+	if e := shown(); e.Word != atlas.WordConfirmed || e.State != atlas.StateConfirmed {
+		t.Errorf("after the confirmation the entry reads %s, %s; want confirmed", e.State, e.Word)
 	}
 }

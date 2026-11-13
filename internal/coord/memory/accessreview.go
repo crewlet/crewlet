@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the seats' pending access reviews --------------------------------- //
@@ -30,6 +32,9 @@ func (f *Fleet) CreateAccessReview(_ context.Context, handle string, value []byt
 	if handle == "" {
 		return false, errors.New("coord/memory: an access review needs its seat")
 	}
+	if err := coord.HoldValue("the access review of "+handle, len(value)); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.accessReviews[handle]; ok {
@@ -44,6 +49,9 @@ func (f *Fleet) CreateAccessReview(_ context.Context, handle string, value []byt
 func (f *Fleet) UpdateAccessReview(_ context.Context, handle string, value []byte, revision uint64) (bool, error) {
 	if handle == "" || revision == 0 {
 		return false, errors.New("coord/memory: an access review is updated at the revision it was read at")
+	}
+	if err := coord.HoldValue("the access review of "+handle, len(value)); err != nil {
+		return false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

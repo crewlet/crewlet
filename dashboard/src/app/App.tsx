@@ -139,6 +139,8 @@ const BrandSetup = lazyScreen("brand", (m) => m.BrandSetup);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Atlas = lazyScreen("atlas", (m) => m.Atlas);
 const AtlasEntry = lazyScreen("atlas", (m) => m.EntryPage);
+const AtlasChanges = lazyScreen("atlas", (m) => m.ChangesPage);
+const AtlasReview = lazyScreen("atlas", (m) => m.Review);
 const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
@@ -299,6 +301,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Integrations kind={route.kind} />;
     case "atlas":
       return <Atlas />;
+    case "atlas-changes":
+      return <AtlasChanges />;
+    case "atlas-review":
+      return <AtlasReview />;
     case "atlas-entry":
       return <AtlasEntry key={route.id} id={route.id} />;
     case "budgets":

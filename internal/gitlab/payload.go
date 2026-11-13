@@ -1,5 +1,9 @@
 // Package gitlab is the code-host integration: the forge agents review,
 // merge and ship through.
+//
+// It is also the atlas's read of the group (ADR-0135, atlas.go): every
+// project, its pipeline and its environments, read with GET alone under the
+// company's read credential, or the provisioning token where there is none.
 package gitlab
 
 import (
