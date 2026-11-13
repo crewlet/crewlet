@@ -735,7 +735,6 @@ var allowed = []Entry{
 	{File: "internal/engine/statelogsnapshot_internal_test.go", Func: "parkSnapshotLoop", HeadStart: 1, ElapsedBound: 1, Piece: 17},
 	{File: "internal/engine/statelogstop_internal_test.go", Func: "TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog", ClockStep: 1, Piece: 17},
 	{File: "internal/engine/statelogtruncated_internal_test.go", Func: "TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack", HeadStart: 1, ExemptWait: 1, Piece: 17},
-	{File: "internal/engine/statelogverdict_internal_test.go", Func: "TestOneLogsSilenceLeavesNoOtherDomainUnread", ElapsedBound: 1, Piece: 17},
 	{File: "internal/engine/status_internal_test.go", Func: "workspace.await", ExemptWait: 1, Piece: 22},
 	{File: "internal/engine/steer_internal_test.go", Func: "TestAnOfferThatMeetsTheHandOverWaitsForTheWrite", NegativeWindow: 1, Piece: 22},
 	{File: "internal/engine/steerpull_internal_test.go", Func: "TestAJobsHarnessAskingForItsNotesIsOnItsRecord", ExemptWait: 1, ExemptElapsed: 1, Piece: 22},

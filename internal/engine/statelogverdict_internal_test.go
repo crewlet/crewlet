@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/estate"
@@ -112,8 +113,32 @@ func wrongCopyOf(t *testing.T, e *Engine, name string) {
 // Read one after another inside one deadline, the silent log spent all of it
 // and the knowledge base and usage, read after it, failed on the expired
 // context and kept their old verdicts.
+//
+// ON THE BUBBLE'S CLOCK, AND EXACTLY. The reading's time was measured on the
+// wall clock against twice its deadline, and a loaded race runner that
+// scheduled the reading's goroutines late measured a correct reading past it
+// (crewlet/crewlet#1115). In a synctest bubble the deadline and the
+// measurement both read the bubble's clock, which moves only once every
+// goroutine in it is blocked, so a reading that ends at its deadline takes
+// exactly the deadline, and one that waits past it for anything takes more.
+// Serialisation needs no slack either: the logs read after the silent one
+// would meet an ended context and stop answering, which the verdicts below
+// catch.
+//
+// Mutation: give each log's reading a deadline of its own past the reading's,
+// and the reading takes longer than its deadline; read the logs one after
+// another, and the domains after the silent one are left unread.
 func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, oneLogsSilenceLeavesNoOtherDomainUnread)
+}
+
+// oneLogsSilenceLeavesNoOtherDomainUnread is
+// [TestOneLogsSilenceLeavesNoOtherDomainUnread] inside its bubble: its
+// deadline and its measurement are the bubble's clock.
+//
+//fixedwait:bubble
+func oneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 	var runs []*runningLog
 	for _, d := range registeredDomains() {
 		runs = append(runs, &runningLog{domain: d})
@@ -154,8 +179,9 @@ func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	v := judgeReads(time.Now(), readHealthsWith(ctx, runs, floors, observe))
-	if took := time.Since(started); took > 2*budget {
-		t.Fatalf("the reading took %s for a %s deadline", took, budget)
+	if took := time.Since(started); took != budget {
+		t.Fatalf("the reading took %s on the bubble's clock, want exactly its %s "+
+			"deadline: a reading that ends at its deadline takes no more", took, budget)
 	}
 	if !v.domains[vectorsName].unread {
 		t.Fatal("the premise: the silent vectors log was read")
