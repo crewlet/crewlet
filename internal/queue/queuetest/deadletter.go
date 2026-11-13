@@ -10,6 +10,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -344,13 +345,25 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// across the leaf's link, raw where the leader's reply would not
 		// cross it (internal/queue/jetstream's copyread.go).
 		//
+		// THE KEEP'S OWN COMPLETION DECIDES IT, never a wait on the clock: a
+		// copy at the ceiling moves its megabytes three times more before it
+		// is kept, as long as that takes on the machine. Once the large event
+		// is in its handler, a drain returns when its return is settled, and
+		// settling the pass that spends its budget is the keep
+		// (WaitForHandlers). Its queue's ack window outlasts the keep, as
+		// production's does (WithKeepingAckWindow).
+		//
 		// Mutation: count a pass as a failure of its message, and its copy is
 		// kept with the pair's poison while the unhandled subject holds
 		// nothing.
-		newQueueWithAttempts := s.needAttempts(t)
-		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
+		newQueue := s.needKeepingAckWindow(t)
+		q := s.startQueue(ctx, t, newQueue(t, 1))
 		const topic, group = "passed.large", "grp"
-		subscribe(ctx, t, q, topic, group, func(context.Context, *events.Event) queue.Result {
+		handed, handedOnce := make(chan struct{}), sync.Once{}
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			if labelOf(ev) == "large" {
+				handedOnce.Do(func() { close(handed) })
+			}
 			return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
 		})
 		unhandled, poison := topics.Unhandled(topic, group), topics.DeadLetter(topic, group)
@@ -375,11 +388,22 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		pad := queue.MaxPayloadBytes - queue.LetterFraming/2 - carried
 		publish(ctx, t, q, topic, padded("large", pad))
 
-		var got []queue.Kept
-		awaitState(t, "the passed large copy to be dead-lettered", func() bool {
-			got = listedAsMarked(ctx, t, q, under, unhandled)
-			return len(got) == 2
-		})
+		select {
+		case <-handed:
+		case <-time.After(keepFor): //fixedwait:liveness
+			t.Fatal("the large event never reached its handler")
+		}
+		if err := q.PauseDelivery(ctx); err != nil {
+			t.Fatalf("PauseDelivery: %v", err)
+		}
+		if remaining, err := q.WaitForHandlers(ctx, keepFor); err != nil || remaining != 0 {
+			t.Fatalf("the large copy's keep never settled: %d in flight (%v)", remaining, err)
+		}
+		got := listedAsMarked(ctx, t, q, under, unhandled)
+		if len(got) != 2 {
+			t.Fatalf("once its keep returned the unhandled subject lists %d entries, want the "+
+				"probe and the large copy", len(got))
+		}
 		if len(got[1].Header) != 0 {
 			t.Errorf("a passed copy is kept under %q, want none: its subject says what it is, "+
 				"and the transport has no room beside it", got[1].Header)

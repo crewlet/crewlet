@@ -265,6 +265,17 @@ type Capabilities struct {
 	// it can actually see.
 	WithDeliveryAttempts func(t *testing.T, attempts int) queue.EventQueue
 
+	// WithKeepingAckWindow is WithDeliveryAttempts's queue with the ack
+	// window production gives a delivery, rather than the short one a
+	// harness gives its redelivery cases: one that outlasts the keep of a
+	// dead letter at the transport's ceiling. A case whose handler retires a
+	// message of megabytes keeps its copy inside the delivery's window, as
+	// production does, and a window a harness shortened does not redeliver
+	// the message mid-keep — a redelivery production never makes, which
+	// keeps a copy at the ceiling twice, since it has no room for the
+	// identity that collapses a second keep.
+	WithKeepingAckWindow func(t *testing.T, attempts int) queue.EventQueue
+
 	// READ-YOUR-OWN-WRITE, required of every inspection function below.
 	//
 	// A backend supplying these must have them reflect an operation that has
@@ -858,6 +869,14 @@ const (
 	// not bring it back as a "wait for something" budget. Positive halves
 	// wait on settleFor and on a signal; negative ones on Settle.
 	quietFor = 150 * time.Millisecond
+
+	// keepFor ends a case that waits on the keep of a dead letter at the
+	// transport's ceiling, and only so that a hang ends: such a case is
+	// decided by the keep's own completion, which a drain reports
+	// (WaitForHandlers), never by this bound. Generous on purpose: a keep of
+	// megabytes under the race detector on a loaded runner outlasted
+	// settleFor, which is sized for a delivery of a few bytes.
+	keepFor = 2 * time.Minute
 
 	// overlapRounds is how many publish/drain pairs the overlap case races
 	// against each other.
@@ -1678,6 +1697,18 @@ func (s *suite) needAttempts(t *testing.T) func(t *testing.T, attempts int) queu
 		return s.caps.WithDeliveryAttempts
 	}
 	t.Skip("backend cannot be built with a specific delivery-attempt limit")
+	return nil
+}
+
+// needKeepingAckWindow returns a constructor for a queue like needAttempts's
+// whose ack window outlasts a keep at the transport's ceiling
+// ([Capabilities.WithKeepingAckWindow]).
+func (s *suite) needKeepingAckWindow(t *testing.T) func(t *testing.T, attempts int) queue.EventQueue {
+	t.Helper()
+	if s.caps.WithKeepingAckWindow != nil {
+		return s.caps.WithKeepingAckWindow
+	}
+	t.Skip("backend cannot be built with an ack window that outlasts a keep")
 	return nil
 }
 

@@ -67,6 +67,13 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
+			// The twin keeps no ack window: a delivery stays in flight
+			// until its handler's return is settled, however long that
+			// takes, so WithDeliveryAttempts's queue already outlasts a
+			// keep.
+			WithKeepingAckWindow: func(_ *testing.T, attempts int) queue.EventQueue {
+				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
+			},
 			// Total, so there is no failure to report — which is the
 			// point of the signature rather than an exemption from it: the
 			// twin cannot fail to answer, and the backend that can must say
