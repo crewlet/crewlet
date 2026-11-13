@@ -6,7 +6,7 @@
  * when the administrator presses Apply, under the entity's own tag.
  */
 
-import type { AtlasKind } from "~/contract/atlas.ts";
+import type { AtlasKind } from "../contract/atlas.ts";
 
 /** What ignoring a finding costs. */
 export type AdvisorSeverity = "blocks" | "costs" | "note";
