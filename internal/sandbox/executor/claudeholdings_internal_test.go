@@ -830,6 +830,84 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 	}
 }
 
+// A RECORD A RETRACTION NAMES IS HANDED TO NO MODEL, as Claude Code's resume
+// drops it once it has walked the chain (2.1.310 and 2.1.322): a record whose
+// uuid's first 24 characters are those of a uuid a refused reply's fallback,
+// a malformed reply's retry or a reply names as taken back, on the chain or
+// beside it. So a call is told whose record a fallback names, or whose
+// result's; whose record, a sibling of the chain's reply, a fallback names;
+// whose record a retry names; whose record an entry names by its first 24
+// characters alone, another tail after them; and, in a subagent's thread,
+// whose record its own thread's fallback names, its subagent still reported.
+// An entry no record's uuid can begin with names no record: the call is held
+// beside one naming the call's record in uppercase, or cut short, as with no
+// retraction at all (the chain critique's probes P1a to P1d).
+//
+// Mutation: hand over a record a retraction names, and each told call is
+// held; read retractions off a refused reply's fallback alone, as 2.1.310
+// does, and the retried call is held; read only an entry of 24 characters
+// exactly, and each call a longer entry names, by its whole uuid or by its
+// first 24 characters and another tail, is held; or compare them in any case,
+// and the uppercase entry's call is told.
+func TestARecordARetractionNamesIsHandedToNoModel(t *testing.T) {
+	t.Parallel()
+	const x, outX = "toolu_retracted", "retracted done"
+	// call is the call's record's uuid, which holds letters an uppercase
+	// spelling changes.
+	const call = "abcdef12-0000-4000-8000-000000000002"
+	callX := hsLogged(x, outX)
+	text := `[{"type":"text","text":"done."}]`
+	result := func(parent, uuid string) string {
+		return ctResult(parent, uuid, hsAnswer(x, hsBlock(t, outX)), hsBlock(t, outX))
+	}
+	// on is the call, its result and a reply after them, all on the chain.
+	on := []string{hsReplyOf(t, ctUUID(1), call, "msg_x", hsUse(x)), result(call, ctUUID(3)),
+		hsReplyOf(t, ctUUID(3), ctUUID(5), "msg_after", text)}
+	with := func(lines ...string) []string { return append(slices.Clone(on), lines...) }
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		"no retraction": {lines: on, held: true},
+		"the call's record named by a refused reply's fallback": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
+			call))},
+		"the result's record named by a refused reply's fallback": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
+			ctUUID(3)))},
+		"a sibling of the chain's reply, holding the call, named by a fallback": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_pair", text), hsReplyOf(t, ctUUID(2), call, "msg_pair", hsUse(x)),
+			result(call, ctUUID(4)), hsReplyOf(t, ctUUID(2), ctUUID(5), "msg_after", text),
+			ctFallback(ctUUID(5), ctUUID(6), call)}},
+		"the call's record named by a malformed reply's retry": {lines: with(ctRetry(ctUUID(5), ctUUID(6), call),
+			hsReplyOf(t, ctUUID(6), ctUUID(7), "msg_last", text))},
+		"the call's record named by its first 24 characters": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
+			call[:24]+"ffffffffffff"))},
+		"an entry naming the call's record in uppercase": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
+			strings.ToUpper(call))), held: true},
+		"an entry naming the call's record cut short": {lines: with(ctFallback(ctUUID(5), ctUUID(6), call[:23])),
+			held: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(callX))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(callX); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[x], tc.held)
+			}
+		})
+	}
+	t.Run("a call of a subagent's, its record named by its own thread's fallback", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.thread = append(s.thread, hsSide(t, ctFallback(ctUUID(104), ctUUID(105), ctUUID(102))))
+		got := hsSubagentRead(t, s)
+		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
+			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+		}
+	})
+}
+
 // A MAIN THREAD WHOSE LEAF THE READING CANNOT FOLLOW IS NO READING: where
 // Claude Code's resume may start from another record than the nearest user or
 // assistant record up from the thread's last, or its load drops or rewrites a
@@ -922,40 +1000,53 @@ func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
 // here, as a test lowers the plaintext's): a main thread of as many records as
 // it allows is walked, and one of one more is no reading; a subagent's thread
 // of one more is not whole, and files no record past it, so what the walk
-// holds stays within the bound.
+// holds stays within the bound. A uuid a record retracts counts toward the
+// bound as a record does, in either thread.
 //
 // Mutation: file a thread's records past the bound, and the longer main
-// thread is walked, and the longer subagent's thread whole.
+// thread is walked, and the longer subagent's thread whole; or count no
+// retracted uuid toward it, and each thread that retracts one is walked
+// within one fewer.
 func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 	t.Parallel()
 	ask := hsAsk(hsLogged(hsSubCall, hsSubOut))
-	main := hsThread(hsCall(ctUUID(1), 2, hsSubCall, hsBlock(t, hsSubOut))...)
+	pair := hsCall(ctUUID(1), 2, hsSubCall, hsBlock(t, hsSubOut))
+	// retraction names a record no thread here carries.
+	const retraction = "77777777-0000-4000-8000-000000000001"
 	for _, tc := range []struct {
+		main    string
 		records int
 		walked  bool
-	}{{3, true}, {2, false}} {
+	}{
+		{hsThread(pair...), 3, true}, {hsThread(pair...), 2, false},
+		{hsThread(append(slices.Clone(pair), ctFallback(ctUUID(3), ctUUID(4), retraction))...), 5, true},
+		{hsThread(append(slices.Clone(pair), ctFallback(ctUUID(3), ctUUID(4), retraction))...), 4, false},
+	} {
 		w := newHoldingsWalk(ctSession, ask, hsBounds())
 		w.records = tc.records
-		err := w.mainThread(t.Context(), strings.NewReader(main))
+		err := w.mainThread(t.Context(), strings.NewReader(tc.main))
 		if walked := err == nil; walked != tc.walked || (!walked && !errors.Is(err, errChainBound)) {
-			t.Errorf("a main thread of 3 records within %d: %v; want it walked %t", tc.records, err, tc.walked)
+			t.Errorf("a main thread of %d lines within %d: %v; want it walked %t", strings.Count(tc.main, "\n"),
+				tc.records, err, tc.walked)
 		}
 	}
-	thread := ctThread(hsForeground(t).thread...)
+	foreground := hsForeground(t).thread
+	retracting := append(slices.Clone(foreground), hsSide(t, ctFallback(ctUUID(104), ctUUID(105), retraction)))
 	for _, tc := range []struct {
+		thread  []string
 		records int
 		whole   bool
-	}{{4, true}, {3, false}} {
+	}{{foreground, 4, true}, {foreground, 3, false}, {retracting, 6, true}, {retracting, 5, false}} {
 		w := newHoldingsWalk(ctSession, ask, hsBounds())
 		w.records = tc.records
 		a := &subagentFacts{}
 		w.agents[ctAgent] = a
-		if err := w.subagentThread(t.Context(), ctAgent, a, strings.NewReader(thread)); err != nil {
+		if err := w.subagentThread(t.Context(), ctAgent, a, strings.NewReader(ctThread(tc.thread...))); err != nil {
 			t.Fatalf("a subagent's thread within %d: %v", tc.records, err)
 		}
 		if whole := a.broken == ""; whole != tc.whole || (!whole && !strings.Contains(a.broken, "cannot walk")) {
-			t.Errorf("a subagent's thread of 4 records within %d is not whole for %q; want it whole %t",
-				tc.records, a.broken, tc.whole)
+			t.Errorf("a subagent's thread of %d lines within %d is not whole for %q; want it whole %t",
+				len(tc.thread), tc.records, a.broken, tc.whole)
 		}
 	}
 }

@@ -35,6 +35,15 @@ import (
 // boundary from what the resume walks, so nothing reached through one is sure
 // to be handed; and the walk stops at the last restart for that reason.
 //
+// AND NO RECORD A RETRACTION NAMES IS HANDED ([threadLine.Retracted]): once it
+// has walked the chain and recovered what it recovers, the resume drops every
+// record but a system one whose uuid's first 24 characters are those of a
+// uuid a record names as taken back (a refused reply's fallback, a malformed
+// reply's retry), on the chain or beside it. The reading reads those names
+// off every record of the thread ([threadChain.retract]), where the resume
+// reads them off the records it hands over alone, so it takes away no less
+// than the resume does.
+//
 // THE LEAF of a main thread is the nearest user or assistant record up from
 // its last record, the leaf Claude Code's resume starts from wherever nothing
 // else moves it, which the reading holds to be so ([holdingsWalk.mainEnd]):
@@ -80,7 +89,8 @@ import (
 // so a parent is looked up once the thread is read whole.
 
 // holdingsMaxRecords is the most user, assistant, attachment and system
-// records of one thread a reading walks the chain of.
+// records of one thread a reading walks the chain of, and of the uuids those
+// records retract, counted together ([threadChain.room]).
 //
 // 262,144, TWICE THE LINES A THREAD AT THE PLAINTEXT'S BOUND HOLDS: 256 MiB
 // ([threadPlainMax]) of lines of 2,053 bytes, a real main thread's average
@@ -89,8 +99,11 @@ import (
 // in a map, a parent and its marks, the uuid of a parent that came later, and
 // each reply's id as a digest: at the bound, every record a reply of its own
 // id naming a parent that comes later, 35 MiB live, its heap peaking at 69 MiB
-// (BenchmarkAReadingAtItsBounds, on two cores). Past it, a main thread is no
-// reading and a subagent's thread not whole.
+// (BenchmarkAReadingAtItsBounds, on two cores). A uuid a record retracts is
+// held as its first ten bytes in a set, less than any record costs, so a
+// thread at the bound that retracts holds no more than that (computed, not
+// measured). Past it, a main thread is no reading and a subagent's thread not
+// whole.
 const holdingsMaxRecords = 1 << 18
 
 // What a record's parent is, where it is no record of the thread
@@ -116,6 +129,9 @@ const (
 	markReply
 	// markResults is a user record holding a call's result.
 	markResults
+	// markRetracted is a record whose uuid a retraction names
+	// ([threadChain.retract]): handed to no model, wherever it lies.
+	markRetracted
 )
 
 // errChainBound is a thread holding more records than a reading walks the
@@ -135,6 +151,11 @@ type threadChain struct {
 	marks  []uint8
 	// later are the parents not read when their child was.
 	later []chainLaterParent
+	// retracted are the first 24 characters of each uuid a record of the
+	// thread retracts that a record's uuid can begin with, as the ten bytes
+	// they write ([threadChain.retract]), kept until the thread is read
+	// whole and its records marked by them.
+	retracted map[[10]byte]struct{}
 	// replies are the counted replies' records and their ids' SHA-256, in
 	// record order; a reply's id is the box's word, as long as a line, and two
 	// ids are the same reply only where the harness compares them equal, which
@@ -169,25 +190,25 @@ type chainReply struct {
 // newThreadChain is the walk of a thread not read yet, filing at most bound
 // records.
 func newThreadChain(bound int) *threadChain {
-	return &threadChain{bound: bound, index: map[[16]byte]int32{}, lastOwn: -1}
+	return &threadChain{bound: bound, index: map[[16]byte]int32{}, retracted: map[[10]byte]struct{}{}, lastOwn: -1}
 }
 
 // add files line, a user, assistant, attachment or system record of the
 // thread, its own where own, with marks, and answers its place: an error
 // where its uuid is no lowercase canonical UUID or is another record's, or
-// where the thread holds c.bound already.
+// where the thread has no room left for it ([threadChain.room]).
 func (c *threadChain) add(line threadLine, own bool, marks uint8) (int32, error) {
 	uuid, err := line.UUID()
 	if err != nil {
 		return -1, err
 	}
 	id, ok := canonicalUUID(uuid)
-	switch {
-	case !ok:
+	if !ok {
 		return -1, errors.New("its uuid is no lowercase canonical UUID, so no parent can name it as the harness " +
 			"does")
-	case len(c.parent) >= c.bound:
-		return -1, fmt.Errorf("%w, %d", errChainBound, c.bound)
+	}
+	if err = c.room(); err != nil {
+		return -1, err
 	}
 	if _, held := c.index[id]; held {
 		return -1, errors.New("its uuid is another record's, and the harness walks the last of the two")
@@ -232,6 +253,40 @@ func chainParent(head threadHead) (int32, [16]byte) {
 	return chainLater, id
 }
 
+// room says whether the thread has room for one more thing it files: its
+// records ([threadChain.add]) and what its records retract
+// ([threadChain.retract]) count toward one bound, c.bound, since each is kept
+// until the thread is read whole, and a retraction costs no more of it than a
+// record does.
+func (c *threadChain) room() error {
+	if len(c.parent)+len(c.retracted) >= c.bound {
+		return fmt.Errorf("%w, %d", errChainBound, c.bound)
+	}
+	return nil
+}
+
+// retract files uuid, an entry of a record's `retractedMessageUuids`
+// ([threadLine.Retracted]): Claude Code's resume hands its model no record
+// whose uuid's first 24 characters are uuid's, so the reading files those
+// 24, where a lowercase canonical uuid, the only kind a record it files
+// carries, can begin with them ([retractedPrefix]); an entry no such uuid
+// begins with retracts no record it files, and is passed over. An error where
+// the thread has no room left for it ([threadChain.room]).
+func (c *threadChain) retract(uuid string) error {
+	prefix, ok := retractedPrefix(uuid)
+	if !ok {
+		return nil
+	}
+	if _, held := c.retracted[prefix]; held {
+		return nil
+	}
+	if err := c.room(); err != nil {
+		return err
+	}
+	c.retracted[prefix] = struct{}{}
+	return nil
+}
+
 // canonicalUUID is s as the 16 bytes it writes, where s is a UUID in its
 // canonical form in lowercase hex: 8, 4, 4, 4 and 12 digits between hyphens.
 //
@@ -240,13 +295,38 @@ func chainParent(head threadHead) (int32, [16]byte) {
 // lowercase twin is, and read as the same 16 bytes it would link two records
 // the harness never links.
 func canonicalUUID(s string) (id [16]byte, ok bool) {
-	if len(s) != 36 {
+	if len(s) != 36 || !canonicalHex(s, id[:]) {
 		return [16]byte{}, false
 	}
+	return id, true
+}
+
+// retractedPrefix is the first 24 characters of s, where they are those a
+// lowercase canonical uuid begins with ([canonicalUUID]): 8, 4, 4 and 4
+// digits, each run followed by its hyphen, as the ten bytes they write.
+//
+// AS CLAUDE CODE COMPARES THEM: its resume takes an entry's first 24 UTF-16
+// code units and a record's uuid's first 24, and holds them one where they
+// are equal. A record the reading files carries a uuid of ASCII alone, so an
+// entry matches one only where its first 24 code units are the same ASCII,
+// which are then its first 24 bytes as decoded, whatever the decode makes of
+// what follows them.
+func retractedPrefix(s string) (prefix [10]byte, ok bool) {
+	if len(s) < 24 || !canonicalHex(s[:24], prefix[:]) {
+		return [10]byte{}, false
+	}
+	return prefix, true
+}
+
+// canonicalHex writes into id the bytes s spells, where s is the first
+// len(s) characters of a lowercase canonical uuid, len(s) 24 or 36: runs of
+// lowercase hex digits two to a byte, a hyphen after the 8th, 12th, 16th and
+// 20th of them.
+func canonicalHex(s string, id []byte) bool {
 	for i, n := 0, 0; i < len(s); {
 		if i == 8 || i == 13 || i == 18 || i == 23 {
 			if s[i] != '-' {
-				return [16]byte{}, false
+				return false
 			}
 			i++
 			continue
@@ -254,13 +334,13 @@ func canonicalUUID(s string) (id [16]byte, ok bool) {
 		hi, okHi := lowerHex(s[i])
 		lo, okLo := lowerHex(s[i+1])
 		if !okHi || !okLo {
-			return [16]byte{}, false
+			return false
 		}
 		id[n] = hi<<4 | lo
 		n++
 		i += 2
 	}
-	return id, true
+	return true
 }
 
 // lowerHex is the value of b, a lowercase hex digit.
@@ -288,7 +368,10 @@ func (c *threadChain) reply(record int32, id string) {
 func (c *threadChain) restart() { c.scopeFrom = int32(len(c.parent)) }
 
 // resolve looks up the parents not read when their children were, now the
-// thread is read whole: each the record it names, or chainNowhere.
+// thread is read whole: each the record it names, or chainNowhere; and marks
+// each record whose uuid begins with a uuid's first 24 characters that a
+// record of the thread retracts ([threadChain.retract]), wherever the record
+// lies, since the resume drops it from what it walked.
 func (c *threadChain) resolve() {
 	for _, l := range c.later {
 		parent, held := c.index[l.parent]
@@ -298,6 +381,14 @@ func (c *threadChain) resolve() {
 		c.parent[l.record] = parent
 	}
 	c.later = nil
+	if len(c.retracted) > 0 {
+		for id, record := range c.index {
+			if _, gone := c.retracted[[10]byte(id[:10])]; gone {
+				c.mark(record, markRetracted)
+			}
+		}
+	}
+	c.retracted = nil
 }
 
 // done releases what only reading the thread needed: the records by uuid.
@@ -395,11 +486,12 @@ func (c *threadChain) on(record int32) bool {
 }
 
 // handed reports whether the resume hands its model record (the file
-// comment): past the last restart, and on the chain, or a reply's record of
-// an id a reply on the chain carries, or a user record of results whose
-// parent is one. False for -1, no record of the thread.
+// comment): past the last restart, retracted by no record of the thread, and
+// on the chain, or a reply's record of an id a reply on the chain carries, or
+// a user record of results whose parent is one. False for -1, no record of the
+// thread.
 func (c *threadChain) handed(record int32) bool {
-	if record < c.scopeFrom || int(record) >= len(c.parent) {
+	if record < c.scopeFrom || int(record) >= len(c.parent) || c.marks[record]&markRetracted != 0 {
 		return false
 	}
 	if c.on(record) {

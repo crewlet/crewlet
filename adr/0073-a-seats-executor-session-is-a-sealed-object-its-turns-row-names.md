@@ -2426,7 +2426,15 @@ replaced for its model is live in no thread: behind a flag Anthropic's servers
 set, Claude Code hands its model a preview in place of the largest results a
 reply's calls returned past a budget, records the replacement beside the
 result's own record, which keeps the whole output, and hands the preview again
-on resume. Rule 4: a call is held only through its one counted result, whose
+on resume. Nor is a record a retraction names: where a model's reply is refused
+as it streams and Claude Code moves the request to another model, or it retries
+a reply whose call it could not parse, it takes that attempt's records back
+and names them (on a system record of the fallback, on the retry's meta user
+record), and a resume drops every record but a system one whose uuid's first
+24 characters are a named uuid's, on the chain or beside it; the reading reads
+the names off every record of the thread, where the resume reads them off the
+records it hands over, so it takes away no less. Rule 4: a call is held only
+through its one counted result, whose
 `is_error` is the log's failure and whose text is the output the log took,
 compared by SHA-256 digests so no tool output leaves the archive: every byte of
 it where the log kept the output whole (up to `MaxBridgeOutputBytes`, 4 KiB),

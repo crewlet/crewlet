@@ -127,6 +127,16 @@ import (
 // off. A record that replaces in no shape Claude Code writes is no reading in
 // the main thread, and leaves a subagent's thread not whole.
 //
+// NOR IS A RECORD A RETRACTION NAMES, in whichever thread
+// ([threadLine.Retracted]): where a model's reply is refused as it streams and
+// Claude Code moves the request to another model, or it retries a reply whose
+// call it could not parse, it takes that attempt's records back out of the
+// conversation and names them, and a resume drops every record so named,
+// whatever chain it lies on (claudechain.go). The live run dropped it too
+// before it went on, so a subagent's model had not seen it either. A record
+// that retracts in no shape Claude Code writes is no reading in the main
+// thread, and leaves a subagent's thread not whole.
+//
 // RULE 4, THE LOGGED RESULT: a call is held only through its one result, whose
 // is_error is the log's failure and whose text ([resultText]) is the log's
 // output: every byte of it where the log kept the output whole, and else as
@@ -205,9 +215,9 @@ import (
 // absolutely or through `..`; a member it reads is held twice; the main thread
 // is no regular file, or is not there; a line of it is past its bound or is no
 // record, a user or assistant record's message does not decode, a record
-// replaces results in no shape Claude Code writes, or a progress record, which
-// Claude Code's load drops and links the records after it past
-// ([recordProgress]), is among them; the main thread's leaf may
+// replaces results or retracts records in no shape Claude Code writes, or a
+// progress record, which Claude Code's load drops and links the records after
+// it past ([recordProgress]), is among them; the main thread's leaf may
 // not be the one the reading walks from (a checkpoint a rewind, a withdrawal
 // or a fork marked, or that names its leaf in no shape Claude Code writes, or
 // that names a record its last record does not descend from; a sidechain's
@@ -233,7 +243,8 @@ import (
 // smallest results keeps about three times the line); one result's text; a
 // metadata; the chain of the thread it reads, one thread's at a time (each
 // record's uuid filed in a map, its parent and its marks, the uuid of a parent
-// that came later, and each reply's id as a digest: [threadChain]); and its
+// that came later, each reply's id as a digest, and the first ten bytes of
+// each uuid its records retract: [threadChain]); and its
 // facts: a few words and an id of at most [sandbox.MaxBridgeCallIDBytes] for
 // each asked call, each leg and each notification, and for each subagent a few
 // more and a description of at most [holdingsDescriptionBytes], about 2 MiB
@@ -672,6 +683,13 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		restart := w.restarts.See(line.Head)
 		if err = line.ReplacedResults(w.replaced); err != nil {
 			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread replaces results in no "+
+				"shape Claude Code writes", line.N), cause: err}
+		}
+		if err = line.Retracted(chain.retract); errors.Is(err, errChainBound) {
+			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is a record the reading "+
+				"cannot walk to as the resume does", line.N), cause: err}
+		} else if err != nil {
+			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread retracts records in no "+
 				"shape Claude Code writes", line.N), cause: err}
 		}
 		if err = w.checkpointOf(line); err != nil {
@@ -1137,6 +1155,19 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 	if err := line.ReplacedResults(w.replaced); err != nil {
 		a.notWhole(fmt.Sprintf("line %d of its thread replaces results in no shape Claude Code writes", line.N),
 			err)
+	}
+	// FILED WHILE THE CHAIN STANDS, as its records are
+	// ([holdingsWalk.subagentRecord]): past its bound the chain files nothing
+	// more, so what it holds stays within it.
+	if !chain.broken {
+		if err := line.Retracted(chain.retract); errors.Is(err, errChainBound) {
+			chain.broken = true
+			a.notWhole(fmt.Sprintf("line %d of its thread is a record the reading cannot walk to as the resume does",
+				line.N), err)
+		} else if err != nil {
+			a.notWhole(fmt.Sprintf("line %d of its thread retracts records in no shape Claude Code writes", line.N),
+				err)
+		}
 	}
 	record := w.subagentRecord(agent, a, chain, line)
 	if head.Type != recordUser && head.Type != recordAssistant {
