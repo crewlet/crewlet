@@ -13,9 +13,9 @@ import (
 // answers every field absent, so the form still renders.
 func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []setup.Requirement {
 	var org, access, secret string
-	var enabled bool
+	var enabled, atlasOn bool
 	if in != nil {
-		enabled = in.Enabled
+		enabled, atlasOn = in.Enabled, in.Atlas
 		if in.Provisioning != nil {
 			org, access, secret = in.Provisioning.OrganizationID, in.Provisioning.AccessKey, in.Provisioning.SecretKey
 		}
@@ -71,6 +71,23 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
+			// THE ONE STEP OF "SEE MORE IN ATLAS" (ADR-0144): the provisioner
+			// key above can make the application itself, so nothing is
+			// created by hand at Scaleway. Off unless a person turns it on.
+			Field:      "atlas",
+			Label:      "See more in Atlas",
+			Kind:       setup.KindToggle,
+			ConfigPath: "integrations.scaleway.atlas",
+			Default:    "false",
+			Hint:       "Shows servers, databases, buckets and DNS in Atlas, read-only.",
+			More: "Crewlet makes a read-only IAM application named crewlet-atlas for it, with its own " +
+				"policy and API key, on your {link}. It holds " + words.And(asSaid(AtlasSets())) +
+				" on every project and nothing else, and no agent uses it. Turn this off to delete the " +
+				"application, its policy and its key.",
+			LinkText:  "IAM applications page",
+			VendorURL: ApplicationsURL,
+		},
+		{
 			// Hidden and on: connecting a switched-off integration is not a
 			// thing anybody means.
 			Field:      "enabled",
@@ -90,6 +107,8 @@ func Requirements(in *config.Scaleway, resolve func(string) (string, bool)) []se
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(access, resolve)
 		case "secret_key":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(secret, resolve)
+		case "atlas":
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(atlasOn)
 		case "enabled":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(enabled)
 		}

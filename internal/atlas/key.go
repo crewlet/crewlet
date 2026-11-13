@@ -181,7 +181,7 @@ func canonicalKey(k Kind, key string) (string, error) {
 	case KindPipeline:
 		repo, name, ok := strings.Cut(key, "#")
 		if !ok || !segmentRE().MatchString(name) {
-			return "", fmt.Errorf("%w: a pipeline is its repository's key, '#' and its name", ErrInvalid)
+			return "", fmt.Errorf("%w: a pipeline is the key of what it builds, '#' and its name", ErrInvalid)
 		}
 		canonical, err := repositoryKey(repo)
 		if err != nil {
