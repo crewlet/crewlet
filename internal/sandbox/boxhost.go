@@ -73,17 +73,19 @@ func (r BoxRead) Valid() bool { return slices.Contains(BoxReads, r) }
 //
 // FOUR KINDS OF FAILURE, each told apart because each is handled apart: the
 // host said the box is gone (wrapping [ErrBoxGone]); the host did not answer
-// ([ErrBoxHostSilent]); the host's coordination store did not answer its read
-// of the run's row, which licenses the read ([ErrStoreSilent]), carried apart
-// from the host's own words ([BoxReadReply.Unsettled]); and anything else the
-// host said, which is the box's own failure to be read, counted like one read
-// here.
+// ([ErrBoxHostSilent]), or stopped as it read, which is the same fact, carried
+// apart from the host's own words ([BoxReadReply.Withdrawn]); the host's
+// coordination store did not answer its read of the run's row, which licenses
+// the read ([ErrStoreSilent]), carried apart the same way
+// ([BoxReadReply.Unsettled]); and anything else the host said, which is the
+// box's own failure to be read, counted like one read here.
 type BoxReader interface {
 	ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error)
 }
 
 // ErrBoxHostSilent is a box read the node whose host the box is on did not
-// answer: it is stopped, restarting, or gone.
+// answer: it is stopped, restarting, or gone, or it stopped as it read
+// ([BoxReadReply.Withdrawn]).
 //
 // NOT A FAILURE OF THE BOX, which is why a collection handed it gives its
 // claim back UNCOUNTED and acknowledges the completion: the host announces the
@@ -116,12 +118,18 @@ var ErrStoreSilent = errors.New("sandbox: the coordination store did not answer 
 // storeSilent is err, the store's error at a step a collection cannot go on
 // without, wrapped in [ErrStoreSilent]: the store did not answer it.
 //
-// UNLESS ctx HAS ENDED, which is then the cause and is returned as it is, for
-// the collection to judge as it judges every read its context ended
+// UNLESS ctx HAS ENDED, which is then the cause and is returned as it is. ctx
+// is the context of the node that makes the step, which at the host's read of
+// the run's row ([Coordinator.ReadHostedBox]) is the HOST'S: its answerer's own
+// lifetime, held to its share of the asker's time. On the node that collects,
+// the collection judges it as it judges every read its context ended
 // ([Coordinator.collectFailed]): a cancellation of this node's own is handed
 // back uncounted whatever it cut, and a deadline the delivery ran out of is
 // counted, or a collection that always outlasts its delivery would be asked
-// again for ever, its last step the store's.
+// again for ever, its last step the store's. On the host, the reply says which
+// ([AnswerBoxRead]): a cancellation is the host stopping as it read
+// ([BoxReadReply.Withdrawn]), which its asker hands back uncounted, and a
+// deadline is the read running out of the asker's time, which it counts.
 func storeSilent(ctx context.Context, err error) error {
 	if err == nil || ctx.Err() != nil {
 		return err
@@ -265,6 +273,18 @@ type BoxReadReply struct {
 	// that could not tell the store's silence from the box's failure would
 	// count it against a box that is up. Added within [BoxReadWireVersion] 1.
 	Unsettled bool `json:"unsettled,omitempty"`
+	// Withdrawn is a read the host's own lifetime cut short, Error saying
+	// where: the host withdrew as an answerer of box reads (internal/queue's
+	// AnswerFunc runs under the answerer's context, which its withdrawal
+	// cancels), draining or restarting, while it read. No failure of the
+	// box, which a host going away never finished reading: the asker reads it
+	// as a host that did not answer ([ErrBoxHostSilent]), whose reply still
+	// crosses the broker, so it learns that now rather than at its deadline.
+	// A read its share of the asker's time cut is no withdrawal: that is the
+	// box's read running out of time, said in Error alone. Added within
+	// [BoxReadWireVersion] 1: an asker that does not know the flag reads Error
+	// as the box's failure and counts it, as one always did.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 }
 
 // Answers is the id of the request this reply answers.
@@ -278,6 +298,8 @@ func (r BoxReadReply) Err() error {
 		return fmt.Errorf("sandbox: node %s found the box gone: %s: %w", r.Node, r.Error, ErrBoxGone)
 	case r.Refused != "":
 		return fmt.Errorf("%w: node %s: %s", ErrBoxNotHosted, r.Node, r.Refused)
+	case r.Withdrawn:
+		return fmt.Errorf("sandbox: node %s stopped as it read the box: %s: %w", r.Node, r.Error, ErrBoxHostSilent)
 	case r.Unsettled:
 		return fmt.Errorf("sandbox: node %s could not read the box: %s: %w", r.Node, r.Error, ErrStoreSilent)
 	case r.Error != "":
@@ -290,6 +312,14 @@ func (r BoxReadReply) Err() error {
 
 // AnswerBoxRead is a host's reply to one admitted box read: the read made by
 // host ([Coordinator.ReadHostedBox]), or why it was not.
+//
+// ctx IS THE HOST'S OWN: its answerer's lifetime, which its withdrawal cancels,
+// held to its share of the asker's time. A read that failed once it was
+// cancelled is said apart from every other failure, whatever step the
+// cancellation cut ([BoxReadReply.Withdrawn]), unless it had found the box gone
+// or the row refusing the read, which the host decided before it stopped; one
+// its deadline cut is the read running out of the asker's time, and is said in
+// the host's words alone.
 func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) BoxReadReply {
 	reply := BoxReadReply{Version: BoxReadWireVersion, Request: req.ID, Node: host.node}
 	result, ended, err := host.ReadHostedBox(ctx, req.TurnID, req.LaunchID, req.SandboxID, req.Read)
@@ -298,6 +328,11 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 		reply.Refused = err.Error()
 	case errors.Is(err, ErrBoxGone):
 		reply.Gone, reply.Error = true, err.Error()
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		// THE HOST STOPPING, not the box, nor its store: a step it cut
+		// fails with the cancellation's own error, which storeSilent leaves
+		// as it is, or with whatever the step saw as it ended.
+		reply.Withdrawn, reply.Error = true, err.Error()
 	case errors.Is(err, ErrStoreSilent):
 		reply.Unsettled, reply.Error = true, err.Error()
 	case err != nil:

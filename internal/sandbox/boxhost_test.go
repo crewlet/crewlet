@@ -216,6 +216,171 @@ func TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted(t *testing.T) {
 	}
 }
 
+// hostServing asks node-a as the fleet's channel does ([hostAnswers]), under a
+// lifetime of the host's own, apart from the asker's: its answerer's, which
+// the host's withdrawal cancels while it reads (internal/queue's AnswerFunc).
+// Where share is set, the read is held to that much of the asker's time, as
+// the host's answer holds it ([BoxReadAnswerShare]).
+type hostServing struct {
+	host  *Coordinator
+	share time.Duration
+
+	mu       sync.Mutex
+	withdraw context.CancelFunc
+}
+
+func (h *hostServing) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	serving, withdraw := context.WithCancel(context.WithoutCancel(ctx))
+	defer withdraw()
+	h.mu.Lock()
+	h.withdraw = withdraw
+	h.mu.Unlock()
+	readCtx := serving
+	if h.share > 0 {
+		var cancel context.CancelFunc
+		readCtx, cancel = context.WithTimeout(serving, h.share)
+		defer cancel()
+	}
+	return hostAnswers{host: h.host}.ReadBox(readCtx, run, read)
+}
+
+// stops withdraws the host as an answerer of box reads, as its drain does,
+// while it reads.
+func (h *hostServing) stops() {
+	h.mu.Lock()
+	withdraw := h.withdraw
+	h.mu.Unlock()
+	if withdraw != nil {
+		withdraw()
+	}
+}
+
+// stopsAtTheRow is the host's view of the run store, whose read of a run's row
+// is where the host withdraws: the read ends with the host's lifetime.
+type stopsAtTheRow struct {
+	PendingStore
+	host *hostServing
+}
+
+func (s stopsAtTheRow) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.host.stops()
+	return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, ctx.Err())
+}
+
+// A HOST THAT STOPS AS IT READS IS A HOST THAT DID NOT ANSWER. A host reads a
+// box for its asker under its answerer's own lifetime, which its withdrawal
+// cancels as it drains or restarts, and the reply it has by then still crosses
+// the broker. Answered in the host's own words alone, the cut read was the
+// box's failure to be read: the asker, its own context live, counted it
+// against a box that is up, whichever step the withdrawal cut, and a stop was
+// ended on it with its spend written off. So the reply says the host stopped
+// (`withdrawn`), and the asker reads it as a host that did not answer
+// (ErrBoxHostSilent): a collection hands its claim back uncounted, and a stop
+// is kept and asked again until the host reads it. A read its share of the
+// asker's time cut is that time's, and counted, as one this node makes.
+//
+// Mutation: drop the flag AnswerBoxRead sets, its key on the wire or Err's
+// reading of it, and the withdrawn host's read is counted and its stop ended
+// uncharged; flag every end of the host's context, and the share's is not
+// counted.
+func TestAHostThatStopsAsItReadsIsAHostThatDidNotAnswer(t *testing.T) {
+	t.Parallel()
+	waits := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	for _, tc := range []struct {
+		name string
+		// arrange stages where the host's read ends, on host's view of the
+		// rig's store.
+		arrange func(rig *coordRig, host *hostServing) PendingStore
+		counted bool
+	}{
+		{"withdrawn at its read of the run's row", func(rig *coordRig, host *hostServing) PendingStore {
+			return stopsAtTheRow{PendingStore: rig.pending, host: host}
+		}, false},
+		{"withdrawn as it reads the box", func(rig *coordRig, host *hostServing) PendingStore {
+			rig.runner.CollectFunc = func(ctx context.Context) error {
+				host.stops()
+				return ctx.Err()
+			}
+			return rig.pending
+		}, false},
+		{"out of its share of the asker's time", func(rig *coordRig, host *hostServing) PendingStore {
+			host.share = 50 * time.Millisecond
+			rig.runner.CollectFunc = waits
+			return rig.pending
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			host := &hostServing{}
+			host.host = rig.hostOn(t, "node-a", tc.arrange(rig, host))
+			rig.onNode(t, "node-b", host, nil)
+			rig.launchedBy("t1", "node-a")
+			rig.runner.Finish(Result{Success: true, Text: "the box's account"})
+
+			err := collectAgain(t, rig)
+			row := rig.get("t1")
+			if row.Status != StatusRunning || len(rig.failures()) != 0 || len(rig.resumer.calls()) != 0 {
+				t.Fatalf("the collection (%v) left the run %s, announced %+v and resumed %d times; want it "+
+					"handed back", err, row.Status, rig.failures(), len(rig.resumer.calls()))
+			}
+			switch failures := row.Launch.CollectFailures; {
+			case tc.counted && failures != 1:
+				t.Fatalf("the collection (%v) counted %d failures; want the read its time cut counted once",
+					err, failures)
+			case !tc.counted && (failures != 0 || err != nil):
+				t.Fatalf("the collection = %v, counting %d failures; want a host that stopped as it read "+
+					"handed back uncounted and acknowledged, as a host that did not answer", err, failures)
+			}
+		})
+	}
+
+	// AND A STOP of a run whose host stops as it reads is kept, its spend
+	// still on the box, and read once the host answers.
+	t.Run("a stop's read", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		spies := watchStops(rig)
+		host := &hostServing{}
+		host.host = rig.hostOn(t, "node-a", rig.pending)
+		rig.onNode(t, "node-b", host, &nudges{})
+		rig.launchedBy("t1", "node-a")
+		rig.runner.Finish(Result{Text: "halfway", InputTokens: 4000})
+		rig.runner.CollectFunc = func(ctx context.Context) error {
+			host.stops()
+			return ctx.Err()
+		}
+
+		rig.stop(t)
+		rig.fireRetries()
+		kept, found, err := rig.pending.Get(t.Context(), "t1")
+		if err != nil || !found {
+			t.Fatalf("the stop whose host stopped as it read was finished at once (%v), charged %d tokens and "+
+				"announced %d times: its spend written off; want it kept", err, rig.accountant.total(),
+				len(rig.stopAnnouncements()))
+		}
+		if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected || rig.accountant.asked() != 0 ||
+			len(rig.stopAnnouncements()) != 0 {
+			t.Fatalf("the stop whose host stopped as it read reads ending %+v stop %+v, charged %d, announced "+
+				"%d; want it kept, unread", kept.Ending, kept.Stop, rig.accountant.asked(),
+				len(rig.stopAnnouncements()))
+		}
+
+		rig.runner.CollectFunc = nil
+		rig.fireRetries()
+		if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+			t.Fatal("the stop was not finished once its host read the box")
+		}
+		if got := rig.accountant.total(); got != 4000 || len(spies.closedTurns()) != 1 {
+			t.Fatalf("charged %d tokens and closed %d turns; want the 4000 the host read, its turn closed once",
+				got, len(spies.closedTurns()))
+		}
+	})
+}
+
 // A HOST'S SILENT STORE CROSSES THE WIRE AS ONE. A host's reply carries a
 // failure in the host's own words (BoxReadReply.Error), which no asker can read
 // a sentinel out of, so the coordination store's silence at the host's read of

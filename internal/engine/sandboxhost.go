@@ -162,7 +162,10 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 			Node: b.node, Error: "this node runs no sandbox runtime to read the box with"})
 	}
 	// THE ASKER'S BUDGET, its share of it: a read still running when the
-	// asker stopped listening is an answer nobody reads.
+	// asker stopped listening is an answer nobody reads. Beneath it, this
+	// node's own lifetime as an answerer, which its withdrawal cancels: a
+	// read that ends cut by that is answered as the host stopping
+	// (sandbox.BoxReadReply.Withdrawn), never as the box's failure.
 	readCtx, cancel := context.WithTimeout(ctx,
 		time.Duration(float64(time.Until(req.Deadline))*sandbox.BoxReadAnswerShare))
 	defer cancel()
