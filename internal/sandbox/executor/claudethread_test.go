@@ -783,7 +783,9 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
 // shape leaves its boundary's head and uuid whole and is refused by Preserved
 // alone, as a retraction list of the wrong shape leaves its retry's head and
-// message whole and is refused by Retracted alone. A record's own uuid that
+// message whole and is refused by Retracted alone, and a replacements list of
+// the wrong shape leaves its record's head whole and is refused by
+// ReplacedResults alone. A record's own uuid that
 // is no string
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
@@ -858,6 +860,16 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		if m, err := line.Message(); err != nil || line.Head.Type != recordUser || !line.Head.Main() {
 			t.Errorf("a retry whose retractedMessageUuids is %s reads with the head %+v and the message %+v, %v",
 				name, line.Head, m, err)
+		}
+	}
+	for name, list := range map[string]string{"a string": `"` + ctCall + `"`, "an object": `{}`, "null": `null`} {
+		line := ctLine(t, ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)), `"replacements":[`+
+			ctReplaced(ctCall)+`]`, `"replacements":`+list))
+		if err := line.ReplacedResults(func(string) {}); err == nil {
+			t.Errorf("a record whose replacements are %s replaces results with no error; want one", name)
+		}
+		if h := line.Head; h.Type != recordContentReplacement || h.AgentID != ctAgent || h.Chained() {
+			t.Errorf("a record whose replacements are %s reads with the head %+v", name, h)
 		}
 	}
 	summary := ctSummary(ctUUID(15), ctUUID(16))
@@ -1128,8 +1140,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // reply stopped, whether its harness wrote it for a failed request, the model
 // that wrote it, the reply it is, what its request took, what it says a
 // compaction kept, the leaf it says a resume starts from and whether it names
-// one at all, its attachment's type, and the records it says its harness took
-// back, each beside the error it answered. A
+// one at all, its attachment's type, the records it says its harness took
+// back, and the results it says its harness replaced, each beside the error it
+// answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1195,6 +1208,9 @@ func ctAllButUUID(l threadLine) string {
 		return nil
 	})
 	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	var replaced []string
+	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
+	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
 	return b.String()
 }
 
@@ -1216,13 +1232,14 @@ func ctRaw(v json.RawMessage) string {
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
-// its marks, a compaction's metadata, the uuids a record retracts), a hook's
-// attachment, an origin, a
+// its marks, a compaction's metadata, the uuids a record retracts, a record's
+// replacements), a hook's attachment, an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
-// lists, and what a compaction's metadata says it kept (its list, the list's
-// anchor and uuids, its segment and the segment's ends). So a line hands out
+// lists, what a compaction's metadata says it kept (its list, the list's
+// anchor and uuids, its segment and the segment's ends), and each replacement
+// a record lists (its kind and its call's id). So a line hands out
 // exactly what it hands out
 // without the other key, through every accessor. 2.1.322 already spells a
 // call's id `toolUseId` (a subagent's metadata names the call that started it
@@ -1249,6 +1266,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
 	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
 	retracting := ctFallback(ctUUID(5), ctUUID(6), ctUUID(2))
+	replacing := ctReplacement("", ctReplaced(ctCall))
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1333,6 +1351,14 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to:   `"retractedMessageUuids":["` + ctUUID(2) + `"],"RetractedMessageUuids":["` + ctUUID(9) + `"]`},
 		"RETRACTEDMESSAGEUUIDS alone": {record: ctRetry(ctUUID(5), ctUUID(6)), from: `"retractedMessageUuids":[]`,
 			to: `"retractedMessageUuids":[],"RETRACTEDMESSAGEUUIDS":["` + ctUUID(9) + `"]`},
+		"a replacements, then Replacements": {record: replacing, from: `"replacements":[` + ctReplaced(ctCall) + `]`,
+			to: `"replacements":[` + ctReplaced(ctCall) + `],"Replacements":[` + ctReplaced(other) + `]`},
+		"a replacement's kind, then Kind": {record: replacing, from: `"kind":"tool-result"`,
+			to: `"kind":"tool-result","Kind":"other"`},
+		"a replacement's toolUseId, then ToolUseId": {record: replacing, from: `"toolUseId":"` + ctCall + `"`,
+			to: `"toolUseId":"` + ctCall + `","ToolUseId":"` + other + `"`},
+		"a replacement's toolUseId written twice": {record: replacing, from: `"toolUseId":"` + ctCall + `"`,
+			to: `"toolUseId":"` + other + `","toolUseId":"` + ctCall + `"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -2331,6 +2357,75 @@ func TestAnAttachmentSaysItsType(t *testing.T) {
 		line := ctLine(t, ctReplace(t, briefing, `"type":"fork_briefing"`, `"type":`+kind))
 		if got, err := line.AttachmentType(); err == nil {
 			t.Errorf("an attachment whose type is %s is of the type %q, want an error", name, got)
+		}
+	}
+}
+
+// ctReplacement is a content-replacement record of entries, each a JSON value,
+// in ctSession's thread of agent, "" for the main thread, whose record names
+// none. No run reached one, which waits on a flag only Anthropic's servers
+// set: its keys and their order are read from 2.1.310's and 2.1.322's code.
+func ctReplacement(agent string, entries ...string) string {
+	named := ""
+	if agent != "" {
+		named = `"agentId":"` + agent + `",`
+	}
+	return `{"type":"content-replacement","sessionId":"` + ctSession + `",` + named + `"replacements":[` +
+		strings.Join(entries, ",") + `]}`
+}
+
+// ctReplaced is the entry of a content-replacement record that replaces call
+// id's result, its preview abridged.
+func ctReplaced(id string) string {
+	return `{"kind":"tool-result","toolUseId":"` + id + `","replacement":"<persisted-output>\nOutput too large ` +
+		`(212.4KB). Full output saved to: /tmp/box/tool-results/` + id + `.txt\n</persisted-output>"}`
+}
+
+// A CONTENT-REPLACEMENT RECORD NAMES THE RESULTS IT REPLACED: ReplacedResults
+// hands the id of each entry of a content-replacement record whose kind is
+// "tool-result", in order, the main thread's record and a subagent's alike;
+// passes over an entry of another kind, as the harness's resume does; reads
+// nothing off a record of another type, though it lists replacements; and is
+// an error where the record lists them in no shape the harness writes: no
+// list, an object in its place, an entry that is no object, a kind that is no
+// string, and a tool's result named by no string.
+//
+// Mutation: read the ids off every record that lists replacements, or take
+// every entry for a tool's result whatever its kind, and a record that
+// replaces no result names a call; or pass an entry of no shape over, and a
+// list the harness never wrote reads.
+func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
+	t.Parallel()
+	other := `{"kind":"image","toolUseId":"` + ctCall + `","replacement":"x"}`
+	listed := ctReplacement("", ctReplaced(ctCall))
+	for name, tc := range map[string]struct {
+		record string
+		ids    []string
+	}{
+		"the main thread's":   {ctReplacement("", ctReplaced(ctCall), ctReplaced(ctMCPCall)), []string{ctCall, ctMCPCall}},
+		"a subagent's":        {ctReplacement(ctAgent, ctReplaced(ctCall)), []string{ctCall}},
+		"one of another kind": {ctReplacement("", other, ctReplaced(ctMCPCall)), []string{ctMCPCall}},
+		"one of no entries":   {ctReplacement(""), nil},
+		"a result listing replacements": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"replacements":[`+ctReplaced(ctCall)+`],"type":"user"`), nil},
+	} {
+		var got []string
+		err := ctLine(t, tc.record).ReplacedResults(func(id string) { got = append(got, id) })
+		if err != nil || !slices.Equal(got, tc.ids) {
+			t.Errorf("%s names the results %q, %v; want %q", name, strings.Join(got, ","), err,
+				strings.Join(tc.ids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"no list":                    `{"type":"content-replacement","sessionId":"` + ctSession + `"}`,
+		"an object for its list":     strings.Replace(listed, `"replacements":[`, `"replacements":{"x":[`, 1) + "}",
+		"an entry that is no object": ctReplacement("", `"x"`),
+		"a kind that is no string":   ctReplacement("", `{"kind":1,"toolUseId":"`+ctCall+`"}`),
+		"a result naming no call":    ctReplacement("", `{"kind":"tool-result","replacement":"x"}`),
+		"a call named by null":       ctReplacement("", `{"kind":"tool-result","toolUseId":null}`),
+	} {
+		if err := ctLine(t, record).ReplacedResults(func(string) {}); err == nil {
+			t.Errorf("a record of %s replaces results with no error; want one", name)
 		}
 	}
 }
