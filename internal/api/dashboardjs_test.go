@@ -2376,8 +2376,8 @@ const (
 	// added to 5958 KiB's tree: 5971 KiB.
 	// The atlas's Home widget (its card, the two reads behind it, the board
 	// kit's shared "more on the page" link and a two-line row held to its
-	// width) added 2,244 bytes, nearly all script, and took it to 5972.6 KiB
-	// (6,115,968 bytes): 5973 KiB.
+	// width) added 2,283 bytes, nearly all script, and took it to 5972.7 KiB
+	// (6,116,007 bytes): 5973 KiB.
 	treeBudget = 5<<20 + 853<<10
 )
 

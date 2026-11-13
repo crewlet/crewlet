@@ -31,6 +31,13 @@ const WHOLE = {};
 /** The most urgent entries first; the quiet ones a short atlas answers are left out below. */
 const URGENT = { sort: "health", limit: ROWS };
 
+/**
+ * Every row's tracks: the health word in a column of its own, wide enough
+ * for the longer of the two ("Needs a look" beside its dot), so each entry's
+ * name starts where the one above it does; then the name and its reason.
+ */
+const ROW = "6.5rem minmax(0, 1fr)";
+
 /** The page, narrowed to what the card counts. */
 const ATLAS = ["company", "atlas"];
 
@@ -90,7 +97,7 @@ function Attention() {
             sub={look > 0 ? "waiting on a person" : "nothing waiting"}
           />
         </StatGroup>
-        <List className="home-admin-list">
+        <List className="home-admin-list" template={ROW}>
           {rows.map((row) => (
             <ListItem
               key={row.id}
