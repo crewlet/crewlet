@@ -457,7 +457,13 @@ func (r *coordRig) failures() []types.ExecutorFailed {
 
 // completion is the signal the waiter raises for the job the row holds now.
 func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Event) {
-	run := r.get(turnID)
+	return r.completionIn(r.t.Context(), turnID)
+}
+
+// completionIn is completion from inside a call the coordinator made, under
+// that call's context.
+func (r *coordRig) completionIn(ctx context.Context, turnID string) (types.ExecutorFinished, *events.Event) {
+	run := r.getIn(ctx, turnID)
 	payload := types.ExecutorFinished{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, LaunchID: run.LaunchID,

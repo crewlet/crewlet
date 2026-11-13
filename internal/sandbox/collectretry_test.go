@@ -391,8 +391,18 @@ func (s *silentStore) WatchLog(ctx context.Context, turnID string) (<-chan LogVi
 // redelivers it or the poll announces it again.
 func collectAgain(t *testing.T, rig *coordRig) error {
 	t.Helper()
-	payload, ev := rig.completion("t1")
-	return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	return collectAgainIn(t.Context(), t, rig)
+}
+
+// collectAgainIn is collectAgain from inside a call the coordinator made, as a
+// second delivery of the completion arrives while the first is still being
+// collected: under a context derived from that call's (without its
+// cancellation, since the queue's second delivery outlives the first's
+// collection), never one made up.
+func collectAgainIn(ctx context.Context, t *testing.T, rig *coordRig) error {
+	t.Helper()
+	payload, ev := rig.completionIn(ctx, "t1")
+	return rig.coordinator.OnCompleted(ctx, payload, ev)
 }
 
 // heldThroughSilence collects t1 once per give-up window, for longer than the

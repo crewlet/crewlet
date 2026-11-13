@@ -509,7 +509,7 @@ func TestAReplySaysWhatItsFlagNamesOnce(t *testing.T) {
 			}
 			said := err.Error()
 			for _, kind := range kinds {
-				if errors.Is(err, kind) != (kind == tc.kind) {
+				if errors.Is(err, kind) != errors.Is(kind, tc.kind) {
 					t.Errorf("the asker reads %q as %v: %v; want %v alone", said, kind, errors.Is(err, kind), tc.kind)
 				}
 			}

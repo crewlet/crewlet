@@ -497,12 +497,12 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 				mu       sync.Mutex
 				statuses []string
 			)
-			rig.runner.CollectFunc = func(context.Context) error {
+			rig.runner.CollectFunc = func(ctx context.Context) error {
 				if reads.Add(1) != 1 {
 					return nil
 				}
 				store.hold()
-				go func() { theirs <- collectAgain(t, rig) }()
+				go func() { theirs <- collectAgainIn(context.WithoutCancel(ctx), t, rig) }()
 				<-store.held
 				store.silence("WatchLog", "ReleaseClaim")
 				return nil
