@@ -18,6 +18,10 @@
 // organization as an account, and each product as what its account does.
 // Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
 // own id and name, with a bot token one of the agents already holds.
+// Its eleventh and twelfth read DigitalOcean and Expo (ADR-0146), each with a
+// read-only identity a person makes for the atlas alone, since neither
+// vendor gives the company a credential of its own: a team's resources and
+// the names that point at them, and an account's projects and their builds.
 //
 // # Its own duty, never the reconcile loop
 //
