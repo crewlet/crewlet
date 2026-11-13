@@ -23,7 +23,7 @@ import { EntryPage } from "./EntryPage.tsx";
 import { touchingSentence } from "./entry.tsx";
 import { PURGE_HELD } from "./EntryActions.tsx";
 import { Review } from "./Review.tsx";
-import { addArgs, draftKey, factsOf, relationsFrom, reviewDecisions } from "./writes.ts";
+import { addArgs, draftKey, factsOf, relationsFrom, reviewDecisions, undecided } from "./writes.ts";
 
 const ATLAS_ACTS = [
   "atlas_add_entry",
@@ -163,6 +163,14 @@ describe("what the write controls send", () => {
       "atlas_confirm",
       "atlas_retire",
     ]);
+    // WHAT THE SETTINGS DECLARE IS SETTLED THERE: no button that could only be refused.
+    const declared = {
+      ...disagreement!,
+      fact: { ...disagreement!.fact!, source: { kind: "settings" as const, revision: "r7" } },
+    };
+    expect(reviewDecisions(declared)).toEqual([]);
+    expect(undecided(declared)).toMatch(/settled there/);
+    expect(undecided(disagreement!)).toBeNull();
   });
 
   test("the words over an entry's diagram count what the diagram draws, the entries around it among them", () => {

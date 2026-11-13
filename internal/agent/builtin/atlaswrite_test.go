@@ -802,6 +802,7 @@ func TestAnAtlasRefusalIsWordedForThePersonWhoPressed(t *testing.T) {
 		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": atlasToken()}, "looks like a credential"},
 		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "Not A Slug"}, "1 to 40 lowercase letters"},
 		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "billing"}, "holds an entry with this kind and key already"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "bucket", "key": "acme/my bucket"}, "letters, digits and . _ ~ : + -"},
 		{builtin.AtlasAddEntryTool, map[string]any{"kind": "host", "key": "ssh/web-9"}, "declared by the company's settings"},
 		{builtin.AtlasCorrectTool, map[string]any{"atlas_entry": "host:ssh/web-1", "fact": "address", "value": "10.0.0.5", "wrong": true},
 			"declared by the company's settings"},
@@ -816,5 +817,48 @@ func TestAnAtlasRefusalIsWordedForThePersonWhoPressed(t *testing.T) {
 		if strings.Contains(said, atlasToken()) || strings.Contains(said, "atlas_") || strings.Contains(said, "`") {
 			t.Errorf("%s told a person %q, which repeats the value or names a tool or an argument", c.tool, said)
 		}
+	}
+}
+
+// AN ENTRY WAITS UNTIL SOMEBODY SAYS IT IS THERE: one an agent reported stays
+// likely after a person corrects a fact on it, a confirmation of it then
+// records the person's own word for the entry, and only the caller's own add
+// is finished by adding again.
+//
+// Mutation: answer a confirmation by the entry's state alone and the entry a
+// person corrected one fact of stays likely for good, with nothing to press.
+func TestConfirmingAnEntrySomebodyOnlyCorrectedMakesItConfirmed(t *testing.T) {
+	t.Parallel()
+	ledger := newAtlasLedger()
+	w := atlasWrites(t, ledger)
+	cache := atlas.MustRef(atlas.KindDatastore, "acme/cache")
+	reported, err := atlas.Exists(cache, atlas.AgentSource("sre", "turn-1", atlas.EvidenceCall), atlasWriteAt.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.mu.Lock()
+	reported.Position = uint64(len(ledger.claims) + 1)
+	ledger.claims = append(ledger.claims, reported)
+	ledger.versions[cache.ID().String()] = reported.Position
+	ledger.mu.Unlock()
+	shown := func() atlas.Entry {
+		return entryNamed(t, viewOf(t, w), cache)
+	}
+	mustWrite(t, w[builtin.AtlasCorrectTool], map[string]any{"atlas_entry": "datastore:acme/cache", "fact": "purpose",
+		"value": "Sessions"})
+	if e := shown(); e.Word != atlas.WordLikely {
+		t.Fatalf("after a person corrected one fact the entry reads %s, %s; the case needs it still likely", e.State, e.Word)
+	}
+	// Adding it again is no way to finish an add the caller never made.
+	if got, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "datastore", "key": "acme/cache",
+		"name": "Cache"}); !got.Failed {
+		t.Errorf("an add of an entry an agent reported, by a person who only corrected it, answered %s", got.Output)
+	}
+	confirmed := mustWrite(t, w[builtin.AtlasConfirmTool], map[string]any{"atlas_entry": "datastore:acme/cache"})
+	if confirmed["unchanged"] == true {
+		t.Fatalf("confirming a likely entry recorded nothing: %v", confirmed)
+	}
+	if e := shown(); e.Word != atlas.WordConfirmed || e.State != atlas.StateConfirmed {
+		t.Errorf("after the confirmation the entry reads %s, %s; want confirmed", e.State, e.Word)
 	}
 }

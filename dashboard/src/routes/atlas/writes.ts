@@ -170,6 +170,29 @@ export interface Decision {
   removes?: boolean;
 }
 
+/** Who made a claim, as far as deciding it goes. */
+type Voice = { source: { kind: string } };
+
+/**
+ * Why a disagreement is not decided in the atlas, or null where it is. What
+ * the company's settings or the engine's own records declare is changed where
+ * it is declared: the engine refuses every decision on it here, so no button
+ * is drawn that could only be refused.
+ */
+export function settledElsewhere(shown: Voice, others: readonly Voice[] = []): string | null {
+  const kinds = [shown, ...others].map((claim) => claim.source.kind);
+  if (kinds.includes("settings")) {
+    return "The company’s settings declare this, so it is settled there: change the settings, or what the other source reports.";
+  }
+  if (kinds.includes("records")) {
+    return "The engine’s own records say this, so it is settled where they come from, never in the atlas.";
+  }
+  return null;
+}
+
+/** Why an owner the sources disagree on is not decided by a button: Set owner names the one owner. */
+export const OWNER_DECIDED_BY = "An entry has one owner. Name it with Set owner on the entry.";
+
 /** A value as a sentence writes it. */
 function said(value: { type: string; text: string }): string {
   return value.type === "word" ? valueWord(value.text) : value.text;
@@ -180,6 +203,7 @@ export function factDecisions(
   entry: Pick<AtlasEntry, "ref" | "name">,
   fact: AtlasFactView,
 ): Decision[] {
+  if (settledElsewhere(fact, fact.others)) return [];
   const subject = entryArg(fact.of ?? entry.ref);
   const label = factLabel(fact);
   const many = factSpec(fact.fact).traits.includes("many");
@@ -230,6 +254,7 @@ export function relationDecisions(
   edge: AtlasEdge,
   targetName: string,
 ): Decision[] {
+  if (settledElsewhere(edge, edge.others)) return [];
   const subject = entryArg(entry.ref);
   const words = `${RELATIONS[edge.relation].toLowerCase()} ${targetName}`;
   const kept = `Kept that ${entry.name} ${words}`;
@@ -262,27 +287,18 @@ export function relationDecisions(
       },
     ];
   }
-  if ((edge.external === "seat" || edge.external === "unit") && edge.name) {
-    return [
-      {
-        key: "keep",
-        tool: "atlas_set_owner",
-        args: { atlas_entry: subject, [edge.external]: edge.name },
-        label: "Keep this owner",
-        done: `Kept the owner of ${entry.name}`,
-        accepts: true,
-      },
-      {
-        key: "remove",
-        tool: "atlas_set_owner",
-        args: { atlas_entry: subject, clear: true },
-        label: "Clear the owner",
-        done: `Cleared the owner of ${entry.name}`,
-        removes: true,
-      },
-    ];
-  }
+  // AN OWNER IS NAMED BY SET OWNER, which replaces every owner a person
+  // named: a button here could only keep or clear all of them at once.
   return [];
+}
+
+/** Why one waiting item carries no decision of its own, or null where it does. */
+export function undecided(item: AtlasReviewItem): string | null {
+  const claim = item.fact ?? item.relation;
+  if (!claim) return null;
+  const elsewhere = settledElsewhere(claim, claim.others);
+  if (elsewhere) return elsewhere;
+  return item.relation?.relation === "owned_by" ? OWNER_DECIDED_BY : null;
 }
 
 /** The decisions one waiting item allows, the one that accepts what is shown first. */

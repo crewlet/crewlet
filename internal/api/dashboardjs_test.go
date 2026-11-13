@@ -2328,9 +2328,9 @@ const (
 	// Adding, correcting and confirming in the atlas (Add entry, an entry's
 	// actions and their dialogs, History, Changes, Review and its bulk
 	// decision, and the vocabulary's fact and relation tables the dialogs
-	// offer from) took it to 5942.0 KiB (6,084,566 bytes, +47,460, nearly all
-	// of it the atlas chunk's script): 5942 KiB.
-	treeBudget = 5<<20 + 822<<10
+	// offer from) took it to 5943.1 KiB (6,085,783 bytes, +48,677, nearly all
+	// of it the atlas chunk's script): 5944 KiB.
+	treeBudget = 5<<20 + 824<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

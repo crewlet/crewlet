@@ -134,7 +134,7 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
           blocked={
             retired
               ? "It is retired. Restore it first."
-              : entry.state === "confirmed"
+              : entry.state === "confirmed" && entry.word === "confirmed"
                 ? "A person, the settings or the engine’s records already stand behind it."
                 : undefined
           }
@@ -361,7 +361,12 @@ function OwnerDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
       ? { kind: held.external, name: held.name ?? "" }
       : null;
   const [owner, setOwner] = useState<OwnerChoice>(before);
-  const same = owner?.kind === before?.kind && owner?.name === before?.name;
+  // THE SAME OWNER IS STILL A CHANGE where no person stands behind it yet:
+  // naming it makes it the person's own, and clearing withdraws a suggestion.
+  const settled = held ? held.source.kind === "person" && held.standing === "settled" : false;
+  const owned = entry.relations.some((edge) => edge.relation === "owned_by");
+  const same =
+    owner?.kind === before?.kind && owner?.name === before?.name && (owner ? settled : !owned);
   return (
     <WriteDialog
       title={`Who owns ${entry.name}`}
@@ -448,14 +453,17 @@ function UnrelateDialog({
 }) {
   const write = useAct("atlas_unrelate");
   const [picked, setPicked] = useState("");
-  const options: SelectOption[] = drawn.map((edge, i) => ({
-    value: String(i),
+  // A PICK IS THE RELATION ITSELF, never its place in a list a refresh reorders.
+  const keyOf = (edge: (typeof drawn)[number]) =>
+    `${edge.relation}>${edge.to ?? `page:${edge.name ?? ""}`}`;
+  const options: SelectOption[] = drawn.map((edge) => ({
+    value: keyOf(edge),
     label: `${RELATIONS[edge.relation]} ${
       edge.to ? (names.get(edge.to) ?? "an entry you are not shown") : "a Doclet page"
     }`,
     description: edge.to ? undefined : edge.name,
   }));
-  const edge = picked === "" ? undefined : drawn[Number(picked)];
+  const edge = drawn.find((one) => keyOf(one) === picked);
   return (
     <WriteDialog
       title={`Remove a relation from ${entry.name}`}
@@ -740,7 +748,11 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
           { atlas_entry: entryArg(entry.ref) },
           { done: `Retired ${entry.name}` },
         );
-        if (result?.kind === "refused") throw new Error(result.sentence);
+        // ONLY A WRITE THE ENGINE TOOK CLOSES IT: a refusal is drawn here, and
+        // one nobody can vouch for keeps its Retry in the toast.
+        if (result?.kind !== "applied" && result?.kind !== "pending") {
+          throw new Error("The entry was not retired.");
+        }
         onClose();
       }}
     >
@@ -761,7 +773,12 @@ function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
   const [value, setValue] = useState("");
   const [typed, setTyped] = useState("");
   const values = [...new Set(entry.facts.map((view) => view.value.text))];
-  const phrase = what === "entry" ? entry.ref.key : value;
+  // A MERGED ENTRY IS ERASED A KEY AT A TIME: a purge names one key, and what
+  // is recorded under the others stays until each is purged.
+  const merged = entry.members.length > 1;
+  const [member, setMember] = useState(entryArg(entry.ref));
+  const memberKey = member.slice(member.indexOf(":") + 1);
+  const phrase = what === "entry" ? memberKey : value;
   const blocked =
     what === "value" && value === ""
       ? "Pick the value to erase"
@@ -779,7 +796,7 @@ function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
       alert
       onClose={onClose}
       onSubmit={() =>
-        write.run(what === "entry" ? { atlas_entry: entryArg(entry.ref) } : { value }, {
+        write.run(what === "entry" ? { atlas_entry: member } : { value }, {
           done: what === "entry" ? `Purged ${entry.name}` : "Purged a value from the atlas",
         })
       }
@@ -817,9 +834,30 @@ function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
           )}
         </FormField>
       )}
+      {what === "entry" && merged && (
+        <FormField
+          label="Key"
+          required
+          helper="This entry is several keys merged into one. A purge erases one key and what is recorded under it; the others stay until each is purged."
+        >
+          {(field) => (
+            <Select
+              id={field.id}
+              value={member}
+              options={entry.members.map((one) => ({ value: entryArg(one), label: one.key }))}
+              onChange={(next) => {
+                setMember(String(next));
+                setTyped("");
+              }}
+            />
+          )}
+        </FormField>
+      )}
       <p>
         {what === "entry"
-          ? `This erases ${entry.name} and everything recorded about it, on every node, its history included, and keeps it from being recorded again.`
+          ? merged
+            ? `This erases everything recorded under ${memberKey}, on every node, its history included, and keeps it from being recorded again.`
+            : `This erases ${entry.name} and everything recorded about it, on every node, its history included, and keeps it from being recorded again.`
           : "This erases the value from every entry and from the history, on every node, and keeps it from being recorded again."}{" "}
         <strong>Nothing undoes it.</strong> The engine asks you to confirm who you are before it
         runs.

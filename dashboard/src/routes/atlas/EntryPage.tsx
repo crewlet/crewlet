@@ -33,7 +33,13 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { Changes } from "./Changes.tsx";
 import { ClaimList, DecisionButtons, type ShownClaim } from "./Decisions.tsx";
 import { EntryActions, type Names } from "./EntryActions.tsx";
-import { factDecisions, relationDecisions, type Decision } from "./writes.ts";
+import {
+  OWNER_DECIDED_BY,
+  factDecisions,
+  relationDecisions,
+  settledElsewhere,
+  type Decision,
+} from "./writes.ts";
 import { ATLAS_POLL_MS, SELECT_KEY, TRACE_KEY } from "./filters.ts";
 import {
   EntryHead,
@@ -410,6 +416,7 @@ function Sources({ entry, names, now }: { entry: AtlasEntry; names: Names; now: 
                 }}
                 others={fact.others ?? []}
                 decisions={factDecisions(entry, fact)}
+                held={settledElsewhere(fact, fact.others)}
                 seatName={seatName}
                 now={now}
               />
@@ -426,6 +433,10 @@ function Sources({ entry, names, now }: { entry: AtlasEntry; names: Names; now: 
                   edge,
                   edge.to ? (names.get(edge.to) ?? "it") : "it",
                 )}
+                held={
+                  settledElsewhere(edge, edge.others) ??
+                  (edge.relation === "owned_by" ? OWNER_DECIDED_BY : null)
+                }
                 seatName={seatName}
                 now={now}
               />
@@ -495,6 +506,7 @@ function Disagreement({
   shown,
   others,
   decisions,
+  held,
   seatName,
   now,
 }: {
@@ -503,6 +515,8 @@ function Disagreement({
   shown: ShownClaim;
   others: readonly AtlasClaimed[];
   decisions: readonly Decision[];
+  /** Why no decision is offered here, where none is. */
+  held: string | null;
   seatName: (handle: string) => string;
   now: number;
 }) {
@@ -516,6 +530,7 @@ function Disagreement({
       </Card.Header>
       <Card.Body>
         <ClaimList shown={shown} others={others} seatName={seatName} now={now} />
+        {held && <p className="muted">{held}</p>}
         <DecisionButtons decisions={decisions} />
       </Card.Body>
     </Card>

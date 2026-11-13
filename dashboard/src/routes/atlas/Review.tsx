@@ -43,7 +43,7 @@ import { entryPath } from "./entry.tsx";
 import { ATLAS_POLL_MS } from "./filters.ts";
 import { EntryDisc } from "./parts.tsx";
 import { KINDS, RELATIONS, factLabel } from "./words.ts";
-import { reviewDecisions, type Decision } from "./writes.ts";
+import { reviewDecisions, undecided, type Decision } from "./writes.ts";
 
 /** What each reason to wait is called, one and many, and what it means. */
 export const REVIEW_KINDS: Readonly<
@@ -215,6 +215,11 @@ export function Review() {
                           <Text variant="body" tone="secondary">
                             {KINDS[item.entry.kind].word}{" "}
                             <span className="mono">{item.entry.key}</span>. {words.why}
+                          </Text>
+                        )}
+                        {undecided(item) && (
+                          <Text variant="body" tone="secondary">
+                            {undecided(item)}
                           </Text>
                         )}
                         <DecisionButtons decisions={reviewDecisions(item)} />

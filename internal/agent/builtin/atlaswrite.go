@@ -467,7 +467,9 @@ func atlasWriteFailure(ctx context.Context, tool string, actor Actor, entry atla
 		case !r.PersonRefusal.IsZero():
 		case errors.Is(err, atlasdomain.ErrStaleVersion):
 			r = toPerson(r, caveat.AtlasChangedMeanwhile())
-		case errors.Is(err, atlasdomain.ErrInvalid):
+		// THE VOCABULARY'S REFUSALS ALONE: the log refuses other things as
+		// invalid (an operation id), which are no form of a person's to change.
+		case errors.Is(err, atlas.ErrInvalid), errors.Is(err, atlas.ErrCredential):
 			r = toPerson(r, atlasForm(err))
 		}
 		return r
@@ -660,9 +662,11 @@ func atlasForm(err error) caveat.Refusal {
 	}
 	// THE RULE ALONE: the sentence leads with the kind or the fact it is about
 	// ("service key: ..."), which the person's own form already names.
+	// A RULE MAY HOLD A COLON OF ITS OWN (a key's alphabet lists one), so only
+	// the lead is cut.
 	rule := atlasdomain.Sentence(err)
-	if i := strings.LastIndex(rule, ": "); i >= 0 {
-		rule = rule[i+2:]
+	if _, after, cut := strings.Cut(rule, ": "); cut {
+		rule = after
 	}
 	return caveat.AtlasNotInItsForm(rule)
 }
@@ -945,7 +949,11 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	// the caller's own claim already stands on the entry, what the call still
 	// says of it and the atlas does not is recorded, and an add that would
 	// record nothing is refused as the second add it is.
-	mine := found && slices.Contains(e.Sources, n.person)
+	// THE CALLER'S OWN ADD, not any claim of theirs: a person who corrected a
+	// fact on an entry an integration reports has not added it.
+	mine := found && slices.ContainsFunc(n.recorded, func(c atlas.Claim) bool {
+		return c.Subject == ref && c.Facet.Kind == atlas.FacetExists && c.Source == n.person && !c.Denied
+	})
 	if found && !mine {
 		r := toPerson(refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s "+
 			"is in the atlas already, as entry %s.", n.tool, ref, e.ID)), caveat.AtlasEntryExists(false))
@@ -1099,6 +1107,11 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		r := failed(fmt.Sprintf("%s: %s holds many values: `value` names the one that is wrong.", n.tool, f))
 		return atlasPlan{}, &r
 	}
+	// AS THE ATLAS WRITES IT: a value named in another spelling of its
+	// grammar is the value shown.
+	if v, invalid := f.Value(lookup); many && invalid == nil {
+		lookup = v.Text
+	}
 	now, held := factOn(m.entry, ref, f, lookup)
 	if !held {
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: the atlas shows no %s on %s "+
@@ -1218,7 +1231,10 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			"with %s.", n.tool, ref, AtlasRestoreTool))
 		return atlasPlan{}, &r
 	}
-	if m.entry.State == atlas.StateConfirmed {
+	// CONFIRMED IS THE ENTRY'S OWN WORD, not only its state: an entry an agent
+	// reported stays "likely" after a person corrects one fact on it, and it
+	// waits in review until somebody says the entry itself is there.
+	if m.entry.State == atlas.StateConfirmed && m.entry.Word == atlas.WordConfirmed {
 		return plan, nil
 	}
 	exists, refusal := n.claim(atlas.Exists(ref, n.person, n.at))

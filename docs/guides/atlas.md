@@ -249,11 +249,14 @@ is gone the moment its cause is:
 
 - **Disagreements**: a fact or a relation the sources disagree on, with the
   value shown and every other value beside it. **Keep** records the value shown
-  as yours again; **Take** records the other one as yours.
+  as yours again; **Take** records the other one as yours. Where one side
+  is what the company's settings or the engine's own records declare, no button
+  is drawn: it is settled where it is declared, and the item says so.
 - **Unconfirmed**: an entry only an agent reported, with nothing the engine
   could check. It stays off the map until you **Confirm** it, or **Retire** it.
 - **Likely**: an entry an agent backed with a call or a file, that no person,
-  integration or setting stands behind yet.
+  integration or setting stands behind yet. It stays here, even after
+  somebody corrects one fact on it, until somebody confirms the entry itself.
 
 Pick several with their boxes to decide them together: **Accept as shown**
 confirms each entry and keeps each shown value, and **Retire** retires the
