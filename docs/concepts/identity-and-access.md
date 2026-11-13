@@ -648,9 +648,11 @@ on the engine's own surfaces: Worklet, Doclet, Chatlet and `a2a_ask`. During a
 rolling upgrade a node of the older build cannot read a record the newer build
 wrote with its requester, so it hands that write's wake back for a node of the
 newer build rather than wake anybody from it, and a wake no such node took is
-kept until the next one starts and delivers it: for the minutes of the roll a
-wake can come late, never from a node that could not read whom its write was
-made for
+kept until one delivers it — a node already running within seconds of the
+keep, the next to start otherwise — save the losses
+[Running a Fleet](../guides/fleet.md#draining-and-rolling-upgrades) names: for
+the minutes of the roll a wake can come late, never from a node that could not
+read whom its write was made for
 ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 An older data node refuses a routed write whose actor carries a requester,
 naming the key (`actor.provenance.WrittenFor` for Worklet,

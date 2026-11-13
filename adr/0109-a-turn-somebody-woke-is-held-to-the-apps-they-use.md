@@ -199,9 +199,10 @@ a roll:
 - an older notify parser cannot read that record either, so it passes the record's wake back to
   the inbound group for a node of the newer build rather than acknowledging it as a payload it
   cannot parse (internal/notify, crewlet#993); a wake no such node took within the group's
-  deliveries is kept with the group's unhandled deliveries, and the next node of the newer build
-  to start after it is kept replays it, so the wake is late rather than lost, and never delivered
-  by a node that could not read its carrier;
+  deliveries is kept with the group's unhandled deliveries, and a node of the newer build replays
+  it — one already running within a poll of the keep, the next to start otherwise — so the wake
+  is late rather than acknowledged away, save the losses internal/notify's Deferral names, and
+  never delivered by a node that could not read its carrier;
 - an older data node refuses a routed write whose actor carries a requester, naming the key
   (`actor.provenance.WrittenFor` for Worklet, `args.Actor.WrittenFor` for Doclet and Chatlet), and
   runs none of it (ADR-0025's amendment). The router asks the next data node, so a data node of the
