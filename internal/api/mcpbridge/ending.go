@@ -472,11 +472,11 @@ func (o *binding) holdRefusalLocked(over <-chan struct{}) {
 }
 
 // holdSessionOpen holds a request that opens a session on the opening
-// ([opensSession]) for the opening's end until the request is over, as the
-// answer of a call it refuses is held ([binding.holdRefusalLocked]), and
-// reports whether the opening may serve it: false, holding nothing, once the
-// opening has ended. over is the request's context's Done, closed once its
-// handler has returned.
+// ([opensSession]) for the opening's end until the MCP handler has returned
+// it, as the answer of a call it refuses is held ([binding.holdRefusalLocked]),
+// and reports whether the opening may serve it: false, holding nothing, once
+// the opening has ended. served is closed once the handler has returned the
+// request ([Bridge.serveMCP]).
 //
 // THE SDK OPENS THE SESSION AS IT SERVES THE REQUEST, and the end closes the
 // sessions the opening's servers hold as it finds them once the answers it
@@ -485,16 +485,25 @@ func (o *binding) holdRefusalLocked(over <-chan struct{}) {
 // initialize's, reaches the box before the close, which writes none. A
 // session opened after the close began would be one nothing ever closed.
 //
+// THE HANDLER'S RETURN, NEVER THE REQUEST'S CONTEXT. The context ends before
+// it where the box gave the request up, its connection failed, or the node
+// that relayed it closed it, and the handler goes on: still opening the
+// session, which it would then file after the end's close had looked, or
+// still answering on it, whose close waits for that answer, as the SDK's close
+// of a session waits for every request in flight on it, and so held the end
+// past its bound. By the handler's return the session is filed among the
+// server's, or closed.
+//
 // UNDER ONE LOCK WITH THE END, which marks the opening ended under it before
 // it waits for anything ([binding.endKeeping]): a request either came first,
 // and the end waits for it, or finds the opening ended, and is never served.
-func (o *binding) holdSessionOpen(over <-chan struct{}) bool {
+func (o *binding) holdSessionOpen(served <-chan struct{}) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.ended {
 		return false
 	}
-	o.holdRefusalLocked(over)
+	o.holdRefusalLocked(served)
 	return true
 }
 

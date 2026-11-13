@@ -267,7 +267,8 @@
 //
 // AND SO IS A REQUEST THAT OPENED A SESSION ON THE OPENING before its end
 // ([binding.holdSessionOpen]): the SDK opens the session as it serves the
-// request, so the ending waits for the request before it closes the box's
+// request, so the ending waits for the MCP handler to return the request,
+// whatever became of its box's connection, before it closes the box's
 // sessions, and that session is one of those it closes. A request that opens a
 // session once the opening has ended is never served there: its routing found
 // the opening a moment before, and it is turned away to ask again
@@ -1685,31 +1686,37 @@ func opensSession(r *http.Request) bool {
 // as the request arrives, and that is the request's credential to its end.
 //
 // A REQUEST THAT OPENS A SESSION ([opensSession]) IS SERVED ONLY BY AN OPENING
-// THAT HAS NOT ENDED, and that opening's end waits for it to be over before it
-// closes the box's sessions ([binding.holdSessionOpen]), so the session the SDK
-// opens as it serves the request is among those the end closes. One whose
-// opening ended after its routing found it is TURNED AWAY TO ASK AGAIN, a 503
-// with a Retry-After, as a call to the notes route is ([Bridge.serveSteer]):
-// the run ended, the seat left this node, or a recovery opened the job again,
-// and the request's next try is routed afresh, to the opening that serves the
-// box now, here or on the seat's next holder, or refused where the run is
-// over. NEVER SERVED THERE: a session opened on an ended opening is one its end
-// never closes, which answers every call made on it as one not run, a box told
-// to call again calling on it again. And never the SDK's 400 "no server
-// available", which a harness takes for its own malformed request rather than
-// for one to make again.
+// THAT HAS NOT ENDED, and that opening's end waits for the MCP handler to
+// return it before it closes the box's sessions ([binding.holdSessionOpen]), so
+// the session the SDK opens as it serves the request is among those the end
+// closes. One whose opening ended after its routing found it is TURNED AWAY TO
+// ASK AGAIN, a 503 with a Retry-After, as a call to the notes route is
+// ([Bridge.serveSteer]): the run ended, the seat left this node, or a recovery
+// opened the job again, and the request's next try is routed afresh, to the
+// opening that serves the box now, here or on the seat's next holder, or
+// refused where the run is over. NEVER SERVED THERE: a session opened on an
+// ended opening is one its end never closes, which answers every call made on
+// it as one not run, a box told to call again calling on it again. And never
+// the SDK's 400 "no server available", which a harness takes for its own
+// malformed request rather than for one to make again.
 //
 // A request on a session it names needs neither: that session is closed by the
 // opening's end, and the SDK answers a request on a closed one with the 404
 // that has a client open a new session, through the routing.
 func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *binding) {
-	if opensSession(r) && !opened.holdSessionOpen(r.Context().Done()) {
-		log.InfoContext(r.Context(), "mcp_bridge_session_open_turned_away", "run_id", opened.session.RunID,
-			"launch_id", opened.id, "seat", opened.session.Handle,
-			"detail", "the run's session on this node ended as a request opening an MCP session on it "+
-				"reached it; the box is told to ask again, which reaches the opening that serves it now")
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(holderRetryCeiling))
-		return
+	if opensSession(r) {
+		// HELD UNTIL THE HANDLER HAS RETURNED THE REQUEST, never only until
+		// the request's context ends ([binding.holdSessionOpen]).
+		served := make(chan struct{})
+		defer close(served)
+		if !opened.holdSessionOpen(served) {
+			log.InfoContext(r.Context(), "mcp_bridge_session_open_turned_away", "run_id", opened.session.RunID,
+				"launch_id", opened.id, "seat", opened.session.Handle,
+				"detail", "the run's session on this node ended as a request opening an MCP session on it "+
+					"reached it; the box is told to ask again, which reaches the opening that serves it now")
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(holderRetryCeiling))
+			return
+		}
 	}
 	b.streamable.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), servedOpening{}, opened)))
 }

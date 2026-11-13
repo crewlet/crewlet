@@ -39,6 +39,9 @@ type bubbled struct {
 	bridge  *mcpbridge.Bridge
 	session *mcpbridge.Session
 	ledger  *ledger
+	// url is the job's endpoint as its box dials it, for a case whose request
+	// goes through the bridge's own route.
+	url string
 }
 
 // openBubbled opens a session of the given tools, recorded on l. Called inside
@@ -85,7 +88,7 @@ func openBubbledWith(t *testing.T, l *ledger, led mcpbridge.Ledger, ready func(*
 	if ready != nil {
 		ready(b.session)
 	}
-	if b.bridge.Open(t.Context(), b.session) == "" {
+	if b.url = b.bridge.Open(t.Context(), b.session); b.url == "" {
 		t.Fatal("no endpoint was minted")
 	}
 	return b
@@ -1109,6 +1112,86 @@ func TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt(t *testing.T) {
 	if n := f.session.Connections(); n != 0 {
 		t.Errorf("%d MCP sessions survive the end, the one the request opened among them", n)
 	}
+}
+
+// AN OPENING'S END IS HELD NO LONGER THAN ITS BOUND BY A SESSION ITS BOX GAVE UP
+// OPENING, AND STILL CLOSES THAT SESSION. A request that opens a session is held
+// for the opening's end until the MCP handler has returned it
+// (TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt), never only until
+// the request's context ends: the context ends as the box gives the request up
+// or its connection fails, and the handler goes on. Held only that long, an end
+// coming after the box gave up closed the box's sessions while the SDK was
+// still answering on the one the request opened, and the SDK's close of a
+// session waits for every request in flight on it: the end waited out that
+// answer, past its bound, for a box that no longer reads. And where the SDK had
+// not yet filed the session, the close missed it, and it lived on, on an
+// opening that had ended.
+//
+// Mutation: hold the request only until its context ends (its Done for the
+// channel the handler's return closes), and the end is still waiting once its
+// bound has passed.
+func TestAnOpeningsEndIsHeldNoLongerThanItsBoundByASessionItsBoxGaveUpOpening(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		b := openBubbled(t, &ledger{})
+		mux := http.NewServeMux()
+		mux.Handle(mcpbridge.PathPrefix+"{token}", b.bridge.Handler())
+		entered, release := make(chan struct{}), make(chan struct{})
+		enter := sync.OnceFunc(func() { close(entered) })
+		letGo := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(letGo)
+		// THE SESSION'S ANSWER IS STILL BEING MADE: its initialize is held on
+		// the opening's own server, after the SDK opened the session.
+		mcpbridge.OpeningServers(b.session)[0].AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "initialize" {
+					enter()
+					<-release
+				}
+				return next(ctx, method, req)
+			}
+		})
+		ctx, giveUp := context.WithCancel(t.Context())
+		defer giveUp()
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, b.url, strings.NewReader(initializeRequest))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			mux.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+		<-entered
+		// THE BOX GIVES THE REQUEST UP, which ends its context, as a server
+		// ends the request of a box whose connection closed.
+		giveUp()
+		synctest.Wait()
+
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			b.bridge.Close("run-1")
+		}()
+		synctest.Wait()
+		if closedNow(ended) {
+			t.Fatal("the end returned before its bound, the session it let open still being answered")
+		}
+		time.Sleep(mcpbridge.EndAnswerWait)
+		synctest.Wait()
+		if !closedNow(ended) {
+			letGo()
+			<-ended
+			t.Fatal("the end waited past its bound on a session its box gave up opening")
+		}
+
+		// THE HANDLER RETURNS, and the session is closed behind the end.
+		letGo()
+		<-served
+		mcpbridge.AwaitClosing(b.bridge)
+		if n := b.session.Connections(); n != 0 {
+			t.Errorf("%d MCP sessions survive the end, the one the box gave up opening among them", n)
+		}
+	})
 }
 
 // parkedOpening is a seat's job opened on a bridge that serves the job's
