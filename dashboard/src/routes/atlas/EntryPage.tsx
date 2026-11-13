@@ -417,7 +417,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
         <Stack gap={3}>
           {entry.sources.map((source) => {
             const values = says(source);
-            const named = source.kind === "settings" || source.kind === "records";
+            const named =
+              source.kind === "settings" || source.kind === "records" || source.kind === "code";
             const name = sourceName(source, seatName);
             return (
               <Card
