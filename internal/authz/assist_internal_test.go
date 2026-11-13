@@ -29,7 +29,7 @@ func TestARowStatesItsNatureAndTheListAloneSaysNever(t *testing.T) {
 				"never is the human-only list's alone", a, r.assist)
 		}
 	}
-	for a, entry := range assistantNever {
+	for a, entry := range assistantNever() {
 		if _, known := rules[a]; !known {
 			t.Errorf("the human-only list names %s, which the table has no row for", a)
 		}
@@ -125,7 +125,7 @@ func TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne(t *testing.T) {
 			continue
 		}
 		rows++
-		_, listed := assistantNever[a]
+		_, listed := assistantNever()[a]
 		for _, object := range []Object{self, {Kind: KindPerson, Owner: other, ID: other},
 			{Kind: KindCompany}, {}} {
 			if d := Decide(t.Context(), through(iam.AssistScopeRead), a, object, NoChart{},

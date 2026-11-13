@@ -338,32 +338,35 @@ func (t *atlasWrite) versions(ctx context.Context, n *atlasNow, plan atlasPlan) 
 // the chart.
 func (t *atlasWrite) now(ctx context.Context, turn *turnctx.Turn, actor Actor) (*atlasNow, *tools.Result) {
 
-	n := &atlasNow{tool: t.Name(), at: t.deps.now(), person: atlas.PersonSource(actor.Handle)}
-	answer, read, why := t.read.atlas(ctx, turn, t.Name(), atlasdomain.DefaultRead(), n.at)
-	if why != "" {
-		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: %s", t.Name(), why))
-		return nil, &r
+	n, refusal := readAtlasNow(ctx, t.read, turn, t.Name(), t.deps.now())
+	if refusal != nil {
+		return nil, refusal
 	}
-	// A CHANGE IS DECIDED ON ALL OF WHAT THE CALLER READS: a source this node
-	// serves that answered in part may hold the very fact the write would
-	// claim beside. One this node does not serve, and Gitlet where the caller
-	// may not read it, hold nothing the write may touch.
-	for _, c := range answer.Coverage {
-		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !read {
-			continue
-		}
-		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
-			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
-			t.Name(), strings.ReplaceAll(string(c.Source), "_", " ")))
-		return nil, &r
-	}
-	n.view, n.recorded, n.recordedAt, n.gitlet = answer.View, answer.Recorded, answer.RecordedAt, read
+	n.person = atlas.PersonSource(actor.Handle)
 	if n.chart = t.deps.Org(); n.chart == nil {
 		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: this node runs no company "+
 			"yet. Try again once its settings are applied.", t.Name()))
 		return nil, &r
 	}
 	return n, nil
+}
+
+// wholeRead refuses a change decided on an atlas read in part. A CHANGE IS
+// DECIDED ON ALL OF WHAT THE CALLER READS: a source this node serves that
+// answered in part may hold the very fact the write would claim beside. One
+// this node does not serve, and Gitlet where the caller may not read it, hold
+// nothing the write may touch.
+func wholeRead(tool string, coverage []gather.Coverage, gitletRead bool) *tools.Result {
+	for _, c := range coverage {
+		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !gitletRead {
+			continue
+		}
+		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
+			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
+			tool, strings.ReplaceAll(string(c.Source), "_", " ")))
+		return &r
+	}
+	return nil
 }
 
 // write records a plan's steps in order, each under its own operation derived

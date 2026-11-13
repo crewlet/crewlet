@@ -17,6 +17,10 @@ const (
 	// rather than answering a slice of the atlas as if it were all of it.
 	MaxLiveClaims = 800_000
 
+	// MaxTurnBytes bounds the run an agent's claim names: a run id is a
+	// UUID, and nothing longer names a turn.
+	MaxTurnBytes = 64
+
 	// MaxPurges bounds one read of the purge markers, which only an
 	// administrator adds, one value or entry at a time.
 	MaxPurges = 10_000

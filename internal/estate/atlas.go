@@ -14,7 +14,7 @@ import (
 // the atlas where its seat is held, a seats-only leaf included, and every read
 // is answered at the level its caller passes, on this node's floor on the log.
 //
-// A PERSON'S WRITES ARE ROUTED TOO, on the terms of every surface write: the
+// A PERSON'S WRITES AND AN AGENT'S ARE ROUTED TOO, on the terms of every surface write: the
 // operator's catalogue, which the dashboard and the assistant write through,
 // is served wherever the API is, and a node holding no data reaches a data
 // node's writer through the router as it reaches its reader. Each write carries
@@ -33,9 +33,12 @@ type AtlasReader interface {
 }
 
 // AtlasWriter is the atlas log's write side as a surface writes it: a person's
-// claim, and an administrator's purge of an entry or of a value by its digest.
+// claim, an agent's with the evidence of its turn, and an administrator's
+// purge of an entry or of a value by its digest.
 type AtlasWriter interface {
 	Record(ctx context.Context, c atlasdomain.Call, claim atlas.Claim, ifMatch uint64) (statelog.Result, error)
+	Observe(ctx context.Context, c atlasdomain.Call, claim atlas.Claim,
+		seen atlasdomain.Observation) (statelog.Result, error)
 	PurgeEntry(ctx context.Context, c atlasdomain.Call, ref atlas.Ref) (statelog.Result, error)
 	PurgeDigest(ctx context.Context, c atlasdomain.Call, digest string) (statelog.Result, error)
 }
@@ -165,6 +168,24 @@ var opAtlasRecord = define("atlas.record", opIdempotentWrite, atlasDomain, false
 		return w.Record(ctx, a.Call, a.Claim, a.IfMatch)
 	})
 
+type atlasObserveArgs struct {
+	Call  atlasdomain.Call
+	Claim atlas.Claim
+	Seen  atlasdomain.Observation
+}
+
+// AN AGENT'S CLAIM, from whichever node holds its seat (ADR-0132): the node
+// that ran the turn checked the cited call's answer, which only it holds, and
+// the data node's writer holds the claim to everything a record can be held to.
+var opAtlasObserve = define("atlas.observe", opIdempotentWrite, atlasDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a atlasObserveArgs) (statelog.Result, error) {
+		w, err := b.atlasWriter()
+		if err != nil {
+			return statelog.Result{}, err
+		}
+		return w.Observe(ctx, a.Call, a.Claim, a.Seen)
+	})
+
 type atlasPurgeEntryArgs struct {
 	Call  atlasdomain.Call
 	Entry atlas.Ref
@@ -249,6 +270,12 @@ var _ AtlasWriter = AtlasWrites{}
 func (x AtlasWrites) Record(ctx context.Context, c atlasdomain.Call, claim atlas.Claim,
 	ifMatch uint64) (statelog.Result, error) {
 	return call(ctx, x.r, opAtlasRecord, nil, atlasRecordArgs{Call: c, Claim: claim, IfMatch: ifMatch})
+}
+
+// Observe writes one agent's claim, with the turn and the evidence behind it.
+func (x AtlasWrites) Observe(ctx context.Context, c atlasdomain.Call, claim atlas.Claim,
+	seen atlasdomain.Observation) (statelog.Result, error) {
+	return call(ctx, x.r, opAtlasObserve, nil, atlasObserveArgs{Call: c, Claim: claim, Seen: seen})
 }
 
 // PurgeEntry erases an entry everywhere and marks it.

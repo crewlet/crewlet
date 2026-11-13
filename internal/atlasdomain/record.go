@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -21,7 +22,10 @@ import (
 //     framework's eviction, generation and barrier.
 //   - 2: an integration's read of one entry (`read`, ADR-0129): the claims it
 //     holds on the entry that changed, and the slots it withdraws.
-const RecordVersion = 2
+//   - 3: an agent's claim (ADR-0132): a `claim` whose source is an agent, by
+//     its seat, with the turn it was recorded in and the evidence the engine
+//     checked behind it.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -44,6 +48,8 @@ const GateRecordVersion = 1
 // without the row would fault on the record rather than retain it.
 var versionedFields = statelog.RecordFields{
 	{Name: "Op read", Since: 2, Path: []string{"op"}, Equals: string(OpRead)},
+	{Name: "Claim.Source agent", Since: 3, Op: string(OpClaim), Path: []string{"mutation", "source", "kind"},
+		Equals: string(atlas.SourceAgent)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -55,7 +61,8 @@ type OpKind string
 // The ops an atlas record can carry.
 const (
 	// OpClaim records one claim on an entry: a fact, a relation, the entry
-	// itself, two entries joined or kept apart, or a denial of any of them.
+	// itself, two entries joined or kept apart, or a denial of any of them;
+	// a person's, or an agent's with the evidence of its turn.
 	OpClaim OpKind = "claim"
 
 	// OpRead records one integration's read of one entry (ADR-0129): the
