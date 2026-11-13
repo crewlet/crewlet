@@ -2342,7 +2342,18 @@ const (
 	// atlas source, with the workload's rows in the tables the dialogs offer
 	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
 	// +52,609): 5950 KiB.
-	treeBudget = 5<<20 + 830<<10
+	// Atlas, Sources (each source's card with its last read in figures, what
+	// it was refused, the servers' table and Refresh now, with the route, the
+	// band's link and the question's and the action's declarations) added
+	// 6,268 bytes, script +6,171 and the atlas sheet +97, and took it to
+	// 5955.5 KiB (6,098,424 bytes): 5956 KiB.
+	// An agent's evidence in Review (each report's by-line and the call it
+	// cited, under a waiting entry and beside an agent's value), the bulk
+	// dialog's reporter and the Inbox's notice of drift on what the reader
+	// set added 2,322 bytes, script +2,286 and the atlas sheet +36. Built
+	// beside Sources the tree measures 5957.8 KiB (6,100,752 bytes, 6 over
+	// the sum of the two): 5958 KiB.
+	treeBudget = 5<<20 + 838<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

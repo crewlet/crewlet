@@ -81,7 +81,8 @@ and one selection.
   line. **Every change** opens [Changes](#changes).
 - **Where it comes from**: the vendors the entries come from, and how many
   entries are Confirmed, Likely and Unconfirmed. Under it, **Review** says how
-  many things wait for a person and opens [Review](#review).
+  many things wait for a person and opens [Review](#review), and **Sources**
+  opens [each integration's last read](#sources-and-refresh-now).
 
 Nothing in the band, or anywhere on the page, is a request rate, a latency or
 an error budget: the engine holds none. Health is the engine's word for an
@@ -264,6 +265,9 @@ is gone the moment its cause is:
   is drawn: it is settled where it is declared, and the item says so.
 - **Unconfirmed**: an entry only an agent reported, with nothing the engine
   could check. It stays off the map until you **Confirm** it, or **Retire** it.
+  Under it is what the agent said: which agent, in which turn (the link opens
+  the run, where the call's own answer is), the tool whose call it cited, and
+  what a call of that tool is evidence of.
 - **Likely**: an entry an agent backed with a call or a file, that no person,
   integration or setting stands behind yet. It stays here, even after
   somebody corrects one fact on it, until somebody confirms the entry itself.
@@ -274,7 +278,52 @@ Pick several with their boxes to decide them together: **Accept as shown**
 confirms each entry and keeps each shown value, and **Retire** retires the
 picked entries. A bulk decision lists what it decides in a dialog and sends
 only when you press again there; what the engine refused stays picked, with
-its reason.
+its reason. An entry an agent reported is listed there with who reported it.
+
+An agent's value beside a person's, in a disagreement, names the call it cited
+in the same way.
+
+**One thing in Review also reaches your Inbox:** a newer report that differs
+from a value you set or confirmed yourself. It appears under **Needs you**
+with both values and opens the entry's Sources tab, where you keep one. It
+leaves the Inbox as soon as somebody decides. Everything else waits in Review
+for every holder of Atlas together, so the Inbox does not fill with
+infrastructure changes.
+
+## Sources and Refresh now
+
+**Sources** (from the band, `#/company/atlas/sources`) lists each integration
+the atlas reads for the company: Cloudflare, Datadog, GitHub, GitLab and the
+company's servers, once each is connected. Each is read whole on a timer (every hour
+unless [`atlas.refresh_interval_seconds`](../getting-started/configuration.md)
+says otherwise), and its card says how the last read went:
+
+- **Its state**: Read, Partly read (the read finished and was refused some
+  part), Last read failed, or Not read yet, with when it was read and when it
+  is read next. A read that failed is tried again five minutes later, and the
+  atlas keeps what the last whole read found.
+- **Its last whole read in figures**: the entries it held, the calls it made
+  at the vendor (for the servers, the commands it ran), the changes it
+  recorded, and **Values withheld**: how many values it left out because they
+  were shaped like a credential. They are counted and never shown, here or
+  anywhere else.
+- **What it could not read**: each listing the vendor refused, with the
+  permission that restores it, and each server it could not reach or whose
+  command failed. What an earlier read found there stands. Why a read failed
+  outright is shown to administrators; everyone else is told that it failed.
+- **Entries it stopped seeing**: how many entries the last read did not list.
+  Nothing is retired on one miss: an entry is retired only when a second whole
+  read, a day later, does not list it either.
+- **Each server**, for the servers' card: when the server was last read whole,
+  and how many of its parts (its ports, its containers) the last read could
+  not read. Only a server whose inventory is switched on is listed
+  ([let the atlas read a server](../integrations/ssh.md#let-the-atlas-read-a-server)).
+
+**Refresh now** asks for a read of that source without waiting for the timer.
+The node that reads for the atlas makes it within a minute, and the card says
+who asked while it waits. The engine reads one source at most once every five
+minutes, whoever asks: inside that time the button is held and says when it
+can be pressed again. Anyone holding Atlas may ask; an agent never does.
 
 ## Changes
 

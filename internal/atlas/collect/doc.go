@@ -58,6 +58,25 @@
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
 //
+// # A person may ask for a read, and the floor is the duty's
+//
+// A source is read on its interval, and sooner where a person asked
+// ([Status.DueFor]): on the tick after the ask, once [RefreshFloor] has passed
+// since the source's last attempt. The floor is the refresh interval's own, so
+// no gesture reads a vendor more often than the smallest cadence a company
+// may set, and it is held here as well as where the ask is made, since the
+// ask is a record anybody with the store could write. The ask is dropped when
+// its read is made, when a read already answered it, and when the company no
+// longer connects its source.
+//
+// # A source that reads in scopes keeps one last whole read each
+//
+// The servers are read one by one, and a server that could not be reached
+// says nothing of the others. Each scope the read visits ([Read.Scopes])
+// keeps the instant it was last read whole and how many of its parts the last
+// read was refused ([Scope]), counted from the read rather than from the
+// findings, which are bounded.
+//
 // # Other voices use the same builder and the same diff
 //
 // A voice that is no integration's (a repository's files,
@@ -91,6 +110,9 @@
 // calls and withheld values it cost, the parts it was refused, and the
 // entries it has stopped seeing since when): the whole company, current value only, so it is a record in
 // the coordination store ([CoordStore]), beside the integration statuses and
-// apart from them. Which node reads: the `worker:atlas-collect` lease, claimed
-// per tick and re-claimed before every source.
+// apart from them. A person's ask that a source be read now ([Request]): the
+// whole company, current value only, until the duty honours it, so it is a
+// record of its own in the coordination store, never a field of the standing
+// the duty rewrites whole. Which node reads: the `worker:atlas-collect` lease,
+// claimed per tick and re-claimed before every source.
 package collect

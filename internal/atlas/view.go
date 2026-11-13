@@ -96,7 +96,23 @@ type Entry struct {
 	Holders         []Holder `json:"holders,omitempty"`
 	Signals         []Signal `json:"signals,omitempty"`
 	NotUsedRecently bool     `json:"not_used_recently,omitempty"`
+
+	// reports is each agent's newest live claim on the entry, newest first:
+	// what the review shows a person deciding on it ([ReviewItem.Reports]).
+	reports []Report
 }
+
+// Report is one agent's word on an entry: its source (the seat, the turn it
+// recorded in, what the call it cited is evidence of and that call's tool)
+// and when it was made.
+type Report struct {
+	Source     Source    `json:"source"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// MaxReports bounds the reports a review item carries: a person decides on
+// the newest few, and an entry many agents reported is still one item.
+const MaxReports = 5
 
 // Claimed is one source's live claim beside the value the atlas holds.
 type Claimed struct {

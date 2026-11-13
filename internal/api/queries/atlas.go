@@ -1,6 +1,7 @@
 // The company's atlas, read: its entries as a list, as a map, one entry, a
 // trace of what depends on one, the counts a filter menu offers, its own
-// log as lines and as daily counts, and what waits for a person. Every
+// log as lines and as daily counts, what waits for a person, and each
+// source's standing. Every
 // question takes the atlas app (ADR-0127) and reads the atlas as its asker:
 // Gitlet's repositories only for a holder of Gitlet, and an integration's
 // standing or a connection test only for an administrator, so the atlas is
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -39,6 +41,9 @@ type AtlasReads interface {
 	// the questions here hold each line to the atlas its asker reads.
 	AtlasLog(ctx context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error)
 	AtlasActivity(ctx context.Context, since time.Time, fresh statelog.Freshness) (atlasdomain.Activity, error)
+	// AtlasSources is every source the company connects as a reader is shown
+	// it at now; false where this node runs no company yet.
+	AtlasSources(ctx context.Context, now time.Time) (collect.Report, bool, error)
 }
 
 // atlasFresh is the read level every atlas question reads at: the
@@ -130,6 +135,14 @@ type AtlasReviewAnswer struct {
 	Counts     map[atlas.ReviewKind]int `json:"counts"`
 }
 
+// AtlasSourcesAnswer is each source the atlas reads for the company: when it
+// was last read, what that read cost and left out, what it was refused, the
+// ask that waits on it, and the cadence all of them are read on. A fault's
+// own text is an administrator's, as an integration's is.
+type AtlasSourcesAnswer struct {
+	collect.Report
+}
+
 // registerAtlas registers the atlas's questions, each on the atlas app.
 func registerAtlas(r *Registry, s Sources) {
 	app := Requires(iam.GrantAtlas)
@@ -141,6 +154,35 @@ func registerAtlas(r *Registry, s Sources) {
 	r.Register("atlas_log", app, s.atlasLog)
 	r.Register("atlas_activity", app, s.atlasActivity)
 	r.Register("atlas_review", app, s.atlasReview)
+	r.Register("atlas_sources", app, s.atlasSources)
+}
+
+// atlasSources is each source's standing, off the coordination store. THE
+// FAULT'S TEXT IS AN ADMINISTRATOR'S: it is a vendor's or the engine's own
+// error, which every other screen shows an administrator alone, and every
+// holder is still told that the read failed.
+func (s Sources) atlasSources(ctx context.Context, _ Params) (any, error) {
+	principal, err := caller(ctx, "atlas_sources")
+	if err != nil {
+		return nil, err
+	}
+	report, running, err := s.Atlas.AtlasSources(ctx, s.clock())
+	switch {
+	case errors.Is(err, gather.ErrNoSource):
+		return nil, fmt.Errorf("%w: this node reaches no coordination store, so it cannot read the "+
+			"sources' standings", ErrUnavailable)
+	case err != nil:
+		return nil, fmt.Errorf("%w: the sources' standings could not be read on this node right now: %s",
+			ErrUnavailable, err.Error())
+	case !running:
+		return nil, fmt.Errorf("%w: this node runs no company yet, so there is no atlas to read", ErrUnavailable)
+	}
+	if !principal.Can(iam.GrantAdmin) {
+		for i := range report.Sources {
+			report.Sources[i].LastError = ""
+		}
+	}
+	return AtlasSourcesAnswer{Report: report}, nil
 }
 
 // atlasView is the atlas as the question's asker reads it, and what the read
@@ -347,13 +389,34 @@ func (s Sources) atlasFacets(ctx context.Context, p Params) (any, error) {
 // nowhere: the facts and relations the sources disagree on, then the entries
 // only an agent reported. It reads the atlas as its asker does, so it never
 // lists an entry the asker's catalogue would not.
+//
+// `mine` narrows it to what contradicts the asker's own word: a fact or a
+// relation they set or confirmed that a newer report differs from. It is what
+// a person's Inbox is told of, so a credential acting as no seat, whose word
+// no claim carries, is answered none.
 func (s Sources) atlasReview(ctx context.Context, p Params) (any, error) {
+	mine, err := atlasFlag(p, "mine")
+	if err != nil {
+		return nil, err
+	}
 	view, read, err := s.atlasView(ctx, "atlas_review")
 	if err != nil {
 		return nil, err
 	}
-	limit := Clamp(p.Int("limit", atlas.PageDefault), atlas.PageDefault, atlas.PageMax)
-	page, err := view.Review(atlas.ReviewKind(p.String("kind")), p.String("cursor"), limit)
+	q := atlas.ReviewQuery{Kind: atlas.ReviewKind(p.String("kind")), After: p.String("cursor"),
+		Limit: Clamp(p.Int("limit", atlas.PageDefault), atlas.PageDefault, atlas.PageMax)}
+	if mine {
+		var principal iam.Principal
+		if principal, err = caller(ctx, "atlas_review"); err != nil {
+			return nil, err
+		}
+		if principal.Seat == "" {
+			return AtlasReviewAnswer{AtlasRead: read, Items: []atlas.ReviewItem{},
+				Counts: map[atlas.ReviewKind]int{}}, nil
+		}
+		q.ContradictedFor = principal.Seat
+	}
+	page, err := view.ReviewOf(q)
 	if err != nil {
 		return nil, badAtlas(err)
 	}

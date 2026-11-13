@@ -1,1 +1,0 @@
-function e(){document.fullscreenElement&&typeof document.exitFullscreen==`function`&&document.exitFullscreen().catch(()=>{})}export{e as t};

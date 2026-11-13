@@ -303,6 +303,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/atlas/log", what: "atlas_log"},
 	{method: "GET", pattern: "/atlas/activity", what: "atlas_activity"},
 	{method: "GET", pattern: "/atlas/review", what: "atlas_review"},
+	{method: "GET", pattern: "/atlas/sources", what: "atlas_sources"},
 	{method: "GET", pattern: "/atlas/{id}", what: "atlas_entry", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/atlas/{id}/trace", what: "atlas_trace", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/atlas/{id}/log", what: "atlas_log", path: map[string]string{"id": "id"}},
