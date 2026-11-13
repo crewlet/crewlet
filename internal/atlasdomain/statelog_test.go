@@ -188,8 +188,9 @@ func suitePayload(kind atlasdomain.ObjectKind, id, opID string) (
 	return atlasdomain.Subject{Kind: kind, ID: id}, atlasdomain.OpBarrier, sentinel(), nil
 }
 
-// carryingSuiteRecord builds one valid record carrying exactly the named
-// versioned field: an integration's read of an entry for the `read` op.
+// carryingSuiteRecord builds one valid record carrying the named versioned
+// field: an integration's read of an entry for the `read` op, and an agent's
+// claim, citing its tool, for the two an agent's source brings.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const id = "carrying"
 	switch field.Name {
@@ -201,6 +202,11 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		claim.Source = atlasdomain.Source{Kind: atlas.SourceAgent, Name: "sre", Turn: "run-1",
 			Evidence: atlas.EvidenceCall}
 		return rawRecord(entryOn(id), "suite-node", "suite-carrying-agent", atlasdomain.OpClaim, sentinel(), claim)
+	case "Claim.Source.Tool":
+		claim := existsClaim(id, "suite-carrying-tool")
+		claim.Source = atlasdomain.Source{Kind: atlas.SourceAgent, Name: "sre", Turn: "run-1",
+			Evidence: atlas.EvidenceCall, Tool: "ssh_read"}
+		return rawRecord(entryOn(id), "suite-node", "suite-carrying-tool", atlasdomain.OpClaim, sentinel(), claim)
 	case "Read.Source code":
 		read := readOf(id, "suite-carrying-code")
 		read.Source = atlasdomain.Source{Kind: atlas.SourceCode, Name: "shop"}

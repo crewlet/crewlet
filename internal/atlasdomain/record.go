@@ -27,7 +27,9 @@ import (
 //     checked behind it.
 //   - 4: a read of a repository's deploy and dependency files (ADR-0133): a
 //     `read` whose source is code, by the repository's name.
-const RecordVersion = 4
+//   - 5: the tool an agent's claim cited, by name, on its source: what a
+//     person reviewing the claim is shown beside its turn and its seat.
+const RecordVersion = 5
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -54,6 +56,7 @@ var versionedFields = statelog.RecordFields{
 		Equals: string(atlas.SourceAgent)},
 	{Name: "Read.Source code", Since: 4, Op: string(OpRead), Path: []string{"mutation", "source", "kind"},
 		Equals: string(atlas.SourceCode)},
+	{Name: "Claim.Source.Tool", Since: 5, Op: string(OpClaim), Path: []string{"mutation", "source", "tool"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
