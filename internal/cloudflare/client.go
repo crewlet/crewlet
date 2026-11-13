@@ -179,6 +179,10 @@ type resultInfo struct {
 	Count      int `json:"count"`
 	TotalCount int `json:"total_count"`
 	TotalPages int `json:"total_pages"`
+
+	// Cursor is where the next page starts, on the routes that page by one
+	// (R2's buckets); empty on the last page and on every other route.
+	Cursor string `json:"cursor"`
 }
 
 // do makes one call and decodes its envelope's result into out, waiting out

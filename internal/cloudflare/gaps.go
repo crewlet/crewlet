@@ -93,3 +93,33 @@ func levelGaps(unresolved map[string][]string, unheld []string, tokensURL string
 	}
 	return out
 }
+
+// seeMoreLabel is what the suggestion of the atlas's optional permissions is
+// filed under, in the Test button's verdict and on the card alike.
+const seeMoreLabel = "See more in Atlas"
+
+// seeMore is the suggestion for a token that does not hold some of the
+// atlas's optional permission groups: what to add, and what it would show.
+// Empty where it holds them all, or where its policy could not be read.
+func seeMore(unheld []string) string {
+	if len(unheld) == 0 {
+		return ""
+	}
+	var shows []words.Said
+	for _, p := range atlasPermissions {
+		if slices.Contains(unheld, p.name) {
+			shows = append(shows, words.Said(p.shows))
+		}
+	}
+	return "Add " + words.And(dashboardNames(unheld)) + " to the token to show " + words.And(shows) +
+		" in Atlas. Optional: everything else works without " + them(len(unheld)) + "."
+}
+
+// seeMoreValue is [seeMore] as a check's fact holds it: a value, not a
+// sentence. Empty where there is nothing to suggest.
+func seeMoreValue(unheld []string) string {
+	if len(unheld) == 0 {
+		return ""
+	}
+	return "optional, add " + words.And(dashboardNames(unheld))
+}

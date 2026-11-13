@@ -105,6 +105,13 @@ type Unread struct {
 	// source keeps one standing per scope; "" otherwise.
 	Scope string
 
+	// Optional is a part behind a permission the company's credential was
+	// never asked to hold (ADR-0145): one a company may add to see more. A
+	// refusal of it is a finding only while the voice holds an entry the
+	// part said exists, which is a permission somebody took away. Where it
+	// holds none, nothing was lost, and the standing does not name the part.
+	Optional bool
+
 	// Holds reports whether a claim the voice already holds came from this
 	// part. Such a claim is carried as it stands: a refusal withdraws and
 	// retires nothing, since it says nothing about what the vendor holds.
