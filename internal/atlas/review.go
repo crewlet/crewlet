@@ -50,6 +50,10 @@ type ReviewItem struct {
 	Relation *Edge     `json:"relation,omitempty"`
 	// Target is what a disputed relation points at, by name.
 	Target *LineTarget `json:"target,omitempty"`
+	// Reports is, for an entry that waits as a whole, each agent's newest
+	// word on it, newest first and at most [MaxReports]: the seat, the turn,
+	// the call it cited and what that call is evidence of.
+	Reports []Report `json:"reports,omitempty"`
 	// Since is the newest claim the item rests on: when it began to wait as
 	// it stands now.
 	Since time.Time `json:"since"`
@@ -92,6 +96,33 @@ func (p reviewPlace) compare(kind ReviewKind, entry Kind, key, facet string) int
 // entries wait for nobody. An unconfirmed entry is listed here though a map
 // leaves it out, since here is where it is confirmed.
 func (v View) Review(kind ReviewKind, after string, limit int) (Review, error) {
+	return v.ReviewOf(ReviewQuery{Kind: kind, After: after, Limit: limit})
+}
+
+// ReviewQuery is what one page of the review is asked for.
+type ReviewQuery struct {
+	// Kind is the reason to list, "" for every reason; After the cursor a
+	// previous page answered; Limit the page, 1 to [PageMax].
+	Kind  ReviewKind
+	After string
+	Limit int
+
+	// ContradictedFor narrows the review to what contradicts this person's
+	// own word: a fact or a relation they set or confirmed that a newer
+	// report differs from ([StandingContested]). Empty lists everybody's.
+	// Total and Counts are then of that person's alone.
+	ContradictedFor string
+}
+
+// contradicts reports whether a contested fact or relation is the word of
+// the person handle, which a newer report differs from.
+func contradicts(handle string, standing Standing, src Source) bool {
+	return standing == StandingContested && src.Kind == SourcePerson && src.Name == handle
+}
+
+// ReviewOf is [View.Review] for q.
+func (v View) ReviewOf(q ReviewQuery) (Review, error) {
+	kind, after, limit, mine := q.Kind, q.After, q.Limit, q.ContradictedFor
 	if kind != "" && !kind.Valid() {
 		return Review{}, fmt.Errorf("%w: `kind` is %s", ErrQuery, words.Or(ReviewKinds))
 	}
@@ -128,12 +159,18 @@ func (v View) Review(kind ReviewKind, after string, limit int) (Review, error) {
 			if f.Standing == StandingSettled {
 				continue
 			}
+			if mine != "" && !contradicts(mine, f.Standing, f.Source) {
+				continue
+			}
 			facet := "fact/" + string(f.Fact) + "/" + f.Of.Key + "/" + f.Value.Text
 			add(e, ReviewDisagreement, facet, newestOf(f.ObservedAt, f.Others), func(it *ReviewItem) { it.Fact = &f })
 		}
 		for j := range e.Relations {
 			ed := e.Relations[j]
 			if ed.Standing == StandingSettled {
+				continue
+			}
+			if mine != "" && !contradicts(mine, ed.Standing, ed.Source) {
 				continue
 			}
 			target := &LineTarget{External: ed.External, Name: ed.Name}
@@ -149,16 +186,21 @@ func (v View) Review(kind ReviewKind, after string, limit int) (Review, error) {
 				it.Relation, it.Target = &ed, target
 			})
 		}
+		if mine != "" {
+			// AN ENTRY THAT WAITS AS A WHOLE contradicts nobody's word.
+			continue
+		}
+		reports := func(it *ReviewItem) { it.Reports = e.reports[:min(len(e.reports), MaxReports)] }
 		switch e.Word {
 		case WordUnconfirmed:
-			add(e, ReviewUnconfirmed, "", e.LastSeen, nil)
+			add(e, ReviewUnconfirmed, "", e.LastSeen, reports)
 		case WordLikely:
 			// ONLY WHAT AN AGENT REPORTED WAITS. A repository's files make an
 			// entry likely too, and a scan declares many at once: listing
 			// them would bury the reports a person is asked to decide, and
 			// its entry page confirms one all the same.
 			if slices.ContainsFunc(e.Sources, func(s Source) bool { return s.Kind == SourceAgent }) {
-				add(e, ReviewLikely, "", e.LastSeen, nil)
+				add(e, ReviewLikely, "", e.LastSeen, reports)
 			}
 		}
 	}
