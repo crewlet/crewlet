@@ -656,6 +656,14 @@ type answerRetry struct {
 	// ([Coordinator.suspectClaim]). Nil for every other series.
 	revive *revival
 
+	// release is a collection's hand-back the coordination store did not
+	// answer, which the series' next attempt makes again before anything
+	// else: the claim is this node's until the store answers it, and no
+	// completion of its job is claimed here meanwhile
+	// ([Coordinator.oweRelease], claimrelease.go). Nil for every other
+	// series.
+	release *claimRelease
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
@@ -1407,11 +1415,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 	var spent bool
 	var kept *ending
 	var revive *revival
+	var release *claimRelease
 	if r != nil {
 		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
 		spent = r.spent(c.now())
-		kept, revive = r.ending, r.revive
+		kept, revive, release = r.ending, r.revive, r.release
 	}
 	c.mu.Unlock()
 	if r == nil {
@@ -1424,6 +1433,18 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// node's writes would only race.
 		_ = notHeld(ctx, handle, turnID, "retrying an owed answer")
 		c.dropOwed(ctx, handle, turnID)
+		return
+	}
+	if release != nil {
+		// A CLAIM'S RELEASE THE STORE DID NOT ANSWER is made again first,
+		// with no read of the row before it: the release decides on the row
+		// as it stands. Owed again while the store is still silent, and once
+		// it answers, the series settles, leaving anything else it keeps to
+		// its next attempt (claimrelease.go).
+		_ = c.unclaimOwing(ctx, *release)
+		if !c.releasing(turnID, release.run.LaunchID) {
+			c.settleOwed(ctx, handle, turnID)
+		}
 		return
 	}
 	run, found, err := c.pending.Get(ctx, turnID)

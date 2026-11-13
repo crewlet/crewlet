@@ -1625,6 +1625,19 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
+	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE OWES THE RELEASE OF ITS
+	// LAST CLAIM ([Coordinator.oweRelease]): that release, asked again, would
+	// give back a claim taken now while its collection is still working. The
+	// completion comes back on the queue's backoff, as one whose claim the
+	// store does not take does, and the waiter announces the job again once
+	// the release has put the run back in running.
+	if c.releasing(ev.TurnID, ev.LaunchID) {
+		log.InfoContext(ctx, "sandbox_completion_release_owed",
+			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "launch_id", ev.LaunchID,
+			"detail", "this node still owes the release of the job's last claim, which the coordination "+
+				"store did not answer; the job is claimed again once that release lands")
+		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, errReleaseOwed)
+	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
 	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
 	// waiter that drives its box announces its completion again on its next
@@ -1939,13 +1952,20 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // giving the run up would throw away a result its box holds. A step its
 // delivery's deadline cut is the deadline's, and counted as above
 // ([storeSilent]).
+//
+// EVERY HAND-BACK HERE THAT THE STORE DOES NOT ANSWER IS KEPT by this node and
+// made again once the store answers, never turned into an ending for its
+// silence ([Coordinator.unclaimCollection], claimrelease.go): the store that
+// does not answer a collection's step is very often the one that does not
+// answer its release, and a run ended there was announced claim_unreverted,
+// "its result is lost", while its box held the result.
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+
 				"handed back uncounted and the completion is retried")
-		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
+		if err := c.unclaimCollection(ctx, run, failure{}); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -1961,9 +1981,11 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"node", run.LaunchNode, "error", cause.Error(),
 			"detail", "the node whose host the run's box is on did not answer the collection; "+
 				"the claim is handed back uncounted and that node announces the completion again")
-		// A hand-back that did not land ended and announced the run itself
-		// ([Coordinator.unclaim]), so either way nothing is retried here.
-		_ = c.unclaim(ctx, run, collectUnrevertedDetail)
+		// A hand-back the store refused ended and announced the run itself,
+		// and one it did not answer is this node's to make again
+		// ([Coordinator.unclaimCollection]), so either way nothing is
+		// retried off this delivery.
+		_ = c.unclaimCollection(ctx, run, failure{})
 		return nil
 	}
 	if errors.Is(cause, ErrStoreSilent) {
@@ -1976,7 +1998,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"detail", "the coordination store did not answer a step the collection cannot go on "+
 				"without; the claim is handed back uncounted and the collection is asked again "+
 				"until the store answers")
-		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
+		if err := c.unclaimCollection(ctx, run, failure{}); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -2009,7 +2031,9 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"collection is retried until it has failed for the poll's give-up window")
 	// COUNTED: the claim did not move the seat's holding count — running and
 	// resumed both hold it — and handing it back to running leaves it there.
-	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
+	// A release the store does not answer counts the failure once, when it
+	// lands ([Coordinator.unclaimCollection]).
+	if err := c.unclaimCollection(ctx, run, failure{collectFailed: now}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -4342,6 +4366,13 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // then refused to let the reply go from a run that no longer read as the
 // claim, the reply was deleted with it.
 //
+// AND A COLLECTION'S RELEASE THE STORE DID NOT ANSWER IS NOT ENDED AT ALL: no
+// answer is no refusal, and the store that did not answer it is very often the
+// silence the collection was handed back for. This node keeps that claim and
+// gives it back once the store answers ([Coordinator.unclaimCollection],
+// claimrelease.go); what is ended here is a release the store refused, and a
+// park's or a resume's hand-back the store did not take.
+//
 // # NO STOP IS REPORTED ON THE SUCCESSFUL PATH, on either route
 //
 // Which is a decision rather than an omission — see
@@ -4404,12 +4435,20 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 ) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	to := claimedFrom(run)
-	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
-		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
-		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, Fence: fenceOf(run), Hold: hold,
-	})
+	cr := claimRelease{run: run, release: releaseFor(run, failed, hold), detail: detail}
+	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, cr.release)
+	return c.releaseAnswered(ctx, cr, counted, released, err)
+}
+
+// releaseAnswered acts on the store's answer to cr's release, released and err,
+// as [Coordinator.unclaimAt] reports it: a release that failed ends the run
+// while it is still the claim, one that moved on is left to whatever moved it,
+// and one that landed counts the run back into its set where the seat no
+// longer counted it (counted false).
+func (c *Coordinator) releaseAnswered(ctx context.Context, cr claimRelease, counted, released bool,
+	err error,
+) error {
+	run, to := cr.run, cr.release.To
 	switch {
 	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
@@ -4419,7 +4458,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 				"landed after all")
 		ended, endErr := c.endClaim(ctx, run, ending{
 			unused: claimedAnswer(run),
-			note:   &failureNote{reason: types.ExecutorFailureClaimStranded, detail: detail},
+			note:   &failureNote{reason: types.ExecutorFailureClaimStranded, detail: cr.detail},
 		})
 		// AUTHORITATIVE, not assumed: the ending moved the row, or found
 		// it moved, and this call moved the counts, and neither knows
