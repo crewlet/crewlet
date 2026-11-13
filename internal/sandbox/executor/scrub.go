@@ -49,11 +49,11 @@ import (
 //     as text, the values in the forms a JSON string escapes them in among
 //     those it takes out. A RECORD KEEPS ITS LINE AND ITS KEYS: the transcript
 //     keeps every line, and each record every key in the order written, a
-//     key's text rewritten only where it held a secret, so a record's line
-//     still begins with the bytes Claude Code finds the record by,
-//     `{"parentUuid":`; what a record can lose is a loaded tool definition
-//     named outside what the provider takes, cut out of its line as written
-//     ([withoutBrokenDefinitions]).
+//     key's text rewritten only where it held a secret, so Claude Code, which
+//     reads a session file past 5 MiB by where each line's keys sit, still
+//     finds every record where it did ([withoutBrokenDefinitions]); what a
+//     record can lose is a loaded tool definition named outside what the
+//     provider takes, cut out of its line as written.
 //   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
 //     string as it streams, the same way, a token at a time. A `.json` file
 //     the rewrite cannot read as one JSON value — a task file its harness was
@@ -772,15 +772,25 @@ func providerToolName(name string) bool {
 // CUT OUT OF THE LINE AS WRITTEN, each definition with the comma that joined
 // it to its list, every other byte of the line left where it was: never the
 // record decoded and written again, which wrote its keys sorted, the
-// attachment (or a subagent's agentId) first. Claude Code's prune of a
-// session file past 5 MiB, which reads the file under
-// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings file can
-// set whatever a launch unsets), takes a line for a record's slot only where
-// it begins `{"parentUuid":` (2.1.310's FPt, 2.1.322's F1t), and walks the
-// chain back from the last record through slots alone. A record's line that
-// is no slot ends that walk, and where the records the walk reached held half
-// the file or less, every record above that line was pruned from the session
-// a relaunch resumed.
+// attachment (a subagent's agentId before it) first and its list inside it.
+// Claude Code reads a session file past 5 MiB by the bytes of its lines, and
+// finds a record by where its keys sit, in two readings (read in 2.1.310 and
+// 2.1.322):
+//
+//   - 2.1.310, reading such a file as it does by default, takes a record for
+//     a subagent's only where `"isSidechain":true` sits in its line's first
+//     256 bytes, and walks the thread back from the last record it takes for
+//     the main thread's. A subagent's record written sorted, its list before
+//     that key, was that record: the walk began there, and records the
+//     subagent wrote after it were left out of the thread a relaunch resumed.
+//     2.1.322 looks for the key past those bytes as well.
+//   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
+//     file can set whatever a launch unsets), both prune such a file, taking a
+//     line for a record only where it begins `{"parentUuid":` and walking the
+//     main thread back from its last record through such lines alone. A
+//     record's line that begins otherwise ends that walk, and where the
+//     records the walk reached held half the file or less, every record above
+//     that line was pruned from the session a relaunch resumed.
 func withoutBrokenDefinitions(line string) string {
 	if !strings.Contains(line, loadedToolsRecord) || !strings.Contains(line, redact.Marker) {
 		return line

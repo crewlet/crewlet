@@ -714,12 +714,14 @@ func ltAnnounced(definitions ...string) string {
 // A LOADED TOOL DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE AS WRITTEN:
 // the definition goes with the comma that joined it to its list, and every
 // other byte of the line stays where it was, the record's keys in the order
-// written above all, so a line that began `{"parentUuid":` (the bytes Claude
-// Code's prune of a session file past 5 MiB finds a record's slot by) still
-// does. Over each shape the record is written in (a main thread's and a
-// subagent's, as 2.1.310 and 2.1.322 write them; one with the names announced
-// alone after the list; and the shape the scrub's first case held), with the
-// renamed definition first, between two kept, last, alone and twice.
+// written above all: a line that began `{"parentUuid":` (the bytes Claude
+// Code's prune of a session file past 5 MiB finds a record by) still does, and
+// a subagent's `"isSidechain":true` stays in its line's first 256 bytes (where
+// 2.1.310's reading of such a file looks for it). Over each shape the record
+// is written in (a main thread's and a subagent's, as 2.1.310 and 2.1.322
+// write them; one with the names announced alone after the list; and the
+// shape the scrub's first case held), with the renamed definition first,
+// between two kept, last, alone and twice.
 //
 // Mutation: write the record again from a map, drop nothing, cut the
 // definition beside the renamed one, or cut a kept one's comma, and a case
@@ -938,13 +940,14 @@ func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 // out of a session: each transcript keeps every line, and each line's record
 // its uuid, its parentUuid and its type as written and every key, at every
 // depth, in the order written, so a line that began `{"parentUuid":` still
-// does; what a record loses is a loaded tool definition the scrub cut, its
-// keys with it. Over a line of every record kind the thread layer's cases
-// shape as 2.1.118, 2.1.310 and 2.1.322 write them, in a main thread and a
-// subagent's, beside the loaded-tools records the probes hold, through the
-// scrub of a whole archive: it takes the session's id out of every line, as a
-// value the launch handed the box would be, so that every line is rewritten,
-// and a tool server's name out of a definition and a call.
+// does and a subagent's `"isSidechain":true` stays where 2.1.310 looks for it;
+// what a record loses is a loaded tool definition the scrub cut, its keys with
+// it. Over a line of every record kind the thread layer's cases shape as
+// 2.1.118, 2.1.310 and 2.1.322 write them, in a main thread and a subagent's,
+// beside the loaded-tools records the probes hold, through the scrub of a
+// whole archive: it takes the session's id out of every line, as a value the
+// launch handed the box would be, so that every line is rewritten, and a tool
+// server's name out of a definition and a call.
 //
 // Mutation: write a loaded-tools record again from a map, or lose a line's
 // break, and a line here goes red.
