@@ -54,10 +54,10 @@ func atlasInventory() *inventory {
 			"region": map[string]any{"slug": "fra1", "name": canaryText},
 			"networks": map[string]any{
 				"v4": []any{
-					map[string]any{"ip_address": "203.0.113.10", "type": "public", "gateway": "203.0.113.1"},
+					map[string]any{"ip_address": "9.9.9.9", "type": "public", "gateway": "9.9.9.1"},
 					map[string]any{"ip_address": "10.10.0.2", "type": "private"},
 				},
-				"v6": []any{map[string]any{"ip_address": "2001:db8::10", "type": "public"}},
+				"v6": []any{map[string]any{"ip_address": "2620:fe::fe", "type": "public"}},
 			},
 			"tags": []any{canaryText}, "image": map[string]any{"description": canaryText},
 		}},
@@ -80,18 +80,19 @@ func atlasInventory() *inventory {
 				"users": []any{map[string]any{"access_key": canarySecret}}},
 		},
 		balancers: []map[string]any{{
-			"id": balancerID, "name": "edge", "ip": "203.0.113.20", "ipv6": "", "status": "active",
+			"id": balancerID, "name": "edge", "ip": "9.9.9.10", "ipv6": "", "status": "active",
 			"region":           map[string]any{"slug": "fra1"},
 			"forwarding_rules": []any{map[string]any{"certificate_id": canaryText}},
 		}},
 		domains: []map[string]any{{"name": "acme.example", "zone_file": "@ IN TXT " + canarySecret}},
 		records: map[string][]map[string]any{"acme.example": {
-			{"id": 1, "type": "A", "name": "@", "data": "203.0.113.20"},
-			{"id": 2, "type": "A", "name": "www", "data": "203.0.113.10"},
-			{"id": 3, "type": "AAAA", "name": "www", "data": "2001:db8::10"},
+			{"id": 1, "type": "A", "name": "@", "data": "9.9.9.10"},
+			{"id": 2, "type": "A", "name": "www", "data": "9.9.9.9"},
+			{"id": 3, "type": "AAAA", "name": "www", "data": "2620:fe::fe"},
 			{"id": 4, "type": "CNAME", "name": "api", "data": "@"},
 			{"id": 5, "type": "CNAME", "name": "docs", "data": "pages.vendor.example."},
 			{"id": 6, "type": "TXT", "name": "@", "data": canarySecret},
+			{"id": 7, "type": "A", "name": "legacy", "data": "203.0.113.9"},
 		}},
 		apps: []map[string]any{{
 			"id": appID, "live_url": "https://shop-abc12.ondigitalocean.app", "owner_uuid": canaryText,
@@ -228,20 +229,26 @@ func TestTheAtlasReadsTheTeamsResources(t *testing.T) {
 
 	web := atlasEntry(t, v, atlas.KindHost, "digitalocean/droplet/1001")
 	if web.Name != "web-1" || atlasFacts(web, atlas.FactRegion) != "fra1" || !owned(web) ||
-		atlasFacts(web, atlas.FactAddress) != "10.10.0.2 2001:db8::10 203.0.113.10" {
+		atlasFacts(web, atlas.FactAddress) != "10.10.0.2 2620:fe::fe 9.9.9.9" {
 		t.Errorf("the Droplet: %q %+v %+v", web.Name, web.Facts, web.Relations)
 	}
 	// A NAME POINTING AT ONE OF THE TEAM'S OWN ADDRESSES points at the
-	// resource, so no second server is claimed for the address.
+	// resource, so no second server is claimed for the address. An address
+	// that is none of the team's is a server known by its address alone.
 	for _, c := range read.Claims {
-		if c.Subject.Kind == atlas.KindHost && strings.HasPrefix(c.Subject.Key, atlas.HostAddrPrefix+"/") {
-			t.Errorf("a server is claimed by its address alone: %s", c.Subject)
+		if c.Subject.Kind == atlas.KindHost && strings.HasPrefix(c.Subject.Key, atlas.HostAddrPrefix+"/") &&
+			c.Subject.Key != "addr/203.0.113.9" {
+			t.Errorf("a server the team holds is claimed by its address alone: %s", c.Subject)
 		}
+	}
+	legacy := atlasEntry(t, v, atlas.KindHostname, "legacy.acme.example")
+	if !relates(legacy, atlas.RelationResolvesTo, v, atlas.KindHost, "addr/203.0.113.9") {
+		t.Errorf("a name pointing outside the team: %+v", legacy.Relations)
 	}
 	prod := atlasEntry(t, v, atlas.KindHost, "digitalocean/kubernetes/"+clusterID)
 	edge := atlasEntry(t, v, atlas.KindHost, "digitalocean/load-balancer/"+balancerID)
 	if prod.Name != "prod" || !owned(prod) || edge.Name != "edge" || !owned(edge) ||
-		atlasFacts(edge, atlas.FactAddress) != "203.0.113.20" {
+		atlasFacts(edge, atlas.FactAddress) != "9.9.9.10" {
 		t.Errorf("the cluster %q %+v, the load balancer %q %+v", prod.Name, prod.Facts, edge.Name, edge.Facts)
 	}
 	pg := atlasEntry(t, v, atlas.KindDatastore, "digitalocean/database/"+postgresID)
@@ -504,9 +511,9 @@ func TestNoCredentialShapeReachesTheAtlasFromDigitalOcean(t *testing.T) {
 			"region": map[string]any{"slug": s}})
 		inv.domains = append(inv.domains, map[string]any{"name": s, "zone_file": s})
 		inv.records["acme.example"] = append(inv.records["acme.example"],
-			map[string]any{"id": 7, "type": "A", "name": s, "data": s},
-			map[string]any{"id": 8, "type": "CNAME", "name": "alias", "data": s},
-			map[string]any{"id": 9, "type": "TXT", "name": "@", "data": s})
+			map[string]any{"id": 17, "type": "A", "name": s, "data": s},
+			map[string]any{"id": 18, "type": "CNAME", "name": "alias", "data": s},
+			map[string]any{"id": 19, "type": "TXT", "name": "@", "data": s})
 		inv.apps = append(inv.apps, map[string]any{"id": s, "live_url": "https://" + s + ".example/?key=" + s,
 			"spec": map[string]any{"name": s, "domains": []any{map[string]any{"domain": s}},
 				"envs":      []any{map[string]any{"key": s, "value": s}},
