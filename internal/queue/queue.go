@@ -303,13 +303,14 @@ const (
 	// What delivers it is the DEAD LETTER: its copy is kept on the group's
 	// unhandled subject, apart from the group's poison, and a reader that
 	// can handle it now lists that subject and handles each copy as a
-	// delivery. internal/notify's Service does that at every start, which
-	// is when what makes a copy readable — a newer build — arrives.
+	// delivery. internal/notify's Service does that at its start, which is
+	// when what makes a copy readable — a newer build — arrives, and again
+	// whenever the subject moves while it runs.
 	//
 	// SO THE GROUP'S OWN BUDGET AND BACKOFF, AND NOT A LONGER WINDOW OF ITS
 	// OWN. A dead letter follows, not a drop, so the budget bounds only how
-	// long a passed message circles its group before it waits, kept, for
-	// the next start of a node that reads it. Ten minutes covers the
+	// long a passed message circles its group before it waits, kept, for a
+	// node that reads it. Ten minutes covers the
 	// ordinary case, a newer node winning one of a message's early
 	// deliveries, many times over; a longer window would hold the slot it
 	// occupies (below) longer and deliver nothing the replay does not.
@@ -455,8 +456,8 @@ func Defer(cause DeferCause, reason string) Result {
 // deliveries failed as itself ([RetiredTo]).
 //
 // The group's own budget, about ten minutes, is all a pass gets, and enough:
-// a dead letter follows, not a drop, and the replay at the next start of a node
-// that reads the copy delivers it (internal/notify). From its first delivery
+// a dead letter follows, not a drop, and the replay of a node that reads the
+// copy delivers it (internal/notify). From its first delivery
 // until a node that reads it acks it, or its budget is spent, it holds one of
 // the group's ack-pending slots, which [OutcomePass] does the arithmetic of:
 // it delays the group's mail and loses none.

@@ -849,8 +849,8 @@ The consequences worth stating plainly:
   or discards is kept for `stream.event_retention_hours` and then expires,
   and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
   [Dead letters](../concepts/event-system.md#dead-letters).
-- **An older node hands a newer record's wake back to the fleet, and the
-  next node of the newer build to start delivers what the fleet did not.**
+- **An older node hands a newer record's wake back to the fleet, and a
+  node of the newer build delivers what the fleet did not.**
   Every node takes the notification service's deliveries from one consumer
   group, `notify-inbound`, and a wake carries the record its feed relayed,
   so a wake whose record the newer build wrote reaches the older nodes too,
@@ -861,39 +861,39 @@ The consequences worth stating plainly:
   added — a domain given a wake feed, say — which an older node has no
   parser for (`reason=newer_source`): the engine's own producers mark what
   they publish, so it is told apart from a vendor's webhook nothing parses,
-  which is acknowledged as before. It comes back on the redelivery backoff, a second doubling to
-  thirty, for the group's 25 deliveries, about ten minutes, and nothing
-  steers those deliveries to a node of the newer build: early in a roll, one
-  newer node among many older ones, every one of them can go to an older
-  node. One that no node has taken by then is dead-lettered with its copy
-  among the group's unhandled deliveries,
+  which is acknowledged as before. It comes back on the redelivery backoff,
+  a second doubling to thirty, for the group's 25 deliveries, about ten
+  minutes, and nothing steers those deliveries to a node of the newer
+  build: early in a roll, one newer node among many older ones, every one
+  of them can go to an older node. One that no node has taken by then is
+  dead-lettered with its copy among the group's unhandled deliveries,
   `dlq.crewlet.notifications.inbound.notify-inbound.unhandled.{digest}`
   (`dead_lettered` at `ERROR`, with `returned=pass` and
   `reason=newer_record`), as is one whose last delivery a node that sheds or
   stops handed back after the passes, or one whose last delivery reached a
   newer node that could not publish its wake — its broker did not answer,
   or its stop ended the handler — a failure of that node's, never of the
-  wake (`handler_failed` with `fault=node`). A node of the newer build already
-  running never replays it: the next one to start after it is kept delivers
-  its wake and drops it (`inbound_dead_letters_replayed`), so a roll that
-  takes longer than ten minutes loses no wake to its length. A roll that
-  pauses with a newer node among older ones delivers those wakes as it goes
-  on, at each next node's start; one paused for good keeps them for
-  `stream.event_retention_hours`, and restarting a node of the newer build
-  delivers them. A copy whose keep fails — refused, or cut by a node that
-  stopped or was killed while it crossed — is kept by the message's next
-  delivery (`dead_letter_failed` at `WARN`), since the broker delivers a
-  message five times past its budget for that; two losses remain: a copy
-  whose keep fails at every one of those deliveries (`dead_letter_failed` at
-  `ERROR`), and one no start replays before the retention lets it go,
-  counted below.
-  Waiting, each holds one of the group's acknowledgement slots for up to its
-  ten minutes, out of the broker's 1000, so only a sustained 1.7 such wakes
-  a second early in a roll would delay the group's other mail, and none of
-  it is lost. While any such wake waits, `inbound_dead_lettered` is raised
-  on every data node, naming how many wait and how soon the first expires:
-  finish the roll, or restart a node of the newer build if it has paused,
-  and the start delivers them. One that expires first is counted as a lost
+  wake (`handler_failed` with `fault=node`). Every node of the newer build
+  replays that subject: one already running within ten seconds of the keep,
+  since it asks the broker on every such beat whether the subject moved,
+  and a node starting at its start. It delivers each copy's wake and drops
+  the copy (`inbound_dead_letters_replayed`), so a roll that takes longer
+  than ten minutes loses no wake to its length, and one paused with a newer
+  node among older ones delivers them as they are kept. A copy whose keep
+  fails — refused, or cut by a node that stopped or was killed while it
+  crossed — is kept by the message's next delivery (`dead_letter_failed` at
+  `WARN`), since the broker delivers a message five times past its budget
+  for that; two losses remain: a copy whose keep fails at every one of
+  those deliveries (`dead_letter_failed` at `ERROR`), and one no node of a
+  build that reads it runs to replay before the retention lets it go,
+  counted below. Waiting, each holds one of the group's acknowledgement
+  slots for up to its ten minutes, out of the broker's 1000, so only a
+  sustained 1.7 such wakes a second early in a roll would delay the group's
+  other mail, and none of it is lost. While any such wake waits,
+  `inbound_dead_lettered` is raised on every data node, naming how many wait
+  and how soon the first expires: one that stays is one no running node
+  reads, so finish the roll, or start a node of the newer build if it has
+  paused, and it is delivered. One that expires first is counted as a lost
   wake (`crewlet.notify.inbound.dead_letter_expired`). `crewlet feeds
   dead-letters` does not list these: they are the notification service's,
   not a wake feed's. See

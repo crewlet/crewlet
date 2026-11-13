@@ -52,9 +52,10 @@ func (r DeferReason) Valid() bool { return r == DeferNewerRecord || r == DeferNe
 // group's 25 deliveries, about ten minutes, can go to older nodes while one
 // node of the newer build sits among them. One no node parsed by then is
 // dead-lettered with its copy on the group's unhandled subject
-// ([queue.RetiredTo]), and the next start of a node that reads it replays it
-// and drops the letter (replay.go) — the change feed's dead letters' own shape
-// (internal/changefeed); a node of that build already running never does. The
+// ([queue.RetiredTo]), and a node that reads it replays it and drops the
+// letter (replay.go) — one already running within a poll of the keep, and
+// otherwise the next to start, the change feed's dead letters' own shape
+// (internal/changefeed). The
 // group's own budget is enough for that reason: a dead letter follows, not a
 // drop, so a roll longer than ten minutes loses no wake to its length. What it
 // can lose is a copy whose keep fails at every delivery the broker makes of

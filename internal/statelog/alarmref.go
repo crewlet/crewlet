@@ -150,9 +150,10 @@ var alarmMeaning = map[Kind]string{
 		"delivery no node handled: a wake whose record a newer build wrote, which " +
 		"the older nodes of a roll passed round until its deliveries were spent, or " +
 		"one a node that shed or stopped handed back last — kept whole in " +
-		"`CREWLET_DLQ`. Each is a wake nobody has had. The next start of a node that " +
-		"reads an entry delivers its wake and drops it; one no start delivers expires " +
-		"after `stream.event_retention_hours`, and its wake with it.",
+		"`CREWLET_DLQ`. Each is a wake nobody has had. Every node that reads an entry " +
+		"delivers its wake and drops it, one already running within a few seconds of " +
+		"its keep; one no node delivers expires after `stream.event_retention_hours`, " +
+		"and its wake with it.",
 	KindFeedStopped: "A change feed on this node has held no consumer for " +
 		"longer than the one-minute stall grace, so this node publishes no " +
 		"wake from it. It opens its group again on its own and is handed every " +

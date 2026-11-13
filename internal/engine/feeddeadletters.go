@@ -32,9 +32,10 @@ import (
 //
 // AND THE INBOUND GROUP'S UNHANDLED DELIVERIES, BESIDE THEM. The notification
 // service's inbound group keeps a delivery no member handled on its unhandled
-// subject (internal/notify's UnhandledSubject), and a node's start replays it
-// (internal/notify's replay.go): the same kind of entry, a wake nobody has had,
-// waiting for the start of a node that reads it. So the same reading ages
+// subject (internal/notify's UnhandledSubject), and every node that reads it
+// replays it, a running one within a poll of its keep (internal/notify's
+// replay.go): the same kind of entry, a wake nobody has had, waiting for a node
+// that reads it. So the same reading ages
 // those entries on every beat for `inbound_dead_lettered` and counts one the
 // retention let go as the wake it lost; the replay drops through the same
 // ledger ([Engine.startNotifications] hands it to the service), so its drops
@@ -116,10 +117,12 @@ func (l *deadLetterLedger) DropDeadLetter(ctx context.Context, subject string, s
 	return err
 }
 
-// marks is what every dead-letter subject under under holds, as the broker
-// counts it: every feed's ([changefeed.DeadLettersUnder]), or the inbound
-// group's ([inboundLettersUnder]).
-func (l *deadLetterLedger) marks(ctx context.Context, under string) (queue.Marks, error) {
+// DeadLetterMarks implements [notify.DeadLetters]: what every dead-letter
+// subject under under holds, as the broker counts it — every feed's
+// ([changefeed.DeadLettersUnder]), or the inbound group's
+// ([inboundLettersUnder]), which the alarm's reading and the notification
+// service's running replay both ask.
+func (l *deadLetterLedger) DeadLetterMarks(ctx context.Context, under string) (queue.Marks, error) {
 	return l.store.DeadLetterMarks(ctx, under)
 }
 
@@ -418,7 +421,7 @@ func (w *deadLetterWatch) readInbound(ctx context.Context, now time.Time) []stat
 func (w *deadLetterWatch) readTree(ctx context.Context, tree *letterTree, under string,
 	subjects []watched, now time.Time) {
 
-	marks, err := w.ledger.marks(ctx, under)
+	marks, err := w.ledger.DeadLetterMarks(ctx, under)
 	if err != nil {
 		// QUIET, because the broker that did not answer raises its own
 		// alarms, and this runs on every beat of every data node.
@@ -538,9 +541,9 @@ func (w *deadLetterWatch) inboundExpired(subject string) func(context.Context, q
 		}
 		log.WarnContext(ctx, "inbound_dead_letter_expired", "subject", subject, "seq", k.Seq,
 			"kept_at", k.StoredAt, "expired_at", k.Expires,
-			"detail", "the dead-letter stream's retention let it go before any node's start "+
-				"replayed it, and the wake it held is lost: no node of a build that reads it "+
-				"started within stream.event_retention_hours")
+			"detail", "the dead-letter stream's retention let it go before any node's replay "+
+				"delivered it, and the wake it held is lost: no node of a build that reads it "+
+				"ran within stream.event_retention_hours")
 	}
 }
 

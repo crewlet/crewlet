@@ -1,6 +1,8 @@
 package notify_test
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -404,8 +406,9 @@ func (p blockingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify
 // is a deadlock the bubble reports, never a case that hangs.
 //
 // Mutation: replay inside Start, and every goroutine of the bubble is blocked
-// on the held copy; end the replay at Stop without waiting for it, or never
-// end it, and the second copy is replayed after the Stop returned.
+// on the held copy; return from Stop without waiting for the replay, and Stop
+// has returned while the replay still holds its copy; never end it, and the
+// second copy is replayed after the Stop returned.
 func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		parser := blockingParser{versionedParser: versionedParser{reads: 2}, once: &sync.Once{},
@@ -423,8 +426,17 @@ func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
 		stopped := make(chan error, 1)
 		go func() { stopped <- newer.svc.Stop(context.Background()) }()
 		// THE STOP HAS ENDED THE REPLAY'S CONTEXT AND WAITS FOR IT, which is
-		// held on its first copy until released.
+		// held on its first copy until released: every goroutine of the
+		// bubble is blocked, and the stop must be among them, never
+		// returned — the engine closes the queue once it does, under a
+		// replay still reading it.
 		synctest.Wait()
+		select {
+		case err := <-stopped:
+			close(parser.release)
+			t.Fatalf("Stop returned (%v) while the replay still held its copy", err)
+		default:
+		}
 		close(parser.release)
 		if err := <-stopped; err != nil {
 			t.Fatalf("Stop: %v", err)
@@ -443,6 +455,134 @@ func TestAStartReturnsWhileItsReplayRunsAndAStopEndsIt(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A RUNNING NODE REPLAYS A COPY KEPT AFTER IT STARTED.
+//
+// A node of the newer build already running reads every copy kept after its
+// start as well, and a roll paused with one newer node among older ones keeps
+// one every ten minutes or so: replayed only at a start, each waited for a
+// restart a paused roll never brings, and expired with its wake. So the replay
+// runs for as long as the service does, and a pass follows the subject's
+// count moving, within a poll of the keep. In a bubble, so the poll passes on
+// its clock.
+//
+// Mutation: replay once at the start and never again, and the copy kept after
+// it is never delivered.
+func TestARunningNodeReplaysACopyKeptAfterItStarted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		newer := newService(t, func(o *notify.Options, _ *harness) {
+			o.Parsers = []notify.Parser{versionedParser{reads: 2}}
+		})
+		start(t, newer.svc)
+		staged(t, newer, "kept after the start", relayed("2", "op-50"))
+
+		time.Sleep(notify.ReplayPoll + time.Second)
+		synctest.Wait()
+		woken := newer.settledN(t, inbox("engineering-lead"), 1)
+		if len(woken) != 1 || woken[0].ID != changefeed.WakeID("op-50", "engineering-lead") {
+			t.Fatalf("the seat was woken %d time(s), want once, by the wake derived from op-50",
+				len(woken))
+		}
+		if left := inboundLetters(t, newer.q, notify.UnhandledSubject()); len(left) != 0 {
+			t.Errorf("the unhandled subject holds %d copies, want none: the running node "+
+				"delivered and dropped the one kept after its start", len(left))
+		}
+	})
+}
+
+// countingParser is versionedParser, counting what it is handed.
+type countingParser struct {
+	versionedParser
+	parsed *atomic.Int32
+}
+
+func (p countingParser) Parse(ctx context.Context, w types.RawWebhook, r *notify.Registry) ([]notify.Routed, error) {
+	p.parsed.Add(1)
+	return p.versionedParser.Parse(ctx, w, r)
+}
+
+// A RUNNING REPLAY NEVER HANDLES AGAIN WHAT ITS BUILD CANNOT, AND TRIES AGAIN
+// WHAT MAY HAVE CLEARED.
+//
+// A copy this node passed is one its build cannot read, and its build changes
+// only with a restart — and so is one it fails as itself, a wake too large to
+// publish: handled again at every pass it would cost a frame's read and a
+// parse each time the subject moved, for nothing. A copy kept because its
+// wake was not delivered for a reason of the node's own may be delivered now:
+// a later pass, at most a retry's minute on, tries it again. Here an older
+// node passes a newer record's copy once and fails a too-large wake's once,
+// however the subject moves, and a copy whose wake's broker did not answer is
+// delivered once the broker takes it. In a bubble, so the polls pass on its
+// clock.
+//
+// Mutation: forget what a pass held back (the memory's held set), and the
+// passed copy is parsed at every pass; hold back nothing it failed as itself,
+// and the too-large one is; retry nothing a pass kept, and the failed wake is
+// never delivered.
+func TestARunningReplayHoldsBackWhatItsBuildCannotRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parsed := new(atomic.Int32)
+		var refusing atomic.Bool
+		refusing.Store(true)
+		older := newService(t, func(o *notify.Options, h *harness) {
+			o.Parsers = []notify.Parser{countingParser{versionedParser{reads: 1}, parsed}}
+			o.Queue = refusingWakes{EventQueue: h.q, refusing: &refusing,
+				tooLarge: changefeed.WakeID("op-62", "engineering-lead")}
+		})
+		start(t, older.svc)
+		staged(t, older, "a newer record", relayed("3", "op-60"))
+		stagedAt := staged(t, older, "a record whose wake fails", relayed("1", "op-61"))
+		staged(t, older, "a record whose wake is too large", relayed("1", "op-62"))
+
+		// THE COUNT MOVES with each keep: a pass parses all three copies,
+		// passes the newer one, fails the too-large one as itself and keeps
+		// the one whose wake the broker did not take.
+		time.Sleep(notify.ReplayPoll + time.Second)
+		synctest.Wait()
+		if got := parsed.Load(); got != 3 {
+			t.Fatalf("the first pass after the keeps parsed %d copies, want all three", got)
+		}
+
+		// THE BROKER TAKES WAKES AGAIN, and the retry's pass comes: the
+		// failed wake is delivered, and the passed copy is not parsed again.
+		refusing.Store(false)
+		time.Sleep(notify.ReplayRetry + notify.ReplayPoll)
+		synctest.Wait()
+		woken := older.settledN(t, inbox("engineering-lead"), 1)
+		if len(woken) != 1 || woken[0].ID != changefeed.WakeID("op-61", "engineering-lead") {
+			t.Fatalf("the seat was woken %d time(s), want once, by the wake derived from op-61",
+				len(woken))
+		}
+		if got := parsed.Load(); got != 4 {
+			t.Errorf("the replay parsed %d copies in all, want 4: the passed copy and the "+
+				"too-large one once each, and the failed wake's twice", got)
+		}
+		left := inboundLetters(t, older.q, notify.UnhandledSubject())
+		if len(left) != 2 || left[0].Seq == stagedAt || left[1].Seq == stagedAt {
+			t.Errorf("the unhandled subject holds %d copies, want the passed and the too-large "+
+				"ones", len(left))
+		}
+	})
+}
+
+// refusingWakes is a queue whose wakes the broker does not take while refusing
+// is set, and that refuses the wake tooLarge as too large, always.
+type refusingWakes struct {
+	queue.EventQueue
+	refusing *atomic.Bool
+	tooLarge uuid.UUID
+}
+
+func (q refusingWakes) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	_, wake := topics.SeatFromInbox(topic)
+	switch {
+	case wake && ev.ID == q.tooLarge:
+		return fmt.Errorf("publish the wake: %w", queue.ErrTooLarge)
+	case wake && q.refusing.Load():
+		return fmt.Errorf("publish the wake: %w", queue.ErrUnavailable)
+	}
+	return q.EventQueue.Publish(ctx, topic, ev)
 }
 
 // windowValve counts each bucket in fixed windows a second wide, truncated from

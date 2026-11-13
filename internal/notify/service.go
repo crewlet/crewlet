@@ -231,9 +231,11 @@ type Options struct {
 }
 
 // DeadLetters is the queue's dead-letter verbs as the replay of the inbound
-// group's unhandled deliveries calls them: the listing of the group's
-// unhandled subject, one copy's frame, and the drop of a copy it handled.
+// group's unhandled deliveries calls them: the marks a running replay asks
+// whether the group's unhandled subject moved by, the listing of that subject,
+// one copy's frame, and the drop of a copy it handled.
 type DeadLetters interface {
+	DeadLetterMarks(ctx context.Context, under string) (queue.Marks, error)
 	DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept, error)
 	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
 	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
@@ -280,14 +282,16 @@ type Service struct {
 	// reads them on every event.
 
 	// replaying is the replay [Service.Start] began, on a goroutine of its
-	// own, until [Service.Stop] ends it: its cancel, and done, closed once
-	// it has returned. Nil before Start.
+	// own, until [Service.Stop] ends it: its cancel, first, closed once its
+	// first pass has returned, and done, closed once it has. Nil before
+	// Start.
 	replaying *replayRun
 }
 
 // replayRun is one replay's goroutine, as the service that started it stops it.
 type replayRun struct {
 	cancel context.CancelFunc
+	first  chan struct{}
 	done   chan struct{}
 }
 
@@ -439,11 +443,12 @@ func (s *Service) Unregister(source string) bool {
 
 // Start attaches to the inbound topic, then begins the replay of the inbound
 // group's unhandled deliveries — the wakes no node handled while they were
-// offered (replay.go) — and returns without waiting for it.
+// offered (replay.go) — once at once and again whenever they move, for as long
+// as the service runs, and returns without waiting for it.
 //
 // THE REPLAY AFTER THE SUBSCRIBE, so this node is a member of the group
 // whatever the replay meets: a replay that failed part way leaves its copies
-// kept for the next start, and must not leave the node deaf.
+// kept for a later pass, and must not leave the node deaf.
 //
 // AND ON A GOROUTINE OF ITS OWN, which [Service.Stop] ends — as a change
 // feed's replay runs on the feed's own (internal/changefeed). Start runs in
@@ -456,7 +461,12 @@ func (s *Service) Unregister(source string) bool {
 // values without ctx's end, because a caller's context — an apply's — ends
 // when the call does, and the replay outlives the call; what ends it is Stop.
 // A replay stopped part way keeps every copy it did not reach, and every copy
-// it was handling when stopped that it could not settle, for the next start.
+// it was handling when stopped that it could not settle, for another node's
+// replay or the next start.
+//
+// AND IT RUNS FOR AS LONG AS THE SERVICE DOES, not once: a copy kept after this
+// node started is one it reads as well, and replayed only at a start it waited
+// for a restart a paused roll never brings (replay.go).
 //
 // Outside the lock, because the replay handles each copy through
 // [Service.Handle], which takes the read lock, and Go's RWMutex is not
@@ -477,13 +487,13 @@ func (s *Service) Start(ctx context.Context) error {
 	// taken by the same goroutine deadlocks the boot.
 	sources := slices.Sorted(maps.Keys(s.parsers))
 	replayCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	run := &replayRun{cancel: cancel, done: make(chan struct{})}
+	run := &replayRun{cancel: cancel, first: make(chan struct{}), done: make(chan struct{})}
 	s.replaying = run
 	s.mu.Unlock()
 	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
 	go func() {
 		defer close(run.done)
-		s.replay(replayCtx)
+		s.replay(replayCtx, run.first)
 	}()
 	return nil
 }
@@ -496,7 +506,7 @@ func (s *Service) Start(ctx context.Context) error {
 // A REPLAY STOPPED PART WAY LOSES NOTHING: a copy it never reached is still
 // kept, and one it was handling when stopped either settled — its wakes
 // published and its entry dropped — or is kept as a delivery whose wake was not
-// published, for the next start.
+// published, for another node's replay or the next start.
 //
 // The inbound subscription is left as it is: the queue it is on ends it, as it
 // ends every subscription of the node.
@@ -560,9 +570,9 @@ func (s *Service) Sources() []string {
 // failure's are, so the older nodes of a roll cannot spin it between them. The
 // group's 25 deliveries offer it to the fleet for about ten minutes, and
 // nothing steers them to a node that reads it; one no node handled by then is
-// dead-lettered with its copy among the group's unhandled deliveries, and the
-// next node that reads it replays it at its start (replay.go), through this
-// same handling.
+// dead-lettered with its copy among the group's unhandled deliveries, and a
+// node that reads it replays it (replay.go) — one running within a poll of the
+// keep, or the next to start — through this same handling.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	return s.handle(ctx, ev, false)
 }

@@ -1912,14 +1912,15 @@ var table = []rule{
 		// newer record's wake the older nodes of a roll passed round until
 		// its 25 deliveries were spent, or one whose last delivery a node
 		// that shed or stopped handed back, kept on the group's unhandled
-		// subject until the next start of a node that reads it replays it
-		// (internal/notify), or the retention lets it go.
+		// subject until a node that reads it replays it (internal/notify),
+		// or the retention lets it go.
 		//
 		// RAISED FROM THE FIRST ENTRY, NODE-WIDE: the group is one for the
 		// whole fleet, and a single entry is a wake somebody has not had —
-		// one that nothing delivers until a node of the build that reads it
-		// STARTS, which a roll paused for good never brings. Its count of
-		// what expires within a day is the reading's, taken on every beat.
+		// one a running node of the build that reads it delivers within a
+		// beat or two, and that otherwise waits for such a node to START,
+		// which a roll paused for good never brings. Its count of what
+		// expires within a day is the reading's, taken on every beat.
 		kind: KindInboundDeadLettered,
 		fires: func(r Reading) (string, bool) {
 			if len(r.InboundDeadLetters) == 0 {
@@ -1927,16 +1928,18 @@ var table = []rule{
 			}
 			return deadLetterDetail(r.InboundDeadLetters, func(held, soon int) string {
 				return fmt.Sprintf("the notification service's inbound group holds %d "+
-					"delivery(ies) no node handled, wakes waiting for the next start of a "+
-					"node that reads them, %d of them expiring within a day", held, soon)
+					"delivery(ies) no node handled, wakes waiting for a node that reads "+
+					"them, %d of them expiring within a day", held, soon)
 			}), true
 		},
-		remedy: "Each entry is a wake nobody has had, which the next start of a node " +
-			"that reads it delivers, once, dropping the entry: finish the roll, or " +
-			"restart a node of the newer build if the roll is paused, since a node " +
-			"already running replays only at its start. Each start that finds entries " +
-			"logs `inbound_dead_letters_replayed`, and a line for each, named for what " +
-			"became of it. An entry no start delivers expires after " +
+		remedy: "Each entry is a wake nobody has had, which every node that reads it " +
+			"delivers, once, dropping the entry — one already running within a few " +
+			"seconds of the keep. An entry that stays is one no running node reads: " +
+			"finish the roll, or start a node of the newer build if the roll is " +
+			"paused, and it is delivered. Each replay that handles entries logs " +
+			"`inbound_dead_letters_replayed`, and a line for each, named for what " +
+			"became of it; one kept for a reason that may clear is tried again within " +
+			"a minute. An entry no node delivers expires after " +
 			"`stream.event_retention_hours` and its wake is lost " +
 			"(`crewlet.notify.inbound.dead_letter_expired`). Each was logged as " +
 			"`dead_lettered` when its budget was spent, naming the return that spent it.",
