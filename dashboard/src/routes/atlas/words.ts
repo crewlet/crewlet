@@ -38,6 +38,7 @@ export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName 
   endpoint: { word: "Endpoint", glyph: "waypoints" },
   certificate: { word: "Certificate", glyph: "badge-check" },
   service: { word: "Service", glyph: "layers" },
+  workload: { word: "Workload", glyph: "container" },
   host: { word: "Server", glyph: "server" },
   datastore: { word: "Database", glyph: "database" },
   queue: { word: "Queue", glyph: "list-ordered" },
@@ -84,7 +85,8 @@ export const LANES: Readonly<
   services: {
     label: "Services",
     columns: 3,
-    empty: "Services appear when a person adds one, by asking Ask Crewlet.",
+    empty:
+      "Services appear when a person adds one, by asking Ask Crewlet, and containers from the servers the SSH integration reads for Atlas.",
   },
   runtime: {
     label: "Runtime",
@@ -228,6 +230,8 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   address: "Address",
   port: "Port",
   containers: "Runs containers",
+  open_port: "Open ports",
+  image: "Image",
   engine: "Engine",
   engine_version: "Engine version",
   default_branch: "Default branch",

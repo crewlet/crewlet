@@ -146,6 +146,7 @@ const MONO = new Set<AtlasValue["type"]>([
   "version",
   "account_ref",
   "branch",
+  "image",
 ]);
 
 /** A fact's value as the engine canonicalised it, with an internal address marked as one. */

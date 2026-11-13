@@ -209,6 +209,8 @@ const IDENTITY: ReadonlySet<AtlasFact> = new Set([
   "url",
   "inbound_url",
   "port",
+  "open_port",
+  "image",
 ]);
 
 /** The entry's signals as rows: what is wrong, and since when. */

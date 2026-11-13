@@ -39,6 +39,7 @@ const LANE_OF: Readonly<Record<AtlasKind, AtlasLane>> = {
   endpoint: "entry",
   certificate: "entry",
   service: "services",
+  workload: "services",
   host: "runtime",
   datastore: "data",
   queue: "data",

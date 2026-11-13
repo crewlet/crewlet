@@ -16,6 +16,7 @@ export type AtlasKind =
   | "endpoint"
   | "certificate"
   | "service"
+  | "workload"
   | "host"
   | "datastore"
   | "queue"
@@ -96,6 +97,8 @@ export type AtlasFact =
   | "address"
   | "port"
   | "containers"
+  | "open_port"
+  | "image"
   | "engine"
   | "engine_version"
   | "default_branch"
@@ -142,7 +145,8 @@ type AtlasValueType =
   | "account_ref"
   | "branch"
   | "label"
-  | "instant";
+  | "instant"
+  | "image";
 
 /** Where a claim came from (`atlas.SourceKind`). */
 export type AtlasSourceKind = "settings" | "records" | "integration" | "agent" | "person";
