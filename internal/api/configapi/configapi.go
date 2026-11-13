@@ -1080,6 +1080,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 	var refused *AdmissionError
 	var managed *ManagedError
 	var raise *RaiseError
+	var tooLarge *DocumentTooLargeError
 	switch {
 	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
 	// managed document refuses whoever is asking before anything they sent
@@ -1090,6 +1091,15 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 		refuseAdmission(w, refused)
 	case errors.As(err, &raise):
 		refuseRaise(w, raise)
+	case errors.As(err, &tooLarge):
+		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
+			httpjson.Detail{
+				"hint": "the document, sealed into the activation pointer that carries it " +
+					"to every node, is past what one key of the coordination store holds; " +
+					"nothing was stored. Make the document or its summary smaller",
+				"document_bytes": tooLarge.DocumentBytes, "pointer_bytes": tooLarge.PointerBytes,
+				"max_pointer_bytes": coord.MaxValueBytes,
+			})
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
 			map[string]string{
