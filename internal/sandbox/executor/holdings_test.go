@@ -203,7 +203,32 @@ func TestAReadingTakesTheSeatsSlotInsideTheProcesssTwo(t *testing.T) {
 	}
 }
 
+// A READING WHOSE CALLER LEFT AS ITS ARCHIVE OPENED ENDS WITH ITS CALLER'S
+// ERROR, whatever the store made of the open stopping under it: a relaunch
+// that gave up on its reading is told it gave up, never the store's account
+// of a connection that was cut.
+//
+// Mutation: answer an open that failed by the store's error alone, and the
+// reading ends with the store's.
+func TestAReadingWhoseCallerLeftAsItOpenedEndsWithItsCallersError(t *testing.T) {
+	t.Parallel()
+	call := sandbox.LoggedCall{ID: "toolu_left", Asked: true, Output: "left done"}
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	cut := errors.New("the store's connection was cut")
+	got, err := executor.NewClaudeCode().ReadHoldings(ctx, rhSession("2.1.310"),
+		func(context.Context) (io.ReadCloser, error) {
+			leave()
+			return nil, cut
+		}, rhAsk(call))
+	if got.Read || !errors.Is(err, context.Canceled) || errors.Is(err, cut) {
+		t.Errorf("a reading whose caller left as it opened = %+v, %v; want no reading, with its caller's own error",
+			got, err)
+	}
+}
+
 // A READING IS ONLY OF A WRITER ITS RULES WERE MEASURED ON: Claude Code 2.1.310
+
 // and later. A writer below it, a release the run recorded none of, one that
 // is no release, and one of the shape of a release whose number is past what
 // an int holds, at or past the floor as its digits read, are each no reading,

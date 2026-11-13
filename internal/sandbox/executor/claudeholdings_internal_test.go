@@ -309,10 +309,14 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 // alone and is told; a counted record's result holds it. In subagent A's
 // thread: one with a parentUuid, A's `agentId` and `isSidechain` true. A
 // result there naming no agent or another, or no sidechain, holds nothing, and
-// leaves A's thread not whole; one out of the chain holds nothing either.
+// leaves A's thread not whole, so A is not reported and its call is told under
+// its heading; one out of the chain holds nothing either, and restarts A's
+// thread, since Claude Code's walk reads a record of no parentUuid as a root
+// ([threadRestarts.See]).
 //
 // Mutation: count a record that is not chained, or not its own thread's, and
-// the case's result holds its call.
+// the case's result holds its call; or pass a user or assistant record that is
+// not A's own by and leave A's thread whole, and A is reported.
 func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_own", "own done"
@@ -361,11 +365,14 @@ func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 			s := hsForeground(t)
 			s.thread[2] = ctReplace(t, s.thread[2], tc.from, tc.to)
 			got := hsSubagentRead(t, s)
-			records := got.Calls[hsSubCall]
-			if held, _ := got.Holds(hsLogged(hsSubCall, hsSubOut)); held != tc.held || records.Uses != 1 ||
-				(records.Results == 1) != tc.held || records.Thread != ctAgent {
-				t.Errorf("Holds = %t, its records %+v; want held %t, with one use in its subagent's thread", held,
-					records, tc.held)
+			records, report := got.Calls[hsSubCall], got.Subagents[ctAgent]
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			if held != tc.held || records.Uses != 1 || (records.Results == 1) != tc.held ||
+				records.Thread != ctAgent || report.Reported != tc.held ||
+				(!tc.held && (under != ctAgent || !strings.Contains(report.Why, hsNotWhole))) {
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want held %t, with one use in its "+
+					"subagent's thread, the subagent reported only where its call is held, and else not whole",
+					held, under, records, report, tc.held)
 			}
 		})
 	}
@@ -1023,13 +1030,14 @@ func (c *hsCancelling) Read(p []byte) (int, error) {
 }
 
 // A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, since a line's read
-// takes none: a caller that left while the main thread was read, many
-// mebibytes that gzip barely shrinks, ends the reading within a line, with the
-// caller's own error and the rest of the stream never read. A walk that asked
-// only between members would read the thread whole and drain the stream.
+// takes none: a caller that left while a thread was read, many mebibytes that
+// gzip barely shrinks, the main thread's or a subagent's, ends the reading
+// within a line, with the caller's own error and the rest of the stream never
+// read. A walk that asked only between members would read the thread whole
+// and drain the stream.
 //
-// Mutation: ask the context between members alone, and the reading reads the
-// whole thread and stands.
+// Mutation: ask the context between members alone, in either thread's walk,
+// and the reading reads that whole thread and stands.
 func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
 	random := rand.NewChaCha8([32]byte{'h', 'o', 'l', 'd'})
@@ -1040,16 +1048,28 @@ func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 		lines = append(lines, `{"type":"queue-operation","operation":"enqueue","sessionId":"`+ctSession+
 			`","content":"`+base64.StdEncoding.EncodeToString(noise)+`"}`)
 	}
-	archive := hsArchive(t, hsThread(lines...))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	stream := &hsCancelling{r: bytes.NewReader(archive), after: 1 << 20, cancel: cancel}
-	got, err := hsReadFrom(ctx, stream, ctSession, hsAsk(hsLogged("toolu_ctx", "ctx done")), hsBounds())
-	if got.Read || !errors.Is(err, context.Canceled) {
-		t.Fatalf("a reading whose caller left = %+v, %v; want no reading, with its caller's error", got, err)
+	member := func(name, body string) tarMember {
+		return tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: body}
 	}
-	if stream.handed >= len(archive) {
-		t.Errorf("the reading read all %d bytes of a stream whose caller left after %d", len(archive), stream.after)
+	for name, members := range map[string][]tarMember{
+		"in the main thread":     {member(hsMain, hsThread(lines...))},
+		"in a subagent's thread": {member(hsMain, hsThread()), member(hsAgentThread, ctThread(lines...))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := tarOfMembers(t, members)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stream := &hsCancelling{r: bytes.NewReader(archive), after: 1 << 20, cancel: cancel}
+			got, err := hsReadFrom(ctx, stream, ctSession, hsAsk(hsLogged("toolu_ctx", "ctx done")), hsBounds())
+			if got.Read || !errors.Is(err, context.Canceled) {
+				t.Fatalf("a reading whose caller left = %+v, %v; want no reading, with its caller's error", got, err)
+			}
+			if stream.handed >= len(archive) {
+				t.Errorf("the reading read all %d bytes of a stream whose caller left after %d", len(archive),
+					stream.after)
+			}
+		})
 	}
 }
 
@@ -1136,34 +1156,40 @@ func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
 // another session's main thread, a thread deeper than the session's
 // subagents (a Workflow's), `agent-.jsonl`, and the session's saved compaction
 // under either of its names are passed over, so a call only they record is
-// absent, and the reading of the session's own main thread stands. A
+// absent, and the reading of the session's own main thread stands: the saved
+// compaction holds the call both as a main thread and as a sidechain of no
+// agent writes it, so a walk that read it as either thread would count it. A
 // depth-one subagent's thread and metadata are read, its call counted in its
 // thread; and either held twice, under two spellings, is no reading, since a
 // restore keeps the last copy.
 //
 // Mutation: take any `projects/crewlet/<x>.jsonl` for the main thread, as a
-// person's transcript does, and another session's call is counted; or drop
-// the check of a subagent's member held twice, and its archive is read.
+// person's transcript does, and another session's call is counted; read the
+// saved compaction, and its call is counted; or drop the check of a
+// subagent's member held twice, and its archive is read.
 func TestHoldingsReadOnlyTheContinuedSessionsMembers(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_member", "member done"
 	call := hsLogged(id, out)
-	elsewhere := hsThread(hsCall(ctUUID(1), 2, id, hsBlock(t, out))...)
+	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
+	elsewhere := hsThread(pair...)
+	sidechain := func(line string) string { return ctReplace(t, line, `"isSidechain":false`, `"isSidechain":true`) }
+	compaction := hsThread(append(slices.Clone(pair), sidechain(pair[0]), sidechain(pair[1]))...)
 	session := claudeProjectPrefix + ctSession
-	for name, member := range map[string]string{
-		"another session's main thread":          claudeProjectPrefix + ctOther + ".jsonl",
-		"a Workflow's thread":                    session + "/subagents/workflows/w-1/agent-" + ctAgent + ".jsonl",
-		"agent-.jsonl":                           session + "/subagents/agent-.jsonl",
-		"the saved compaction":                   session + "/" + claudePrecompactFile,
-		"the saved compaction beside the thread": session + "." + claudePrecompactFile,
+	for name, tc := range map[string]struct{ member, body string }{
+		"another session's main thread":          {claudeProjectPrefix + ctOther + ".jsonl", elsewhere},
+		"a Workflow's thread":                    {session + "/subagents/workflows/w-1/agent-" + ctAgent + ".jsonl", elsewhere},
+		"agent-.jsonl":                           {session + "/subagents/agent-.jsonl", elsewhere},
+		"the saved compaction":                   {session + "/" + claudePrecompactFile, compaction},
+		"the saved compaction beside the thread": {session + "." + claudePrecompactFile, compaction},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := hsRead(t, tarOf(t, map[string]string{hsMain: hsThread(), member: elsewhere}), ctSession,
+			got, err := hsRead(t, tarOf(t, map[string]string{hsMain: hsThread(), tc.member: tc.body}), ctSession,
 				hsAsk(call))
 			hsReadWhole(t, got, err)
 			if records, named := got.Calls[id]; named {
-				t.Errorf("its records %+v; want none, %s being no member the reading reads", records, member)
+				t.Errorf("its records %+v; want none, %s being no member the reading reads", records, tc.member)
 			}
 		})
 	}
@@ -1486,28 +1512,34 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // notification, are reported; P2(dc)'s box copy, its subagent's thread cut
 // back before its last reply (condition 5), and P2(d)'s, its Agent call
 // answered by the resume's own result (condition 3), are not. Built, each
-// otherwise reportable: a subagent whose metadata is missing or names a call
-// of another tool; whose thread restarts, opens on a record that roots no
+// otherwise reportable: a subagent whose metadata is missing, names a call of
+// another tool, or names an id a second Agent call carries; whose thread
+// restarts, holds a record of another agent's, opens on a record that roots no
 // chain, ends on an empty reply, on the text of a reply cut before its call, on
 // a reply its harness wrote itself (a failed request's error, which ends the
 // subagent and answers its call completed, or a resume's "No response
 // requested."), on one marked an API error though it ended its turn, or on one
 // cut at its token bound, or holds a skill's text, a leg the main thread holds
-// no call of (d4's
-// record); whose thread starts a second leg it finished, the main thread
-// holding no call of it (condition 4 alone); whose Agent call's answer names
-// another agent or is a background subagent's; whose notification precedes a
-// restart of the main thread; or that was sent a message whose result refused
-// it with null, or left none, and no notification answered. A message its own
-// result refused with the literal false is no leg, and one answered by a
-// notification is answered; and the members' order is the box's to choose.
+// no call of (d4's record); whose thread starts a second leg it finished, the
+// main thread holding no call of it (condition 4 alone); whose Agent call's
+// answer names another agent, is a background subagent's, is a failure, comes
+// twice, or precedes a restart of the main thread; whose notification names
+// another agent, or a subagent that did not complete, or precedes a restart of
+// the main thread; or that was sent a message whose result refused it with
+// null, or left none, and no notification answered. A message its own result
+// refused with the literal false is no leg, and one answered by a notification
+// is answered; a subagent a Task call started reads as one an Agent call did;
+// and the members' order is the box's to choose.
 //
 // Mutation: ignore a restart in a subagent's thread, and the restarted one is
 // reported; drop condition 4, and the second leg's subagent is reported; take
 // a reply of text for finished whatever it stopped for, and the cut pair's is;
 // take one for finished whatever it stopped for but a call, and the resume's
-// own reply's is; or read past a reply's mark of an API error, and the marked
-// reply's is.
+// own reply's is; read past a reply's mark of an API error, and the marked
+// reply's is; or drop any other part of a condition (the answer's liveness,
+// its failure, its count, the metadata's one call, a Task call as a start, a
+// notification's status or agent, a record of another agent's), and the
+// subagent its case built is reported.
 func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
 	t.Parallel()
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
@@ -1590,6 +1622,33 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		"its notification before a restart of the main thread": {with(hsBackground, func(t *testing.T, s *hsSession) {
 			s.main = append(s.main, ctMicrocompactBoundary(ctUUID(4), ctUUID(5)))
 		}), hsUnanswered},
+		"its Agent call's answer before a restart of the main thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, ctMicrocompactBoundary(ctUUID(3), ctUUID(4)))
+		}), hsUnanswered},
+		"its Agent call's answer a failure": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.main[2] = ctReplace(t, s.main[2], `"type":"tool_result"`, `"type":"tool_result","is_error":true`)
+		}), hsUnanswered},
+		"its Agent call answered twice": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, hsAnswerOf(t, ctUUID(3), ctUUID(5), hsStarted, "the subagent's report",
+				hsCompleted(ctAgent)))
+		}), hsUnanswered},
+		"a second Agent call under its call's id": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, ctAssistant(ctUUID(3), ctUUID(5), hsCallOf(hsStarted, claudeToolAgent,
+				hsAgentInput)))
+		}), hsUnlinked},
+		"started by a Task call": {with(hsForeground, func(_ *testing.T, s *hsSession) {
+			s.main[1] = ctAssistant(ctUUID(1), ctUUID(2), hsCallOf(hsStarted, claudeToolTask, hsAgentInput))
+		}), ""},
+		"its notification of a subagent that did not complete": {with(hsBackground, func(t *testing.T, s *hsSession) {
+			s.main[3] = ctReplace(t, s.main[3], "<status>completed</status>", "<status>killed</status>")
+		}), hsUnanswered},
+		"its notification naming another agent": {with(hsBackground, func(t *testing.T, s *hsSession) {
+			s.main[3] = ctReplace(t, s.main[3], "<task-id>"+ctAgent+"</task-id>", "<task-id>"+hsOtherAgent+"</task-id>")
+		}), hsUnanswered},
+		"a record of another agent's in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread = slices.Insert(s.thread, 3, ctReplace(t, ctAttachment(ctUUID(103), ctUUID(110), ctTokens,
+				ctTokensRendered), `"isSidechain":false`, `"isSidechain":true,"agentId":"`+hsOtherAgent+`"`))
+		}), hsNotWhole},
 		"sent a message its own result refused with null": {with(hsForeground, sent("null")), hsUnanswered},
 		"sent a message with no result":                   {with(hsForeground, sent("")), hsUnanswered},
 	} {
@@ -1661,6 +1720,93 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 				held, under, got.Subagents["a0000000000000002"])
 		}
 	})
+}
+
+// A CALL WHOSE RECORDS LIE IN TWO THREADS IS TOLD, in the main list, wherever
+// its use lies and wherever its result: a thread's result pairs with a call of
+// its own thread alone, so a use in the main thread and its result in a
+// subagent's, or the reverse, is no call a model was handed whole with its
+// result, and a whole pair in each, as a gateway that repeats ids would
+// leave, is two calls' records under one id. Each is counted in both threads,
+// two of them and no thread named, though every condition of its subagent
+// holds.
+//
+// Mutation: count a call's threads as one however many hold its records, and
+// each reads as the records of one thread.
+func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
+	t.Parallel()
+	for name, edit := range map[string]func(*testing.T, *hsSession){
+		"its use in the main thread, its result in a subagent's": func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, ctAssistant(ctUUID(3), ctUUID(5), hsUse(hsSubCall)))
+			s.thread = []string{s.thread[0], ctReplace(t, s.thread[2], `"parentUuid":"`+ctUUID(102)+`"`,
+				`"parentUuid":"`+ctUUID(101)+`"`), s.thread[3]}
+		},
+		"its use in a subagent's thread, its result in the main thread": func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, hsAnswerOf(t, ctUUID(3), ctUUID(5), hsSubCall, hsSubOut, hsBlock(t, hsSubOut)))
+			s.thread = []string{s.thread[0], s.thread[1], ctReplace(t, s.thread[3], `"parentUuid":"`+ctUUID(103)+`"`,
+				`"parentUuid":"`+ctUUID(102)+`"`)}
+		},
+		"a whole pair in each": func(t *testing.T, s *hsSession) {
+			s.main = append(s.main, hsCall(ctUUID(3), 5, hsSubCall, hsBlock(t, hsSubOut))...)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			edit(t, &s)
+			got := hsSubagentRead(t, s)
+			records := got.Calls[hsSubCall]
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			if held || under != "" || records.Threads != 2 || records.Thread != "" || !got.Subagents[ctAgent].Reported {
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want its records counted in two "+
+					"threads, no thread named, and it told in the main list, its subagent reported", held, under,
+					records, got.Subagents[ctAgent])
+			}
+		})
+	}
+}
+
+// A TASK NOTIFICATION IS READ LINE BY LINE, as Claude Code writes one and as
+// probe T's T10 measured it on both releases: its header; the subagent's id,
+// an agent's by the layer's rule; the leg's, one the call-id rule holds; any
+// number of output files; and a status of completed, nothing after the status
+// read. Any other text names no subagent's leg: no header, or one with more on
+// its line; an agent or a leg outside its rule; the ids in the other order; a
+// line between them and the status; or a status other than completed, or with
+// more on its line.
+//
+// Mutation: read any status as completed, read past a line that is no output
+// file, or take a leg outside the call-id rule, and a text of another shape
+// answers a leg.
+func TestATaskNotificationIsReadLineByLine(t *testing.T) {
+	t.Parallel()
+	const head, done = "<task-notification>\n", "<status>completed</status>"
+	ids := "<task-id>" + ctAgent + "</task-id>\n<tool-use-id>" + hsStarted + "</tool-use-id>\n"
+	files := "<output-file>/tmp/box/" + ctAgent + ".output</output-file>\n<output-file>/tmp/box/b.output</output-file>\n"
+	swapped := "<tool-use-id>" + hsStarted + "</tool-use-id>\n<task-id>" + ctAgent + "</task-id>\n"
+	long := strings.Repeat("t", sandbox.MaxBridgeCallIDBytes+1)
+	for name, tc := range map[string]struct {
+		text string
+		ok   bool
+	}{
+		"as written":                      {head + ids + done + "\n</task-notification>", true},
+		"with its output files, as T10":   {head + ids + files + done + "\n<summary>Agent finished</summary>", true},
+		"ending at its status":            {head + ids + done, true},
+		"no header":                       {ids + done, false},
+		"a header with more on its line":  {"<task-notification> \n" + ids + done, false},
+		"an agent outside the agent rule": {head + strings.Replace(ids, ctAgent, "a b", 1) + done, false},
+		"a leg outside the call-id rule":  {head + strings.Replace(ids, hsStarted, long, 1) + done, false},
+		"its ids in the other order":      {head + swapped + done, false},
+		"a line between ids and status":   {head + ids + "<summary>Agent finished</summary>\n" + done, false},
+		"a status other than completed":   {head + ids + "<status>killed</status>", false},
+		"a status with more on its line":  {head + ids + done + " ", false},
+	} {
+		agent, leg, ok := taskNotification(tc.text)
+		if ok != tc.ok || (ok && (agent != ctAgent || leg != hsStarted)) {
+			t.Errorf("%s reads as %t, naming %q and %q; want %t, naming %q and %q", name, ok, agent, leg, tc.ok,
+				ctAgent, hsStarted)
+		}
+	}
 }
 
 // A SUBAGENT LINE THAT IS NO RECORD LEAVES IT UNREPORTED, AND THE READING
@@ -1991,25 +2137,32 @@ func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing
 // a mebibyte, a subagent's thread of a whole first line, a hole of 600 KiB and
 // a break, whose lines each stay under the line's bound and whose stream is a
 // few kibibytes, is read; two of them hand out past the budget, and the
-// second is no reading, the layer's bound named.
+// second is no reading, the layer's bound named. And a metadata of holes, at
+// its own bound, after a thread whose hole of 1000 KiB left it less than
+// that, hands out past what is left, and is no reading too, in the reading's
+// own words.
 //
-// Mutation: hand each member the whole plaintext bound, and both are read.
+// Mutation: hand each member the whole plaintext bound, and both threads are
+// read; or read a metadata past what is left of the budget, and the one after
+// the long thread is read.
 func TestWhatMembersHandOutIsHeldToTheArchivesBudget(t *testing.T) {
 	t.Parallel()
 	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
-	const hole = 600 << 10
-	thread := func(agent string) []byte {
+	thread := func(agent string, hole int) []byte {
 		first := ctSubagentPrompt(ctUUID(101)) + "\n"
 		return sparseMember(claudeProjectPrefix+ctSession+"/subagents/agent-"+agent+".jsonl",
 			int64(len(first)+hole+1), sparseSegment{0, first}, sparseSegment{int64(len(first) + hole), "\n"})
 	}
 	main := plainMember(hsMain, hsThread())
+	meta := sparseMember(hsAgentMeta, holdingsMetaMaxBytes, sparseSegment{0, "{"})
 	for name, tc := range map[string]struct {
 		members [][]byte
 		read    bool
+		bound   error
 	}{
-		"one such thread":  {[][]byte{main, thread(ctAgent)}, true},
-		"two such threads": {[][]byte{main, thread(ctAgent), thread("a0000000000000002")}, false},
+		"one such thread":                    {[][]byte{main, thread(ctAgent, 600<<10)}, true, nil},
+		"two such threads":                   {[][]byte{main, thread(ctAgent, 600<<10), thread("a0000000000000002", 600<<10)}, false, errThreadBound},
+		"a metadata past what a thread left": {[][]byte{main, thread(ctAgent, 1000<<10), meta}, false, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2020,7 +2173,7 @@ func TestWhatMembersHandOutIsHeldToTheArchivesBudget(t *testing.T) {
 				return
 			}
 			hsNoReading(t, got, err)
-			if !errors.Is(err, errThreadBound) {
+			if tc.bound != nil && !errors.Is(err, tc.bound) {
 				t.Errorf("the reading ended with %v; want a member past what is left of the budget", err)
 			}
 		})
