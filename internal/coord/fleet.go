@@ -1809,10 +1809,12 @@ type AtlasSources interface {
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
 }
 
-// AtlasCodeScans is where the atlas's scan of each Gitlet repository's deploy
-// and dependency files keeps its standing (internal/atlas/codescan): the
-// default branch's tip it last read whole, how many files it listed and
-// read, and what it refused.
+// AtlasCodeScans is where the atlas's scan of each repository's deploy and
+// dependency files keeps its standing (internal/atlas/codescan): the default
+// branch's tip it last read whole, how many files it listed and read, and
+// what it refused. A Gitlet repository's is keyed by its id; a forge's own
+// standing and each of its repositories' are keyed under `forge/`
+// (codescan.ForgeStore), which no repository's id starts with.
 //
 // # Why the fleet holds it
 //
