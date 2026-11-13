@@ -656,11 +656,12 @@ type answerRetry struct {
 	// ([Coordinator.suspectClaim]). Nil for every other series.
 	revive *revival
 
-	// release is a collection's hand-back the coordination store did not
-	// answer, which the series' next attempt makes again before anything
-	// else, unless a claim of its job has taken it over or is on its way:
-	// the claim is this node's until the store answers it, and no completion
-	// of its job is claimed here meanwhile ([Coordinator.oweRelease],
+	// release is a claim's hand-back the coordination store did not answer
+	// (a collection's, a park's or a resume's, an answer's own included),
+	// which the series' next attempt makes again before anything else,
+	// unless a claim of its job has taken it over or is on its way: the
+	// claim is this node's until the store answers it, and no claim of its
+	// job is made here meanwhile ([Coordinator.oweRelease],
 	// [Coordinator.claimCompletion], claimrelease.go). Nil for every other
 	// series.
 	release *claimRelease
@@ -1384,10 +1385,21 @@ func (c *Coordinator) scheduleOwed(turnID string, delay time.Duration) {
 // which a refusal and a readmission both have to be, so that a signal landing
 // between "this attempt is waiting on X" and the timer that waits for it can
 // never be overwritten by that timer.
+//
+// A SERIES THAT OWES A CLAIM'S RELEASE IS ARMED NO LATER THAN THE HAND-BACK'S
+// SPACING ([answerRetryCeiling]), whatever its caller asked for: the release
+// is made again before anything else the series does ([Coordinator.retryOwed]),
+// and a longer wait, an answer's for its seat's conditions, held the claim on
+// the store's row, and the seat's mail behind it, past the store's answer. A
+// shorter one stands: it asks the store again sooner, as an answer's backoff
+// after its failed resume does.
 func (c *Coordinator) scheduleOwedLocked(turnID string, delay time.Duration) {
 	r := c.retries[turnID]
 	if r == nil || c.closed {
 		return
+	}
+	if r.release != nil {
+		delay = min(delay, answerRetryCeiling)
 	}
 	if r.stop != nil {
 		if r.stop() {
@@ -1440,8 +1452,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// A CLAIM'S RELEASE THE STORE DID NOT ANSWER is made again first,
 		// with no read of the row before it: the release decides on the row
 		// as it stands. Owed again while the store is still silent, and once
-		// it answers, the series settles, leaving anything else it keeps to
-		// its next attempt (claimrelease.go).
+		// it answers, the attempt goes on against the row as the release left
+		// it (claimrelease.go): an answer's claim given back is the answered
+		// run this series exists to resume, or to let go of once its attempts
+		// are spent, and a completion's is back in running, which owes the
+		// series nothing and settles it. Settled at once instead, the answer
+		// was left on its run with nothing on this node to resume it.
 		//
 		// BUT NOT ONCE A CLAIM OF ITS JOB HAS TAKEN IT OVER, by winning on
 		// the run it put back, and NOT WHILE ONE IS ON ITS WAY: made then, it
@@ -1464,17 +1480,16 @@ func (c *Coordinator) retryOwed(turnID string) {
 			return
 		}
 		_ = c.unclaimOwing(ctx, release)
-		if !c.releasing(turnID, release.run.LaunchID) {
-			c.settleOwed(ctx, handle, turnID)
+		if c.releasing(turnID, release.run.LaunchID) {
+			return
 		}
-		return
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
-		if kept != nil || revive != nil {
-			// A READ IS NOT A RESUME, and neither an ending nor a revival
-			// owes an attempt: the row is read again on the hand-back's
-			// own spacing.
+		if kept != nil || revive != nil || release != nil {
+			// A READ IS NOT A RESUME, and neither an ending, a revival nor
+			// a release just settled owes an attempt: the row is read again
+			// on the hand-back's own spacing.
 			c.scheduleOwed(turnID, answerRetryCeiling)
 			return
 		}
@@ -2298,7 +2313,7 @@ func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 // lifts the seat's inbox hold if nothing else needs it.
 //
 // NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, a
-// claim it suspects ([answerRetry.revive]), or a collection's release the store
+// claim it suspects ([answerRetry.revive]), or a claim's release the store
 // did not answer ([answerRetry.release]). Each is a run whose only driver is
 // this series, and a settle that dropped it — on a refusal that only says the
 // row is not what the settling path expected — left a claim, with the
@@ -2362,7 +2377,7 @@ func (c *Coordinator) releaseOwed(handle string) {
 
 // dropOwed forgets one owed answer's series on a seat this node does not hold,
 // whatever it still owed the row: an ending it kept, a claim it suspects, a
-// revival it was retrying, a collection's release it owed. Each is on the row,
+// revival it was retrying, a claim's release it owed. Each is on the row,
 // and the holder's recovery pass reads the row and finishes, revives or reaps
 // what it finds — where this node's own writes, under a lease the holder has
 // fenced or is about to, would only race it. Unlike [Coordinator.settleOwed],

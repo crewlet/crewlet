@@ -170,8 +170,9 @@ func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 // gave its claim back, one its seat's budget held, and a panic on its way up.
 //
 // Mutation: drop the recount from any of those exits, and its case leaves the
-// seat held on a run that no longer holds it; drop the held exit's uncount, and
-// its case counts the one run twice.
+// seat held on a run that no longer holds it; count the run where a hand-back's
+// release lands instead of moving the claim's count there, and the cases that
+// give their claim back count the one run twice.
 func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

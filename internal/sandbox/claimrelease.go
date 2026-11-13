@@ -8,47 +8,70 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A COLLECTION'S HAND-BACK THE COORDINATION STORE DID NOT ANSWER IS KEPT OWED.
+// A CLAIM'S HAND-BACK THE COORDINATION STORE DID NOT ANSWER IS KEPT OWED.
 //
-// A collection that could not finish hands its claim back for the
-// completion's retry ([Coordinator.collectFailed]), and a hand-back that
-// cannot be written ends the run ([Coordinator.unclaimAt]): a row left in the
+// A claim whose work could not finish is handed back for its signal's retry
+// ([Coordinator.unclaimAt]): a collection that could not read its box or finish
+// after it ([Coordinator.collectFailed]), a park whose question could not be
+// announced or recorded ([Coordinator.park]), and a resume that failed or that
+// its seat's conditions held ([Coordinator.resumeAndSettle]). A hand-back that
+// cannot be written ends the run ([Coordinator.unclaim]): a row left in the
 // claim is picked up by nothing. But a release the store did not answer is no
 // refusal. Its request found no store to answer it, or its write was sent and
 // the answer lost, so it may have landed ([coord.ErrUnavailable]); and a store
-// that does not answer the release is very often the same silence the
-// collection was handed back for ([ErrStoreSilent]): a leader election, a
-// member restarting, a quorum lost for seconds. Ended there, the run was
-// announced claim_unreverted, "its result is lost", while its box held the
-// result and the store answered again a moment later.
+// that does not answer the release is very often the same silence the claim
+// was handed back for ([ErrStoreSilent], a park's record, a resume's read of
+// its log): a leader election, a member restarting, a quorum lost for seconds.
+// Ended there, the run was announced claim_unreverted, "its result is lost",
+// while its box held the result, its question or its turn, and the store
+// answered again a moment later.
 //
 // So this node KEEPS IT ([Coordinator.oweRelease]). The claim stays its own
-// until the store answers, the release is asked again on the hand-back's
-// spacing ([answerRetryCeiling]) with the seat's mail held behind it, as a
-// revival or a give-back the store did not confirm is
-// ([Coordinator.oweRevival], [Coordinator.giveBackClaim]), and this node never
-// turns it into an ending for the store's silence. UNCOUNTED: the release's own
+// until the store answers, the release is asked again no further apart than
+// the hand-back's spacing ([answerRetryCeiling]), sooner where an answer's own
+// backoff arms its series sooner ([Coordinator.scheduleOwedLocked]), with the
+// seat's mail held behind it, as a revival or a give-back the store did not
+// confirm is ([Coordinator.oweRevival], [Coordinator.giveBackClaim]), and this
+// node never turns it into an ending for the store's silence. UNCOUNTED: the release's own
 // failure says nothing about the box, and a release that counts a failed
-// collection counts it once, when it lands. A release the store REFUSED (a
-// definite answer no retry changes: a row this build cannot decode or encode, a
-// value past what its key holds) still ends the run as [Coordinator.unclaimAt]
-// says, and a seat that moves before the release lands has the claim reaped by
-// its next holder, as a claim whose node stopped is ([Coordinator.reapTail]).
+// collection or resume counts it once, when it lands. A release the store
+// REFUSED (a definite answer no retry changes: a row this build cannot decode
+// or encode, a value past what its key holds) still ends the run as
+// [Coordinator.unclaim] says, and a seat that moves before the release lands
+// has the claim reaped by its next holder, as a claim whose node stopped is
+// ([Coordinator.reapTail]).
+//
+// THE SEAT COUNTS THE RUN AS THE CLAIM IT STILL IS until a release lands, and
+// the landing moves that count to the set the release returns the run to
+// ([Coordinator.releaseAnswered]): a run owed its release is in the claim on
+// the store's row, which holds the seat, and a recount meanwhile reads it so.
+// Given back before the release instead, as a resume's hand-back once gave it,
+// a release owed for minutes left the seat counted free beside a claim that
+// would come back to it, and a recount meanwhile counted the run again, so the
+// landing counted it twice.
 //
 // # No claim of the job is taken on this node while its release is out
 //
 // A release names its claim by the job, the status and the lease, and a claim
 // this node takes of the same job again carries all three. A release that
-// landed though its answer was lost puts the run back in running, where the
-// completion's retry claims it again; the release asked again then would give
-// back that claim while its collection is still working, and the claim after
-// it would collect and resume the job a second time beside the first. So the
-// release is RECORDED AS OUT BEFORE IT IS SENT, and kept recorded while it is
-// owed ([Coordinator.releases]), and no claim of the job is taken here while
-// it is ([Coordinator.claimCompletion], [errReleaseOwed]): the completion comes
-// back on the queue's backoff, as one whose claim the store does not take
-// does, and the waiter announces the job again once the release has put the
-// run back in running.
+// landed though its answer was lost puts the run back where the claim found
+// it, where the claim's retry takes it again; the release asked again then
+// would give back that claim while its work is still going on, and the claim
+// after it would collect and resume the job a second time beside the first. So
+// the release is RECORDED AS OUT BEFORE IT IS SENT, and kept recorded while it
+// is owed ([Coordinator.releases]), and no claim of the job is taken here while
+// it is.
+//   - A COMPLETION'S CLAIM is refused ([Coordinator.claimCompletion],
+//     [errReleaseOwed]): the completion comes back on the queue's backoff, as
+//     one whose claim the store does not take does, and the waiter announces
+//     the job again once the release has put the run back in running.
+//   - AN ANSWER'S CLAIM is made only by the answer's own series on this node,
+//     the inline attempt included, one attempt at a time
+//     ([Coordinator.attemptOwed]), and the release its failed resume owes is on
+//     that very series, which makes it again before anything else and goes on
+//     to the answer only once it is no longer out ([Coordinator.retryOwed]).
+//     Settled there instead, as a release a completion owes is, the answer was
+//     left answered on its run with nothing on this node to resume it.
 //
 // A CLAIM ALREADY ON ITS WAY when the release went out is not refused, and
 // cannot be. The node's admission orders two claims of a job only where both
@@ -90,33 +113,17 @@ func releaseFor(run PendingRun, failed failure, hold *Refusal) Release {
 	}
 }
 
-// unclaimCollection hands back the claim a collection could not finish, failed
-// being what the release counts onto the job's record, and keeps a release the
-// store did not answer owed rather than ending the run for it (see the top of
-// this file). It reports as [Coordinator.unclaimAt] does: nil where the claim
-// went back, is owed, or had moved on, and the release's own error where the
-// run was ended in its place.
+// unclaimOwing makes cr's release, for a claim's hand-back
+// ([Coordinator.unclaimAt]) and for each retry of one this node owes: a
+// release the store did not answer is owed again ([Coordinator.oweRelease]),
+// and any other answer settles what was owed and is acted on as
+// [Coordinator.releaseAnswered] acts on it. A release a claim of its job TOOK
+// OVER while it was out, by winning on the run it put back, has landed, and
+// nothing more is owed for it ([Coordinator.claimCompletion]); so has one the
+// seat's release dropped, whose claim its next holder reaps.
 //
-// RECORDED AS OUT FIRST, so no claim of the job starts on this node while the
-// release is on its way ([Coordinator.claimCompletion]).
-func (c *Coordinator) unclaimCollection(ctx context.Context, run PendingRun, failed failure) error {
-	cr := &claimRelease{run: run, release: releaseFor(run, failed, nil), detail: collectUnrevertedDetail}
-	c.mu.Lock()
-	c.releases[run.TurnID] = cr
-	c.mu.Unlock()
-	return c.unclaimOwing(ctx, cr)
-}
-
-// unclaimOwing makes cr's release, for a collection's hand-back and for each
-// retry of one this node owes: a release the store did not answer is owed
-// again ([Coordinator.oweRelease]), and any other answer settles what was owed
-// and is acted on as [Coordinator.unclaimAt] acts on it. A release a claim of
-// its job TOOK OVER while it was out, by winning on the run it put back, has
-// landed, and nothing more is owed for it ([Coordinator.claimCompletion]); so
-// has one the seat's release dropped, whose claim its next holder reaps.
-//
-// A CONTEXT OF ITS OWN, as [Coordinator.unclaimAt]'s is, because the failure it
-// hands back is often the cancellation itself.
+// A CONTEXT OF ITS OWN, because the failure it hands back is often the
+// cancellation itself.
 func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
@@ -147,11 +154,9 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 		log.InfoContext(ctx, "sandbox_claim_reverted",
 			"turn_id", turnID, "launch_id", cr.run.LaunchID, "revert_to", cr.release.To,
 			"detail", "the claim's hand-back the coordination store did not answer has landed; the run "+
-				"is back where the claim found it, for its completion's retry")
+				"is back where the claim found it, for its retry")
 	}
-	// THE SEAT STILL COUNTS THE RUN: every collection hands back a claim its
-	// seat counts as it was, since running and resumed both hold it.
-	return c.releaseAnswered(ctx, *cr, true, released, err)
+	return c.releaseAnswered(ctx, *cr, released, err)
 }
 
 // oweRelease keeps a claim's release the store did not answer for this node's
