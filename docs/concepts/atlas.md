@@ -130,7 +130,9 @@ The read is the `atlas-collect` duty, one node of the fleet at a time ([singleto
 
 **Nothing a vendor returns reaches the atlas as text.** Every value a read reports goes through the vocabulary's grammars, which refuse a value or a key shaped like a credential; what is refused is counted on the source, never shown. A source maps a vendor's answer into closed fields and reads no field nobody mapped.
 
-Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, which listings it was refused, and which entries it has stopped seeing since when.
+Each source's standing, kept on the coordination store beside the integration statuses, says when it was last read whole, what that read cost in calls and withheld values, whether its last read failed and why, which listings it was refused, and which entries it has stopped seeing since when. A source that reads its world in parts with a standing of their own, as the servers are, also says when each was last read whole and how many of its parts the last read was refused.
+
+**A person may ask for a read now.** The dashboard's Sources page shows each standing and offers "Refresh now" ([Sources and Refresh now](../guides/atlas.md#sources-and-refresh-now)). The ask is a record of its own on the coordination store, apart from the standing the duty rewrites whole, so the node a person asks on need not hold the duty. The duty reads a source someone asked for on its next tick, once five minutes have passed since the source's last read (the floor of the refresh interval, so no gesture reads a vendor more often than the smallest cadence a company may set), and drops the ask once the read is made or the source is gone. An ask inside the floor is refused where it is made, and an agent cannot make one.
 
 ### What a repository's files declare
 
@@ -180,7 +182,7 @@ Agents meet the company's systems while they work: a server over SSH, a vendor t
 
 ## Reading the atlas
 
-People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through seven questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, and that log counted a day at a time ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
+People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through nine questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, that log counted a day at a time, what waits for a person, and each source's standing ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
 
 An entry, a fact or a relation only an agent reported, with nothing the engine could check behind it, is **unconfirmed**. A list and the map leave it out unless the read asks for it (`unconfirmed`), and one entry read in full shows it marked as such: it stays hidden until a person confirms it. An agent is never shown it.
 
@@ -284,6 +286,7 @@ A turn whose ask names an entry exactly is also handed a few lines about it befo
 | What a turn's tool calls answered, which a record cites | the node running the turn, for that turn | the turn's own memory, never written anywhere |
 | An agent's records today, against its allowance of 200 | the whole company, now | the coordination store's shared counter, a UTC day wide |
 | The log's lines, its daily counts, an entry's last change, a row's owner, purpose, relation counts and reason, and a relation's family | nobody: computed on every read, from the log's rows and the fold | the read itself |
-| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, the listings it was refused, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
+| Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, the listings it was refused, each server's last whole read, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
+| A person's ask that a source be read now: who asked and when | the whole company, current value only, until the duty honours it | the coordination store, in a bucket of its own |
 | Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
 | How often: `atlas.refresh_interval_seconds`, and whether agents record: `atlas.agent_records` | the company | the company document |

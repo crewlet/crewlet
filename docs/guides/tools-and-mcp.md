@@ -138,7 +138,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Seven more are a
+itself is recorded beside either as the write's `operator_id`. Eight more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
@@ -152,7 +152,11 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox).
+the code writes (a seat is woken, never shown an inbox); and `atlas_refresh`,
+any Atlas holder's ask that one integration be read for the atlas now rather
+than on its next scheduled read, which the engine honours within a minute and
+refuses for a source read less than five minutes ago
+([Sources](atlas.md#sources-and-refresh-now)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
