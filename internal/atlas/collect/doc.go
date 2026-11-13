@@ -7,6 +7,10 @@
 // its monitors and their states, its service catalogue, its hosts and its
 // Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
 // agents' installations cover, its workflows and its deployment environments.
+// Its fourth reads the company's servers (ADR-0134): on each server that opts
+// in, the ports it listens on and the containers it runs. That one is handed
+// to the worker by the engine rather than registered, since it runs commands
+// through the node's SSH runner.
 //
 // # Its own duty, never the reconcile loop
 //

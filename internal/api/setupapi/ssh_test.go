@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -142,7 +143,37 @@ func TestAnSSHServerIsWrittenAsARevisionAndRemovedOnlyOnceNoAgentNamesIt(t *test
 		len(state.SSH.Hosts[0].Fingerprints) != 1 || state.SSH.Hosts[0].Fingerprints[0] != fingerprint {
 		t.Fatalf("the answer shows %+v", state.SSH)
 	}
+	// THE INVENTORY IS SWITCHED BY ITS OWN ROUTE, which changes that one
+	// field: the server's keys, users and description stand, the answer
+	// names the commands before and after, and the setup then carries it.
+	if len(state.SSH.InventoryCommands) != 2 || state.SSH.InventoryCommands[0].Command != config.SSHInventoryPorts ||
+		state.SSH.InventoryCommands[0].Containers || !state.SSH.InventoryCommands[1].Containers ||
+		state.SSH.Hosts[0].Inventory {
+		t.Fatalf("before it is switched on the answer shows %+v", state.SSH)
+	}
+	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/db-9/inventory", `{"inventory": true}`, nil); res.Code != http.StatusNotFound {
+		t.Errorf("the inventory of a server nobody registered = %d", res.Code)
+	}
+	for _, on := range []bool{true, false, true} {
+		body := fmt.Sprintf(`{"inventory": %t}`, on)
+		if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1/inventory", body, nil); res.Code != http.StatusOK {
+			t.Fatalf("switch the inventory to %t = %d: %s", on, res.Code, res.Body)
+		}
+		res := s.do(t, http.MethodGet, "/setup/integrations/ssh", "", nil)
+		var after setupapi.ToolState
+		if err := json.Unmarshal(res.Body.Bytes(), &after); err != nil {
+			t.Fatal(err)
+		}
+		if h := after.SSH.Hosts[0]; h.Inventory != on || h.Description != "Production API server" ||
+			h.Users.Operate != "crewlet-ops" || len(h.Fingerprints) != 1 || h.Fingerprints[0] != fingerprint {
+			t.Fatalf("after switching the inventory to %t the server is %+v", on, h)
+		}
+	}
 	setupRes := s.do(t, http.MethodGet, "/setup/integrations/ssh/hosts/api-1/setup", "", nil)
+	if !strings.Contains(setupRes.Body.String(), "inventory-allowlist") ||
+		!strings.Contains(setupRes.Body.String(), `crewlet.%s.inventory`) {
+		t.Errorf("the setup of a server that opts in lacks the inventory: %.300s", setupRes.Body)
+	}
 	if setupRes.Code != http.StatusOK || !strings.Contains(setupRes.Body.String(), "HOST_ID=api-1") ||
 		!strings.Contains(setupRes.Body.String(), strings.Fields(ca.PublicLine())[1]) {
 		t.Errorf("the server setup = %d: %.300s", setupRes.Code, setupRes.Body)

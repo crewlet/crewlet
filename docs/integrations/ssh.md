@@ -45,15 +45,16 @@ The setup is one POSIX shell script, safe to run again: after a rotation, an all
 
 - trusts Crewlet's authority line (and a staged one during a rotation) in `/etc/ssh/crewlet/user_ca.pub`;
 - creates the read and operate users with no password, and adds the read user to `systemd-journal` where the group exists;
-- writes the one principal each user accepts;
+- writes the one principal each user accepts and, on a server that [lets the atlas read it](#let-the-atlas-read-a-server), the inventory's principal beside the read user's;
 - installs the gate, `/usr/local/sbin/crewlet-gate`, the only program a Crewlet certificate runs, and the read allowlist, `/etc/ssh/crewlet/read-allowlist`;
+- writes the inventory's own allowlist, `/etc/ssh/crewlet/inventory-allowlist`, on a server that lets the atlas read it, and removes it on one that does not;
 - gives the operate user full sudo (edit `/etc/sudoers.d/crewlet-ops` to narrow it) and, with `containers`, gives the read user `sudo -n` for `docker ps` and `docker logs --tail` alone;
 - adds `/etc/ssh/sshd_config.d/60-crewlet.conf`, which applies to the two Crewlet users only: certificates from Crewlet's authority, no `authorized_keys`, no password, no PTY, no forwarding of any kind, `LogLevel VERBOSE`, and the read user's every command forced through the gate;
 - checks the result with `sshd -t` and reloads sshd. It changes nothing for any other user.
 
 The gate refuses an empty command (an interactive shell), any quote or shell character, an option where a rule takes a word, and anything off the allowlist, each with exit status 126, and logs each command it runs or refuses with the certificate's key ID. sshd's own log names the key ID and serial of every certificate it accepts.
 
-The gate matches a command against a rule word for word, with two places where a program's bare name stands for the absolute path the rule names: the first word, which the gate runs by that path, and the word after `sudo -n`, which sudo resolves through its `secure_path` and runs only if the sudoers line names that same path. So `sudo -n docker ps` matches `/usr/bin/sudo -n /usr/bin/docker ps`, while `sudo -n ./docker ps`, `sudo -n /tmp/docker ps` and `sudo -n docker ps -a` are refused. Every other word is exact, and a bare name never stands for a file path. This is gate version 2; a server set up with an earlier version keeps refusing the bare name after `sudo -n` until its setup runs again, and Test connection fails its gate version step until then.
+The gate matches a command against a rule word for word, with two places where a program's bare name stands for the absolute path the rule names: the first word, which the gate runs by that path, and the word after `sudo -n`, which sudo resolves through its `secure_path` and runs only if the sudoers line names that same path. So `sudo -n docker ps` matches `/usr/bin/sudo -n /usr/bin/docker ps`, while `sudo -n ./docker ps`, `sudo -n /tmp/docker ps` and `sudo -n docker ps -a` are refused. Every other word is exact, and a bare name never stands for a file path. A certificate that names a command of its own, which only the engine's [inventory](#let-the-atlas-read-a-server) carries, runs that command whatever the client asked for, and only where the inventory's allowlist holds it. This is gate version 3; a server set up with an earlier version runs no inventory and keeps answering its old version, so Test connection fails its gate version step until its setup runs again. An agent's reads keep working on it meanwhile.
 
 The default read allowlist:
 
@@ -111,6 +112,34 @@ In a turn somebody woke, an agent reaches its servers only for somebody of the c
 
 Every certificate Crewlet signs is recorded before it is used, and every command once it ran, failed or was denied: the agent, the turn, the server and user, the command (sealed), the stdin's size and digest, the exit status, the output's size and digest (never its text), the approver and the certificate's serial. Every verdict on an operate command is recorded too, before it acts: a delegate's, with its verdict, confidence, sealed reason and findings and why Crewlet overruled it, Crewlet's own escalation at a deadline, and a person's approval through a decision. `GET /setup/integrations/ssh/audit` pages all three (`kind=certificate`, `command` or `verdict`).
 
+## Let the atlas read a server
+
+The [atlas](../concepts/atlas.md) can show what a server is doing: the ports it listens on and the containers it runs. For that the engine itself, never an agent, runs two read-only commands on the server each time the atlas refreshes (`atlas.refresh_interval_seconds`, an hour by default). It is **off for every server** until you switch it on for that server, and the server refuses it until its setup has been run again.
+
+The commands are a closed set. Nothing else can be run this way:
+
+| Command | Run on | Why it is safe to run on a timer | What the atlas keeps |
+|---|---|---|---|
+| `/usr/bin/ss -tln` | every server that opts in | Lists listening TCP sockets by address and port. It takes no `-p`, so it never asks which process holds a socket, and it changes nothing. | The port of each socket bound beyond the loopback address, as the server's open ports. |
+| `/usr/bin/sudo -n /usr/bin/docker ps` | a server that opts in and has `containers` on | Lists running containers. It is the exact command the `containers` setting already lets the read user run, with no option, so it cannot inspect a container or read its environment. | Each container's name and image, as a workload that runs on the server. |
+
+`docker ps` prints each container's command line, and a command line can carry a credential somebody passed as an argument. The engine reads the image and name columns of the table and no other: the command, the ports, the state and the age of a container are never copied out of the answer. A container whose name or image is shaped like a credential is refused and counted, never shown. What a command printed is held in memory for the parse and dropped; like every command's output, it reaches no record.
+
+To switch it on for a server:
+
+1. Open **Company › Integrations › SSH › Settings**. Under **Servers**, switch **Read for Atlas** on for the server. The dialog lists the exact commands that will run on that server before anything is saved. The same switch is `hosts[].inventory: true` in the company document, and `PUT /setup/integrations/ssh/hosts/{id}/inventory` with `{"inventory": true}`.
+2. Run the server's setup again as root (`GET /setup/integrations/ssh/hosts/{id}/setup`). It adds the inventory's principal, `crewlet.<host id>.inventory`, and the inventory's allowlist. Until then the server refuses the inventory's certificate and the atlas says so on the SSH source.
+3. Press Test connection (`POST /setup/integrations/ssh/hosts/{id}/test`). On a server that opts in it adds a step, `inventory_binding`: the engine signs in with an inventory certificate, asks for a different command, and passes only if the server ran the certificate's command instead.
+
+How each run is held:
+
+- **Its own certificate, for one command.** The engine signs a certificate for each command, valid for two minutes, whose only principal is `crewlet.<host id>.inventory` and whose force-command is that one command. The engine signs no inventory certificate for any other command, and the server's gate runs the command the certificate names, not the one a client sends. The certificate's key ID is `crewlet/_engine/inventory/<command id>`, so the server's own log tells the engine's reads from every agent's.
+- **Recorded like an agent's command.** The certificate is recorded before it is used and the command once it ran or failed, in the SSH audit (`GET /setup/integrations/ssh/audit?seat=_engine`), held by `_engine` in the place an agent's handle takes: its text, sizes, exit status and the digest of its output, never the output.
+- **Within the company's limits.** A command is stopped at `commands.timeout_seconds`, and output past `commands.max_output_bytes` is not read at all, since half a table would look like containers that stopped.
+- **A server that cannot be read is a finding.** A server that is down, was not set up again, or whose command failed is named on the SSH source's standing with what to do, and what an earlier read recorded for it stands.
+
+Switching it off stops the commands at the next refresh. Run the setup again to take the principal and the allowlist off the server. The ports and containers the atlas held for it are retired once two reads a day apart have not seen them.
+
 ## Configuration
 
 ```yaml
@@ -137,6 +166,7 @@ integrations:
           read: crewlet-read
           operate: crewlet-ops     # optional: absent means the server is read-only
         description: Production API server
+        inventory: true            # optional: let the engine read its ports and containers for the atlas
 
 roles:
   - name: Site Reliability Engineer
@@ -164,6 +194,7 @@ roles:
 | `hosts[].users.operate` | The login user for approved commands. It must differ from the read user. Absent leaves the server read-only. |
 | `hosts[].description` | One line of up to 200 characters, shown to agents and approvers. |
 | `hosts[].containers` | Lets the read user list containers and read their logs through `sudo -n`. Off by default. |
+| `hosts[].inventory` | Lets the engine itself read the server's listening ports, and its containers where `containers` is on, for the atlas. Off by default; see [Let the atlas read a server](#let-the-atlas-read-a-server). |
 | `hosts[].read_allowlist` | Up to 100 rules replacing the default read allowlist, each an absolute path, then words of the gate's own characters. |
 | `roles[].integrations.ssh.level` | `read` or `operate`, one level for every server the agent names. |
 | `roles[].integrations.ssh.hosts` | The servers the agent may reach, each a host id above. Required when the agent is on. |

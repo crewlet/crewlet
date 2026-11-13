@@ -31,6 +31,8 @@ const (
 	FactAddress    Fact = "address"
 	FactPort       Fact = "port"
 	FactContainers Fact = "containers"
+	FactOpenPort   Fact = "open_port"
+	FactImage      Fact = "image"
 
 	FactEngine        Fact = "engine"
 	FactEngineVersion Fact = "engine_version"
@@ -184,6 +186,8 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 		FactAddress:    {Type: TypeAddress, Many: true, Kinds: []Kind{KindHost}},
 		FactPort:       {Type: TypePort, Kinds: []Kind{KindHost, KindDatastore, KindQueue}},
 		FactContainers: {Type: TypeWord, Words: yesNo, Kinds: []Kind{KindHost}},
+		FactOpenPort:   {Type: TypePort, Many: true, Kinds: []Kind{KindHost}},
+		FactImage:      {Type: TypeImage, Kinds: []Kind{KindWorkload}},
 
 		FactEngine:        {Type: TypeWord, Words: engines, Kinds: dataKinds},
 		FactEngineVersion: {Type: TypeVersion, Kinds: dataKinds},
@@ -229,7 +233,7 @@ var specs = sync.OnceValue(func() map[Fact]Spec {
 var Facts = []Fact{
 	FactName, FactPurpose, FactEnvironment, FactImportance,
 	FactVendor, FactCapability, FactAccountRef, FactAccountName, FactSite, FactRegion, FactIntegration, FactInboundURL,
-	FactURL, FactAddress, FactPort, FactContainers,
+	FactURL, FactAddress, FactPort, FactContainers, FactOpenPort, FactImage,
 	FactEngine, FactEngineVersion,
 	FactDefaultBranch, FactVisibility, FactStatus, FactPullMirrorOf, FactPushMirrorTo, FactImportedFrom,
 	FactLastResult, FactRunner, FactRequired, FactPipelineState,

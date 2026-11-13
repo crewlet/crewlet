@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
 
 // THE ATLAS-COLLECT DUTY, wired: the fleet singleton that reads each connected
@@ -52,8 +53,9 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 		return
 	}
 	worker, err := collect.New(collect.Options{
-		Store: store,
-		Log:   atlasCollectLog{Reader: reader, Writer: writer},
+		Sources: e.atlasSources(),
+		Store:   store,
+		Log:     atlasCollectLog{Reader: reader, Writer: writer},
 		// THE LIVE DOCUMENT AND THIS NODE'S RESOLVER, read on every tick:
 		// a source resolves its own credential from them, and an apply can
 		// change both.
@@ -89,6 +91,14 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 	e.atlasCollect = worker
 	// Detached, for the reason the reconcile loop is.
 	worker.Start(context.WithoutCancel(ctx))
+}
+
+// atlasSources is what the duty reads: every registered vendor, and the
+// company's servers. The SSH source is built here rather than registered,
+// because each command it runs is recorded through this node's runner, on the
+// access log.
+func (e *Engine) atlasSources() []collect.Source {
+	return append(collect.Registered(), sshint.NewAtlasSource(e.sshRun()))
 }
 
 // atlasCollectLog is the atlas log's two sides as the duty takes them: this

@@ -121,7 +121,7 @@ type pair struct {
 var pairs = sync.OnceValue(func() map[Relation]pair {
 	return map[Relation]pair{
 		RelationRunsOn: {
-			from: []Kind{KindService, KindDatastore, KindQueue},
+			from: []Kind{KindService, KindWorkload, KindDatastore, KindQueue},
 			to:   []Kind{KindHost, KindAccount},
 		},
 		RelationDependsOn: {

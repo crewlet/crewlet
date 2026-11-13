@@ -36,8 +36,8 @@ through the operator tools
 | Lane | What fills it in this version |
 |---|---|
 | Entry | the zones the Cloudflare integration declares, the host names the engine answers at (`api.external_url`, `api.public.external_url`), and what the engine reads from the Cloudflare account: every zone, every name an A, AAAA or CNAME record gives and what it points at, and every certificate pack ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
-| Services | the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
-| Runtime | the servers the SSH integration declares, and the hosts that report to Datadog |
+| Services | the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the containers running on each server you [let the atlas read](#reading-inside-a-server), the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
+| Runtime | the servers the SSH integration declares, with the open ports of each one you let the atlas read, and the hosts that report to Datadog |
 | Data | the databases, queues and buckets a Gitlet repository's compose files, manifests and charts name, shown as likely, and what people add |
 | Platforms | each connected integration's account, and the vendors a Gitlet repository's dependency and Terraform files name, shown as likely |
 | Code and delivery | Gitlet's repositories and their checks, the repositories the GitHub and GitLab integrations name, and what the engine reads from the GitHub organisation: every repository the agents' apps cover, its workflows and the environments it deploys to ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
@@ -48,6 +48,16 @@ An empty cluster says this on the map itself, so a new company sees what it woul
 take to fill each one. Anybody holding Atlas changes it from these screens
 ([adding and correcting](#adding-and-correcting)); the same changes can be
 proposed by Ask Crewlet, which you approve, or made through the operator tools.
+
+## Reading inside a server
+
+A server the SSH integration declares is on the map from the start, with its address. What runs on it is not, because finding out means running commands on the server, and that is yours to decide for each server.
+
+To let the atlas read a server, an administrator opens **Company › Integrations › SSH › Settings** and, under **Servers**, switches **Read for Atlas** on for it. The dialog shows the exact commands before anything is saved: one that lists the listening ports and, where the server's container reads are on, one that lists the running containers. Nothing else can be run this way, the engine runs them itself rather than through an agent, and every run is recorded in the SSH audit. Then run the server's setup on it again, so the server accepts the engine's inventory.
+
+From the next refresh the server shows its open ports, and each container appears as a workload in the Services lane, by its name and image, running on that server. A container's command line is never kept. If the server cannot be read (it is down, or its setup was not run again), the SSH source says which server and what to do, and what the atlas already showed for it stays.
+
+Switching it off stops the commands. The integration page has every detail: [let the atlas read a server](../integrations/ssh.md#let-the-atlas-read-a-server).
 
 ## The page
 

@@ -13,7 +13,9 @@ An **entry** is one thing the company runs on. Its kind is one of a closed set, 
 | `domain` | Domain | Entry | `acme.example` |
 | `hostname` | Hostname | Entry | `api.acme.example` |
 | `endpoint` | Endpoint | Entry | `https://api.acme.example/v1` |
+| `certificate` | Certificate | Entry | a certificate pack a vendor holds for the company's names |
 | `service` | Service | Services | `checkout-api` |
+| `workload` | Workload | Services | the container `acme-api` on the server `web-1` |
 | `host` | Server | Runtime | `web-1` |
 | `datastore` | Database | Data | `orders-db` |
 | `queue` | Queue | Data | `orders` |
@@ -29,7 +31,7 @@ What a vendor does for the company (chat, tracking, code hosting, CI, monitoring
 
 **Relations** always point from the thing that relies to the thing relied on, so "what depends on X" is one walk against the arrows: `runs_on`, `depends_on`, `exposes`, `resolves_to`, `in_zone` and `fronted_by` are drawn on the map at rest; `served_by`, `built_from`, `deployed_by`, `monitored_by`, `belongs_to`, `documented_in` (a Doclet page) and `owned_by` (a seat or a unit) appear when an entry is selected.
 
-**Facts** are a closed list per kind, each with a value type: a host name, an IP address, an address without credentials, a port, a version, a region, an account's own id, a branch, a short label, a word from a closed set. Facts of **meaning** (purpose, environment, importance, and the owner) are decided only by people and the settings; an integration or an agent can only suggest them.
+**Facts** are a closed list per kind, each with a value type: a host name, an IP address, an address without credentials, a port, a version, a region, an account's own id, a branch, a container image's reference, a short label, a word from a closed set. Facts of **meaning** (purpose, environment, importance, and the owner) are decided only by people and the settings; an integration or an agent can only suggest them.
 
 ## Where each fact comes from
 
@@ -120,6 +122,8 @@ The read is the `atlas-collect` duty, one node of the fleet at a time ([singleto
 **Retirement takes two complete reads a day apart.** A read that does not list an entry the integration holds is one miss, never a removal: a vendor's listing can skip a row while it changes, and a vendor's view can lag. The entry is retired only by a later complete read, at least a day after the first miss, that misses it too; it then leaves the map and stays in history, and a read that lists it again restores it. A read that failed or was cut short retires nothing and forgets no miss. An integration never denies a fact or a relation and never outranks a person: a person's claim on the same fact stands, and the entry goes to Review with both values shown.
 
 **An integration says an entry exists only where the entry lives at its vendor.** A Datadog monitor lives at Datadog; the service it watches does not, so the read relates the service to the monitor without claiming the service. A monitor somebody deletes therefore takes its relations with it after the same two reads, and retires nothing: an entry only its relations named leaves the map, and one another source or a person stands behind stays as it was.
+
+**A server is read only where the company opts it in.** The SSH integration is the one source that runs commands rather than calling a vendor, so it reads nothing by default. On a server whose `inventory` is on, the engine itself runs a closed set of two read-only commands, each on a certificate signed for that one command and recorded as an agent's command is ([let the atlas read a server](../integrations/ssh.md#let-the-atlas-read-a-server), ADR-0134). The ports the server listens on beyond its loopback address become its `open_port` facts, and each running container becomes a `workload`, keyed by the server and its name there, with its image, running on the server. The server itself stays the settings' entry: the read names it and never claims it. A container's command line, its ports and its state are dropped as the answer is parsed, and what a command printed reaches no record. Each server is two parts of the read, its ports and its containers; one the engine could not read is a finding with what to do about it, and what an earlier read recorded for it stands.
 
 **A listing the credential may not read is a finding, never a failed read.** A vendor puts each listing behind a permission of its own, and the company's credential may hold some and not others. The read completes with the listings it may read, and the source's standing names each one it was refused with the permission that restores it. What an earlier read of a refused listing recorded stays exactly as it was: nothing is withdrawn, nothing is missed and nothing is retired, however long the refusal lasts. Any other failure of a listing fails the whole read.
 

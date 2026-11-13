@@ -2336,6 +2336,10 @@ const (
 	// decision, and the vocabulary's fact and relation tables the dialogs
 	// offer from) took it to 5943.1 KiB (6,085,783 bytes, +48,677, nearly all
 	// of it the atlas chunk's script): 5944 KiB.
+	// The SSH integration's Servers section (each server's "Read for Atlas"
+	// switch and the dialog that lists the commands first) and the atlas's
+	// workload kind, image and open ports, named in the atlas words, took
+	// it to 5899.1 KiB (6,040,678 bytes, +3,572, all script): 5900 KiB.
 	treeBudget = 5<<20 + 824<<10
 )
 
