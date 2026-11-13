@@ -241,6 +241,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "Relation.Kind atlas_entry":
+		// A PATCH WHOSE RELATION SET NAMES AN ATLAS ENTRY, by its id.
+		relations := []worklet.Relation{{Kind: worklet.RelationEntry,
+			Other: "7f3c2a10-5b1e-5c3d-9a4f-0d2e6b8c1a57"}}
+		patch, err := json.Marshal(worklet.TaskPatch{Relations: &relations})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Mutation = patch
 	case "Comment.Act":
 		// AN ASK THE ENGINE COMPOSED FOR ONE EXACT COMMAND, carrying its act.
 		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
