@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"io"
+	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -154,6 +155,12 @@ func ReadTranscriptFiltered(ctx context.Context, harness string, format int,
 	filter TranscriptFilter) (Transcript, error) {
 	return readTranscript(ctx, harness, format, open, from, ReadBySeat, bounds, filter)
 }
+
+// SparseBomb is a gzipped tar whose one member is named as a session's
+// transcript and is a sparse file declaring size bytes, every one of them a
+// hole: a few blocks of archive that hand their reader size bytes the archive
+// does not hold ([sparseMember]).
+func SparseBomb(t *testing.T, size int64) []byte { return sparseBomb(t, size) }
 
 // TranscriptReadsHeld is how many of the process's [TranscriptReadsAtOnce]
 // slots reads hold now: what a case reads to see a slot taken before an

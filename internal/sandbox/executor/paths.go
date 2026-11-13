@@ -62,9 +62,9 @@
 // layer: one figure for the launch floor, best effort, which counts nothing
 // from a line it cannot read. The reading that tells a relaunch which of its
 // round's calls a kept session holds (claudeholdings.go) reads a kept
-// archive's threads through the layer, metering the archive at
-// [threadPlainMax] with the scrub's own meter and handing each member it reads
-// what is left of that budget.
+// archive's main thread, and each depth-one subagent's thread and metadata,
+// through the layer, metering the archive at [threadPlainMax] with the scrub's
+// own meter and handing each member it reads what is left of that budget.
 //
 // # A run's harness session, carried between boxes
 //

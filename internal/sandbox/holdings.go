@@ -271,7 +271,12 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // between the bounded steps of its work ([HoldingsReader]), so a reading
 // overruns it by one such step at most; a reading past it is no reading, and
 // the relaunch tells the session every call after its save point, which is
-// never wrong.
+// never wrong. MEASURED on two cores (the executor's
+// BenchmarkAReadingAtItsBounds): Claude Code's reading of an ordinary kept
+// session, 1.6 MiB sealed, takes about 50 ms, so a burst of 32 relaunches,
+// whose readings take turns on the seats' one transcript slot, reads in about
+// a second and a half; and the slowest reading at its bounds, 255 MiB of
+// lines, takes 2 s, inside the wait too.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the

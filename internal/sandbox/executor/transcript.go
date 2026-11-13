@@ -532,7 +532,9 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // line's, so about a third more, in the one slot seats take between them
 // ([SeatTranscriptReadsAtOnce]). A relaunch's reading of which of its round's
 // calls a kept session holds ([Runner.ReadHoldings]) takes that slot too, and
-// holds less than one read at its worst, about 75 MiB.
+// holds less than one read at its worst: 67 MiB live, measured on a line at
+// the line's bound of the smallest results a message holds
+// (BenchmarkAReadingAtItsBounds).
 //
 // A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
 // no decoder while it does — and no opened object, whose store connection it
@@ -560,10 +562,13 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // A RELAUNCH'S READING TAKES IT TOO ([Runner.ReadHoldings]): which of its
 // round's calls the cut-off session it continues holds, read off the kept
-// archive before its brief is written, whose worst, about 75 MiB, is within
-// one read's. It waits for the slot inside its own wait, and a reading that
-// waits past it tells its session every call after its save point, which is
-// never wrong.
+// archive before its brief is written, whose worst, 67 MiB live, is within one
+// read's. It waits for the slot inside its own wait, and a reading that waits
+// past it tells its session every call after its save point, which is never
+// wrong. Measured on two cores (BenchmarkAReadingAtItsBounds), an ordinary
+// kept session, 1.6 MiB sealed, reads in about 50 ms, so a burst of 32
+// relaunches' readings takes the slot for about a second and a half, and the
+// slowest at the bounds, 255 MiB of lines, for 2 s: each inside its wait.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at
