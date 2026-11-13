@@ -711,6 +711,26 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if !e.joins(ctx, notify.InboundGroup) {
 		return nil
 	}
+	svc, err := e.inboundService(c, parsers, prompts)
+	if err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+	if err := svc.Start(ctx); err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+
+	e.notify.mu.Lock()
+	e.notify.service = svc
+	e.notify.mu.Unlock()
+	return nil
+}
+
+// inboundService is the notification service this node routes c's inbound
+// deliveries with, through parsers and prompts: everything [Engine.startNotifications]
+// starts but the start.
+func (e *Engine) inboundService(c *Company, parsers []notify.Parser,
+	prompts []notify.Prompt) (*notify.Service, error) {
+
 	// THE REPLAY'S DROPS THROUGH THE LEDGER THE ALARM'S READING SHARES, so a
 	// copy the replay delivered is accounted for as delivered and never
 	// counted as a wake the retention lost (feeddeadletters.go). Nil where
@@ -719,7 +739,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if e.deadLetterLedger != nil {
 		letters = e.deadLetterLedger
 	}
-	svc, err := notify.New(notify.Options{
+	return notify.New(notify.Options{
 		// THE NODE'S WAKE QUEUE, so a delivery routed to a seat whose
 		// mailbox is not complete yet is NAKed and redelivered rather than
 		// published onto a subject the stream discards. See [Engine.wakes].
@@ -743,17 +763,6 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		FirstParty:  declaredInboundSources(),
 		DeadLetters: letters,
 	})
-	if err != nil {
-		return fmt.Errorf("engine: notifications: %w", err)
-	}
-	if err := svc.Start(ctx); err != nil {
-		return fmt.Errorf("engine: notifications: %w", err)
-	}
-
-	e.notify.mu.Lock()
-	e.notify.service = svc
-	e.notify.mu.Unlock()
-	return nil
 }
 
 // notificationRateLimit is the per-seat notification cap the inbound edge
