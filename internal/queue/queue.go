@@ -311,20 +311,34 @@ const (
 	// deliveries, many times over; a longer window would hold the slot it
 	// occupies (below) longer and deliver nothing the replay does not.
 	//
-	// WHILE IT WAITS IT HOLDS ONE OF THE GROUP'S ACK-PENDING SLOTS. A pass
-	// waits out its spacing as a delayed Nak, which the broker counts as
-	// pending acknowledgement until it redelivers the message, and a
-	// consumer at its limit of pending messages delivers no new one: the
-	// shipped broker's consumers set none (internal/queue/jetstream's
-	// subscriptions leave MaxAckPending unset), so the server's default of
-	// 1000 applies. Each pass holds its slot only until it is redelivered,
-	// which is a second or two once any real share of the group runs the
-	// newer build. The worst case is early in a roll, one newer node among
-	// many: a passed message can hold its slot for its whole ten minutes,
-	// so about 1.7 newer-record wakes a second, sustained, fill 1000 slots
-	// (1000 over the budget's 601 seconds). That delays the group's other
-	// mail and loses none of it, and the stall heals as the passes are
-	// redelivered or dead-lettered.
+	// A PASSED MESSAGE HOLDS ONE OF THE GROUP'S ACK-PENDING SLOTS FROM ITS
+	// FIRST DELIVERY until a node that reads it acks it, or until its 25th
+	// delivery is dead-lettered and terminated — through every pass and
+	// every redelivery between. The shipped broker keeps a message pending
+	// from its first delivery until it is acked or terminated, a delayed Nak
+	// moving only when it is delivered next, and a redelivery to another
+	// member frees nothing (nats-server v2.15.2, server/consumer.go's
+	// pending set). A consumer at its limit of pending messages delivers no
+	// new one, and the shipped broker's consumers set none
+	// (internal/queue/jetstream's subscriptions leave MaxAckPending unset),
+	// so the server's default of 1000 applies; an external server's account
+	// may set less. So WHILE PASSES HOLD ALL OF THEM, THE GROUP STOPS
+	// DELIVERING NEW MAIL until slots free, and LOSES NOTHING: a slot frees
+	// when a node that reads its message acks it, or when the pass that
+	// spends its budget dead-letters it.
+	//
+	// HOW LONG ONE IS HELD IS THE GROUP'S NEWER SHARE'S, since nothing steers
+	// a delivery to a node that reads it: after a first pass, about 2 s with
+	// three quarters of the group on the newer build, 3 s with two thirds,
+	// 7 s with half, 42 s with a quarter, 3 minutes with a tenth, and the
+	// whole 601 s of the budget's spacing when no node reads it — the
+	// worst case, early in a roll, one newer node among many. About 1.7
+	// newer-record wakes a second, sustained, then fill the 1000 (1000 over
+	// 601 seconds). LEAVING THE SERVER'S 1000 IN PLACE IS A DECISION: the
+	// group fills it only at that rate of newer-record wakes, which only the
+	// newer build's own records relayed by its feeds make and only while the
+	// roll is that early, and what it costs then is the group's other mail
+	// waiting for slots, never a delivery lost.
 	//
 	// The in-memory twin redelivers it as it redelivers a Nak, behind the
 	// mail that was waiting with no timer, and spends and dead-letters it
@@ -410,9 +424,10 @@ func Defer(cause DeferCause, reason string) Result {
 //
 // The group's own budget, about ten minutes, is all a pass gets, and enough:
 // a dead letter follows, not a drop, and the replay at the next start of a node
-// that reads the copy delivers it (internal/notify). While it waits out its
-// spacing it holds one of the group's ack-pending slots, which [OutcomePass]
-// does the arithmetic of: it delays the group's mail and loses none.
+// that reads the copy delivers it (internal/notify). From its first delivery
+// until a node that reads it acks it, or its budget is spent, it holds one of
+// the group's ack-pending slots, which [OutcomePass] does the arithmetic of:
+// it delays the group's mail and loses none.
 func Pass(reason string, err error) Result {
 	return Result{Outcome: OutcomePass, Reason: reason, Err: err}
 }
