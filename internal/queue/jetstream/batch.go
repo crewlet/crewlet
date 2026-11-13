@@ -308,14 +308,14 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
-			a.nakOrDeadLetter(ctx, d.msg)
+			a.nakOrDeadLetter(ctx, d.msg, d.ev)
 		}
 	case queue.OutcomePass:
 		// Each message by its own delivery count, under the partition's
 		// reason, and the attachment goes on taking mail: see
 		// [attachment.pass].
 		for _, d := range items {
-			a.pass(ctx, d.msg, res.Reason)
+			a.pass(ctx, d.msg, d.ev, res.Reason)
 		}
 	}
 }
@@ -334,6 +334,6 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 // the failure path already honours; what differs is only how it got there.
 func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string) {
 	for _, d := range items {
-		a.handBack(ctx, d.msg, reason)
+		a.handBack(ctx, d.msg, d.ev, reason)
 	}
 }

@@ -904,7 +904,7 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	// one. Returning it costs nothing: this consumer picks it up again
 	// when the hold lifts, or a successor does.
 	if a.blocked() {
-		a.handBack(ctx, msg, a.blockedBy())
+		a.handBack(ctx, msg, ev, a.blockedBy())
 		return
 	}
 	a.q.beginHandler()
@@ -1056,19 +1056,19 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// Never republish instead: a republished event is a NEW message,
 		// and the completion ledger's idempotency plus the batch layer's
 		// aging both key on the identity a Nak preserves.
-		a.handBack(ctx, msg, res.Reason)
+		a.handBack(ctx, msg, ev, res.Reason)
 		// Quiescing is the other half of a deferral: continuing to fetch
 		// would hand this process more work it has equally lost the
 		// right to do.
 		a.setQuiesced(true)
 
 	case queue.OutcomeNak:
-		a.nakOrDeadLetter(ctx, msg)
+		a.nakOrDeadLetter(ctx, msg, ev)
 
 	case queue.OutcomePass:
 		// Neither a failure nor a deferral, and the attachment goes on
 		// taking mail: see [attachment.pass].
-		a.pass(ctx, msg, res.Reason)
+		a.pass(ctx, msg, ev, res.Reason)
 	}
 }
 
@@ -1094,7 +1094,7 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 // NOT QUIESCED, which is the whole difference from a deferral: nothing is
 // wrong with this node, only with this message here, so the attachment keeps
 // taking the rest of its mail while the message waits out its spacing.
-func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, reason string) {
+func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE is passed at the shortest
 	// spacing, for [attachment.nakOrDeadLetter]'s reason: returnMsg reads
 	// the same metadata for the budget and treats an unreadable one as "not
@@ -1103,7 +1103,7 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, reason string)
 	if md, err := msg.Metadata(); err == nil {
 		delivered = md.NumDelivered
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(delivered), queue.OutcomePass, reason)
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(delivered), queue.OutcomePass, reason)
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
@@ -1115,7 +1115,7 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, reason string)
 // this is where the dead-letter subject is known and the message body is in
 // hand. MaxDeliver stays configured as a backstop so a bug here cannot
 // produce an infinite loop.
-func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
+func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev *events.Event) {
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE STILL GOES BACK, at the
 	// shortest spacing: the alternative is dropping a delivery over a
 	// header, and returnMsg reads the same metadata for the budget and
@@ -1124,11 +1124,11 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 	if md, err := msg.Metadata(); err == nil {
 		failures = a.failed(md.Sequence.Stream)
 	}
-	a.returnMsg(ctx, msg, a.q.nakBackoff(failures), queue.OutcomeNak, "")
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(failures), queue.OutcomeNak, "")
 }
 
-// handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown —
-// for reason, which is logged should this return spend its budget.
+// handBack returns a HEALTHY message, ev — a deferral, a hold, a pause,
+// teardown — for reason, which is logged should this return spend its budget.
 //
 // IMMEDIATE, and that is the whole reason a deferral NAKs rather than letting
 // the ack timer expire: measured at about a millisecond, where the timer would
@@ -1136,24 +1136,25 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 // goes through the budget boundary, because a Nak spends a delivery whatever
 // it means — so a message whose deliveries went on handoffs is dead-lettered
 // with a line rather than discarded by the broker's backstop in silence.
-func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, reason string) {
-	a.returnMsg(ctx, msg, 0, queue.OutcomeDefer, reason)
+func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
+	a.returnMsg(ctx, msg, ev, 0, queue.OutcomeDefer, reason)
 }
 
 // returnMsg is the one place a message goes back, and the one place the
-// delivery budget is spent. delay 0 returns it immediately. spent is the
-// return it is — a failure (Nak), a hand-back (Defer) or a pass — and reason
-// why, which decide where its dead letter is kept and what its line says
-// should this return spend its budget ([attachment.deadLetter]).
-func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration,
-	spent queue.Outcome, reason string) {
+// delivery budget is spent. delay 0 returns it immediately. ev is the event it
+// carries, for the line; spent is the return it is — a failure (Nak), a
+// hand-back (Defer) or a pass — and reason why, which decide where its dead
+// letter is kept and what its line says should this return spend its budget
+// ([attachment.deadLetter]).
+func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *events.Event,
+	delay time.Duration, spent queue.Outcome, reason string) {
 
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
 		// Terminated here, so nothing will redeliver this sequence and
 		// its failure count is dead weight.
 		a.settled(md.Sequence.Stream)
-		a.deadLetter(ctx, msg.Data(), md, spent, reason)
+		a.deadLetter(ctx, msg.Data(), ev, md, spent, reason)
 		// Term, not Ack: the message is being discarded from this
 		// subscription deliberately, and Term says so to anyone reading
 		// consumer state.
@@ -1184,14 +1185,16 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay tim
 // BARE, the message's own bytes and nothing beside them, whichever subject:
 // the subject says which kind of copy it is, so no copy is too large to be
 // found as what it is ([Queue.deadLetter]).
-func (a *attachment) deadLetter(ctx context.Context, data []byte, md *jetstream.MsgMetadata,
-	spent queue.Outcome, reason string) {
+//
+// ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), never one spelled
+// here, so both backends name one situation alike.
+func (a *attachment) deadLetter(ctx context.Context, data []byte, ev *events.Event,
+	md *jetstream.MsgMetadata, spent queue.Outcome, reason string) {
 
-	subject := queue.RetiredTo(a.key.topic, a.key.group, spent)
-	a.log.Error("dead_lettered", "deliveries", md.NumDelivered, "returned", spent.String(),
-		"reason", reason, "subject", subject)
-	if err := a.q.deadLetter(ctx, subject, data); err != nil {
-		a.log.Error("dead_letter_failed", "error", err.Error())
+	queue.LogDeadLettered(ctx, a.log, a.key.topic, a.key.group, ev,
+		int(min(md.NumDelivered, math.MaxInt32)), spent, reason)
+	if err := a.q.deadLetter(ctx, queue.RetiredTo(a.key.topic, a.key.group, spent), data); err != nil {
+		a.log.ErrorContext(ctx, "dead_letter_failed", "error", err.Error())
 	}
 }
 

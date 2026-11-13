@@ -574,11 +574,13 @@ func (b *Broker) invoke(
 // lock RELEASED for the reason [Broker.invoke] gives above: a log write this
 // package does not control must not be made while holding the mutex that
 // guards every subscription and every peer on this broker.
+//
+// THROUGH THE CONTRACT'S OWN LINE ([queue.LogDeadLettered]), never one spelled
+// here: the twin's was `event_dead_lettered`, with its redeliveries, where the
+// backend that ships logs `dead_lettered` with its deliveries.
 func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []deadLetter) {
 	for _, d := range dead {
-		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
-			"event_type", d.ev.Type, "deliveries", d.deliveries, "returned", d.spent.String(),
-			"reason", d.reason, "subject", queue.RetiredTo(sub.topic, sub.group, d.spent))
+		queue.LogDeadLettered(ctx, log, sub.topic, sub.group, d.ev, d.deliveries, d.spent, d.reason)
 	}
 }
 

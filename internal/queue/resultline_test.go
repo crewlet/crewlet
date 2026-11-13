@@ -188,3 +188,72 @@ func TestNoBackendWritesItsOwnResultLine(t *testing.T) {
 		}
 	}
 }
+
+// A DEAD LETTER IS ONE LINE, NAMING WHERE ITS COPY IS KEPT AND WHAT SPENT IT.
+//
+// Both backends log a message whose budget a return spent through
+// [queue.LogDeadLettered], so the line is held here once: its name, its level,
+// how many deliveries the message had, the return that spent it and why, and
+// the subject its copy went to — which tells an operator whether it is poison
+// or a delivery no member handled, waiting for a reader that can.
+//
+// Mutation: name the subject by the pair's poison whatever the return, and a
+// pass's line sends an operator to the wrong subject; drop the reason, and a
+// hand-back's line no longer says what blocked it.
+func TestADeadLetterIsOneLineNamingWhereItsCopyIsKept(t *testing.T) {
+	t.Parallel()
+	const topic, group = "crewlet.notifications.inbound", "notify-inbound"
+	ev := &events.Event{Type: "external_notification"}
+	for _, tc := range []struct {
+		spent  queue.Outcome
+		reason string
+	}{
+		{queue.OutcomeNak, ""},
+		{queue.OutcomePass, "newer_record"},
+		{queue.OutcomeDefer, "shedding"},
+	} {
+		var buf bytes.Buffer
+		queue.LogDeadLettered(t.Context(), slog.New(slog.NewJSONHandler(&buf, nil)), topic, group,
+			ev, 25, tc.spent, tc.reason)
+		var line map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+			t.Fatalf("decoding %q: %v", buf.String(), err)
+		}
+		want := map[string]any{"msg": "dead_lettered", "level": "ERROR", "topic": topic,
+			"group": group, "event_type": "external_notification", "deliveries": float64(25),
+			"returned": tc.spent.String(), "reason": tc.reason,
+			"subject": queue.RetiredTo(topic, group, tc.spent)}
+		for key, value := range want {
+			if got := line[key]; got != value {
+				t.Errorf("a %s's dead letter logs %s = %v, want %v, in %s", tc.spent, key, got,
+					value, buf.String())
+			}
+		}
+	}
+}
+
+// NO BACKEND WRITES ITS OWN DEAD-LETTER LINE, for
+// [TestNoBackendWritesItsOwnResultLine]'s reason: the twin spelled its own,
+// `event_dead_lettered` with a count of redeliveries, where the broker logged
+// `dead_lettered` with its deliveries, and the line that said a copy was kept
+// bare beside its pass was spelled once in each backend. A backend calls
+// [queue.LogDeadLettered], which takes the context a line is correlated by.
+//
+// Mutation: spell the twin's line again (`log.ErrorContext(ctx,
+// "event_dead_lettered", …)`), and its file is named.
+func TestNoBackendWritesItsOwnDeadLetterLine(t *testing.T) {
+	t.Parallel()
+	forbidden := []string{
+		`"dead_lettered"`,
+		`"event_dead_lettered"`,
+		`"dead_letter_unmarked"`,
+	}
+	for file, raw := range backendSources(t) {
+		for _, bad := range forbidden {
+			if bytes.Contains(raw, []byte(bad)) {
+				t.Errorf("%s spells %s itself; call queue.LogDeadLettered so every "+
+					"backend says the same thing", file, strings.Trim(bad, `"`))
+			}
+		}
+	}
+}

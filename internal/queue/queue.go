@@ -1680,6 +1680,30 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 	}
 }
 
+// LogDeadLettered emits the standard line for a subscription's message whose
+// delivery budget a return spent, once its backend has kept the copy:
+// `dead_lettered`, at Error, with the event's type, how many times it was
+// delivered (deliveries, the last included), the return that spent it
+// (`returned`: nak, defer or pass) and why (`reason`, empty for a failure),
+// and the subject its copy is kept on ([RetiredTo]) — which says whether it is
+// poison or a delivery no member handled.
+//
+// ONE LINE FOR ONE SITUATION ON EVERY BACKEND, which is why it lives in the
+// contract, for [LogBatchResult]'s reason: the twin spelled its own, as
+// `event_dead_lettered` with a count of redeliveries, where the broker logged
+// `dead_lettered` with its deliveries, so a log consumer counting the dead
+// letters of one backend missed the other's, and the two counts of one
+// message's deliveries differed by one.
+//
+// UNDER ctx, for [LogResult]'s reason.
+func LogDeadLettered(ctx context.Context, l *slog.Logger, topic, group string, ev *events.Event,
+	deliveries int, spent Outcome, reason string) {
+
+	l.ErrorContext(ctx, "dead_lettered", "topic", topic, "group", group,
+		"event_type", eventType(ev), "deliveries", deliveries, "returned", spent.String(),
+		"reason", reason, "subject", RetiredTo(topic, group, spent))
+}
+
 // LogListenerPanic emits the standard line for a publish listener that
 // panicked and was recovered, and [LogStreamHandlerPanic] the one for a
 // stream handler.
