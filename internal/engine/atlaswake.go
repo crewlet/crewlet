@@ -95,8 +95,13 @@ func (e *Engine) atlasDrift(ctx context.Context) (atlaswake.Reading, bool, error
 	deps := AtlasToolDeps(e)
 	// GITLET IS READ ONLY AS SOMEBODY (ADR-0127), and the duty is nobody:
 	// a Gitlet repository's drift reaches its people in Review.
+	//
+	// STALE, AS THE COLLECT DUTY READS: a linearizable read appends a barrier
+	// to every log it reads, and a duty must not write to the logs every
+	// five minutes to look at them. A copy a pass behind tells a drift a
+	// pass later, which a wake that is one a day loses nothing to.
 	answer, running := deps.AtlasRead(ctx, nil, "", gitlet.Principal{},
-		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}, time.Now().UTC())
+		statelog.Freshness{Level: statelog.ReadStale}, time.Now().UTC())
 	if !running {
 		return atlaswake.Reading{}, false, nil
 	}

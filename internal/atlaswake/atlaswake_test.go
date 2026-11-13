@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // entry is a service owned by a seat or a unit, with what is open on it.
@@ -374,7 +375,7 @@ func TestAWakeSaysNothingOutsideTheClosedWords(t *testing.T) {
 		t.Fatalf("the routed wake reads %+v, want sre's, derived, with no body and no sender", one)
 	}
 	prompt := Prompt{}.Build(one.Inbound, nil)
-	for _, want := range []string{checkout.String(), "(service)", "`alerting`", "`contested`", "atlas_get"} {
+	for _, want := range []string{checkout.String(), "(service)", "`alerting`", "`contested`", toolname.AtlasGet} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
 		}

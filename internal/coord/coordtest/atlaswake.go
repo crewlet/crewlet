@@ -19,10 +19,10 @@ var atlasWakeCases = []fleetCase{
 				h.t.Fatalf("create %v answered %v (%v)", pair, ok, err)
 			}
 		}
-		all, err := h.f.AtlasWakes(h.ctx)
+		all, listErr := h.f.AtlasWakes(h.ctx)
 		key := coord.AtlasWakeKey("sre", entry)
-		if err != nil || len(all) != 3 || string(all[key].Value) != `{"day":"a"}` || all[key].Revision == 0 {
-			h.t.Fatalf("the wakes listed %v (%v), want three with sre's first as written", all, err)
+		if listErr != nil || len(all) != 3 || string(all[key].Value) != `{"day":"a"}` || all[key].Revision == 0 {
+			h.t.Fatalf("the wakes listed %v (%v), want three with sre's first as written", all, listErr)
 		}
 		value, read, found, readErr := h.f.AtlasWake(h.ctx, "sre", entry)
 		if readErr != nil || !found || string(value) != `{"day":"a"}` || read != all[key].Revision {
@@ -40,15 +40,15 @@ var atlasWakeCases = []fleetCase{
 		if ok, err := h.f.DeleteAtlasWake(h.ctx, "sre", entry, read); err != nil || ok {
 			h.t.Fatalf("a delete at a revision that moved answered %v (%v), want refused", ok, err)
 		}
-		all, err = h.f.AtlasWakes(h.ctx)
-		if err != nil || string(all[key].Value) != `{"day":"b"}` {
-			h.t.Fatalf("after the refused writes the record reads %q (%v)", all[key].Value, err)
+		all, listErr = h.f.AtlasWakes(h.ctx)
+		if listErr != nil || string(all[key].Value) != `{"day":"b"}` {
+			h.t.Fatalf("after the refused writes the record reads %q (%v)", all[key].Value, listErr)
 		}
 		if ok, err := h.f.DeleteAtlasWake(h.ctx, "sre", entry, all[key].Revision); err != nil || !ok {
 			h.t.Fatalf("a delete at the revision read answered %v (%v)", ok, err)
 		}
-		if all, err = h.f.AtlasWakes(h.ctx); err != nil || len(all) != 2 {
-			h.t.Fatalf("deleting one record left %v (%v), want the other two", all, err)
+		if all, listErr = h.f.AtlasWakes(h.ctx); listErr != nil || len(all) != 2 {
+			h.t.Fatalf("deleting one record left %v (%v), want the other two", all, listErr)
 		}
 	}},
 }

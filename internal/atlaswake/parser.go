@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 var log = logging.Get("atlaswake")
@@ -154,8 +155,8 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 }
 
 // Task is a drift turn's task: look first, then act only within the role.
-const Task = "This wake carries no detail on purpose. Read the entry with `atlas_get` by that id, " +
-	"and what relies on it with `atlas_trace`, before you decide anything: it may have settled " +
+const Task = "This wake carries no detail on purpose. Read the entry with `" + toolname.AtlasGet +
+	"` by that id, and what relies on it with `" + toolname.AtlasTrace + "`, before you decide anything: it may have settled " +
 	"since. Then act as your role does for a service you answer for. A disagreement between " +
 	"sources is settled by a person, so say what you found where your team will read it rather " +
 	"than choosing a side. You are told about this entry at most once a day, and the turn may " +

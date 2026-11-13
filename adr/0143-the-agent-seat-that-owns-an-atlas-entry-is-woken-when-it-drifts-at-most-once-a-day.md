@@ -18,7 +18,7 @@
 6. **The wake is derived, and a pointer.** The duty publishes one delivery of source `atlas_drift` on the inbound topic, the alarms' route (ADR-0095). Its wake id is the seat, the entry and the day, and its instant the claim's, the same on every copy, so a publish that failed is made again by the next pass as the same wake (ADR-0012). The delivery carries the entry's id, its kind and the change classes, and is refused if it says anything else. No name, no value and no text a vendor, an agent or a person wrote rides it; the seat reads the entry with its own atlas tools, at the trust its writers earn. The wake names no sender, so the turn is the company's own (ADR-0109), and one entry is one conversation.
 7. **The company can turn it off.** `atlas.owner_wakes: false` wakes nobody. Each record is kept through its day and dropped after it, so turning the switch off and on again inside one day buys no second wake.
 
-The duty is a fleet singleton, `atlas-wake`, on any worker node, every five minutes: the floor of the atlas's own refresh interval, below which no integration's read moves a fact.
+The duty is a fleet singleton, `atlas-wake`, on any worker node, every five minutes: the floor of the atlas's own refresh interval, below which no integration's read moves a fact. It reads the atlas's log at the `stale` level, as the collect duty does: a stronger read appends a barrier to every log it reads, and a duty does not write to the logs to look at them.
 
 ## Why the obvious alternative is wrong
 
