@@ -1,5 +1,6 @@
 /** The atlas's chunk: its screens, its peek and the map code. See `app/lazyScreen.ts`. */
 
+export { AdvisorAtlasFix } from "./AdvisorFix.tsx";
 export { Atlas } from "./Atlas.tsx";
 export { AtlasPeek } from "./AtlasPeek.tsx";
 export { ChangesPage } from "./ChangesPage.tsx";
