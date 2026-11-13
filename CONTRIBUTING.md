@@ -200,12 +200,12 @@ one file, `npm run test:watch` for the watch loop), and its benchmarks (a
 fresh directory under the system temp directory and never removes it — 16 to
 48 MB a run, which over a day of gate runs left 11.9 GB on the machine that
 runs the engine's suites. The Go suites keep their stores and broker streams
-under that same temp directory (`t.TempDir()`), and a write that finds the
-disk full fails a case for a reason nothing in the change explains. It used
-to fail every node boot first, while the test brokers still sized their
-storage from the volume's free space; they declare a fixed size now
-(`internal/queue/jetstream/brokertest`), which ended that failure and not the
-leak. All three scripts run Vitest through
+under that same temp directory (`t.TempDir()`, and `brokertest.TempDir` for a
+broker's store), and a write that finds the disk full fails a case for a
+reason nothing in the change explains. It used to fail every node boot first,
+while the test brokers still sized their storage from the volume's free
+space; they declare a fixed size now (`internal/queue/jetstream/brokertest`),
+which ended that failure and not the leak. All three scripts run Vitest through
 `dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
 creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
 started without it.
