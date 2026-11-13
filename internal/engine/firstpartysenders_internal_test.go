@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -299,7 +300,8 @@ func deliveredTo(t *testing.T, o *org.Organization, reg *notify.Registry, handle
 		worklet.NewParser(worklet.ParserOptions{}),
 		doclet.NewParser(doclet.ParserOptions{}),
 		chatlet.NewParser(),
-	}, notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt()), delivery)
+		gitlet.NewParser(gitlet.ParserOptions{}),
+	}, notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt(), gitlet.Prompt{}), delivery)
 }
 
 // deliveredWith is [deliveredTo] through one parser and its prompt.

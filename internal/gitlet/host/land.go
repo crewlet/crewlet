@@ -88,6 +88,13 @@ type landing struct {
 	Change *gitlet.ChangeOption
 	// Principal is who pushes.
 	Principal gitlet.Principal
+	// WrittenFor is whom the push is made for (gitlet.Proposal.WrittenFor), as
+	// its builder was handed it: an engine write's, from the write it builds
+	// (gitlet.EngineWrite.WrittenFor); a coding box's, whom its run's turn
+	// works for, from the run's row (admission.writtenFor); and a person's,
+	// nothing. The proposal carries it as handed, never stated anew here, so a
+	// push lands for whom its write was made.
+	WrittenFor types.WrittenFor
 	// Via is how the builder built the push's pack — the relay's is
 	// gitlet.ViaGit, an engine write's gitlet.ViaEngine — which the proposal
 	// and the push row carry as it says:
@@ -422,14 +429,29 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
 			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
+			WrittenFor: l.WrittenFor,
 		}
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref, title,
 		func(introduced []string, count int, unstored *gitlet.PackRef) error {
+			var invalid error
 			if l.Merge != nil {
-				return mergeCarrying(*l.Merge, unstored, l.Synced.DropEpoch).ValidateUnstored()
+				invalid = mergeCarrying(*l.Merge, unstored, l.Synced.DropEpoch).ValidateUnstored()
+			} else {
+				invalid = s.checkProposal(proposal(introduced, count, unstored))
 			}
-			return s.checkProposal(proposal(introduced, count, unstored))
+			if gitlet.IsUnknownToThisBuild(invalid) {
+				// WHOM THE PUSH IS MADE FOR NAMES WHAT THIS BUILD DOES NOT
+				// KNOW — a kind, an app — as a coding box's run's row may,
+				// which another build wrote: no receiver's bug, and nothing
+				// this build may judge, so its committer is asked, and the
+				// estate's walk reaches a node of the build that knows it, or
+				// answers that the fleet's builds differ, with nothing landed
+				// (gitlet.IsUnknownToThisBuild). Refused here, it would be
+				// refused by the one node that cannot read it.
+				return nil
+			}
+			return invalid
 		})
 	var (
 		invalid *invalidProposal

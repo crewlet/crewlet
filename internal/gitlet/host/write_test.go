@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
@@ -50,11 +51,12 @@ func text(path, content string) gitlet.FileOp {
 	return gitlet.FileOp{Op: gitlet.FileOpPut, Path: path, Content: &content}
 }
 
-// files is a commit_files by who onto ref: onto head, or creating ref from
-// base where head is "".
+// files is a commit_files by who onto ref, made for nobody but who: onto
+// head, or creating ref from base where head is "".
 func files(repo string, who gitlet.Principal, ref, head, base string, ops ...gitlet.FileOp) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo, Principal: who, OpID: opNow(),
-		Fresh: linear, Ref: ref, ExpectedHead: head, Base: base, Message: "a change made through a tool", Files: ops}
+	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: ref, ExpectedHead: head, Base: base,
+		Message: "a change made through a tool", Files: ops}
 }
 
 // writeCase is a solo fleet with RepoName's main seeded by ceo.
@@ -503,8 +505,8 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 	share := c.Fleet.Nodes()[0].Share()
 	held, reached := make(chan struct{}), make(chan struct{})
 	c.Fleet.Faults().Arm(gitletfault.HostAfterPropose, gitletfault.Action{Once: true, Block: held, Reached: reached})
-	create := gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: c.repo, Principal: alice(), OpID: opNow(),
-		Fresh: linear, Ref: "refs/heads/seats/alice/b", Commit: c.head}
+	create := gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: c.repo, Principal: alice(),
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/heads/seats/alice/b", Commit: c.head}
 	done := make(chan error, 1)
 	var created gitlet.EngineWriteResult
 	go func() {
@@ -521,7 +523,8 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 		t.Fatalf("the create: %+v %v", created, err)
 	}
 	deleted := c.land(gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: c.repo, Principal: alice(),
-		OpID: opNow(), Fresh: linear, Ref: "refs/heads/seats/alice/b", ExpectedHead: c.head})
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/heads/seats/alice/b",
+		ExpectedHead: c.head})
 	if deleted.Command.New != gitlet.ZeroOID {
 		t.Errorf("the delete's command is %+v, want its new the zero id", deleted.Command)
 	}
@@ -534,7 +537,8 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 		}
 	}
 	_, err := c.write(gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: c.repo, Principal: alice(),
-		OpID: opNow(), Fresh: linear, Ref: "refs/heads/seats/alice/c", Commit: strings.Repeat("ab", 20)})
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/heads/seats/alice/c",
+		Commit: strings.Repeat("ab", 20)})
 	if !errors.Is(err, gitlet.ErrObjectNotFound) {
 		t.Errorf("a create at a commit the repository lacks = %v, want ErrObjectNotFound", err)
 	}

@@ -434,7 +434,10 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 // A WRITE's call carries the same requester as its write's ceiling too
 // ([CodeDeps.writeCaller]): nil for a write made for its seat alone or for a
 // person, a colleague seat's, or nobody's — a requester who may change
-// nothing, whose turn the write is still made in for the seat's own work.
+// nothing, whose turn the write is still made in for the seat's own work. And
+// whom its write is made for is the actor's carrier (Actor.WrittenFor),
+// composed from the same bound ceiling, which every request the write forms
+// carries, stamped beside that ceiling ([written]).
 type codeCaller struct {
 	actor   Actor
 	asker   gitlet.Principal

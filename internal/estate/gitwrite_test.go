@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -28,12 +29,14 @@ import (
 // the longest the engine stamps every other field of it: the run's work item
 // and model at gitlet.MaxProvenanceBytes of a character JSON spells in six
 // bytes, a branch at the 255 bytes a ref may be of the same, a seat's handle
-// at iam.MaxLogin, an operation id at statelog.MaxCallerOpIDBytes, the field
-// names, the request's own fields and its signed frame — some 6.8 KiB as
-// measured (TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound: 6 908
-// bytes beside a commit_files' payload, 6 945 beside a revert's), held to
-// SIXTEEN, over twice that: what a slot of a Gitlet node's writes' lane holds of
-// a write's request is the payload's bound and this beside it.
+// at iam.MaxLogin, an operation id at statelog.MaxCallerOpIDBytes, whom the
+// write is made for at its widest (a credential's login at iam.MaxLogin and
+// every app, some 180 bytes), the field names, the request's own fields and
+// its signed frame — some 6.9 KiB as measured
+// (TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound: 7 089 bytes beside
+// a commit_files' payload, 7 125 beside a revert's), held to SIXTEEN, over
+// twice that: what a slot of a Gitlet node's writes' lane holds of a write's
+// request is the payload's bound and this beside it.
 const requestBeside = 16 << 10
 
 // sizer is a broker registration that records the size of every request each
@@ -69,8 +72,10 @@ func (s *sizer) sent(subject string) []int {
 // largestWrite is the largest engine write of kind — a commit_files or a
 // revert — that gitlet.EngineWrite.Validate admits: its payload's message of
 // '<', which JSON spells in six bytes, filled to the bound exactly, and every
-// other field at the longest the engine stamps it. The rule is the judge of
-// "largest": the write is admitted, and the same write one '<' longer is
+// other field at the longest the engine stamps it — whom it is made for among
+// them, a credential's carrier at its widest (a login of iam.MaxLogin bytes and
+// every app) beside the ceiling of nobody it comes with. The rule is the judge
+// of "largest": the write is admitted, and the same write one '<' longer is
 // refused.
 func largestWrite(t *testing.T, kind gitlet.EngineWriteKind) gitlet.EngineWrite {
 	t.Helper()
@@ -79,7 +84,10 @@ func largestWrite(t *testing.T, kind gitlet.EngineWriteKind) gitlet.EngineWrite 
 		Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: strings.Repeat("s", iam.MaxLogin),
 			Run: gitlet.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d", WorkBackend: widest,
 				WorkKey: widest, Model: widest}},
-		OpID: statelog.NewOpID(time.Now(), strings.Repeat("n", statelog.MaxCallerOpIDBytes-37)),
+		WrittenFor: types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential,
+			Login: "ci:" + strings.Repeat("c", iam.MaxLogin-len("ci:")), Apps: slices.Clone(iam.Apps)}),
+		Ceiling: &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody},
+		OpID:    statelog.NewOpID(time.Now(), strings.Repeat("n", statelog.MaxCallerOpIDBytes-37)),
 		Fresh: statelog.Freshness{Level: statelog.ReadSession,
 			Floors: []statelog.Position{{Stream: topics.CodeLogStream, Generation: math.MaxUint32, Seq: math.MaxUint64}}},
 		Ref:          "refs/heads/" + strings.Repeat("&", gitref.MaxRefNameBytes-len("refs/heads/")),

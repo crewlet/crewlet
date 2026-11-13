@@ -513,7 +513,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		CodeHolds:   holds.ids,
 		CodeFloor:   grants.CodeFloor,
 		CodeCeiling: grants.CodeCeiling,
-		RunEnv:      boxGit,
+		// AND WHOM ITS TURN WORKS FOR, which a round carried on keeps with
+		// the grants: its box's pushes and its change carry it.
+		CodeWorkingFor: grants.CodeWorkingFor,
+		RunEnv:         boxGit,
 		Recorded: func(launch string) {
 			// THE RECORD HOLDS THE TURN'S NOTES FROM HERE, the box's
 			// included: a note to the turn waits on it, whichever node it

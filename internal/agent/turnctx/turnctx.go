@@ -286,10 +286,11 @@ type Turn struct {
 
 	// WorkingFor is who the turn works for when a colleague's ask, the
 	// answer to this seat's own ask, or a colleague's write on Worklet,
-	// Doclet or Chatlet handed it on ([types.WorkingFor]): the requester
-	// ceiling is theirs whoever asked, answered or wrote, read before
-	// Requester. Nil for a turn no hand-on woke, and for one handed on by a
-	// colleague working for itself. Carried on the run's row with Requester.
+	// Doclet, Chatlet or Gitlet handed it on ([types.WorkingFor]): the
+	// requester ceiling is theirs whoever asked, answered or wrote, read
+	// before Requester. Nil for a turn no hand-on woke, and for one handed on
+	// by a colleague working for itself. Carried on the run's row with
+	// Requester.
 	WorkingFor *types.WorkingFor
 
 	// Senders are the parties who triggered this turn, in the order they

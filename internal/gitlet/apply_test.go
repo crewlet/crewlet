@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1012,13 +1014,13 @@ func TestTheHistoryHorizonIsBoundedByWhatItsRowsWeigh(t *testing.T) {
 
 // A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of the commands,
 // the introduced ids and, for a seat's push, the run the row stores — a coding
-// box's run and harness among it — what deleting it costs, and what the
-// horizon and a purge part are bounded by.
+// box's run and harness among it — and whom the push was made for, what
+// deleting it costs, and what the horizon and a purge part are bounded by.
 //
 // Mutations: weigh a row by its commands and introduced ids alone
 // (pushRowBytes dropping the run) — the seat's row weighs less than it holds;
 // weigh it without the executor (pushRowBytes dropping RunID) — the box's
-// does.
+// does; weigh it without its carrier — the seat's does.
 func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -1032,6 +1034,9 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-12",
 		Model: "claude-sonnet-4-5"}}
 	seat.Via = ViaEngine
+	// MADE FOR A CREDENTIAL, whose carrier the row keeps and weighs too.
+	seat.WorkingFor = &types.WorkingFor{Kind: types.WorkingForCredential, Login: "ci:release",
+		Apps: []iam.Grant{iam.GrantGitlet, iam.GrantWorklet}}
 	box := pushEntry("p3", move("refs/heads/seats/docs-writer/eng-13", ZeroOID, oid("D")))
 	box.Introduced, box.IntroducedCount = []string{oid("D")}, 1
 	box.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: RunProvenance{
@@ -1043,12 +1048,17 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 		want := e.num(`SELECT length(CAST(commands AS BLOB)) + length(CAST(introduced AS BLOB)) +
 			length(CAST(turn_id AS BLOB)) + length(CAST(work_backend AS BLOB)) +
 			length(CAST(work_key AS BLOB)) + length(CAST(model AS BLOB)) +
-			length(CAST(run_id AS BLOB)) + length(CAST(harness AS BLOB))
+			length(CAST(run_id AS BLOB)) + length(CAST(harness AS BLOB)) +
+			COALESCE(length(CAST(working_for AS BLOB)), 0)
 			FROM code_pushes WHERE push_id = ?`, id)
 		if got != want || e.str(`SELECT introduced FROM code_pushes WHERE push_id = ?`, id) == "" {
-			t.Errorf("push %s's row weighs %d bytes by row_bytes, and its commands, introduced ids and run "+
-				"are %d", id, got, want)
+			t.Errorf("push %s's row weighs %d bytes by row_bytes, and its commands, introduced ids, run and "+
+				"carrier are %d", id, got, want)
 		}
+	}
+	carrier := e.num(`SELECT COALESCE(length(working_for), 0) FROM code_pushes WHERE push_id = 'p2'`)
+	if carrier == 0 {
+		t.Fatal("the seat's push row keeps no carrier: the case weighs none")
 	}
 	if run := e.num(`SELECT length(turn_id) FROM code_pushes WHERE push_id = 'p2'`); run == 0 {
 		t.Fatal("the seat's push row holds no turn: the case weighs no run")
@@ -1184,4 +1194,209 @@ func TestAPurgeReleasesOnlyItsOwnNameClaim(t *testing.T) {
 	if holder := e.str(`SELECT repo_id FROM code_names WHERE token = ?`, NameToken("a")); holder != "repo-b" {
 		t.Fatalf("the claim is held by %q after purging repo-a, want repo-b's kept", holder)
 	}
+}
+
+// A CODE ROW KEEPS WHOM ITS WRITE WAS MADE FOR (ADR-0109, the replicated
+// migration a_code_row_keeps_whom_an_agents_write_was_made_for), identically
+// on every node: an open made for pat keeps pat on its first
+// revision's row; a seat's push moving the change's head made for pat, on the
+// revision it adds and on its push row; a reopen made for pat of a change
+// whose source moved while it was closed, on the revision the reopen adds; a
+// seat's push opening a change from its options made for pat, on that change's
+// first revision; a merge made for pat, on the push row
+// it lands; and an enqueue, on its entry's row. A LANDING'S RECORD CARRIES
+// NOBODY, and the push row it lands for each entry keeps what that entry's
+// row holds, read in the landing's own apply — pat for the entry enqueued for
+// pat, the credential for the one enqueued for it, nobody for the one
+// enqueued for nobody. A write made for nobody keeps NULL, and so does a
+// record stamped below the carrier's version whatever it carries, which a
+// build before the carrier applies with no field to read. Replayed from zero
+// on a second node, every one of these rows is the same. And an entry whose
+// row holds what this build cannot read — a fragment, or JSON's null — lands
+// as a stranger's, who holds no app: the closed end.
+//
+// Mutations: the open's revision kept without its carrier — revision 1 keeps
+// NULL, red; a push's row kept without it — the seat's push row, red; a
+// merge's push row — red; a landing's push rows — red; an enqueue's entry
+// row — red; the entry scan reading no carrier — the landing's push rows keep
+// NULL, red; the version arm dropped — the open stamped below keeps pat, red;
+// an unreadable entry read as nobody — its landing's push row keeps NULL, red;
+// the reopen's revision kept without its carrier — the reopen made for pat
+// keeps NULL, red; the first revision of a change a push opens kept without
+// it — red.
+func TestACodeRowKeepsWhomItsWriteWasMadeFor(t *testing.T) {
+	t.Parallel()
+	const repo, main = "repo-a", "refs/heads/main"
+	pat := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "pat"}
+	ci := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "ci:release", Apps: []iam.Grant{iam.GrantGitlet}}
+	dev := Principal{Kind: PrincipalAgent, Seat: "dev"}
+	id := func(n int) string { return fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", n) }
+	change, entry := id, func(n int) string { return id(100 + n) }
+	source := func(n int) string { return fmt.Sprintf("refs/heads/change-%d", n) }
+	head := func(n int) string { return oid(fmt.Sprint("head-", n)) }
+	opened := func(n int, f *types.WorkingFor) built {
+		return rec(t, RepoSubject(repo), OpChangeOpen, Scope{RepoPath(repo)}, ChangeOpen{RepoID: repo,
+			ChangeID: change(n), SourceRef: source(n), TargetRef: main, Head: head(n), Title: "Retry the upload",
+			Owner: dev, WorkingFor: f})
+	}
+	enqueued := func(n int, f *types.WorkingFor) built {
+		return rec(t, RepoSubject(repo), OpEnqueue, Scope{RepoPath(repo)}, Enqueue{RepoID: repo,
+			EntryID: entry(n), ChangeID: change(n), TargetRef: main, HeadOID: head(n), Method: MergeMethodMerge,
+			Principal: dev, WorkingFor: f})
+	}
+	closed := func(n int) built {
+		return rec(t, RepoSubject(repo), OpChangeClose, Scope{RepoPath(repo)}, ChangeClose{RepoID: repo,
+			ChangeID: change(n), By: dev})
+	}
+	// A REOPEN of change n at a head its source moved to while it was closed,
+	// which the committer stamps from its snapshot.
+	reopened := func(n int, f *types.WorkingFor) built {
+		return rec(t, RepoSubject(repo), OpChangeReopen, Scope{RepoPath(repo)}, ChangeReopen{RepoID: repo,
+			ChangeID: change(n), By: dev, Head: oid(fmt.Sprint("back-", n)), WorkingFor: f})
+	}
+	landing := func(landID, base string, changes ...int) built {
+		l := Land{RepoID: repo, LandID: landID, TargetRef: main, BaseOID: base, Node: "git-a",
+			ReceivedAt: applyClock}
+		for _, n := range changes {
+			l.Entries = append(l.Entries, LandEntry{EntryID: entry(n), ChangeID: change(n),
+				Commit: oid(fmt.Sprint("landed-", n))})
+		}
+		l.TipOID = l.Entries[len(l.Entries)-1].Commit
+		return rec(t, RepoSubject(repo), OpLand, Scope{RepoPath(repo)}, l)
+	}
+	base := pushEntry(id(200), move(main, ZeroOID, oid("A")))
+	for n := 1; n <= 7; n++ {
+		base.Commands = append(base.Commands, move(source(n), ZeroOID, head(n)))
+	}
+	// THE SEAT'S PUSH, an engine write moving change 1's head.
+	moved := pushEntry(id(201), move(source(1), head(1), oid("moved")))
+	moved.Principal = Principal{Kind: PrincipalAgent, Seat: "dev",
+		Run: RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+	moved.Via, moved.Day, moved.WorkingFor = ViaEngine, "2031-04-02", pat
+	// A SEAT'S BOX PUSH OPENING A CHANGE FROM ITS OPTIONS (`git push -o
+	// change`), made for pat.
+	optioned := pushEntry(id(202), move(source(8), ZeroOID, head(8)))
+	optioned.Principal = Principal{Kind: PrincipalAgent, Seat: "dev",
+		Run: RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000002",
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"}}
+	optioned.Day, optioned.WorkingFor = "2031-04-02", pat
+	optioned.Change = &ChangeOption{Target: main, Title: "Opened by its push"}
+	mergeID, landID := id(301), id(401)
+	records := []built{
+		create(t, repo, "a"),
+		pushOf(t, repo, base),
+		opened(1, pat),
+		pushOf(t, repo, moved),
+		rec(t, RepoSubject(repo), OpMerge, Scope{RepoPath(repo)}, Merge{RepoID: repo, MergeID: mergeID,
+			ChangeID: change(1), Method: MergeMethodMerge, TargetRef: main, BaseOID: oid("A"), HeadOID: oid("moved"),
+			CommitOID: oid("merged"), Pack: packOf(mergeID), Node: "git-a", ReceivedAt: applyClock, Principal: dev,
+			WorkingFor: pat}),
+		opened(2, nil), opened(3, nil), opened(4, nil),
+		enqueued(2, pat), enqueued(3, ci), enqueued(4, nil),
+		landing(landID, oid("merged"), 2, 3, 4),
+		stampedBelowTheCarrier(t, opened(5, pat)),
+		opened(6, nil), closed(6), reopened(6, pat),
+		opened(7, nil), closed(7), reopened(7, nil),
+		pushOf(t, repo, optioned),
+	}
+	patRow := sql.NullString{String: `{"kind":"seat","seat":"pat"}`, Valid: true}
+	ciRow := sql.NullString{String: `{"kind":"credential","login":"ci:release","apps":["gitlet"]}`, Valid: true}
+	revision := `SELECT working_for FROM code_revisions WHERE change_id = ? AND n = ?`
+	push := `SELECT working_for FROM code_pushes WHERE push_id = ?`
+	queued := `SELECT working_for FROM code_queue WHERE repo_id = ? AND entry_id = ?`
+	rows := []struct {
+		what  string
+		query string
+		args  []any
+		want  sql.NullString
+	}{
+		{"the first revision of an open made for pat", revision, []any{change(1), 1}, patRow},
+		{"the revision a seat's push made for pat adds", revision, []any{change(1), 2}, patRow},
+		{"the push row of a seat's push made for pat", push, []any{moved.PushID}, patRow},
+		{"the push row of a merge made for pat", push, []any{mergeID}, patRow},
+		{"the entry of an enqueue made for pat", queued, []any{repo, entry(2)}, patRow},
+		{"the entry of an enqueue made for the credential", queued, []any{repo, entry(3)}, ciRow},
+		{"the entry of an enqueue made for nobody", queued, []any{repo, entry(4)}, sql.NullString{}},
+		{"the landing's push row of the entry made for pat", push, []any{LandPushID(landID, entry(2))}, patRow},
+		{"the landing's push row of the entry made for the credential", push,
+			[]any{LandPushID(landID, entry(3))}, ciRow},
+		{"the landing's push row of the entry made for nobody", push, []any{LandPushID(landID, entry(4))},
+			sql.NullString{}},
+		{"the first revision of an open made for nobody", revision, []any{change(2), 1}, sql.NullString{}},
+		{"a person's push row", push, []any{base.PushID}, sql.NullString{}},
+		{"the first revision of an open stamped below the carrier's version", revision, []any{change(5), 1},
+			sql.NullString{}},
+		{"the revision a reopen made for pat adds where the source moved while the change was closed", revision,
+			[]any{change(6), 2}, patRow},
+		{"the revision a reopen made for nobody adds where the source moved", revision, []any{change(7), 2},
+			sql.NullString{}},
+		{"the first revision of a change a seat's push made for pat opens from its options", revision,
+			[]any{PushChangeID(optioned.PushID), 1}, patRow},
+	}
+	first, second := openApplyEstate(t), openApplyEstate(t)
+	first.apply(records...)
+	// A REPLAY FROM ZERO on another node, from the same records.
+	second.apply(records...)
+	for node, e := range map[string]*estate{"the first node": first, "the node that replayed": second} {
+		for _, r := range rows {
+			if got := e.carrierIn(r.query, r.args...); got != r.want {
+				t.Errorf("%s on %s keeps %+v, want %+v", r.what, node, got, r.want)
+			}
+		}
+	}
+	for _, table := range []string{`SELECT * FROM code_revisions ORDER BY change_id, n`,
+		`SELECT * FROM code_pushes ORDER BY push_id`, `SELECT * FROM code_queue ORDER BY repo_id, entry_id`} {
+		if got, want := second.dump(table), first.dump(table); got != want {
+			t.Errorf("%q replayed from zero holds\n%s\nwant\n%s", table, got, want)
+		}
+	}
+
+	// AN ENTRY WHOSE ROW THIS BUILD CANNOT READ lands as a stranger's.
+	unread := openApplyEstate(t)
+	unread.apply(create(t, repo, "a"), pushOf(t, repo, base), opened(2, nil), opened(3, nil), enqueued(2, pat),
+		enqueued(3, pat))
+	unread.exec(`UPDATE code_queue SET working_for = '{' WHERE entry_id = ?`, entry(2))
+	unread.exec(`UPDATE code_queue SET working_for = 'null' WHERE entry_id = ?`, entry(3))
+	unreadLand := id(402)
+	unread.apply(landing(unreadLand, oid("A"), 2, 3))
+	stranger := sql.NullString{String: `{"kind":"stranger"}`, Valid: true}
+	for _, n := range []int{2, 3} {
+		if got := unread.carrierIn(push, LandPushID(unreadLand, entry(n))); got != stranger {
+			t.Errorf("the landing's push row of entry %d, whose row holds what this build cannot read, keeps %+v, "+
+				"want a stranger's", n, got)
+		}
+	}
+}
+
+// carrierIn is the one working_for query reads, NULL as NULL.
+func (e *estate) carrierIn(query string, args ...any) sql.NullString {
+	e.t.Helper()
+	var got sql.NullString
+	if err := e.db.Reader().Read(context.Background(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(context.Background(), query, args...).Scan(&got)
+	}); err != nil {
+		e.t.Fatalf("%q: %v", query, err)
+	}
+	return got
+}
+
+// stampedBelowTheCarrier is b stamped at version 1 whatever it carries: what no
+// encoder writes, and what a build before the carrier would apply with no
+// field to read its carrier into.
+func stampedBelowTheCarrier(t testing.TB, b built) built {
+	t.Helper()
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(b.payload, &record); err != nil {
+		t.Fatalf("read the record to stamp it below the carrier: %v", err)
+	}
+	if string(record["v"]) != fmt.Sprint(WorkingForVersion) {
+		t.Fatalf("the record is stamped %s, and the case stamps one carrying a carrier below it", record["v"])
+	}
+	record["v"] = json.RawMessage(fmt.Sprint(WorkingForVersion - 1))
+	payload, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("re-encode the record stamped below the carrier: %v", err)
+	}
+	b.payload = payload
+	return b
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -59,10 +60,11 @@ func (c *mergeCase) moveMain(path, content string) string {
 	return tip
 }
 
-// rebase is who's rebase_change of change n's source ref at head.
+// rebase is who's rebase_change of change n's source ref at head, made for
+// nobody but who.
 func rebase(repo string, who gitlet.Principal, n int64, ref, head string) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteRebaseChange, RepoID: repo, Principal: who, OpID: opNow(),
-		Fresh: linear, Ref: ref, ExpectedHead: head, Change: n}
+	return gitlet.EngineWrite{Kind: gitlet.WriteRebaseChange, RepoID: repo, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: ref, ExpectedHead: head, Change: n}
 }
 
 // A REBASE KEEPS EACH COMMIT'S AUTHOR (U43 a): a change of two commits by two

@@ -814,7 +814,9 @@ The consequences worth stating plainly:
   rather than run it without the field; the asking node tries the next data
   node. Where none is on the newer build yet, a seat's tool or a person's
   request answers `fleet_builds_differ`, the engine's record of how a turn
-  ended stays owed (the seat's mail waits on it) until one is, and the refusing
+  ended stays owed (the seat's mail waits on it) until one is, a coding run
+  whose change's open uses one comes back with the change not opened, for its
+  seat to open again with `code_open_change`, and the refusing
   data node logs `estate_request_refused` at `WARN` with
   `disposition=unknown_keys`, naming the keys, once per request it refuses. A
   request that does not use the field is served as before. **Upgrade the data

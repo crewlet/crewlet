@@ -586,7 +586,7 @@ give it to them.
 |---|---|
 | nobody: a schedule, a watch, the agent's own work | every app |
 | a colleague agent seat working for nobody but itself | every app |
-| a colleague agent seat's ask, the answer to the agent's own ask, or what that seat wrote on Worklet, Doclet or Chatlet, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask, answer and write |
+| a colleague agent seat's ask, the answer to the agent's own ask, or what that seat wrote on Worklet, Doclet, Chatlet or Gitlet, from a turn that seat worked for somebody | what that somebody uses, by this table, carried through every ask, answer and write |
 | a person of the company | the apps their permissions name (`admin` includes every app) |
 | a person who may not act now: invited and not yet enrolled, suspended or removed | none |
 | a person on a human seat nobody holds in the directory: known to the chart by their contacts alone | none |
@@ -604,7 +604,12 @@ than another, never acts wider than the narrower answer. A `token:` login is
 placed by that node's own `api.auth.tokens` and nothing else, and any other
 login by the identity directory alone. Nobody is asked anything for a
 credential: a question its turn's executor addresses to the requester goes to
-the seat's lead chain instead, as one in a turn nobody woke does. And what no
+the seat's lead chain instead, as one in a turn nobody woke does. A token
+pushes to no repository itself, so what its turn changes of the company's code
+is the seat's own work and nothing else — the seat's own namespace and the
+repositories it owns — whatever the seat may change for anybody else: its code
+tools' writes, what its executor's box pushes, and the change its run opens
+alike. And what no
 app gates stays out of its reach: a token's turn reads no fleet health and
 reaches no server (`fleet_health`, `code_status`, `ssh_read`, `ssh_operate`),
 an `admin` token's included.
@@ -619,12 +624,18 @@ nothing and a credential is narrowed again, never widened. The answer wakes
 the asking agent in a turn worked for them too, through every ask of a chain.
 
 **So does what an agent writes.** A work item an agent files or assigns, a
-comment on one, a page or a comment on it, and a Chatlet message, each written
+comment on one, a page or a comment on it, a Chatlet message, and on Gitlet a
+change it opens, edits, closes or reopens, an ask for a review, a review, a
+comment on a change, an answer to a finding, a push, a merge or an enqueue —
+what its executor pushes, and the change its run opens, included — each written
 in a turn somebody woke, carries that somebody: the engine composes them from
 the writing turn's own ceiling, never from the tool's arguments, and records
 them on every write a later turn reads: a work item's creation and every move
 of its assignee, whatever they wake, since an idle agent's pickup of its next
-work item reads both, and any other write where it may wake another agent.
+work item reads both; a change's open and reopen, a push, a merge and an
+enqueue, whatever they wake, which the engine's later records about them read
+back from crewlet#798's piece 4c-ii on; and any other write where it may wake
+another agent.
 The agent it wakes works for them, composed again on its own node, and so does
 every agent a chain of writes reaches; two writes one agent makes for two
 different people wake its colleague in two turns wherever the wake asks
@@ -641,33 +652,57 @@ wakes works for it, as before.
 **Where the bound ends.** What an agent writes on a vendor's surface (Slack,
 Mattermost, Jira, GitHub, GitLab, Confluence) comes back as that vendor's
 webhook, which carries nobody, so the agent it wakes works for the agent that
-wrote it. Gitlet's changes, reviews and comments do not carry the requester
-yet either (crewlet#798's piece 4c), nor does the merge queue's close of a
-landed change's work item. To keep the bound, keep agents' work for each other
-on the engine's own surfaces: Worklet, Doclet, Chatlet and `a2a_ask`. During a
-rolling upgrade a node of the older build cannot read a record the newer build
-wrote with its requester, so it hands that write's wake back for a node of the
-newer build rather than wake anybody from it, and a wake no such node took is
-kept until one delivers it — a node already running within seconds of the
-keep, the next to start otherwise — save the losses
+wrote it. On Gitlet, what the engine records itself about an agent's earlier
+write — a revision's facts, a failed check of a change, a landing it found, and
+the merge queue's landing, its removal of a change and a close it could not
+make — does not carry the requester yet (crewlet#798's piece 4c-ii), nor does
+the merge queue's close of a landed change's work item, so the agent such a
+record wakes works for the agent that made the write, or for itself. To keep
+the bound, keep agents' work for each other on the engine's own surfaces:
+Worklet, Doclet, Chatlet, Gitlet and `a2a_ask`. During a rolling upgrade a
+node of the older build cannot read a record the newer build wrote with its
+requester, so it hands that write's wake back for a node of the newer build
+rather than wake anybody from it, and a wake no such node took is kept until
+one delivers it — a node already running within seconds of the keep, the next
+to start otherwise — save the losses
 [Running a Fleet](../guides/fleet.md#draining-and-rolling-upgrades) names: for
 the minutes of the roll a wake can come late, never from a node that could not
 read whom its write was made for
 ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 An older data node refuses a routed write whose actor carries a requester,
 naming the key (`actor.provenance.WrittenFor` for Worklet,
-`args.Actor.WrittenFor` for Doclet and Chatlet), and runs none of it. The
-router asks the next data node, so a data node of the newer build serves it.
+`args.Actor.WrittenFor` for Doclet and Chatlet, and `args.written_for` for a
+Gitlet write, which an older Gitlet node refuses too), and runs none of it. The
+router asks the next node — the next data node, or for a Gitlet write the
+repository's next committer or the next Gitlet node — so a node of the newer
+build serves it, and a coding box's push refused this way is pushed again by
+its harness. A node whose build does not know the kind of requester a Gitlet
+write names, or an app of the credential it names, answers that write the same
+way, since only a newer build sends one: whether it was asked over the network
+or of its own copy, the write moves on to a node that knows it rather than
+being refused as malformed, whatever else is wrong with it, since only a node
+that knows the value can judge the rest of the write.
 Where none does, the agent's tool answers `fleet_builds_differ` and nothing is
 written: `save_work_view`'s prior read is refused alike, and
-`code_merge_change` merges and leaves its item open, saying so. A write that
+`code_merge_change` merges and leaves its item open, saying so. A coding run
+whose collection meets no Gitlet committer of the newer build comes back with
+its commits pushed and its change not opened, its report saying that nothing
+of the open ran, and the agent opens the change again with `code_open_change`.
+A write that
 carries nobody (a turn for its own seat, the engine's own write as a seat, a
 person's, a credential's or the engine's) crosses without the key, and either
 build serves it. Upgrading the data nodes first avoids the refusal, and
 [crewlet-operator](https://github.com/crewlet/crewlet-operator/blob/main/docs/concepts/runtime.md#the-seat-pods-follow-the-data-pods)
 rolls the data pods first. An older seat node composes no requester, so a newer
 data node reads its write as made for nobody, and that write wakes its
-colleague in a turn worked for the writing agent until the roll completes.
+colleague in a turn worked for the writing agent until the roll completes; so
+does an older Gitlet node's, and so do the pushes and the change of a run an
+older build launched, until the run ends. Such a run's repositories were
+checked out for nobody, and a run checked out for nobody is never used for
+somebody: once a node of the newer build carries it on in a turn worked for
+somebody, every checkout the run asks for is refused, of a repository it
+already has as much as of another, and the agent is told that a turn worked for
+somebody starts a new run.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet

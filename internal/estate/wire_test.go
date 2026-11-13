@@ -80,23 +80,34 @@ var carriedByServer = map[string]string{
 // plainlyEncoded are the types an operation carries that decode themselves
 // (jsonv2.UnmarshalerFrom) through the caller's own decoder, only to state on
 // arrival whom their writes are for, and that have no encoder of their own: the
-// actors (ADR-0109). Every field they hold crosses exactly as a plain struct's
-// would, so the gates over what an operation takes ([uncarried] here, and
-// wirerule_test.go's [inputTypes] with every gate that reads it) walk into
-// them as into any struct, and TestAPlainlyEncodedActorWritesItsPlainEncoding
-// holds each to that.
+// actors, and the six requests a code write forms, which hold whom it is made
+// for beside their asker (ADR-0109; gitlet's writtenfor.go) and refuse the
+// carrier's kind, or an app a credential's carrier names, that their build
+// does not know, as the decoder refuses a member it does not declare. Every
+// field they hold crosses exactly as a plain struct's would, so the gates over
+// what an operation takes ([uncarried] here, and wirerule_test.go's
+// [inputTypes] with every gate that reads it) walk into them as into any struct;
+// TestAPlainlyEncodedTypeWritesItsPlainEncoding holds each to that, and
+// TestATypeThatDecodesItselfAndWritesNoEncodingIsWalkedInto holds every such
+// type an operation takes to this list.
 var plainlyEncoded = map[reflect.Type]bool{
-	reflect.TypeFor[Actor]():         true,
-	reflect.TypeFor[doclet.Actor]():  true,
-	reflect.TypeFor[chatlet.Actor](): true,
+	reflect.TypeFor[Actor]():                    true,
+	reflect.TypeFor[doclet.Actor]():             true,
+	reflect.TypeFor[chatlet.Actor]():            true,
+	reflect.TypeFor[gitlet.ChangeProposal]():    true,
+	reflect.TypeFor[gitlet.ConversationWrite](): true,
+	reflect.TypeFor[gitlet.EngineWrite]():       true,
+	reflect.TypeFor[gitlet.QueueProposal]():     true,
+	reflect.TypeFor[gitlet.MergeProposal]():     true,
+	reflect.TypeFor[gitlet.Proposal]():          true,
 }
 
 // encodesItself reports a type the gates over what an operation takes stop at:
 // one that writes or reads its own encoding — a MarshalJSON, or the standard
 // library's v2 twin of either method (MarshalJSONTo, UnmarshalJSONFrom), on the
 // value or the pointer — so that nothing inside it crosses as a struct's field
-// does. Never one of [plainlyEncoded], or a pointer at one, which are walked
-// into.
+// does. Never one of [plainlyEncoded] — the actors and the code writes'
+// requests — or a pointer at one, which are walked into.
 func encodesItself(ty reflect.Type) bool {
 	if plainlyEncoded[ty] || (ty.Kind() == reflect.Pointer && plainlyEncoded[ty.Elem()]) {
 		return false
@@ -202,25 +213,37 @@ func TestEveryFieldAnOperationCarriesArrives(t *testing.T) {
 	}
 }
 
-// A PLAINLY ENCODED ACTOR WRITES ITS PLAIN ENCODING: each of [plainlyEncoded]
-// encodes under the wire's rule ([encodeInput]) exactly as a struct of the
-// same fields and no methods would — with every field it sends set, and with
-// all but its author left at their zero, which the rule leaves off inside the
-// actor as it does anywhere else in what an operation takes. That is the
-// premise on which the gates walk into an actor despite the decoder it has of
-// its own, so an encoder an actor gains later (a refusal, a renamed key, a
-// MarshalJSON over encoding/json's defaults) fails here rather than leave the
-// gates reading fields that are no longer what crosses.
+// A PLAINLY ENCODED TYPE WRITES ITS PLAIN ENCODING: each of [plainlyEncoded]
+// — an actor, or a request a code write forms — encodes under the wire's rule
+// ([encodeInput]) exactly as a struct of the same fields and no methods would:
+// with every field it sends set, and with all but what it must carry left at
+// their zero — an actor's author, a request's asker, and whom it is made for
+// stated nobody — which the rule leaves off inside the type as it does
+// anywhere else in what an operation takes. That is the premise on which the
+// gates walk into such a type despite the decoder it has of its own, so an
+// encoder it gains later (a refusal, a renamed key, a MarshalJSON over
+// encoding/json's defaults) fails here rather than leave the gates reading
+// fields that are no longer what crosses.
 //
-// Mutation: give an actor a MarshalJSON over encoding/json, whose defaults
-// hold no rule of the wire's, and its sample at the zero sends every field it
-// leaves there; give it a MarshalJSONTo that renames a key, and its full
-// sample fails.
-func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
+// Mutation: give an actor or a request a MarshalJSON over encoding/json, whose
+// defaults hold no rule of the wire's, and its sample at the zero sends every
+// field it leaves there; give it a MarshalJSONTo that renames a key, and its
+// full sample fails.
+func TestAPlainlyEncodedTypeWritesItsPlainEncoding(t *testing.T) {
 	t.Parallel()
 	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
 		Apps: []iam.Grant{iam.GrantWorklet}})
 	key := statelog.NewOpID(envelopeInstant, "page")
+	at := statelog.Position{Stream: codeStream, Generation: 2, Seq: 41}
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe"}
+	colleague := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "lead"})
+	ceiling := &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingSeat, Seat: "lead"}
+	op := "019a0c2e-0000-7000-8000-0000000000d0.code_open_change"
+	push := richProposal(repoID(1))
+	push.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe", Run: gitlet.RunProvenance{
+		TurnID: "019a0c2e-0000-7000-8000-00000000d00d", RunID: "019a0c2e-0000-7000-8000-00000000b0c5",
+		Harness: "claude-code"}}
+	push.WrittenFor = colleague
 	samples := map[reflect.Type][]any{
 		reflect.TypeFor[Actor](): {
 			Actor{Handle: "swe", Kind: worklet.AuthorAgent, Records: true,
@@ -239,6 +262,39 @@ func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
 			chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent, OperatorID: "pat:1", TurnID: "run-1",
 				Chain: []string{"cto"}, WrittenFor: carrier, OpKey: key},
 			chatlet.Actor{Handle: "swe", Kind: chatlet.AuthorAgent, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.ChangeProposal](): {
+			gitlet.ChangeProposal{OpID: op, Asker: seat, Seen: at, ExpectedVersion: 4, Ceiling: ceiling,
+				WrittenFor: colleague, Edit: &gitlet.ChangeEdit{RepoID: repoID(1),
+					ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Title: new("Retry twice")}},
+			gitlet.ChangeProposal{Asker: seat, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.ConversationWrite](): {
+			gitlet.ConversationWrite{OpID: op, Asker: seat, Seen: at, Ceiling: ceiling, WrittenFor: colleague,
+				Comment: &gitlet.Comment{RepoID: repoID(1), ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
+					Body: "Why two retries?"}},
+			gitlet.ConversationWrite{Asker: seat, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.EngineWrite](): {
+			largestWrite(t, gitlet.WriteCommitFiles),
+			gitlet.EngineWrite{Principal: seat, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.QueueProposal](): {
+			gitlet.QueueProposal{OpID: op, Asker: seat, Seen: at, Ceiling: ceiling, WrittenFor: colleague,
+				Dequeue: &gitlet.Dequeue{RepoID: repoID(1), EntryID: "019a0c2e-0000-7000-8000-0000000000f1"}},
+			gitlet.QueueProposal{Asker: seat, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.MergeProposal](): {
+			gitlet.MergeProposal{OpID: op, Asker: seat, Seen: at, DropEpoch: 3, WrittenFor: colleague,
+				Merge: gitlet.Merge{RepoID: repoID(1), MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+					ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Method: gitlet.MergeMethodFastForward,
+					TargetRef: "refs/heads/main", BaseOID: "6666666666666666666666666666666666666666",
+					HeadOID: "7777777777777777777777777777777777777777", Node: "git-a", ReceivedAt: envelopeInstant}},
+			gitlet.MergeProposal{Asker: seat, WrittenFor: types.ForTurn(nil)},
+		},
+		reflect.TypeFor[gitlet.Proposal](): {
+			push,
+			gitlet.Proposal{Principal: seat, WrittenFor: types.ForTurn(nil)},
 		},
 	}
 	for ty := range plainlyEncoded {
@@ -264,6 +320,56 @@ func TestAPlainlyEncodedActorWritesItsPlainEncoding(t *testing.T) {
 				t.Errorf("%s encodes as %s, want its plain encoding %s (%v)", ty, got, want, err)
 			}
 		}
+	}
+}
+
+// A TYPE THAT DECODES ITSELF AND WRITES NO ENCODING IS WALKED INTO: every type
+// an operation takes ([inputTypes]) with a decoder of its own (an
+// UnmarshalJSON, or the standard library's v2 twin) and no encoder of its own
+// crosses as the plain encoding of its fields, so it is one of
+// [plainlyEncoded], which the gates walk into. Left off that list, it is a type
+// [encodesItself] stops at, and every field of it, and of everything beneath
+// it, drops out of every gate over what an operation takes — what arrives,
+// what leaves the wire at its zero, which zero a method decides, which member
+// a build does not declare — while the gates' count of the structs they read
+// still passes. Today that is the three actors and the six requests a code
+// write forms; a walk that finds fewer reads nothing it should.
+//
+// Mutation: leave gitlet.ChangeProposal out of plainlyEncoded, and the gate
+// names it.
+func TestATypeThatDecodesItselfAndWritesNoEncodingIsWalkedInto(t *testing.T) {
+	t.Parallel()
+	has := func(ty reflect.Type, methods ...reflect.Type) bool {
+		for _, method := range methods {
+			if ty.Implements(method) || reflect.PointerTo(ty).Implements(method) {
+				return true
+			}
+		}
+		return false
+	}
+	found := map[reflect.Type]bool{}
+	for ty, from := range inputTypes() {
+		if ty.Kind() != reflect.Struct ||
+			!has(ty, reflect.TypeFor[json.Unmarshaler](), reflect.TypeFor[jsonv2.UnmarshalerFrom]()) ||
+			has(ty, reflect.TypeFor[json.Marshaler](), reflect.TypeFor[jsonv2.MarshalerTo]()) {
+			continue
+		}
+		found[ty] = true
+		if !plainlyEncoded[ty] {
+			t.Errorf("%s (from %s) decodes itself and writes no encoding of its own, so what crosses of it is "+
+				"its plain encoding: list it in plainlyEncoded, so the gates walk into it", ty, from)
+		}
+	}
+	for ty := range plainlyEncoded {
+		if !found[ty] {
+			t.Errorf("plainlyEncoded lists %s, which no operation takes as a type that decodes itself and "+
+				"writes no encoding", ty)
+		}
+	}
+	// A GATE THAT READ NOTHING PASSES — so it says what it read.
+	if len(found) < 9 {
+		t.Fatalf("the walk found %d types that decode themselves and write no encoding, want the three actors "+
+			"and the six code writes' requests at least", len(found))
 	}
 }
 

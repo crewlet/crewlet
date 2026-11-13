@@ -549,8 +549,8 @@ func (w *ChangeWriter) refused(ctx context.Context, cw ConversationWrite, err er
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		w.log.ErrorContext(ctx, "code_conversation_invalid", "repo", cw.RepoID(), "change", cw.ChangeID(),
-			"op_id", cw.OpID, "error", err)
+		w.log.Log(ctx, invalidLevel(err), "code_conversation_invalid", "repo", cw.RepoID(), "change",
+			cw.ChangeID(), "op_id", cw.OpID, "error", err)
 		return ConversationResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		return ConversationResult{Refusal: ConversationRefusalBusy, Detail: "the change kept moving for every " +
@@ -595,12 +595,12 @@ func (w *ChangeWriter) count(cw ConversationWrite, res ConversationResult, err e
 // conversationOutcome is what became of a write of a change's conversation, as
 // crewlet.code.conversation.writes names it: `handed_on` for one this node
 // decided nothing of about itself, which the router asks the repository's
-// runner-up; `failed` for any other error; the refusal's own code; `unchanged`
-// for one answered from the rows with no record; and otherwise its outcome —
-// applied, pending or unknown.
+// runner-up ([handedOn]); `failed` for any other error; the refusal's own
+// code; `unchanged` for one answered from the rows with no record; and
+// otherwise its outcome — applied, pending or unknown.
 func conversationOutcome(res ConversationResult, err error) string {
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		return "handed_on"
 	case err != nil:
 		return "failed"

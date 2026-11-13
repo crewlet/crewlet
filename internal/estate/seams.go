@@ -1532,7 +1532,12 @@ func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) 
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
 // does (gitlet.EngineWrite.Validate): one it refuses is gitlet.ErrInvalid, naming
 // the field, before any Gitlet node is asked — never a round trip, a sync and a
-// slot of a Gitlet node's lane for an answer every node would give alike.
+// slot of a Gitlet node's lane for an answer every node would give alike. But
+// NOT A VALUE WHOM IT IS MADE FOR NAMES THAT THIS BUILD DOES NOT KNOW
+// (gitlet.IsUnknownToThisBuild), which is no answer every node gives alike: a
+// node of the build that knows it judges the write — a refusal as malformed
+// included, since Validate meets that value before any other rule — so it is
+// asked, and the walk answers it as the wire does ([unreadHere]).
 //
 // It raises this node's floors past the push's record where the write APPLIED
 // or is PENDING — this node's own write, which its next read of the
@@ -1542,7 +1547,7 @@ func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) 
 // which landed nothing, nor for an outcome UNKNOWN, whose record may not
 // exist.
 func (c CodeSeam) GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
-	if err := w.Validate(); err != nil {
+	if err := w.Validate(); err != nil && !gitlet.IsUnknownToThisBuild(err) {
 		return gitlet.EngineWriteResult{}, err
 	}
 	out, err := call(ctx, c.r, opCodeGitWrite, nil, w)

@@ -1299,7 +1299,8 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 // a colleague's ask carries whoever the asking turn worked for, and the
 // answer to this seat's own ask carries whoever the answering turn worked
 // for, which is who this seat worked for when it asked; and an agent's write
-// on Worklet, Doclet or Chatlet carries whoever the writing turn worked for.
+// on Worklet, Doclet, Chatlet or Gitlet carries whoever the writing turn worked
+// for.
 // Nil for any other wake, and for one that carried nobody.
 func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {

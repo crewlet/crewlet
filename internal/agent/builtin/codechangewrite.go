@@ -46,7 +46,8 @@ import (
 // the least access each one's call may be admitted at — and, inside a seat's
 // turn somebody woke, the access the committer holds them to as well
 // (gitlet.ChangeProposal.Ceiling and gitlet.ConversationWrite.Ceiling, which every
-// write here carries), the seat's own work excepted.
+// write here carries beside whom it is made for, their WrittenFor, ADR-0109),
+// the seat's own work excepted.
 //
 // # One operation, so a retry is the same write
 //
@@ -487,8 +488,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
 		open.TurnID = turn.RunID
 	}
-	p := gitlet.ChangeProposal{OpID: op, Asker: c.asker, Ceiling: c.write, Seen: t.deps.openSeen(c, repo),
-		Open: &open}
+	p := gitlet.ChangeProposal{OpID: op, Seen: t.deps.openSeen(c, repo), Open: &open}
 	res, refusal := t.deps.proposeChange(ctx, turn, tool, c, repo, p)
 	if refusal != nil {
 		return *refusal, nil
@@ -552,7 +552,7 @@ func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo gitlet.RepoR
 		ask.Request = append(ask.Request, gitlet.Reviewer{Handle: h})
 	}
 	w := gitlet.ConversationWrite{OpID: statelog.StepOpID(openOp, stepTwo), Asker: c.asker, Ceiling: c.write,
-		Seen: opened.Position, Reviewers: &ask}
+		WrittenFor: c.actor.WrittenFor, Seen: opened.Position, Reviewers: &ask}
 	named := out.Change
 	if named == "" {
 		named = "a change of " + repo.Name + " its apply has yet to number"
@@ -843,8 +843,7 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 	case p.Reopen != nil:
 		p.Reopen.RepoID, p.Reopen.ChangeID = repo.ID, id
 	}
-	p.OpID, p.Asker, p.Ceiling, p.Seen, p.ExpectedVersion = opIDFor(actor, tool, changeVerb, repo.ID, args),
-		c.asker, c.write, change.at, version
+	p.OpID, p.Seen, p.ExpectedVersion = opIDFor(actor, tool, changeVerb, repo.ID, args), change.at, version
 	res, refusal := d.proposeChange(ctx, turn, tool, c, repo, p)
 	if refusal != nil {
 		return *refusal, nil
@@ -876,15 +875,19 @@ type codeChangeWriteAnswer struct {
 	OpID              string   `json:"op_id,omitempty"`
 }
 
-// proposeChange asks the repository's committer to decide p — held first to
-// the rule every committer holds a proposal to (gitlet.ChangeProposal.Validate),
-// so one no node would decide is refused naming its field before it is routed
-// — and answers what it came to, or the refusal the call is answered with: a
-// refusal of the write in its class, an outcome unknown, or a failure to
-// reach any committer.
+// proposeChange asks the repository's committer to decide p as c asks it —
+// its asker, the ceiling whoever the turn works for bounds it by and whom it is
+// made for, the three stamped together here from the call's caller, the
+// carrier composed from the call's own bound ceiling and never from a tool's
+// arguments — held first to the rule every committer holds a proposal to
+// (gitlet.ChangeProposal.Validate), so one no node would decide is refused
+// naming its field before it is routed, and answers what it came to, or the
+// refusal the call is answered with: a refusal of the write in its class, an
+// outcome unknown, or a failure to reach any committer.
 func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, p gitlet.ChangeProposal) (gitlet.ChangeResult, *tools.Result) {
 
+	p.Asker, p.Ceiling, p.WrittenFor = c.asker, c.write, c.actor.WrittenFor
 	if err := p.Validate(); err != nil {
 		r := codeWriteFailure(ctx, tool, c.actor, repo.Name, err)
 		return gitlet.ChangeResult{}, &r

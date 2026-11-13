@@ -547,9 +547,11 @@
 // for a floor or runs anything, answering [ErrUnknownKeys]. A read carrying a
 // newer argument is refused alike, never answered with the argument ignored.
 // The router reads that as a node that RAN NOTHING, whatever the class, and
-// asks the next ([Router.settle]): a keyed operation asks the refusing node
-// last for requests carrying what it refused, and for those alone
-// ([Router.markUnread]), and a repository's home that refused passes the copy
+// asks the next ([Router.settle]) — as it reads its own copy refusing, in
+// process, a request naming a value its build does not know, which it answers
+// as the wire answers the same request ([unreadHere]): a keyed operation asks
+// the refusing node last for requests carrying what it refused, and for those
+// alone ([Router.markUnread]), and a repository's home that refused passes the copy
 // it would fill to its runner-up ([passesFill]). A walk nobody served ends in
 // the refusal over its [ErrUnserved], never over a write a node may have run
 // ([walk.unserved]). The answer of a read a caller carries into another

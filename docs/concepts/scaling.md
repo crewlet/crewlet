@@ -550,9 +550,9 @@ and an index of each executor's pushes, where the report of [what a run
 pushed](code-sandbox.md#what-a-run-pushed-is-reported-for-it) scans its
 repositories' pushes since its launch instead — some 40 to 100 bytes a push
 each, 1.8 to 4.5 GB each at 250 000 pushes a day. The
-code log, which keeps only the trim's window of records, takes 1 625 bytes
-for a seat's coding box's push in a record of its own (1 481 where the engine
-builds it for a tool) and about 1 040 for each of a burst group commit holds
+code log, which keeps only the trim's window of records, takes 1 667 bytes
+for a seat's coding box's push in a record of its own (1 528 where the engine
+builds it for a tool) and about 1 080 for each of a burst group commit holds
 together, the merges of the packs those pushes add
 43 to 108 bytes a push more — the more a merge takes at once, the less —
 and the sweeps that remove the rows a merge retired, a day later, up to 44
@@ -570,7 +570,7 @@ before a box's push was measured, the push rows were 369 MB and 30.8 GB. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Retired pack rows, at most | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 410 MB | about 3 200, 2.0 MB | about 37 MB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 410 MB | about 3 200, 2.0 MB | about 38 MB |
 | 250 000 — a company of thousands of seats | about 45 million, 34.2 GB | about 269 000, 164 MB | 1.9 to 3.1 GB |
 
 The live pack rows are not a column, because they follow the repositories and
@@ -919,6 +919,13 @@ unknown outcome, never a refusal — a refusal says nothing ran.
   `fleet_builds_differ`**, a condition no wait clears until an administrator
   finishes the upgrade: "This node and the company's other nodes run different
   versions of Crewlet".
+- **A coding run's collection opens no change.** The change a run asked to
+  open is opened when it is collected, a write made for whom the run's turn
+  works for; refused this way, it is not asked again, since the collection
+  holds the run's seat until the turn resumes. The run comes back with its
+  commits pushed and its change not opened, its report saying that nothing of
+  the open ran, and the seat opens it again with `code_open_change`
+  ([A run's changes](code-sandbox.md#a-runs-changes)).
 - **The data node that refused logs `estate_request_refused`** at `WARN`, once
   per request it refuses, as it logs a request under a key it does not hold or
   one past its window — with `disposition=unknown_keys`, the operation, the

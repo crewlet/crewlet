@@ -144,7 +144,7 @@ func (lc *refLifecycle) seatPush(t *testing.T, seat string, repo *gitlet.RepoDet
 	push := gitlet.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo.ID,
 		Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: seat,
 			Run: gitlet.RunProvenance{TurnID: statelog.NewOpID(time.Now(), "")}},
-		Via: gitlet.ViaEngine, Node: lc.node.id, ReceivedAt: time.Now().UTC(),
+		WrittenFor: types.ForNobody(), Via: gitlet.ViaEngine, Node: lc.node.id, ReceivedAt: time.Now().UTC(),
 		Commands: []gitlet.Command{{Ref: ref, Old: gitlet.ZeroOID, New: oid}}}
 	res, err := lc.node.router.Code().Propose(t.Context(), push)
 	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != gitlet.ResultOK {

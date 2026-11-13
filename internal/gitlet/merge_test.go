@@ -59,8 +59,9 @@ func approved(t *testing.T, n *node, w *gitlet.ChangeWriter, repo, change string
 }
 
 // merging is asker's merge of change into main, method built onto base from
-// head as commit, under an operation id of its own — carrying the pack its
-// build stored, but for a fast-forward, which builds none.
+// head as commit, under an operation id of its own, made for nobody but the
+// asker — carrying the pack its build stored, but for a fast-forward, which
+// builds none.
 func merging(repo, change string, asker gitlet.Principal, method gitlet.MergeMethod, base, head,
 	commit string) gitlet.MergeProposal {
 
@@ -73,7 +74,7 @@ func merging(repo, change string, asker gitlet.Principal, method gitlet.MergeMet
 			IndexBytes: gitlet.IndexBytesFor(1), ReverseBytes: gitlet.ReverseBytesFor(1),
 			GitChecksum: oidOf("pack" + m.MergeID), Objects: 1}
 	}
-	return gitlet.MergeProposal{OpID: opID, Asker: asker, Merge: m}
+	return gitlet.MergeProposal{OpID: opID, Asker: asker, WrittenFor: types.ForNobody(), Merge: m}
 }
 
 // requireMerged fails t unless res is a merge applied at a position, its
