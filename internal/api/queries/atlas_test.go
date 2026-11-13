@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -25,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -910,5 +912,117 @@ func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// advisedSources is acme's atlas with what people recorded in it, on a chart
+// that holds one agent seat and no unit.
+func advisedSources(t *testing.T) queries.Sources {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte("name: acme\nproviders:\n  llm:\n    p: {model: m}\n  sandbox: {fake: true}\n" +
+		"roles:\n  - name: CEO\n    handle: ceo\n    llm: p\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := atlasSourcesWith(atlasCode(), acmeLog(t))
+	s.Company = func() (*config.Company, *org.Organization) { return cfg, chart }
+	return s
+}
+
+// THE ADVISOR NAMES AN ATLAS ENTRY ONLY TO A HOLDER OF THE ATLAS APP, read as
+// the asker reads the atlas. A holder is named the service nobody owns and
+// the server whose owning unit the chart does not hold, each with the call
+// that fixes it; whoever asks without the app is told how many and sent no
+// name, no id and no call.
+//
+// Mutation: read Names as true whoever asks, and the reader without the app
+// is sent checkout-api.
+func TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp(t *testing.T) {
+	t.Parallel()
+	s := advisedSources(t)
+	read := func(ctx context.Context) (map[advisor.Class]advisor.Finding, string) {
+		t.Helper()
+		answer, err := s.AdvisedOfAtlas(ctx, advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(answer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[advisor.Class]advisor.Finding{}
+		for _, f := range answer.Findings {
+			out[f.Class] = f
+		}
+		return out, string(raw)
+	}
+	holder, _ := read(asAtlasReader(t))
+	unowned, gone := holder[advisor.ClassAtlasUnowned], holder[advisor.ClassAtlasOwnerGone]
+	if len(unowned.Entries) != 1 || unowned.Entries[0].ID != atlasCheckout.ID() ||
+		unowned.Fix.Kind != advisor.FixAtlasAct || unowned.Fix.Act.Tool != builtin.AtlasSetOwnerTool {
+		t.Errorf("a holder's unowned finding = %+v, want checkout-api with the owner write", unowned)
+	}
+	if len(gone.Entries) != 1 || gone.Entries[0].ID != atlasWeb.ID() || gone.Entries[0].Owner.Name != "platform" {
+		t.Errorf("a holder's owner finding = %+v, want web-1 and the unit the chart no longer holds", gone)
+	}
+
+	nobody := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "bo", Kind: iam.KindPerson,
+		Seat: "bo", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}})
+	blind, raw := read(nobody)
+	if len(blind) != len(holder) {
+		t.Fatalf("a reader without the app is raised %d findings, a holder %d", len(blind), len(holder))
+	}
+	for class, f := range blind {
+		if len(f.Entries) != 0 || f.Fix.Act != nil || f.Fix.Kind != advisor.FixNone || f.Title != holder[class].Title {
+			t.Errorf("%s for a reader without the app = %+v, want the count and nothing named", class, f)
+		}
+	}
+	for _, secret := range []string{"checkout-api", "web-1", atlasCheckout.ID().String(), atlasWeb.ID().String()} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("the answer for a reader without the atlas app holds %q", secret)
+		}
+	}
+}
+
+// staleDesk is acme's sources four hours on: Cloudflare read whole ten
+// minutes ago, and Datadog not since four hours ago, on an hourly read.
+type staleDesk struct{ atlasDesk }
+
+func (staleDesk) AtlasSourceReport(_ context.Context, now time.Time) (collect.Report, bool, error) {
+	recent, old := now.Add(-10*time.Minute), now.Add(-4*time.Hour)
+	standings := map[integration.Kind]collect.Status{
+		integration.KindCloudflare: {LastAttemptAt: recent, Completed: true, LastCompleteAt: recent},
+		integration.KindDatadog:    {LastAttemptAt: recent, LastCompleteAt: old, LastError: "datadog: 503 from the vendor"},
+	}
+	return collect.Describe([]integration.Kind{integration.KindCloudflare, integration.KindDatadog,
+		integration.KindGitHub}, standings, nil, time.Hour, now), true, nil
+}
+
+// A SOURCE THAT STOPPED READING IS THE ADVISOR'S ONCE THREE READS HAVE PASSED,
+// off the standings the atlas's own sources question answers: the one not
+// read whole in four hours is listed with the ask for a read as its fix, and
+// neither the one read ten minutes ago nor the one never read is.
+func TestTheAdvisorListsASourceThatStoppedReading(t *testing.T) {
+	t.Parallel()
+	s := advisedSources(t)
+	deps := *s.Atlas.(*builtin.AtlasDeps)
+	deps.Sources = staleDesk{}
+	s.Atlas = &deps
+	answer, err := s.AdvisedOfAtlas(asAtlasReader(t), advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range answer.Findings {
+		if f.Class == advisor.ClassAtlasSourceStale {
+			got = append(got, f.Subject.Name+" "+f.Fix.Act.Tool+" "+f.Fix.Act.Args["integration"])
+		}
+	}
+	if !slices.Equal(got, []string{"Datadog " + builtin.AtlasRefreshTool + " datadog"}) {
+		t.Errorf("stale sources = %v, want Datadog alone with a read asked for", got)
 	}
 }

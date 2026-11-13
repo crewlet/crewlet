@@ -17,7 +17,7 @@ func FromIntegrations(states []integration.State) []Finding {
 		if state.Disconnecting {
 			continue
 		}
-		name := surfaceName(state.Kind)
+		name := SurfaceName(state.Kind)
 		for _, f := range state.Findings {
 			out = append(out, fromIntegration(state.Kind, name, f))
 		}
@@ -68,8 +68,9 @@ func severityOf(phase integration.Phase) Severity {
 	}
 }
 
-// surfaceName is how a sentence names a surface, from the catalogue of tools.
-func surfaceName(kind integration.Kind) string {
+// SurfaceName is how a sentence names a surface, from the catalogue of tools.
+
+func SurfaceName(kind integration.Kind) string {
 	for _, tool := range integration.Tools {
 		for _, s := range tool.Surfaces {
 			if s.Key == string(kind) {
