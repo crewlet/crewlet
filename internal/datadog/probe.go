@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/setup"
@@ -27,6 +28,9 @@ import (
 //     configured webhook. A refusal is a permission the application key
 //     lacks. An absent webhook is a read that worked, since the first pass
 //     creates it.
+//  4. One read of each listing the atlas reads: monitors, the service
+//     catalogue, hosts and Synthetic tests. A refusal here is a warning on
+//     a working verdict, never a refusal of the keys ([atlasWarnings]).
 //
 // Every stage is a read, and nothing at Datadog is created or changed. That
 // is also its limit: the WRITE permissions the reconcile needs (managing
@@ -116,11 +120,43 @@ func Probe(httpClient *http.Client) setup.Probe {
 			}
 		}
 
-		return setup.Works("Works. Both keys are valid.",
+		details := []setup.Detail{
 			setup.Fact{Label: "Organization", Value: org.Name},
 			setup.Fact{Label: "Site", Value: client.Site()},
-			setup.Fact{Label: "They can read", Value: "Users, roles and webhooks"}), nil
+			setup.Fact{Label: "They can read", Value: "Users, roles and webhooks"},
+		}
+		return setup.Works("Works. Both keys are valid.", append(details, atlasWarnings(ctx, client, creds)...)...), nil
 	}
+}
+
+// atlasWarnings reads one row of each listing the atlas reads, and answers a
+// warning for each the application key may not read.
+//
+// NEVER A REFUSAL OF THE KEYS: the integration works without any of them,
+// and the atlas shows what it may read. Only a refusal is said; a listing
+// that did not answer in time, or failed otherwise, says nothing about the
+// keys and is left out. The four run together, inside what is left of the
+// check's budget, so they cost a person one call's wait rather than four.
+func atlasWarnings(ctx context.Context, client *Client, creds Credentials) []setup.Detail {
+	listings := Listings()
+	refused := make([]bool, len(listings))
+	var wg sync.WaitGroup
+	for i, l := range listings {
+		wg.Go(func() {
+			bounded, cancel := context.WithTimeout(ctx, probeCallTimeout)
+			defer cancel()
+			refused[i] = Status(client.CanList(bounded, creds, l)) == http.StatusForbidden
+		})
+	}
+	wg.Wait()
+	var out []setup.Detail
+	for i, l := range listings {
+		if refused[i] {
+			title, action := l.Missing()
+			out = append(out, setup.Warning{Title: title, Action: action})
+		}
+	}
+	return out
 }
 
 // probeCallTimeout bounds one call of the staged check, inside the whole

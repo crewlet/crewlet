@@ -302,7 +302,7 @@ export type FramedScreen =
   | { screen: "seat"; handle: string }
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
-  /** The atlas, drawn as its map or its list (`shape=`), and one entry's page by its id. */
+  /** The atlas, its map over its catalogue, and one entry's page by its id. */
   | { screen: "atlas" }
   | { screen: "atlas-entry"; id: string }
   | { screen: "budgets" }

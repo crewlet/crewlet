@@ -3,21 +3,27 @@ package changefeed_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -93,20 +99,27 @@ func (f framesRead) DeadLetterFrame(ctx context.Context, subject string, seq uin
 // keeps is false.
 func (f fleet) join(t *testing.T, keeps bool) *node {
 	t.Helper()
+	var letters changefeed.DeadLetters
+	if keeps {
+		letters = framesRead{Queue: f.letters, frames: f.frames}
+	}
+	return f.joinWith(t, letters, f.claims)
+}
+
+// joinWith builds one node of f keeping its dead letters through letters and
+// taking its claims in cl, either of them nil for none.
+func (f fleet) joinWith(t *testing.T, letters changefeed.DeadLetters, cl changefeed.Claims) *node {
+	t.Helper()
 	rec, err := metrics.New()
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
 	n := &node{tr: newProbe(), docs: newEstate(), pub: &capture{}, rec: rec, clock: newClock(),
 		letters: f.letters}
-	opts := changefeed.Options{
-		Opener: n.docs, Publisher: n.pub, Claims: f.claims, Translator: n.tr,
-		Metrics: rec, Now: n.clock.now,
-	}
-	if keeps {
-		opts.DeadLetters = framesRead{Queue: f.letters, frames: f.frames}
-	}
-	if n.feed, err = changefeed.New(opts); err != nil {
+	if n.feed, err = changefeed.New(changefeed.Options{
+		Opener: n.docs, Publisher: n.pub, Claims: cl, Translator: n.tr,
+		Metrics: rec, Now: n.clock.now, DeadLetters: letters,
+	}); err != nil {
 		t.Fatalf("new feed: %v", err)
 	}
 	return n
@@ -336,6 +349,231 @@ func TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked(t *testing.T) {
 	}
 }
 
+// A RECORD WHOSE DEAD LETTER WAS ALREADY KEPT IS ACKNOWLEDGED, AND NEITHER
+// KEPT NOR COUNTED AGAIN.
+//
+// A keep waits as long as its frame takes to cross the node's link, so it can
+// outlast the delivery's acknowledgement window, and the record is then handed
+// to a peer past its hour too. Both keeps name the record's identity, so the
+// queue keeps one entry and answers the keep that lands second already kept:
+// the record is settled there as well, and the one record let go is counted
+// once, by whichever node takes its dead-letter claim — here the node whose
+// keep stored the entry, which took the claim first.
+//
+// Mutation: count every keep answered stored or already kept without taking
+// the claim, and the peer counts the record dead-lettered a second time; name
+// a keep by its delivery rather than its record, and the store holds two
+// entries.
+func TestARecordWhoseDeadLetterWasAlreadyKeptIsAcknowledgedAndNotCountedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	first, peer := f.join(t, true), f.join(t, true)
+	stored := first.clock.now().Add(-changefeed.DeadLetterAge - time.Minute)
+	reason := map[string]string{"source": "work", "reason": string(changefeed.DeferUnknownKey)}
+	var kept, again settled
+	first.handle(t, aRecord(stored, 120), aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &kept)
+	peer.handle(t, aRecord(stored, 121), aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &again)
+	for name, s := range map[string]*settled{"the first node": &kept, "the peer": &again} {
+		if acks, naks, _ := s.read(); acks != 1 || len(naks) != 0 {
+			t.Errorf("%s acked the record %d time(s) and handed it back %v, want it settled once",
+				name, acks, naks)
+		}
+	}
+	if entries := first.kept(t); len(entries) != 1 {
+		t.Errorf("the store holds %d entries of the one record, want one", len(entries))
+	}
+	if got := first.counted(metrics.TrackerFeedDeadLettered, reason); got != 1 {
+		t.Errorf("the node that kept the record counted it dead-lettered %d time(s), want once", got)
+	}
+	if got := peer.counted(metrics.TrackerFeedDeadLettered, reason); got != 0 {
+		t.Errorf("the peer whose keep was answered already kept counted the record dead-lettered "+
+			"%d time(s), want none: the record was let go once", got)
+	}
+}
+
+// answerLost is a dead-letter store whose first keep stores its entry and
+// answers an error, as a keep whose answer is lost on its way back does — to
+// an election, a dropped connection, or a link slower than its budget.
+type answerLost struct {
+	changefeed.DeadLetters
+	mu   sync.Mutex
+	lost bool
+}
+
+func (a *answerLost) KeepDeadLetter(ctx context.Context, subject, id string, header, frame []byte) (bool, error) {
+	already, err := a.DeadLetters.KeepDeadLetter(ctx, subject, id, header, frame)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil || a.lost {
+		return already, err
+	}
+	a.lost = true
+	return false, fmt.Errorf("keep a dead letter on %s: the answer was lost: %w", subject, queue.ErrUnavailable)
+}
+
+// syncBuffer is a log sink the logger may write to from any goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// detailsOf is the detail of each log line named msg whose key is key, in the
+// order they were logged.
+func (b *syncBuffer) detailsOf(t *testing.T, msg, key string) []string {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var details []string
+	for line := range bytes.Lines(b.buf.Bytes()) {
+		var l struct {
+			Msg    string `json:"msg"`
+			Key    string `json:"key"`
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(line, &l); err != nil {
+			t.Fatalf("a log line is not JSON: %v (%q)", err, line)
+		}
+		if l.Msg == msg && l.Key == key {
+			details = append(details, l.Detail)
+		}
+	}
+	return details
+}
+
+// captureLogs points the process's log at a buffer for one test, which must not
+// be parallel — the log is the process's — and puts logging's own default back
+// after it.
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, buf)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	return buf
+}
+
+// A DEAD LETTER WHOSE STORING KEEP ANSWERED AN ERROR IS COUNTED ONCE, BY THE
+// KEEP ANSWERED NEXT.
+//
+// A keep can store its entry and still answer an error, its answer lost on the
+// way back, and its node then hands the record back, claiming and counting
+// nothing. The record's next keep is answered already kept, and it is the keep
+// that takes the record's dead-letter claim: it counts the record and logs its
+// line. Counted by the answer instead, the record would sit in CREWLET_DLQ
+// with no count and no line at all. The line says an earlier keep stored the
+// entry and no more, since an operator's discard or a feed start's replay may
+// have dropped it by then.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: count only a keep answered stored, and the record is counted
+// nowhere and its line never logged; give the line a stored keep's detail, and
+// it promises an entry that may be gone.
+func TestADeadLetterWhoseStoringKeepAnsweredAnErrorIsCountedOnce(t *testing.T) {
+	logs := captureLogs(t)
+	f := newFleet(t)
+	n := f.joinWith(t, &answerLost{DeadLetters: framesRead{Queue: f.letters, frames: f.frames}}, f.claims)
+	rec := aRecord(n.clock.now().Add(-changefeed.DeadLetterAge-time.Minute), 120)
+	rec.Key = "item/answer-lost"
+	reason := map[string]string{"source": "work", "reason": string(changefeed.DeferUnknownKey)}
+
+	var lost settled
+	n.handle(t, rec, aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &lost)
+	if acks, naks, _ := lost.read(); acks != 0 || len(naks) != 1 {
+		t.Fatalf("a keep answered with an error acked the record %d time(s) and handed it back %v, "+
+			"want it handed back once", acks, naks)
+	}
+	if entries := n.kept(t); len(entries) != 1 {
+		t.Fatalf("the store holds %d entries, want the one the lost answer's keep stored", len(entries))
+	}
+	if got := n.counted(metrics.TrackerFeedDeadLettered, reason); got != 0 {
+		t.Fatalf("a keep answered with an error counted the record %d time(s), want none", got)
+	}
+
+	var again settled
+	rec.Delivered = 121
+	n.handle(t, rec, aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &again)
+	if acks, naks, _ := again.read(); acks != 1 || len(naks) != 0 {
+		t.Errorf("the keep answered already kept acked the record %d time(s) and handed it back %v, "+
+			"want it settled once", acks, naks)
+	}
+	if entries := n.kept(t); len(entries) != 1 {
+		t.Errorf("the store holds %d entries of the one record, want one", len(entries))
+	}
+	if got := n.counted(metrics.TrackerFeedDeadLettered, reason); got != 1 {
+		t.Errorf("the record whose storing keep's answer was lost was counted dead-lettered %d "+
+			"time(s), want once", got)
+	}
+	details := logs.detailsOf(t, "changefeed_record_dead_lettered", rec.Key)
+	if len(details) != 1 {
+		t.Fatalf("the record's dead-lettering was logged %d time(s), want once", len(details))
+	}
+	if !strings.Contains(details[0], "an earlier keep stored its entry") ||
+		strings.Contains(details[0], "so it is kept in") {
+		t.Errorf("the line of a record counted by a keep answered already kept says %q, "+
+			"want it to say an earlier keep stored the entry, which may be gone by now", details[0])
+	}
+}
+
+// A DEAD LETTER WHOSE CLAIM CANNOT BE DECIDED IS COUNTED ANYWAY.
+//
+// The count is the one reading an operator has of how many records were let
+// go, and a record nobody counted is never noticed, where one two nodes count
+// reads one too many. So a claims store that answers an error, and a feed
+// given no claims at all, count the record they kept.
+//
+// Mutation: fail closed on a claim the store could not decide, and the record
+// is counted by nobody.
+func TestADeadLetterWhoseClaimCannotBeDecidedIsCountedAnyway(t *testing.T) {
+	t.Parallel()
+	for name, broken := range map[string]bool{
+		"a claims store that answers an error": true,
+		"a feed given no claims":               false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			var cl changefeed.Claims
+			if broken {
+				f.claims.breakWith(errors.New("the coordination store is unreachable"))
+				cl = f.claims
+			}
+			n := f.joinWith(t, framesRead{Queue: f.letters, frames: f.frames}, cl)
+			var s settled
+			n.handle(t, aRecord(n.clock.now().Add(-changefeed.DeadLetterAge-time.Minute), 120), aFrame,
+				&changefeed.Deferral{Reason: changefeed.DeferNewerRecord}, &s)
+			if acks, naks, _ := s.read(); acks != 1 || len(naks) != 0 {
+				t.Errorf("the record was acked %d time(s) and handed back %v, want it settled once", acks, naks)
+			}
+			if got := n.counted(metrics.TrackerFeedDeadLettered,
+				map[string]string{"source": "work", "reason": string(changefeed.DeferNewerRecord)}); got != 1 {
+				t.Errorf("a record whose dead-letter claim could not be decided was counted %d time(s), "+
+					"want once", got)
+			}
+		})
+	}
+}
+
+// THE DEAD-LETTER CLAIM FITS THE CLAIMS STORE. It is held for the queue's
+// window, and the coordination store refuses a claim longer than it keeps one
+// (coord.MaxClaimTTL) rather than clamp it: every keep would then be counted,
+// each beside a warning that the claim could not be decided.
+//
+// Mutation: a window longer than coord.MaxClaimTTL, and this is red.
+func TestTheDeadLetterClaimFitsTheClaimsStore(t *testing.T) {
+	t.Parallel()
+	if queue.DeadLetterWindow > coord.MaxClaimTTL {
+		t.Errorf("queue.DeadLetterWindow %v is longer than the coordination store keeps a claim "+
+			"(coord.MaxClaimTTL %v), so every record's dead-letter claim is refused",
+			queue.DeadLetterWindow, coord.MaxClaimTTL)
+	}
+}
+
 // A DEAD LETTER THAT COULD NOT BE KEPT LEAVES ITS RECORD HANDED BACK, NEVER
 // ACKED BARE.
 //
@@ -484,7 +722,8 @@ func TestADeadLettersHeaderIsOneBoundedLineOfASCII(t *testing.T) {
 	}
 	// AND THE QUEUE KEEPS IT, through the twin that refuses exactly what
 	// the broker refuses.
-	if err := newFleet(t).letters.KeepDeadLetter(t.Context(), subject, header, frame); err != nil {
+	letters := newFleet(t).letters
+	if _, err := letters.KeepDeadLetter(t.Context(), subject, "the largest", header, frame); err != nil {
 		t.Fatalf("a record at its log's ceiling was not kept: %v", err)
 	}
 	back, err := changefeed.DecodeDeadLetter(header)
@@ -590,13 +829,17 @@ func keptRecord(clk *clock) changefeed.Record {
 
 // A REPLAY DERIVES A KEPT RECORD'S WAKE ONCE, AND DROPS ITS ENTRY.
 //
-// Two nodes can each keep the same record — one's ack lost, the record
-// redelivered to the other past its hour. The feed's start publishes the first
-// entry's wake through the claim a delivery passes and drops the entry; the
-// second is the same record, whose wake this replay has just settled, so it is
-// dropped with nothing published again — never left as though the claim this
-// replay took were a peer's — and its frame never read. The wake carries the
-// record's own place, as a delivered one does.
+// Two entries can hold the same record, under its one identity (keepID), only
+// when its keeps are further apart than the window the broker holds the
+// identity for: a restart rebuilds the window from the entries still held, so
+// it forgets only a dropped entry's identity and never leaves two. So the case
+// keeps the record twice that far apart on the twin's clock, which a bubble
+// moves. The feed's start publishes the first entry's
+// wake through the claim a delivery passes and drops the entry; the second is
+// the same record, whose wake this replay has just settled, so it is dropped
+// with nothing published again — never left as though the claim this replay
+// took were a peer's — and its frame never read. The wake carries the record's
+// own place, as a delivered one does.
 //
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,
@@ -604,34 +847,122 @@ func keptRecord(clk *clock) changefeed.Record {
 // settled, and two are read.
 func TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		rec := keptRecord(newClock())
+		deadLetterOf(t, f, rec)
+		// PAST THE QUEUE'S WINDOW on the twin's clock, the bubble's, so the
+		// record's second keep stores an entry of its own.
+		time.Sleep(queue.DeadLetterWindow + time.Second)
+		deadLetterOf(t, f, rec)
+
+		newer := f.join(t, true)
+		if len(newer.kept(t)) != 2 {
+			t.Fatalf("the store holds %d entries, want the record kept twice", len(newer.kept(t)))
+		}
+		if !changefeed.Replay(t.Context(), newer.feed, newer.docs) {
+			t.Fatal("the replay's listing did not answer")
+		}
+		if got := newer.pub.count(); got != 1 {
+			t.Fatalf("the replay published %d wake(s) for one record kept twice, want one", got)
+		}
+		// ONE FRAME READ, the entry it derived the wake from: the second
+		// entry of the same record is settled by its header alone.
+		if got := f.frames.Load(); got != 1 {
+			t.Errorf("the replay read %d frames, want the one it derived the wake from", got)
+		}
+		w, _ := events.DataAs[*types.RawWebhook](newer.pub.first(t))
+		at, err := statelog.ParsePosition(w.Trigger)
+		if want := (statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}); err != nil ||
+			at != want || w.Body["key"] != rec.Key {
+			t.Errorf("the replayed wake carries %q at %q (%v), want %s at %v", w.Body["key"], w.Trigger, err, rec.Key, want)
+		}
+		if left := newer.kept(t); len(left) != 0 {
+			t.Errorf("%d entries are still kept after their wake was published", len(left))
+		}
+	})
+}
+
+// A REBUILT LOG'S RECORD AT A REUSED SEQUENCE IS REPLAYED ON ITS OWN.
+//
+// A deleted and rebuilt log numbers its records from one again while the dead
+// letters keep their entries for the event stream's retention, so an old
+// incarnation's entry and a new one's can name the same stream and sequence.
+// The broker stored the two at different instants, which both entries carry:
+// they are two records, kept under two identities, and the replay derives each
+// one's wake from its own frame. Neither is dropped unread as a copy of the
+// other.
+//
+// Mutation: name a record's place without its stored instant, and the second
+// entry is dropped unread as the first one's copy, its wake lost.
+func TestARebuiltLogsRecordAtAReusedSequenceIsReplayedOnItsOwn(t *testing.T) {
+	t.Parallel()
 	f := newFleet(t)
-	rec := keptRecord(newClock())
-	deadLetterOf(t, f, rec)
-	deadLetterOf(t, f, rec)
+	old := keptRecord(newClock())
+	deadLetterOf(t, f, old)
+	rebuilt := old
+	rebuilt.StoredAt = old.StoredAt.Add(10 * time.Minute)
+	rebuilt.ID, rebuilt.Key, rebuilt.Payload = "op-2", "item/u2", []byte(`{"frame":"u2"}`)
+	deadLetterOf(t, f, rebuilt)
 
 	newer := f.join(t, true)
 	if len(newer.kept(t)) != 2 {
-		t.Fatalf("the store holds %d entries, want the record kept twice", len(newer.kept(t)))
+		t.Fatalf("the store holds %d entries, want one for each incarnation's record", len(newer.kept(t)))
 	}
 	if !changefeed.Replay(t.Context(), newer.feed, newer.docs) {
 		t.Fatal("the replay's listing did not answer")
 	}
-	if got := newer.pub.count(); got != 1 {
-		t.Fatalf("the replay published %d wake(s) for one record kept twice, want one", got)
+	if got := newer.pub.count(); got != 2 {
+		t.Fatalf("the replay published %d wake(s) for two records at one sequence, want one each", got)
 	}
-	// ONE FRAME READ, the entry it derived the wake from: the second entry
-	// of the same record is settled by its header alone.
-	if got := f.frames.Load(); got != 1 {
-		t.Errorf("the replay read %d frames, want the one it derived the wake from", got)
-	}
-	w, _ := events.DataAs[*types.RawWebhook](newer.pub.first(t))
-	at, err := statelog.ParsePosition(w.Trigger)
-	if want := (statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}); err != nil ||
-		at != want || w.Body["key"] != rec.Key {
-		t.Errorf("the replayed wake carries %q at %q (%v), want %s at %v", w.Body["key"], w.Trigger, err, rec.Key, want)
+	if got := f.frames.Load(); got != 2 {
+		t.Errorf("the replay read %d frames, want each record's own", got)
 	}
 	if left := newer.kept(t); len(left) != 0 {
-		t.Errorf("%d entries are still kept after their wake was published", len(left))
+		t.Errorf("%d entries are still kept after both wakes were published", len(left))
+	}
+}
+
+// TWO NODES KEEP ONE RECORD ONCE, WHETHER OR NOT THEY READ ITS ENVELOPE.
+//
+// A node that cannot open a record's frame — a key it does not hold, an
+// envelope a newer build writes — defers it knowing only what the delivery
+// says: its log, its position and the broker's instant, and no generation. A
+// node that read the envelope also knows the log's generation, one or more on
+// a log reanchored since it began. Both keep the one record, the second once
+// the first's delivery window lapsed, and the queue keeps it once: the
+// identity is what both read alike.
+//
+// Mutation: key the identity on the generation rather than the stored instant,
+// and the store holds two entries of the one record.
+func TestTwoNodesKeepOneRecordOnceWhetherOrNotTheyReadItsEnvelope(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	read, blind := f.join(t, true), f.join(t, true)
+	rec := aRecord(read.clock.now().Add(-changefeed.DeadLetterAge-time.Minute), 120)
+	if rec.Gen < 1 {
+		t.Fatalf("the record is at generation %d, want a reanchored log's", rec.Gen)
+	}
+	var first, second settled
+	read.handle(t, rec, aFrame, &changefeed.Deferral{Reason: changefeed.DeferNewerRecord}, &first)
+	unread := rec
+	unread.ID, unread.Gen, unread.Delivered = "", 0, 121
+	blind.handle(t, unread, aFrame, &changefeed.Deferral{Reason: changefeed.DeferUnknownKey}, &second)
+	for name, s := range map[string]*settled{"the node that read it": &first, "the node that could not": &second} {
+		if acks, naks, _ := s.read(); acks != 1 || len(naks) != 0 {
+			t.Errorf("%s acked the record %d time(s) and handed it back %v, want it settled once",
+				name, acks, naks)
+		}
+	}
+	if entries := read.kept(t); len(entries) != 1 {
+		t.Errorf("the store holds %d entries of the one record, want one", len(entries))
+	}
+	counted := read.counted(metrics.TrackerFeedDeadLettered,
+		map[string]string{"source": "work", "reason": string(changefeed.DeferNewerRecord)}) +
+		blind.counted(metrics.TrackerFeedDeadLettered,
+			map[string]string{"source": "work", "reason": string(changefeed.DeferUnknownKey)})
+	if counted != 1 {
+		t.Errorf("the one record was counted dead-lettered %d time(s) across the two nodes, want once", counted)
 	}
 }
 
@@ -755,7 +1086,7 @@ func TestAForeignFrameInTheDeadLettersIsDroppedAndWakesNobody(t *testing.T) {
 func TestAnEntryANewerBuildKeptIsLeft(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	if err := f.letters.KeepDeadLetter(t.Context(), subject,
+	if _, err := f.letters.KeepDeadLetter(t.Context(), subject, "a newer build's record",
 		[]byte(`{"v":2,"source":"work","seq":7}`), []byte("frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}

@@ -1,0 +1,12 @@
+-- The atlas's log is read as a question (what changed, when and in whose
+-- voice), newest first across the whole company, and counted a day at a time
+-- over its last two weeks. An entry's own claims are found by its entry index
+-- and a voice's live ones by the source index; neither finds the newest claims
+-- of every entry without reading all of them, history included.
+--
+-- A claim a read withdrew is found by the retention's index, which already
+-- orders replaced claims by when they were replaced.
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically. An index derives from
+-- rows every node already holds alike, and changes no row.
+CREATE INDEX atlas_claims_at_idx ON atlas_claims (at, claim_id); -- the log, newest first, and its daily counts

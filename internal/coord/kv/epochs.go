@@ -66,9 +66,15 @@ type EpochsConfig struct {
 	// "crewlet". It must be the prefix the deployment's lease store uses,
 	// or the two count the same resource twice.
 	BucketPrefix string
+	// Reach is how this node's connection reaches the bucket ([Reach]).
+	// Required.
+	Reach Reach
 }
 
 func (c *EpochsConfig) normalize() error {
+	if err := checkReach("EpochsConfig", c.Reach); err != nil {
+		return err
+	}
 	if c.BucketPrefix == "" {
 		c.BucketPrefix = defaultBucketPrefix
 	}
@@ -122,7 +128,7 @@ func openEpochs(ctx context.Context, js jetstream.JetStream, cfg EpochsConfig) (
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
 	}
-	return &Epochs{js: js, kv: settled(js, bucket), read: read}, nil
+	return &Epochs{js: js, kv: settled(js, bucket, cfg.Reach), read: read}, nil
 }
 
 // Next mints resource's next fencing token: strictly above every token the

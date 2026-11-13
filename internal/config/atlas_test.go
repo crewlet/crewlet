@@ -7,6 +7,25 @@ import (
 	"time"
 )
 
+// AGENTS RECORD IN THE ATLAS UNLESS THE COMPANY TURNS IT OFF: unset is on,
+// and only an explicit false stops it.
+//
+// Mutation: read the pointer's zero as off and a company that says nothing
+// stops its agents recording.
+func TestAgentsRecordInTheAtlasUnlessTurnedOff(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	for _, tc := range []struct {
+		name string
+		a    Atlas
+		want bool
+	}{{"unset", Atlas{}, true}, {"true", Atlas{AgentRecords: &on}, true}, {"false", Atlas{AgentRecords: &off}, false}} {
+		if got := tc.a.AgentsRecord(); got != tc.want {
+			t.Errorf("agent_records %s: agents record = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // THE ATLAS'S HISTORY IS KEPT BETWEEN A QUARTER OF A YEAR AND TEN YEARS, a year
 // and a month when the company says nothing, as the access history's is.
 //

@@ -23,6 +23,7 @@ type Builder struct {
 	claims []atlas.Claim
 	seen   map[slotKey]bool
 	held   []derive.Withheld
+	unread []Unread
 }
 
 // slotKey is one entry's one slot: a read holds each at most once.
@@ -85,16 +86,28 @@ func (b *Builder) reference(where, raw string) bool {
 	return false
 }
 
-// Ref is the entry key names and its exists claim; false where the key is
-// withheld. The key is held to the grammar as a recorded one ([atlas.RecordedRef]),
-// so a key shaped like a credential is refused as it was written.
-func (b *Builder) Ref(where string, k atlas.Kind, key string) (atlas.Ref, bool) {
+// Names is the entry key names, with no claim that it exists: what a source
+// says something about without holding it, as a monitor names the service it
+// watches. False where the key is withheld. The key is held to the grammar as
+// a recorded one ([atlas.RecordedRef]), so a key shaped like a credential is
+// refused as it was written.
+func (b *Builder) Names(where string, k atlas.Kind, key string) (atlas.Ref, bool) {
 	if b.reference(where, key) {
 		return atlas.Ref{}, false
 	}
 	r, err := atlas.RecordedRef(k, key)
 	if err != nil {
 		b.Withhold(where, err)
+		return atlas.Ref{}, false
+	}
+	return r, true
+}
+
+// Ref is the entry key names and its exists claim, for an entry the vendor
+// itself holds; false where the key is withheld.
+func (b *Builder) Ref(where string, k atlas.Kind, key string) (atlas.Ref, bool) {
+	r, ok := b.Names(where, k, key)
+	if !ok {
 		return atlas.Ref{}, false
 	}
 	c, err := atlas.Exists(r, b.src, b.at)
@@ -117,7 +130,10 @@ func (b *Builder) Relates(where string, from atlas.Ref, rel atlas.Relation, to a
 	b.add(where, c, err)
 }
 
+// Unread records one part of the vendor the credential may not read.
+func (b *Builder) Unread(u Unread) { b.unread = append(b.unread, u) }
+
 // Read is what the builder gathered.
 func (b *Builder) Read() Read {
-	return Read{Claims: b.claims, Withheld: b.held, Calls: b.calls}
+	return Read{Claims: b.claims, Withheld: b.held, Calls: b.calls, Unread: b.unread}
 }

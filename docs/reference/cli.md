@@ -2343,13 +2343,16 @@ first node on that build replays it.
 The node takes the claim on the entry's going that its replay and the alarm's
 expiry count take, so no node counts a discarded entry as a wake the retention
 lost; it logs `changefeed_dead_letter_discarded` naming who pressed it and
-counts `crewlet.tracker.feed.dead_letter_discarded`. An id no feed holds — never
-an entry, one already replayed, expired or discarded, or a subscription's
-poison under another `dlq.` subject, which this never reaches — is refused as
-`no_dead_letter` and removes nothing. Where a feed could not be listed and no
-other holds the id, the node says so rather than "no such entry": run it again.
-A discard the node did not answer may have been made; `dead-letters` lists what
-the feeds still hold.
+counts `crewlet.tracker.feed.dead_letter_discarded`. A keep of the same record
+that lands within fifteen minutes of its entry — a node whose keep was still
+crossing a link — stores nothing while the broker runs; after a broker restart
+it is stored and listed again, and has to be discarded again. An id no feed
+holds — never an entry, one already replayed, expired or discarded, or a
+subscription's poison under another `dlq.` subject, which this never reaches —
+is refused as `no_dead_letter` and removes nothing. Where a feed could not be
+listed and no other holds the id, the node says so rather than "no such entry":
+run it again. A discard the node did not answer may have been made;
+`dead-letters` lists what the feeds still hold.
 
 ## `crewlet doctor`
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -768,6 +769,51 @@ func TestALeaseTTLBelowTheFloorIsRefused(t *testing.T) {
 	if desc := field.Tag.Get("desc"); !strings.Contains(desc, fmt.Sprintf("at least %v", floor)) {
 		t.Errorf("the schema describes lease_ttl_seconds as %q, which does not state the "+
 			"%v-second floor the validator holds it to", desc, floor)
+	}
+}
+
+// AN EVENT RETENTION BELOW THE DEAD LETTERS' WINDOW IS REFUSED, NAMING THE
+// FIELD AND THE WINDOW.
+//
+// The dead letters are kept by the event stream's age, and a keep of one thing
+// is collapsed for the dead-letter window (queue.DeadLetterWindow), which the
+// broker refuses a stream's age to be shorter than: a retention below it
+// loaded here and failed the boot on the broker's own words, naming neither
+// this field nor the window. Zero is still the default rather than a setting,
+// and the schema's description states the minimum the validator holds.
+//
+// Mutation: drop the window from Stream.validate's retention check, and every
+// value below it loads.
+func TestAnEventRetentionBelowTheDeadLettersWindowIsRefused(t *testing.T) {
+	t.Parallel()
+	least := queue.DeadLetterWindow.Hours()
+	for _, below := range []float64{-1, 0.001, 0.1, least - 0.001} {
+		_, err := ParseRunnableBootstrap([]byte(fmt.Sprintf(
+			"stream:\n  store_dir: %s\n  event_retention_hours: %v\n", TestStoreDir, below)),
+			NewResolver(MapSource{}))
+		if !errors.Is(err, ErrOutOfRange) {
+			t.Errorf("event_retention_hours: %v = %v, want it refused as out of range", below, err)
+			continue
+		}
+		problems := Problems(err)
+		if len(problems) != 1 || problems[0].Path != "stream.event_retention_hours" ||
+			!strings.Contains(problems[0].Message, fmt.Sprintf("at least %v", least)) {
+			t.Errorf("event_retention_hours: %v refused with %+v, want one problem at "+
+				"stream.event_retention_hours naming the %v-hour minimum", below, problems, least)
+		}
+	}
+	for _, ok := range []float64{0, least, 1, 720} {
+		cfg, err := ParseRunnableBootstrap([]byte(fmt.Sprintf(
+			"stream:\n  store_dir: %s\n  event_retention_hours: %v\n", TestStoreDir, ok)),
+			NewResolver(MapSource{}))
+		if err != nil || cfg.Stream.EventRetentionHours != ok {
+			t.Errorf("event_retention_hours: %v = (%v, %v), want it loaded as written", ok, cfg, err)
+		}
+	}
+	field, _ := reflect.TypeFor[Stream]().FieldByName("EventRetentionHours")
+	if desc := field.Tag.Get("desc"); !strings.Contains(desc, fmt.Sprintf("at least %v", least)) {
+		t.Errorf("the schema describes event_retention_hours as %q, which does not state the "+
+			"%v-hour minimum the validator holds it to", desc, least)
 	}
 }
 

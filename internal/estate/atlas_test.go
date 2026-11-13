@@ -36,7 +36,7 @@ func atlasRouter(t *testing.T) (*Router, *recordingAsker) {
 // atlas read through the reader facade and every atlas write through the writer
 // facade, and nothing else through either.
 //
-// Mutation: point AtlasReads.History at opAtlasEntry, or AtlasWrites.PurgeEntry
+// Mutation: point AtlasReads.Log at opAtlasEntry, or AtlasWrites.PurgeEntry
 // at opAtlasPurgeValue, and a facade's operations lack one.
 func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 	t.Parallel()
@@ -85,7 +85,11 @@ func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 type atlasDesk struct {
 	mu    sync.Mutex
 	calls []string
+	asked []string
 }
+
+// atlasLineAt is when the desk's one log line was recorded.
+var atlasLineAt = time.Date(2026, 11, 12, 8, 30, 0, 0, time.UTC)
 
 func (d *atlasDesk) For(context.Context, string) (Backend, bool) {
 	return Backend{Atlas: AtlasHalf{Reader: d, Writer: d}}, true
@@ -110,6 +114,15 @@ func (d *atlasDesk) Record(_ context.Context, c atlasdomain.Call, claim atlas.Cl
 		claim.Value.Text, ifMatch), c)
 }
 
+func (d *atlasDesk) Observe(_ context.Context, c atlasdomain.Call, claim atlas.Claim,
+	seen atlasdomain.Observation) (statelog.Result, error) {
+	if seen.Turn == "" {
+		return statelog.Result{}, fmt.Errorf("%w: no turn", atlasdomain.ErrInvalid)
+	}
+	return d.wrote(fmt.Sprintf("observe:%s:%s:%s=%s:%s:%s", claim.Subject, claim.Facet.Kind, claim.Facet.Fact,
+		claim.Value.Text, seen.Turn, seen.Evidence), c)
+}
+
 func (d *atlasDesk) PurgeEntry(_ context.Context, c atlasdomain.Call, ref atlas.Ref) (statelog.Result, error) {
 	return d.wrote("purge_entry:"+ref.String(), c)
 }
@@ -129,9 +142,21 @@ func (d *atlasDesk) Entry(context.Context, string, statelog.Freshness) (atlasdom
 	return atlasdomain.EntryRow{}, false, nil
 }
 
-func (d *atlasDesk) History(context.Context, string, string, int,
-	statelog.Freshness) (atlasdomain.HistoryPage, error) {
-	return atlasdomain.HistoryPage{}, nil
+func (d *atlasDesk) Log(_ context.Context, q atlasdomain.LogQuery) (atlasdomain.LogPage, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.asked = append(d.asked, fmt.Sprintf("log:%v:%s:%d:%s", q.Entries, q.Cursor, q.Limit, q.Fresh.Level))
+	return atlasdomain.LogPage{Lines: []atlasdomain.LogLine{{ID: "line", Entry: "entry", At: atlasLineAt,
+		Withdrawn: true}}, Next: "below", Complete: true}, nil
+}
+
+func (d *atlasDesk) Activity(_ context.Context, since time.Time,
+	fresh statelog.Freshness) (atlasdomain.Activity, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.asked = append(d.asked, fmt.Sprintf("activity:%s:%s", since.Format(time.RFC3339), fresh.Level))
+	return atlasdomain.Activity{Days: []atlasdomain.ActivityDay{{Entry: "entry", Target: "other", Day: since,
+		Lines: 3}}, Complete: true}, nil
 }
 
 func (d *atlasDesk) Purges(context.Context, statelog.Freshness) ([]atlasdomain.PurgeRow, error) {
@@ -200,5 +225,102 @@ func TestAPersonsAtlasWriteFromANodeWithoutDataCrossesWhole(t *testing.T) {
 	}
 	if !slices.Equal(desk.calls, want) {
 		t.Errorf("the data node ran %v, want %v", desk.calls, want)
+	}
+}
+
+// AN AGENT'S ATLAS RECORD FROM A NODE HOLDING NO DATA IS A DATA NODE'S WRITE
+// (ADR-0132): the claim, the turn it was made in, the evidence the asking node
+// derived, the seat and the operation cross whole, and a refusal keeps its
+// identity. A seat is held wherever its lease lands, a leaf without data
+// included, and only that node holds what its turn's calls answered.
+//
+// Mutation: drop Seen from atlasObserveArgs and the record arrives naming no
+// turn, which the data node refuses.
+func TestAnAgentsAtlasRecordFromANodeWithoutDataCrossesWhole(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	desk := &atlasDesk{}
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
+	w := f.client.AtlasWrites()
+	sre := atlasdomain.Call{By: iam.Actor{Name: "sre", Kind: iam.ActorAgent},
+		OpID: statelog.NewOpID(time.Now(), "atlas")}
+	at := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	db := atlas.MustRef(atlas.KindDatastore, "web-1/orders-db")
+	claim, err := atlas.Says(db, atlas.FactEngine, "postgres", atlas.AgentSource("sre", "run-1", atlas.EvidenceNone), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := atlasdomain.Observation{Turn: "run-1", Evidence: atlas.EvidenceCall}
+	if res, err := w.Observe(t.Context(), sre, claim, seen); err != nil || res.Outcome != statelog.OutcomeApplied ||
+		res.OpID != sre.OpID {
+		t.Errorf("observe = (%+v, %v)", res, err)
+	}
+	if _, err := w.Observe(t.Context(), sre, claim, atlasdomain.Observation{}); !errors.Is(err, atlasdomain.ErrInvalid) {
+		t.Errorf("a record naming no turn crossed as %v", err)
+	}
+	desk.mu.Lock()
+	defer desk.mu.Unlock()
+	want := []string{"observe:datastore:web-1/orders-db:fact:engine=postgres:run-1:call|sre|agent|" + sre.OpID}
+	if !slices.Equal(desk.calls, want) {
+		t.Errorf("the data node ran %v, want %v", desk.calls, want)
+	}
+}
+
+// THE ATLAS LOG READ FROM A NODE HOLDING NO DATA IS A DATA NODE'S READ: the
+// page asked for (which entries, from which line, how many, how fresh) and the
+// window counted cross whole, and the lines, the next page and the counts
+// cross back as the data node answered them.
+//
+// Mutation: drop Cursor from the query the operation carries, or Reader from
+// the half the serving node answers with, and the case goes red.
+func TestTheAtlasLogReadFromANodeWithoutDataCrossesWhole(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	desk := &atlasDesk{}
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
+	ctx := t.Context()
+	reads := f.client.AtlasReads()
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+
+	page, err := reads.Log(ctx, atlasdomain.LogQuery{Entries: []string{"a", "b"}, Cursor: "from", Limit: 25,
+		Fresh: stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Lines) != 1 || page.Next != "below" || !page.Complete {
+		t.Fatalf("the page crossed back as %+v", page)
+	}
+	if l := page.Lines[0]; l.ID != "line" || l.Entry != "entry" || !l.At.Equal(atlasLineAt) || !l.Withdrawn {
+		t.Errorf("the line crossed back as %+v", l)
+	}
+	since := atlasLineAt.Add(-14 * 24 * time.Hour)
+	activity, err := reads.Activity(ctx, since, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (atlasdomain.ActivityDay{Entry: "entry", Target: "other", Day: since, Lines: 3}); !activity.Complete ||
+		len(activity.Days) != 1 || activity.Days[0] != want {
+		t.Errorf("the counts crossed back as %+v", activity)
+	}
+
+	desk.mu.Lock()
+	defer desk.mu.Unlock()
+	want := []string{"log:[a b]:from:25:stale", "activity:" + since.Format(time.RFC3339) + ":stale"}
+	if !slices.Equal(desk.asked, want) {
+		t.Errorf("the data node was asked %v, want %v", desk.asked, want)
 	}
 }

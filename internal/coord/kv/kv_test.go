@@ -80,14 +80,15 @@ var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 	t.Helper()
-	return openStoreVia(t, jsOf(nc), ttl)
+	return openStoreVia(t, jsOf(nc), InProcess, ttl)
 }
 
-// openStoreVia is [openStore] over a client in any API.
-func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *Store {
+// openStoreVia is [openStore] over a client in any API, which reaches the
+// buckets as reach says.
+func openStoreVia(t *testing.T, client jetstream.JetStream, reach Reach, ttl time.Duration) *Store {
 	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix})
+	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix, Reach: reach})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestSharedContract(t *testing.T) {
 		out := make([]coord.Backend, 3)
 		for i := range out {
 			s, err := Open(t.Context(), jsOf(nc), Config{
-				TTL: coordtest.LongTTL, BucketPrefix: prefix,
+				TTL: coordtest.LongTTL, BucketPrefix: prefix, Reach: InProcess,
 			})
 			if err != nil {
 				t.Fatalf("Open handle %d: %v", i, err)
@@ -306,19 +307,21 @@ func TestConfigIsValidated(t *testing.T) {
 		name string
 		cfg  Config
 	}{
-		{"no TTL", Config{}},
-		{"TTL below the broker's floor", Config{TTL: 50 * time.Millisecond}},
-		{"negative TTL", Config{TTL: -time.Second}},
-		{"bucket prefix with a dot", Config{TTL: time.Minute, BucketPrefix: "a.b"}},
-		{"bucket prefix with a colon", Config{TTL: time.Minute, BucketPrefix: "a:b"}},
-		{"too many replicas", Config{TTL: time.Minute, Replicas: 9}},
+		{"no TTL", Config{Reach: InProcess}},
+		{"TTL below the broker's floor", Config{TTL: 50 * time.Millisecond, Reach: InProcess}},
+		{"negative TTL", Config{TTL: -time.Second, Reach: InProcess}},
+		{"bucket prefix with a dot", Config{TTL: time.Minute, BucketPrefix: "a.b", Reach: InProcess}},
+		{"bucket prefix with a colon", Config{TTL: time.Minute, BucketPrefix: "a:b", Reach: InProcess}},
+		{"too many replicas", Config{TTL: time.Minute, Replicas: 9, Reach: InProcess}},
+		{"no reach", Config{TTL: time.Minute}},
+		{"a reach nothing knows", Config{TTL: time.Minute, Reach: "nearby"}},
 	}
 	for _, c := range cases {
 		if _, err := Open(context.Background(), jsOf(nc), c.cfg); err == nil {
 			t.Fatalf("Open with %s was accepted", c.name)
 		}
 	}
-	if _, err := Open(context.Background(), nil, Config{TTL: time.Minute}); err == nil {
+	if _, err := Open(context.Background(), nil, Config{TTL: time.Minute, Reach: InProcess}); err == nil {
 		t.Fatal("Open with no connection was accepted")
 	}
 }
@@ -579,6 +582,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		Reach:         InProcess,
 		MaxRateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
@@ -800,7 +804,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	const inForce = 90 * time.Second
-	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix})
+	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
@@ -811,7 +815,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
 	// holding possibly-different Tier A files actually do.
-	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
 	}
@@ -857,13 +861,13 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
 	// deployment or an early cluster actually has.
-	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
 	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
 	// one replica, and no node rewrites them.
-	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3, Reach: InProcess})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
 			"coordination and reported itself healthy — the leases, the " +
@@ -884,7 +888,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
 	// node against a replicated fleet's buckets is not locked out.
-	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
 	}
@@ -1273,6 +1277,7 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		Reach:         InProcess,
 		MaxRateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,

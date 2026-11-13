@@ -435,6 +435,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// name something else by the time it resumes, and one lookup a
 			// segment is the whole cost (see [turnctx.Lookups]).
 			Lookups: turnctx.NewLookups(),
+			// AND WHAT ITS CALLS ANSWERED, empty for every segment too: a
+			// record in the atlas cites a call this segment made itself.
+			Seen: turnctx.NewSeen(),
 			// The turn's deadline, for the runs it launches to carry.
 			Deadline: t.deadline,
 			// The seat and the ORG both come off the pinned epoch, so a

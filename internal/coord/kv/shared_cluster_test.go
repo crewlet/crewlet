@@ -52,7 +52,7 @@ func TestSharedContractOnACluster(t *testing.T) {
 	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
 		cfg := Config{
 			TTL: coordtest.LongTTL, BucketPrefix: fmt.Sprintf("s%d", bucketSeq.Add(1)),
-			Clustered: true, Replicas: 3,
+			Clustered: true, Replicas: 3, Reach: InProcess,
 		}
 		first, err := Open(t.Context(), client(t, 0), cfg)
 		if err != nil {
@@ -124,9 +124,9 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		}
 		return client
 	}
-	cfg := Config{TTL: coordtest.LongTTL, BucketPrefix: "cut", Clustered: true, Replicas: 3}
+	cfg := Config{TTL: coordtest.LongTTL, BucketPrefix: "cut", Clustered: true, Replicas: 3, Reach: InProcess}
 	fleetCfg := FleetConfig{
-		BucketPrefix: "cutfleet", Clustered: true, Replicas: 3,
+		BucketPrefix: "cutfleet", Clustered: true, Replicas: 3, Reach: InProcess,
 		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, RebaseRetention: 10 * time.Minute,

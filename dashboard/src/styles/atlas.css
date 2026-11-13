@@ -10,23 +10,238 @@
   min-width: 0;
 }
 
-/* THE MAP FILLS THE SCREEN: the shell hands the height over (`useFillScreen`),
-   and the canvas takes what is left under the toolbar and the coverage line. */
-.atlas-screen--fill {
-  flex: 1 1 auto;
-  min-height: 0;
+/* THE BAND: four tiles. On a wide page they are one row, the fixed three at
+   the width their words need and "Needs attention now" taking the rest, so
+   its two cards say a name and a reason on one line each. A narrower page
+   stands them in two columns with that tile across both, and a phone in one. */
+.atlas-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "entries" "attention" "week" "sources";
+  gap: var(--spacing-3);
+  min-width: 0;
 }
+.atlas-band__tile {
+  min-width: 0;
+}
+.atlas-band__tile--entries {
+  grid-area: entries;
+}
+.atlas-band__tile--attention {
+  grid-area: attention;
+}
+.atlas-band__tile--week {
+  grid-area: week;
+}
+.atlas-band__tile--sources {
+  grid-area: sources;
+}
+@container page (width >= 36rem) {
+  .atlas-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: "entries week" "attention attention" "sources sources";
+  }
+}
+@container page (width >= 68rem) {
+  .atlas-band {
+    grid-template-columns: 16.5rem minmax(0, 1fr) 10.75rem 11.5rem;
+    grid-template-areas: "entries attention week sources";
+  }
+}
+/* BESIDE A SHEET the page is a third narrower: the band keeps to one row of
+   its first two tiles, so the map under it keeps its height. The week and
+   the sources come back when the sheet closes. */
+@container page (width >= 44rem) {
+  .atlas-band[data-beside="sheet"] {
+    grid-template-columns: 16.5rem minmax(0, 1fr);
+    grid-template-areas: "entries attention";
+  }
+  .atlas-band[data-beside="sheet"] .atlas-band__tile--week,
+  .atlas-band[data-beside="sheet"] .atlas-band__tile--sources {
+    display: none;
+  }
+}
+.atlas-band__ring {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.atlas-band__words {
+  display: grid;
+  gap: var(--spacing-2);
+  align-content: start;
+  min-width: 0;
+}
+.atlas-band__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--spacing-3);
+}
+.atlas-band__attention {
+  display: grid;
+  gap: var(--spacing-2);
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+}
+.atlas-band__entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-3);
+  text-align: start;
+}
+.atlas-band__entry-words {
+  display: grid;
+  min-width: 0;
+}
+.atlas-band__name {
+  font-weight: var(--font-weight-semibold);
+}
+.atlas-band__figure {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+.atlas-band__marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* THE TOOLBAR IS THE SEARCH AND ONE FILTER CONTROL. The search takes the
+   width a name needs and gives it up on a phone. */
+.atlas-search {
+  flex: 0 1 26rem;
+  min-width: 12rem;
+}
+/* THE FILTER PANEL: the menus two abreast where there is room, so the whole
+   panel stands inside the popover's height, and one abreast on a phone. */
+.atlas-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--spacing-3);
+  box-sizing: border-box;
+  inline-size: min(23.5rem, 82vw);
+  padding: var(--spacing-3);
+}
+.atlas-filters__row {
+  display: grid;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.atlas-filters__foot {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+.atlas-filter-count {
+  display: inline-flex;
+  margin-inline-start: var(--spacing-2);
+}
+.atlas-chosen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+/* THE MAP TAKES A SHARE OF THE WINDOW and the catalogue follows under it, so
+   the page scrolls as one and the picture never pushes the rows off a laptop. */
 .atlas-map {
   position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  height: min(34rem, 70vh);
   min-height: 22rem;
   min-width: 0;
 }
 .atlas-map > * {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* THE DOCK AND THE CARD BESIDE AN ENTRY: the map's own surfaces, laid out here. */
+.atlas-dock {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+.atlas-dock__words,
+.atlas-hover__words {
+  display: grid;
+  min-width: 0;
+}
+.atlas-hover {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.atlas-hover__words {
+  gap: var(--spacing-1);
+}
+
+.atlas-catalogue {
+  display: grid;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.atlas-catalogue__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-3);
+}
+.atlas-chips {
+  display: inline-flex;
+  gap: var(--spacing-1);
+}
+.atlas-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.atlas-activity__line {
+  inline-size: 4.5rem;
+}
+
+/* AN ENTRY AMONG ITS NEIGHBOURS: a still diagram as tall as the rows of
+   clusters it draws, each row a card and a half with its outline. */
+.atlas-near {
+  display: flex;
+  flex-direction: column;
+  block-size: 11.5rem;
+  min-width: 0;
+}
+.atlas-near > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.atlas-near[data-rows="2"] {
+  block-size: 17rem;
+}
+.atlas-near[data-rows="3"] {
+  block-size: 22.5rem;
+}
+.atlas-near[data-rows="4"] {
+  block-size: 28rem;
+}
+.atlas-near[data-rows="5"] {
+  block-size: 33.5rem;
+}
+
+.atlas-change {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
 }
 
 .atlas-vendor,
@@ -45,6 +260,21 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  min-width: 0;
+}
+
+/* AN ENTRY'S HEADER: its disc, then the frame's header beside it. The disc's
+   ring and badge stand outside its box, so the header keeps room for them. */
+.atlas-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding-block-start: var(--spacing-2);
+  padding-inline-start: var(--spacing-1);
+  min-width: 0;
+}
+.atlas-head > :last-child {
+  flex: 1 1 auto;
   min-width: 0;
 }
 

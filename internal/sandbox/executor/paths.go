@@ -33,6 +33,35 @@
 // large degrades only itself. See stream.go for the reasons, and what each
 // used to cost.
 //
+// # A Claude Code thread is read a whole line at a time
+//
+// A reader that decides something from what a Claude Code session recorded,
+// rather than showing it to a person, reads the session's threads through one
+// layer (claudethread.go): a member named exactly ([claudeMainThread],
+// [claudeSubagentThread], [claudeSubagentMeta], [claudePrecompact], and
+// [claudeMemberOf] back), never by [claudeThread], which takes any session's
+// file for the main thread; a whole line at a time through the scrub's own
+// [readLine] at the scrub's own bounds, a last piece with no break never a
+// line, and a line or a member past its bound the end of the reading, never a
+// skip; every whole line decoded into its head before anything reads it, with
+// no keyword prefilter, every value as the harness's own JSON.parse reads it,
+// under one set of options ([threadDecoding]: every key exactly as written,
+// never matched by case as encoding/json matches a struct's fields, a key
+// written twice by its last value, and a string's invalid UTF-8 or lone
+// surrogate as the replacement character, never refused), and `parentUuid`
+// handed over as written, since the harness's bookkeeping carries none and only
+// a root carries null; a list a box wrote read an element at a time
+// ([eachElement]), never decoded whole before its first element is checked,
+// and an object whose keys are open, as a map's are, a key at a time
+// ([eachKey]), never decoded into a map of every key first; a key only one
+// reader reads held to its type in that reader's accessor; and a hook's
+// firing handed out by [threadLine.Hook] alone, a call's id by
+// [threadMessage.Calls] alone, since a PostToolUse hook's firing carries the id
+// of the call it followed. The take's context meter (measure.go) decides
+// nothing of what a session recorded and reads the main thread outside the
+// layer: one figure for the launch floor, best effort, which counts nothing
+// from a line it cannot read.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts

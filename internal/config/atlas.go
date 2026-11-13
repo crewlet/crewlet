@@ -4,8 +4,9 @@ import "time"
 
 // Atlas is the company's policy over its atlas, the map and catalogue of what
 // it runs on: how long what people record in it is kept as history
-// (internal/atlasdomain), and how often each connected integration's vendor
-// is read whole for it (internal/atlas/collect). The atlas itself is never
+// (internal/atlasdomain), how often each connected integration's vendor is
+// read whole for it (internal/atlas/collect), and whether its agents record
+// what their own tool calls show them (ADR-0132). The atlas itself is never
 // declared here: what the company records in it is edited on the atlas, and
 // what this document already declares is read from it whole.
 type Atlas struct {
@@ -21,7 +22,16 @@ type Atlas struct {
 	// integrations' check interval refuses one: a value typed in seconds by
 	// somebody who meant minutes should say so.
 	RefreshIntervalSeconds int `yaml:"refresh_interval_seconds,omitempty" json:"refresh_interval_seconds,omitempty" js:"min=0" desc:"How often each connected integration is read whole for the atlas, in seconds. 0 takes the default of 3600; the floor is 300."`
+
+	// AgentRecords is whether the company's agents record in the atlas what
+	// a tool call of their own turn showed them. A pointer because unset is
+	// on: the switch exists to turn it off, and false must stay false.
+	AgentRecords *bool `yaml:"agent_records,omitempty" json:"agent_records,omitempty" desc:"Whether agents record in the atlas what a tool call of their own turn showed them, and dispute what it holds (default true). false stops both; what they recorded before stays until a person retires it."`
 }
+
+// AgentsRecord reports whether the company's agents record in its atlas: on
+// unless the company turned it off.
+func (a Atlas) AgentsRecord() bool { return a.AgentRecords == nil || *a.AgentRecords }
 
 // The atlas refresh interval's default and floor.
 const (

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -49,11 +50,11 @@ func TestADeadLetterPastTheRetentionIsGone(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	subject := topics.DeadLetter("changefeed.work", "crewlet-tracker-feed")
-	if err := q.KeepDeadLetter(ctx, subject, []byte("old"), []byte("old frame")); err != nil {
+	if _, err := q.KeepDeadLetter(ctx, subject, "old", []byte("old"), []byte("old frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	clk.step(deadLetterRetention - time.Second)
-	if err := q.KeepDeadLetter(ctx, subject, []byte("young"), []byte("young frame")); err != nil {
+	if _, err := q.KeepDeadLetter(ctx, subject, "young", []byte("young"), []byte("young frame")); err != nil {
 		t.Fatalf("keep: %v", err)
 	}
 	kept, err := q.DeadLettersOn(ctx, subject)
@@ -81,5 +82,55 @@ func TestADeadLetterPastTheRetentionIsGone(t *testing.T) {
 	if frame, held, err := q.DeadLetterFrame(ctx, subject, old); err != nil || held {
 		t.Errorf("at its retention the old entry's frame reads %q, held %v (%v): want it gone",
 			frame, held, err)
+	}
+}
+
+// A KEEP OF ONE IDENTITY IS COLLAPSED FOR THE WINDOW, ON THE BROKER'S CLOCK,
+// AND NOT A MOMENT PAST IT — as the broker this twin stands for remembers a
+// message id for its dead-letter stream's duplicate window and then lets it go.
+//
+// queuetest holds every backend to the collapse inside the window; what this
+// holds is the window itself, which no suite can wait out: a twin that never
+// let an identity go would answer "already kept" to a keep the broker stores,
+// and a reader would settle a thing it never kept; one that let it go early
+// would keep twice what the broker keeps once.
+//
+// Mutation: compare against no window, and the keep past it is collapsed; let
+// an identity go a beat early, and the keep inside it is kept again.
+func TestAKeepOfOneIdentityIsCollapsedForTheWindowAndNoLonger(t *testing.T) {
+	t.Parallel()
+	clk := &steppedClock{at: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)}
+	q := New()
+	q.broker.mu.Lock()
+	q.broker.now = clk.now
+	q.broker.mu.Unlock()
+	ctx := context.Background()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	subject := topics.DeadLetter("changefeed.work", "crewlet-tracker-feed")
+	keep := func(when string) bool {
+		t.Helper()
+		already, err := q.KeepDeadLetter(ctx, subject, "the record", []byte(when), []byte("frame"))
+		if err != nil {
+			t.Fatalf("keep %s: %v", when, err)
+		}
+		return already
+	}
+	if keep("first") {
+		t.Fatal("the first keep of an identity was answered already kept")
+	}
+	clk.step(queue.DeadLetterWindow - time.Nanosecond)
+	if !keep("inside") {
+		t.Error("a keep of the same identity a nanosecond inside the window kept an entry")
+	}
+	clk.step(time.Nanosecond)
+	if keep("past") {
+		t.Error("a keep of the same identity at the window's end was answered already kept")
+	}
+	kept, err := q.DeadLettersOn(ctx, subject)
+	if err != nil || len(kept) != 2 || string(kept[0].Header) != "first" || string(kept[1].Header) != "past" {
+		t.Errorf("the subject lists %v (%v), want the first keep's entry and the one past the "+
+			"window", kept, err)
 	}
 }

@@ -1097,6 +1097,47 @@ large message reaches it, until the limit is raised again, or leaves them
 running and refusing every large write. Neither is a broker that carries what
 they send, which is the reason not to lower it.
 
+**No duplicate-window limit below 15 minutes, on any server.** The engine's
+dead letters, `CREWLET_DLQ`, declare a duplicate window of 15 minutes: a dead
+letter is kept under an identity of its own, and the window is what makes a
+second keep of the same one store nothing — a node handed the record while
+another's keep of it was still crossing a slow link — for as long as the
+longest keep at the engine's slowest link takes. nats-server refuses a stream
+whose window is above its own `jetstream { limits { duplicate_window } }`, so
+a server that sets one below 15 minutes refuses the stream when the node
+first provisions it, and the boot fails. The server answers every invalid
+stream configuration with the same code, so the refusal names the window as
+the likely cause, beside the server's own words:
+
+```text
+engine: stream: ensure stream CREWLET_DLQ: nats: API error: code=500 err_code=10052 description=duplicates window can not be larger then server limit of 10m0s; CREWLET_DLQ declares a duplicate window of 15m0s, and a server whose JetStream limits cap the window below that refuses the stream as an invalid configuration, so the likely cause is jetstream { limits { duplicate_window } } set below 15m0s: raise it to 15m0s or more, or remove it, in the configuration of every server stream.url reaches
+```
+
+Raise the limit to `15m` or more, or remove it, on every server `stream.url`
+reaches. A server that sets none carries the window as it is.
+
+**A large write across a slow link is given its time by the client too.** The
+NATS client writes a message whole, in one socket write, and gives the
+connection up when that write does not finish inside its write deadline. Left
+at the client's default of a minute, that cut a write of more than about
+2 MiB across a link at the engine's floor (a mebibyte in thirty seconds), and
+broke the connection under every other request riding it, the node's leases
+among them. So the engine sets the deadline to the largest write the client
+makes — a message at 8 MiB behind as much as the client buffers, the 8 MiB it
+holds while reconnecting included — at that floor: about eight minutes. What
+that costs is on a connection that dies in the middle of a large write: the
+client gives it up only when the deadline passes, and nothing else moves on
+the connection meanwhile. A small write's own socket write never runs into
+it. But a caller's own deadline is not checked while its request waits for
+the connection, which a large write holds for its whole socket write, nor
+while its own write is in the socket: a caller, a small write or a lease
+renewal among them, is held behind every large write ahead of it, each for
+up to that deadline of about eight minutes (the client's minute cut the write
+and broke the connection), and then for its own. Bounding that wait needs the
+write windowed, which
+[crewlet/crewlet#1035](https://github.com/crewlet/crewlet/issues/1035)
+tracks.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it

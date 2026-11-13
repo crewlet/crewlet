@@ -19,7 +19,7 @@ import (
 func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	cfg := EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1))}
+	cfg := EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess}
 	process := func() *memory.Backend {
 		t.Helper()
 		counter, err := OpenEpochs(t.Context(), jsOf(nc), cfg)
@@ -61,7 +61,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	// AND A FLEET CARRIES ON FROM IT: the KV lease store mints from the same
 	// bucket, so a move from local coordination to a fleet keeps the tokens
 	// the single node's runs were stamped with below the fleet's.
-	store, err := Open(t.Context(), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: cfg.BucketPrefix})
+	store, err := Open(t.Context(), jsOf(nc), Config{TTL: time.Minute, BucketPrefix: cfg.BucketPrefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
-		counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1))})
+		counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
 		if err != nil {
 			t.Fatalf("OpenEpochs: %v", err)
 		}
@@ -92,7 +92,7 @@ func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 func TestAFloorRaisesTheCounterAndNeverLowersIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1))})
+	counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
 	if err != nil {
 		t.Fatalf("OpenEpochs: %v", err)
 	}

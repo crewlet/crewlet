@@ -48,7 +48,7 @@ func TestSixtyFourFlushesForOnePersonOnAReplicatedBucketAllLand(t *testing.T) {
 		t.Fatalf("client: %v", err)
 	}
 	f, err := OpenFleet(ctx, client, FleetConfig{
-		BucketPrefix: "chatreadrace", Clustered: true, Replicas: 3,
+		BucketPrefix: "chatreadrace", Clustered: true, Replicas: 3, Reach: InProcess,
 		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute,
