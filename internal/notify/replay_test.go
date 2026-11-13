@@ -591,14 +591,32 @@ func (q refusingWakes) Publish(ctx context.Context, topic string, ev *events.Eve
 type windowValve struct {
 	mu     sync.Mutex
 	counts map[string]int
+	// admitted is how many asks the valve admitted in each window, any
+	// bucket's.
+	admitted map[time.Time]int
 }
 
 func (v *windowValve) Allow(_ context.Context, bucket string, limit int, now time.Time) (bool, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	key := bucket + "@" + now.Truncate(time.Second).String()
+	window := now.Truncate(time.Second)
+	key := bucket + "@" + window.String()
 	v.counts[key]++
-	return v.counts[key] <= limit, nil
+	if v.counts[key] > limit {
+		return false, nil
+	}
+	if v.admitted == nil {
+		v.admitted = map[time.Time]int{}
+	}
+	v.admitted[window]++
+	return true, nil
+}
+
+// admittedIn is how many asks the valve admitted in now's window.
+func (v *windowValve) admittedIn(now time.Time) int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.admitted[now.Truncate(time.Second)]
 }
 
 func (v *windowValve) Reopens(now time.Time) time.Time {
@@ -659,16 +677,18 @@ func TestAReplayedBurstIsPacedByTheValveAndLosesNoWake(t *testing.T) {
 // been the window's only wake — while a refusal of a replayed copy costs
 // nothing, since the copy is kept. So the replay asks in a bucket of its own,
 // at the same limit. Three copies for a seat limited to one a second are paced
-// into three windows, and a live wake in the third is delivered beside the
-// third copy. In a bubble, so the windows pass on its clock.
+// into three windows; Start returns once that first pass has, still in the
+// third window, and a live wake asked then is delivered beside the third copy.
+// In a bubble, so the windows pass on its clock and on nothing else.
 //
 // Mutation: pace the replay in the live path's bucket, and the live wake is
 // skipped as rate limited.
 func TestAReplayNeverSpendsASlotTheLivePathWouldDropAWakeFor(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		valve := &windowValve{counts: map[string]int{}}
 		newer := newService(t, func(o *notify.Options, _ *harness) {
 			o.Parsers = []notify.Parser{versionedParser{reads: 2}}
-			o.Valve = &windowValve{counts: map[string]int{}}
+			o.Valve = valve
 			o.Now = nil
 		})
 		newer.limit = 1
@@ -678,8 +698,13 @@ func TestAReplayNeverSpendsASlotTheLivePathWouldDropAWakeFor(t *testing.T) {
 		}
 		start(t, newer.svc)
 
-		// THE THIRD WINDOW, the replay's last copy delivered in it.
-		time.Sleep(2*time.Second + 300*time.Millisecond)
+		// THE THIRD WINDOW, the replay's last copy admitted in it: the live
+		// wake must meet a window the replay spent a slot in, or a shared
+		// bucket would pass this case as well as the replays' own.
+		if valve.admittedIn(time.Now()) == 0 {
+			t.Fatalf("the replay admitted no copy in the window the live wake is asked in, " +
+				"so the case cannot tell the replays' bucket from the live path's")
+		}
 		if got := newer.svc.Handle(t.Context(), relayed("2", "op-live")); got.Outcome != queue.OutcomeAck {
 			t.Fatalf("the live delivery was answered %+v, want an ack", got)
 		}
