@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"testing"
 	"time"
 
@@ -86,19 +87,25 @@ func TestALeafOfAFleetReadsADeadLetterAtTheCeilingWholeAndSeesItsDropAtOnce(t *t
 // listedWhole is subject's listing once it holds want entries, read through q:
 // a listing reads whichever copy the broker places its consumer on, and a copy
 // may be a moment behind the keeps.
+//
+// AND A FLEET STILL SETTLING ITS ROUTES may answer the read with no responders,
+// which the queue reports as the broker unavailable: what every reader of the
+// dead letters asks again after, so this one does too, until its deadline. Any
+// other error fails the case at once.
 func listedWhole(ctx context.Context, t *testing.T, q *js.Queue, subject string, want int) []queue.Kept {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		kept, err := q.DeadLettersOn(ctx, subject)
-		if err != nil {
+		switch {
+		case errors.Is(err, queue.ErrUnavailable):
+		case err != nil:
 			t.Fatalf("DeadLettersOn: %v", err)
-		}
-		if len(kept) == want {
+		case len(kept) == want:
 			return kept
 		}
 		if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
-			t.Fatalf("the subject lists %d entries, want the %d kept", len(kept), want)
+			t.Fatalf("the subject lists %d entries (%v), want the %d kept", len(kept), err, want)
 		}
 		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
