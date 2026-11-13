@@ -764,9 +764,10 @@ func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
 // line holds: blanks between its tokens, inside the list as much as outside
 // it, and in its other values escapes, a line separator raw and escaped, a lone
 // surrogate's escape and a byte that is no UTF-8, each kept as written and
-// never decoded and written again. A line the rewrite hands the cut is one
-// JSON.stringify could have written, with no blank between its tokens; the
-// cut is held to every byte of any line all the same.
+// never decoded and written again. A line the rewrite hands the cut has no
+// blank between its tokens, and every key and string in it written as
+// [jsonRewrite.writeString] writes one; the cut is held to every byte of any
+// line all the same.
 //
 // Mutation: write the record again from a map, or the list again from its
 // kept definitions, and the blanks or the escapes go.

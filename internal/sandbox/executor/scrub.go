@@ -48,12 +48,16 @@ import (
 //     the last one of a job packed while it wrote — is scrubbed and redacted
 //     as text, the values in the forms a JSON string escapes them in among
 //     those it takes out. A RECORD KEEPS ITS LINE AND ITS KEYS: the transcript
-//     keeps every line, and each record every key in the order written, a
-//     key's text rewritten only where it held a secret, so Claude Code, which
-//     reads a session file past 5 MiB by where each line's keys sit, still
-//     finds every record where it did ([withoutBrokenDefinitions]); what a
-//     record can lose is a loaded tool definition named outside what the
-//     provider takes, cut out of its line as written.
+//     keeps every line, and each record every key in the order written, so
+//     Claude Code, which reads a session file past 5 MiB by where each line's
+//     keys sit, still finds every record where it did; what a record can lose
+//     is a loaded tool definition named outside what the provider takes, cut
+//     out of its line as written ([withoutBrokenDefinitions]). Every key and
+//     string is written again ([jsonRewrite.writeString]) as the text Go
+//     decodes it to, changed only where it held a secret: so an escape can
+//     come out spelled otherwise than its harness wrote it, and a lone
+//     surrogate's escape or a byte that is no UTF-8, each of which Go decodes
+//     to U+FFFD, comes out as U+FFFD.
 //   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
 //     string as it streams, the same way, a token at a time. A `.json` file
 //     the rewrite cannot read as one JSON value — a task file its harness was
@@ -247,9 +251,11 @@ func memberName(s scrubber, name string) string {
 	return redact.Secrets(s.apply(name))
 }
 
-// jsonEscaped is how a JSON string a harness writes holds s, without its
-// quotes: escaped as JSON.stringify escapes, which leaves `<`, `>` and `&` as
-// they are (plainjson).
+// jsonEscaped is s as plainjson writes it in a JSON string, without its
+// quotes: the form a JSON string a harness writes holds it in, escaped as
+// JSON.stringify escapes with `<`, `>` and `&` left as they are, for every s
+// but one holding U+2028 or U+2029, which plainjson writes as escapes and
+// JSON.stringify as they are.
 func jsonEscaped(s string) string {
 	out, err := plainjson.Marshal(s, "")
 	if err != nil {
@@ -1152,8 +1158,10 @@ func (j *jsonRewrite) credential() bool {
 	return f != nil && f.object && credentialKey(f.key)
 }
 
-// writeString writes s as a JSON string, escaped as JSON.stringify escapes
-// (plainjson).
+// writeString writes s as a JSON string, escaped as plainjson escapes: as
+// JSON.stringify does, but for U+2028 and U+2029, which it writes as escapes
+// where JSON.stringify writes them as they are. JSON.parse reads either back
+// as the same text.
 func (j *jsonRewrite) writeString(s string) error {
 	out, err := plainjson.Marshal(s, "")
 	if err != nil {
