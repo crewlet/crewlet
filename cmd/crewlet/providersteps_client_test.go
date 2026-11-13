@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -79,7 +80,7 @@ func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 			"in one bash block: give its \"Giving the company a model\" the steps verbatim")
 	}
 
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
 		filepath.Join(dir, "node.db")) + fixtureStream(dir) + fixtureKeyring
 	if err := os.WriteFile(filepath.Join(dir, defaultBootstrapPath), []byte(tierA), 0o600); err != nil {

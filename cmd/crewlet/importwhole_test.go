@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // wholeCompanyDoc is a company file whose org has a unit, a seat in it and a
@@ -37,7 +39,7 @@ units:
 // Mutation: store the document without its roles, or send the node a re-encoded
 // half, and the matching half fails.
 func TestImportStoresTheWholeCompany(t *testing.T) {
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	file := companyFile(t, dir, "company.yaml", func(string) string { return wholeCompanyDoc })
 

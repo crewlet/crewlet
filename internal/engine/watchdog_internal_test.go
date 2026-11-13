@@ -32,7 +32,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	t.Helper()
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &boot)
 	// No HTTP surface: this is about the seat host, and binding a port
 	// would make the test fight every other one in the package for it.

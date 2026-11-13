@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -137,7 +138,7 @@ func decideOn(t *testing.T, boot *config.Bootstrap, seed tierBSeed, cfg string,
 // carries none.
 func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	if plan, err := bootOn(t, cfg, tierBSeed{}, quiet()); err != nil ||
 		plan.company != nil || !plan.activatedAt.IsZero() {
@@ -171,7 +172,7 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 // booted a node on its store's company with no projects until the next apply.
 func TestRunBootsTheEngineOnTheRevisionItsStoreActivated(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	boot := &config.Bootstrap{}
 
@@ -234,7 +235,7 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 
 	t.Run("a -company file on an empty store", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		plan, err := bootOn(t, cfg, seedOf(file), quiet())
 		if err != nil {
 			t.Fatal(err)
@@ -248,7 +249,7 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 
 	t.Run("-import-company over a runnable revision", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		serveStored(t, cfg, runnableRevisionDoc)
 		plan, err := bootOn(t, cfg, overrideOf(file), quiet())
 		if err != nil {
@@ -262,7 +263,7 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 
 	t.Run("-import-company over a revision this build cannot run", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		serveStored(t, cfg, storedRevisionDoc)
 		plan, err := bootOn(t, cfg, overrideOf(file), quiet())
 		if err != nil || plan.company != nil || plan.act != seedImport {
@@ -314,7 +315,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 
 	t.Run("a different file", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		id := serveStored(t, cfg, runnableRevisionDoc)
 		var logged bytes.Buffer
 		plan, err := bootOn(t, cfg, seedOf(file), slog.New(slog.NewTextHandler(&logged, nil)))
@@ -338,7 +339,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 
 	t.Run("the stored revision itself", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		document, err := json.Marshal(file)
 		if err != nil {
 			t.Fatal(err)
@@ -360,7 +361,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 
 	t.Run("over a revision this build cannot run", func(t *testing.T) {
 		t.Parallel()
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		id := serveStored(t, cfg, storedRevisionDoc)
 		_, err := bootOn(t, cfg, seedOf(file), quiet())
 		if err == nil {
@@ -398,7 +399,7 @@ func TestAnUndecidedSeedIsRefused(t *testing.T) {
 // the newer build's field.
 func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	if _, errs, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
 		t.Fatalf("import: %v (%s)", err, errs)
@@ -466,7 +467,7 @@ units:
 // refusing the company it was running yesterday.
 func TestADuplicateUnitKeyBootsFromTheStoreAndIsRefusedFromAFile(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	serveStored(t, cfg, duplicateKeysRevision)
 
@@ -507,7 +508,7 @@ func TestADuplicateUnitKeyBootsFromTheStoreAndIsRefusedFromAFile(t *testing.T) {
 // boot) and never the moment of this boot.
 func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	serveStored(t, cfg, duplicateKeysRevision)
 	stored := bootActivation(t, cfg)
@@ -553,7 +554,7 @@ func TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation(t *testing.T
 		{"with a -company file beside it", storedRevisionDoc, "nonexistent",
 			seedOf(parse(t, companyYAML))},
 	} {
-		cfg := bootstrapForStore(t, t.TempDir())
+		cfg := bootstrapForStore(t, brokertest.TempDir(t))
 		id := serveStored(t, cfg, tc.document)
 
 		plan, err := bootOn(t, cfg, tc.seed, quiet())
@@ -577,7 +578,7 @@ func TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation(t *testing.T
 
 	// AN OFFER BUILT ON NO COMPANY — a newer build's offline import on a node
 	// that knew none — is published only where the fleet has none.
-	cfg := bootstrapForStore(t, t.TempDir())
+	cfg := bootstrapForStore(t, brokertest.TempDir(t))
 	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
 		t.Fatal(err)

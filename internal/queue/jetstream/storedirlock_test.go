@@ -25,7 +25,7 @@ import (
 // than per descriptor) and the second start succeeds.
 func TestASecondBrokerOnOneStoreDirectoryIsRefused(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	first, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("first start: %v", err)
@@ -57,7 +57,7 @@ func TestASecondBrokerOnOneStoreDirectoryIsRefused(t *testing.T) {
 // Mutation: drop the release from shutdown and the restart is refused.
 func TestAStoppedBrokerReleasesItsStoreDirectory(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	first, err := StartServer(t.Context(), Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("first start: %v", err)
@@ -83,7 +83,7 @@ func TestAStoppedBrokerReleasesItsStoreDirectory(t *testing.T) {
 // start on the directory is refused.
 func TestAFailedStartReleasesItsStoreDirectory(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if srv, err := StartServer(cancelled, Config{StoreDir: dir, StoreMaxBytes: brokertest.StoreMaxBytes}); err == nil {
@@ -106,7 +106,7 @@ func TestAFailedStartReleasesItsStoreDirectory(t *testing.T) {
 // reaches nats-server, which dies on the store instead of naming the setting.
 func TestAStoreDirectoryThatIsAFileIsRefusedNamingTheSetting(t *testing.T) {
 	t.Parallel()
-	store := filepath.Join(t.TempDir(), "store")
+	store := filepath.Join(brokertest.TempDir(t), "store")
 	if err := os.WriteFile(store, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}

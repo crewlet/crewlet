@@ -131,7 +131,7 @@ func listeningServer(t *testing.T) (*server.Server, *nats.Conn) {
 		JetStream:         true,
 		Host:              "127.0.0.1",
 		Port:              -1,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

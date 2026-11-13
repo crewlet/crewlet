@@ -359,7 +359,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	}
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	brokertest.GitletCacheIn(&boot.Gitlet)
 	withServingTierA(t, &boot)
 	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so

@@ -72,7 +72,7 @@ type drainRig struct {
 func newDrainRig(t *testing.T) *drainRig {
 	t.Helper()
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)

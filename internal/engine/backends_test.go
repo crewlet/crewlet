@@ -106,7 +106,7 @@ func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
 	// The single-binary promise: a company with nothing configured starts.
 	// If this needs a broker, the promise is not kept.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 	// hold seats it cannot serve. Closing twice must also be safe: a
 	// deferred Close beside an explicit one is the ordinary shape.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	// Observable as: the KV slot builds at all on an embedded stream, which
 	// it can only do by reaching the in-process server.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
 	back, err := openBackends(t, b)
@@ -193,7 +193,7 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 func TestTheCoordinationConnectionIsWatched(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
 	back, err := openBackends(t, b)
@@ -221,7 +221,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 	// slot still has to be a real backend, because a nil one surfaces as a
 	// panic in the seat host rather than a configuration error.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.Type = config.CoordinationLocal
 	})
 	back, err := openBackends(t, b)
@@ -270,7 +270,7 @@ func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	//   - StoreDir is actually USED. Ignoring it selects an in-memory
 	//     server, which starts and works and loses everything on restart —
 	//     the failure a company only discovers the first time it restarts.
-	dir := filepath.Join(t.TempDir(), "stream")
+	dir := filepath.Join(brokertest.TempDir(t), "stream")
 	mk := func() *engine.Backends {
 		t.Helper()
 		b := bootstrap(t, func(b *config.Bootstrap) { brokertest.StoreIn(&b.Stream, dir) })
@@ -359,7 +359,7 @@ func TestTheStoreOpensWithTheOtherSlots(t *testing.T) {
 	// A node holding a queue attachment with nowhere to record what a turn
 	// did is a node that works and forgets.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -403,7 +403,7 @@ roles:
     llm: zulu
 `
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, doc), nil)
 	if err != nil {
@@ -422,7 +422,7 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 	// similarity" is a real answer; inventing 1536 for it would let a
 	// vector of that width be written to a company that can produce none.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -449,7 +449,7 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, nil, nil)
 	if err != nil {
@@ -497,7 +497,7 @@ func TestAStoreThatCannotOpenTakesTheBrokerDownWithIt(t *testing.T) {
 	// The margin here is not delicate: three failed opens leak about a
 	// hundred goroutines, against a residue of one when they are cleaned
 	// up. The threshold sits far from both.
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	before := settledGoroutines()
 	for i := range failedOpenAttempts {
 		b := bootstrap(t, func(b *config.Bootstrap) {
@@ -540,7 +540,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 	// goroutine and read in another needs a happens-before edge to be worth
 	// anything, and the edge in question — whether Close waits for the
 	// handler — is the very thing under test.
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	path := filepath.Join(dir, "crewlet.db")
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
@@ -619,7 +619,7 @@ func TestCloseLeavesTheStoreClosed(t *testing.T) {
 	// process owns it exclusively, so a restart in-process contends with
 	// the corpse of the last one.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -647,7 +647,7 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	// there is one driver, and TestTursoIsTheOnlyDriverInTheBinary in
 	// internal/store is what asserts that now.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Store.BusyTimeoutSeconds = 11
 		b.Store.MaxOpenConns = 3
 	})
@@ -687,7 +687,7 @@ func TestAnUnsetTimeoutTakesTheStoreDefault(t *testing.T) {
 	// a literal zero, which for a busy timeout means every contended
 	// statement failing immediately.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -715,7 +715,7 @@ func TestAnUnsetTimeoutTakesTheStoreDefault(t *testing.T) {
 
 func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join(t.TempDir(), "stream")
+	dir := filepath.Join(brokertest.TempDir(t), "stream")
 	mk := func() *engine.Backends {
 		t.Helper()
 		b := bootstrap(t, func(b *config.Bootstrap) {
@@ -1022,7 +1022,7 @@ func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	taken := held.Addr().(*net.TCPAddr).Port
 
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Node.ID = "node-route-taken"
 		b.Stream.Cluster.Name = "crewlet-route-taken"
 		b.Stream.Cluster.Host = "127.0.0.1"

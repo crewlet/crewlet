@@ -196,7 +196,7 @@ func leafReading(t *testing.T) (*server.Server, *Queue) {
 	memberCfg.LeafHost, memberCfg.LeafPort = "127.0.0.1", AnyPort
 	// A MEMBER THAT SERVES LEAVES PERSISTS, and the leaf creates what it
 	// is first to use in the file store to match.
-	memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
+	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member := startTestServer(t, memberCfg)
 
 	leafCfg := cfg

@@ -741,7 +741,7 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 // DialOwned the queue's loss and the owned rows do.
 func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 	t.Parallel()
-	embedded, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	embedded, err := StartServer(t.Context(), Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)
 	}

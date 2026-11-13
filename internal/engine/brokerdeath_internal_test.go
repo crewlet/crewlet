@@ -133,7 +133,7 @@ func runBrokerDeathParent(t *testing.T, mode string) (int, string) {
 	cmd := exec.CommandContext(ctx, os.Args[0],
 		"-test.run=^TestABrokerThatDeclaresItselfDeadEndsTheNode$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
-		brokerDeathChildEnv+"="+mode, brokerDeathDirEnv+"="+t.TempDir())
+		brokerDeathChildEnv+"="+mode, brokerDeathDirEnv+"="+brokertest.TempDir(t))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

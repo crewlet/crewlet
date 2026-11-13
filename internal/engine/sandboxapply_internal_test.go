@@ -313,7 +313,7 @@ func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
 func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	e, err := New(t.Context(), Options{
@@ -388,7 +388,7 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.Source) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	brokertest.GitletCacheIn(&b.Gitlet)

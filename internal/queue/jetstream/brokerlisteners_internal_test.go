@@ -27,7 +27,7 @@ func loneMember(t *testing.T) *Server {
 	t.Helper()
 	cfg := Config{ServerName: "lone", ClusterName: "lone", ClusterHost: "127.0.0.1",
 		ClusterURLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", freePort(t.Context(), t))},
-		StoreDir:    t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}
+		StoreDir:    brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}
 	for attempt := 1; ; attempt++ {
 		cfg.ClusterPort = freePort(t.Context(), t)
 		srv, err := StartServer(t.Context(), cfg)

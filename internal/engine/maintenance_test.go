@@ -334,7 +334,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)

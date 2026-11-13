@@ -391,7 +391,7 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 	// presents that cookie to every other. See [withSignIn].
 	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	brokertest.GitletCacheIn(&boot.Gitlet)
 	boot.Stream.Cluster.Name = relays.ClusterName()
 	boot.Stream.Cluster.Port = port
