@@ -50,6 +50,8 @@ type InventoryProject struct {
 	JobsEnabled        *bool  `json:"jobs_enabled"`
 	BuildsAccess       string `json:"builds_access_level"`
 	EnvironmentsAccess string `json:"environments_access_level"`
+	// RepositoryAccess is whether the project keeps code at all.
+	RepositoryAccess string `json:"repository_access_level"`
 }
 
 // accessDisabled is a project feature switched off for everybody.
@@ -64,6 +66,12 @@ func (p InventoryProject) RunsPipelines() bool {
 
 // KeepsEnvironments reports a project whose environments are not switched off.
 func (p InventoryProject) KeepsEnvironments() bool { return p.EnvironmentsAccess != accessDisabled }
+
+// HoldsCode reports a project with a repository that has commits on a default
+// branch and is not archived: one whose files say what it runs as.
+func (p InventoryProject) HoldsCode() bool {
+	return !p.Archived && !p.EmptyRepo && p.DefaultBranch != "" && p.RepositoryAccess != accessDisabled
+}
 
 // InventoryEnvironment is one environment of a project. Tier is GitLab's own
 // word for what the environment is for (production, staging, testing,
@@ -174,4 +182,65 @@ func (c *Client) LastDeploymentStatus(ctx context.Context, project, environment 
 		return "", err
 	}
 	return out.Last.Status, nil
+}
+
+// treePages is how many pages of a commit's tree a read walks: ten thousand
+// entries. A repository past that is a monorepo whose first listing alone
+// would be a hundred requests at every move of its default branch, and it is
+// not read.
+const treePages = 100
+
+// TreeEntry is one entry of a commit's tree. GitLab's listing carries no
+// size.
+type TreeEntry struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+}
+
+// ErrTreeTooLarge is a tree past [treePages] pages.
+var ErrTreeTooLarge = errors.New("gitlab: the repository's tree is past what one read walks")
+
+// BranchHead is the commit a project's branch is at.
+func (c *Client) BranchHead(ctx context.Context, project int64, branch string) (string, error) {
+	var out struct {
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	path := projectPath(project) + "/repository/branches/" + url.PathEscape(branch)
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return "", err
+	}
+	return out.Commit.ID, nil
+}
+
+// Tree walks every entry of the tree at ref, by keyset, to exhaustion or to
+// [ErrTreeTooLarge].
+func (c *Client) Tree(ctx context.Context, project int64, ref string) ([]TreeEntry, error) {
+	var out []TreeEntry
+	params := url.Values{"ref": {ref}, "recursive": {"true"}, "pagination": {"keyset"},
+		"per_page": {strconv.Itoa(inventoryPageSize)}}
+	for range treePages {
+		var rows []TreeEntry
+		next, err := c.getPage(ctx, projectPath(project)+"/repository/tree", params, &rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if next == nil {
+			return out, nil
+		}
+		for key, value := range next {
+			params[key] = value
+		}
+	}
+	return nil, ErrTreeTooLarge
+}
+
+// Blob reads one object of a project's repository as it is, at most limit
+// bytes of it; oversize is one past limit.
+func (c *Client) Blob(ctx context.Context, project int64, oid string, limit int64) ([]byte, bool, error) {
+	return c.getRaw(ctx, projectPath(project)+"/repository/blobs/"+url.PathEscape(oid)+"/raw", limit)
 }
