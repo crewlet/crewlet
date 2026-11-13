@@ -64,10 +64,14 @@ type headroom struct {
 // can deliver one twice, and the alternative — last-write-wins — would make
 // the answer depend on the order a backend happened to walk its messages in.
 //
-// A count past the budget is CLAMPED at zero. An operator who shrinks
-// MaxDeliver under a backlog produces a message delivered more times than its
-// budget allows, and a negative number compares as less than every reserve a
-// caller holds and therefore reads as plenty.
+// A count past the budget is CLAMPED at zero. A message is delivered past its
+// budget whenever the dead letter its budget's delivery was to keep was not
+// kept — a keep that failed, or a node stopped or killed before it settled —
+// and is then offered again for that keep (internal/queue/jetstream's
+// keepRetries); an operator who shrinks MaxDeliver under a backlog produces
+// one too. A negative number compares as less than every reserve a caller
+// holds and therefore reads as plenty, where zero says what is true: the next
+// return dead-letters it.
 func WithHeadroom(ctx context.Context, perMessage []Headroom) context.Context {
 	if len(perMessage) == 0 {
 		return ctx

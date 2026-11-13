@@ -401,6 +401,12 @@ func undrainLocked(sub *subscription, evs []*events.Event) {
 // made to cost what the broker's does, left standing for every partition of
 // the drain but the one that stopped it.
 //
+// SETTLED UNDER THE LOCK IT IS TAKEN UNDER, its dead letters' keeps included,
+// so no drain ever reads it in flight: the contract counts a backend's own
+// hand-back in flight until it is settled ([queue.EventQueue.WaitForHandlers]),
+// which on the broker is a keep crossing a link and here is nothing to wait
+// for.
+//
 // The splice point is found by SCANNING the leading run of chunk events, not by
 // a length delta. A delta assumes the mailbox only grew at the front, and
 // publishing appends at the TAIL — a handler that publishes lets one land

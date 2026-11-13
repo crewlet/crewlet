@@ -84,7 +84,7 @@ func everyWrite() []aWrite {
 			return err
 		}},
 		{"the delivery budget's dead letter", func(ctx context.Context, q *Queue) error {
-			return q.deadLetter(ctx, budgetLetters, make([]byte, 5<<20))
+			return q.deadLetter(ctx, budgetLetters, "a budget probe", make([]byte, 5<<20))
 		}},
 		anAppend,
 	}

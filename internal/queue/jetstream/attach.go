@@ -901,10 +901,17 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	// A hold taken while this message was in flight must still stop it.
 	// The engine pauses a seat's inbox precisely to keep a fresh turn from
 	// starting, and a message already fetched is exactly what would start
-	// one. Returning it costs nothing: this consumer picks it up again
-	// when the hold lifts, or a successor does.
+	// one. Returning it costs a delivery, as every return does: this
+	// consumer picks it up again when the hold lifts, or a successor does.
+	//
+	// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs: the hand-back
+	// that spends the message's budget keeps its dead letter, a write that
+	// crosses a link at its bytes' pace, and a drain that did not count it
+	// stopped the queue under the keep ([queue.EventQueue.WaitForHandlers]).
 	if a.blocked() {
+		a.q.beginHandler()
 		a.handBack(ctx, msg, ev, a.blockedBy())
+		a.q.endHandler()
 		return
 	}
 	a.q.beginHandler()
@@ -1151,22 +1158,19 @@ func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events
 // carries, for the line; spent is the return it is — a failure (Nak), a
 // hand-back (Defer) or a pass — and reason why, which decide where its dead
 // letter is kept and what its line says should this return spend its budget
-// ([attachment.deadLetter]).
+// ([attachment.retire]).
+//
+// A DELIVERY AT OR PAST THE BUDGET IS RETIRED, not only the budget's own: the
+// broker's backstop stands [keepRetries] deliveries past it ([backstopFor]),
+// so a message whose keep failed, or whose budget's delivery a node killed or
+// stopped never settled, is delivered again — to a handler first, which may
+// handle it — and retired by whichever return meets it there.
 func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *events.Event,
 	delay time.Duration, spent queue.Outcome, reason string) {
 
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
-		// Terminated here, so nothing will redeliver this sequence and
-		// its failure count is dead weight.
-		a.settled(md.Sequence.Stream)
-		a.deadLetter(ctx, msg.Data(), ev, md, spent, reason)
-		// Term, not Ack: the message is being discarded from this
-		// subscription deliberately, and Term says so to anyone reading
-		// consumer state.
-		if err := msg.Term(); err != nil {
-			a.log.Warn("term_failed", "error", err.Error())
-		}
+		a.retire(ctx, msg, ev, md, spent, reason)
 		return
 	}
 	if delay <= 0 {
@@ -1180,47 +1184,98 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 	}
 }
 
-// deadLetter keeps data, the copy of the message md delivered, as its
-// subscription's dead letter, once spent — the return that delivery was
-// answered with — spent its budget: on the subject the contract keeps that
-// return's copy on ([queue.RetiredTo]), a failure's with the group's poison
-// and a pass's or a hand-back's with the group's unhandled deliveries, where a
-// reader that can handle it now finds it. A keep that fails is logged here,
-// and the caller terminates the message even so ([attachment.returnMsg]).
+// retire keeps msg, the delivery md describes, as its subscription's dead
+// letter once spent — the return it was answered with — spent its budget, and
+// terminates it: on the subject the contract keeps that return's copy on
+// ([queue.RetiredTo]), a failure's with the group's poison and a pass's or a
+// hand-back's with the group's unhandled deliveries, where a reader that can
+// handle it now finds it.
+//
+// TERMINATED ONLY ONCE THE COPY IS KEPT. A keep that fails — refused, cut by a
+// stop that closed the connection, a dead-letter stream electing its leader —
+// leaves the message to the broker, returned at the failure path's spacing,
+// and its next delivery keeps the copy: the broker's backstop stands
+// [keepRetries] deliveries past the budget for that ([backstopFor]), so the
+// delivery that spent the budget is not the broker's last. Terminated after a
+// failed keep, as it was, the message was gone with no copy, though nothing
+// was wrong with it but the moment. Only a keep that fails at the backstop's
+// own delivery, which nothing follows, loses the copy, said as such.
+//
+// KEPT UNDER THE MESSAGE'S OWN IDENTITY ([letterOf]), so a keep made again
+// after one whose answer was lost — the entry stored, the error all the
+// keeper heard — is stored as nothing and answered already kept: one entry,
+// however many keeps of it.
 //
 // KEPT WHETHER OR NOT THE LOOP IS STOPPING, under ctx's values without its
 // cancellation: a stop cancels the consume loop's context, and the copy of a
 // message whose last delivery a stop met — a hand-back of a batch taken as the
 // queue stopped, or a pass or a failure handled just before — was kept under
 // that context and lost with it, though nothing was wrong with the keep. The
-// write is bounded all the same, by its own budget ([Queue.write]); and a
-// drain waits for it, since a delivery is in flight until its return is
-// settled ([attachment.dispatchOne]).
+// write is bounded all the same, by its own budget ([Queue.write]); a drain
+// waits for it, since a delivery is in flight until its return is settled
+// ([attachment.dispatchOne]); and so does a stop, which closes the connection
+// only once no keep is in flight ([Queue.awaitKeeps]).
 //
-// A KEEP THAT FAILS ALL THE SAME LOSES THE COPY, and the message is
-// terminated even so, because nothing would bring it back: the delivery that
-// spent the budget is the broker's last, its MaxDeliver being the budget
-// itself, so left unterminated it sits for the acknowledgement window and is
-// then dropped by the broker's backstop with nothing more said (nats-server
-// v2.15.2, server/consumer.go:2430-2457, hasMaxDeliveries).
-//
-// BARE, the message's own bytes and nothing beside them, whichever subject:
-// the subject says which kind of copy it is, so no copy is too large to be
-// found as what it is ([Queue.deadLetter]).
-//
-// ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), never one spelled
-// here, so both backends name one situation alike.
-func (a *attachment) deadLetter(ctx context.Context, data []byte, ev *events.Event,
+// ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), once the copy is kept,
+// never one spelled here, so both backends name one situation alike.
+func (a *attachment) retire(ctx context.Context, msg jetstream.Msg, ev *events.Event,
 	md *jetstream.MsgMetadata, spent queue.Outcome, reason string) {
 
+	a.q.keeping.Begin()
+	defer a.q.keeping.End()
+	subject := queue.RetiredTo(a.key.topic, a.key.group, spent)
+	if err := a.q.deadLetter(context.WithoutCancel(ctx), subject, letterOf(md), msg.Data()); err != nil {
+		a.keepFailed(ctx, msg, md, subject, err)
+		return
+	}
+	// Terminated here, so nothing will redeliver this sequence and its
+	// failure count is dead weight.
+	a.settled(md.Sequence.Stream)
 	queue.LogDeadLettered(ctx, a.log, a.key.topic, a.key.group, ev,
 		int(min(md.NumDelivered, math.MaxInt32)), spent, reason)
-	keep := context.WithoutCancel(ctx)
-	if err := a.q.deadLetter(keep, queue.RetiredTo(a.key.topic, a.key.group, spent), data); err != nil {
-		a.log.ErrorContext(ctx, "dead_letter_failed", "error", err.Error(),
-			"detail", "the copy is lost: the delivery that spent the budget is the "+
-				"broker's last, so nothing redelivers the message")
+	// Term, not Ack: the message is being discarded from this
+	// subscription deliberately, and Term says so to anyone reading
+	// consumer state.
+	if err := msg.Term(); err != nil {
+		a.log.Warn("term_failed", "error", err.Error())
 	}
+}
+
+// keepFailed answers a retirement whose keep failed with err: the message
+// goes back, at the failure path's spacing, for its next delivery to keep —
+// unless md is the broker's last delivery of it ([backstopFor]), when nothing
+// would bring it back and the copy is lost.
+func (a *attachment) keepFailed(ctx context.Context, msg jetstream.Msg, md *jetstream.MsgMetadata,
+	subject string, err error) {
+
+	if md.NumDelivered >= uint64(backstopFor(a.q.cfg)) {
+		a.settled(md.Sequence.Stream)
+		a.log.ErrorContext(ctx, "dead_letter_failed", "subject", subject,
+			"deliveries", md.NumDelivered, "error", err.Error(),
+			"detail", "the copy is lost: this was the broker's last delivery of the message, "+
+				"the keep failed at every one of the deliveries its backstop gives past the "+
+				"budget, and nothing redelivers it")
+		if termErr := msg.Term(); termErr != nil {
+			a.log.Warn("term_failed", "error", termErr.Error())
+		}
+		return
+	}
+	a.log.WarnContext(ctx, "dead_letter_failed", "subject", subject,
+		"deliveries", md.NumDelivered, "error", err.Error(),
+		"detail", "nothing was kept: the message goes back, and its next delivery keeps the copy")
+	if nakErr := msg.NakWithDelay(a.q.nakBackoff(md.NumDelivered)); nakErr != nil {
+		a.log.Warn("nak_failed", "error", nakErr.Error())
+	}
+}
+
+// letterOf is the identity a subscription's dead letter of the delivery md
+// describes is kept under ([Queue.deadLetter]): the message the broker stored —
+// its stream, its sequence there and the broker's instant for it — which every
+// delivery of it carries alike, whichever node it reaches. The instant tells a
+// message apart from the one a stream deleted and made again stores at a
+// reused sequence. Quoted, so no stream's name runs into the numbers after it.
+func letterOf(md *jetstream.MsgMetadata) string {
+	return fmt.Sprintf("%q %d %d", md.Stream, md.Sequence.Stream, md.Timestamp.UnixNano())
 }
 
 // --- the four attachment verbs -------------------------------------------

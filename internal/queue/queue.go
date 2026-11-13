@@ -1342,7 +1342,8 @@ type EventQueue interface {
 
 	// InFlightCount reports handler invocations currently mid-flight —
 	// the number an operator watches converge to zero during a drain.
-	// A delivery is in flight until what its handler returned is settled
+	// A delivery is in flight until what its handler returned is settled,
+	// and so is one the backend hands back itself, until that hand-back is
 	// (WaitForHandlers says why).
 	InFlightCount() int
 
@@ -1380,7 +1381,11 @@ type EventQueue interface {
 	// delivery budget is its dead letter's keep, a write that can take as
 	// long as its bytes take to cross a link, and a drain that read the
 	// delivery as finished once its handler returned stopped the queue
-	// under the keep, the copy lost.
+	// under the keep, the copy lost. AND SO IS A DELIVERY THE BACKEND HANDS
+	// BACK ITSELF — one a hold, a pause, a quiesce, a detach or a stop met
+	// between its fetch and its handler — until that hand-back is settled,
+	// though no handler runs: it spends a delivery as every return does,
+	// and the one that spends the budget keeps a dead letter as well.
 	WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error)
 
 	// Stop closes the connection.

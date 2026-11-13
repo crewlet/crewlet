@@ -873,10 +873,13 @@ The consequences worth stating plainly:
   pauses with a newer node among older ones delivers those wakes as it goes
   on, at each next node's start; one paused for good keeps them for
   `stream.event_retention_hours`, and restarting a node of the newer build
-  delivers them. Two losses remain: a copy whose keep the broker refused
-  (`dead_letter_failed`), or that a node killed outright never finished
-  keeping, since nothing redelivers a message past its last delivery; and
-  one no start replays before the retention lets it go, counted below.
+  delivers them. A copy whose keep fails — refused, or cut by a node that
+  stopped or was killed while it crossed — is kept by the message's next
+  delivery (`dead_letter_failed` at `WARN`), since the broker delivers a
+  message five times past its budget for that; two losses remain: a copy
+  whose keep fails at every one of those deliveries (`dead_letter_failed` at
+  `ERROR`), and one no start replays before the retention lets it go,
+  counted below.
   Waiting, each holds one of the group's acknowledgement slots for up to its
   ten minutes, out of the broker's 1000, so only a sustained 1.7 such wakes
   a second early in a roll would delay the group's other mail, and none of

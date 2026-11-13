@@ -75,11 +75,11 @@ func (q *Queue) SubscribeBatch(
 			// top of this loop already answers with `continue`, ten lines
 			// up, which is what it should have said here too.
 			if ctx.Err() != nil {
-				a.nakAll(ctx, batch, handBackStopping)
+				a.handBackUndispatched(ctx, batch, handBackStopping)
 				return
 			}
 			if a.blocked() {
-				a.nakAll(ctx, batch, a.blockedBy())
+				a.handBackUndispatched(ctx, batch, a.blockedBy())
 				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key)
@@ -239,14 +239,14 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		//
 		// UNHANDLED IS NOT UNCHARGED. These messages were FETCHED, which
 		// is where this broker's counter moves, so their delivery is
-		// already spent by the time the loop gets here — nakAll only
+		// already spent by the time the loop gets here — the hand-back only
 		// decides whether the last one dead-letters with a copy or is
 		// discarded by MaxDeliver in silence. That is the contract's rule
 		// and not this backend's shape: see [queue.DeliveriesLeft], and
 		// internal/queue/memory, whose mailbox is a slice and therefore
 		// has to charge a take deliberately.
 		if a.blocked() {
-			a.nakAll(ctx, part.Items, a.blockedBy())
+			a.handBackUndispatched(ctx, part.Items, a.blockedBy())
 			continue
 		}
 
@@ -338,4 +338,18 @@ func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string
 	for _, d := range items {
 		a.handBack(ctx, d.msg, d.ev, reason)
 	}
+}
+
+// handBackUndispatched hands back what a drain fetched and this consumer will
+// not dispatch — a stop, a hold, a pause, a quiesce or a detach met before a
+// handler ran — for reason ([attachment.nakAll]).
+//
+// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs, for the reason
+// [attachment.dispatchOne] counts its own hand-back: one of them may spend a
+// message's budget, and its dead letter's keep crosses a link at its bytes'
+// pace, under a drain that would otherwise read the queue as idle and stop it.
+func (a *attachment) handBackUndispatched(ctx context.Context, items []delivery, reason string) {
+	a.q.beginHandler()
+	defer a.q.endHandler()
+	a.nakAll(ctx, items, reason)
 }

@@ -84,14 +84,15 @@ import (
 // is declared (engineStreams), and a retention shorter than it is one the
 // broker refuses the stream for (Tier A refuses it first).
 //
-// THE DELIVERY BUDGET'S DEAD LETTER NAMES NONE ([Queue.deadLetter]), on
+// THE DELIVERY BUDGET'S DEAD LETTER NAMES ONE TOO ([Queue.deadLetter]), on
 // either of its pair's subjects, poison's or the unhandled deliveries'
-// ([queue.RetiredTo]): the broker never hands a subscription's message past
-// its MaxDeliver to anybody (nats-server v2.15.2,
-// server/consumer.go:2430-2457, hasMaxDeliveries, asked as the
-// acknowledgement window lapses at :6185-6191), and the budget's keep is of
-// the delivery that reached it, so no second node is ever handed the message
-// it keeps.
+// ([queue.RetiredTo]): the message the broker stored, its stream, its sequence
+// and its instant ([letterOf]). A message whose keep failed goes back for its
+// next delivery to keep — the broker's backstop stands past the budget for
+// that ([keepRetries]) — and a keep that stored its entry and lost its answer
+// failed as far as its keeper heard, so the identity is what makes the keep
+// made again come to nothing. A copy too large for the identity's header
+// beside it is kept with none, and twice at worst.
 //
 // A DROP ([Queue.DropDeadLetter]) asks which subject the sequence is on before
 // it deletes it, and the delete is the leader's. Wherever the leader's read

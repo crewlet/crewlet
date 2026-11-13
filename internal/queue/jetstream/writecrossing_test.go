@@ -79,7 +79,8 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 		t.Parallel()
 		q := leafAcrossSlowLink(t, slowLinkRate)
 		const topic, group = "slowlink.retired", "grp"
-		if err := q.deadLetter(t.Context(), topics.DeadLetter(topic, group), incompressible(t, queue.MaxPayloadBytes)); err != nil {
+		if err := q.deadLetter(t.Context(), topics.DeadLetter(topic, group), "a message at the ceiling",
+			incompressible(t, queue.MaxPayloadBytes)); err != nil {
 			t.Fatalf("a message at the ceiling the budget dead-lettered, across a link "+
 				"carrying a mebibyte a second, was answered as not kept: %v", err)
 		}

@@ -47,11 +47,12 @@ func (r DeferReason) Valid() bool { return r == DeferNewerRecord }
 // (internal/changefeed); a node of that build already running never does. The
 // group's own budget is enough for that reason: a dead letter follows, not a
 // drop, so a roll longer than ten minutes loses no wake to its length. What it
-// can lose is a copy whose keep the broker refused, or that a node killed
-// outright never finished keeping, since nothing redelivers a message past its
-// last delivery (internal/queue/jetstream's attachment.deadLetter), and one
-// no start replays before the dead letters' retention lets it go, which
-// `inbound_dead_lettered` names while it waits.
+// can lose is a copy whose keep fails at every delivery the broker makes of
+// the message past its budget for that keep — a keep that fails once, or
+// that a stopped or killed node never finished, is made again by the next
+// (internal/queue/jetstream's keepRetries) — and one no start replays before
+// the dead letters' retention lets it go, which `inbound_dead_lettered` names
+// while it waits.
 type Deferral struct {
 	Reason DeferReason
 	// Err is what the parser met, for the log line.
