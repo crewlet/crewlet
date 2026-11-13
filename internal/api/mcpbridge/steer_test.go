@@ -63,9 +63,14 @@ func (i *fakeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <
 	return out, i.changed
 }
 
+// Read records the read, or, AS THE CONTRACT SAYS, takes none once the inbox is
+// closed and says so.
 func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.closed {
+		return mcpbridge.ErrInboxNotServing
+	}
 	i.reads = append(i.reads, ids)
 	return i.readErr
 }
@@ -161,6 +166,14 @@ type polled struct {
 	notes   []mcpbridge.SteerNote
 	refusal string
 	took    time.Duration
+}
+
+// status is the answer's status, or 0 where the call failed on the wire.
+func (p polled) status() int {
+	if p.res == nil {
+		return 0
+	}
+	return p.res.StatusCode
 }
 
 // answer is one GET of the notes route, read whole.
@@ -486,6 +499,110 @@ func readWith(ctx context.Context, t *testing.T, client *http.Client, url string
 		}
 	}
 	return polled{res: res, refusal: refusal.Error}
+}
+
+// A READ ITS OPENING'S END OVERTOOK ON ITS WAY IN IS TURNED AWAY TO ASK AGAIN,
+// never answered done with nothing recorded. The route found the opening
+// serving its inbox, read the read's body, and the opening ended before the
+// read reached the inbox: the run ended, the seat left this node, or a
+// recovery opened the job again with an inbox of its own. The end closed the
+// inbox, which then took no read and said nothing of it, and the route answered
+// 204: the plugin never confirmed the note again, and the record kept it served
+// and unread, which the run's ending reports unconfirmed and a later launch
+// tells again as one the session may already show. So a closed inbox says it
+// took nothing ([mcpbridge.ErrInboxNotServing]); and a read that finds its
+// opening ended is answered as the end answers it, whatever the seat's fence
+// says, as a poll is: the seat leaves this node's grants, which closes the
+// fence, before its release ends the opening. Each is turned away as a call
+// reaching its opening as it ends is, a 503 with the Retry-After a poll the
+// opening cannot hold is given, never as a record that could not be written.
+// After the recovery the box's read made again is recorded by the opening that
+// serves it now.
+//
+// Mutation: answer a read its inbox did not take done, or as a record that
+// could not be written, and the run's end and the recovery go red; answer a
+// read on an ended opening by its closed fence, and the seat's leaving goes red.
+func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
+	t.Parallel()
+	for _, end := range []struct {
+		name string
+		// end ends the opening, closing the seat's fence first where the
+		// seat leaves, and answers the inbox the box's next read reaches, nil
+		// where none on this node serves it.
+		end func(t *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox
+	}{
+		{"the run ends", func(_ *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
+			f.bridge.Close("run-1")
+			return nil
+		}},
+		{"the seat leaves this node", func(_ *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox {
+			fenced.Store(true)
+			f.bridge.ReleaseSeat(seat())
+			return nil
+		}},
+		{"a recovery opens the job again", func(t *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
+			inbox := newFakeInbox()
+			if f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: f.ledger, Steer: inbox}) == "" {
+				t.Fatal("the recovery minted no endpoint")
+			}
+			return inbox
+		}},
+	} {
+		t.Run(end.name, func(t *testing.T) {
+			t.Parallel()
+			parked := newParkedFence()
+			var asks atomic.Int32
+			var fenced atomic.Bool
+			// THE READ'S OWN ASK OF THE FENCE IS THE SECOND: the routing asks
+			// first, and the read asks once its route found the inbox serving
+			// and read its body, as the last step before the inbox.
+			f := newSteerFixtureWith(t, time.Minute, func(s *mcpbridge.Session) {
+				s.Fence = func() error {
+					if asks.Add(1) == 2 {
+						_ = parked.fence()
+					}
+					if fenced.Load() {
+						return errors.New("the seat left this node")
+					}
+					return nil
+				}
+			})
+			t.Cleanup(parked.letGo)
+			parked.arm()
+			url := mcpbridge.SteerURL(f.url) + "/read"
+			answered := make(chan polled, 1)
+			go func() { answered <- readWith(t.Context(), t, f.server.Client(), url, "n-1") }()
+			<-parked.entered
+			next := end.end(t, f, &fenced)
+			parked.letGo()
+			got := <-answered
+			if got.res == nil {
+				t.Fatal("a read its opening's end overtook failed on the wire")
+			}
+			if got.res.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("a read its opening's end overtook was answered %d %q, want a 503 to ask again",
+					got.res.StatusCode, got.refusal)
+			}
+			wantTurnedAway(t, got, "unavailable")
+			if after := got.res.Header.Get("Retry-After"); after != strconv.Itoa(int(mcpbridge.SteerPollRetry/time.Second)) {
+				t.Errorf("the read is told to ask again after %q, want %s, as a call its opening's end "+
+					"overtook is", after, mcpbridge.SteerPollRetry)
+			}
+			if reads := f.inbox.readIDs(); len(reads) != 0 {
+				t.Errorf("the ended opening's inbox recorded the reads %q", reads)
+			}
+			if next == nil {
+				return
+			}
+			if again := readWith(t.Context(), t, f.server.Client(), url, "n-1"); again.status() != http.StatusNoContent {
+				t.Errorf("the box's read made again was answered %d %q, want 204", again.status(), again.refusal)
+			}
+			if reads := next.readIDs(); len(reads) != 1 || !slices.Equal(reads[0], []string{"n-1"}) {
+				t.Errorf("the recovery's inbox recorded the reads %q, want the read of n-1 alone", reads)
+			}
+		})
+	}
 }
 
 // parkedFence is a session's fence that holds every request asking it once it

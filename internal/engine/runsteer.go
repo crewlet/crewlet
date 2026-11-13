@@ -1784,9 +1784,23 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 //     published delivered all the same ([runInbox.confirmedBefore]), under the
 //     id that confirmation's report took and at its read's instant, so a note
 //     both reported is one record.
+//
+// AN INBOX THAT SERVES NO JOB TAKES NO READ, AND SAYS SO
+// ([mcpbridge.ErrInboxNotServing]): one closed, its opening's end having taken
+// it after the notes route found it serving, or one not yet bound, which a
+// recovery's opening serves a moment before it is. Answered done, the plugin
+// never confirmed the note again, and the record kept it served and unread, for
+// the run's ending to report unconfirmed and a later launch to tell again as
+// one the session may already show. Turned away, the confirmation made again
+// reaches the inbox that serves the job now. DECIDED UNDER THE INBOX'S OWN
+// LOCK, which its Close takes ([runInbox.bound]): a read that found the inbox
+// serving records through the store, a write a later Close does not touch.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
-	if launch == "" || len(ids) == 0 {
+	switch {
+	case launch == "":
+		return mcpbridge.ErrInboxNotServing
+	case len(ids) == 0:
 		return nil
 	}
 	_, opened, _ := watch.snapshot()

@@ -1574,6 +1574,65 @@ func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 	}
 }
 
+// A CONFIRMATION AN INBOX SERVING NO JOB CANNOT TAKE SAYS SO, AND RECORDS
+// NOTHING. The run's opening on the bridge can end as its notes route records a
+// confirmation (the run ended, the seat left the node, or a recovery opened the
+// job again with an inbox of its own), and its end closes the inbox the route
+// found serving; and a recovery's opening serves the box a moment before its
+// inbox is bound to the job. Either inbox serves no job, and a read of it took
+// nothing and answered done: the bridge said 204, the plugin never confirmed the
+// note again, and the record kept it served and unread, so the run's ending
+// reported unconfirmed a note OpenCode had delivered, and a later launch told it
+// again as one the session may already show. So such an inbox answers
+// mcpbridge.ErrInboxNotServing, which the bridge turns away to ask again, and
+// the confirmation made again is recorded by the inbox that serves the job.
+//
+// Mutation: answer a read of an inbox that serves no job done (nil), and both
+// of its reads go red.
+func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	served := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, served, 1)
+	if notes, _ := served.Wait(ctx, 0); len(notes) != 1 {
+		t.Fatalf("the poll was answered %+v, want n-1", notes)
+	}
+
+	// THE OPENING'S END CLOSED THE INBOX the route found serving.
+	served.Close()
+	if err := served.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Errorf("a confirmation reaching a closed inbox answered %v, want ErrInboxNotServing", err)
+	}
+	// A RECOVERY'S OPENING SERVES THE BOX before its inbox is bound.
+	unbound := runs.inbox(identityOfRun(mustRow(t, store, "run-1")), 1)
+	t.Cleanup(unbound.Close)
+	if err := unbound.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Errorf("a confirmation reaching an inbox not yet bound answered %v, want ErrInboxNotServing", err)
+	}
+	if n := mustRow(t, store, "run-1").Steer.Notes[0]; !n.Waiting() || n.Served != launch {
+		t.Fatalf("a confirmation no inbox took left n-1 %+v, want it waiting, served to job %s", n, launch)
+	}
+	if got := steered(p); len(got) != 0 {
+		t.Fatalf("a confirmation no inbox took reported %+v", got)
+	}
+
+	// THE CONFIRMATION MADE AGAIN reaches the inbox that serves the job now,
+	// which records it.
+	recovered := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, recovered, 1)
+	if err := recovered.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("the confirmation made again answered %v", err)
+	}
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Errorf("the confirmation made again left n-1 read %+v, want it read at job %s's step", read, launch)
+	}
+}
+
 // THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last
 // boundary is its last chance to read a note in its own loop, so it asks the
 // record itself, where a batch answers from a view one write behind.

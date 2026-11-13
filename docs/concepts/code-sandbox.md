@@ -1224,8 +1224,15 @@ it:
     next poll.
     A read names the notes
     (one to ten) the harness put in front of its model, and is recorded read at the
-    run's next step. Each note carries an id the harness admits it under, unique to
-    the note and the job, so a poller that admits it twice admits it once.
+    run's next step. A read the session's end overtakes on its way to the notes is
+    turned away to ask again too, never answered done with nothing recorded: the
+    plugin would never confirm those notes again, and the turn's ending would
+    report them unconfirmed though they were delivered. That includes a seat
+    leaving the node, whose tools close here a moment before its session ends: a
+    read that finds the session ended is answered as the end answers it, not as a
+    run whose tools are closed. Each note carries an id the harness admits it
+    under, unique to the note and the job, so a poller that admits it twice admits
+    it once.
 
   A harness takes notes here only where its run is set up to ask for them; a run
   whose harness asks for none still has every note read, by its review. Both

@@ -83,13 +83,24 @@ type SteerInbox interface {
 	// earlier read of the same job recorded is reported again, as the same
 	// record; an error is a read that could not be confirmed written, and its
 	// notes wait, or, where the write landed, are reported when the harness
-	// confirms them again.
+	// confirms them again. An inbox that serves no job, not yet bound or
+	// closed, takes no read and answers [ErrInboxNotServing].
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
-	// handed out closes, and every later call answers nothing.
+	// handed out closes, every later Take and Wait answers nothing, and every
+	// later Read [ErrInboxNotServing].
 	Close()
 }
+
+// ErrInboxNotServing is what a [SteerInbox] answers a [SteerInbox.Read] with
+// where it serves no job: closed, the opening that served it having ended, or
+// not yet bound to its job, which a recovery's opening serves a moment before
+// it is. It recorded nothing. Declared here, by the consumer, which tells it
+// from a write that could not be confirmed: the read is turned away to ask
+// again, as one reaching its opening as it ends is ([Bridge.serveSteer]), and
+// its next try reaches the inbox that serves the job now.
+var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox serves no job, and recorded nothing")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -183,7 +194,9 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 // NEVER THE 404 of a session that never had an inbox, which says the run has
 // no notes route at all: the OpenCode plugin reads that as it reads a refused
 // token, and stops asking for the rest of its run, so a box that goes on
-// would never be handed a note between its steps again.
+// would never be handed a note between its steps again. And the same holds
+// for a read whose opening the end overtakes after this check, on its way to
+// the inbox ([readNotes]).
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
 	if opened.session.Steer == nil {
 		// A SESSION WITH NO INBOX (a run with nothing to steer, the
@@ -336,11 +349,12 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
 // away with, and a read that reached its opening as it ended
-// ([Bridge.serveSteer]): the pace the bridge's own relay reads a seat's lease
-// again at while it waits for the seat's next holder ([holderRetryCeiling]),
-// because that holder is what serves the session's next opening: a node that
-// is going hands its seats on, and an opening that ended was replaced, moved
-// with its seat, or ended with its run, whose route then answers 401.
+// ([Bridge.serveSteer], [readNotes]): the pace the bridge's own relay reads a
+// seat's lease again at while it waits for the seat's next holder
+// ([holderRetryCeiling]), because that holder is what serves the session's
+// next opening: a node that is going hands its seats on, and an opening that
+// ended was replaced, moved with its seat, or ended with its run, whose route
+// then answers 401.
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
@@ -353,6 +367,26 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 // readNotes records the notes a read names — none for a run whose tools are
 // closed, which takes nothing more from its notes (see [Bridge.pollNotes]); its
 // read is answered as done, because there is nothing for the poller to retry.
+//
+// A READ ITS OPENING'S END OVERTOOK ON ITS WAY IN IS TURNED AWAY TO ASK AGAIN,
+// as one that reached the opening after its end took the inbox is
+// ([Bridge.serveSteer]), never answered done with nothing recorded: the
+// plugin would never confirm its notes again, and the record would keep each
+// served and unread. The end is found at either of the read's last two steps:
+//
+//   - A FENCED OPENING THAT HAS ENDED answers as its end answers, as a held
+//     poll does, rather than as a run whose tools are closed: a seat leaving
+//     this node leaves its grants, which closes the fence, before its release
+//     ends the opening, and its box goes on with the seat's next holder, which
+//     the read's next try reaches. An opening that has ended is answered in
+//     its end's words, never its fence's ([binding.stop]).
+//   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
+//     ([ErrInboxNotServing]): the end closed it after the route found it
+//     serving, or a recovery's opening serves the box before its inbox is
+//     bound. The inbox decides that under its own lock, which its close takes,
+//     so a read either found it serving and is recorded through the store,
+//     which a later close does not touch, or did not and is not recorded at
+//     all.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
@@ -370,17 +404,24 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		return
 	}
 	if fence(opened.session) != nil {
+		if opened.over() {
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if err := inbox.Read(r.Context(), body.IDs); err != nil {
+	switch err := inbox.Read(r.Context(), body.IDs); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrInboxNotServing):
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+	default:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_read_failed", "error", err.Error(),
 			"detail", "the notes wait; the poller confirms them again, and the review "+
 				"reads any it never does")
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(time.Second))
-		return
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // Shutdown releases every poll for notes this bridge holds — one it serves from

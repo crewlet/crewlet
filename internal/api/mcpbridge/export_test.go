@@ -72,6 +72,10 @@ const SteerHold = steerHold
 // SteerTakeBudget bounds the inbox's answer to one hook.
 const SteerTakeBudget = steerTakeBudget
 
+// SteerPollRetry is the Retry-After a notes call its opening's end overtook is
+// turned away with.
+const SteerPollRetry = steerPollRetry
+
 // CallMargin is what a call's answer can take beyond its tool's own bound
 // ([Bridge.CallTimeout]).
 const CallMargin = callMargin
