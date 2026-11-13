@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var atlasNow = time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
@@ -547,6 +548,29 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"AtlasSourcesAnswer":  {sources},
 	} {
 		holdShape(t, iface, rows, iface == "AtlasRead")
+	}
+}
+
+// THE ANSWERS ABOUT WORK ARE THEIR DECLARED SHAPES, read and unread alike:
+// what the dashboard's types declare is what these questions send.
+func TestTheAtlasWorkAnswersAreTheirDeclaredShapes(t *testing.T) {
+	t.Parallel()
+	web := entryID(atlas.KindHost, "ssh/web-1")
+	row := worklet.TaskRow{ID: "t-1", Key: "ENG-1", Title: "Patch web-1"}
+	s := atlasWorkSources(&stubWork{marks: worklet.EntryMarks{Open: map[string]int{web: 2}, Capped: true},
+		entryWork: worklet.EntryWork{Open: []worklet.TaskRow{row}, Recent: []worklet.TaskRow{row},
+			OpenTotal: worklet.ClaimTotal{Total: 60, Capped: true}, RecentTotal: worklet.ClaimTotal{Total: 1}}})
+	holder, outsider := asAtlasReader(t, iam.GrantWorklet), asAtlasReader(t)
+	byID := map[string]any{"id": web}
+	work := askAtlas(holder, t, s, "atlas_entry_work", byID)
+	named := askAtlas(holder, t, s, "atlas_named", map[string]any{"ids": web})
+	for iface, rows := range map[string][]map[string]any{
+		"AtlasWorkAnswer":      {askAtlas(holder, t, s, "atlas_work", nil), askAtlas(outsider, t, s, "atlas_work", nil)},
+		"AtlasEntryWorkAnswer": {work, askAtlas(outsider, t, s, "atlas_entry_work", byID)},
+		"AtlasNamedAnswer":     {named},
+		"AtlasNamed":           listOf(t, named["named"]),
+	} {
+		holdShape(t, iface, rows, false)
 	}
 }
 
