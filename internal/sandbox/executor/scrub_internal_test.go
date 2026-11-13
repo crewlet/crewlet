@@ -891,10 +891,14 @@ func TestTheCutReadsEachKeyByItsExactName(t *testing.T) {
 // it. A renamed `name` beside a sound `NAME` is cut, a renamed `Name` beside a
 // sound `name` is not, and a definition named only by a `Name` names nothing
 // Claude Code reads and is cut, as one with no name is; of a `name` written
-// twice, the last is the one judged.
+// twice, the last is the one judged, and a last one that is no string (a
+// number, an object, a null) names nothing the provider takes, so the
+// definition is cut whatever the `name` before it said.
 //
 // Mutation: read the name with encoding/json's decode, which fills it from a
-// key in any case, and three cases go red.
+// key in any case, and three cases go red; judge the name a decode that
+// failed had filled in before it failed, and a sound name followed by a
+// number or an object is kept.
 func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 	t.Parallel()
 	renamed := "mcp__" + scrubMarker + "__backup_list"
@@ -909,6 +913,9 @@ func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 		"no name":                           {`{"description":"later"}`, true},
 		"a sound name, then a renamed one":  {`{"name":"mcp__seat__later","name":"` + renamed + `"}`, true},
 		"a renamed name, then a sound one":  {`{"name":"` + renamed + `","name":"mcp__seat__later"}`, false},
+		"a sound name, then a number":       {`{"name":"mcp__seat__later","name":5}`, true},
+		"a sound name, then an object":      {`{"name":"mcp__seat__later","name":{"x":[1]}}`, true},
+		"a sound name, then a null":         {`{"name":"mcp__seat__later","name":null}`, true},
 	} {
 		line := `{"parentUuid":null,"isSidechain":false,"attachment":{"type":"deferred_tools_record","entries":[` +
 			described + `,` + tc.definition + `]},"type":"attachment"}`
