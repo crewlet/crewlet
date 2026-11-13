@@ -1437,6 +1437,13 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // its type: a model's reply whose replacesSpan is a string, and an attachment
 // whose replacesSpan is null, each read whole, and restart nothing.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE: a chained record whose
+// parentUuid is the empty string, a reply's or an attachment's, and a user
+// record or a reply that carries no parentUuid at all, each falsy to the
+// walk, restart the thread where they follow its first chained record; and a
+// brief of no parentUuid that opens the thread is its first chained record,
+// which roots it, and restarts nothing.
+//
 // Mutation: count every root, and the brief restarts every thread; count every
 // root but the first one seen, and the first root of a thread whose start is
 // gone is none; read a thread whose start is gone as whole, and one that never
@@ -1447,7 +1454,9 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // replacesSpan by its presence, and one that is false restarts the thread;
 // read either kind off any record's type, and the attachment or the reply
 // restarts it; hold replacesSpan to its type on every record, and the reply
-// and the attachment that carry one of another type are no records.
+// and the attachment that carry one of another type are no records; root a
+// chain at null alone, and the empty string and the absent parent restart
+// nothing.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
@@ -1503,6 +1512,19 @@ func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 		"a null replacesSpan on an attachment": {lines: after(ctReplace(t,
 			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"type":"attachment"`,
 			`"type":"attachment","replacesSpan":null`))},
+		"a reply whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"an attachment whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"a user record with no parentUuid": {lines: after(ctReplace(t, ctSpan(ctUUID(3), ctUUID(7), ""),
+			`"parentUuid":"`+ctUUID(3)+`",`, "")), restarts: []int{5}},
+		"a reply with no parentUuid": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`",`,
+			"")), restarts: []int{5}},
+		"a brief with no parentUuid, opening its thread": {lines: []string{ctEnqueue,
+			ctReplace(t, brief, `"parentUuid":null,`, ""), tokens, reply}},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {

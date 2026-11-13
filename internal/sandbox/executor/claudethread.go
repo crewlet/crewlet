@@ -1863,9 +1863,8 @@ type threadRestarts struct {
 // See reports whether the record with head h, the thread's next, is a
 // RESTART: a record of subtype compact_boundary; a system record of subtype
 // microcompact_boundary; a user record whose `replacesSpan` is true; one
-// rooting a chain (`parentUuid` literally null) that is not the thread's
-// first chained record; or the thread's first chained record where it roots
-// no chain.
+// rooting a chain (below) that is not the thread's first chained record; or
+// the thread's first chained record where it roots no chain.
 //
 // THE FIRST CHAINED RECORD, never the first record or the first root: a
 // thread's bookkeeping before its brief is no chain's, and its brief roots the
@@ -1898,11 +1897,27 @@ type threadRestarts struct {
 // alone, never a Stop's note, so each reader it concerns asks
 // [threadLine.ToolResultsCleared] of the records it reads.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE: its resume walks a thread's
+// chain back from its last record, parent by parent, and stops at the first
+// record whose `parentUuid` is null, the empty string or absent, each falsy
+// to it alike. So beside a root as written (null), a chained record whose
+// parent is the empty string roots a chain, and so does a user or assistant
+// record that carries no `parentUuid` at all, which the walk reads as null
+// where any record descends from it: what lies before either is in no chain
+// a resume hands over. No release measured writes either (every user and
+// assistant record measured carries null or a uuid), so the rule costs a
+// measured thread nothing; a record of another type with no `parentUuid` is
+// the harness's bookkeeping, in no chain ([threadHead.Parent]).
+//
 // A thread with no chained record restarts nowhere: it holds no chain to
 // start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
-	first := h.Chained() && !r.chained
-	r.chained = r.chained || h.Chained()
+	chained, root := h.Chained(), h.Root() || string(h.Parent) == `""`
+	if h.Parent == nil && (h.Type == recordUser || h.Type == recordAssistant) {
+		chained, root = true, true
+	}
+	first := chained && !r.chained
+	r.chained = r.chained || chained
 	switch {
 	case h.Subtype == subtypeCompactBoundary:
 		return true
@@ -1911,7 +1926,7 @@ func (r *threadRestarts) See(h threadHead) bool {
 	case h.ReplacesSpan:
 		return true
 	case first:
-		return !h.Root()
+		return !root
 	}
-	return h.Root()
+	return root
 }

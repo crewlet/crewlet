@@ -376,9 +376,11 @@ func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 // one is told. Measured: s1's compaction, whose boundary follows its call's
 // result, and s2's trim, which kept none of the job's records, so its call is
 // not in the file at all; and, as both releases' readers read them, a
-// microcompaction's boundary, a span replaced and a root after the first. A
-// result between two restarts is before the last. A result after the last
-// restart is live, and held.
+// microcompaction's boundary, a span replaced and a root after the first,
+// written as one or a user record whose parentUuid is absent or the empty
+// string, which Claude Code's walk reads as one. A result between two
+// restarts is before the last. A result after the last restart is live, and
+// held.
 //
 // Mutation: compare a result's line with the thread's FIRST restart, and the
 // result between two restarts is live.
@@ -388,10 +390,13 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 	call := hsLogged(id, out)
 	pair := hsCall(ctUUID(1), 2, id, hsBlock(t, out))
 	restart := map[string]string{
-		"a compaction's boundary":      ctBoundary(ctUUID(4), ctUUID(5), ctUUID(3)),
-		"a microcompaction's boundary": ctMicrocompactBoundary(ctUUID(3), ctUUID(4)),
-		"a span replaced":              ctSpan(ctUUID(3), ctUUID(4), "true"),
-		"a later root":                 ctBrief(ctUUID(4)),
+		"a compaction's boundary":       ctBoundary(ctUUID(4), ctUUID(5), ctUUID(3)),
+		"a microcompaction's boundary":  ctMicrocompactBoundary(ctUUID(3), ctUUID(4)),
+		"a span replaced":               ctSpan(ctUUID(3), ctUUID(4), "true"),
+		"a later root":                  ctBrief(ctUUID(4)),
+		"a later root of no parentUuid": ctReplace(t, ctBrief(ctUUID(4)), `"parentUuid":null,`, ""),
+		"a later root whose parentUuid is the empty string": ctReplace(t, ctBrief(ctUUID(4)), `"parentUuid":null`,
+			`"parentUuid":""`),
 	}
 	for name, line := range restart {
 		t.Run("after it, "+name, func(t *testing.T) {
