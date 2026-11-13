@@ -458,7 +458,7 @@ type threadLine struct {
 	// Head is what every reader needs of the line.
 	Head threadHead
 
-	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
+	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -479,6 +479,7 @@ type threadWire struct {
 	Origin        json.RawMessage `json:"origin"`
 	ToolUseID     json.RawMessage `json:"toolUseID"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	APIError      json.RawMessage `json:"isApiErrorMessage"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -505,7 +506,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	return threadLine{
 		N: n, Raw: raw, Head: head,
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult,
+		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
 	}, nil
 }
 
@@ -1353,7 +1354,12 @@ func (m threadMessage) Calls() []threadCall { return m.calls }
 // the text's first: a thread cut between them ends on a record of text alone,
 // which reads as a finished leg. Only the stop_reason tells the two apart:
 // "tool_use" on every such text record measured, as on its call's, and
-// "end_turn" or "stop_sequence" on every other record of text alone.
+// "end_turn" or "stop_sequence" on every other record of text alone. Its
+// reader takes a leg for finished on "end_turn" alone, with no API error
+// ([threadLine.APIError]), as Claude Code itself tests a reply that ended its
+// turn: every reply the harness writes itself, in place of a model's, stops
+// at "stop_sequence" (a resume's "No response requested.", a failed request's
+// error).
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // string where present. Any other type is this accessor's error, never "",
@@ -1376,6 +1382,37 @@ func (l threadLine) StopReason() (string, error) {
 		return "", fmt.Errorf("an assistant record's message: %w", err)
 	}
 	return wireString("stop_reason", message.StopReason)
+}
+
+// APIError reports whether an assistant record is the reply Claude Code wrote
+// itself where its request failed for good, in place of a model's: its
+// `isApiErrorMessage`, true where it says so; false where it is absent or
+// false, and on every record that is no assistant's.
+//
+// ITS READER is the one that tells a relaunch which of its calls a kept
+// session holds (exact telling), to know whether a subagent's leg ended on a
+// reply its model wrote. A request that fails for good (an overload past its
+// retries, a prompt past its window, a credential refused) leaves a reply of
+// the harness's own in its thread, its text the error's ("API Error: ..."),
+// its model "<synthetic>", stopped at "stop_sequence" and marked so, as
+// 2.1.310 and 2.1.322 write one; the harness then ends a subagent's loop on
+// it and answers the call that started the subagent as completed, its report
+// that text, though no model read what the failed request carried. Claude
+// Code's own test of a reply that ended its turn is this mark false and its
+// stop reason "end_turn" ([threadLine.StopReason]).
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never the line's, so a reshaped mark costs only the reader that
+// asks for it.
+//
+// Read off the line's one decode, its raw `isApiErrorMessage`, never a second
+// read of the line.
+func (l threadLine) APIError() (bool, error) {
+	if l.Head.Type != recordAssistant || l.apiError == nil {
+		return false, nil
+	}
+	return wireBool("isApiErrorMessage", l.apiError)
 }
 
 // threadUsage is what a model's reply says of the request it answered

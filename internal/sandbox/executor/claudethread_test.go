@@ -1865,6 +1865,43 @@ func TestAReplySaysWhyItStopped(t *testing.T) {
 	}
 }
 
+// A REPLY SAYS WHETHER ITS HARNESS WROTE IT FOR A REQUEST THAT FAILED: APIError
+// reads an assistant record's own `isApiErrorMessage` as written, true where
+// it says so, false where it is false (the resume's own reply) or absent
+// (every model's reply measured); nothing on a record that is no assistant's,
+// whatever it carries there; and an error where the mark is no boolean, null
+// among it, never false, which its reader would take for a model's reply.
+//
+// Mutation: read the mark as false whatever it holds, and the failed
+// request's reply reads as a model's; or read a null as no mark, and it is no
+// error.
+func TestAReplySaysWhetherItsHarnessWroteItForAFailedRequest(t *testing.T) {
+	t.Parallel()
+	marked := func(mark string) string {
+		return ctReplace(t, ctSynthetic(ctUUID(30), ctUUID(31)), `"isApiErrorMessage":false`,
+			`"isApiErrorMessage":`+mark)
+	}
+	for name, tc := range map[string]struct {
+		record string
+		failed bool
+	}{
+		"a failed request's reply":         {marked("true"), true},
+		"the reply a resume writes":        {ctSynthetic(ctUUID(30), ctUUID(31)), false},
+		"a model's reply, which says none": {ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"done."}]`), false},
+		"a result carrying the mark": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"isApiErrorMessage":true,"type":"user"`), false},
+	} {
+		if failed, err := ctLine(t, tc.record).APIError(); failed != tc.failed || err != nil {
+			t.Errorf("%s reads as a failed request's %t, %v; want %t", name, failed, err, tc.failed)
+		}
+	}
+	for name, mark := range map[string]string{"null": `null`, "a string": `"true"`, "a number": `1`, "an object": `{}`} {
+		if failed, err := ctLine(t, marked(mark)).APIError(); err == nil {
+			t.Errorf("a reply whose mark is %s reads as a failed request's %t, want an error", name, failed)
+		}
+	}
+}
+
 // ctUsage is the usage ctAssistant's message carries, as written.
 const ctUsage = `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
 	`"output_tokens":20}`

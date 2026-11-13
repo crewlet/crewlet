@@ -123,9 +123,10 @@ import (
 //     the integer 1, a request shape, and a description or none; and that
 //     call is exactly one counted Agent or Task call of the main thread.
 //  2. WHOLE: no line of its thread is no record; every user and assistant
-//     record is its own, its `agentId` and `isSidechain` true, and its message
-//     and its stop reason decode; no record names another agent; and its
-//     thread never restarts, so its first chained record roots its chain.
+//     record is its own, its `agentId` and `isSidechain` true, and its
+//     message, its stop reason and its mark of an API error decode; no record
+//     names another agent; and its thread never restarts, so its first
+//     chained record roots its chain.
 //  3. EVERY LEG ANSWERED, LIVE IN THE MAIN THREAD. Its legs are the call that
 //     started it, and every SendMessage call of the main thread to it, but one
 //     its own result refused (`success`, the literal false); a SendMessage
@@ -145,11 +146,17 @@ import (
 //     thread gave it; a message the main thread holds no call of, a skill's
 //     text among them, is one more.
 //  5. EVERY LEG FINISHED: each stretch of its thread from one leg's start to
-//     the next ends on a reply of text or thinking alone that did not stop for
-//     calls. A reply that wrote text and then called a tool is two records,
-//     the text's first, each saying it stopped for the call: a thread cut
-//     between the two ends on text, which only the stop reason tells from a
-//     finished reply.
+//     the next ends on a reply of text or thinking alone with which its model
+//     ended its turn: its stop reason "end_turn" and no API error, as Claude
+//     Code itself tests a reply that ended its turn. A reply that wrote text
+//     and then called a tool is two records, the text's first, each saying it
+//     stopped for the call: a thread cut between the two ends on text, which
+//     only the stop reason tells from a finished reply. And a request that
+//     failed for good leaves a reply the harness wrote itself, the error's
+//     text, stopped at "stop_sequence" and marked an API error
+//     ([threadLine.APIError]), on which the harness ends the subagent and
+//     answers the call that started it as completed: no model read what that
+//     request carried, a call's result among it.
 //
 // A subagent not reported says which condition failed first, in words for
 // the log ([sandbox.SubagentThread.Why]). An origin, an answer's toolUseResult
@@ -271,9 +278,10 @@ const (
 	// claudeForeground is the request shape of a subagent its call waited for,
 	// whose result is its answer.
 	claudeForeground = "foreground"
-	// claudeStoppedForCalls is the stop reason of a reply that stopped for the
-	// calls it made ([threadLine.StopReason]).
-	claudeStoppedForCalls = "tool_use"
+	// claudeEndedTurn is the stop reason of a reply with which its model
+	// ended its turn ([threadLine.StopReason]), the one stop that finishes a
+	// subagent's leg ([finishedReply]).
+	claudeEndedTurn = "end_turn"
 )
 
 // holdingsFloor is [holdingsWriterFloor].
@@ -817,6 +825,11 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 	if stopErr != nil {
 		a.notWhole(fmt.Sprintf("line %d of its thread says no stop reason", line.N), stopErr)
 	}
+	apiError, apiErr := line.APIError()
+	if apiErr != nil {
+		a.notWhole(fmt.Sprintf("line %d of its thread marks an API error in no shape Claude Code writes", line.N),
+			apiErr)
+	}
 	for _, call := range message.Calls() {
 		w.count(agent, call, line.N)
 	}
@@ -825,7 +838,8 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, line threadL
 		a.legStarts++
 	}
 	a.open = true
-	a.finished = head.Type == recordAssistant && stopErr == nil && finishedReply(message.Kinds(), stop)
+	a.finished = head.Type == recordAssistant && stopErr == nil && apiErr == nil &&
+		finishedReply(message.Kinds(), stop, apiError)
 }
 
 // notWhole says why a's thread is not whole, where nothing has yet.
@@ -856,10 +870,19 @@ func legStart(message threadMessage) bool {
 }
 
 // finishedReply reports whether an assistant record whose blocks are kinds,
-// its reply stopped for stop, ends a leg: blocks of text and thinking alone,
-// at least one, of a reply that did not stop for calls.
-func finishedReply(kinds []string, stop string) bool {
-	if len(kinds) == 0 || stop == claudeStoppedForCalls {
+// its reply stopped for stop and written by its harness in place of a failed
+// request's where apiError, ends a leg: a reply with which its model ended its
+// turn, as Claude Code itself tests one (its stop reason "end_turn" and no
+// API error), of blocks of text and thinking alone, at least one.
+//
+// "END_TURN" ALONE, never any stop but a call's: every reply the harness
+// writes itself stops at "stop_sequence", a failed request's error and a
+// resume's "No response requested." among them, and no model read what came
+// before either; and a reply cut at its token bound ("max_tokens") or refused
+// ended no turn its model chose to end. Each leaves its leg unfinished, the
+// safe direction.
+func finishedReply(kinds []string, stop string, apiError bool) bool {
+	if len(kinds) == 0 || apiError || stop != claudeEndedTurn {
 		return false
 	}
 	return !slices.ContainsFunc(kinds, func(kind string) bool {

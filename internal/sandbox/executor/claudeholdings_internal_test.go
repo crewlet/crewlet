@@ -1143,6 +1143,17 @@ func hsFinished(t *testing.T, parent, uuid string) string {
 	return hsReply(t, parent, uuid, `[{"type":"text","text":"done."}]`, `"end_turn"`)
 }
 
+// hsAPIError is the reply Claude Code writes itself, chained to parent, where
+// its request failed for good, as 2.1.310 and 2.1.322 write one, abridged: the
+// resume's own reply's shape ([ctSynthetic]: its model "<synthetic>", stopped
+// at "stop_sequence"), its text the error's and its mark of an API error
+// true, and none of the error's own keys beside it.
+func hsAPIError(t *testing.T, parent, uuid string) string {
+	t.Helper()
+	return ctReplace(t, ctReplace(t, ctSynthetic(parent, uuid), "No response requested.", "API Error: 529 Overloaded"),
+		`"isApiErrorMessage":false`, `"isApiErrorMessage":true`)
+}
+
 // hsCallOf is a model's call id of tool with input, a JSON object, as an
 // assistant record's content.
 func hsCallOf(id, tool, input string) string {
@@ -1302,8 +1313,12 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // answered by the resume's own result (condition 3), are not. Built, each
 // otherwise reportable: a subagent whose metadata is missing or names a call
 // of another tool; whose thread restarts, opens on a record that roots no
-// chain, ends on an empty reply or on the text of a reply cut before its call,
-// or holds a skill's text, a leg the main thread holds no call of (d4's
+// chain, ends on an empty reply, on the text of a reply cut before its call, on
+// a reply its harness wrote itself (a failed request's error, which ends the
+// subagent and answers its call completed, or a resume's "No response
+// requested."), on one marked an API error though it ended its turn, or on one
+// cut at its token bound, or holds a skill's text, a leg the main thread holds
+// no call of (d4's
 // record); whose thread starts a second leg it finished, the main thread
 // holding no call of it (condition 4 alone); whose Agent call's answer names
 // another agent or is a background subagent's; whose notification precedes a
@@ -1314,7 +1329,10 @@ type hsMeasured map[string][]sandbox.LoggedCall
 //
 // Mutation: ignore a restart in a subagent's thread, and the restarted one is
 // reported; drop condition 4, and the second leg's subagent is reported; take
-// a reply of text for finished whatever it stopped for, and the cut pair's is.
+// a reply of text for finished whatever it stopped for, and the cut pair's is;
+// take one for finished whatever it stopped for but a call, and the resume's
+// own reply's is; or read past a reply's mark of an API error, and the marked
+// reply's is.
 func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
 	t.Parallel()
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
@@ -1362,6 +1380,24 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 			s.thread[3] = hsSide(t, hsReply(t, ctUUID(103), ctUUID(104),
 				`[{"type":"text","text":"Now the next call."}]`, `"tool_use"`))
 		}), hsUnfinished},
+		"its last reply its harness's own, for a request that failed": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, hsAPIError(t, ctUUID(103), ctUUID(104)))
+		}), hsUnfinished},
+		"its last reply its harness's own, a resume's": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, ctSynthetic(ctUUID(103), ctUUID(104)))
+		}), hsUnfinished},
+		"its last reply ended its turn, marked an API error": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, ctReplace(t, hsFinished(t, ctUUID(103), ctUUID(104)), `"type":"assistant"`,
+				`"isApiErrorMessage":true,"type":"assistant"`))
+		}), hsUnfinished},
+		"its last reply cut at its token bound": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, hsReply(t, ctUUID(103), ctUUID(104), `[{"type":"text","text":"done."}]`,
+				`"max_tokens"`))
+		}), hsUnfinished},
+		"its last reply's mark of an API error no boolean": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, ctReplace(t, hsFinished(t, ctUUID(103), ctUUID(104)), `"type":"assistant"`,
+				`"isApiErrorMessage":"false","type":"assistant"`))
+		}), hsNotWhole},
 		"a skill's text in its thread (d4's record)": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread = []string{s.thread[0], s.thread[1], s.thread[2],
 				hsSide(t, ctSkillText(ctUUID(103), ctUUID(110))), hsSide(t, hsFinished(t, ctUUID(110), ctUUID(104)))}

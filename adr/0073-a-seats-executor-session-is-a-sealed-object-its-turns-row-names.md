@@ -2395,11 +2395,15 @@ did not refuse) has a live answer in the main thread, the call's own completed
 foreground answer or a task notification, which a continuation hands its model
 verbatim (probe T, T10), and a SendMessage under an id the log keeps none of is
 a leg nothing answers; its thread starts no more legs than that; and each leg
-ends on a finished reply. A call in an unreported subagent's thread is told
-under that subagent's heading. A seat server's call needs no rule of its own:
-every continuation probe T made carried the call and its result whether its
-server answered, was left out, held its `initialize`, refused it, or no longer
-offered the tool (T6).
+ends on a reply its model ended its turn with, its stop reason `end_turn` and
+no API error, as Claude Code itself tests one: a request that fails for good
+leaves a reply the harness writes itself, its text the error's, on which it
+ends the subagent and answers the call that started it as completed, though no
+model read what that request carried. A call in an unreported subagent's
+thread is told under that subagent's heading. A seat server's call needs no
+rule of its own: every continuation probe T made carried the call and its
+result whether its server answered, was left out, held its `initialize`,
+refused it, or no longer offered the tool (T6).
 
 **A continuation's first request is its caller's question, not the reading's.**
 Claude Code compacts a conversation before a request wherever its own count of
