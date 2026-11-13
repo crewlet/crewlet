@@ -34,7 +34,8 @@ func (n *writeNode) observe(handle, turn string, evidence atlas.Evidence, c atla
 	return res
 }
 
-// AN AGENT'S CLAIM LANDS ON EVERY NODE WITH ITS TURN AND ITS EVIDENCE, the
+// AN AGENT'S CLAIM LANDS ON EVERY NODE WITH ITS TURN, ITS EVIDENCE AND THE
+// TOOL IT CITED, the
 // seat as its source whatever the claim said, so its confidence is read off
 // the record on every node alike and chosen by nobody.
 //
@@ -45,8 +46,12 @@ func TestAnAgentsClaimLandsOnEveryNodeWithItsEvidence(t *testing.T) {
 	log := openAtlasLog(t)
 	a, b := newWriteNode(t, log, "data-1"), newWriteNode(t, log, "data-2")
 	a.observe("sre", "run-7", atlas.EvidenceCall, must(t)(atlas.Exists(orders, asAgent, writerClock)))
-	b.observe("sre", "run-7", atlas.EvidenceFile,
-		must(t)(atlas.Says(orders, atlas.FactEngine, "postgres", asAgent, writerClock)))
+	// AND THE TOOL IT CITED, where the turn's node named one.
+	if _, err := b.writer.Observe(t.Context(), agentCall("sre"),
+		must(t)(atlas.Says(orders, atlas.FactEngine, "postgres", asAgent, writerClock)),
+		atlasdomain.Observation{Turn: "run-7", Evidence: atlas.EvidenceFile, Tool: "code_read"}); err != nil {
+		t.Fatal(err)
+	}
 	a.drain()
 	b.drain()
 	if got, want := a.dump(), b.dump(); !maps.EqualFunc(got, want, func(x, y []string) bool {
@@ -62,6 +67,7 @@ func TestAnAgentsClaimLandsOnEveryNodeWithItsEvidence(t *testing.T) {
 		want := atlas.AgentSource("sre", "run-7", atlas.EvidenceCall)
 		if c.Facet.Kind == atlas.FacetFact {
 			want.Evidence = atlas.EvidenceFile
+			want = want.Citing("code_read")
 		}
 		if c.Source != want {
 			t.Errorf("the %s claim landed as %+v, want %+v", c.Facet.Kind, c.Source, want)
@@ -92,6 +98,9 @@ func TestOnlyAnAgentObservesAndNamesItsTurn(t *testing.T) {
 		{Turn: strings.Repeat("r", atlasdomain.MaxTurnBytes+1), Evidence: atlas.EvidenceCall},
 		{Turn: "run-1"},
 		{Turn: "run-1", Evidence: "hearsay"},
+		// A CITED TOOL IS A NAME, never a value shaped like a credential.
+		{Turn: "run-1", Evidence: atlas.EvidenceCall, Tool: "ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
+		{Turn: "run-1", Evidence: atlas.EvidenceCall, Tool: "two words"},
 	} {
 		if _, err := n.writer.Observe(t.Context(), agentCall("sre"), claim, bad); !errors.Is(err, atlasdomain.ErrInvalid) {
 			t.Errorf("an observation %+v was recorded: %v", bad, err)

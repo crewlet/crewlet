@@ -68,6 +68,7 @@ import type {
   AtlasLogAnswer,
   AtlasMapAnswer,
   AtlasReviewAnswer,
+  AtlasSourcesAnswer,
   AtlasTraceAnswer,
 } from "../contract/atlas.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
@@ -7968,6 +7969,8 @@ export interface QueryMap {
   atlas_activity: AtlasActivityAnswer;
   /** What waits for a person in the atlas, computed on the read. */
   atlas_review: AtlasReviewAnswer;
+  /** Each source the atlas reads for the company, and the ask waiting on it. */
+  atlas_sources: AtlasSourcesAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

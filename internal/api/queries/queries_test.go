@@ -366,6 +366,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"atlas_log":      string(iam.GrantAtlas),
 		"atlas_activity": string(iam.GrantAtlas),
 		"atlas_review":   string(iam.GrantAtlas),
+		"atlas_sources":  string(iam.GrantAtlas),
 		// GITLET'S ROWS, each asked behind the gitlet app (ADR-0110) and
 		// decided per repository by the grant the serving node derives from
 		// its chart (gitlet.GrantOf, ADR-0088): a listing leaves out what the

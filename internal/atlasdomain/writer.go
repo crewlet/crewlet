@@ -218,6 +218,11 @@ type Observation struct {
 	// Evidence is what the cited call of that turn is evidence of, derived
 	// from the call's tool by the engine and never passed by the agent.
 	Evidence atlas.Evidence
+
+	// Tool is the cited call's tool, by name, so a person reviewing the
+	// claim is told which call it rests on. Empty where the name is not one
+	// a record keeps ([atlas.CitableTool]).
+	Tool string
 }
 
 // Observe writes one agent's claim on its entry (ADR-0132): an entry, a fact
@@ -244,7 +249,11 @@ func (w *Writer) Observe(ctx context.Context, c Call, claim atlas.Claim, seen Ob
 		return statelog.Result{}, invalid("an agent's claim names the turn it was recorded in, in at most %d bytes",
 			MaxTurnBytes)
 	}
-	return w.claim(ctx, c, claim, atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence), NoIfMatch)
+	if seen.Tool != "" && !atlas.CitableTool(seen.Tool) {
+		return statelog.Result{}, invalid("the tool an agent's claim cites is named by its name, in at most " +
+			"128 letters, digits and separators, and never by a value shaped like a credential")
+	}
+	return w.claim(ctx, c, claim, atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence).Citing(seen.Tool), NoIfMatch)
 }
 
 // claim publishes one claim as src, judged and conditioned as [Writer.Record]

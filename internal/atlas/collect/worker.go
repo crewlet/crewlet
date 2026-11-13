@@ -55,6 +55,11 @@ type Store interface {
 	Load(ctx context.Context) (map[integration.Kind]Status, error)
 	Save(ctx context.Context, st Status) error
 	Forget(ctx context.Context, kind integration.Kind) error
+
+	// Requests is every waiting ask that a source be read now, and Answered
+	// drops one.
+	Requests(ctx context.Context) (map[integration.Kind]Request, error)
+	Answered(ctx context.Context, kind integration.Kind) error
 }
 
 // Options is what a worker is built from.
@@ -231,6 +236,14 @@ func (w *Worker) Tick(ctx context.Context) {
 			"detail", "no source is read this tick; the recorded standings are still what the API serves")
 		return
 	}
+	asked, err := w.store.Requests(ctx)
+	if err != nil {
+		// THE CADENCE DOES NOT WAIT ON THE ASKS: every source is still read
+		// when it is due, and an ask is honoured by the tick that reads it.
+		log.WarnContext(ctx, "atlas_source_refresh_asks_unreadable", "error", err,
+			"detail", "every source is read on its own cadence this tick; an ask waits for the next")
+		asked = nil
+	}
 	now := w.now().UTC()
 	interval := w.interval()
 	known := map[integration.Kind]bool{}
@@ -253,12 +266,20 @@ func (w *Worker) Tick(ctx context.Context) {
 			if _, hosts := src.(CodeHost); hosts && w.code != nil {
 				w.code.Forget(ctx, kind)
 			}
+			w.answered(ctx, asked, kind)
 			continue
 		}
 		if !found {
 			st = Status{Kind: kind}
 		}
-		if st.Due(now, interval) {
+		req, waiting := asked[kind]
+		if waiting && !req.Waits(st) {
+			// AN ASK A READ ALREADY ANSWERED is dropped: the visit that
+			// answered it could not, where its drop failed or it was made
+			// while the visit ran.
+			w.answered(ctx, asked, kind)
+		}
+		if st.DueFor(now, interval, req) {
 			// STILL OURS? Re-claimed before every source, for the reconcile
 			// loop's reason: a visit makes hundreds of vendor calls, and the
 			// duty's lease is sized for one visit rather than a sweep.
@@ -266,6 +287,9 @@ func (w *Worker) Tick(ctx context.Context) {
 				return
 			}
 			w.visit(ctx, src, in, st, now)
+			// THE VISIT IS THE ANSWER, whatever it found: a read that failed
+			// is on the standing, and asking again is the person's to decide.
+			w.answered(ctx, asked, kind)
 		}
 		// A FORGE'S REPOSITORIES ARE READ AFTER THE FORGE ITSELF, as a visit
 		// of their own: the pass comes due apart from the source's read, and
@@ -286,6 +310,21 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !known[kind] {
 			w.forget(ctx, kind)
 		}
+	}
+	for kind := range asked {
+		if !known[kind] {
+			w.answered(ctx, asked, kind)
+		}
+	}
+}
+
+// answered drops the ask for kind, where asked holds one.
+func (w *Worker) answered(ctx context.Context, asked map[integration.Kind]Request, kind integration.Kind) {
+	if _, waiting := asked[kind]; !waiting {
+		return
+	}
+	if err := w.store.Answered(ctx, kind); err != nil {
+		log.WarnContext(ctx, "atlas_source_refresh_ask_kept", "source", kind.String(), "error", err)
 	}
 }
 

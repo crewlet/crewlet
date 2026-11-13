@@ -27,6 +27,7 @@ import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./provide
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { McpAlarm, McpAlarmEntry, McpAlarmKind } from "~/contract/mcp.ts";
+import type { AtlasReviewItem } from "~/contract/atlas.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import {
   failureWords,
@@ -64,7 +65,7 @@ export type Severity = "critical" | "caution" | "info";
  * sees. Neither half is a convention anybody has to remember.
  */
 export type Subject =
-  "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup" | "alarms" | "holds";
+  "engine" | "budget" | "run" | "seat" | "round" | "tools" | "setup" | "alarms" | "holds" | "atlas";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
@@ -77,6 +78,7 @@ export const SUBJECTS: Record<Subject, string> = {
   setup: "the company's setup",
   alarms: "every alarm the engine raised",
   holds: "every conversation the engine holds",
+  atlas: "what you set in the atlas",
 };
 
 /**
@@ -110,6 +112,7 @@ export const WHERE_OF: Record<Subject, Where> = {
   setup: "seat",
   alarms: "seat",
   holds: "seat",
+  atlas: "seat",
 };
 
 /**
@@ -244,6 +247,44 @@ export interface AttentionInput {
   findings: readonly AdvisorFinding[];
   /** What the advisor could not read, for the same reader; empty when it read everything. */
   setupUnread: readonly string[];
+  /**
+   * What contradicts the reader's own word in the atlas: a fact or a relation
+   * they set or confirmed that a newer report differs from (`atlas_review`
+   * asked with `mine`). Empty for a reader who does not hold Atlas.
+   */
+  atlasDrift: readonly AtlasReviewItem[];
+}
+
+/** A value as a sentence quotes it. */
+function quoted(value: { text: string } | undefined): string {
+  return value ? `"${value.text}"` : "it";
+}
+
+/**
+ * A fact or a relation the reader set, which a newer report now differs
+ * from. The atlas shows both and settles neither, so the person who said it
+ * is told: it is the one thing in Review that reaches an Inbox.
+ */
+function driftRow(item: AtlasReviewItem): Attention {
+  const fact = item.fact;
+  const other = fact?.others?.find((one) => !one.denied && one.value);
+  return {
+    id: `atlas-drift-${item.id}`,
+    severity: "caution",
+    subject: "atlas",
+    icon: "map",
+    title: `${item.entry.name}: a newer report differs from what you set`,
+    detail: fact
+      ? other
+        ? `You set ${quoted(fact.value)}. A newer report says ${quoted(other.value)}. The atlas shows both until somebody decides.`
+        : `You set ${quoted(fact.value)}, and a newer report says otherwise. The atlas shows both until somebody decides.`
+      : "A newer report says otherwise about a relation you set. The atlas shows both until somebody decides.",
+    path: ["company", "atlas", item.entry.id],
+    query: { tab: "sources" },
+    action: "Open the entry to decide",
+    clears: "Clears once somebody keeps one of the two.",
+    at: item.since,
+  };
 }
 
 /** A standing alarm's row: the section that draws it, its nodes and since when. */
@@ -305,7 +346,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
-  const { notices, findings, setupUnread } = input;
+  const { notices, findings, setupUnread, atlasDrift } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -703,6 +744,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       });
     }
   }
+
+  // --- the atlas ------------------------------------------------------------
+  // ONLY DRIFT ON WHAT THE READER SET reaches here. Everything else that
+  // waits in the atlas waits in its own Review, for every holder together.
+  for (const item of atlasDrift) out.push(driftRow(item));
 
   return out.sort((a, b) => {
     const d = ORDER[a.severity] - ORDER[b.severity];

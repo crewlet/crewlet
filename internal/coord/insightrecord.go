@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,22 +68,27 @@ type InsightRecord struct {
 // MaxInsightPayloadBytes is the most a record's body may hold: the relay's limit.
 const MaxInsightPayloadBytes = 2 << 10
 
+// The shapes a record's class, week and day are held to, COMPILED AT FIRST
+// USE: this package is linked into the hook every push runs, and a pattern
+// compiled at init is paid by every one of them (cmd/crewlet's init bound).
 var (
-	insightClassShape = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
-	insightWeekShape  = regexp.MustCompile(`^\d{4}-W\d{2}$`)
-	insightDayShape   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	insightClassShape = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	})
+	insightWeekShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d{4}-W\d{2}$`) })
+	insightDayShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`) })
 )
 
 // Validate refuses a record that is not the shape this file promises.
 func (r InsightRecord) Validate() error {
 	switch {
-	case !insightClassShape.MatchString(r.Class):
+	case !insightClassShape().MatchString(r.Class):
 		return fmt.Errorf("coord: an insight record's class must be a catalogue id")
-	case !insightWeekShape.MatchString(r.Week):
+	case !insightWeekShape().MatchString(r.Week):
 		return fmt.Errorf("coord: an insight record's week must be an ISO week")
 	case !r.Status.Valid():
 		return fmt.Errorf("coord: an insight record's status %q is not one this build names", r.Status)
-	case r.Day != "" && !insightDayShape.MatchString(r.Day):
+	case r.Day != "" && !insightDayShape().MatchString(r.Day):
 		return fmt.Errorf("coord: an insight record's day must be a company day")
 	case len(r.Payload) > MaxInsightPayloadBytes:
 		return fmt.Errorf("coord: an insight record's payload is past %d bytes", MaxInsightPayloadBytes)

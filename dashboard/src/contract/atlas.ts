@@ -152,7 +152,7 @@ type AtlasValueType =
 export type AtlasSourceKind = "settings" | "records" | "integration" | "code" | "agent" | "person";
 
 /** What backs an agent's claim, as the engine checked it (`atlas.Evidence`). */
-type AtlasEvidence = "call" | "file" | "none";
+export type AtlasEvidence = "call" | "file" | "none";
 
 /** How far a claim can be trusted, derived from its source (`atlas.Confidence`),
  *  the most trusted first. */
@@ -366,6 +366,15 @@ export interface AtlasSource {
   revision?: string;
   turn?: string;
   evidence?: AtlasEvidence;
+  /** An agent's alone: the tool whose answer the claim cited, by name. */
+  tool?: string;
+}
+
+/** One agent's word on an entry (`atlas.Report`): who reported it, in which
+ *  turn, citing which call, and when. */
+export interface AtlasReport {
+  source: AtlasSource;
+  observed_at: string;
 }
 
 /** Another source's live claim beside the value the atlas holds. */
@@ -555,6 +564,64 @@ export interface AtlasActivityAnswer extends AtlasRead {
   entries: AtlasEntryActivity[];
 }
 
+/** How a source's last read went (`collect.State`): never read, read whole,
+ *  read with some part refused, or not finished. */
+export type AtlasSourceState = "never" | "read" | "partial" | "failed";
+
+/** One part of a vendor a source was refused (`collect.Finding`), and what
+ *  to grant. `scope` names the server the part belongs to, where it has one. */
+interface AtlasSourceFinding {
+  part: string;
+  scope?: string;
+  detail?: string;
+}
+
+/** One part of a source with a standing of its own (`collect.Scope`): a
+ *  server of the SSH source. `last_read_at` is its last whole read, absent
+ *  where it has none, and `unread` how many of its parts the last read was
+ *  refused. */
+export interface AtlasSourceScope {
+  id: string;
+  last_read_at?: string;
+  unread?: number;
+}
+
+/** One source as a reader is shown it (`collect.Standing`). The counts are
+ *  the last complete read's; `withheld` counts the values left out for their
+ *  shape, which are never shown. `last_error` is sent to an administrator
+ *  alone. `next_read_at` is absent where the source is due now,
+ *  `refresh_requested_at` where no ask waits on it, and `refreshable_at`
+ *  where an ask is honoured at once. */
+export interface AtlasSourceStanding {
+  kind: string;
+  state: AtlasSourceState;
+  last_attempt_at?: string;
+  last_complete_at?: string;
+  entries: number;
+  calls: number;
+  withheld: number;
+  recorded: number;
+  retired: number;
+  purged: number;
+  missing: number;
+  last_error?: string;
+  unread: AtlasSourceFinding[];
+  unread_overflow: number;
+  scopes: AtlasSourceScope[];
+  next_read_at?: string;
+  refresh_requested_at?: string;
+  refresh_requested_by?: string;
+  refreshable_at?: string;
+}
+
+/** `atlas_sources`: each source the atlas reads for the company, in the order
+ *  of their names, and the cadence they are read on. */
+export interface AtlasSourcesAnswer {
+  sources: AtlasSourceStanding[];
+  refresh_interval_seconds: number;
+  refresh_floor_seconds: number;
+}
+
 /** One thing that waits for a person (`atlas.ReviewItem`), computed on every
  *  read and stored nowhere. `fact` or `relation` is what the sources disagree
  *  on, with every other value beside the one shown; both are absent for an
@@ -566,6 +633,9 @@ export interface AtlasReviewItem {
   fact?: AtlasFactView;
   relation?: AtlasEdge;
   target?: AtlasLineTarget;
+  /** For an entry that waits as a whole: each agent's newest word on it,
+   *  newest first, at most five. */
+  reports?: AtlasReport[];
   /** The newest claim the item rests on. */
   since: string;
 }

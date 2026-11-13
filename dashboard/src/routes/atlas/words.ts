@@ -9,9 +9,10 @@ import type { Vendor as MarkVendor } from "@crewlethq/icons";
 import type { GraphEdgeFamily, Tone } from "@crewlethq/ui";
 import type {
   AtlasCoverageSource,
+  AtlasEvidence,
   AtlasFact,
-  AtlasFamily,
   AtlasFactView,
+  AtlasFamily,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
@@ -163,6 +164,22 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   slack: { name: "Slack", mark: "slack" },
   xai: { name: "xAI" },
   other: { name: "Other" },
+};
+
+/** What a source of the atlas is called: its vendor's name, and the servers by what they are. */
+export function sourceName(kind: string): string {
+  if (kind === "ssh") return "Servers";
+  return (VENDORS as Readonly<Record<string, { name: string }>>)[kind]?.name ?? kind;
+}
+
+/**
+ * What the call an agent cited is evidence of, as the clause after the tool's
+ * name. The engine reads the class off the call's tool; the agent never says.
+ */
+export const EVIDENCE: Readonly<Record<AtlasEvidence, string>> = {
+  call: "a read of a server or of a vendor, whose answer the engine checked the record against",
+  file: "a file of a repository, which the engine checked the record against",
+  none: "text anybody could have written, so the engine could check nothing behind it",
 };
 
 /** The three words a confidence reads as. */

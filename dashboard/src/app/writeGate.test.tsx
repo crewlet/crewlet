@@ -77,6 +77,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "an entry's Confirm, Correct and More menu, and the dialog each opens",
     suite: "routes/atlas/writes.test.tsx",
   },
+  "routes/atlas/Sources.tsx": {
+    why: "Refresh now on a source's card, held inside the engine's floor and for a reader who may not ask",
+    suite: "routes/atlas/Sources.test.tsx",
+  },
   "routes/inbox/Inbox.tsx": {
     why: "the Inbox's Mark all read, which reads through the newest notice loaded",
     suite: "routes/inbox/Inbox.test.tsx",

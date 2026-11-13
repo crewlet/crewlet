@@ -714,6 +714,16 @@ export const ACTIONS = {
     refreshes: ATLAS_READS,
     scope: "person",
   },
+  // REFRESH NOW (Atlas › Sources): an ask that one source be read, which the
+  // node holding the collect duty honours within a minute. It writes no log,
+  // so the sources' standings are asked again once it is answered.
+  atlas_refresh: {
+    args: ["integration"],
+    domain: null,
+    apps: ["atlas"],
+    refreshes: ["atlas_sources"],
+    scope: "person",
+  },
   // A PURGE IS AN ADMINISTRATOR'S, after a fresh sign-in check the transport
   // asks for (`protocol/rest.ts`).
   atlas_purge: {
