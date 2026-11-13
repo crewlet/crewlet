@@ -267,9 +267,11 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// [queue.DeliveriesLeftFor].
 		res := runBatchHandler(a.withProgress(a.withHeadroom(ctx, part.Items...), part.Items...),
 			a.log, evs, h)
-		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
+		// IN FLIGHT UNTIL THE OUTCOME IS SETTLED, a dead letter's keep
+		// included, for [attachment.dispatchOne]'s reason.
+		a.q.endHandler()
 		// AFTER THE OUTCOME IS APPLIED: an acked message leaves the
 		// consumer's unfinished count only then, and released before it
 		// would read as waiting for that moment.

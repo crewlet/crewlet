@@ -1327,6 +1327,8 @@ type EventQueue interface {
 
 	// InFlightCount reports handler invocations currently mid-flight —
 	// the number an operator watches converge to zero during a drain.
+	// A delivery is in flight until what its handler returned is settled
+	// (WaitForHandlers says why).
 	InFlightCount() int
 
 	// Backend is a stable lowercase backend name for operator display.
@@ -1357,6 +1359,13 @@ type EventQueue interface {
 	// were still running when the wait ended. Zero means a clean drain;
 	// non-zero means the timeout expired, which is not an error — the
 	// caller owns any "too long" policy. Always PauseDelivery first.
+	//
+	// A HANDLER IS IN FLIGHT UNTIL WHAT IT RETURNED IS SETTLED, not only
+	// until it returned: settling a return that spends a message's
+	// delivery budget is its dead letter's keep, a write that can take as
+	// long as its bytes take to cross a link, and a drain that read the
+	// delivery as finished once its handler returned stopped the queue
+	// under the keep, the copy lost.
 	WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error)
 
 	// Stop closes the connection.

@@ -70,11 +70,14 @@ func TestAPassIsSpacedByItsDeliveriesAndIsNoFailure(t *testing.T) {
 
 // answeredMsg is a delivered message that records what it was answered: the
 // spaced returns ([jetstream.Msg.NakWithDelay]), the immediate ones and the
-// terminations. Anything else it is asked panics on the nil interface it
+// terminations, each termination told to onTerm where a case set one. Its
+// payload is data. Anything else it is asked panics on the nil interface it
 // embeds, which is a case asking for more than it set up.
 type answeredMsg struct {
 	jetstream.Msg
 	md     *jetstream.MsgMetadata
+	data   []byte
+	onTerm func()
 	delays []time.Duration
 	naked  int
 	termed int
@@ -82,10 +85,19 @@ type answeredMsg struct {
 
 func (m *answeredMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.md, nil }
 
+func (m *answeredMsg) Data() []byte { return m.data }
+
 func (m *answeredMsg) NakWithDelay(delay time.Duration) error {
 	m.delays = append(m.delays, delay)
 	return nil
 }
 
-func (m *answeredMsg) Nak() error  { m.naked++; return nil }
-func (m *answeredMsg) Term() error { m.termed++; return nil }
+func (m *answeredMsg) Nak() error { m.naked++; return nil }
+
+func (m *answeredMsg) Term() error {
+	m.termed++
+	if m.onTerm != nil {
+		m.onTerm()
+	}
+	return nil
+}

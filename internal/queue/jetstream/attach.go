@@ -911,8 +911,14 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	held := delivery{msg: msg, ev: ev}
 	done := a.runningOn(ev)
 	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
-	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, not only until
+	// it returned: settling a return that spends the budget is a dead
+	// letter's keep, a write that waits as long as its bytes take to cross
+	// a link, and a drain that read the delivery as finished once the
+	// handler returned stopped the queue under it, the copy lost
+	// ([queue.EventQueue.WaitForHandlers]).
+	a.q.endHandler()
 	done()
 }
 
@@ -1182,6 +1188,22 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 // reader that can handle it now finds it. A keep that fails is logged here,
 // and the caller terminates the message even so ([attachment.returnMsg]).
 //
+// KEPT WHETHER OR NOT THE LOOP IS STOPPING, under ctx's values without its
+// cancellation: a stop cancels the consume loop's context, and the copy of a
+// message whose last delivery a stop met — a hand-back of a batch taken as the
+// queue stopped, or a pass or a failure handled just before — was kept under
+// that context and lost with it, though nothing was wrong with the keep. The
+// write is bounded all the same, by its own budget ([Queue.write]); and a
+// drain waits for it, since a delivery is in flight until its return is
+// settled ([attachment.dispatchOne]).
+//
+// A KEEP THAT FAILS ALL THE SAME LOSES THE COPY, and the message is
+// terminated even so, because nothing would bring it back: the delivery that
+// spent the budget is the broker's last, its MaxDeliver being the budget
+// itself, so left unterminated it sits for the acknowledgement window and is
+// then dropped by the broker's backstop with nothing more said (nats-server
+// v2.15.2, server/consumer.go:2430-2457, hasMaxDeliveries).
+//
 // BARE, the message's own bytes and nothing beside them, whichever subject:
 // the subject says which kind of copy it is, so no copy is too large to be
 // found as what it is ([Queue.deadLetter]).
@@ -1193,8 +1215,11 @@ func (a *attachment) deadLetter(ctx context.Context, data []byte, ev *events.Eve
 
 	queue.LogDeadLettered(ctx, a.log, a.key.topic, a.key.group, ev,
 		int(min(md.NumDelivered, math.MaxInt32)), spent, reason)
-	if err := a.q.deadLetter(ctx, queue.RetiredTo(a.key.topic, a.key.group, spent), data); err != nil {
-		a.log.ErrorContext(ctx, "dead_letter_failed", "error", err.Error())
+	keep := context.WithoutCancel(ctx)
+	if err := a.q.deadLetter(keep, queue.RetiredTo(a.key.topic, a.key.group, spent), data); err != nil {
+		a.log.ErrorContext(ctx, "dead_letter_failed", "error", err.Error(),
+			"detail", "the copy is lost: the delivery that spent the budget is the "+
+				"broker's last, so nothing redelivers the message")
 	}
 }
 

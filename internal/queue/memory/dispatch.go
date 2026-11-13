@@ -520,7 +520,6 @@ func (b *Broker) invoke(
 	res := runHandler(ctx, call)
 
 	b.mu.Lock()
-	client.exitHandlerLocked()
 	var dead []deadLetter
 	switch res.Outcome {
 	case queue.OutcomeDefer:
@@ -549,6 +548,11 @@ func (b *Broker) invoke(
 		// Acked: the events left the mailbox before the call, so there
 		// is nothing to put back.
 	}
+	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, a dead letter's
+	// keep included ([queue.EventQueue.WaitForHandlers]): instant here,
+	// under the lock, where the broker's keep is a write that can cross a
+	// link.
+	client.exitHandlerLocked()
 	b.mu.Unlock()
 
 	// Logging happens OUTSIDE the critical section. A log call is a write

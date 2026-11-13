@@ -1957,7 +1957,8 @@ func (q *Queue) noteConsumerProposal() { q.consumerProposals.Add(1) }
 // through a capability, which is where a backend-specific observable belongs.
 func (q *Queue) ConsumerProposals() int { return int(q.consumerProposals.Load()) }
 
-// InFlightCount reports handler invocations currently mid-flight.
+// InFlightCount reports handler invocations currently mid-flight, each until
+// what its handler returned is settled.
 func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
 // PauseDelivery stops dispatching new events while leaving Publish working,
@@ -1974,10 +1975,10 @@ func (q *Queue) PauseDelivery(context.Context) error {
 	return nil
 }
 
-// WaitForHandlers waits for in-flight handlers, returning how many were
-// still running when the wait ended. Zero means a clean drain; non-zero
-// means the timeout expired, which is not an error — the caller owns any
-// "too long" policy.
+// WaitForHandlers waits for in-flight handlers, and for the settling of what
+// each returned, returning how many were still in flight when the wait ended.
+// Zero means a clean drain; non-zero means the timeout expired, which is not
+// an error — the caller owns any "too long" policy.
 func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error) {
 	return q.inFlight.Wait(ctx, timeout)
 }
