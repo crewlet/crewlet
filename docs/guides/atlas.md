@@ -377,6 +377,21 @@ line with the entry it is about and who recorded it. It lists what people,
 integrations and agents recorded; what the engine reads from the settings and
 its own records at every read leaves no line.
 
+## On Home
+
+**Atlas attention** is a card you can add to your Home (Edit Home, under
+Atlas). It shows how many entries are Alerting and how many Need a look, and
+lists the four most urgent with the reason for each in one sentence. Pressing
+an entry opens it; **Open** goes to the atlas, and a line under the list says
+how many more the page holds.
+
+- When nothing is wrong it says **Nothing is alerting**, with how many entries
+  the atlas holds. It says that only over a read that reached every source: if
+  one was not read, the card names it and says the list may be short.
+- It is offered only to people who hold Atlas. If your access is taken away,
+  the card stays on your Home and says you no longer have access; it shows no
+  entry and reads nothing.
+
 ## Asking about it
 
 [Ask Crewlet](../concepts/assistant.md) reads the atlas as you, through the
