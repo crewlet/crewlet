@@ -1593,18 +1593,20 @@ var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // claudeHostedOff is every variable that, set in a run's environment, starts
 // Claude Code in the mode of Anthropic's own hosted environment (Claude Code on
-// the web), which no box is: CLAUDE_CODE_REMOTE. Switched on, with
+// the web), which no box is: CLAUDE_CODE_REMOTE. Switched on ("1", "true",
+// "yes" or "on", as the harness reads a switch), with
 // CLAUDE_CODE_ENVIRONMENT_KIND absent or `byoc`, it changes what a resume hands
 // its model: unless a flag the harness fetches turns it off, the resume's load
 // gives a record whose parent the transcript does not hold another parent, an
 // earlier record it picks by timestamp, up to 16 times a load, so the run
-// continues a conversation its session never recorded; and 2.1.322 can take
-// another of the conversation's ends as the one it continues. 2.1.322 also
-// raises its heap (`--max-old-space-size=8192`) and admits its coordinator and
-// hermetic modes, which other variables ask for (read in 2.1.310's and
-// 2.1.322's shipped code). No settings file can set it: both releases ignore
-// it in a settings file's `env`, so only the environment the harness starts
-// in can.
+// continues a conversation its session never recorded; and 2.1.322 alone can
+// also take another of the conversation's ends as the one it continues. Both
+// releases also admit their coordinator and hermetic modes with it switched
+// on, which other variables ask for, and where its value is exactly "true"
+// put `--max-old-space-size=8192` in their `NODE_OPTIONS`, a heap limit for
+// the Node processes they start (read in 2.1.310's and 2.1.322's shipped
+// code). No settings file can set it: both releases ignore it in a settings
+// file's `env`, so only the environment the harness starts in can.
 //
 // UNSET RATHER THAN REFUSED, as [claudeSwitchesOff] is: it can arrive from the
 // seat's role.sandbox.env, the image or a profile the login shell sources, and
