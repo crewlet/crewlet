@@ -558,6 +558,11 @@ func TestARepositoryTheListingDoesNotHoldIsReleasedOnlyWhereTheListingIsWhole(t 
 	r.forge.off = true
 	r.now = r.now.Add(time.Hour)
 	r.pass()
+	// And a forge there is nothing to read with is not asked again at once.
+	r.now = r.now.Add(time.Minute)
+	if r.pass() {
+		t.Error("a forge the company does not connect owes a pass a minute after one found that out")
+	}
 	left, err := r.scans.AtlasCodeScans(t.Context())
 	if _, repos := r.standing(); err != nil || len(repos) != 0 || len(r.log.entries(forgeVoice)) != 0 || len(left) != 0 {
 		t.Fatalf("a disconnected forge kept %v, %v and %d standings (%v)", repos, r.log.entries(forgeVoice), len(left), err)

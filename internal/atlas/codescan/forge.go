@@ -72,9 +72,16 @@ type Forges struct {
 	// forge: what lets the duty's every tick ask whether a pass is due
 	// without reading the bucket.
 	standings map[integration.Kind]ForgeStatus
-	// forgotten is the forges this node knows it holds nothing of.
-	forgotten map[integration.Kind]bool
+	// forgotten is when this node last made sure it holds nothing of a
+	// forge the company does not connect.
+	forgotten map[integration.Kind]time.Time
 }
+
+// forgetAgain is how long a forge this node made sure it holds nothing of is
+// taken to hold nothing: an hour, the duty's default interval. The duty asks
+// at every tick, and only another node holding the duty in between could
+// have written a standing since.
+const forgetAgain = time.Hour
 
 // NewForges builds the reader.
 func NewForges(o ForgeOptions) (*Forges, error) {
@@ -87,7 +94,7 @@ func NewForges(o ForgeOptions) (*Forges, error) {
 		return nil, errors.New("codescan: Gitlet's mirrors are required: a mirrored repository is read by Gitlet's scan")
 	}
 	return &Forges{reader: reader{log: o.Log, readings: newReadings(MaxReadingBytes)}, store: o.Store,
-		mirrored: o.Mirrored, standings: map[integration.Kind]ForgeStatus{}, forgotten: map[integration.Kind]bool{}}, nil
+		mirrored: o.Mirrored, standings: map[integration.Kind]ForgeStatus{}, forgotten: map[integration.Kind]time.Time{}}, nil
 }
 
 // Due implements [collect.CodePass].
@@ -133,6 +140,11 @@ func (f *Forges) Pass(ctx context.Context, host collect.CodeHost, in collect.Inp
 	switch {
 	case errors.Is(err, integration.ErrNotConfigured):
 		f.Forget(ctx, kind)
+		// NOT ASKED AGAIN BEFORE THE INTERVAL, remembered here alone: a forge
+		// there is nothing to read with has no standing worth a record.
+		f.mu.Lock()
+		f.standings[kind] = ForgeStatus{Kind: kind, LastAttemptAt: now}
+		f.mu.Unlock()
 		return
 	case err != nil:
 		f.fault(ctx, fs, fmt.Errorf("codescan: open %s: %w", kind, err))
@@ -374,10 +386,11 @@ func (f *Forges) release(ctx context.Context, kind integration.Kind, st Status, 
 // connects has what its repositories' files declared withdrawn, and its
 // standings forgotten.
 func (f *Forges) Forget(ctx context.Context, kind integration.Kind) {
+	now := time.Now().UTC()
 	f.mu.Lock()
-	done := f.forgotten[kind]
+	at, done := f.forgotten[kind]
 	f.mu.Unlock()
-	if done {
+	if done && now.Sub(at) < forgetAgain {
 		return
 	}
 	_, standings, err := f.store.Load(ctx, kind)
@@ -385,7 +398,6 @@ func (f *Forges) Forget(ctx context.Context, kind integration.Kind) {
 		log.WarnContext(ctx, "atlas_forge_standing_unreadable", "forge", kind.String(), "error", err)
 		return
 	}
-	now := time.Now().UTC()
 	for _, voice := range slices.Sorted(maps.Keys(standings)) {
 		if err := f.release(ctx, kind, standings[voice], now); err != nil {
 			log.WarnContext(ctx, "atlas_forge_code_kept", "forge", kind.String(), "error", err,
@@ -399,7 +411,7 @@ func (f *Forges) Forget(ctx context.Context, kind integration.Kind) {
 	}
 	f.mu.Lock()
 	delete(f.standings, kind)
-	f.forgotten[kind] = true
+	f.forgotten[kind] = now
 	f.mu.Unlock()
 }
 
