@@ -319,11 +319,14 @@ func (r BoxReadReply) Err() error {
 // hostSaid is a failure a host's reply flags, as its asker reads it: lead, what
 // the flag names, then the host's own words, then kind's sentence, ONLY where
 // those words do not hold it already. A host's words are its error's text,
-// which holds the sentinel's sentence wherever its error wrapped the sentinel,
-// as a box found gone, a refused read and the store's silence always do; the
-// sentence added again made the asker's log say each failure twice in one
-// line. errors.Is answers kind, and no other sentinel, either way: the words
-// are text, and only the flag says what they are.
+// which holds the sentinel's sentence where that text was built around the
+// sentinel, as a refused read's and the store's silence's always are: the
+// sentence added again made the asker's log say each of those twice in one
+// line. A backend's own sentence for a box that is gone ([boxGone]) does not
+// hold it, the sentinel riding beside the text rather than in it, nor does a
+// read the host's withdrawal cut, and each is said with it once. errors.Is
+// answers kind, and no other sentinel, either way: the words are text, and only
+// the flag says what they are.
 func hostSaid(lead, words string, kind error) error {
 	text := lead + ": " + words
 	if !strings.Contains(words, kind.Error()) {

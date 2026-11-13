@@ -439,14 +439,17 @@ func TestAHostsSilentStoreCrossesTheWireAsOne(t *testing.T) {
 }
 
 // A REPLY'S FLAG IS SAID ONCE, AS WHAT IT IS. A failure the host flags crosses
-// in the host's own words, which already hold the sentinel's sentence wherever
-// its error wrapped the sentinel, and the asker's reading of the flag added it
-// again: its log said the box was gone, the read refused or the store silent
-// twice in one line, and a silent store's reply read "could not read the box",
-// the box's failure, which is exactly what the flag exists to say it is not.
-// So each flagged reply reads as what its flag names, the sentinel's sentence
-// once, the host's words kept whole, and errors.Is still answering the
-// sentinel and no other.
+// in the host's own words, which hold the sentinel's sentence wherever their
+// text was built around the sentinel (a refused read's and the store's
+// silence's always are, as is this case's gone box's), and the asker's reading
+// of the flag added it again: its log said the read refused or the store
+// silent twice in one line, and a silent store's reply read "could not read the
+// box", the box's failure, which is exactly what the flag exists to say it is
+// not. Words that do not hold it (a backend's own sentence for a box that is
+// gone, a read the host's withdrawal cut) are said with it once. So each
+// flagged reply reads as what its flag names, the sentinel's sentence once, the
+// host's words kept whole, and errors.Is still answering the sentinel and no
+// other.
 //
 // Mutation: word an unsettled reply as the box's failure again, or append a
 // flag's sentence whatever the host's words hold, and its case goes red.
