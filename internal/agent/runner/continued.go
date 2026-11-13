@@ -684,8 +684,8 @@ func (r *Runner) readsSince(cursor int) []steer.Read {
 // the header takes every read and every fresh note up to the last served one,
 // and only the fresh notes after that follow it plainly — each one the turn had
 // not read before this brief, which is what the header says of them. A note of
-// fresh its record holds read already — a lost take's, which this brief hands
-// over — is one of reads, at the place the record read it
+// fresh whose place its record holds already, a lost take's, which this brief
+// hands over, or one a hook's serve placed, is one of reads, at that place
 // ([Runner.inReadOrder]).
 func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) []string {
 	reads, fresh = r.inReadOrder(reads, fresh)
@@ -717,21 +717,24 @@ func (r *Runner) toldNotes(reads []steer.Read, unsure bool, fresh []steer.Note) 
 	return append(out, renderedNotes(fresh[upTo:])...)
 }
 
-// inReadOrder is reads together with every note of fresh the run's record holds
-// read already — a take recorded it and its answer was lost, and the take's
-// settle handed it to this brief ([steer.Briefing.Orders]) — in the order the
-// record numbered their reads, and the rest of fresh, the notes the brief is
-// the first to read, in their own order.
+// inReadOrder is reads together with every note of fresh whose place the run's
+// record holds already ([steer.Briefing.Orders]), in the order of the record's
+// places: one it holds read, a take having recorded it and lost its answer and
+// the take's settle having handed it to this brief, and one a hook's serve
+// placed, which the launch's write reads at that place. Then the rest of fresh,
+// which the launch's write reads after every one of them, in their own order.
 //
 // BY THE RECORD'S PLACES, never by when the runner came to hold a note: a read
 // this segment made reaches the runner before the record has numbered it (Order
 // zero), and the source that recorded it says where it is ([Runner.placed]);
 // and a lost take's note is handed over only once its settle is answered — at a
 // later round, after a later take's notes, or at a brief — while the record
-// numbered it where the take was made. Told in the order the runner came to hold
-// them, a person's later note, correcting it, was told ahead of the note it
-// corrects. A read the source has not placed — the first segment's box keeps no
-// record — keeps its turn, after every placed one.
+// numbered it where the take was made; and a note a hook's serve placed waits
+// at that place while a later note, correcting it, is read at a later one. Told
+// in the order the runner came to hold them, a person's later note, correcting
+// it, was told ahead of the note it corrects. A read the source has not placed
+// (the first segment's box keeps no record) keeps its turn, after every placed
+// one.
 func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Read, []steer.Note) {
 	r.mu.Lock()
 	placed := r.placed

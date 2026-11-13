@@ -705,10 +705,10 @@ type Runner struct {
 
 	// placed is the place among the run's record's reads of every note this
 	// segment's source handed over, and of every note the launch's brief
-	// carries that the record holds read already, by id — what the last
-	// brief's source said ([steer.Briefing.Orders]), nil where it keeps no
-	// record. A brief tells the reads in that order ([Runner.inReadOrder]).
-	// Guarded by mu.
+	// carries whose place the record holds already, read already or placed by
+	// a hook's serve, by id: what the last brief's source said
+	// ([steer.Briefing.Orders]), nil where it keeps no record. A brief tells
+	// the reads in that order ([Runner.inReadOrder]). Guarded by mu.
 	placed map[string]int
 
 	// sent is every record this runner publishes off the path of the request
@@ -910,15 +910,15 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// the notes this brief is the first to read. The run is a fresh
 		// session with no conversation of the engine's to carry them in,
 		// so its brief does. See [Runner.steered]. IN THE ORDER THE RECORD
-		// READ THEM, a note a lost take recorded that this brief hands over
-		// among them ([Runner.inReadOrder]).
+		// READ THEM, a note a lost take recorded that this brief hands over,
+		// and one a hook's serve placed, among them ([Runner.inReadOrder]).
 		Steered: r.readFirst(fresh),
 	})
 }
 
 // readFirst is every note the turn has read, rendered, in the order its record
-// read them, and then the notes of fresh it has not read yet
-// ([Runner.inReadOrder]).
+// read them, a note of fresh whose place the record holds already among them,
+// and then the rest of fresh ([Runner.inReadOrder]).
 func (r *Runner) readFirst(fresh []steer.Note) []string {
 	reads, rest := r.inReadOrder(r.readsSince(0), fresh)
 	out := make([]string, 0, len(reads)+len(rest))

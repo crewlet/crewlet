@@ -261,13 +261,17 @@ type Reading struct {
 //
 // Orders is the place among the record's reads (Reading.Order) of every note
 // the segment's source handed it from the record, and of every note of Notes
-// read already by the record's word — a lost take's, whose settle handed it to
-// this brief — by id; nil from a source that keeps no record. A brief tells
-// the notes the turn has read in the order the record numbered their reads, and
-// the reads a segment makes reach it before the record has numbered them (Order
-// zero), so the source that recorded them says where they are: a note a lost
-// take recorded is then told at its take's place, never after a note a later
-// take read — a correction of it among them.
+// whose place the record holds already, by id: one the record's word reads
+// already, a lost take's, whose settle handed it to this brief; and a waiting
+// one a hook's serve placed (sandbox.RunNote.Place), which the launch's write
+// reads at that place. Nil from a source that keeps no record. A brief tells
+// the notes the turn has read in the order the record numbered their reads,
+// and the reads a segment makes reach it before the record has numbered them
+// (Order zero), so the source that recorded them says where they are: a note a
+// lost take recorded is then told at its take's place, and a note a hook was
+// served at its first serve's, never after a note a later take read, a
+// correction of it among them. A note of Notes it places none of is read at
+// the launch's own place, after every read.
 type Briefing struct {
 	Notes      []Note
 	Unanswered []string

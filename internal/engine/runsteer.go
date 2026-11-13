@@ -1298,8 +1298,14 @@ func notesTaken(candidates []openedNote, taken []sandbox.RunNote) []steer.Note {
 // which the launch's own write records read — and every note the record marks
 // unanswered, by id, read off the same record; and the place among the
 // record's reads of every note this segment's takes handed over, those the
-// brief carries among them ([rowSource.orders]), so the brief tells the turn's
-// read notes in the order the record numbered them.
+// brief carries among them ([rowSource.orders]), and of every note it peeks
+// that a hook's serve placed ([sandbox.RunNote.Place]), so the brief tells the
+// turn's notes in the order the record numbers them.
+//
+// A PEEKED NOTE A HOOK'S SERVE PLACED is read by the launch's write at that
+// place, ahead of a correction a person filed after it and the job's session
+// confirmed: handed with no place, it was told after every read, the
+// correction first.
 //
 // THE MARKS AS THE RECORD HOLDS THEM NOW, never only as the segment's claim
 // read them: a take's settle is made off the path that took, and can mark a
@@ -1332,10 +1338,17 @@ func (r *rowSource) Brief(ctx context.Context) steer.Briefing {
 	// INSIDE NO JOB: the brief is the next job's, and an item on the record is
 	// the job before it's, which the launch's write removes. Peeked here, one
 	// would be written back as a person's note the brief read.
+	orders := r.ordersNow()
 	for _, o := range r.steers.waiting(run.TurnID, run.Steer.Notes, "") {
 		notes = append(notes, o.note)
+		if o.held.Place > 0 {
+			if orders == nil {
+				orders = map[string]int{}
+			}
+			orders[o.held.ID] = o.held.Place
+		}
 	}
-	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: r.ordersNow()}
+	return steer.Briefing{Notes: notes, Unanswered: unansweredNotes(run), Orders: orders}
 }
 
 // ordersNow is the places among the record's reads of the notes this segment's

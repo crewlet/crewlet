@@ -943,6 +943,81 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 	})
 }
 
+// A RELAUNCH'S BRIEF TELLS A NOTE A HOOK'S SERVE PLACED AT THAT PLACE. A note
+// whose first serve to a job's hook fixed its place among the turn's reads
+// (sandbox.RunNote.Place), and which nothing has read since, its hook's answer
+// lost with no cancel heard, waits while a person's later note, correcting it,
+// is served and read at a later place. A relaunch's brief peeks it, and the
+// launch's write reads it at its own place, ahead of the correction: so the
+// brief hands that place beside the places of the reads it carries
+// (steer.Briefing.Orders), and its runner tells the note ahead of the
+// correction, as every later brief does from the record. A note no hook was
+// served takes the write's own place, after every read, and the brief places
+// none.
+//
+// Mutation: hand the brief without a peeked note's place, or place a note no
+// hook was served, and the case goes red.
+func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	serve := func(take string, ids ...string) {
+		t.Helper()
+		if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: ids, Launch: launch,
+			Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: take,
+				Boundary: string(types.SteerBoundaryToolBatch), Iteration: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-a", Text: "deploy to prod", By: "founder"})
+	serve("take-1", "n-a")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-b", Text: "no, deploy to staging", By: "founder"})
+	serve("take-2", "n-b")
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+		Held: []string{"take-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-c", Text: "and tag the release", By: "founder"})
+	source := claimedSource(t, store, runs, launch)
+	brief := source.Brief(ctx)
+	var peeked []string
+	for _, n := range brief.Notes {
+		peeked = append(peeked, n.ID)
+	}
+	if !slices.Equal(peeked, []string{"n-a", "n-c"}) {
+		t.Fatalf("the brief peeks %v, want the note a hook's serve placed and the one no hook was served", peeked)
+	}
+	sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed := mustRow(t, store, "run-1")
+	relaunch := claimed
+	relaunch.BriefNotes = sealed
+	if _, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner,
+		Epoch: claimed.OwnerEpoch}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	places := map[string]int{}
+	for _, read := range runs.carried(mustRow(t, store, "run-1")) {
+		places[read.ID] = read.Order
+	}
+	if places["n-a"] != 1 || places["n-b"] != 2 || places["n-c"] != 3 {
+		t.Fatalf("the premise: the launch's write reads the notes at %v, want n-a at its first serve's place 1, "+
+			"ahead of the correction n-b at 2, and n-c at the write's own place 3", places)
+	}
+	if got, ok := brief.Orders["n-a"]; !ok || got != places["n-a"] {
+		t.Errorf("the brief places the note a hook's serve placed at %d (placed %v), want %d, where the launch's "+
+			"write reads it, ahead of the correction at %d", got, ok, places["n-a"], places["n-b"])
+	}
+	if got, ok := brief.Orders["n-c"]; ok {
+		t.Errorf("the brief places the note no hook was served at %d, want it unplaced: the launch's write reads "+
+			"it after every read", got)
+	}
+}
+
 // A REVIEW'S TAKE STILL LOST AT ITS SEGMENT'S END IS MARKED BEFORE THE SEGMENT
 // RETURNS, so the run's ending reports its note missed. The review's round took
 // a note, the take's answer was lost and its settle went unanswered too, and
