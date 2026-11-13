@@ -2325,7 +2325,13 @@ const (
 	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
 	// sheets about +28,100, the kit's layered service map in the one sheet
 	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
-	treeBudget = 5<<20 + 776<<10
+	// Kit 0.124.0 and the decision rows read in product words took it to
+	// 5898.0 KiB (6,039,547 bytes, +2,441: script +1,811, a held call's
+	// title from its own arguments, the one escalation heading and the row's
+	// detail; the sheets +630, the kit's quiet callout and compact finding
+	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
+	// moves this budget with a reason of its own.
+	treeBudget = 5<<20 + 778<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

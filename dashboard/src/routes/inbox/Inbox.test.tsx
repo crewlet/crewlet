@@ -2431,7 +2431,7 @@ describe("the pane", () => {
         },
       });
       await settle();
-      const by = screen.getByText("Escalated by security-engineer (rule 2)");
+      const by = screen.getByText("Escalated by security-engineer (rule 2), low confidence");
       const findings = screen.getAllByText(
         /Restarts a production service|No item names this server/,
       );
@@ -2440,7 +2440,8 @@ describe("the pane", () => {
         "Finding: Restarts a production service",
         "Finding: No item names this server",
       ]);
-      expect(screen.getByText("Low confidence")).toBeTruthy();
+      // SAID ONCE, on the heading: no second line names the delegate's confidence.
+      expect(screen.queryByText("Low confidence")).toBeNull();
       expect(screen.getByText("Restarts the API outside the change window.")).toBeTruthy();
       const why = screen.getByText("Its delegate was not sure, so it is yours to decide.");
       // THE PANE'S OWN COPY of the call, never the list row's beside it.
@@ -2544,6 +2545,32 @@ describe("the pane", () => {
       expect(within(pane).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
       expect(within(pane).getByRole("button", { name: "Deny" })).toBeTruthy();
       expect(within(pane).queryByRole("button", { name: "Always allow" })).toBeNull();
+    });
+
+    // ONE TITLE FOR A HELD CALL, in product words from its own arguments: the
+    // list's row and the pane's heading draw the same string, never the tool's
+    // name in one and the engine's question in the other. Mutation: word the
+    // list's row by the run's question and this is red.
+    test("the list words a held call as the pane does", async () => {
+      approvals(false);
+      location.hash = "#/inbox?row=run%3Aturn-9";
+      const run = releaseRun("pr_merge", {
+        change: "web!42",
+        head: HEAD,
+        method: "merge",
+        reason: "Fixes the login loop.",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      const titles = screen.getAllByText("Merge change 42 in web?");
+      expect(titles).toHaveLength(2);
+      expect(titles.filter((t) => t.closest(".crewlet-reading-pane"))).toHaveLength(1);
+      expect(screen.queryByText(WHOLE.question)).toBeNull();
     });
 
     test("a held deploy shows its commit, changes, environment, rollback and reason as text", async () => {

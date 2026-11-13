@@ -51,14 +51,26 @@ export function withDelegateWords(d: HeldDelegation, name: Name): string {
 }
 
 /**
- * Who put a call to people: the delegates that answered escalate, or Crewlet,
- * where none did (no answer in time, or the engine overruled their answers).
+ * The one delegate whose answer IS the escalation, or null: a single answer,
+ * and it says escalate. Its name and confidence are then said once, on the
+ * note's heading, and never again on a line of its own.
+ */
+export function soleEscalation(d: HeldDelegation): HeldDelegation["given"][number] | null {
+  const only = d.given.length === 1 ? d.given[0]! : null;
+  return only?.verdict === "escalate" ? only : null;
+}
+
+/**
+ * Who put a call to people, under which rule, and how sure they were: the
+ * delegates that answered escalate, or Crewlet, where none did (no answer in
+ * time, or the engine overruled their answers). The confidence is said here
+ * only for a sole escalation, whose answer has no line of its own.
  */
 export function escalatedByWords(d: HeldDelegation, name: Name): string {
   const by = [...new Set(d.given.filter((g) => g.verdict === "escalate").map((g) => g.by))];
-  return by.length > 0
-    ? `Escalated by ${andList(by.map(name))} (rule ${d.rule})`
-    : `Escalated by Crewlet (rule ${d.rule})`;
+  const who = by.length > 0 ? andList(by.map(name)) : "Crewlet";
+  const sure = confidenceWords(soleEscalation(d)?.confidence ?? "").toLowerCase();
+  return `Escalated by ${who} (rule ${d.rule})${sure ? `, ${sure}` : ""}`;
 }
 
 /** A verdict in a word, and the state it is drawn in: done, needs a person, refused. */

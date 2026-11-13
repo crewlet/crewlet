@@ -14,6 +14,8 @@
  */
 
 import type { McpApprovalAnswer, McpHeldWhole } from "~/contract/mcp.ts";
+import type { ExecutorRow } from "~/protocol/index.ts";
+import { releaseRequestOf } from "./delegation.ts";
 import { pathSegment, rest } from "~/protocol/rest.ts";
 
 /** How a held call is answered: made once, made and its tool set to Always allow, or refused. */
@@ -72,4 +74,88 @@ export function answeredWords(answer: string, by: string): string {
           ? "Denied"
           : "Answered";
   return by ? `${what} by ${by}.` : `${what}.`;
+}
+
+/** What a held call's title is read from: its act, its tool and what the reader is shown of it. */
+export interface HeldCallSubject {
+  /** What approving it does (`held_call.act`); absent for an MCP tool's call. */
+  act?: string | undefined;
+  /**
+   * A call its tool asks about every time (`held_call.fixed`): an engine
+   * tool's, whose question the tool words itself.
+   */
+  fixed?: boolean | undefined;
+  tool: string;
+  /** The server as a person knows it. */
+  server: string;
+  /** What it would send, where this reader is shown it. */
+  args?: Record<string, unknown> | null | undefined;
+  /** The engine's own question for it, where the caller has the run's. */
+  question?: string | undefined;
+}
+
+/**
+ * A GitHub pull request's address or a change's reference (`web!42`), as a
+ * person names it; anything else is said as written.
+ */
+function changeWords(change: string): string {
+  const pull = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/i.exec(change.trim());
+  if (pull) return `pull request ${pull[2]} in ${pull[1]}`;
+  const ref = /^([^!\s]+)!(\d+)$/.exec(change.trim());
+  return ref ? `change ${ref[2]} in ${ref[1]}` : change.trim();
+}
+
+/**
+ * What a held call asks, as its title: ONE SOURCE for the decision row, the
+ * Inbox's list and its reading pane, so the three never word one call two ways.
+ *
+ * IN PRODUCT WORDS FROM THE CALL'S OWN ARGUMENTS where the reader is shown
+ * them: a merge names its change, a deploy its repository and environment, a
+ * command its server. A reader not shown them, and any other call its tool
+ * asks about every time, is asked in the engine's own question, which that
+ * tool words. Only a call neither says (an MCP tool's) is named by its tool,
+ * which is all anybody knows it by. The raw call stays under Arguments
+ * ([heldCallNamed]).
+ */
+export function heldCallTitle(call: HeldCallSubject): string {
+  const request = releaseRequestOf(call.act, call.args);
+  if (request?.act === "pr_merge") return `Merge ${changeWords(request.change)}?`;
+  if (request?.act === "deploy") return `Deploy ${request.repo} to ${request.environment}?`;
+  const host = call.act === "ssh_operate" ? call.args?.host : undefined;
+  if (typeof host === "string" && host.trim()) return `Run a command on ${host.trim()}?`;
+  // THE TOOL'S OWN QUESTION, for every call its tool words: one it asks about
+  // every time, whatever its act. An MCP tool's question is only its name again.
+  const question = (call.question ?? "").trim();
+  const worded = call.fixed === true || (call.act !== undefined && call.act !== "other");
+  if (question && worded) return question;
+  return heldCallNamed(call);
+}
+
+/** The call by its tool and server, as it was made: "Call ask_to_merge on crewlet?". */
+export function heldCallNamed(call: Pick<HeldCallSubject, "tool" | "server">): string {
+  return `Call ${call.tool} on ${call.server}?`;
+}
+
+/** The call a parked run holds, as its title is read from it, or null for a run parked on a question. */
+export function heldRunCall(
+  run: Pick<ExecutorRow, "held_call" | "held_arguments" | "question">,
+): HeldCallSubject | null {
+  const held = run.held_call;
+  if (!held) return null;
+  return {
+    act: held.act,
+    fixed: held.fixed,
+    tool: held.tool,
+    server: held.server,
+    args: run.held_arguments,
+    question: run.question,
+  };
+}
+
+/** The title of the call a parked run holds ([heldCallTitle]), or null for a run parked on a question. */
+export function heldRunTitle(
+  run: Pick<ExecutorRow, "held_call" | "held_arguments" | "question">,
+): string | null {
+  const call = heldRunCall(run);
+  return call ? heldCallTitle(call) : null;
 }

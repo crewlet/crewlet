@@ -638,11 +638,14 @@ export function RaiseBudgetButton({
   handle,
   name,
   window: own,
+  variant = "secondary",
 }: {
   handle: string;
   name: string;
   /** The seat's own window the gate is refusing in, where it names one. */
   window: BudgetWindow | undefined;
+  /** Filled where raising is the row's first way out (a decision row), outlined elsewhere. */
+  variant?: "primary" | "secondary";
 }) {
   const org = useOrgBudget();
   // DRAWN WHERE THE SCREEN PRESENTS IT, outside a table's layer host (`dialogPresenter.tsx`).
@@ -668,7 +671,7 @@ export function RaiseBudgetButton({
     <>
       <Button
         size="small"
-        variant="secondary"
+        variant={variant}
         disabledReason={access.can ? undefined : access.reason}
         title={access.can ? undefined : access.reason}
         onClick={() =>
