@@ -61,6 +61,15 @@
 // records them with [Replace], which withdraws at once what the voice no
 // longer says: a reading that is exact at its instant needs no second miss.
 //
+// # A forge's repositories are a visit of their own
+//
+// A source whose vendor hosts repositories is also a [CodeHost] (ADR-0136):
+// it lists them, and serves a tree and a blob. The duty asks its [CodePass]
+// (codescan.Forges) about every such source after the source's own read; the
+// pass keeps its own standing and comes due apart from the read, and the
+// duty's lease is claimed again for it as for any visit. The seam is here so
+// a vendor implements it without importing the reader of the files.
+//
 // # Values are typed, and a credential has nowhere to go
 //
 // Every value a source reports goes through the vocabulary's grammars

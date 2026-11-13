@@ -1,6 +1,7 @@
 package deployfiles
 
 import (
+	"cmp"
 	"path"
 	"slices"
 	"strings"
@@ -129,6 +130,23 @@ func Classify(p string) (Format, bool) {
 		}
 	}
 	return "", false
+}
+
+// Listed is the files of one tree that are on the list, whoever listed the
+// tree: the first [MaxFiles] of them by path, and how many more the tree
+// holds, none of which is read. BY PATH, so the files past the bound are the
+// same ones on every node and at every read of the commit.
+func Listed[T any](files []T, pathOf func(T) string) (listed []T, more int) {
+	for _, f := range files {
+		if _, ok := Classify(pathOf(f)); ok {
+			listed = append(listed, f)
+		}
+	}
+	slices.SortFunc(listed, func(a, b T) int { return cmp.Compare(pathOf(a), pathOf(b)) })
+	if len(listed) > MaxFiles {
+		more, listed = len(listed)-MaxFiles, listed[:MaxFiles]
+	}
+	return listed, more
 }
 
 // refusedName reports a file refused by its (lowered) name whatever directory

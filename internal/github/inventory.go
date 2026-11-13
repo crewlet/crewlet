@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -29,6 +30,9 @@ type InventoryRepo struct {
 	// is what an Enterprise Server too old to send the word still sends.
 	Visibility string `json:"visibility"`
 	Private    bool   `json:"private"`
+	// PushedAt is the instant of the last push to any branch, as GitHub
+	// wrote it: read as a stamp that moves when the default branch may have.
+	PushedAt string `json:"pushed_at"`
 }
 
 // Workflow is one Actions workflow of a repository.
@@ -181,4 +185,73 @@ func (r installationReader) deploymentStatus(ctx context.Context, repo string, i
 		return DeploymentStatus{}, false, nil
 	}
 	return rows[0], true, nil
+}
+
+// What the atlas reads of a repository's code (ADR-0136): where its default
+// branch is, the tree there and one blob. A commit's message and author and a
+// tree's address ride the same answers and are not decoded.
+
+// branchHead is the commit a repository's branch is at.
+func (r installationReader) branchHead(ctx context.Context, repo, branch string) (string, error) {
+	var out struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	parts := strings.Split(branch, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	err := r.get(ctx, inventoryPath(repo)+"/git/ref/heads/"+strings.Join(parts, "/"), nil, &out)
+	return out.Object.SHA, err
+}
+
+// TreeEntry is one entry of a commit's tree.
+type TreeEntry struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
+	Size int64  `json:"size"`
+}
+
+// tree is every entry of the tree at commit, in one request; truncated is a
+// tree past what GitHub answers in one, of which it lists only a part.
+func (r installationReader) tree(ctx context.Context, repo, commit string) ([]TreeEntry, bool, error) {
+	var out struct {
+		Tree      []TreeEntry `json:"tree"`
+		Truncated bool        `json:"truncated"`
+	}
+	path := inventoryPath(repo) + "/git/trees/" + url.PathEscape(commit)
+	if err := r.get(ctx, path, url.Values{"recursive": {"1"}}, &out); err != nil {
+		return nil, false, err
+	}
+	return out.Tree, out.Truncated, nil
+}
+
+// blob is one object's bytes, at most limit of them; oversize is one past
+// limit, whose content is not decoded.
+func (r installationReader) blob(ctx context.Context, repo, oid string, limit int64) ([]byte, bool, error) {
+	var out struct {
+		Size     int64  `json:"size"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	if err := r.get(ctx, inventoryPath(repo)+"/git/blobs/"+url.PathEscape(oid), nil, &out); err != nil {
+		return nil, false, err
+	}
+	if out.Size > limit {
+		return nil, true, nil
+	}
+	if out.Encoding != "base64" {
+		return nil, false, fmt.Errorf("github: a blob of %s is encoded as %q, not base64", repo, out.Encoding)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(out.Content, "\n", ""))
+	if err != nil {
+		return nil, false, fmt.Errorf("github: decode a blob of %s: %w", repo, err)
+	}
+	if int64(len(raw)) > limit {
+		return nil, true, nil
+	}
+	return raw, false, nil
 }

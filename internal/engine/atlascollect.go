@@ -2,12 +2,18 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/codescan"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE ATLAS-COLLECT DUTY, wired: the fleet singleton that reads each connected
@@ -52,10 +58,19 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 		log.ErrorContext(ctx, "atlas_collect_unavailable", "error", err)
 		return
 	}
+	duty := atlasCollectLog{Reader: reader, Writer: writer}
+	forges, err := e.atlasForges(duty)
+	if err != nil {
+		log.ErrorContext(ctx, "atlas_collect_unavailable", "error", err)
+		return
+	}
 	worker, err := collect.New(collect.Options{
 		Sources: e.atlasSources(),
 		Store:   store,
-		Log:     atlasCollectLog{Reader: reader, Writer: writer},
+		Log:     duty,
+		// AND EACH FORGE'S REPOSITORIES' FILES, where Gitlet mirrors none
+		// of them (ADR-0136): a visit of the same duty, after the forge's.
+		Code: forges,
 		// THE LIVE DOCUMENT AND THIS NODE'S RESOLVER, read on every tick:
 		// a source resolves its own credential from them, and an apply can
 		// change both.
@@ -99,6 +114,52 @@ func (e *Engine) startAtlasCollect(ctx context.Context) {
 // access log.
 func (e *Engine) atlasSources() []collect.Source {
 	return append(collect.Registered(), sshint.NewAtlasSource(e.sshRun()))
+}
+
+// atlasForges is the reader of the files of the repositories a forge hosts
+// and Gitlet does not mirror: its standings beside the scan's own in the
+// fleet's coordination store, and the atlas log as the duty holds it.
+func (e *Engine) atlasForges(duty collect.Log) (*codescan.Forges, error) {
+	store, err := codescan.NewForgeStore(e.backends.Fleet)
+	if err != nil {
+		return nil, err
+	}
+	return codescan.NewForges(codescan.ForgeOptions{Log: duty, Store: store, Mirrored: e.atlasMirrored})
+}
+
+// atlasMirrored is the atlas key of every repository a Gitlet repository
+// pulls from, read from Gitlet's own listing of its mirrors: the engine's
+// read, which no principal makes. A company that keeps no code in Gitlet
+// mirrors nothing. Only the address is read; the credential beside it is a
+// reference, and is not.
+func (e *Engine) atlasMirrored(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	company := e.Company()
+	if company == nil || company.Config == nil || company.Config.CodeBackendFor() != config.CodeGitlet {
+		return out, nil
+	}
+	if e.router == nil {
+		return nil, errors.New("engine: this node reaches no Gitlet to list the mirrors of")
+	}
+	for cursor := ""; ; {
+		page, err := e.router.Code().Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadMirrorsDue, Cursor: cursor,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			return nil, fmt.Errorf("engine: list Gitlet's mirrors: %w", err)
+		}
+		for _, m := range page.Mirrors {
+			if m.From == nil {
+				continue
+			}
+			// AN ADDRESS THAT IS NO FORGE'S KEY mirrors nothing a forge lists.
+			if key, err := atlas.RepositoryKeyOf(m.From.URL); err == nil {
+				out[key] = true
+			}
+		}
+		if cursor = page.Next; cursor == "" {
+			return out, nil
+		}
+	}
 }
 
 // atlasCollectLog is the atlas log's two sides as the duty takes them: this

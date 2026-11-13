@@ -13,7 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/codescan"
-	"github.com/crewlet/crewlet/internal/atlasdomain"
+	"github.com/crewlet/crewlet/internal/atlas/collect/collecttest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/deployfiles"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -114,86 +114,15 @@ func (c *fakeCode) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAnsw
 	return gitlet.GitAnswer{Kind: q.Kind, CodeFiles: ans}, nil
 }
 
-// fakeLog is the atlas log as the scan writes it: every voice's live claims.
-type fakeLog struct {
-	mu      sync.Mutex
-	live    map[atlas.Source]map[atlas.Ref]map[string]atlas.Claim
-	reads   []atlasdomain.ReadInput
-	callers []iam.Actor
-	purged  map[atlas.Ref]bool
-	refuse  error
-}
+// fakeLog is the atlas log as the scan writes it, in memory.
+type fakeLog struct{ *collecttest.Log }
 
-func newFakeLog() *fakeLog {
-	return &fakeLog{live: map[atlas.Source]map[atlas.Ref]map[string]atlas.Claim{}, purged: map[atlas.Ref]bool{}}
-}
-
-func (l *fakeLog) LiveOf(_ context.Context, src atlas.Source, _ statelog.Freshness) (atlasdomain.Live, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := atlasdomain.Live{Complete: true}
-	for _, slots := range l.live[src] {
-		for _, c := range slots {
-			out.Claims = append(out.Claims, c)
-		}
-	}
-	return out, nil
-}
-
-func (l *fakeLog) Read(_ context.Context, c atlasdomain.Call, in atlasdomain.ReadInput) (statelog.Result, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	switch {
-	case l.refuse != nil:
-		return statelog.Result{}, l.refuse
-	case l.purged[in.Entry]:
-		return statelog.Result{}, atlasdomain.ErrPurged
-	}
-	l.callers = append(l.callers, c.By)
-	l.reads = append(l.reads, in)
-	voice := l.live[in.Source]
-	if voice == nil {
-		voice = map[atlas.Ref]map[string]atlas.Claim{}
-		l.live[in.Source] = voice
-	}
-	slots := voice[in.Entry]
-	if slots == nil {
-		slots = map[string]atlas.Claim{}
-		voice[in.Entry] = slots
-	}
-	for _, claim := range in.Claims {
-		claim.Source, claim.ObservedAt = in.Source, in.ObservedAt
-		if err := claim.Validate(); err != nil {
-			return statelog.Result{}, err
-		}
-		slots[claim.Slot()] = claim
-	}
-	for _, slot := range in.Withdrawn {
-		delete(slots, slot)
-	}
-	if len(slots) == 0 {
-		delete(voice, in.Entry)
-	}
-	return statelog.Result{}, nil
-}
+func newFakeLog() *fakeLog { return &fakeLog{collecttest.NewLog()} }
 
 // entries is the entries the repository's voice holds, in order.
-func (l *fakeLog) entries(repo string) []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var out []string
-	for r := range l.live[atlas.CodeSource(repo)] {
-		out = append(out, r.String())
-	}
-	sort.Strings(out)
-	return out
-}
+func (l *fakeLog) entries(repo string) []string { return l.Entries(atlas.CodeSource(repo)) }
 
-func (l *fakeLog) written() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.reads)
-}
+func (l *fakeLog) written() int { return l.Written() }
 
 type rig struct {
 	t       *testing.T
@@ -300,7 +229,7 @@ func TestARepositoryIsReadWhenItsDefaultBranchMovesAndOnlyWhatChanged(t *testing
 		st.Name != "shop" || st.Rules != codescan.Rules {
 		t.Fatalf("the standing after the first pass: %+v", st)
 	}
-	for _, by := range r.log.callers {
+	for _, by := range r.log.Callers {
 		if by.Kind != iam.ActorSystem || by.Name != codescan.Name {
 			t.Errorf("a record was written as %+v, want the engine's own worker", by)
 		}
@@ -512,7 +441,7 @@ func TestAFailedPassWaitsAndAPurgedEntryIsCounted(t *testing.T) {
 		t.Fatalf("a repository whose pass just failed is due at once: %v", due)
 	}
 	r.now = r.now.Add(codescan.RetryAfter)
-	r.log.purged[atlas.MustRef(atlas.KindAccount, "other/stripe")] = true
+	r.log.Purged[atlas.MustRef(atlas.KindAccount, "other/stripe")] = true
 	r.pass()
 	st = r.status(shopID)
 	if !st.Completed || st.LastError != "" || st.Purged != 1 || st.Recorded != 3 {

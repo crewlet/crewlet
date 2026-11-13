@@ -82,6 +82,10 @@ type Options struct {
 	// is claimed, so a shedding node's lease lapses; nil admits.
 	Admits func() bool
 
+	// Code reads the files of the repositories each forge among the sources
+	// hosts ([CodePass]); nil reads none.
+	Code CodePass
+
 	// Tick overrides [Tick]; zero takes it. Now is the clock; nil is the
 	// wall clock in UTC.
 	Tick time.Duration
@@ -97,6 +101,7 @@ type Worker struct {
 	interval func() time.Duration
 	claim    func(context.Context) (bool, error)
 	admits   func() bool
+	code     CodePass
 	tick     time.Duration
 	now      func() time.Time
 
@@ -124,7 +129,8 @@ func New(opts Options) (*Worker, error) {
 	}
 	w := &Worker{
 		sources: opts.Sources, store: opts.Store, log: opts.Log, input: opts.Input,
-		interval: opts.Interval, claim: opts.ClaimDuty, admits: opts.Admits, tick: opts.Tick, now: opts.Now,
+		interval: opts.Interval, claim: opts.ClaimDuty, admits: opts.Admits, code: opts.Code, tick: opts.Tick,
+		now: opts.Now,
 	}
 	if w.sources == nil {
 		w.sources = Registered()
@@ -242,21 +248,37 @@ func (w *Worker) Tick(ctx context.Context) {
 			if found {
 				w.forget(ctx, kind)
 			}
+			// AND WHAT ITS REPOSITORIES' FILES DECLARED IS WITHDRAWN: a
+			// forge the company disconnected is one nothing reads again.
+			if _, hosts := src.(CodeHost); hosts && w.code != nil {
+				w.code.Forget(ctx, kind)
+			}
 			continue
 		}
 		if !found {
 			st = Status{Kind: kind}
 		}
-		if !st.Due(now, interval) {
-			continue
+		if st.Due(now, interval) {
+			// STILL OURS? Re-claimed before every source, for the reconcile
+			// loop's reason: a visit makes hundreds of vendor calls, and the
+			// duty's lease is sized for one visit rather than a sweep.
+			if !w.holdsDuty(ctx) {
+				return
+			}
+			w.visit(ctx, src, in, st, now)
 		}
-		// STILL OURS? Re-claimed before every source, for the reconcile
-		// loop's reason: a visit makes hundreds of vendor calls, and the
-		// duty's lease is sized for one visit rather than a sweep.
-		if !w.holdsDuty(ctx) {
-			return
+		// A FORGE'S REPOSITORIES ARE READ AFTER THE FORGE ITSELF, as a visit
+		// of their own: the pass comes due apart from the source's read, and
+		// the lease is re-claimed for it as for any visit.
+		if host, hosts := src.(CodeHost); hosts && w.code != nil && w.code.Due(ctx, kind, interval, now) {
+			if !w.holdsDuty(ctx) {
+				return
+			}
+			bounded, cancel := context.WithTimeout(ctx, VisitDeadline)
+			in.Now = now
+			w.code.Pass(bounded, host, in, now)
+			cancel()
 		}
-		w.visit(ctx, src, in, st, now)
 	}
 	// A STANDING WITH NO SOURCE IN THIS BUILD is forgotten too: a build
 	// that dropped a vendor's source would otherwise show it as read.

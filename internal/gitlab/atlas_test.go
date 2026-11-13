@@ -39,11 +39,15 @@ const (
 	atlasAdminToken = "admin-token-value"
 )
 
-// glProject is one project at the fake.
+// glProject is one project at the fake. files is every file of its default
+// branch's tree, and links the symbolic links beside them, by path.
 type glProject struct {
 	row       map[string]any
 	pipelines []map[string]any
 	envs      []map[string]any
+	head      string
+	files     map[string]string
+	links     map[string]string
 }
 
 // hub is a GitLab group as the atlas reads it. A path named in refuse answers
@@ -65,6 +69,9 @@ var (
 	projectRoute     = regexp.MustCompile(`^/api/v4/projects/([^/]+)$`)
 	pipelinesRoute   = regexp.MustCompile(`^/api/v4/projects/(\d+)/pipelines$`)
 	environmentsList = regexp.MustCompile(`^/api/v4/projects/(\d+)/environments$`)
+	branchRoute      = regexp.MustCompile(`^/api/v4/projects/(\d+)/repository/branches/([^/]+)$`)
+	treeRoute        = regexp.MustCompile(`^/api/v4/projects/(\d+)/repository/tree$`)
+	blobRoute        = regexp.MustCompile(`^/api/v4/projects/(\d+)/repository/blobs/([0-9a-f]+)/raw$`)
 	environmentRoute = regexp.MustCompile(`^/api/v4/projects/(\d+)/environments/(\d+)$`)
 )
 
@@ -165,6 +172,50 @@ func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		answer(http.StatusNotFound, map[string]string{"message": "404 Not found"})
+	case branchRoute.MatchString(path):
+		m := branchRoute.FindStringSubmatch(path)
+		p := h.project(m[1])
+		if name, _ := url.PathUnescape(m[2]); name != p.row["default_branch"] {
+			answer(http.StatusNotFound, map[string]string{"message": "404 Branch Not Found"})
+			return
+		}
+		answer(http.StatusOK, map[string]any{"name": m[2], "commit": map[string]any{"id": p.head,
+			"message": canaryText, "author_name": canaryPerson, "author_email": canaryEmail}})
+	case treeRoute.MatchString(path):
+		p := h.project(treeRoute.FindStringSubmatch(path)[1])
+		if q.Get("ref") != p.head || q.Get("recursive") != "true" || q.Get("pagination") != "keyset" {
+			wrong("tree")
+			return
+		}
+		// BY KEYSET: the page after a token, and a link to the next.
+		rows := p.tree()
+		size, _ := strconv.Atoi(q.Get("per_page"))
+		start, _ := strconv.Atoi(q.Get("page_token"))
+		end := min(len(rows), start+size)
+		if end < len(rows) {
+			next := *r.URL
+			nq := next.Query()
+			nq.Set("page_token", strconv.Itoa(end))
+			next.RawQuery = nq.Encode()
+			w.Header().Set("Link", "<https://gitlab.com"+next.String()+`>; rel="next"`)
+		}
+		answer(http.StatusOK, rows[start:end])
+	case blobRoute.MatchString(path):
+		m := blobRoute.FindStringSubmatch(path)
+		for _, body := range h.project(m[1]).files {
+			if gitBlob(body) == m[2] {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				_, _ = w.Write([]byte(body))
+				return
+			}
+		}
+		for _, target := range h.project(m[1]).links {
+			if gitBlob(target) == m[2] {
+				_, _ = w.Write([]byte(target))
+				return
+			}
+		}
+		answer(http.StatusNotFound, map[string]string{"message": "404 Blob Not Found"})
 	case projectRoute.MatchString(path):
 		name, _ := url.PathUnescape(projectRoute.FindStringSubmatch(path)[1])
 		for _, p := range h.projects {
