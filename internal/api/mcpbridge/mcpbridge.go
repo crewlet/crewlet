@@ -1416,6 +1416,11 @@ func (b *Bridge) parse(token string) (subject, bool) {
 func (b *Bridge) held(sub subject) *binding {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	return b.heldLocked(sub)
+}
+
+// heldLocked is [Bridge.held], under b.mu.
+func (b *Bridge) heldLocked(sub subject) *binding {
 	if opened := b.sessions[sub.launch]; opened != nil && opened.session.RunID == sub.run {
 		return opened
 	}
@@ -1446,22 +1451,34 @@ func (b *Bridge) held(sub subject) *binding {
 // already held a call to the incarnation its token names, so an opening that
 // is not here is a run that is over.
 func (b *Bridge) verdict(sub subject) httprelay.Verdict {
-	if sub.route.pinned() {
-		if b.held(sub) != nil {
-			return httprelay.Serve
-		}
-		return httprelay.Refuse
-	}
+	_, verdict := b.holding(sub)
+	return verdict
+}
+
+// holding is this node's live opening of the job a subject names, nil where it
+// holds none ([Bridge.held]), and the node's verdict on the token
+// ([Bridge.verdict]), the two read under one lock.
+//
+// ONE MOMENT FOR BOTH: a seat leaving this node takes its readiness and its
+// openings in one step ([Bridge.ReleaseSeat]), and read apart, the readiness
+// from before that step and the opening from after it said that a run whose
+// box goes on with the seat's next holder is over, which the box's harness
+// takes for good.
+func (b *Bridge) holding(sub subject) (*binding, httprelay.Verdict) {
 	b.mu.RLock()
-	ready := b.ready[sub.route.seat]
-	b.mu.RUnlock()
+	defer b.mu.RUnlock()
+	opened := b.heldLocked(sub)
 	switch {
-	case !ready:
-		return httprelay.Elsewhere
-	case b.held(sub) != nil:
-		return httprelay.Serve
+	case sub.route.pinned() && opened != nil:
+		return opened, httprelay.Serve
+	case sub.route.pinned():
+		return nil, httprelay.Refuse
+	case !b.ready[sub.route.seat]:
+		return opened, httprelay.Elsewhere
+	case opened != nil:
+		return opened, httprelay.Serve
 	default:
-		return httprelay.Refuse
+		return nil, httprelay.Refuse
 	}
 }
 
@@ -1689,7 +1706,19 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 
 // heldOnly serves a call relayed to this node on the opening the call's token
 // names, which the relay's admission already found here
-// ([Bridge.admitRelayed]); a token whose opening has gone since is refused.
+// ([Bridge.admitRelayed]).
+//
+// AN OPENING GONE SINCE IS ANSWERED AS THIS NODE CAN ANSWER IT NOW
+// ([Bridge.verdict]): the relay admits a call and starts its handler after, and
+// the opening can leave in between. Where the run is over, closed or replaced
+// by a relaunch's job, the call is refused, as one reaching this node's own
+// route is. Where the seat left this node ([Bridge.ReleaseSeat]), the run goes
+// on with the seat's next holder: the call is turned away to ask again, a 503
+// with a Retry-After, as one that found no holder in time is
+// ([Bridge.forward]), and its next try is relayed to that holder. NEVER
+// REFUSED THERE: a refusal says the run is over, which OpenCode's plugins read
+// as the end of the run's notes and of its skill reports, and a box's MCP
+// client as a refused credential, for a run that goes on.
 func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sub, ok := b.parse(r.PathValue("token"))
@@ -1697,13 +1726,19 @@ func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *bindin
 			b.refuse(w, r, "", "the token is forged, malformed or expired")
 			return
 		}
-		opened := b.held(sub)
-		if opened == nil {
+		opened, verdict := b.holding(sub)
+		switch {
+		case opened != nil:
+			b.serveBegun(w, r, sub, opened, serve)
+		case verdict == httprelay.Elsewhere:
+			log.InfoContext(r.Context(), "mcp_bridge_relayed_seat_left", "run_id", sub.run,
+				"detail", "the seat left this node after the relay admitted the call; the box is "+
+					"told to call again, which reaches the seat's next holder")
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(holderRetryCeiling))
+		default:
 			_, reason := b.Miss(r.PathValue("token"))
 			b.refuse(w, r, sub.run, reason)
-			return
 		}
-		b.serveBegun(w, r, sub, opened, serve)
 	})
 }
 

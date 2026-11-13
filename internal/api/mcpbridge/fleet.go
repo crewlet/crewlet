@@ -87,29 +87,9 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	if opts.Leases == nil || opts.HolderWait <= 0 {
 		return nil, errors.New("mcpbridge: joining a fleet needs its seat leases and a holder wait")
 	}
-	// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's
-	// own pattern so the token reaches it as a path value — never the
-	// route's handler, which would relay a relayed call again: at the job's
-	// endpoint, and at each of the seat's MCP servers beneath it, whose name
-	// it reads as a path value too ([ServerPattern]). And the notes route's,
-	// served on the opening the token names here, for the same reason never
-	// through its own routing.
-	//
-	// EVERY ROUTE ON THE OPENING HELD HERE, behind the step that holds it to
-	// the session the job's box started ([Bridge.serveBegun]): a relayed
-	// request is as much the run's first as one that reached this node's own
-	// route, and the MCP handler alone would serve it before that is told.
-	mux := http.NewServeMux()
-	streamable := b.heldOnly(func(w http.ResponseWriter, r *http.Request, _ *binding) {
-		b.streamable.ServeHTTP(w, r)
-	})
-	mux.Handle(PathPrefix+"{token}", streamable)
-	mux.Handle(ServerPattern, streamable)
-	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
-	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
-		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
+		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: b.relayed(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
@@ -123,6 +103,33 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 		b.fleet.Store(nil)
 		return stop(ctx)
 	}, nil
+}
+
+// relayed is the handler a call relayed to this node is served by, once the
+// relay has admitted it ([Bridge.admitRelayed]).
+//
+// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's own
+// pattern so the token reaches it as a path value, never the route's
+// handler, which would relay a relayed call again: at the job's endpoint, and
+// at each of the seat's MCP servers beneath it, whose name it reads as a path
+// value too ([ServerPattern]). And the notes route's and the skill route's,
+// served on the opening the token names here, for the same reason never
+// through their own routing.
+//
+// EVERY ROUTE ON THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step
+// that holds it to the session the job's box started ([Bridge.serveBegun]): a
+// relayed request is as much the run's first as one that reached this node's
+// own route, and the MCP handler alone would serve it before that is told.
+func (b *Bridge) relayed() http.Handler {
+	mux := http.NewServeMux()
+	streamable := b.heldOnly(func(w http.ResponseWriter, r *http.Request, _ *binding) {
+		b.streamable.ServeHTTP(w, r)
+	})
+	mux.Handle(PathPrefix+"{token}", streamable)
+	mux.Handle(ServerPattern, streamable)
+	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
+	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
+	return mux
 }
 
 // admitRelayed is what this node can do for a call relayed to it: the same
@@ -142,10 +149,11 @@ func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	if !ok {
 		return httprelay.Refuse
 	}
-	if opened := b.held(sub); opened != nil && opened.session.Loopback {
+	opened, verdict := b.holding(sub)
+	if opened != nil && opened.session.Loopback {
 		return httprelay.Refuse
 	}
-	return b.verdict(sub)
+	return verdict
 }
 
 // The pace a waiting call reads the seat's lease again at. A takeover is
