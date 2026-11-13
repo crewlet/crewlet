@@ -98,12 +98,23 @@ func (l landing) landed() uint64 { return l.applied + l.pending + l.unknown }
 // it is answered busy (the file's head), and answers once the hold is
 // reached, with the hold's release and the held pass's end. A pass that ends
 // any other way before the hold fails the case, with what it did.
+//
+// THE HELD PASS ENDS WITH THE CASE, however the case ends: where the case has
+// not let it go itself, it is let go and waited for as the case's cleanup —
+// after the case's own defers, so once whatever the case stopped is back.
+// Held, it would keep its member's compactor, one compaction at a time a
+// node, from every later case's pass, which would then fail for this case's
+// fault.
 func heldPass(t *testing.T, c Cluster, n Node) (release func(), done <-chan struct{}) {
 	t.Helper()
 	held, reached := make(chan struct{}), make(chan struct{})
 	c.Faults().Arm(gitletfault.CompactAfterUpload, gitletfault.Action{Once: true, Block: held, Reached: reached})
 	release = sync.OnceFunc(func() { close(held) })
 	ended, stop := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		release()
+		<-ended
+	})
 	var last compact.PollReport
 	go func() {
 		defer close(ended)
@@ -296,14 +307,6 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	landedBefore := landingOn(nx)
 
 	release, done := heldPass(t, c, nx)
-	// THE HELD PASS ENDS WITH THE CASE, however the case ends: held, it keeps
-	// its member's compactor — one compaction at a time a node — from every
-	// later case's pass. Let go last, once whatever the case stopped is back,
-	// and waited for.
-	defer func() {
-		release()
-		<-done
-	}()
 	down := false
 	defer func() {
 		if down {
