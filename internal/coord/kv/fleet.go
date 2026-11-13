@@ -1003,7 +1003,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	}
 	// THE BUCKET WHOSE AGE OUTLASTS THE WINDOW, and no longer than it must:
 	// the valve's windows in rate, aged a few of them, and a window up to a
-	// day in windows, aged a few days — see "Why TWENTY-TWO buckets". A window
+	// day in windows, aged a few days (see "Why TWENTY-TWO buckets"). A window
 	// in a bucket that reaped it before it closed would restart its count
 	// mid-window and pass far more than its caller asked for, so a longer
 	// one is refused loudly rather than counted.

@@ -17,7 +17,7 @@ import (
 // HERE: only a regular file the list admits is kept, so a symbolic link, a
 // submodule and every file off the list never leave this node, whatever the
 // tree holds. ONE FILE is read as a checks file is, from the batch's lookup of
-// its path, and only a path the list admits as a file that is read — the
+// its path, and only a path the list admits as a file that is read: the
 // query's own validation refuses any other before git runs.
 
 // codeFilesRead answers a code files read: the commit's listing, or the one

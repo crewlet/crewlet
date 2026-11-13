@@ -3330,9 +3330,9 @@ func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
 // EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
 // the repository's home Gitlet node reads to record them on the change, or to
-// land it, a commit's checks file, which it reads a change's checks'
-// definitions from at its target's tip, and a commit's deploy and dependency
-// files, which it reads for the atlas — so a read of it names NO asker and
+// land it, a commit's deploy and dependency files, which it reads for the
+// atlas, and a commit's checks file, which it reads a change's checks'
+// definitions from at its target's tip — so a read of it names NO asker and
 // no seat it reads for, is held to no grant and is recorded as nobody's read:
 // an asker there would be judged for a read it never made, and a
 // `visibility: unit` repository's readers would be told the engine read it.

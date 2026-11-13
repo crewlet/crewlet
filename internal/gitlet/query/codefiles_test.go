@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// codeFilesQ is the atlas's read of a commit's deploy and dependency files —
-// the engine's own, which names no asker: the listing, or one file.
+// codeFilesQ is the atlas's read of a commit's deploy and dependency files
+// (the engine's own, which names no asker): the listing, or one file.
 func codeFilesQ(repo, commit, file string) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitCodeFiles, RepoID: repo, Home: true,
 		CodeFiles: &gitlet.CodeFilesQuery{Commit: commit, File: file}}
