@@ -264,6 +264,55 @@ func (q failingWakes) Publish(ctx context.Context, topic string, ev *events.Even
 	return q.EventQueue.Publish(ctx, topic, ev)
 }
 
+// A WAKE WHOSE LAST DELIVERY A NEWER NODE COULD NOT PUBLISH IS KEPT WITH THE
+// UNHANDLED DELIVERIES, AND A LATER START DELIVERS IT.
+//
+// The older nodes of a roll pass a newer record's wake round, and its last
+// delivery can reach a newer node whose broker does not answer the wake's
+// publish. That failure is the node's, not the delivery's (queue.NakNode), so
+// the copy its budget leaves is kept with the group's unhandled deliveries —
+// kept with the poison, as a failure's was, it was a wake no start ever
+// replayed. The next start of a newer node that can publish delivers it.
+//
+// The newer node attaches first, so the twin's round robin hands it the first
+// delivery and every second one after, the budget's twenty-fifth among them.
+//
+// Mutation: answer the node's failed publish as the delivery's own failure (a
+// plain Nak), and the copy is kept with the poison, which no start replays.
+func TestAWakeWhoseLastDeliveryItsNodeCouldNotPublishIsReplayed(t *testing.T) {
+	ctx := t.Context()
+	older := newService(t, func(o *notify.Options, _ *harness) {
+		o.Parsers = []notify.Parser{versionedParser{reads: 1}}
+	})
+	unreachable := fmt.Errorf("publish the wake: %w", queue.ErrUnavailable)
+	start(t, node(t, older, versionedParser{reads: 2}, func(q queue.EventQueue) queue.EventQueue {
+		return failingWakes{EventQueue: q, boom: unreachable}
+	}))
+	start(t, older.svc)
+	lead := inbox("engineering-lead")
+
+	rec := relayed("2", "op-12")
+	if err := older.q.Publish(ctx, topics.NotificationsInbound, rec); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	passedOff(t, older, rec)
+	older.quiet(t, lead)
+	if poison := inboundLetters(t, older.q, inboundPoison); len(poison) != 0 {
+		t.Fatalf("the inbound group's poison holds %d entries, want none: the newer node's "+
+			"failure was its own, not the wake's", len(poison))
+	}
+
+	start(t, node(t, older, versionedParser{reads: 2}, nil))
+	woken := older.settledN(t, lead, 1)
+	if len(woken) != 1 || woken[0].ID != changefeed.WakeID("op-12", "engineering-lead") {
+		t.Fatalf("the seat was woken %d time(s), want once, by the wake derived from op-12",
+			len(woken))
+	}
+	if left := inboundLetters(t, older.q, notify.UnhandledSubject()); len(left) != 0 {
+		t.Errorf("after the replay the inbound group holds %d unhandled copies, want none", len(left))
+	}
+}
+
 // staged keeps ev on the inbound group's unhandled subject, as the queue keeps
 // a delivery no member handled, under id, and answers the entry's sequence.
 func staged(t *testing.T, h *harness, id string, ev *events.Event) uint64 {

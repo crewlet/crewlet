@@ -504,6 +504,13 @@ func (s *Service) Sources() []string {
 //
 // # A failure NAKs, a shed DEFERS, a record a newer build wrote PASSES
 //
+// A wake that could not be published fails the delivery, which goes back for
+// a redelivery — as the NODE's failure, never the delivery's, where the node
+// is why ([nodeFault]: a broker it could not reach, a queue no longer live, a
+// stop that ended the handler), so a delivery whose budget it spends is kept
+// with the group's unhandled deliveries, for a replay, and not with its poison
+// ([queue.NakNode]).
+//
 // A shedding node DEFERS — hands the delivery back at once, at the head of the
 // group, and stops consuming until its posture admits work again (the
 // engine's resumeInbound) — rather than NAKing or republishing. A NAK is a
@@ -622,9 +629,40 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, paced bool) queu
 		// happened. The API's delivery ledger holds the claim, so the
 		// provider's own retry is refused — this redelivery is the only
 		// second chance the wake gets.
+		//
+		// AND A FAILURE OF THIS NODE'S IS NOT THE DELIVERY'S: a broker it
+		// could not reach, a queue no longer live, a stop that ended this
+		// handler ([nodeFault]). Answered as the node's own, it is returned
+		// as any failure is and never counted against the delivery, so one
+		// whose budget it spends — a newer record's wake whose last delivery
+		// reached a newer node that could not publish it — is kept with
+		// the group's unhandled deliveries, which a later replay delivers,
+		// rather than with its poison, which nothing replays
+		// ([queue.RetiredTo]).
+		if nodeFault(ctx, errs) {
+			return queue.NakNode(err)
+		}
 		return queue.Nak(err)
 	}
 	return queue.Ack()
+}
+
+// nodeFault reports whether every one of errs, a delivery's failed wakes, is
+// a failure of THIS NODE's rather than of the delivery: a publish the broker
+// did not answer ([queue.ErrUnavailable]), one refused by a queue that is no
+// longer live ([queue.ErrNotLive]), or any failure under a context that has
+// ended — a stop cancelling the handler. One wake that failed for anything
+// else — a wake too large to publish, which no node's retry changes — makes
+// the delivery's failure its own.
+func nodeFault(ctx context.Context, errs []error) bool {
+	for _, err := range errs {
+		switch {
+		case ctx.Err() != nil, errors.Is(err, queue.ErrUnavailable), errors.Is(err, queue.ErrNotLive):
+		default:
+			return false
+		}
+	}
+	return len(errs) > 0
 }
 
 // deliver resolves one recipient and wakes them, or records why not.

@@ -43,8 +43,11 @@ import (
 //     dropped by a node that could not judge it; and one already gone was
 //     settled by whoever took it.
 //
-// The group's poison — a delivery a FAILURE retired — is kept on its other
-// dead-letter subject, which this never reads.
+// So is one whose last delivery reached a node that could not publish its wake
+// — its broker did not answer, or its stop ended the handler — since that
+// failure is the node's ([queue.NakNode]). The group's poison — a delivery
+// one of whose deliveries FAILED AS ITSELF — is kept on its other dead-letter
+// subject, which this never reads.
 //
 // # Each copy contained as a delivery is
 //

@@ -1023,6 +1023,53 @@ func (p failingPublisher) Publish(ctx context.Context, topic string, ev *events.
 	return p.Queue.Publish(ctx, topic, ev)
 }
 
+// A WAKE THIS NODE COULD NOT PUBLISH IS THE NODE'S FAILURE, NOT THE
+// DELIVERY'S.
+//
+// A broker the node could not reach, a queue no longer live, a stop that ended
+// the handler: the delivery is returned as any failure is, but never counted
+// against it (queue.NakNode), so one whose budget such a failure spends — a
+// newer record's wake whose last delivery reached a newer node that could not
+// publish it — is kept with the group's unhandled deliveries, which a replay
+// delivers, and not with its poison, which nothing replays. A wake that failed
+// for a reason no node's retry changes is the delivery's own.
+//
+// Mutation: answer every failed wake with a plain Nak, and the node's own
+// rows count against the delivery; treat any error as the node's, and the
+// too-large row does not.
+func TestAWakeThisNodeCouldNotPublishIsTheNodesFailure(t *testing.T) {
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	for name, tc := range map[string]struct {
+		ctx      context.Context
+		boom     error
+		delivery bool
+	}{
+		"a broker that did not answer": {t.Context(),
+			fmt.Errorf("publish: %w", queue.ErrUnavailable), false},
+		"a queue no longer live":        {t.Context(), fmt.Errorf("publish: %w", queue.ErrNotLive), false},
+		"a stop that ended the handler": {stopped, context.Canceled, false},
+		"a wake too large to publish": {t.Context(),
+			fmt.Errorf("publish: %w", queue.ErrTooLarge), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newService(t, func(o *notify.Options, hh *harness) {
+				o.Queue = failingPublisher{Queue: hh.q, boom: tc.boom}
+			})
+			h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "hi")}
+
+			got := h.svc.Handle(tc.ctx, delivery("tracker"))
+			if got.Outcome != queue.OutcomeNak || !errors.Is(got.Err, tc.boom) {
+				t.Fatalf("Handle = %+v, want a failure carrying %v", got, tc.boom)
+			}
+			if got.FailsMessage() != tc.delivery {
+				t.Errorf("the failure counts against the delivery: %v, want %v", got.FailsMessage(),
+					tc.delivery)
+			}
+		})
+	}
+}
+
 // A publish failure means the wake never happened. The API's delivery ledger
 // already holds the claim, so the provider's own retry is refused — this
 // redelivery is the only second chance the wake gets.

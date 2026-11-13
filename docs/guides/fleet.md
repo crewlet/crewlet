@@ -866,7 +866,10 @@ The consequences worth stating plainly:
   `dlq.crewlet.notifications.inbound.notify-inbound.unhandled.{digest}`
   (`dead_lettered` at `ERROR`, with `returned=pass` and
   `reason=newer_record`), as is one whose last delivery a node that sheds or
-  stops handed back after the passes. A node of the newer build already
+  stops handed back after the passes, or one whose last delivery reached a
+  newer node that could not publish its wake — its broker did not answer,
+  or its stop ended the handler — a failure of that node's, never of the
+  wake (`handler_failed` with `fault=node`). A node of the newer build already
   running never replays it: the next one to start after it is kept delivers
   its wake and drops it (`inbound_dead_letters_replayed`), so a roll that
   takes longer than ten minutes loses no wake to its length. A roll that
