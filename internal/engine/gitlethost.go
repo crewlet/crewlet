@@ -484,7 +484,7 @@ func (e *Engine) buildGitletHost(ctx context.Context, nodeID string, boot *confi
 
 	// 10c. THE ATLAS'S READ OF A REPOSITORY'S DEPLOY AND DEPENDENCY FILES
 	// (internal/atlas/codescan), a worker of the same loop (atlascode.go).
-	if err := e.buildAtlasCodeScan(homeLoop); err != nil {
+	if err = e.buildAtlasCodeScan(homeLoop); err != nil {
 		h.Stop(context.WithoutCancel(ctx))
 		return gitletHostParts{}, fmt.Errorf("engine: build the atlas's code scan: %w", err)
 	}
