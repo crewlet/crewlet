@@ -36,13 +36,15 @@ const ClassAlarm = "alarm"
 
 // ClassConversationHeld is a conversation the engine holds because it failed the
 // same way twice (ADR-0117); its subject is the seat, Name the conversation,
-// and Cause how it failed: [CauseContextExhausted] or [CauseOutOfMemory].
+// and Cause how it failed: [CauseContextExhausted], [CauseOutOfMemory] or
+// [CauseRequestRefused].
 const ClassConversationHeld = "conversation.held"
 
 // The causes of a held conversation ([Notice.Cause]), as its hold names them.
 const (
 	CauseContextExhausted = "context_exhausted"
 	CauseOutOfMemory      = "out_of_memory"
+	CauseRequestRefused   = "request_refused"
 )
 
 // SubjectAlarm is what an alarm's notice is about: Name is the alarm's kind.

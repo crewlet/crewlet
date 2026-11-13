@@ -580,8 +580,9 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # (`response`), delivered refs, activity
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
-                           # error_kind launch_failed, context_exhausted or
-                           # out_of_memory), and the kills the kernel made
+                           # error_kind launch_failed, context_exhausted,
+                           # request_refused or out_of_memory), and the
+                           # kills the kernel made
                            # for memory in its job's domain.
                            # NO PHASE: the
                            # work of the `execute` round that launched it
@@ -740,7 +741,9 @@ budget_exhausted           # a charge the token budget refused ended a turn;
                            # `last_error`; the seat's `stopped`/`budget` is
                            # read from the refusing window itself
 turn.guard_breach          # runtime invariant fired (stall, max_iter,
-                           # depth_cap, scheduled_timeout). A failed turn:
+                           # depth_cap, scheduled_timeout), or the model's
+                           # provider refused the executor's request on a
+                           # fresh session (request_refused). A failed turn:
                            # the seat's `last_error`, never a stop
 llm_unavailable            # the fallback chain is exhausted. A failed
                            # turn: the seat's `last_error`, never a stop

@@ -609,3 +609,64 @@ func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
 		t.Errorf("an export of two documents: %v, want errNotOneValue", err)
 	}
 }
+
+// A LOADED TOOL DEFINITION THE SCRUB RENAMED IS LEFT OUT OF THE KEPT SESSION.
+// The harness sends every definition of this record again on every request of
+// a session it resumes, and one named outside the provider's pattern has each
+// of those requests refused. A definition the scrub did not touch stays, and
+// so does every other line that names the tool.
+//
+// Mutation: return the rewritten line as it is, and the first case goes red.
+func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{"cloudhost"})
+	record := `{"type":"attachment","uuid":"u-1","attachment":{"type":"deferred_tools_record","entries":[` +
+		`{"name":"mcp__cloudhost__backup_list","description":"Lists <b>backups</b>","input_schema":{"type":"object"}},` +
+		`{"name":"mcp__monitor__search","description":"Searches","input_schema":{"type":"object"}}]}}`
+	got := rewriteLine(record, s, testBounds)
+	var kept struct {
+		UUID       string `json:"uuid"`
+		Attachment struct {
+			Type    string `json:"type"`
+			Entries []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"entries"`
+		} `json:"attachment"`
+	}
+	if err := json.Unmarshal([]byte(got), &kept); err != nil {
+		t.Fatalf("the record is no longer JSON: %v: %q", err, got)
+	}
+	if len(kept.Attachment.Entries) != 1 || kept.Attachment.Entries[0].Name != "mcp__monitor__search" ||
+		kept.UUID != "u-1" || kept.Attachment.Type != loadedToolsRecord {
+		t.Fatalf("the record kept %+v, want the one definition the scrub did not rename", kept)
+	}
+	for _, entry := range kept.Attachment.Entries {
+		if !providerToolName(entry.Name) {
+			t.Errorf("the kept record names %q, which the provider refuses", entry.Name)
+		}
+	}
+	for name, want := range map[string]bool{
+		"mcp__monitor__search": true, "a-b_C9": true, strings.Repeat("a", 128): true,
+		"": false, strings.Repeat("a", 129): false, "mcp__[REDACTED:engine-secret]__x": false,
+		"with space": false, "dot.ted": false, "caf\u00e9": false,
+	} {
+		if providerToolName(name) != want {
+			t.Errorf("providerToolName(%q) = %v, want %v", name, !want, want)
+		}
+	}
+	if rewriteLine(record, s, testBounds) != got {
+		t.Error("two rewrites of one record differ, and a tar's two readings must write the same bytes")
+	}
+
+	untouched := `{"type":"attachment","attachment":{"type":"deferred_tools_record","entries":[` +
+		`{"name":"mcp__monitor__search","description":"Searches <b>all</b>"}]}}`
+	if got := rewriteLine(untouched, s, testBounds); got != untouched {
+		t.Errorf("a record the scrub renamed nothing in was rewritten: %q", got)
+	}
+	call := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__cloudhost__backup_list"}]}}`
+	if got := rewriteLine(call, s, testBounds); !strings.Contains(got, "tool_use") ||
+		!strings.Contains(got, scrubMarker) {
+		t.Errorf("a call's own line was not kept as rewritten: %q", got)
+	}
+}

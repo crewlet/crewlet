@@ -1120,3 +1120,46 @@ func passages(text string, goSource bool) []string {
 	flush()
 	return out
 }
+
+// A REQUEST THE PROVIDER REFUSED AS BUILT IS TOLD BY ITS STATUS: the harness
+// answers it as its result's text, under its failure flag and the status the
+// provider gave. Such a run failed, its error is the provider's message, and it
+// is named apart from every other failure; a spent plan, an outage and a
+// conversation past its context are not it.
+//
+// Mutation: read the sentence instead of the status, or drop the context
+// exception, and a case goes red.
+func TestARequestItsProviderRefusedIsToldByItsStatus(t *testing.T) {
+	t.Parallel()
+	const said = "API Error: 400 tools.88.custom.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'"
+	for _, c := range []struct {
+		name, line string
+		want       bool
+	}{
+		{"an invalid request", `{"type":"result","subtype":"success","is_error":true,"api_error_status":400,` +
+			`"terminal_reason":"api_error","result":"` + said + `"}`, true},
+		{"a request too large", `{"type":"result","subtype":"success","is_error":true,"api_error_status":413,` +
+			`"result":"API Error: 413 request too large"}`, true},
+		{"a spent plan", `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,` +
+			`"result":"You've hit your limit"}`, false},
+		{"an outage", `{"type":"result","subtype":"success","is_error":true,"api_error_status":529,` +
+			`"result":"API Error: 529 overloaded"}`, false},
+		{"a context past its model's", `{"type":"result","subtype":"success","is_error":true,` +
+			`"api_error_status":400,"terminal_reason":"prompt_too_long","result":"Prompt is too long"}`, false},
+		{"the sentence with no status", `{"type":"result","subtype":"success","is_error":true,` +
+			`"result":"` + said + `"}`, false},
+		{"a run that succeeded and quoted it", `{"type":"result","subtype":"success","is_error":false,` +
+			`"api_error_status":400,"result":"` + said + `"}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := claude().Parse(c.line)
+			if got.RequestRefused != c.want {
+				t.Errorf("RequestRefused = %v, want %v, on %s", got.RequestRefused, c.want, c.line)
+			}
+			if c.want && (got.Success || got.Error == "") {
+				t.Errorf("a refused run is %+v, want a failure carrying the provider's message", got)
+			}
+		})
+	}
+}

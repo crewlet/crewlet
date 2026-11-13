@@ -1190,8 +1190,9 @@ type PendingRun struct {
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
 	// ExhaustedSessions are the sessions a job of this turn ran out of its model's
-	// context in ([ranOutOfContext]): no later launch continues them, and the turn's
-	// end retires them on the executor log. The TURN'S, kept by every relaunch.
+	// context in, or had its request refused by its provider in ([sessionSpent]):
+	// no later launch continues them, and the turn's end retires them on the
+	// executor log. The TURN'S, kept by every relaunch.
 	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
@@ -4590,10 +4591,17 @@ const (
 	// ordinary refusal, so a credential that keeps failing fails the turn
 	// rather than relaunching it for ever.
 	FollowUpSignInReplaced FollowUpReason = "sign_in_replaced"
+	// FollowUpRequestRefused is a job relaunched in a fresh session because
+	// the provider refused the request the job before it made in a session it
+	// continued. ONCE: a job launched for this reason that is refused again is
+	// collected, and its round ends the turn.
+	FollowUpRequestRefused FollowUpReason = "request_refused"
 )
 
 // Valid reports whether the reason is one this build names.
-func (r FollowUpReason) Valid() bool { return r == FollowUpSignInReplaced }
+func (r FollowUpReason) Valid() bool {
+	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused
+}
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
 // every token figure in the engine is: the whole input, the share of it the

@@ -99,7 +99,8 @@ func boundToModels(kind failureKind) bool {
 }
 
 // failureBasis fingerprints the settings kind's failure depends on for handle
-// in c: the seat's models and the company's, or its sandbox and the company's.
+// in c: the seat's models and the company's, its sandbox and the company's, or
+// for a refused request the models and the company's tool servers.
 func failureBasis(c *Company, handle string, kind failureKind) (string, bool) {
 	if c == nil || c.Config == nil {
 		return "", false
@@ -109,7 +110,12 @@ func failureBasis(c *Company, handle string, kind failureKind) (string, bool) {
 			continue
 		}
 		settings := []any{role.Sandbox, c.Config.Providers.Sandbox}
-		if boundToModels(kind) {
+		switch {
+		case kind == failureRequestRefused:
+			// WHAT A REQUEST IS BUILT FROM: the models it is sent to and the
+			// tool servers whose definitions it carries.
+			settings = []any{role.LLM, c.Config.Providers.LLM, c.Config.MCPServers}
+		case boundToModels(kind):
 			settings = []any{role.LLM, c.Config.Providers.LLM}
 		}
 		raw, err := json.Marshal(settings)

@@ -40,6 +40,8 @@ import (
 //
 // NOT the engine's identity facts (the seat's handle and email, which a
 // transcript names in every commit), a setting written in the document, the
+// name of an MCP server the launch declares, whatever position also holds it
+// ([withoutServerNames]), the
 // unresolved text of a reference, or a setup step's script or file: none is a
 // secret, and scrubbed by value each was lost from every kept session — the
 // seat's own name read as a redacted secret throughout — and a setup step's
@@ -314,8 +316,24 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 			add(loginValues(raw)...)
 		}
 	}
-	handed.Values = dedupe(values)
+	handed.Values = dedupe(withoutServerNames(values, req.MCPServers))
 	return handed
+}
+
+// withoutServerNames is values less every one that is exactly the name of an
+// MCP server the launch declares.
+//
+// A NAME THE DOCUMENT DECLARES IS NO SECRET, whatever position also holds it:
+// the company document states it in every revision, and it is part of every
+// tool name of that server (`mcp__<server>__<tool>`). Taken out by value, a
+// kept session lost the name wherever it stood, and a tool definition its
+// harness restores and sends again was named outside the provider's pattern,
+// which refused every request of the session.
+func withoutServerNames(values []string, servers map[string]MCPServer) []string {
+	return slices.DeleteFunc(values, func(v string) bool {
+		_, declared := servers[v]
+		return declared
+	})
 }
 
 // union is h with what carried holds that h does not: the secrets a job before

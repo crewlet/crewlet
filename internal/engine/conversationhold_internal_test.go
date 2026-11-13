@@ -237,3 +237,61 @@ func TestARemovedSeatLeavesNoConversationHeld(t *testing.T) {
 		t.Errorf("after the ghost seat left the holds are %+v (%v), want ceo's alone", all, err)
 	}
 }
+
+// refusedRun is a run of ceo's on conversation whose provider refused its
+// request, on a continued session or not.
+func refusedRun(conversation string, continued bool) *events.Event {
+	return events.New(types.ExecutorCollected{Agent: ceoSeat.String(), ConversationKey: conversation,
+		HarnessSessionContinued: continued, Failed: true, ErrorKind: types.ExecutorErrorRequestRefused,
+		Error: "API Error: 400 tools.88.custom.name: String should match pattern"}, events.TraceContext{})
+}
+
+// A REQUEST THE PROVIDER REFUSED TWICE IN A ROW, THE SECOND TIME ON A FRESH
+// SESSION, HOLDS ITS CONVERSATION, which is what tells an administrator: a
+// schedule whose every fire is refused stops firing into the refusal and stands
+// as a notice. A refusal of a continued session is the session's, which is
+// retired, and a run that finished in between starts the count again. The hold
+// is judged against the models and the tool servers a request is built from.
+//
+// Mutation: drop the kind from conversationFailures, hold on a continued
+// session's refusal, or fingerprint the models alone, and this goes red.
+func TestTheSecondRequestItsProviderRefusesHoldsTheConversation(t *testing.T) {
+	t.Parallel()
+	const fires = "schedule/role/r-1/health-check"
+	e, _, fleet := pausingEngine(t)
+	ctx := t.Context()
+	for _, ev := range []*events.Event{
+		refusedRun(fires, true), collected(fires, false, false), refusedRun(fires, false),
+		refusedRun(fires, true), refusedRun("chat:room/2", false),
+	} {
+		e.noteConversationRun(ctx, "", ev)
+	}
+	// A HOLD IS WRITTEN OFF THE LISTENER, so one a wrong rule took above is
+	// waited for behind one that is certain: another conversation's.
+	const other = "chat:room/3"
+	e.noteConversationRun(ctx, "", refusedRun(other, false))
+	e.noteConversationRun(ctx, "", refusedRun(other, false))
+	waitFor(t, "the other conversation to be held", func() bool { return len(holdsOf(t, fleet)) > 0 })
+	if held := holdsOf(t, fleet); len(held) != 1 || held[0].Conversation != other {
+		t.Fatalf("no fresh session of %s was refused twice in a row, and the holds are %+v", fires, held)
+	}
+	e.noteConversationRun(ctx, "", refusedRun(fires, false))
+	waitFor(t, "the conversation to be held", func() bool { return len(holdsOf(t, fleet)) == 2 })
+	var h coord.ConversationHold
+	for _, held := range holdsOf(t, fleet) {
+		if held.Conversation == fires {
+			h = held
+		}
+	}
+	if h.Kind != string(failureRequestRefused) || h.Basis == "" {
+		t.Errorf("the hold is %+v, want %s held for its refused request", h, fires)
+	}
+	both := capabilityCompany(t)
+	request, _ := failureBasis(both, "ceo", failureRequestRefused)
+	models, _ := failureBasis(both, "ceo", failureContextExhausted)
+	box, _ := failureBasis(both, "ceo", failureOutOfMemory)
+	if request == "" || request == models || request == box {
+		t.Errorf("a refused request's basis is %q, want one of its own beside the models' %q and the "+
+			"sandbox's %q: it covers the tool servers too", request, models, box)
+	}
+}
