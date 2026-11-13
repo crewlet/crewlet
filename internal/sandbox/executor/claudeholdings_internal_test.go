@@ -720,6 +720,16 @@ func hsProgress(parent, uuid string) string {
 //     on the chain, so after its own result where that lies on the chain
 //     before the reply, and a result recovered beside a reply is placed after
 //     that reply's records, so before a call of a later reply; each is told;
+//     so is a result on the chain whose call's record lies off it, recovered
+//     by nothing, and a call on the chain whose result lies off it under a
+//     record of no reply, each handed without the other; a call and its
+//     result both recovered beside one reply are handed in the file's order,
+//     so the one whose result is written first is told; and a result
+//     recovered beside its call's own reply is handed after the call's
+//     record on the chain, whichever is written first, and held;
+//   - nothing before the last restart is handed: a call whose record lies
+//     there, its reply's id a reply's on the chain past it, and a call whose
+//     result's parent lies there, are each told;
 //   - the walk stops at the last restart, so a call reached only through a
 //     record before it is told: a compaction that kept a segment deletes every
 //     record before its boundary from what the resume walks;
@@ -728,9 +738,10 @@ func hsProgress(parent, uuid string) string {
 //     a call after it is told; with no boundary, the call is held.
 //
 // In a subagent's thread, the chain from its last record of its own: a
-// withdrawn attempt's call there is told, its subagent still reported; and a
-// walk that meets a parent naming no record, or a record it already took,
-// before the thread's root leaves the subagent not whole.
+// withdrawn attempt's call there is told, its subagent still reported, and so
+// it is where a record of no agent hangs off the attempt last; and a walk
+// that meets a parent naming no record, or a record it already took, before
+// the thread's root leaves the subagent not whole.
 //
 // Mutation: hand over every record past the last restart, and the withdrawn
 // attempt's call is held; recover through any reply's id, on the chain or
@@ -740,10 +751,17 @@ func hsProgress(parent, uuid string) string {
 // and the call past it is held; pair a recovered use with a result on the
 // chain by the file's order, and the call recovered after its own result is
 // held; pair a recovered result with a use of another reply, and the call of
-// the later reply is held; walk past the last restart, and the call reached
+// the later reply is held; pair two records both recovered beside one reply
+// whatever their order, and the call whose result is written first is held;
+// pair a recovered result with its use on the chain by their lines, and the
+// call whose result is written first is told; recover through a reply's
+// record before the last restart, or a result whose parent lies there, and
+// its call is held; walk past the last restart, and the call reached
 // through a record before it is held; leave the checkpoint out of the leaf,
-// and the call after it is held; or read a subagent's chain that breaks as
-// whole, and its subagent is reported.
+// and the call after it is held; walk a subagent's thread from its last
+// record of any agent, and the attempt a record of no agent hangs off is
+// held; or read a subagent's chain that breaks as whole, and its subagent is
+// reported.
 func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 	t.Parallel()
 	const x, y, outX, outY = "toolu_chain_x", "toolu_chain_y", "chain x done", "chain y done"
@@ -797,6 +815,33 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_b", text), hsReplyOf(t, ctUUID(2), ctUUID(3), "msg_c", hsUse(x)),
 			result(2, 4, x, outX), hsReplyOf(t, ctUUID(3), ctUUID(5), "msg_after", text),
 		}, held: map[string]bool{x: false}},
+		"a result on the chain whose call's record lies off it, recovered by nothing": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_w", hsUse(x)), result(1, 3, x, outX),
+			hsReplyOf(t, ctUUID(3), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a call on the chain whose result lies off it under a record of no reply": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_x", hsUse(x)),
+			ctAttachment(ctUUID(2), ctUUID(9), ctTokens, ctTokensRendered), result(9, 3, x, outX),
+			hsReplyOf(t, ctUUID(2), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a call and its result recovered beside one reply, the result written first": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_m", text), result(2, 3, x, outX),
+			hsReplyOf(t, ctUUID(2), ctUUID(4), "msg_m", hsUse(x)), hsReplyOf(t, ctUUID(2), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a result recovered beside its call's reply, written before the call's record": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_m", text), result(2, 3, x, outX),
+			hsReplyOf(t, ctUUID(2), ctUUID(4), "msg_m", hsUse(x)), hsReplyOf(t, ctUUID(4), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: true}},
+		"a reply's record before the last restart, its id a reply's on the chain past it": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_m", hsUse(x)), ctMicrocompactBoundary(ctUUID(2), ctUUID(10)),
+			hsReplyOf(t, ctUUID(10), ctUUID(11), "msg_m", text), result(11, 12, x, outX),
+			hsReplyOf(t, ctUUID(11), ctUUID(13), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a result past the last restart whose parent, a reply's record, lies before it": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_m", text), ctMicrocompactBoundary(ctUUID(2), ctUUID(10)),
+			hsReplyOf(t, ctUUID(10), ctUUID(11), "msg_m", hsUse(x)), result(2, 12, x, outX),
+			hsReplyOf(t, ctUUID(11), ctUUID(13), "msg_after", text),
+		}, held: map[string]bool{x: false}},
 		"a call reached only through a record before the last restart": {lines: []string{
 			user(21, 6), ctMicrocompactBoundary(ctUUID(1), ctUUID(10)),
 			hsReplyOf(t, ctUUID(10), ctUUID(21), "msg_x", hsUse(x)), result(21, 22, x, outX),
@@ -829,19 +874,32 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a withdrawn attempt in a subagent's thread", func(t *testing.T) {
-		t.Parallel()
-		s := hsForeground(t)
-		s.thread = []string{s.thread[0],
-			hsSide(t, hsReplyOf(t, ctUUID(101), ctUUID(102), "msg_withdrawn", hsUse(hsSubCall))), s.thread[2],
-			hsSide(t, ctReplace(t, hsFinished(t, ctUUID(101), ctUUID(104)), `"id":"msg_test"`, `"id":"msg_retry"`))}
-		got := hsSubagentRead(t, s)
-		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
-			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
-				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
-		}
-	})
+	for name, trailing := range map[string]string{
+		"a withdrawn attempt in a subagent's thread": "",
+		// A RECORD OF NO AGENT AFTER IT, hanging off the attempt: the walk
+		// starts from the thread's last record of its own, never from that.
+		"a withdrawn attempt in a subagent's thread, a record of no agent hanging off it last": ctReplace(t,
+			ctAttachment(ctUUID(103), ctUUID(105), ctTokens, ctTokensRendered), `"isSidechain":false`,
+			`"isSidechain":true`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			s.thread = []string{s.thread[0],
+				hsSide(t, hsReplyOf(t, ctUUID(101), ctUUID(102), "msg_withdrawn", hsUse(hsSubCall))), s.thread[2],
+				hsSide(t, ctReplace(t, hsFinished(t, ctUUID(101), ctUUID(104)), `"id":"msg_test"`, `"id":"msg_retry"`))}
+			if trailing != "" {
+				s.thread = append(s.thread, trailing)
+			}
+			got := hsSubagentRead(t, s)
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			if records := got.Calls[hsSubCall]; held || under != "" || records.Live ||
+				!got.Subagents[ctAgent].Reported {
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+					"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+			}
+		})
+	}
 	for name, edit := range map[string]func(*testing.T, *hsSession){
 		"a parent naming no record in a subagent's thread": func(t *testing.T, s *hsSession) {
 			s.thread[3] = hsSide(t, hsFinished(t, ctUUID(199), ctUUID(104)))
@@ -1983,13 +2041,17 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // no call of (d4's record); whose thread starts a second leg it finished, the
 // main thread holding no call of it (condition 4 alone); whose Agent call's
 // answer names another agent, is a background subagent's, is a failure, comes
-// twice, or precedes a restart of the main thread; whose notification names
+// twice, precedes a restart of the main thread, lies on the main thread's
+// chain beside its call's record off it, or lies off it under a record of no
+// reply; whose notification names
 // another agent, or a subagent that did not complete, or precedes a restart of
 // the main thread; or that was sent a message whose result refused it with
 // null, or left none, and no notification answered. A message its own result
 // refused with the literal false is no leg, and one answered by a notification
 // is answered; a subagent a Task call started reads as one an Agent call did;
-// and the members' order is the box's to choose.
+// a prompt whose parentUuid is the empty string or absent roots its thread's
+// chain, as Claude Code's walk reads it; and the members' order is the box's
+// to choose.
 //
 // Mutation: ignore a restart in a subagent's thread, and the restarted one is
 // reported; drop condition 4, and the second leg's subagent is reported; take
@@ -2002,7 +2064,10 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // unfinished rather than not whole; or drop any other part of a condition
 // (the answer's liveness, its failure, its count, the metadata's one call, a
 // Task call as a start, a notification's status or agent, a record of another
-// agent's, a progress record), and the subagent its case built is reported.
+// agent's, a progress record, an answer handed only beside its call's record
+// handed), and the subagent its case built is reported; or read a prompt's
+// parentUuid that is empty or absent as naming no record, and the subagent
+// whose prompt carries it is not whole.
 func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
 	t.Parallel()
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
@@ -2043,6 +2108,22 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		"a progress record in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread = append(s.thread, hsSide(t, hsProgress(ctUUID(104), ctUUID(105))))
 		}), hsNotWhole},
+		"its prompt's parentUuid the empty string": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[0] = ctReplace(t, s.thread[0], `"parentUuid":null`, `"parentUuid":""`)
+		}), ""},
+		"its prompt with no parentUuid": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[0] = ctReplace(t, s.thread[0], `"parentUuid":null,`, "")
+		}), ""},
+		"its Agent call's record off the chain, its answer on it": {with(hsForeground, func(t *testing.T,
+			s *hsSession) {
+			s.main[2] = hsAnswerOf(t, ctUUID(1), ctUUID(3), hsStarted, "the subagent's report", hsCompleted(ctAgent))
+		}), hsUnanswered},
+		"its Agent call's answer off the chain, under a record of no reply": {with(hsForeground, func(t *testing.T,
+			s *hsSession) {
+			s.main = []string{s.main[0], s.main[1], ctAttachment(ctUUID(2), ctUUID(9), ctTokens, ctTokensRendered),
+				hsAnswerOf(t, ctUUID(9), ctUUID(3), hsStarted, "the subagent's report", hsCompleted(ctAgent)),
+				hsReplyOf(t, ctUUID(2), ctUUID(5), "msg_after", `[{"type":"text","text":"done."}]`)}
+		}), hsUnanswered},
 		"its first chained record roots no chain": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread[0] = ctReplace(t, s.thread[0], `"parentUuid":null`, `"parentUuid":"`+ctUUID(100)+`"`)
 		}), hsNotWhole},
