@@ -114,7 +114,7 @@ func TestAFreshJobsLeftOutReadsReachItsCopysNextBrief(t *testing.T) {
 	brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
 		BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 		Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
-			SessionID: "sess-ask", BoxKept: true}}, nil, nil))
+			SessionID: "sess-ask", BoxKept: true}}, nil, nil, nil))
 	owed := strings.Index(brief, "## Reads an earlier message counted but did not list")
 	if owed < 0 || strings.Count(brief, "- read_page(") != 2 || strings.Index(brief, "- read_page(") < owed {
 		t.Errorf("the copy in its box is not told the two reads its job's brief counted, and only those, under "+

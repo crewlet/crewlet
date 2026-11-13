@@ -432,7 +432,7 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 		"":                            false,
 	} {
 		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{SessionStart: start}}}
-		if got := runnerResume(in, nil, nil).Continued; got != want {
+		if got := runnerResume(in, nil, nil, nil).Continued; got != want {
 			t.Errorf("a job whose box said %q resumes continued %v, want %v", start, got, want)
 		}
 	}
@@ -459,7 +459,7 @@ func TestAResumeReadsHowTheJobsHarnessEnded(t *testing.T) {
 		"saved":                  false,
 	} {
 		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{HarnessEnd: end}}}
-		got := runnerResume(in, nil, nil).HarnessEnd
+		got := runnerResume(in, nil, nil, nil).HarnessEnd
 		if got != end {
 			t.Errorf("a job whose record says its harness ended %q resumes with %q", end, got)
 		}

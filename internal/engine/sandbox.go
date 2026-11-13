@@ -998,6 +998,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Run:          req.Run,
 		Bridged:      req.Bridged,
 		BridgedRead:  req.BridgedRead,
+		Leads:        req.Leads,
 		State:        state,
 		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
 		Answer:       req.Answer,
@@ -1185,6 +1186,11 @@ type resumeInput struct {
 	// BridgedRead is how many calls the log had taken at that read
 	// ([sandbox.ResumeRequest.BridgedRead]).
 	BridgedRead int
+	// Leads is the turn's leads as the coordinator read them for the resume
+	// ([sandbox.ResumeRequest.Leads]), or said it could not
+	// ([sandbox.TurnLeads.Unread]); zero on a close or a reopening, which
+	// tells no lead.
+	Leads sandbox.TurnLeads
 
 	State   execstate.State
 	Turn    *turnctx.Turn
@@ -1392,7 +1398,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
-	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher))
+	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher), e.leads)
 	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1774,8 +1780,12 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 // ([runSteers.carried]).
 //
 // seal opens a held call's arguments and seals its result (ADR-0077): nil on a
-// node without the fleet keyring's cipher, where a held call is not made.
-func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) *runner.Resume {
+// node without the fleet keyring's cipher, where a held call is not made. leads
+// opens the run's leads the coordinator read beside its row ([resumeLeads]):
+// nil reads each as a lead that cannot be read here.
+func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
+	leads *sandbox.LeadSeal) *runner.Resume {
+
 	return &runner.Resume{
 		State: in.State, Answer: in.Answer,
 		// WHICH SESSION THE JOB'S BOX SAID IT STARTED, off the job's own
@@ -1796,6 +1806,18 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// its box holds them only as that count, so a relaunch carrying the
 		// round on in that box tells them ([runner.Resume.Owed]).
 		Owed: in.Run.Launch.OmittedCalls(),
+		// AND THE TURN'S LEADS AS THE RESUME READ THEM BESIDE ITS ROW, opened,
+		// those its job's brief told marked: a relaunch continuing that job's
+		// session where it may lack the brief tells them again
+		// ([runner.Resume.Leads]), with how many earlier ones are not kept,
+		// past the bound or because the store could not give them back; and
+		// where it could not, the ones the job's brief told by their numbers,
+		// for that relaunch to hand on unread.
+		Leads: resumeLeads(in.Run, in.Leads, seal, leads), LeadsCut: in.Leads.Cut,
+		LeadsUnread: unreadLeads(in.Run, in.Leads),
+		// AND WHERE THE TURN BEGAN, the session its conversation's last turn
+		// left as the turn's row froze it, which a task lead told again says.
+		Base: frozenBase(in.Run),
 		// WHICH BOX DID THE WORK, and what it delivered — see
 		// [runRecordOf].
 		Run: runRecordOf(in.Run, in.Account),
@@ -1842,6 +1864,96 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// once its claim has moved it on.
 		Served: servedNotes(in.Run),
 	}
+}
+
+// resumeLeads is the turn's leads read beside run's row ([sandbox.TurnLeads]),
+// opened in order ([runner.ResumeLead]): those the job's brief told marked, as
+// the job's record says by their numbers ([sandbox.LaunchRecord.ToldLeads]),
+// and a held lead's result opened from the seal its row put on it
+// ([sandbox.CallSeal.OpenKept]). One that does not open
+// here is kept as a lead that cannot be read, by its kind, job and round, and
+// why: NEVER DROPPED, so a brief that tells it again says a message is missing
+// rather than leave the run to think none was. One under a key this node lacks,
+// or of a kind this build does not know, is this node's fact and logged at
+// warning; one that does not open under a key it holds is the record's, and
+// logged at error. A held lead whose result does not open is told as a call made
+// whose result cannot be read here.
+func resumeLeads(run sandbox.PendingRun, read sandbox.TurnLeads, seal *sandbox.CallSeal,
+	leads *sandbox.LeadSeal) []runner.ResumeLead {
+
+	if len(read.Kept) == 0 {
+		return nil
+	}
+	told := map[int]bool{}
+	for _, mark := range run.Launch.ToldLeads() {
+		told[mark] = true
+	}
+	out := make([]runner.ResumeLead, 0, len(read.Kept))
+	for _, kept := range read.Kept {
+		lead, err := openLead(run.TurnID, kept, leads)
+		if err != nil {
+			lead = sandbox.Lead{Kind: kept.Kind, Job: kept.Job, Seq: kept.Seq, Round: kept.Round, Unread: err.Error()}
+			if errors.Is(err, sandbox.ErrLeadUnopened) {
+				log.Error("sandbox_lead_unopened", "turn_id", run.TurnID, "launch_id", kept.Job,
+					"kind", string(kept.Kind), "error", err.Error())
+			} else {
+				log.Warn("sandbox_lead_unread", "turn_id", run.TurnID, "launch_id", kept.Job,
+					"kind", string(kept.Kind), "error", err.Error())
+			}
+		}
+		resumed := runner.ResumeLead{Lead: lead, Told: told[kept.Appended]}
+		if answer := lead.Answer; answer != nil && answer.Held != nil && answer.Held.Result != nil {
+			result, err := seal.OpenKept(run.TurnID, *answer.Held.Result)
+			if err != nil {
+				log.Error("held_call_result_unopened", "turn_id", run.TurnID, "held_call", answer.Held.HeldID,
+					"tool", answer.Held.Tool, "error", err.Error())
+			} else {
+				resumed.Result = &result
+			}
+		}
+		out = append(out, resumed)
+	}
+	return out
+}
+
+// unreadLeads is the leads the brief of run's job told, by their numbers
+// ([sandbox.LaunchRecord.ToldLeads]), where the resume could not read the
+// run's leads at all ([sandbox.TurnLeads.Unread]): none where it read them,
+// whatever they held, since those it told are among them, marked.
+//
+// THE CHAIN OUTLIVES A READ THAT FAILED. A continuation of the job's session
+// that may lack its brief is to tell those leads again and hand them on, for
+// the job its launch opens to mark, so a continuation of THAT session, which
+// may lack them as well, tells them in turn. Read, they ride the leads
+// themselves ([runner.ResumeLead.Told]); unread, the relaunch says them as not
+// kept and hands their numbers on all the same ([runner.Resume.LeadsUnread]),
+// so the next read that answers tells them rather than leave a session that
+// lacks them told neither them nor that they are missing.
+func unreadLeads(run sandbox.PendingRun, read sandbox.TurnLeads) []int {
+	if !read.Unread {
+		return nil
+	}
+	return run.Launch.ToldLeads()
+}
+
+// openLead is kept opened under leads ([sandbox.LeadSeal.Open]), refused where
+// this node holds no seal to open one with.
+func openLead(turnID string, kept sandbox.KeptLead, leads *sandbox.LeadSeal) (sandbox.Lead, error) {
+	if leads == nil {
+		return sandbox.Lead{}, fmt.Errorf("%w: this node holds no seal to open a lead with",
+			sandbox.ErrLeadKeyUnknown)
+	}
+	return leads.Open(turnID, kept)
+}
+
+// frozenBase is the session run's conversation's last turn left, as the turn's
+// row froze it ([sandbox.PendingRun.Base]), in the runner's terms: nil where the
+// turn continues none.
+func frozenBase(run sandbox.PendingRun) *runner.BaseBasis {
+	if run.Base == nil || run.Base.Session == nil {
+		return nil
+	}
+	return baseBasis(*run.Base.Session, 0).Base
 }
 
 // runnerAsked is the coordinator's account of an answered question in the
@@ -1924,11 +2036,14 @@ func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
 }
 
 // prior is how call stood, some earlier attempt having marked it: what it
-// returned, opened from its seal, where that attempt recorded it.
+// returned, opened from its seal, where that attempt recorded it, and that
+// result as the row sealed it, which the answer's lead keeps whether or not it
+// opens here ([runner.HeldPrior.Kept]).
 func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.HeldPrior {
 	if !call.Made() {
 		return runner.HeldPrior{}
 	}
+	kept := call.Kept()
 	result, err := h.seal.OpenResult(h.held.TurnID, call)
 	if err != nil {
 		// RECORDED, AND UNREADABLE HERE: the call was made, and what it
@@ -1942,25 +2057,29 @@ func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.Hel
 		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
 			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
 		return runner.HeldPrior{Made: true, Unread: true,
-			Result: sandbox.HeldResult{Failed: call.Call != nil && call.Call.Failed}}
+			Result: sandbox.HeldResult{Failed: call.Call != nil && call.Call.Failed}, Kept: kept}
 	}
-	return runner.HeldPrior{Made: true, Result: result}
+	return runner.HeldPrior{Made: true, Result: result, Kept: kept}
 }
 
 // Record seals and records what the held call returned, and the call itself as
-// a call of its run's round, as the surface that made it answered it — its
-// arguments and their digest withheld, as the held call's were; see
-// [runner.HeldCommit].
-func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
+// a call of its run's round, as the surface that made it answered it (its
+// arguments and their digest withheld, as the held call's were), answering the
+// result as it sealed it, which the answer's lead keeps whether or not the
+// row's write lands; see [runner.HeldCommit].
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult,
+	answered toolloop.ToolResult) (sandbox.HeldKept, error) {
+
 	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
 	if err != nil {
-		return err
+		return sandbox.HeldKept{}, err
 	}
-	return h.held.Record(ctx, sandbox.HeldMade{Result: sealed, Call: sandbox.BridgeCall{
-		Name: h.held.Call.Tool, Failed: answered.Failed,
-		Origin: answered.Origin, Server: answered.Server, Source: answered.Source,
-		Refusal: string(answered.Refusal()),
-	}})
+	return sandbox.KeptAs(h.held.Call, sealed), h.held.Record(ctx, sandbox.HeldMade{Result: sealed,
+		Call: sandbox.BridgeCall{
+			Name: h.held.Call.Tool, Failed: answered.Failed,
+			Origin: answered.Origin, Server: answered.Server, Source: answered.Source,
+			Refusal: string(answered.Refusal()),
+		}})
 }
 
 // runnerLost is the coordinator's account of a lost job in the runner's terms,
@@ -2939,6 +3058,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A person's answer is sealed onto the run it answers and opened
 		// before a resume reads it — see [Engine.answers].
 		Answers: e.answers,
+		// And what carried each session of the run on, into the run's
+		// leads, kept beside its record, for a later brief to tell again:
+		// see [Engine.leads].
+		Leads: e.leads,
 		// A report, a failure or a question past what the run's record
 		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},

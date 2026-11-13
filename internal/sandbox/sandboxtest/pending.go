@@ -20,6 +20,7 @@ package sandboxtest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,6 +83,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
+		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
@@ -210,6 +212,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
+		{"AnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns", testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns},
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
@@ -628,6 +631,193 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
 		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
 			got.FreshOmitted)
+	}
+}
+
+// THE TURN'S LEADS ARE KEPT BESIDE ITS ROW AND OUTLIVE EVERY RELAUNCH. What
+// carried each session of the turn on is kept beside the run's record, in a
+// part of its own (sandbox.PendingStore.Leads): the attach that names a job's
+// command takes the leads its brief opened with of its own into it, each once,
+// numbered as taken, held to their share with the oldest dropped first and
+// still counted, and marks on the job's record, by those numbers, every lead
+// its brief told (sandbox.LaunchRecord.LeadMarks). The record keeps the marks
+// and the count of the leads taken, never a lead's bytes. The reset that opens
+// the next job clears the job's marks with the rest of its record and leaves
+// the leads as they are, the very bytes and every key a later build added to
+// one, and the count with them, whatever the reset's run carries.
+//
+// Mutation: clear the part at a reset or keep the job before's marks there,
+// write a lead back without its carried keys, lose the cut, put a lead's bytes
+// on the record, or let a reset drop the count, and a check goes red.
+func testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-leads"
+	// A THIRD OF THE SHARE EACH, so the third job's own lead drops the first.
+	lead := func(job string) sandbox.KeptLead {
+		return sandbox.KeptLead{Kind: sandbox.LeadKindAnswer, Job: job, Seq: 1, Round: 1,
+			Sealed: bytes.Repeat([]byte("s"), sandbox.MaxKeptLeadBytes/3),
+			Extra:  map[string]json.RawMessage{"later": json.RawMessage(`"a later build's key"`)}}
+	}
+	// attach is the attach that names the running job's command, its brief's
+	// leads named for the run and the job as the row names them.
+	attach := func(own []sandbox.KeptLead, told []sandbox.LeadRef) sandbox.PendingRun {
+		t.Helper()
+		row := mustGet(t, s, turn)
+		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-leads", CommandID: "cmd-" + row.LaunchID,
+			Brief: sandbox.BriefContinued, Leads: sandbox.BriefLeads{Run: row.LeadsRun, Job: row.LaunchID,
+				Counted: row.LeadsAppended, Own: own, Told: told}}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names %s's command: %v", row.LaunchID, err)
+		}
+		return mustGet(t, s, turn)
+	}
+	read := func(row sandbox.PendingRun) sandbox.TurnLeads {
+		t.Helper()
+		leads, err := s.Leads(ctx, row)
+		if err != nil {
+			t.Fatalf("Leads: %v", err)
+		}
+		return leads
+	}
+	jobs := func(leads []sandbox.KeptLead) (names []string, numbers []int) {
+		for _, kept := range leads {
+			names, numbers = append(names, kept.Job), append(numbers, kept.Appended)
+		}
+		return names, numbers
+	}
+	asWritten := func(t *testing.T, kept sandbox.KeptLead, job string) {
+		t.Helper()
+		if !bytes.Equal(kept.Sealed, lead(job).Sealed) || string(kept.Extra["later"]) != `"a later build's key"` {
+			t.Errorf("%s's lead is kept re-made: %d bytes sealed, carried keys %v", job, len(kept.Sealed),
+				kept.Extra)
+		}
+	}
+	mustBeginLaunch(t, s, run(turn))
+	before := mustGet(t, s, turn)
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-leads", Leads: sandbox.BriefLeads{
+		Run: before.LeadsRun, Job: before.LaunchID, Own: []sandbox.KeptLead{lead("job-0")}}},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach before the job: %v", err)
+	}
+	if got := read(mustGet(t, s, turn)); len(got.Kept) != 0 || got.Cut != 0 {
+		t.Errorf("the attach before the job kept leads %+v with %d cut, want none: it names no command", got.Kept,
+			got.Cut)
+	}
+	first := attach([]sandbox.KeptLead{lead("job-1")}, nil)
+	if names, numbers := jobs(read(first).Kept); !slices.Equal(names, []string{"job-1"}) ||
+		!slices.Equal(numbers, []int{1}) || !slices.Equal(first.Launch.LeadMarks, []int{1}) ||
+		first.LeadsAppended != 1 {
+		t.Fatalf("the first job keeps leads %v numbered %v, its record marks %v and counts %d; want job-1's, "+
+			"numbered 1, marked and counted", names, numbers, first.Launch.LeadMarks, first.LeadsAppended)
+	}
+	sealed := base64.StdEncoding.EncodeToString(lead("job-1").Sealed)
+	if raw, err := json.Marshal(first); err != nil || bytes.Contains(raw, []byte(sealed)) {
+		t.Errorf("the job's record holds the bytes of the lead it marks (%v): it keeps the marks and the count "+
+			"alone", err)
+	}
+	next := run(turn)
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	reset := mustGet(t, s, turn)
+	if len(reset.Launch.LeadMarks) != 0 || reset.LeadsAppended != 1 || reset.LeadsRun != first.LeadsRun {
+		t.Fatalf("the next job's record marks %v, counts %d and names run %q for its leads; want none of the "+
+			"job before's marks, the count and the run kept (%q)", reset.Launch.LeadMarks, reset.LeadsAppended,
+			reset.LeadsRun, first.LeadsRun)
+	}
+	got := read(reset)
+	if names, _ := jobs(got.Kept); !slices.Equal(names, []string{"job-1"}) || got.Cut != 0 {
+		t.Fatalf("after the reset the turn's leads read %v with %d cut, want job-1's, kept as they were", names,
+			got.Cut)
+	}
+	asWritten(t, got.Kept[0], "job-1")
+	second := attach([]sandbox.KeptLead{lead("job-2")}, []sandbox.LeadRef{{Job: "job-1", Kind: sandbox.LeadKindAnswer}})
+	if names, numbers := jobs(read(second).Kept); !slices.Equal(names, []string{"job-1", "job-2"}) ||
+		!slices.Equal(numbers, []int{1, 2}) || !slices.Equal(second.Launch.LeadMarks, []int{1, 2}) ||
+		second.LeadsAppended != 2 {
+		t.Errorf("the second job keeps leads %v numbered %v, its record marks %v and counts %d; want job-1's "+
+			"told again and its own, both marked", names, numbers, second.Launch.LeadMarks, second.LeadsAppended)
+	}
+	// A SEND-BACK OPENS A NEW ROUND AND KEEPS THE TURN'S LEADS ALL THE SAME.
+	mustBeginLaunch(t, s, run(turn))
+	third := attach([]sandbox.KeptLead{lead("job-3")}, nil)
+	got = read(third)
+	if names, numbers := jobs(got.Kept); !slices.Equal(names, []string{"job-2", "job-3"}) ||
+		!slices.Equal(numbers, []int{2, 3}) || got.Cut != 1 || !slices.Equal(third.Launch.LeadMarks, []int{3}) ||
+		third.LeadsAppended != 3 {
+		t.Errorf("the third job keeps leads %v numbered %v with %d cut, its record marks %v and counts %d; want "+
+			"job-1 dropped and counted, job-2 told by no brief of its, and its own marked", names, numbers,
+			got.Cut, third.Launch.LeadMarks, third.LeadsAppended)
+	}
+	for i, job := range []string{"job-2", "job-3"} {
+		if i < len(got.Kept) {
+			asWritten(t, got.Kept[i], job)
+		}
+	}
+	mustBeginLaunch(t, s, next)
+	fourth := mustGet(t, s, turn)
+	if got := read(fourth); len(got.Kept) != 2 || got.Cut != 1 || fourth.LeadsAppended != 3 ||
+		len(fourth.Launch.LeadMarks) != 0 {
+		t.Errorf("the fourth job reads %d leads with %d cut, its record counting %d and marking %v; want the two "+
+			"and the cut kept, the count kept and no mark", len(got.Kept), got.Cut, fourth.LeadsAppended,
+			fourth.Launch.LeadMarks)
+	}
+}
+
+// AN EARLIER RUN'S LEADS ARE NONE OF THE TURN'S NEXT RUN'S. A turn's record can
+// be removed and created again, and the store may leave a part of the earlier
+// run beside the new record (coord's removeRunPart leaves a part beside a
+// record created again): the leads part names the run it is of, and the record
+// the run its leads are kept for (sandbox.PendingRun.LeadsRun), so a part of
+// another run reads as none of this one's, every lead the record counts said as
+// not kept; and the record's next attach that takes a lead replaces it, its
+// own lead numbered past every lead the record counted, so the leads the
+// replaced part took with it are still counted.
+//
+// Mutation: read a part whatever run it names, take into another run's part,
+// or start the replacing part's numbers at none, and a check goes red.
+func testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	const turn = "t-leads-earlier"
+	attach := func(job string) sandbox.PendingRun {
+		t.Helper()
+		row := mustGet(t, s, turn)
+		own := sandbox.KeptLead{Kind: sandbox.LeadKindAnswer, Job: row.LaunchID, Seq: row.LaunchSeq, Round: 1,
+			Sealed: []byte(job + "'s answer")}
+		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-earlier", CommandID: "cmd-" + job,
+			Brief: sandbox.BriefContinued, Leads: sandbox.BriefLeads{Run: row.LeadsRun, Job: row.LaunchID,
+				Counted: row.LeadsAppended, Own: []sandbox.KeptLead{own}}}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names %s's command: %v", job, err)
+		}
+		return mustGet(t, s, turn)
+	}
+	mustBeginLaunch(t, s, run(turn))
+	first := attach("job-1")
+	// A PART OF ANOTHER RUN OF THE TURN, as a record removed and created again
+	// can find beside it.
+	earlier, err := json.Marshal(map[string]any{"run": "an-earlier-run", "appends": 1,
+		"leads": []sandbox.KeptLead{{Kind: sandbox.LeadKindAnswer, Job: "job-earlier", Seq: 1, Round: 1,
+			Appended: 1, Sealed: []byte("an earlier run's answer")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLeads,
+		func(coord.Record, bool) ([]byte, error) { return earlier, nil }); err != nil || !ok {
+		t.Fatalf("staging another run's leads beside the record: %v, %v", ok, err)
+	}
+	got, err := s.Leads(ctx, first)
+	if err != nil || len(got.Kept) != 0 || got.Cut != 1 {
+		t.Errorf("beside a part of another run the record reads leads %+v with %d cut, %v; want none of them, "+
+			"and the one lead it counts said as not kept", got.Kept, got.Cut, err)
+	}
+	next := run(turn)
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	second := attach("job-2")
+	got, err = s.Leads(ctx, second)
+	if err != nil || len(got.Kept) != 1 || got.Kept[0].Job != second.LaunchID || got.Kept[0].Appended != 2 ||
+		got.Cut != 1 || !slices.Equal(second.Launch.LeadMarks, []int{2}) || second.LeadsAppended != 2 {
+		t.Errorf("the next attach reads leads %+v with %d cut, its record marking %v and counting %d, %v; want "+
+			"its own lead alone, numbered 2 past the one the replaced part took with it, which is counted",
+			got.Kept, got.Cut, second.Launch.LeadMarks, second.LeadsAppended, err)
 	}
 }
 

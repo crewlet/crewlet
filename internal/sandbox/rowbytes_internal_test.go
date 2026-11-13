@@ -25,6 +25,8 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -399,6 +401,57 @@ func TestIdentitiesFoldPastTheirShareAndNeverLoseACount(t *testing.T) {
 	}
 }
 
+// worstLeads is the leads a run's leads part keeps at their share
+// ([MaxKeptLeadBytes]), each sealed the way a launch seals one ([LeadSeal.Seal])
+// and numbered at its widest ([KeptLead.Appended]): a held call's answer at its
+// worst, its question, its words and who gave them in the bytes that escape the
+// most and the result of held, the worst held call, sealed at its widest as its
+// row seals it ([HeldCall.Kept]), beside a review grown through the keys a
+// later build adds to a lead until the two weigh the share exactly. So the
+// part's arithmetic holds any history a take keeps, whatever it holds
+// ([heldLeads]), as the row's does an answer within its share; and the share
+// holds one lead at its worst, which is what it is sized for.
+func worstLeads(t *testing.T, held HeldCall) []KeptLead {
+	t.Helper()
+	markup := func(n int) string { return strings.Repeat("<", n) }
+	seal, err := NewLeadSeal(recordseal.OneKey("leads-k1", "the row model's fleet key material"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := strings.Repeat("a", 64)
+	answer, err := seal.Seal(turn, Lead{Kind: LeadKindAnswer, Job: uuid.NewString(), Seq: math.MaxInt64,
+		Round: math.MaxInt, Answer: &LeadAnswer{Question: markup(decision.MaxQuestion),
+			Words: markup(MaxLeadWordsBytes), Cut: math.MaxInt, By: markup(iam.MaxLogin),
+			Label: &provenance.Label{Source: provenance.Source(markup(32)), Trust: provenance.Trust(markup(32)),
+				Authors: []provenance.Author{{Kind: iam.ActorKind(markup(32)), Seat: markup(iam.MaxLogin)}}},
+			Withdrawn: true, Refused: &LeadRefused{Messages: math.MaxInt, Bytes: math.MaxInt, MaxBytes: math.MaxInt},
+			Held: &LeadHeld{Tool: markup(MaxBridgeCallNameBytes), Server: markup(128), HeldID: uuid.NewString(),
+				Choice: markup(32), Outcome: LeadHeldOutcome(markup(32)), Failed: true, Why: markup(1 << 10),
+				Result: held.Kept()}}})
+	if err != nil {
+		t.Fatalf("sealing the worst lead: %v", err)
+	}
+	answer.Appended = math.MaxInt
+	if one, _ := json.Marshal([]KeptLead{answer}); len(one) > MaxKeptLeadBytes {
+		t.Fatalf("one lead at its worst weighs %d, past the %d a run's leads part keeps: the share holds at "+
+			"least one", len(one), MaxKeptLeadBytes)
+	}
+	review, err := seal.Seal(turn, Lead{Kind: LeadKindReview, Job: uuid.NewString(), Seq: math.MaxInt64,
+		Round: math.MaxInt})
+	if err != nil {
+		t.Fatalf("sealing a review: %v", err)
+	}
+	review.Appended = math.MaxInt
+	leads := paddedTo(t, MaxKeptLeadBytes, []KeptLead{answer, review}, func(l *[]KeptLead, pad string) {
+		(*l)[1].Extra = map[string]json.RawMessage{"pad": json.RawMessage(`"` + pad + `"`)}
+	})
+	if kept := heldLeads(leads); len(kept) != len(leads) || len(leads) > MaxKeptLeads {
+		t.Fatalf("leads at their share keep %d of %d, at most %d: the model is not what a take keeps", len(kept),
+			len(leads), MaxKeptLeads)
+	}
+	return leads
+}
+
 // heldResultAtItsWorst is the result of a held call as the row holds it at its
 // widest: an output at [MaxHeldResultBytes] of markup, sealed the way the
 // engine seals one ([CallSeal.SealResult]) — encoded with every byte escaped
@@ -639,9 +692,17 @@ func worstRow(t *testing.T) PendingRun {
 		func(h *[]HandedBack, pad string) {
 			(*h)[0].Event = json.RawMessage(`"` + pad + `"`)
 		})
+	// THE LEADS ITS BRIEF TOLD, AS MANY AS THE PART KEEPS, each number at its
+	// widest: nineteen digits each, ascending, as the attach writes them
+	// ([LaunchRecord.LeadMarks], [MaxKeptLeads]). The leads themselves are
+	// beside the row ([worstLeadsPart]), never on it.
+	marks := make([]int, MaxKeptLeads)
+	for i := range marks {
+		marks[i] = math.MaxInt - (MaxKeptLeads - 1) + i
+	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
-		BriefOmitted: omitted, FreshOmitted: omitted,
+		BriefOmitted: omitted, FreshOmitted: omitted, LeadMarks: marks,
 		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
 		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
 		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
@@ -746,6 +807,9 @@ func worstRow(t *testing.T) PendingRun {
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
+		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
+		// writes it, and how many leads that part has taken, at its widest.
+		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
 		BoxSince: worstAt, Capture: capture, Kept: capture, Base: &base,
 		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
 			executorkeep.ExhaustedMaxSessions),
@@ -874,9 +938,10 @@ const elidedWorst = 100
 // Mutation: raise MaxAnswerBytes, MaxHeldArgsBytes or ConversationBaseMaxBytes
 // past what the rest has room for, raise MaxRunRepos, MaxConePaths or
 // MaxCodeHolds far enough, or let a note's seal or a held call's result grow,
-// and the rest overruns its share; and raise maxIncarnationBytes to 700,000,
-// and the row's incarnations at that bound — its owner's, and the taker and the
-// standby's taker of each capture it holds — overrun it too.
+// and the rest overruns its share; raise MaxKeptLeads far enough, and the
+// job's marks of its leads overrun the rest; and raise maxIncarnationBytes to
+// 700,000, and the row's incarnations at that bound (its owner's, and the taker
+// and the standby's taker of each capture it holds) overrun it too.
 // Grow or shrink a note's seal by a byte, and every other field no longer
 // weighs the figure the table states; grow or shrink the turn's read of its
 // conversation by a byte, and the rest no longer leaves the spare it states.
@@ -1000,6 +1065,74 @@ var zeroInTheWorstRow = func() map[string]string {
 func TestTheWorstRowSetsEveryField(t *testing.T) {
 	t.Parallel()
 	everyFieldSet(t, "row", worstRow(t), zeroInTheWorstRow)
+}
+
+// worstLeadsPart is a run's leads part with every field at its bound: its
+// leads at their share, numbered at their widest ([worstLeads]), the run it is
+// of a launch id as the create names it, and how many leads it has taken at
+// the widest that count can be.
+func worstLeadsPart(t *testing.T) leadsPart {
+	t.Helper()
+	return leadsPart{Run: uuid.NewString(), Leads: worstLeads(t, *worstRow(t).HeldCall), Appends: math.MaxInt}
+}
+
+// THE WHOLE LEADS PART FITS ITS BUDGET: the turn's leads are a value of their
+// own beside the row ([coord.RunLeads]), held to [RowBytes] as the row and the
+// log are. At their worst the leads weigh exactly their share
+// ([MaxKeptLeadBytes]), no more than [MaxKeptLeads] of them, and the whole
+// part, its own fields at their widest, no more than [RowBytes]: what is left
+// is the room a later build adds keys to the part in.
+//
+// AND THE FIGURES ITS TABLE STATES ARE THE ONES THE PART WEIGHS (leads.go): its
+// own fields ([measuredLeadsFields]) and what [RowBytes] leaves to spare beside
+// them and the leads ([measuredLeadsSpare]), compared exactly, as the row's are
+// (TestTheWholeRowFitsItsBudget), since the worst part weighs the same on every
+// run: its ids are new on every run, each of a fixed width.
+//
+// Mutation: raise MaxKeptLeadBytes past what RowBytes leaves beside the part's
+// fields, and the part overruns its value; write a key of the part a byte
+// longer, and its fields no longer weigh the figure the table states; move
+// RowBytes, and the part no longer leaves the spare the table states.
+func TestTheWholeLeadsPartFitsItsBudget(t *testing.T) {
+	t.Parallel()
+	part := worstLeadsPart(t)
+	whole, err := json.Marshal(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leads, err := json.Marshal(part.Leads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := len(whole) - len(leads)
+	spare := RowBytes - MaxKeptLeadBytes - fields
+	t.Logf("the leads part weighs %d of the %d a value may: its %d leads %d of their %d, its own fields %d, "+
+		"and %d to spare", len(whole), RowBytes, len(part.Leads), len(leads), MaxKeptLeadBytes, fields, spare)
+	if len(leads) != MaxKeptLeadBytes || len(part.Leads) > MaxKeptLeads {
+		t.Errorf("the worst part's %d leads weigh %d, want exactly their share %d and at most %d of them",
+			len(part.Leads), len(leads), MaxKeptLeadBytes, MaxKeptLeads)
+	}
+	if len(whole) > RowBytes {
+		t.Errorf("the leads part weighs %d, past the %d a value may", len(whole), RowBytes)
+	}
+	if fields != measuredLeadsFields || spare != measuredLeadsSpare {
+		t.Errorf("the part's own fields weigh %d with %d to spare, and leads.go states %d with %d: restate "+
+			"measuredLeadsFields, measuredLeadsSpare and the lines of the part's table that state them", fields,
+			spare, measuredLeadsFields, measuredLeadsSpare)
+	}
+}
+
+// THE WORST LEADS PART SETS EVERY FIELD THE PART CARRIES, for the reason the
+// worst row does (TestTheWorstRowSetsEveryField): a field [worstLeadsPart]
+// leaves zero is one TestTheWholeLeadsPartFitsItsBudget does not weigh at its
+// widest, and the part's figures would be smaller than any part the store can
+// hold.
+//
+// Mutation: leave the worst leads unnumbered, and the part has a field nothing
+// names.
+func TestTheWorstLeadsPartSetsEveryField(t *testing.T) {
+	t.Parallel()
+	everyFieldSet(t, "leads part", worstLeadsPart(t), nil)
 }
 
 // THE WHOLE LOG FITS ITS BUDGET: the log is a value of its own beside the row,

@@ -19,6 +19,8 @@ import (
 // code search — and
 // none of them in a state log's. So does a person's answer to a parked run,
 // sealed onto the run's row and handed to the resumed run as their words, and
+// what carried each session of a run on, kept beside a run's record for a later
+// brief to tell again, an answer's words among it, and
 // a note to a turn whose executor is out, sealed onto the run's row with the
 // seat anchor a person's authority to send one is decided on. And so do the
 // sealed channels that are no instruction: presence, which a node displays as
@@ -78,6 +80,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leads, err := sandbox.NewLeadSeal(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
 	notes, err := newSteerSeals(ring)
 	if err != nil {
 		t.Fatal(err)
@@ -111,10 +117,11 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	claim(assistant.frames.Domain(), "an assistant turn's frame")
 	claim(presenceWire.Domain(), "a presence frame")
 	claim(answers.Domain(), "an answer to a parked run")
+	claim(leads.Domain(), "a lead a run keeps")
 	note, seat := notes.Domains()
 	claim(note, "a note on a run record")
 	claim(seat, "a run record's seat anchor")
-	if len(owner) != len(registeredDomains())+25 {
+	if len(owner) != len(registeredDomains())+26 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }

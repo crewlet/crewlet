@@ -1425,8 +1425,9 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		}
 		if why == "" {
-			// WHAT ITS BRIEFS LEFT OUT OF THE ROUND, the same for the brief
-			// for either box ([SessionContinuation.Told]).
+			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
+			// they opened with, the same for the brief for either box
+			// ([SessionContinuation.Told]).
 			launch.told = want.Told
 			return launch
 		}

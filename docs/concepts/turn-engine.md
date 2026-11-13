@@ -855,7 +855,12 @@ sequenceDiagram
   harness, below — since it lacks that note and holds the answered ones after
   it. And a note the run's bridge served its harness — OpenCode's, below, which
   may have delivered it with its confirmation lost — is told to a continued
-  session the same way, among the new ones as much as among the read.
+  session the same way, among the new ones as much as among the read. Such a
+  session is told again, apart and before its calls, the messages its job's
+  brief opened with as well, the answer, review or turn's task that carried it
+  on, which the engine keeps beside the run's record for it ([A relaunch
+  continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session));
+  a note is never among them, each note being told by the rule above.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
   that takes them there reads a note after its current step; the take is

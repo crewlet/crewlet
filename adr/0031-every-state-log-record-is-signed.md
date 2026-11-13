@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/recordseal`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/sandbox.TestALeadSealOpensOnlyOnTheTurnAndPlaceItWasSealedFor`, `internal/sandbox.TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt`, `internal/sandbox.TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened`, `internal/sandbox.TestALeadOfAKindThisBuildDoesNotKnowIsUnreadHereNotUnopened`, `internal/engine.TestAResumeOpensTheLeadsItsJobsBriefTold`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -199,6 +199,36 @@ recorded and owed until a node that holds it takes the seat, and a seal that
 does not open as an answer to that question is never handed to a turn or
 attributed to anybody — it is logged at error and let go of, and the run waits
 on its question again. The detail is `internal/sandbox`'s (answerseal.go).
+
+## Amendment: what carried a run's session on is sealed beside its record
+
+A run keeps what carried each session of it on beside its record, for a later
+brief to a session that may lack it to tell again (ADR-0073's amendment on a
+session's leads): an answer to its question in the words of the person who gave
+it, a held call with what it returned, a review, the turn's task. An answer told
+again is told as that person's words, an instruction as it was the first time,
+so each lead is signed under the fleet keyring in a key domain of its own
+(`seat.run.lead`): no frame of another channel opens as a lead, and no lead as
+an answer. It is signed and not encrypted, as an answer is, and a held call's
+result inside it rides as its row sealed it, under the call's own AEAD. The seal
+binds the turn, the job whose brief first told the lead, that job's place among
+the turn's launches, the lead's kind and the round it carried on: moved onto
+another turn, job or place, or named as another kind or round, it does not open.
+It never binds where it is kept: a lead is sealed once and kept as sealed beside
+the run's record, never sealed again however often a later job takes its own
+leads in beside it. Every reader opens it before it uses anything of it, with
+the two failures' dispositions, and one difference from an answer's: a key the
+node does not hold is a fact about the node, so the lead is told as one that
+cannot be read here and stays where it is kept for a node that holds the key,
+but NOTHING WAITS for that node, as an owed answer does. An answer is the
+instruction a run parked for; a lead told again is a message the session may
+already show, so a resume held for it would hold the run for a message it may
+not need. A seal that does not open under a key the node holds, or opens as
+another job's lead or as words its kind does not carry, is a fact about the
+record: none of it is told, it is logged at error, and it stays where it is kept
+until the bound on the run's leads drops it. A lead of a kind the node's build
+does not know is this build's fact, told as one that cannot be read here, as a
+key it lacks is. The detail is `internal/sandbox`'s (leadseal.go).
 
 ## Amendment: a note to an executor is sealed on its record
 

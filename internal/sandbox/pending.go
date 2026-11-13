@@ -1178,6 +1178,22 @@ type PendingRun struct {
 	// nothing could order it.
 	LaunchSeq int64 `json:"launch_seq,omitempty"`
 
+	// LeadsRun is the run its turn's leads part is of ([leadsPart.Run],
+	// [PendingStore.Leads]): the job whose launch created the row, or, for a
+	// row an older build created, the first job this build's relaunch opened
+	// on it. Written once and never again, so a part an earlier run of the
+	// turn left beside the row, which the store may leave by design
+	// (coord's removeRunPart leaves a part beside a record created again), is
+	// told from this run's own.
+	LeadsRun string `json:"leads_run,omitempty"`
+
+	// LeadsAppended is how many leads the run's leads part had taken as the
+	// newest attach that marked any left it ([leadsPart.Appends]): what a
+	// reader holds the part to, so a part that is gone, short, unreadable or
+	// another run's tells every lead it cannot give back as not kept, never
+	// as none. Only grows.
+	LeadsAppended int `json:"leads_appended,omitempty"`
+
 	// Capture is the newest capture of the turn's harness session the row
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the
@@ -2545,6 +2561,14 @@ type PendingStore interface {
 	// THE CREATE ALONE and kept by every reset, whatever the reset's run
 	// carries: the turn's first launch made the read, and a relaunch
 	// continues the base that read named, never one read again.
+	//
+	// THE RUN IS NAMED FOR ITS LEADS ([PendingRun.LeadsRun]) by the create,
+	// and by the first reset of a row that names none (an older build's), and
+	// never again, whatever the run carries; and how many leads its part has
+	// taken ([PendingRun.LeadsAppended]) is kept by every reset. The reset
+	// clears the job's marks with the rest of its record
+	// ([LaunchRecord.LeadMarks]) and leaves the turn's leads beside the row
+	// as they are: they outlive every relaunch as the row does.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -2876,6 +2900,20 @@ type PendingStore interface {
 	// to write it is not the attach's, which has landed, and leaves the job
 	// with no set, so its captures are refused.
 	//
+	// And the leads the brief the job was handed opened with of its own
+	// ([BoxRef.Leads]) are taken into the turn's leads part beside the record
+	// FIRST ([PendingStore.Leads]), once each by their identity and numbered
+	// as taken, held to [MaxKeptLeadBytes] and [MaxKeptLeads], the oldest
+	// dropped first and still counted; then the write that names the command
+	// marks on the job's record every lead its brief told, its own and the
+	// earlier ones it told again, or was to and could not read
+	// ([BriefLeads.ToldUnread]), by those numbers ([LaunchRecord.LeadMarks]),
+	// where the record still names the job and the run they were kept for. A
+	// part another run of the turn left is replaced only where the record
+	// names this launch's run; where it names another, the attach is refused
+	// as below. A take the store cannot write refuses the attach. An attach
+	// that names no command takes none of it.
+	//
 	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
 	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
 	// same order: a newer lease owns the run ([ErrSeatNotHeld]), whether or
@@ -3146,6 +3184,25 @@ type PendingStore interface {
 	// recorded. Unfenced, like a code hold: what a box holds is true whoever
 	// holds the seat.
 	AddHanded(ctx context.Context, run PendingRun, add func(sealed string) (next, incomplete string)) (bool, error)
+
+	// Leads reads the turn's leads kept beside run's row, as the row expects
+	// them: every lead of the run the part keeps, oldest first, and how many
+	// earlier ones it does not, the part's own cut and every lead the row
+	// counts ([PendingRun.LeadsAppended]) that the part cannot give back. A
+	// part of another run of the turn, or none, is none of this run's, and
+	// all the row counts are not kept. An error is a part the store could not
+	// read or that does not decode, never "none": the caller tells every lead
+	// the row counts as not kept, and hands the ones the job's record marks on
+	// by their numbers for a later read to tell ([TurnLeads.Unread]).
+	//
+	// Kept BESIDE the record, never on it, as the bridged log is: up to
+	// [MaxKeptLeadBytes] of sealed leads, which every read of the record
+	// would carry though only a resume reads them ([Coordinator.leadsAt]).
+	// Taken in by the attach that names a job's command
+	// ([PendingStore.AttachSandbox]), before its write of the record, and
+	// never written by any other write: every relaunch keeps them as the
+	// record keeps itself.
+	Leads(ctx context.Context, run PendingRun) (TurnLeads, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from
@@ -4120,6 +4177,12 @@ type BoxRef struct {
 	// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]): written with
 	// the job's command as Brief is.
 	BriefOmitted, FreshOmitted []int
+
+	// Leads is what that brief opened with of its own and the earlier leads it
+	// told again, or was to and could not read ([BriefLeads]): taken into the
+	// run's leads part by the attach that names the job's command, before its
+	// write of the row, and marked on the job's record in that write.
+	Leads BriefLeads
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4334,6 +4397,21 @@ type LaunchRecord struct {
 	// to read a set against.
 	BriefOmitted []int `json:"brief_omitted,omitempty"`
 	FreshOmitted []int `json:"fresh_omitted,omitempty"`
+
+	// LeadMarks is the leads the brief the job's run read told, its own and
+	// every earlier one it told again or was to and could not read
+	// ([BriefTold.ToldUnread]), by the number its run's leads part gave each
+	// ([KeptLead.Appended]), ascending: written by the attach that names
+	// the job's command, once the part has taken the brief's own
+	// ([PendingStore.AttachSandbox]), and cleared with the rest of the job's
+	// record by the reset that opens the next job. Each names a lead the part
+	// keeps, so there are at most [MaxKeptLeads].
+	//
+	// ON THE JOB'S RECORD, as the reads a brief left out are: a continuation
+	// of the job's session that may lack its brief tells again the leads that
+	// brief told ([LaunchRecord.ToldLeads]), read beside the row after the
+	// launch is long gone, on whichever node.
+	LeadMarks []int `json:"lead_marks,omitempty"`
 
 	// FreshSessionID is the session of its own the job's script starts in the
 	// continued one's place, where its launch continued one and its box

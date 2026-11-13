@@ -475,7 +475,7 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	if prior, err := commit.Begin(ctx); err != nil || !prior.First {
 		t.Fatalf("Begin = %+v, %v, want this mark the first", prior, err)
 	}
-	if err := commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{Output: "posted",
+	if _, err := commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{Output: "posted",
 		Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}

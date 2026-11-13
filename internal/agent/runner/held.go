@@ -46,8 +46,12 @@ type HeldCall struct {
 	// would run is not what the person approved.
 	Unopened string
 
-	// outcome is what became of the call, set by [makeHeld].
+	// outcome is what became of the call, set by [makeHeld], and kept what it
+	// returned as the run's row sealed it, set by makeHeld where a result is
+	// recorded ([HeldCommit.Record], [HeldPrior.Kept]): what the answer's lead
+	// keeps of it, for a later brief to tell again ([Asked.lead]).
 	outcome heldOutcome
+	kept    *sandbox.HeldKept
 }
 
 // HeldCommit marks a held call as being made and records what it returned, on
@@ -84,13 +88,20 @@ type HeldCommit interface {
 	// round's log after it; an error after the row's write leaves the call to
 	// the next job's opening, which appends it ([sandbox.OwedCall]).
 	//
+	// It answers the result as it sealed it, with the fields its seal binds
+	// ([sandbox.HeldKept]), wherever it sealed one, the write's error beside
+	// it or not: the answer's lead keeps it, since no record holds it once
+	// the next job opens, and a later brief to a session that may lack the
+	// answer tells it again with what the call returned. Zero where it sealed
+	// nothing.
+	//
 	// WITHOUT ITS ARGUMENTS AND WITHOUT THEIR DIGEST: they ride the row
 	// sealed on the held call (ADR-0077), and a digest of them in the clear
 	// beside the tool's name would confirm a guess at what the seal hides.
 	// A later segment's call log counts the call as one of its tool whose
 	// arguments are not known (sandbox.BridgeCall.Withheld) — an over-count
 	// of a tool no operation id reads, since no builtin is ever held.
-	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error
+	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) (sandbox.HeldKept, error)
 }
 
 // HeldPrior is how a held call stood: as [HeldCommit.Begin] found it when it
@@ -108,6 +119,12 @@ type HeldPrior struct {
 	// off the call's entry recorded with it (sandbox.HeldCall.Call), never
 	// its output.
 	Unread bool
+
+	// Kept is the result that attempt recorded, as the row sealed it
+	// ([sandbox.HeldCall.Kept]), an unread one included: the answer's lead
+	// keeps it, so a later node that holds its key opens it where this one
+	// could not. Nil where none was recorded.
+	Kept *sandbox.HeldKept
 }
 
 // outcome is what became of a call some earlier attempt at the same answer
@@ -218,7 +235,7 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 		return nil
 	}
 	if prior, marked := held.Commit.Marked(ctx); marked {
-		held.outcome = prior.outcome()
+		held.outcome, held.kept = prior.outcome(), prior.Kept
 		return nil
 	}
 	if why := held.notMade(surface); why != "" {
@@ -230,7 +247,7 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 		return fmt.Errorf("runner: marking the held call to %s as made: %w", held.Tool, err)
 	}
 	if !prior.First {
-		held.outcome = prior.outcome()
+		held.outcome, held.kept = prior.outcome(), prior.Kept
 		return nil
 	}
 	res, err := surface.RunApproved(ctx, held.Tool, held.Args)
@@ -248,7 +265,11 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err 
 	if res.Unkept {
 		recorded.Output = tools.UnkeptOutput(res.Output)
 	}
-	if err := held.Commit.Record(ctx, recorded, res); err != nil {
+	kept, err := held.Commit.Record(ctx, recorded, res)
+	if kept.Result != "" {
+		held.kept = &kept
+	}
+	if err != nil {
 		// THE CALL IS MADE, and the run is told what it returned whatever
 		// the record says: only a later attempt at the same answer, which
 		// would then say the result is unknown, reads the record.

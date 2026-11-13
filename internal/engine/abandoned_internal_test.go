@@ -70,7 +70,7 @@ func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 			brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
 				BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
-					SessionID: "sess-ask", BoxKept: true}}, nil, nil))
+					SessionID: "sess-ask", BoxKept: true}}, nil, nil, nil))
 			at := strings.Index(brief, lateHeading)
 			if at < 0 || strings.Count(brief, "- delegate(") != 1 || !strings.Contains(brief[at:], "- delegate(") {
 				t.Errorf("the copy in its box is not told the call nobody waited for once, under the late "+

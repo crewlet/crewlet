@@ -387,6 +387,35 @@ type Resume struct {
 	// tell.
 	Owed []int
 
+	// Leads is the turn's leads as the run keeps them beside its record,
+	// opened, oldest first ([ResumeLead], sandbox.PendingStore.Leads): what
+	// carried each session of the work on. Those the brief the job's run read
+	// told are marked ([ResumeLead.Told], sandbox.LaunchRecord.ToldLeads), and
+	// told again to a continuation of the job's session that may lack that
+	// brief ([Runner.keptSession], [Runner.inPlaceAfter]); LeadsCut is how many
+	// earlier leads of the turn are not kept, past the bound or because the
+	// store could not give them back, said beside them.
+	Leads    []ResumeLead
+	LeadsCut int
+
+	// LeadsUnread is the leads the brief the job's run read told where the
+	// store could not give the turn's leads back at all, by their numbers in
+	// the run's leads part (sandbox.LaunchRecord.ToldLeads,
+	// sandbox.TurnLeads.Unread): none of them is in Leads, and LeadsCut counts
+	// them with every other lead of the turn. A continuation of the job's
+	// session that may lack that brief says them among the leads not kept,
+	// and hands them on all the same, beside the ones it told again
+	// (sandbox.BriefTold.ToldUnread), so the job its launch opens marks them
+	// and a continuation of that job's session that reads them tells them.
+	// Nil where the leads were read.
+	LeadsUnread []int
+
+	// Base is the session the turn's conversation's last turn left, as the
+	// turn's row froze it (sandbox.PendingRun.Base): where the turn began,
+	// which a task lead told again says ([prompts.NextTurnAgain]). Nil where
+	// the turn continues none.
+	Base *BaseBasis
+
 	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent
 	// produced.
@@ -487,6 +516,24 @@ type Resume struct {
 	// the record says of its read — and is told it as a note it may already
 	// show ([Runner.toldNotes]). A fresh run is told it as every note.
 	Served []string
+}
+
+// ResumeLead is one lead of the turn's, as the resume opened it.
+type ResumeLead struct {
+	// Lead is the lead, opened; one that did not open on this node names its
+	// kind, job and round and why ([sandbox.Lead.Unread]), and is told as a
+	// message that cannot be read here.
+	Lead sandbox.Lead
+
+	// Told says the brief the record's job's run read told it
+	// (sandbox.LaunchRecord.ToldLeads).
+	Told bool
+
+	// Result is what a held lead's call returned, opened from the seal its
+	// row put on it (sandbox.CallSeal.OpenKept); nil for every other lead, and
+	// for one whose result did not open here, told as a call made whose
+	// result cannot be read on this node.
+	Result *sandbox.HeldResult
 }
 
 // parked is the job's parked state as the session it ran in holds it: State,

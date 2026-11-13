@@ -1278,7 +1278,7 @@ type SandboxRunUpdate struct {
 // one of [RunParts]), never on it. The record is what every reader decides
 // on: every flip of a run is a read-decide-write of it whole, every listing
 // reads every record whole, and every git request of a coding box reads its
-// run's record and every ref answer past its floor writes it. Two parts:
+// run's record and every ref answer past its floor writes it. Three parts:
 //
 //   - [RunLog], the run's bridged tool log — every tool call its box makes
 //     over the bridge, each with its arguments and output, up to
@@ -1295,6 +1295,12 @@ type SandboxRunUpdate struct {
 //     the next launch's opening and the poll's record of a token it renews
 //     in the box read it, the last growing it by one compare-and-swap of the
 //     part.
+//   - [RunLeads], the turn's leads, each sealed by the job whose brief first
+//     told it, up to internal/sandbox's bound of 512 KiB, which on the record
+//     would have put half a mebibyte on every one of those reads, though only
+//     a resume reads them and only the attach that names a job's command
+//     writes them: one compare-and-swap of the part, BEFORE the record's
+//     write, and every later relaunch keeps them as the record keeps itself.
 //
 // A PART LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
 // what holds that: a part is written only beside a run that has a record
@@ -1433,8 +1439,9 @@ type SandboxRuns interface {
 	// and the part's, which a store that removes both in one step never
 	// leaves — still takes an update until the sweep removes it. Nothing is
 	// lost by that: every reader of a part comes to it through a record, and
-	// each part names the job it was written for, which a run's next launch
-	// replaces.
+	// each part names the job, or the run, it was written for, and a write
+	// for the job or the run its record names replaces one written for
+	// another.
 	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 }
@@ -1448,14 +1455,17 @@ const (
 	RunLog RunPart = "log"
 	// RunHanded is the secrets the run's job's box was handed, sealed.
 	RunHanded RunPart = "handed"
+	// RunLeads is the turn's leads: what carried each session of the run on,
+	// kept for a later brief to a session that may lack its own to tell again.
+	RunLeads RunPart = "leads"
 )
 
 // RunParts is every part a run's record can have beside it: what a delete of
 // the record removes, and what the sweep looks for.
-func RunParts() []RunPart { return []RunPart{RunLog, RunHanded} }
+func RunParts() []RunPart { return []RunPart{RunLog, RunHanded, RunLeads} }
 
 // Valid reports whether p is one of [RunParts].
-func (p RunPart) Valid() bool { return p == RunLog || p == RunHanded }
+func (p RunPart) Valid() bool { return p == RunLog || p == RunHanded || p == RunLeads }
 
 // SecretRecord is one stored credential, as coordination holds it.
 //
@@ -1843,9 +1853,9 @@ type Markers interface {
 	// record families no clock ages, reporting how many went. A failure
 	// part-way reports the markers already removed beside the error.
 	//
-	// AND A PART BESIDE A SANDBOX RUN WHOSE RECORD IS GONE — its log, its
-	// handed set ([RunParts]) — written before cutoff: the one value a
-	// removal can leave behind when its node stops between the record's
+	// AND A PART BESIDE A SANDBOX RUN WHOSE RECORD IS GONE (its log, its
+	// handed set, its leads: [RunParts]), written before cutoff: the one value
+	// a removal can leave behind when its node stops between the record's
 	// removal and the part's ([SandboxRuns]). Whether the run has a record
 	// is read after the part is found, so a record written under the turn
 	// again keeps its parts, and a part is removed only as it was found.

@@ -406,6 +406,13 @@ func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
 // the turn's own, the session its conversation's last turn left.
 func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base != nil }
 
+// MayLackBrief reports whether the kept session the basis names may lack the
+// brief its job was handed: a capture its harness was cut off in
+// ([SessionBasis.Interrupted]), which is not known to hold that brief. THE ONE
+// PREDICATE of the kept path, read by every telling that depends on it: the
+// calls it may already show, the notes and the leads ([Runner.keptSession]).
+func (b SessionBasis) MayLackBrief() bool { return b.Interrupted }
+
 // BaseBasis is the session a conversation's last turn left, as a launch that
 // continues it tells its run: the ended turn it is, where that session was last
 // worked, whether its harness was cut off when it was saved, what its last
@@ -513,8 +520,13 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			elided: r.cfg.Resume.Elided, lateElided: r.cfg.Resume.LateElided,
 			absorbed: r.cfg.Resume.Absorbed}
 		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
-		// approved after the save is told among the rest.
-		briefs.kept = r.keptSession(ctx, basis, collected, nil, built, fresh, "").led(r.sendBackLead(notes))
+		// approved after the save is told among the rest, but one a lead it
+		// tells again tells ([Runner.keptSession]).
+		// ITS LEAD IS THE REVIEW, which the run keeps beside its record as the
+		// review of the round it closed, for a later brief to a session that
+		// may lack this one to tell again.
+		briefs.kept = r.keptSession(ctx, basis, collected, nil, history, built, fresh, "").
+			led(r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -524,7 +536,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// begins and then handed this launch's own fresh brief — the turn's
 		// task, its earlier rounds and notes, and how the conversation's
 		// earlier turns ended — which that session never read.
-		briefs.kept = r.baseSession(basis, user.Text, sandbox.BriefTold{})
+		// ITS LEAD IS THE TURN'S TASK, which the run keeps beside its record
+		// with the closed rounds this brief rendered and the review it carried,
+		// for a later brief to a session that may lack this one to tell again.
+		briefs.kept = r.baseSession(basis, user.Text, sandbox.BriefTold{Own: taskLead(round, history, notes)})
 	}
 	// AND THE FRESH BRIEF NAMES THE KEPT SESSION IT DOES NOT CONTINUE, after
 	// the base's continuation took it whole: a run that starts a session of
@@ -726,12 +741,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	fence := r.cfg.Turn.Context.FenceBoundary()
 	var kept *keptBrief
 	if carry.keeps() {
-		kept = r.keptSession(ctx, basis, round, leadsHeld(carry), built, fresh, carry.branch())
+		kept = r.keptSession(ctx, basis, round, leadsHeld(carry), history, built, fresh, carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
 	// that carries the round on in the job's box rather than from its kept
 	// capture, built here for the same reason ([Runner.inPlaceAfter]).
-	inPlaceAfter, inPlaceOmitted := r.inPlaceAfter(ctx, carry, round, built)
+	inPlaceAfter, inPlaceOmitted, inPlaceTold := r.inPlaceAfter(ctx, carry, round, history, built)
 	// AND EVERY CALL OF THE ROUND, for a run that starts a session of its own
 	// carrying the round on ([prompts.CalledBefore]): it remembers none of
 	// them, and told only that the run before it did things through the seat's
@@ -780,6 +795,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
 		}
 	}
+	// AND WHAT CARRIES THE ROUND ON, AS THE RUN KEEPS IT BESIDE ITS RECORD, now
+	// that the call a person approved is made: every brief below opens with it,
+	// and a later brief to a session that may lack the one its run reads tells
+	// it again (leads.go). None for a loss or a replaced sign-in, whose words
+	// every later brief's cut-off section says too.
+	own := ownLeads(state.Round, carry.lead())
 	// THE GUARD IS THE RELAUNCH'S FROM HERE, empty until its launch decides
 	// which session its run takes up ([Runner.sessionDecided]): the rebuild
 	// armed it as the job before left it, which is what a run that continues
@@ -813,14 +834,15 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept = kept.led(carry.continuation(fence))
+			briefs.kept = kept.led(carry.continuation(fence), own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
 			// first launch froze, handed the reseed, which says what the
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out.
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted})
+			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
+				Own: append(taskLead(state.Round, history, ""), own...)})
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -857,8 +879,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// AND WHAT THE COPY'S BRIEF AND THE FRESH ONE LEFT OUT OF THE
 			// ROUND, which the launch records on the job it opens for the brief
 			// it hands its run.
-			Told:  sandbox.BriefTold{Omitted: inPlaceOmitted},
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted},
+			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
+			// leads of its job's brief it told again, and those it was to and
+			// could not read.
+			Told: sandbox.BriefTold{Omitted: inPlaceOmitted, Own: own, Told: inPlaceTold.refs,
+				ToldUnread: inPlaceTold.unread},
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),

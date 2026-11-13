@@ -1182,6 +1182,12 @@ type Engine struct {
 	// ([sandbox.CoordinatorOptions.Answers]).
 	answers *sandbox.AnswerSeal
 
+	// leads seals what carried each session of a run on into the run's leads,
+	// kept beside its record, and opens it for a resume that tells it again:
+	// the coordinator's, and the resume's ([sandbox.CoordinatorOptions.Leads],
+	// [runnerResume]).
+	leads *sandbox.LeadSeal
+
 	// dataTurns is this node's tally of each turn segment's datastore ops,
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
@@ -1679,6 +1685,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND WHAT CARRIED EACH SESSION OF A RUN ON, kept in the run's leads
+	// beside its record for a later brief to a session that may lack its own
+	// to tell again: an answer's words among it, told as that person's, so
+	// sealed like the answer it was, in a domain of its own (internal/sandbox,
+	// leadseal.go).
+	leads, err := sandbox.NewLeadSeal(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1873,6 +1888,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		presenceWire:        presenceWire,
 		relayWire:           relayWire,
 		answers:             answers,
+		leads:               leads,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,

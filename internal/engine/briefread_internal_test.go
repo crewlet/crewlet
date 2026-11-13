@@ -67,7 +67,7 @@ func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 		{Name: "post_message", Seq: 2, Appended: 2},
 		{Name: "add_issue_comment", Seq: 3, Appended: 3, Approved: true},
 	}}
-	resumed := runnerResume(resumeInput{Bridged: logged, BridgedRead: 2}, nil, nil)
+	resumed := runnerResume(resumeInput{Bridged: logged, BridgedRead: 2}, nil, nil, nil)
 	if resumed.BridgedRead != 2 || len(resumed.Bridged) != 3 {
 		t.Errorf("the runner is handed a read of %d calls beside %d listed, want the 2 the read saw beside "+
 			"the 3 the resume lists", resumed.BridgedRead, len(resumed.Bridged))
@@ -126,7 +126,7 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 			// and the count of it the runner is handed.
 			logged := asking.calls(t, turnID)
 			resumed := runnerResume(resumeInput{Run: asking.row(t, turnID), Bridged: logged,
-				BridgedRead: logged.Appends()}, nil, nil)
+				BridgedRead: logged.Appends()}, nil, nil, nil)
 
 			// WHILE THE RELAUNCH IS READIED: the worker lands as the asking
 			// job's own, and the call the person approved is made.
@@ -164,7 +164,7 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 			brief := relaunchedInPlace(t, carried, runnerResume(resumeInput{Run: row, Bridged: next,
 				BridgedRead: next.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
-					SessionID: "sess-carried", BoxKept: true}}, nil, nil))
+					SessionID: "sess-carried", BoxKept: true}}, nil, nil, nil))
 			const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 			at := strings.Index(brief, lateHeading)
 			if at < 0 || !strings.Contains(brief[at:], "- delegate(") || strings.Count(brief, "- delegate(") != 1 {

@@ -525,7 +525,8 @@ type Continuation struct {
 
 // BriefTold is what one brief a launch hands its run told of the round the
 // launch carries on ([Continuation.Told], [Continuation.Fresh],
-// [SessionContinuation.Told]): the calls of the round it left out.
+// [SessionContinuation.Told]): the calls of the round it left out, and what it
+// opened with.
 //
 // A SESSION HOLDS WHAT ITS BRIEF TOLD, NEVER WHAT ITS BUDGETS LEFT OUT. A brief
 // tells a round's calls held to the prior-work ledger's budgets, and counts the
@@ -551,6 +552,60 @@ type BriefTold struct {
 	// more than a round's log lists ([MaxBridgeCalls]), which a launch refuses
 	// past before anything is opened ([LaunchRequest.toldBounded]).
 	Omitted []int
+
+	// Own is the leads the brief opened with of its own (leads.go): what
+	// carries its session on, an answer, a review or the turn's task, opened,
+	// none of them named for a job yet. The launch seals them for the job it
+	// opens ([Coordinator.sealLeads]) and the attach takes them into the run's
+	// leads part ([PendingStore.Leads]), the job's record marking each told
+	// ([LaunchRecord.LeadMarks]): a later brief to a session of the work that
+	// may lack this one tells them again.
+	//
+	// Told is the earlier leads it told again, by name: the ones the brief of
+	// the job whose session it continues told, where that session may lack
+	// that brief. The job's record marks each told, so a continuation of THIS
+	// job's session, which may lack this brief, tells them again in turn.
+	Own  []Lead
+	Told []LeadRef
+
+	// ToldUnread is the earlier leads it was to tell again and could not
+	// read, by their numbers in the run's leads part: those the record of the
+	// job whose session it continues marks told, where the store could not
+	// give the run's leads back to the resume ([TurnLeads.Unread]). The brief
+	// says them as not kept, and the job's record marks each told all the
+	// same: THIS job's session lacks them as surely as the one it continues
+	// did, so a continuation of it that reads them tells them, and one failed
+	// read never drops a lead from the chain of sessions that may lack it.
+	ToldUnread []int
+}
+
+// sealLeads is own, the leads the brief a launch hands its run opened with of
+// its own ([BriefTold.Own]), sealed for the job the launch opened (its id and its
+// place among the turn's launches, [PendingRun.LaunchSeq]) under the fleet
+// keyring ([LeadSeal]): what the attach that names the job's command takes into
+// the run's leads part beside its row.
+//
+// NONE WHERE THE COORDINATOR HOLDS NO SEAL ([CoordinatorOptions.Leads], a
+// coordinator built without an engine), and a lead that will not seal is
+// logged at error and left out: the launch goes ahead, its brief told, and a
+// later continuation of its session that may lack the brief is told less, as
+// before leads were kept, never a lead the fleet did not sign.
+func (c *Coordinator) sealLeads(ctx context.Context, turnID string, opened PendingRun, own []Lead) []KeptLead {
+	if c.leads == nil || len(own) == 0 {
+		return nil
+	}
+	out := make([]KeptLead, 0, len(own))
+	for _, lead := range own {
+		lead.Job, lead.Seq = opened.LaunchID, opened.LaunchSeq
+		kept, err := c.leads.Seal(turnID, lead)
+		if err != nil {
+			log.ErrorContext(ctx, "sandbox_lead_unsealed", "turn_id", turnID, "launch_id", opened.LaunchID,
+				"kind", string(lead.Kind), "error", err.Error())
+			continue
+		}
+		out = append(out, kept)
+	}
+	return out
 }
 
 // toldBounded reports why r carries a set of calls a brief left out longer
@@ -961,6 +1016,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// command that was never started would have the waiter poll for a
 	// completion marker nothing is ever going to write.
 	briefOmitted, freshOmitted := continued.omitted(req)
+	ownLeads := c.sealLeads(ctx, req.Turn.TurnID, opened, continued.told.Own)
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
@@ -980,6 +1036,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
 		BriefOmitted: briefOmitted, FreshOmitted: freshOmitted,
+		// AND WHAT THAT BRIEF OPENED WITH: its own leads, sealed for this
+		// job, and the earlier ones it told again, or was to and could not
+		// read, for every later brief to a session of the work that may lack
+		// this one (leads.go). Named for the run and the job AS THIS LAUNCH
+		// OPENED THE ROW, never as the store reads it at the attach: a launch
+		// of a run that ended carries that run's name, which is what lets the
+		// take refuse it.
+		Leads: BriefLeads{Run: opened.LeadsRun, Job: opened.LaunchID, Counted: opened.LeadsAppended,
+			Own: ownLeads, Told: slices.Clone(continued.told.Told),
+			ToldUnread: slices.Clone(continued.told.ToldUnread)},
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

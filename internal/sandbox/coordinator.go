@@ -198,6 +198,15 @@ type ResumeRequest struct {
 	// count that included it would leave the first of those unmarked.
 	BridgedRead int
 
+	// Leads is the turn's leads kept beside the run's row
+	// ([PendingStore.Leads]), read by the coordinator beside the log inside
+	// the resume's frame: every lead of the run the part keeps, oldest first,
+	// and how many earlier ones are not kept, past the part's bound or
+	// because the part could not give them back where the row counts them;
+	// never "no leads" for a part the store could not read, which is said
+	// unread ([Coordinator.leadsAt], [TurnLeads.Unread]).
+	Leads TurnLeads
+
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
 	// — it is published on the executor's phase record. Empty on a person's
@@ -443,6 +452,14 @@ type CoordinatorOptions struct {
 	// inside the seal, so a coordinator without it could neither record an
 	// answer nor resume with one. See answerseal.go.
 	Answers *AnswerSeal
+
+	// Leads seals the leads a launch's brief opened with into the run's
+	// leads, kept beside its record, for every later brief to a session of
+	// the work that may lack that brief ([NewLeadSeal], over the fleet
+	// keyring; leads.go). Nil keeps no lead of a brief: a coordinator built
+	// without an engine (a test's), whose runs keep the leads they hold and
+	// add none.
+	Leads *LeadSeal
 
 	// Ended is called for every run this node finishes with, whatever
 	// finished it — collected, parked on its question, failed, torn down or
@@ -965,8 +982,9 @@ type Coordinator struct {
 	account Accountant
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
-	// answers is [CoordinatorOptions.Answers].
+	// answers is [CoordinatorOptions.Answers], leads [CoordinatorOptions.Leads].
 	answers  *AnswerSeal
+	leads    *LeadSeal
 	condense Condenser
 	// pushes is [CoordinatorOptions.Pushes].
 	pushes RunPushes
@@ -1189,6 +1207,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		answers:      opts.Answers,
+		leads:        opts.Leads,
 		condense:     opts.Condense,
 		ended:        opts.Ended,
 		recovered:    opts.Recovered,
@@ -3760,8 +3779,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// a relaunch built from it can tell ([ResumeRequest.BridgedRead]).
 		read := calls.Appends()
 		calls = calls.withHeld(run)
+		// AND THE TURN'S LEADS beside the row, in the same frame: what a
+		// relaunch continuing a session that may lack its brief tells again
+		// ([Coordinator.leadsAt]), never "none" for a part it could not read.
+		leads := c.leadsAt(ctx, run)
 		err = c.resume.Resume(ctx, ResumeRequest{
-			Run: run, Bridged: calls, BridgedRead: read, Answer: answer, Success: success, Trigger: trigger,
+			Run: run, Bridged: calls, BridgedRead: read, Leads: leads, Answer: answer, Success: success,
+			Trigger:       trigger,
 			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 			Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
 			InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
@@ -4007,6 +4031,27 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// The ordinary ending: the turn came back and the run is finished, so
 	// whatever drove the resume did its whole job.
 	return AnswerConsumed, nil
+}
+
+// leadsAt is the turn's leads beside run's row as its resume reads them
+// ([PendingStore.Leads]): where the store cannot give them, every lead the row
+// counts, said as not kept and never as none ([PendingRun.LeadsAppended]), and
+// the read marked unread ([TurnLeads.Unread]), so the leads the job's record
+// marks are handed on by their numbers to the job the relaunch opens, for a
+// later read that answers to tell. A resume is not refused for it, as it is
+// for a log it cannot read: a lead told again is a message the session may
+// already show, and the brief says how many it cannot tell.
+func (c *Coordinator) leadsAt(ctx context.Context, run PendingRun) TurnLeads {
+	leads, err := c.pending.Leads(ctx, run)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_leads_part_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"not_kept", run.LeadsAppended, "error", err.Error(),
+			"detail", "every lead the run's record counts is told as not kept by the relaunch this resume "+
+				"builds, rather than told again; the job that relaunch opens marks the ones this job's "+
+				"record marks, so a later resume that reads them tells them")
+		return TurnLeads{Cut: run.LeadsAppended, Unread: true}
+	}
+	return leads
 }
 
 // markResumeBegun records on a claim of a collected job what the turn resuming

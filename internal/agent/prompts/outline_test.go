@@ -375,3 +375,86 @@ func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
 		t.Error("an outline over invalid UTF-8 was accepted")
 	}
 }
+
+// A PROMPT TOLD AS A PART OF ANOTHER MOVES ITS BUILDER'S HEADINGS AND NOTHING
+// ELSE. A later brief tells again, under a heading of its own, a send-back or a
+// turn's task that a session may lack, nested a level down so it reads as part
+// of that message ([Prompt.Nested]): every heading a builder opened a section
+// with moves one level, by the outline that builder recorded, and every other
+// byte stays where it was. Somebody else's words under those headings (a
+// trigger's own "## Triage", a pull request's "# Title", a reviewer's "##
+// Missing", a code block's "#include", a worker's task opening on its own "#
+// Fix the login bug") are kept byte for byte, as every builder's prompt in the
+// corpus holds them, and the outline still tiles the text, each section keeping
+// its key, its title and whether it is headed. A prompt with no outline, or one
+// that does not tile, is returned as it is.
+//
+// Mutation: move every line that begins with a '#', move a section that is not
+// headed, leave the outline measuring the text as it was, or slice by an
+// outline that does not tile, and a case goes red.
+func TestNestingAPromptMovesOnlyTheHeadingsItsBuilderWrote(t *testing.T) {
+	t.Parallel()
+	// SOMEBODY'S WORDS, fenced under who wrote them as a chat reply is, with
+	// a heading, a code block's "#include" and a heading of their own.
+	words := "[untrusted:AAAAAAAAAAAAAAAA source=chat_thread trust=colleague authors=ana]\n" +
+		"# install the deps first\n```c\n#include <stdio.h>\n```\n## Steps to reproduce\n- run make\n" +
+		"[/untrusted:AAAAAAAAAAAAAAAA]"
+	corpus := append(outlineCorpus(),
+		outlined{name: "a send-back whose task and review hold somebody's headings",
+			prompt: BuildContinuedRound(ContinuedRound{Task: words, Review: words})},
+		outlined{name: "a task and a ledger holding somebody's headings",
+			prompt: BuildPhaseUserMessage(UserMessage{TaskDescription: words,
+				PriorWork: "### Iteration 1\nProduced: " + words})},
+		// A PART THE BUILDER NAMED, which opens on its writer's heading: the
+		// worker's task, a lead section, is no heading of the builder's.
+		outlined{name: "a worker's task opening on its writer's heading",
+			prompt: BuildSubagent(Seat{}, SubagentInput{ParentSystemPrompt: "# Fix the login bug\n" + words})})
+	for _, tc := range corpus {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.prompt.Nested()
+			assertTiles(t, got)
+			if len(got.Sections) != len(tc.prompt.Sections) {
+				t.Fatalf("nested, the outline has %d sections, want the %d it had", len(got.Sections),
+					len(tc.prompt.Sections))
+			}
+			at, was := 0, 0
+			for i, s := range got.Sections {
+				before := tc.prompt.Sections[i]
+				part, original := got.Text[at:at+s.Bytes], tc.prompt.Text[was:was+before.Bytes]
+				at, was = at+s.Bytes, was+before.Bytes
+				if s.Key != before.Key || s.Title != before.Title || s.Headed != before.Headed {
+					t.Errorf("section %+v is nested as %+v, want its key, title and heading kept", before, s)
+				}
+				// ITS OWN HEADING ONE LEVEL DOWN, where the builder opened it
+				// with one, and every other byte as it was.
+				want := original
+				if blank := len(original) - len(strings.TrimLeft(original, "\n")); before.Headed {
+					if !strings.HasPrefix(original[blank:], "#") {
+						t.Fatalf("headed section %q does not open on its heading: %q", before.Key, original)
+					}
+					want = original[:blank] + "#" + original[blank:]
+				}
+				if part != want {
+					t.Errorf("section %q is nested as\n%s\nwant\n%s", s.Key, part, want)
+				}
+			}
+			if n := strings.Count(tc.prompt.Text, words); n > 0 && strings.Count(got.Text, words) != n {
+				t.Errorf("somebody's words are told %d times, want the %d the prompt held, byte for byte:\n%s",
+					strings.Count(got.Text, words), n, got.Text)
+			}
+		})
+	}
+	for name, p := range map[string]Prompt{
+		"no outline": {Text: "## A\n# install the deps first"},
+		"an outline that overruns": {Text: "## A\nx",
+			Sections: []Section{{Key: "a", Title: "A", Bytes: 99, Headed: true}}},
+		"an outline that falls short": {Text: "## A\nx\n## B",
+			Sections: []Section{{Key: "a", Title: "A", Bytes: 3, Headed: true}}},
+	} {
+		if got := p.Nested(); got.Text != p.Text || !slices.Equal(got.Sections, p.Sections) {
+			t.Errorf("%s: the prompt is nested as %+v, want it as it was: no heading of its builder's is known",
+				name, got)
+		}
+	}
+}

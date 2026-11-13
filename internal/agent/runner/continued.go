@@ -39,6 +39,9 @@ import (
 //     once: no list below tells it again ([carried.tellsHeld]) — or what cut it
 //     off;
 //   - that it may end mid-call, where its harness was cut off when it was saved;
+//   - where it may lack its job's brief ([SessionBasis.MayLackBrief]), what
+//     that brief opened with: the leads it told, told again in words of their
+//     own ([Runner.leadsAgain]), as messages it may already show;
 //   - that a successful submission of the round the session holds, which no
 //     list below tells, is none of the round's, whether or not a call is
 //     listed ([prompts.AfterSave.HeldSubmission]): it was made before the
@@ -97,10 +100,11 @@ import (
 // the notes it has not read. Where the job's harness is not known to have ended
 // its own run ([Resume.HarnessEnd]), that copy may lack calls the harness made
 // and had answered without writing them, and is not known to hold the job's
-// brief: so between the two it is told that it was cut off, or may have been,
-// every call of the round, as a session cut off is told its calls
-// ([Runner.inPlaceAfter]), and every note the turn has read, as it is told its
-// notes ([Runner.inPlaceNotes]).
+// brief ([Runner.copyMayLackBrief]): so between the two it is told that it was
+// cut off, or may have been, the leads its job's brief told
+// ([Runner.leadsAgain]), every call of the round, as a session cut off is told
+// its calls ([Runner.inPlaceAfter]), and every note the turn has read, as it is
+// told its notes ([Runner.inPlaceNotes]).
 // Where it did, the copy holds every call its job made and every call its job's
 // brief told — every call of the round but the ones the log took late, a fresh
 // run's brief carrying the round on telling every one of them
@@ -192,23 +196,28 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // word in them fenced or defused under the relaunching segment's token; branch
 // and the basis's home are the engine's record of the session, defused too.
 //
-// NOT WHAT CARRIED ITS JOB ON: a session cut off is no more known to hold its
+// AND WHAT CARRIED ITS JOB ON, of a session that may lack its job's brief
+// ([SessionBasis.MayLackBrief]): a session cut off is no more known to hold its
 // job's brief than the copy a job's own box holds ([Runner.inPlaceAfter]), and
-// one that lacks it lacks the lead it opened with too — the turn's task where
+// one that lacks it lacks the leads it opened with too (the turn's task where
 // the job continued the session its conversation's last turn left, a review
-// that sent the round back, an earlier answer — which the engine keeps no copy
-// of to tell again.
+// that sent the round back, an earlier answer), so it is told again the leads
+// that brief told ([Runner.leadsAgain]), after the section that says it was cut
+// off and before its calls, never ahead of the lead of its own brief; and the
+// call a person approved that a held lead among them tells is in no list of
+// the round's calls, as the lead's own is not.
 //
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
 // last time: telling the calls after the save rewrites a payload past its
 // budget with the seat's auxiliary model, charged to the same counters, and
-// that rewrite can be what fills the window — while the lead of a round a
-// person's answer carries on says what the call they approved returned, and
-// that call is made only once every check that could refuse the relaunch has
-// passed ([Runner.continueAgentRun]). Led after the check, the brief costs
-// nothing the check did not count.
+// that rewrite can be what fills the window, and so can telling the turn's
+// task again, with the prior-work ledger of the rounds its brief rendered;
+// while the lead of a round a person's answer carries on says what the call
+// they approved returned, and that call is made only once every check that
+// could refuse the relaunch has passed ([Runner.continueAgentRun]). Led after
+// the check, the brief costs nothing the check did not count.
 func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, leadHeld []string,
-	surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
+	history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
 
 	if !basis.Continues() {
 		return nil
@@ -218,14 +227,25 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	if basis.Interrupted {
 		after = append(after, prompts.InterruptedSession)
 	}
+	// AND THE LEADS ITS JOB'S BRIEF TOLD, where the session may lack that
+	// brief, which a later brief to this one's session tells in turn.
+	var again toldAgain
+	if basis.MayLackBrief() {
+		again = r.leadsAgain(ctx, history, b)
+		if again.section != "" {
+			after = append(after, again.section)
+		}
+	}
 	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
 	// newest its launch is known to hold rather than where it ends
 	// (internal/sandbox's savepoint.go), so the calls after it may be in it.
-	// AND NEVER THE CALL A PERSON APPROVED THAT ITS LEAD TELLS (leadHeld). AND
-	// THE READS ITS JOB'S BRIEF COUNTED WITHOUT LISTING THEM (basis.Owed), which
-	// the session holds only as that count.
-	called, omitted := r.calledAfter(ctx, round, &basis.Through, basis.Owed, leadHeld, surface, b)
-	called.Interrupted = basis.Interrupted
+	// AND NEVER THE CALL A PERSON APPROVED THAT A LEAD OF ITS BRIEF TELLS
+	// (leadHeld, and every held lead told again). AND THE READS ITS JOB'S BRIEF
+	// COUNTED WITHOUT LISTING THEM (basis.Owed), which the session holds only
+	// as that count.
+	called, omitted := r.calledAfter(ctx, round, &basis.Through, basis.Owed, withHeld(leadHeld, again),
+		surface, b)
+	called.Interrupted = basis.MayLackBrief()
 	after = append(after, prompts.CalledAfter(called))
 	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
 	// a note the run's bridge served a harness among either told as one it may
@@ -239,13 +259,13 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// MARKED UNANSWERED, every note past that, as notes it may already show
 	// ([Runner.notesHeldBy]): the session lacks that note, and holds the
 	// answered ones after it.
-	if basis.Interrupted {
+	if basis.MayLackBrief() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
 	} else {
 		held, unsure := r.notesHeldBy(basis.NoteCursor)
 		after = append(after, r.toldNotes(r.readsSince(held), unsure, fresh)...)
 	}
-	return &keptBrief{basis: basis, after: after, omitted: omitted,
+	return &keptBrief{basis: basis, after: after, omitted: omitted, told: again.refs, toldUnread: again.unread,
 		newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch), provenance.Neutralise(b, basis.Home),
 			r.checkoutName())}
 }
@@ -308,11 +328,16 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // ([carried.boxKept]), which no launch continues in, so its calls are neither
 // rewritten nor charged for a brief nothing would send.
 //
-// NOT WHAT CARRIED THE JOB ON: a copy that lacks the job's brief lacks the
-// lead it opened with too — the turn's task where the job continued the
-// session its conversation's last turn left, a review that sent the round
-// back, an earlier answer — which the engine keeps no copy of to tell again,
-// as a kept session cut off may lack it ([Runner.keptSession]).
+// AND WHAT CARRIED THE JOB ON, where the copy may lack the job's brief
+// ([Runner.copyMayLackBrief]): a copy that lacks it lacks the leads it opened
+// with too (the turn's task where the job continued the session its
+// conversation's last turn left, a review that sent the round back, an earlier
+// answer), so it is told again the leads that brief told ([Runner.leadsAgain]),
+// after the section that says it was cut off and before every call of the
+// round, as a kept session cut off is ([Runner.keptSession]); and the call a
+// person approved that a held lead among them tells is in no list, as the
+// answer's own is not. told is which they were, for the job's record to mark
+// told by this brief in turn.
 //
 // BUILT BEFORE ITS LEAD, as the kept session's brief is ([Runner.keptSession]):
 // telling the calls rewrites a payload past its budget with the seat's
@@ -326,31 +351,35 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // omitted is the reads of the round the brief counts without listing them
 // ([Runner.calledAfter]), which the launch records on the job it opens, for
 // the next brief to that copy to tell.
-func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls,
-	surface *tools.Surface) (after []string, omitted []int) {
+func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls, history []ledger.Iteration,
+	surface *tools.Surface) (after []string, omitted []int, told toldAgain) {
 
 	if carry.session() == "" || !carry.boxKept() || !carry.keeps() {
-		return nil, nil
+		return nil, nil, toldAgain{}
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
 	end, leadHeld := r.cfg.Resume.HarnessEnd, leadsHeld(carry)
 	var called prompts.AfterSave
-	if end.EndedOwnRun() {
+	if !r.copyMayLackBrief() {
 		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, leadHeld, surface, b)
-		if told := prompts.CalledAfter(called); told != "" {
-			after = []string{told}
+		if calls := prompts.CalledAfter(called); calls != "" {
+			after = []string{calls}
 		}
-		return after, omitted
+		return after, omitted, toldAgain{}
 	}
 	after = []string{prompts.MayBeInterruptedCopy}
 	if end == sandbox.HarnessEndCutOff {
 		after[0] = prompts.InterruptedCopy
 	}
-	called, omitted = r.calledInPlace(ctx, round, leadHeld, surface, b)
-	if told := prompts.CalledAfter(called); told != "" {
-		after = append(after, told)
+	again := r.leadsAgain(ctx, history, b)
+	if again.section != "" {
+		after = append(after, again.section)
 	}
-	return after, omitted
+	called, omitted = r.calledInPlace(ctx, round, withHeld(leadHeld, again), surface, b)
+	if calls := prompts.CalledAfter(called); calls != "" {
+		after = append(after, calls)
+	}
+	return after, omitted, again
 }
 
 // leadsHeld is every held call carry's lead tells what became of
@@ -381,7 +410,7 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note) []string {
 	switch {
 	case carry.session() == "" || !carry.boxKept() || !carry.keeps():
 		return renderedNotes(fresh)
-	case !r.cfg.Resume.HarnessEnd.EndedOwnRun():
+	case r.copyMayLackBrief():
 		return r.toldNotes(r.readsSince(0), true, fresh)
 	}
 	if first := r.firstUnanswered(); first > 0 {
@@ -393,20 +422,24 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note) []string {
 // keptBrief is a relaunch's continuation of a kept session but for its lead
 // ([Runner.keptSession]): the session it continues, what the brief tells it
 // after the lead, the reads of the round it counted without listing them
-// ([Runner.calledAfter]), and what a box other than the one it was last worked
-// in changes.
+// ([Runner.calledAfter]), the leads of its job's brief it told again, or was
+// to and could not read ([Runner.leadsAgain]), and what a box other than the
+// one it was last worked in changes.
 type keptBrief struct {
-	basis   SessionBasis
-	after   []string
-	omitted []int
-	newBox  string
+	basis      SessionBasis
+	after      []string
+	omitted    []int
+	told       []sandbox.LeadRef
+	toldUnread []int
+	newBox     string
 }
 
-// led is k's continuation led by lead, what carries the session on: the brief
-// for the box the session was last worked in, and the one for any other, which
-// tell the same calls and so leave out the same reads. Nil for a nil k, a basis
-// that names no kept session.
-func (k *keptBrief) led(lead string) *SessionContinuation {
+// led is k's continuation led by lead, what carries the session on, which the
+// launch keeps as own, the leads it opens with of its own ([ownLeads]): the
+// brief for the box the session was last worked in, and the one for any other,
+// which tell the same calls and the same leads, and so leave out the same
+// reads. Nil for a nil k, a basis that names no kept session.
+func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 	if k == nil {
 		return nil
 	}
@@ -414,7 +447,7 @@ func (k *keptBrief) led(lead string) *SessionContinuation {
 	parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
 	brief := strings.Join(parts, "\n\n")
 	return &SessionContinuation{Basis: k.basis, Brief: brief, Replaced: brief + "\n\n" + k.newBox,
-		Told: sandbox.BriefTold{Omitted: k.omitted}}
+		Told: sandbox.BriefTold{Omitted: k.omitted, Own: own, Told: k.told, ToldUnread: k.toldUnread}}
 }
 
 // baseSession is how a launch continues the session its conversation's last
@@ -426,7 +459,10 @@ func (k *keptBrief) led(lead string) *SessionContinuation {
 // where the turn did; then fresh, the launch's own fresh brief or reseed,
 // whole (of a round carried on, the reseed, which tells every call of the round
 // so far, [prompts.CalledBefore]); and told, what that brief left out of them,
-// which the base's brief leaves out too, being it whole. Only in a box of
+// which the base's brief leaves out too, being it whole, and the leads the
+// base's brief opens with of its own: the turn's task, which the session lacks
+// until it reads this brief, and what carries a round on beside it (leads.go).
+// Only in a box of
 // its own, so its same-box brief is empty. The base's turn and home are the
 // engine's record of that session, defused under the launching segment's
 // token.
@@ -1015,9 +1051,10 @@ func (r *Runner) firstUnanswered() int {
 
 // sendBackLead is what carries a send-back's session on: the review's notes and
 // the engine's correction, with the task restated and the rules the earlier
-// rounds' calls are read by ([prompts.BuildContinuedRound]).
-func (r *Runner) sendBackLead(notes string) string {
-	return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes}).Text
+// rounds' calls are read by ([prompts.BuildContinuedRound]). With its outline,
+// which a later brief that tells it again nests it by ([Runner.leadAgain]).
+func (r *Runner) sendBackLead(notes string) prompts.Prompt {
+	return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes})
 }
 
 // launchBriefs is what a relaunch's run is handed, and holds, for each way its

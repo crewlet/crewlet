@@ -1,6 +1,9 @@
 package runner
 
-import "github.com/crewlet/crewlet/internal/provenance"
+import (
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
 
 // Rotated is a run whose job ended refused by its vendor on a SIGN-IN THAT WAS
 // REPLACED WHILE IT RAN: what a resume carries the round on from
@@ -67,6 +70,7 @@ func (r *Rotated) boxKept() bool                           { return r.BoxKept }
 func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
 func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
 func (r *Rotated) tellsHeld() string                       { return "" }
+func (r *Rotated) lead() *sandbox.Lead                     { return nil }
 func (r *Rotated) keeps() bool                             { return true }
 func (r *Rotated) branch() string                          { return "" }
 func (r *Rotated) refusal() error                          { return nil }

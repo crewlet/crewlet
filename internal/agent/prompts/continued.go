@@ -18,8 +18,9 @@ import (
 // every note it read. What it is told is what it lacks
 // — what changed since its last message, and of a session cut off, that it was
 // or may have been and what it may not show ([InterruptedSession],
-// [InterruptedCopy], [MayBeInterruptedCopy]), with the calls and the notes it
-// may lack ([CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
+// [InterruptedCopy], [MayBeInterruptedCopy]), with the messages that carried
+// its work on, the calls and the notes it may lack ([LeadsToldAgain],
+// [CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
 // not the one it was last worked in, what that changes. The fresh brief a run
 // that starts a session of its own is handed is [BuildPhaseUserMessage]'s, and,
 // for one carrying a round on, what became of the run before it and every call
@@ -917,7 +918,36 @@ func BuildNextTurn(m NextTurn) string {
 	var w strings.Builder
 	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
 		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
-	ended := "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
+	span, ended := nextTurnSpan(m, words)
+	w.WriteString(span)
+	w.WriteString(". " + ended + " " +
+		words.woke + ", and the task below is this " + words.turn + "'s." +
+		"\n- **What you read above may be stale:** read it again before relying on it." +
+		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +
+		":** activate or load them again before relying on them.")
+	w.WriteString("\n\n## This " + words.turn + " is in a new box\nYou are in a new box")
+	if m.Checkout == "" {
+		w.WriteString(", on a FRESH checkout of the repository")
+	}
+	w.WriteString(": anything the session above had not committed and pushed went with the box it" +
+		" was worked in, and what it says about files on disk is what that box held, not what this" +
+		" one holds.")
+	if m.Checkout != "" {
+		w.WriteString("\n\n" + checkoutsAgain(m.Checkout))
+	}
+	w.WriteString("\n\n" + boxPaths(m.Home))
+	if m.Interrupted {
+		w.WriteString("\n\n" + InterruptedSession)
+	}
+	return w.String()
+}
+
+// nextTurnSpan is how far the session a conversation's last turn left runs, as
+// the clause that follows "as your turns left it", and where how that turn
+// ended is told: [BuildNextTurn]'s words, and [NextTurnAgain]'s.
+func nextTurnSpan(m NextTurn, words nextTurnWords) (span, ended string) {
+	var w strings.Builder
+	ended = "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
 	switch {
 	case m.WentOn:
 		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
@@ -946,24 +976,117 @@ func BuildNextTurn(m NextTurn) string {
 			w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
 		}
 	}
-	w.WriteString(". " + ended + " " +
-		words.woke + ", and the task below is this " + words.turn + "'s." +
-		"\n- **What you read above may be stale:** read it again before relying on it." +
-		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +
-		":** activate or load them again before relying on them.")
-	w.WriteString("\n\n## This " + words.turn + " is in a new box\nYou are in a new box")
-	if m.Checkout == "" {
-		w.WriteString(", on a FRESH checkout of the repository")
-	}
-	w.WriteString(": anything the session above had not committed and pushed went with the box it" +
-		" was worked in, and what it says about files on disk is what that box held, not what this" +
-		" one holds.")
-	if m.Checkout != "" {
-		w.WriteString("\n\n" + checkoutsAgain(m.Checkout))
-	}
-	w.WriteString("\n\n" + boxPaths(m.Home))
+	return w.String(), ended
+}
+
+// NextTurnAgain is the lead of a run that continued the session its
+// conversation's last turn left, as a later brief to a session of the work that
+// may lack it tells it again (internal/agent/runner's leadsAgain): the turn
+// boundary [BuildNextTurn] said, in the past tense and in a schedule's words for
+// a schedule's fire, the two things that boundary makes stale, and that what
+// the session says about files on disk from before it is what the earlier
+// turn's box held; and, where that session was cut off when it was kept, that
+// it may hold a call with no result from before the turn began. The task it
+// opened with follows it, rendered again by its teller.
+//
+// NEVER THE NEW BOX. [BuildNextTurn] tells a run it is in a new box, on a fresh
+// checkout or holding none of the repositories the session checked out of
+// Gitlet, where the earlier box's paths were: true of the box that lead's run
+// started in, and stale, or false, of the box a later job continues the
+// session in, which may be that very box after its job worked there. The
+// brief that tells this again says the box it is in, in its own lead and its
+// cut-off section, so nothing here repeats a present-tense claim about a box.
+//
+// AND NEVER "EVERYTHING ABOVE": the session above may hold this turn's own work
+// after the boundary, where its harness wrote any of it, so the boundary is
+// told as where the session began rather than where it ends.
+func NextTurnAgain(m NextTurn) string {
+	words := nextTurnWordsFor(m)
+	span, ended := nextTurnSpan(m, words)
+	var w strings.Builder
+	w.WriteString("### A new " + words.turn + " of this " + words.whole + " began here" +
+		"\nThe session above began as this " + words.whole + " as your " + words.turn + "s left it" + span +
+		". This " + words.turn + " began after that, and the task below is this " + words.turn + "'s. " + ended +
+		"\n- **What was read before this " + words.turn + " began may be stale:** read it again before " +
+		"relying on it." +
+		"\n- **Tools activated and skills loaded before this " + words.turn + " began were set up anew for " +
+		"it:** activate or load them again before relying on them." +
+		"\n\nWhat the session above says about files on disk from before this " + words.turn + " began is " +
+		"what the box of the " + words.turn + " it came from held.")
 	if m.Interrupted {
-		w.WriteString("\n\n" + InterruptedSession)
+		w.WriteString("\n\n" + baseCutOffAgain)
 	}
 	return w.String()
 }
+
+// baseCutOffAgain is [NextTurnAgain]'s word that the session a conversation's
+// last turn left was cut off when it was kept ([InterruptedSession], as
+// [BuildNextTurn] tells it): of where the session began, never of where it
+// ends, which the brief that tells it again says in its own cut-off section.
+const baseCutOffAgain = "The session this turn began from was cut off when it was kept, so before this turn " +
+	"began it may hold a call with no result, which may or may not have run. Check what such a call was " +
+	"meant to do before doing it again."
+
+// leadsAgainHeader opens the messages a session is told again that carried its
+// work on and that it may not show ([LeadsToldAgain]).
+const leadsAgainHeader = "## Messages that carried this work on that the session above may not show"
+
+// LeadsToldAgain is the section that tells a session again the messages that
+// carried its work on that it may not show, each already rendered under a
+// heading of its own (internal/agent/runner's leadsAgain), "" for none: the
+// answers, the review and the turn's task the brief of the job whose session it
+// continues opened with, or told again in turn, where that session is not known
+// to hold that brief (its harness cut off, or never known to have ended its
+// own run), in the order they were sent; and how many earlier such messages the
+// engine no longer keeps to tell again (cut), said rather than left out.
+//
+// SAID AS MESSAGES IT MAY ALREADY SHOW, ONE MESSAGE WHEREVER SHOWN, as notes
+// told again are ([NotesReadAgain]): a session cut off may hold any of them, an
+// answer read both above and here could be acted on twice, and two of them that
+// differ are told apart by their order, the later standing.
+func LeadsToldAgain(leads []string, cut int) string {
+	if len(leads) == 0 && cut <= 0 {
+		return ""
+	}
+	var w strings.Builder
+	w.WriteString(leadsAgainHeader + "\n")
+	switch len(leads) {
+	case 0:
+		w.WriteString("The session above may not show every message that carried this work on: the run working " +
+			"in it may have been cut off before its harness wrote one down.")
+	case 1:
+		w.WriteString("The session above may not show the message below: it carried this work on, and the run " +
+			"working in the session may have been cut off before its harness wrote it down. A message shown " +
+			"both above and here is ONE message, sent once, not two: do what it asks once.")
+	default:
+		w.WriteString("The session above may not show the " + strconv.Itoa(len(leads)) + " messages below: each " +
+			"carried this work on, and the run working in the session may have been cut off before its " +
+			"harness wrote it down. They are in the order they were sent. A message shown both above and here " +
+			"is ONE message, sent once, not two: do what it asks once, and where two of them differ, the later " +
+			"one stands.")
+	}
+	if cut > 0 {
+		w.WriteString("\n\n(+" + strconv.Itoa(cut) + " earlier such " + plural(cut, "message", "messages") +
+			", which " + plural(cut, "is", "are") + " not kept to tell again.)")
+	}
+	for _, lead := range leads {
+		w.WriteString("\n\n" + lead)
+	}
+	return w.String()
+}
+
+// plural is one where n is 1, many otherwise.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// LeadUnread is a message that carried the work on that the brief telling it
+// again cannot read on the node that builds it ([LeadsToldAgain]): its seal under
+// a key that node does not hold, of a kind its build does not know, or one that
+// does not open. Told rather than left out, so the run knows a message is
+// missing; never a word of what it said.
+const LeadUnread = "### A message that carried this work on cannot be read here" +
+	"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told again here."

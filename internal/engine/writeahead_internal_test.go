@@ -179,7 +179,7 @@ func TestASubmissionWhoseUpdateTheStoreRefusedLandsOnceTheStoreIsBack(t *testing
 		t.Fatalf("once the store was back the log holds %+v in flight and lists %+v, want the submission "+
 			"listed with what it answered", logged.InFlight, logged.Calls)
 	}
-	resumed := runnerResume(resumeInput{Run: run.row(t, turnID), Bridged: logged}, nil, nil)
+	resumed := runnerResume(resumeInput{Run: run.row(t, turnID), Bridged: logged}, nil, nil, nil)
 	if len(resumed.Unfinished) != 0 || !slices.ContainsFunc(resumed.Bridged, func(c runner.BridgedCall) bool {
 		return c.Name == runner.SubmitWorkTool && !c.Failed && c.Result == "submitted"
 	}) {
