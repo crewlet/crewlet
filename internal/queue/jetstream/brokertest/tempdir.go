@@ -51,12 +51,22 @@ import (
 // then live in t.TempDir like any other file.
 func TempDir(t testing.TB) string {
 	t.Helper()
+	return tempDir(t, os.RemoveAll)
+}
+
+// tempDir is [TempDir] with the removal its cleanup tries given as removeAll,
+// which is os.RemoveAll for every test broker. A test of the cleanup itself
+// hands it a removal that lands a late write inside an attempt, and a t that
+// records what the cleanup reports, so that it can hold the one cleanup every
+// broker test gets — the retry and the report both — rather than a copy of it.
+func tempDir(t testing.TB, removeAll func(string) error) string {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "crewlet-test-store-") //nolint:usetesting // t.TempDir's own removal is the one this replaces: a late flush fails it
 	if err != nil {
 		t.Fatalf("make a directory for a test broker's store: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := removeStore(dir, os.RemoveAll); err != nil {
+		if err := removeStore(dir, removeAll); err != nil {
 			t.Error(err)
 		}
 	})

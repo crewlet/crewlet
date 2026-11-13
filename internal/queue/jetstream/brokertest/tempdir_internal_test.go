@@ -2,9 +2,11 @@ package brokertest
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -136,6 +138,153 @@ func TestAStoreGoesWithItsTestAfterItsBrokerStops(t *testing.T) {
 	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the store's directory outlived its test (stat: %v)", err)
 	}
+}
+
+// TEMPDIR'S CLEANUP IS THE REMOVAL THAT OUTLASTS A LATE FLUSH, and every
+// broker test gets it through TempDir: the removal the cleanup registered
+// meets a consumer's flush landing inside its first attempt, as a stopped
+// broker's store did in crewlet/crewlet#1079, tries again, and leaves no
+// directory and nothing reported.
+//
+// Mutation: have the cleanup remove the store once — removeAll(dir), or
+// os.RemoveAll(dir), the single removal t.TempDir makes — and the late flush
+// is reported, or never met.
+func TestTempDirsCleanupRemovesAStorePastALateFlush(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{TB: t}
+	var consumer string
+	attempts := 0
+	dir := tempDir(rec, func(path string) error {
+		attempts++
+		if attempts == 1 {
+			return flushLandsDuringRemoval(consumer)
+		}
+		return os.RemoveAll(path)
+	})
+	sweep(t, dir)
+	consumer = storeWithAConsumer(t, dir)
+	rec.end()
+	if len(rec.errs) != 0 {
+		t.Errorf("the cleanup reported a store a late flush landed in rather than removing it: %q",
+			rec.errs)
+	}
+	if attempts != 2 {
+		t.Errorf("the cleanup attempted its removal %d times, want 2: the one the late flush "+
+			"interrupted and the one that removed the late file", attempts)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the store outlived its cleanup (stat: %v)", err)
+	}
+}
+
+// TEMPDIR'S CLEANUP FAILS THE CASE ON A STORE IT COULD NOT REMOVE, once and
+// naming the directory: one still being written once the bounded attempts
+// are spent, which it reports with the file that landed last, and one whose
+// removal was refused for any other reason, which it reports at once with
+// the refusal. A cleanup that said nothing would pass a case whose broker
+// never stopped.
+//
+// Mutation: have the cleanup drop the removal's error, and neither row is
+// reported; drop the bound, and the first row's removal goes on until the
+// writer stops and reports nothing.
+func TestTempDirsCleanupFailsTheCaseOnAStoreItCannotRemove(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// removal is the cleanup's removal for a store whose one consumer
+		// keeps its state in consumer.
+		removal func(consumer string) func(string) error
+		// names is what the report says beside the directory.
+		names []string
+	}{
+		{
+			name: "a store still being written past the bound",
+			removal: func(consumer string) func(string) error {
+				attempts := 0
+				return func(path string) error {
+					attempts++
+					if attempts > storeRetries+1 {
+						// The writer stops, so a removal that went
+						// past the bound ends rather than spinning.
+						return os.RemoveAll(path)
+					}
+					return flushLandsDuringRemoval(consumer)
+				}
+			},
+			names: []string{"stream/jetstream/$G/streams/S/obs/C/o.dat"},
+		},
+		{
+			name: "a store whose removal is refused",
+			removal: func(string) func(string) error {
+				return func(string) error {
+					return &fs.PathError{Op: "unlinkat", Path: "stream", Err: syscall.EACCES}
+				}
+			},
+			names: []string{syscall.EACCES.Error()},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &recorder{TB: t}
+			// The removal is made once the store holds its consumer, which
+			// is after tempDir registered it: a broker writes its store
+			// only once it has the directory.
+			var removal func(string) error
+			dir := tempDir(rec, func(path string) error { return removal(path) })
+			sweep(t, dir)
+			removal = tc.removal(storeWithAConsumer(t, dir))
+			rec.end()
+			if len(rec.errs) != 1 {
+				t.Fatalf("the cleanup reported %d errors, want the one naming the store: %q",
+					len(rec.errs), rec.errs)
+			}
+			for _, want := range append([]string{dir}, tc.names...) {
+				if !strings.Contains(rec.errs[0], want) {
+					t.Errorf("the report does not name %s: %s", want, rec.errs[0])
+				}
+			}
+		})
+	}
+}
+
+// recorder is the testing.TB a case hands [tempDir], so that the case runs
+// the cleanup tempDir registers and reads back what it reported, where the
+// case's own T would fail the case itself: it keeps every cleanup registered
+// on it and every error reported to it, and is the case's T for anything
+// else.
+type recorder struct {
+	testing.TB
+	cleanups []func()
+	errs     []string
+}
+
+func (r *recorder) Cleanup(f func()) { r.cleanups = append(r.cleanups, f) }
+
+func (r *recorder) Error(args ...any) { r.errs = append(r.errs, fmt.Sprint(args...)) }
+
+func (r *recorder) Errorf(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+}
+
+// end runs the cleanups registered on r as a test's end runs them, the last
+// registered first.
+func (r *recorder) end() {
+	for _, f := range slices.Backward(r.cleanups) {
+		f()
+	}
+}
+
+// sweep removes dir once t has ended, whatever the cleanup a case drives
+// through a [recorder] did with it, so a case whose removal stopped short
+// leaves nothing in the machine's temporary directory. Nothing writes there
+// by then, so one removal is the whole of it.
+func sweep(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
 }
 
 // storeWithAConsumer makes dir hold what a stopped broker storing at
