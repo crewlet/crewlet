@@ -722,6 +722,20 @@ from — and for exactly one write: the [typing indicator](#working-status).
 
 ---
 
+## What the atlas reads
+
+The engine reads the team the agents' bots belong to, for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It adds the team's own id and display name to the server's account the atlas already shows. Nothing at Mattermost is changed.
+
+| Part | Calls | Permission | What the atlas gains |
+|---|---|---|---|
+| Team | `GET /api/v4/teams/name/{team}`, once | membership of the team, or a system administrator | the team's id and its display name |
+
+**Which credential.** The bot token of the first agent, by handle, whose Mattermost bot is switched on. Where Mattermost refuses it (`401`, `403` or `404`: the bot was deactivated, or is not a member of the team), the next agent's is asked, and `provisioning.admin_token` last, so the administrator's token is used only where no bot is shown the team. An agent whose bot is switched off is never asked through.
+
+**Nobody is read.** A team's row also carries its contact address and its invite id; the engine reads neither. No member, channel or post is ever listed.
+
+**A refusal is a finding, never a failed read.** Where Mattermost shows the team to none of the credentials, the source's standing on the atlas says to check `integrations.mattermost.team` and the bots' membership, and what an earlier read recorded stays as it was. Any other failure stops the read, which records nothing and is made again five minutes later.
+
 ## Thread Routing
 
 Identical in shape to Slack's, on Mattermost's own primitives. Top-level

@@ -28,6 +28,7 @@ const (
 	StepReadAuth  = "read_auth"
 	StepGate      = "gate_version"
 	StepAllowlist = "allowlist"
+	StepInventory = "inventory_binding"
 	StepOperate   = "operate_binding"
 )
 
@@ -107,6 +108,9 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 	if !add(StepAllowlist, err == nil && code == GateRefused, allowlistDetail(code, err)) {
 		return steps
 	}
+	if h.Inventory && !c.testInventory(ctx, in, rec, add) {
+		return steps
+	}
 	if h.Users.Operate == "" {
 		return steps
 	}
@@ -127,6 +131,29 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 	out, code, err = c.runOn(ctx, opClient, "id")
 	add(StepOperate, err == nil && code == 0 && strings.TrimSpace(out) == GateVersionLine(), operateDetail(out, err))
 	return steps
+}
+
+// testInventory proves a server that opts in to the inventory accepts its
+// principal and runs the command its certificate names.
+func (c *Client) testInventory(ctx context.Context, in TestInput, rec Recorder,
+	add func(id string, ok bool, detail string) bool) bool {
+
+	h := in.Host
+	inv, err := c.testCertificate(ctx, in, LevelInventory, config.SSHInventoryPorts, rec)
+	if err != nil {
+		return add(StepInventory, false, "not tried: "+err.Error())
+	}
+	client, err := c.connect(ctx, h, h.Users.Read, inv.Signer)
+	if err != nil {
+		return add(StepInventory, false, "The server refused the inventory certificate as "+h.Users.Read+
+			": run the server setup again, so it accepts the principal "+Principal(h.ID, LevelInventory)+".")
+	}
+	defer func() { _ = client.Close() }()
+	// THE CLIENT ASKS FOR THE GATE'S VERSION; a server that honours the
+	// certificate runs the command it names instead, and prints its table.
+	out, code, err := c.runOn(ctx, client, "crewlet-gate version")
+	_, parseErr := ParseOpenPorts([]byte(out))
+	return add(StepInventory, err == nil && code == 0 && parseErr == nil, inventoryDetail(out, code, err))
 }
 
 // testCertificate signs and records one test certificate.
@@ -210,6 +237,24 @@ func allowlistDetail(code int, err error) string {
 	}
 	return fmt.Sprintf("A command off the allowlist was not refused (exit %d): the read user's commands are "+
 		"not forced through the gate. Run the server setup again.", code)
+}
+
+func inventoryDetail(out string, code int, err error) string {
+	switch {
+	case err != nil:
+		return "The inventory's session failed: " + err.Error()
+	case strings.TrimSpace(out) == GateVersionLine():
+		return "The server ran the client's command instead of the certificate's: run the server setup again."
+	case code == GateRefused:
+		return "The gate refused the inventory's command: run the server setup again, so its inventory " +
+			"allowlist holds it."
+	case code != 0:
+		return fmt.Sprintf("The inventory's command exited with status %d on the server.", code)
+	}
+	if _, parseErr := ParseOpenPorts([]byte(out)); parseErr != nil {
+		return "The inventory's command printed something other than its table."
+	}
+	return "The server ran the command the inventory's certificate names, not the one the client asked for."
 }
 
 func operateDetail(out string, err error) string {

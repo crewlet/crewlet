@@ -11,9 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -178,6 +180,7 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 		note(SourceNodes, leaseErr)
 	} else {
 		for _, lease := range leases {
+			r.Fleet = append(r.Fleet, fleetNode(lease))
 			status, ok := coord.StatusFromMeta(lease.Meta)
 			if !ok {
 				continue
@@ -364,4 +367,24 @@ func toolCalls(ctx context.Context, u Usage, servers []string, w window) ([]deri
 		out = []derive.ToolUse{}
 	}
 	return out, nil
+}
+
+// fleetNode is one live node as the atlas draws it: its id and how its broker
+// takes part off its profile, and what it says of what it runs on. A node on
+// a build older than the summary is still drawn, with nothing beyond those.
+func fleetNode(lease coord.Lease) derive.FleetNode {
+	id, _ := coord.ClassNode.Name(lease.Resource)
+	profile := placement.FromMeta(id, lease.Meta)
+	n := derive.FleetNode{ID: id, BrokerMember: profile.Broker == placement.BrokerMember,
+		ExternalBroker: profile.Broker == placement.BrokerClient}
+	infra, ok := coord.InfraFromMeta(lease.Meta)
+	if !ok {
+		return n
+	}
+	n.Address = infra.Address
+	n.BrokerServers = infra.BrokerServers
+	n.ObjectsKnown = infra.ObjectsBackend != ""
+	n.ObjectsS3 = infra.ObjectsBackend == string(config.ObjectBackendS3) && infra.Bucket != ""
+	n.Bucket, n.Region = infra.Bucket, infra.Region
+	return n
 }

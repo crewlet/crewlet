@@ -95,6 +95,10 @@ type SSHHost struct {
 	// sudo line they need.
 	Containers bool `yaml:"containers,omitempty" json:"containers,omitempty" desc:"Let the read user list containers and read their logs through sudo -n docker ps and docker logs --tail. Off by default."`
 
+	// Inventory lets the engine itself read the server for the atlas, on
+	// the atlas's refresh interval: exactly [SSHHost.InventoryCommands].
+	Inventory bool `yaml:"inventory,omitempty" json:"inventory,omitempty" desc:"Let the engine itself read this server for the atlas on the atlas's refresh interval: its listening ports (ss -tln) and, where containers is on, its running containers (sudo -n docker ps). Each command is recorded as an agent's is, and only the ports, the container names and their images are kept. Off by default; the server accepts it after its setup is run again."`
+
 	// ReadAllowlist replaces the rendered default allowlist when set.
 	ReadAllowlist []string `yaml:"read_allowlist,omitempty" json:"read_allowlist,omitempty" desc:"The commands the read user may run, one rule each, replacing the default list: an absolute path, then words, where * is any one word not starting with -, a word ending in =* is that option with any value, and a final ... is any further words. At most 100 rules. Empty renders the default list."`
 }
@@ -103,6 +107,33 @@ type SSHHost struct {
 type SSHHostUsers struct {
 	Read    string `yaml:"read" json:"read" js:"required" desc:"The login user for read access, whose every command is forced through the server's read allowlist, such as crewlet-read."`
 	Operate string `yaml:"operate,omitempty" json:"operate,omitempty" desc:"The login user for approved operate commands, such as crewlet-ops. Absent leaves the server read-only."`
+}
+
+// The inventory's commands: the closed set the engine itself may run on a
+// server that opts in, each written as the server's gate matches it.
+const (
+	// SSHInventoryPorts lists the listening TCP sockets by address and port.
+	// It takes no -p, so the kernel is never asked which process holds one.
+	SSHInventoryPorts = "/usr/bin/ss -tln"
+	// SSHInventoryContainers lists the running containers. Its table carries
+	// each container's command, which the engine drops as it parses.
+	SSHInventoryContainers = "/usr/bin/sudo -n /usr/bin/docker ps"
+)
+
+// SSHInventoryCommands is the whole closed set, in the order they are run.
+func SSHInventoryCommands() []string { return []string{SSHInventoryPorts, SSHInventoryContainers} }
+
+// InventoryCommands is what the engine runs on h for the atlas: nothing where
+// h does not opt in, the ports otherwise, and the containers only where the
+// server lets its read user list them.
+func (h SSHHost) InventoryCommands() []string {
+	switch {
+	case !h.Inventory:
+		return nil
+	case h.Containers:
+		return SSHInventoryCommands()
+	}
+	return []string{SSHInventoryPorts}
 }
 
 // The levels a seat holds across its hosts, least access first.

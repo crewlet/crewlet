@@ -64,6 +64,10 @@ type Read struct {
 	// Unread is every part of the vendor the credential may not read. The
 	// read is still whole: each part's earlier claims stand as they were.
 	Unread []Unread
+
+	// Scopes is every part of the world the read visited that keeps a
+	// standing of its own ([Scope]): each server the SSH source read.
+	Scopes []string
 }
 
 // Unread is one part of a vendor a read was refused: a listing the company's
@@ -74,6 +78,10 @@ type Unread struct {
 	// Both are the source's own words, never the vendor's answer.
 	Part   string
 	Detail string
+
+	// Scope is the scope the part belongs to ([Read.Scopes]), where the
+	// source keeps one standing per scope; "" otherwise.
+	Scope string
 
 	// Holds reports whether a claim the voice already holds came from this
 	// part. Such a claim is carried as it stands: a refusal withdraws and

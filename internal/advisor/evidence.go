@@ -700,7 +700,7 @@ func inboundSilent(ev Evidence, _ func(string) SeatKind) []Finding {
 		return nil
 	}
 	kind := integration.KindGitHub
-	name := surfaceName(kind)
+	name := SurfaceName(kind)
 	return []Finding{{
 		Class: ClassInboundSilent, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
 		Area: AreaIntegrations, Subject: Subject{Kind: SubjectIntegration, Name: name},

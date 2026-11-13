@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
@@ -1314,8 +1315,9 @@ func declaredInboundSources() []string {
 }
 
 // nativeParsers is what the engine's own sources contribute to the inbound
-// edge: the native backends' parsers, the alarms' (internal/alarmwake) and the
-// access reviews' (internal/accessreview).
+// edge: the native backends' parsers, the alarms' (internal/alarmwake), the
+// access reviews' (internal/accessreview) and the atlas's drift wakes'
+// (internal/atlaswake).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
 // company-derived input is the org chart — the native backends' LEAD MAP, the
@@ -1339,6 +1341,10 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	// (internal/accessreview).
 	parsers = append(parsers, accessreview.Parser{})
 	prompts = append(prompts, accessreview.Prompt{})
+	// AND THE ATLAS'S DRIFT WAKES, on every node for the same reason: a
+	// wake names its seat and reads no row (internal/atlaswake).
+	parsers = append(parsers, atlaswake.Parser{})
+	prompts = append(prompts, atlaswake.Prompt{})
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as

@@ -1066,6 +1066,14 @@
 // order (internal/gitlet/cache). This package records the mode, serves it and
 // lets a maintainer change it; it indexes and searches nothing.
 //
+// THE ATLAS'S READ OF A REPOSITORY'S FILES asks this package two things, both
+// the engine's own: [ReadDefaultTips], the active project repositories by
+// name with who may read each and its default branch's tip (or one of them,
+// by id), which the scan compares with the tips it last read; and
+// [GitCodeFiles], a commit's deploy and dependency files, whose query refuses
+// a path the closed list (internal/deployfiles) does not admit. What the
+// files declare is internal/atlas/codescan's.
+//
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits

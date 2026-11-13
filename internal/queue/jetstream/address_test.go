@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,5 +191,26 @@ func assertNamesWithoutSecret(t *testing.T, said, names, secret string) {
 	}
 	if !strings.Contains(said, names) {
 		t.Errorf("%q does not name %q", said, names)
+	}
+}
+
+// A SERVER LIST'S HOSTS ARE HOSTS AND NOTHING ELSE: no userinfo, where a
+// token lives, no port and no path, each once, and an entry that does not
+// parse names none rather than being echoed.
+func TestAServerListsHostsCarryNoCredential(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		raw  string
+		want []string
+	}{
+		{"nats://tok@a.internal:4222, b.internal:4222/ ,nats://u:p@c.internal:4222", []string{"a.internal", "b.internal", "c.internal"}},
+		{"tok@a.internal:4222,nats://a.internal:4223", []string{"a.internal"}},
+		{"nats://[2001:db8::7]:4222", []string{"2001:db8::7"}},
+		{"nats://u:p@%zz:4222", nil},
+		{"", nil},
+	} {
+		if got := ServerHosts(tc.raw); !slices.Equal(got, tc.want) {
+			t.Errorf("ServerHosts(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
 	}
 }

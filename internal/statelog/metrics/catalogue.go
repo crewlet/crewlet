@@ -1153,7 +1153,10 @@ func Catalogue() []Instrument {
 				"ended `errored runner_lost`; `mirrors`: its import or its pull " +
 				"mirror's sync STARTED, on a goroutine of its own, since a fetch " +
 				"from another host outlives a turn — `crewlet.code.import.chunks` " +
-				"and `crewlet.code.mirror.runs` count what each came to) and " +
+				"and `crewlet.code.mirror.runs` count what each came to; " +
+				"`atlas_code`: its deploy and dependency files read for the atlas " +
+				"where its default branch moved, at most fifty files a turn, or " +
+				"what they declared withdrawn where it is no longer scanned) and " +
 				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +

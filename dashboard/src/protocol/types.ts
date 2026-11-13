@@ -64,10 +64,15 @@ import type {
   AtlasActivityAnswer,
   AtlasEntriesAnswer,
   AtlasEntryAnswer,
+  AtlasEntryWorkAnswer,
   AtlasFacetsAnswer,
   AtlasLogAnswer,
   AtlasMapAnswer,
+  AtlasNamedAnswer,
+  AtlasReviewAnswer,
+  AtlasSourcesAnswer,
   AtlasTraceAnswer,
+  AtlasWorkAnswer,
 } from "../contract/atlas.ts";
 import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
@@ -3735,6 +3740,10 @@ export interface WorkItemDetail {
    *  renderer falls back to the id, which is a value somebody set. */
   keys?: Record<string, string>;
   links?: WorkLink[];
+  /** How many atlas entries the task names, for a reader without the atlas
+   *  app: those links are left out of `links`, so the count is all this
+   *  reader is told. Absent for a reader who holds it. */
+  entries_withheld?: number;
   /** The task this one is filed under, named — absent for a top-level task
    *  and for a parent this node holds no row for. */
   parent?: WorkTaskRef;
@@ -7965,6 +7974,16 @@ export interface QueryMap {
   atlas_facets: AtlasFacetsAnswer;
   atlas_log: AtlasLogAnswer;
   atlas_activity: AtlasActivityAnswer;
+  /** What waits for a person in the atlas, computed on the read. */
+  atlas_review: AtlasReviewAnswer;
+  /** Each source the atlas reads for the company, and the ask waiting on it. */
+  atlas_sources: AtlasSourcesAnswer;
+  /** The work that touches the atlas, each read as its asker on both apps:
+   *  how many open tasks name each entry, the tasks naming one entry, and
+   *  the entries a task's links name. */
+  atlas_work: AtlasWorkAnswer;
+  atlas_entry_work: AtlasEntryWorkAnswer<WorkSummary>;
+  atlas_named: AtlasNamedAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;

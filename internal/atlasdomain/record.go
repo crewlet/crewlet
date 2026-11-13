@@ -25,7 +25,11 @@ import (
 //   - 3: an agent's claim (ADR-0132): a `claim` whose source is an agent, by
 //     its seat, with the turn it was recorded in and the evidence the engine
 //     checked behind it.
-const RecordVersion = 3
+//   - 4: a read of a repository's deploy and dependency files (ADR-0133): a
+//     `read` whose source is code, by the repository's name.
+//   - 5: the tool an agent's claim cited, by name, on its source: what a
+//     person reviewing the claim is shown beside its turn and its seat.
+const RecordVersion = 5
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -50,6 +54,9 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Op read", Since: 2, Path: []string{"op"}, Equals: string(OpRead)},
 	{Name: "Claim.Source agent", Since: 3, Op: string(OpClaim), Path: []string{"mutation", "source", "kind"},
 		Equals: string(atlas.SourceAgent)},
+	{Name: "Read.Source code", Since: 4, Op: string(OpRead), Path: []string{"mutation", "source", "kind"},
+		Equals: string(atlas.SourceCode)},
+	{Name: "Claim.Source.Tool", Since: 5, Op: string(OpClaim), Path: []string{"mutation", "source", "tool"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -69,7 +76,8 @@ const (
 	// claims the read holds on it that are new or changed, and the slots of
 	// its own earlier claims it no longer holds, which are withdrawn. A read
 	// that stopped seeing the entry retires it: one denied exists claim, and
-	// every other slot withdrawn.
+	// every other slot withdrawn. A read of a repository's files (ADR-0133)
+	// is the same record in the repository's voice, and only withdraws.
 	OpRead OpKind = "read"
 
 	// OpPurge erases an entry or a value everywhere, its history included,

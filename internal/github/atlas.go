@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
@@ -20,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // GitHub's half of the atlas (ADR-0131): the organization's repositories,
@@ -72,69 +69,75 @@ const maxEnvironments = 20
 var errTooManyEnvironments = fmt.Errorf("past the %d most recently deployed environments of its repository",
 	maxEnvironments)
 
-// Collect reads the organization through every agent's installation the
-// engine can read as, and reports it as claims in the integration's voice.
-// It writes nothing at GitHub but the tokens it mints and revokes.
-func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
+// atlasAccess is what a read of the organization is made with: the seats to
+// read through, the addresses, and a client that counts its requests.
+type atlasAccess struct {
+	org     string
+	host    string
+	apiBase string
+	webBase string
+	seats   []SeatApp
+	http    *http.Client
+	calls   func() int
+}
+
+// openAtlas resolves the access a read is made with, and answers
+// [integration.ErrNotConfigured] where the company gave none.
+func openAtlas(in collect.Input) (atlasAccess, error) {
 	if in.Config == nil {
-		return collect.Read{}, fmt.Errorf("github: %w: no company document", integration.ErrNotConfigured)
+		return atlasAccess{}, fmt.Errorf("github: %w: no company document", integration.ErrNotConfigured)
 	}
 	cfg := in.Config.Integrations.GitHub
 	org := strings.ToLower(providedOrg(cfg))
 	if cfg == nil || !cfg.Enabled || org == "" {
-		return collect.Read{}, fmt.Errorf("github: %w: integrations.github is off or names no organization",
+		return atlasAccess{}, fmt.Errorf("github: %w: integrations.github is off or names no organization",
 			integration.ErrNotConfigured)
 	}
 	var lookup func(string) (string, bool)
 	if in.Env != nil {
 		lookup = in.Env.LookupOK
 	}
-	apiBase, webBase := cfg.Bases(lookup)
-	seats := atlasSeats(in.Config, in.Env)
-	if len(seats) == 0 {
-		return collect.Read{}, fmt.Errorf("github: %w: no agent has a GitHub App switched on to read through",
+	a := atlasAccess{org: org}
+	a.apiBase, a.webBase = cfg.Bases(lookup)
+	if a.seats = atlasSeats(in.Config, in.Env); len(a.seats) == 0 {
+		return atlasAccess{}, fmt.Errorf("github: %w: no agent has a GitHub App switched on to read through",
 			integration.ErrNotConfigured)
 	}
+	web, err := url.Parse(a.webBase)
+	if err != nil || web.Hostname() == "" {
+		return atlasAccess{}, errors.New("github: integrations.github.url is not an address with a host")
+	}
+	a.host = strings.ToLower(web.Hostname())
 	base := in.HTTP
 	if base == nil {
 		base = httpx.Client(ClientTimeout)
 	}
+	a.http, a.calls = collect.Counted(base)
+	return a, nil
+}
+
+// Collect reads the organization through every agent's installation the
+// engine can read as, and reports it as claims in the integration's voice.
+// It writes nothing at GitHub but the tokens it mints and revokes.
+func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
+	access, err := openAtlas(in)
+	if err != nil {
+		return collect.Read{}, err
+	}
 	r := &atlasRead{
-		b: collect.NewBuilder(integration.KindGitHub, in.Now), org: org, apiBase: apiBase,
+		b: collect.NewBuilder(integration.KindGitHub, in.Now), org: access.org, apiBase: access.apiBase,
+		host: access.host, http: access.http, calls: access.calls,
 		listed: map[string]bool{}, unread: map[string]map[string]bool{partWorkflows: {}, partDeployments: {}},
 	}
-	counting := *base
-	next := httpx.Transport()
-	if base.Transport != nil {
-		next = base.Transport
-	}
-	counting.Transport = countedTransport{next: next, calls: &r.calls}
-	r.http = &counting
-	web, err := url.Parse(webBase)
-	if err != nil || web.Hostname() == "" {
-		return collect.Read{}, errors.New("github: integrations.github.url is not an address with a host")
-	}
-	r.host = strings.ToLower(web.Hostname())
-	err = r.read(ctx, seats)
+	err = r.read(ctx, access.seats)
 	// EVERY TOKEN THE READ MINTED IS WITHDRAWN, however it ended: a token
 	// nobody holds a reason for would otherwise live out its hour.
 	r.close(context.WithoutCancel(ctx))
 	if err != nil {
 		return collect.Read{}, err
 	}
-	r.b.Calls(int(r.calls.Load()))
+	r.b.Calls(r.calls())
 	return r.b.Read(), nil
-}
-
-// countedTransport counts the requests a read makes, for its standing.
-type countedTransport struct {
-	next  http.RoundTripper
-	calls *atomic.Int64
-}
-
-func (t countedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.calls.Add(1)
-	return t.next.RoundTrip(req)
 }
 
 // atlasSeats is every agent seat whose app is switched on, with its key
@@ -170,7 +173,7 @@ type atlasRead struct {
 	host    string
 	apiBase string
 	http    *http.Client
-	calls   atomic.Int64
+	calls   func() int
 
 	// installs is every installation the read is made as, in seat order.
 	installs []*atlasInstall
@@ -212,80 +215,110 @@ func signs(seat SeatApp) bool {
 	return err == nil
 }
 
-// open reads as one seat's installation: it reads the installation back,
-// mints the read's token and lists what the installation covers. False is an
-// installation the read cannot be made as, which is never a fault: it is not
-// recorded, is gone, is suspended, sits on another account, or its key does
-// not sign for it.
-func (r *atlasRead) open(ctx context.Context, seat SeatApp) (bool, error) {
+// openInstallation reads as one seat's installation: it reads the
+// installation back and mints the read's token, carrying what wants picks of
+// what the installation holds. Nil is an installation the read cannot be made
+// as, which is never a fault: it is not recorded, is gone, is suspended, sits
+// on another account, its key does not sign for it, or wants declines it.
+func openInstallation(ctx context.Context, hc *http.Client, apiBase, org string, seat SeatApp,
+	wants func(held map[string]string) (map[string]string, bool)) (*atlasInstall, error) {
+
 	if seat.Key == "" || seat.InstallationID == 0 {
-		return false, nil
+		return nil, nil
 	}
 	// A KEY THAT DOES NOT PARSE signs nothing, which is a seat to finish
 	// setting up, never a fault of the read.
 	if !signs(seat) {
-		return false, nil
+		return nil, nil
 	}
-	app, err := NewAppClient(seat.AppID, seat.Key, r.apiBase, nil)
+	app, err := NewAppClient(seat.AppID, seat.Key, apiBase, nil)
 	if err != nil {
-		return false, fmt.Errorf("github: build an agent's app client: %w", err)
+		return nil, fmt.Errorf("github: build an agent's app client: %w", err)
 	}
-	app.http = r.http
+	app.http = hc
 	inst, err := app.Installation(ctx, seat.InstallationID)
 	switch {
 	case refused(err):
-		return false, nil
+		return nil, nil
 	case err != nil:
-		return false, fmt.Errorf("github: read an agent's installation: %w", err)
+		return nil, fmt.Errorf("github: read an agent's installation: %w", err)
 	}
-	if inst.Suspended() || !strings.EqualFold(strings.TrimSpace(inst.Account.Login), r.org) {
-		return false, nil
+	if inst.Suspended() || !strings.EqualFold(strings.TrimSpace(inst.Account.Login), org) {
+		return nil, nil
 	}
-	in := &atlasInstall{actions: reads(inst.Permissions, PermissionActions),
-		deployments: reads(inst.Permissions, PermissionDeployments), repos: map[string]InventoryRepo{}}
 	// READ-ONLY OF WHAT THE INSTALLATION HOLDS, whatever the seat's own
 	// tokens carry: the read never writes, and asking for a permission the
 	// installation lacks mints nothing at all.
-	perms := map[string]string{PermissionMetadata: string(LevelRead)}
-	if in.actions {
-		perms[PermissionActions] = string(LevelRead)
-	}
-	if in.deployments {
-		perms[PermissionDeployments] = string(LevelRead)
+	perms, ok := wants(inst.Permissions)
+	if !ok {
+		return nil, nil
 	}
 	token, err := app.mint(ctx, seat.InstallationID, perms, nil)
 	switch {
 	// 422 is GitHub refusing a permission the installation has just lost.
 	case refused(err, http.StatusUnprocessableEntity):
-		return false, nil
+		return nil, nil
 	case err != nil:
-		return false, fmt.Errorf("github: mint a token for the read: %w", err)
+		return nil, fmt.Errorf("github: mint a token for the read: %w", err)
 	}
-	in.reader = installationReader{app: app, token: token.Token}
-	r.installs = append(r.installs, in)
-	repos, err := app.listRepositories(ctx, token.Token)
+	return &atlasInstall{reader: installationReader{app: app, token: token.Token},
+		actions: perms[PermissionActions] != "", deployments: perms[PermissionDeployments] != "",
+		repos: map[string]InventoryRepo{}}, nil
+}
+
+// list fills the installation's repositories, by lowered full name.
+func (in *atlasInstall) list(ctx context.Context) error {
+	repos, err := in.reader.app.listRepositories(ctx, in.reader.token)
 	if err != nil {
 		// A LISTING CUT SHORT IS NO READ: Metadata is every token's, so no
 		// refusal of this listing is a permission's.
-		return false, fmt.Errorf("github: list an installation's repositories: %w", err)
+		return fmt.Errorf("github: list an installation's repositories: %w", err)
 	}
 	for _, repo := range repos {
 		in.repos[strings.ToLower(repo.FullName)] = repo
 	}
-	return true, nil
+	return nil
 }
 
-// close withdraws every token the read minted.
-func (r *atlasRead) close(ctx context.Context) {
+// revokeAll withdraws the token of every installation a read was made as.
+func revokeAll(ctx context.Context, installs []*atlasInstall) {
 	ctx, cancel := context.WithTimeout(ctx, ClientTimeout)
 	defer cancel()
-	for _, in := range r.installs {
+	for _, in := range installs {
 		if err := in.reader.app.revoke(ctx, in.reader.token); err != nil {
 			log.WarnContext(ctx, "github_atlas_token_not_revoked", "error", err,
 				"detail", "a read-only token minted for the atlas read lives until it expires, within the hour")
 		}
 	}
 }
+
+// open reads as one seat's installation, under a token carrying Read-only of
+// what it holds among Metadata, Actions and Deployments, and lists what it
+// covers. False is an installation the read cannot be made as.
+func (r *atlasRead) open(ctx context.Context, seat SeatApp) (bool, error) {
+	in, err := openInstallation(ctx, r.http, r.apiBase, r.org, seat, func(held map[string]string) (map[string]string, bool) {
+		perms := map[string]string{PermissionMetadata: string(LevelRead)}
+		for _, key := range []string{PermissionActions, PermissionDeployments} {
+			if reads(held, key) {
+				perms[key] = string(LevelRead)
+			}
+		}
+		return perms, true
+	})
+	if err != nil || in == nil {
+		return false, err
+	}
+	// KEPT BEFORE IT IS LISTED, so its token is withdrawn however the
+	// listing ends.
+	r.installs = append(r.installs, in)
+	if err := in.list(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// close withdraws every token the read minted.
+func (r *atlasRead) close(ctx context.Context) { revokeAll(ctx, r.installs) }
 
 // read is the read itself: the organization, then every repository an
 // installation lists, each with the parts an installation may read.
@@ -478,7 +511,7 @@ func (r *atlasRead) workflows(ctx context.Context, as installationReader, accoun
 	for _, w := range flows {
 		at := where + ".workflows[" + strconv.FormatInt(w.ID, 10) + "]"
 		file := strings.TrimPrefix(w.Path, workflowDir)
-		p, ok := r.pipeline(at+".path", repo, workflowKeyPrefix, file)
+		p, ok := b.Pipeline(at+".path", repo, workflowKeyPrefix, file)
 		if !ok {
 			continue
 		}
@@ -518,7 +551,7 @@ func (r *atlasRead) deployments(ctx context.Context, as installationReader, acco
 	}
 	for i, d := range latest {
 		at := where + ".deployments[" + strconv.FormatInt(d.ID, 10) + "]"
-		p, ok := r.pipeline(at+".environment", repo, environmentKeyPrefix, d.Environment)
+		p, ok := b.Pipeline(at+".environment", repo, environmentKeyPrefix, d.Environment)
 		if !ok {
 			continue
 		}
@@ -529,68 +562,9 @@ func (r *atlasRead) deployments(ctx context.Context, as installationReader, acco
 		b.Says(at+".environment", p, atlas.FactEnvironment,
 			collect.EnvironmentWord(strings.ToLower(strings.TrimSpace(d.Environment))))
 		b.Says(at+".statuses.state", p, atlas.FactLastResult, deploymentResult(statuses[i].State))
-		r.deployed(at+".statuses.environment_url", p, statuses[i].EnvironmentURL)
+		b.Deployed(at+".statuses.environment_url", p, statuses[i].EnvironmentURL)
 	}
 	return nil
-}
-
-// deployed relates what a deployment says it put its code behind to the
-// environment that deployed it: the address, and the name it is served under.
-// Both are named by their exact keys and never claimed, since neither lives at
-// GitHub: the relation shows once a source that holds the name reports it.
-func (r *atlasRead) deployed(at string, environment atlas.Ref, raw string) {
-	if strings.TrimSpace(raw) == "" {
-		return
-	}
-	b := r.b
-	address, host, err := collect.Address(raw)
-	if err != nil {
-		b.Withhold(at, err)
-		return
-	}
-	if endpoint, ok := b.Names(at, atlas.KindEndpoint, address); ok {
-		b.Relates(at, endpoint, atlas.RelationDeployedBy, environment)
-	}
-	if _, err := netip.ParseAddr(host); err == nil {
-		return
-	}
-	if name, ok := b.Names(at, atlas.KindHostname, host); ok {
-		b.Relates(at, name, atlas.RelationDeployedBy, environment)
-	}
-}
-
-// pipeline is the pipeline of repo that name names under prefix, and its
-// exists claim; false where it is withheld. A NAME SHAPED LIKE A CREDENTIAL IS
-// REFUSED BEFORE IT IS WRITTEN AS A KEY SEGMENT: the segment's escapes would
-// reshape it into text no rule knows, with the credential's body intact.
-func (r *atlasRead) pipeline(where string, repo atlas.Ref, prefix, name string) (atlas.Ref, bool) {
-	if redact.Contains(name) {
-		r.b.Withhold(where, fmt.Errorf("%s key: %w", atlas.KindPipeline, atlas.ErrCredential))
-		return atlas.Ref{}, false
-	}
-	return r.b.Ref(where, atlas.KindPipeline, repo.Key+"#"+prefix+keySegment(name))
-}
-
-// keySegment is a vendor's name as one segment of an entry's key: letters,
-// digits and . _ + - as they are, every other byte as '~' and its two hex
-// digits. Exact both ways, so two names never share a key and a name with a
-// space or a slash still has one.
-func keySegment(name string) string {
-	const hex = "0123456789abcdef"
-	var out strings.Builder
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '.', c == '_', c == '+', c == '-':
-			out.WriteByte(c)
-		default:
-			out.WriteByte('~')
-			out.WriteByte(hex[c>>4])
-			out.WriteByte(hex[c&0xf])
-		}
-	}
-	return out.String()
 }
 
 // workflowState folds GitHub's workflow states into the atlas's words: active

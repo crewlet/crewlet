@@ -190,6 +190,26 @@ test("what the call would send is shown only where the row carries it", async ()
   expect(within(row).getByText("Arguments")).toBeTruthy();
 });
 
+// ONE BUTTON LANGUAGE ON EVERY DECISION ROW: the first answer filled, every
+// other outlined, all at the small size, whether the row is a held call or a
+// question. Mutation: draw the parked run's Answer outlined and this is red.
+test("every decision row draws a filled first answer and outlined others", async () => {
+  const variants = () =>
+    [...document.querySelectorAll<HTMLElement>(".decision-actions button")].map((b) => [
+      b.className.match(/crewlet-btn--(primary|secondary|ghost|outline)/)?.[1],
+      b.className.includes("crewlet-btn--small"),
+    ]);
+  await mount(heldRun());
+  expect(variants()).toEqual([
+    ["primary", true],
+    ["secondary", true],
+    ["secondary", true],
+  ]);
+  cleanup();
+  await mount(heldRun({ held_call: undefined, question: "Which region?" }));
+  expect(variants()).toEqual([["primary", true]]);
+});
+
 test("a run parked on a plain question is no held call", () => {
   expect(heldCallOf(heldRun({ held_call: undefined }))).toBeNull();
 });
@@ -312,10 +332,8 @@ function escalatedRun(): ExecutorRow {
 test("an escalated call shows its delegate's answer and findings before the call", async () => {
   await mount(escalatedRun());
   const row = document.querySelector<HTMLElement>(".decision-list > li")!;
-  expect(within(row).getByText("Escalated by security-engineer (rule 1)")).toBeTruthy();
   const finding = within(row).getByText("Changes firewall rules");
   expect(within(row).getByText("Not one of the item's servers")).toBeTruthy();
-  expect(within(row).getByText("High confidence")).toBeTruthy();
   expect(
     within(row).getByText("The command changes firewall rules, which no delegate allows."),
   ).toBeTruthy();
@@ -323,6 +341,49 @@ test("an escalated call shows its delegate's answer and findings before the call
   expect(finding.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // ITS ANSWERS ARE UNCHANGED: a fixed call is reviewed whole before Allow once.
   expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});
+
+// WHO ESCALATED, THE RULE AND THE CONFIDENCE ARE SAID ONCE, on one quiet
+// callout: a sole escalation has no second line naming its delegate, its
+// verdict or its confidence. Mutation: draw the answer's own line for it, or
+// the tinted callout, and this is red.
+test("a sole escalation is said once, on a quiet callout", async () => {
+  await mount(escalatedRun());
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  const heading = within(row).getByText("Escalated by security-engineer (rule 1), high confidence");
+  expect(heading.closest(".crewlet-callout")?.className).toContain("crewlet-callout--quiet");
+  expect(within(row).getAllByText(/security-engineer/)).toHaveLength(1);
+  expect(within(row).queryByText("Escalated")).toBeNull();
+  expect(within(row).queryByText("High confidence")).toBeNull();
+});
+
+// THE DETAIL SPANS THE ROW: the escalation and the arguments are a row of
+// their own under the words and the buttons, never a third line of the words,
+// which left the column under the buttons empty. Mutation: draw the detail
+// inside `.decision-text` and this is red.
+test("a held call's escalation and arguments span the row under its words and buttons", async () => {
+  await mount(escalatedRun());
+  const item = document.querySelector<HTMLElement>(".decision-list > li .decision-item")!;
+  const [text, actions, detail] = [...item.children];
+  expect(text?.className).toBe("decision-text");
+  expect(actions?.className).toBe("decision-actions");
+  expect(detail?.className).toBe("decision-detail");
+  expect(within(detail as HTMLElement).getByText(/^Escalated by/)).toBeTruthy();
+  expect(within(detail as HTMLElement).getByText("Arguments")).toBeTruthy();
+  expect(within(text as HTMLElement).queryByText(/^Escalated by/)).toBeNull();
+});
+
+// THE TITLE IS IN PRODUCT WORDS from the call's own arguments, the item on the
+// head as an asker's questions say theirs, and the call as it was made stays
+// under Arguments. Mutation: title it by its tool and this is red.
+test("a held command is titled by what it does, its raw call under Arguments", async () => {
+  await mount(escalatedRun());
+  const row = document.querySelector<HTMLElement>(".decision-list > li")!;
+  expect(row.querySelector(".decision-title")?.textContent).toBe("Run a command on web-1?");
+  expect(row.querySelector(".decision-group-head")?.textContent).toContain("on ENG-7");
+  expect(row.querySelector(".decision-text")?.textContent).not.toContain("ENG-7");
+  const raw = within(row).getByText("Call ssh_operate on crewlet");
+  expect(raw.closest(".decision-detail")).toBeTruthy();
 });
 
 test("a call put to people at once carries no escalation", async () => {

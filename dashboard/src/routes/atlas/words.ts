@@ -9,9 +9,10 @@ import type { Vendor as MarkVendor } from "@crewlethq/icons";
 import type { GraphEdgeFamily, Tone } from "@crewlethq/ui";
 import type {
   AtlasCoverageSource,
+  AtlasEvidence,
   AtlasFact,
-  AtlasFamily,
   AtlasFactView,
+  AtlasFamily,
   AtlasHealth,
   AtlasKind,
   AtlasLane,
@@ -31,6 +32,14 @@ export function entries(count: number): string {
   return plural(count, "entry", "entries");
 }
 
+/** What the map's key calls an entry that open tasks name. */
+export const WORKED_ON = "Being worked on";
+
+/** How many open tasks name an entry, as a count with its noun: "2 open tasks". */
+export function openTasks(count: number): string {
+  return plural(count, "open task");
+}
+
 /** What each kind of entry is called, and the glyph drawn on its tile. */
 export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName }>> = {
   domain: { word: "Domain", glyph: "globe" },
@@ -38,6 +47,7 @@ export const KINDS: Readonly<Record<AtlasKind, { word: string; glyph: GlyphName 
   endpoint: { word: "Endpoint", glyph: "waypoints" },
   certificate: { word: "Certificate", glyph: "badge-check" },
   service: { word: "Service", glyph: "layers" },
+  workload: { word: "Workload", glyph: "container" },
   host: { word: "Server", glyph: "server" },
   datastore: { word: "Database", glyph: "database" },
   queue: { word: "Queue", glyph: "list-ordered" },
@@ -84,7 +94,8 @@ export const LANES: Readonly<
   services: {
     label: "Services",
     columns: 3,
-    empty: "Services appear when a person adds one, by asking Ask Crewlet.",
+    empty:
+      "Services appear when a person adds one, with Add entry, and containers from the servers the SSH integration reads for Atlas.",
   },
   runtime: {
     label: "Runtime",
@@ -95,7 +106,7 @@ export const LANES: Readonly<
   data: {
     label: "Data",
     columns: 2,
-    empty: "Databases, queues and buckets appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Databases, queues and buckets appear when a person adds one, with Add entry.",
   },
   platforms: {
     label: "Platforms",
@@ -112,7 +123,7 @@ export const LANES: Readonly<
   observability: {
     label: "Observability",
     columns: 2,
-    empty: "Monitors appear when a person adds one, by asking Ask Crewlet.",
+    empty: "Monitors appear when a person adds one, with Add entry.",
   },
   tools: {
     label: "Tools and models",
@@ -161,6 +172,22 @@ export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVe
   slack: { name: "Slack", mark: "slack" },
   xai: { name: "xAI" },
   other: { name: "Other" },
+};
+
+/** What a source of the atlas is called: its vendor's name, and the servers by what they are. */
+export function sourceName(kind: string): string {
+  if (kind === "ssh") return "Servers";
+  return (VENDORS as Readonly<Record<string, { name: string }>>)[kind]?.name ?? kind;
+}
+
+/**
+ * What the call an agent cited is evidence of, as the clause after the tool's
+ * name. The engine reads the class off the call's tool; the agent never says.
+ */
+export const EVIDENCE: Readonly<Record<AtlasEvidence, string>> = {
+  call: "a read of a server or of a vendor, whose answer the engine checked the record against",
+  file: "a file of a repository, which the engine checked the record against",
+  none: "text anybody could have written, so the engine could check nothing behind it",
 };
 
 /** The three words a confidence reads as. */
@@ -228,6 +255,8 @@ export const FACTS: Readonly<Record<AtlasFact, string>> = {
   address: "Address",
   port: "Port",
   containers: "Runs containers",
+  open_port: "Open ports",
+  image: "Image",
   engine: "Engine",
   engine_version: "Engine version",
   default_branch: "Default branch",
@@ -331,6 +360,7 @@ export const SOURCE_KINDS: Readonly<Record<AtlasSourceKind, string>> = {
   settings: "The company settings",
   records: "The engine's records",
   integration: "An integration",
+  code: "A repository's deploy and dependency files",
   agent: "An agent",
   person: "A person",
 };
@@ -344,6 +374,7 @@ export const RECORDS: Readonly<Record<string, string>> = {
   ssh_tests: "connection tests",
   access_log: "the access log",
   usage: "the usage history",
+  fleet: "the engine's own nodes",
 };
 
 /** Each place an atlas read reads, named as a reader knows it. */

@@ -1039,7 +1039,10 @@ type GitLab struct {
 	// — everyone in a thread hears its activity — needs one REST call per
 	// comment or state change. When empty, routing degrades to the
 	// payload-derived targets; directed events are unaffected.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read PAT for participants-based routing; empty degrades routing."`
+	//
+	// It is also the credential the atlas reads the group with (ADR-0135),
+	// ahead of the provisioning token, so a read never needs the wider one.
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read PAT (read_api) for participants-based routing and the atlas's read of the group; empty degrades routing."`
 
 	// WebhookName is the name every hook this engine registers carries,
 	// and therefore WHICH HOOKS ON THIS INSTANCE ARE THIS DEPLOYMENT'S.

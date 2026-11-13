@@ -173,6 +173,16 @@
 // day in all, which the trim's seven-day min_age holds about 85 MB of on a
 // fleet that trims. [TrackerLogMaxBytes] is nearly five years of the records,
 // and nearly four years of the whole day, barriers included.
+//
+// # A task names what it touches in another domain
+//
+// A linked page and an atlas entry are edges on the task's own record whose
+// other end is another domain's id ([RelationPage], [RelationEntry]), and that
+// domain is never written. An entry is named by its id alone, counted rather
+// than named in a history row, and left out of an answer for a reader who may
+// not read the atlas ([TaskDetail.WithoutEntries]); the work on each entry is
+// read from the tracker's own rows ([Reader.EntryMarks], [Reader.EntryWork]).
+// ADR-0140 records the decision.
 package worklet
 
 import (

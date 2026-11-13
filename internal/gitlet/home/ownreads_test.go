@@ -112,6 +112,40 @@ func TestAHomeLeavesItsSeatsAUnit(t *testing.T) {
 	})
 }
 
+// A WORKER THE ENGINE REGISTERS READS THROUGH THE SAME BOUND: its git reads,
+// made through the loop ([home.Loop.GitRead]), run one at a time on a share of
+// one unit, as the loop's own do, however many of its turns ask at once.
+//
+// Mutation: answer Loop.GitRead from the estate as it was given, and three
+// reads are in flight at once.
+func TestARegisteredWorkersGitReadsWaitInTheHomesBound(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		held := newHeldReads(newEstate())
+		p := &placement{homes: map[string]string{repoA: "node-a"}}
+		l, _ := loopOver(t, home.Options{Chart: noChart,
+			Estate: held, Placement: asNode{placement: p, node: "node-a"}, Nudges: newNudges(),
+			Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+			NodeID: "node-a", Share: units(1)}, time.Hour)
+		synctest.Wait()
+		q := gitlet.GitQuery{Kind: gitlet.GitRevisionFacts, RepoID: repoA,
+			RevisionFacts: &gitlet.RevisionFactsQuery{Head: oid("a"), Target: oid("1")}}
+		var wg sync.WaitGroup
+		for range 3 {
+			wg.Go(func() { _, _ = l.GitRead(t.Context(), q) })
+		}
+		synctest.Wait()
+		if got := held.peak(); got != 1 {
+			t.Errorf("%d of a registered worker's reads were in flight at once on a share of one unit, want 1", got)
+		}
+		close(held.release)
+		wg.Wait()
+		if got := held.peak(); got != 1 {
+			t.Errorf("%d of a registered worker's reads were in flight at once on a share of one unit, want 1", got)
+		}
+	})
+}
+
 // left is how many changes repo's due list and its rechecks hold.
 func (e *estate) left(repo string) int {
 	e.mu.Lock()

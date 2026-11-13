@@ -50,6 +50,7 @@ import {
 import { FINDING_KINDS } from "~/contract/identity.ts";
 import {
   WidgetCard,
+  WidgetMore,
   WidgetNote,
   WidgetQuery,
   defineWidgets,
@@ -64,12 +65,7 @@ const POLL_MS = 60_000;
 
 /** "and 3 more" under a list cut to [ROWS], linking to the page that lists them all. */
 function More({ total, to }: { total: number; to: string[] }) {
-  if (total <= ROWS) return null;
-  return (
-    <a className="home-card-more t-link" href={href(to)}>
-      {`${plural(total - ROWS, "more")} on the page`}
-    </a>
-  );
+  return <WidgetMore more={total - ROWS} to={to} />;
 }
 
 // ---- Backups ------------------------------------------------------------------

@@ -157,7 +157,7 @@ func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 
 func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !only(w, args, "linked", "linked_pages", "if_match") ||
+	if !ok || !only(w, args, "linked", "linked_pages", "linked_entries", "if_match") ||
 		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}

@@ -55,16 +55,20 @@ type Source struct {
 	// turn derived it. No caller passes a confidence; it is read off these.
 	Turn     string         `json:"turn,omitempty"`
 	Evidence atlas.Evidence `json:"evidence,omitempty"`
+
+	// Tool is an agent's too, from version 5: the tool whose answer the
+	// claim cited, by name, absent where the name is not one a record keeps.
+	Tool string `json:"tool,omitempty"`
 }
 
 // sourceOf is a vocabulary source on the wire.
 func sourceOf(s atlas.Source) Source {
-	return Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence}
+	return Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence, Tool: s.Tool}
 }
 
 // vocabulary is the source in the vocabulary's own type.
 func (s Source) vocabulary() atlas.Source {
-	return atlas.Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence}
+	return atlas.Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence, Tool: s.Tool}
 }
 
 // Claim is one claim on one entry: the entry itself, one fact, one relation,

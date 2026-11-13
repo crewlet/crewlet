@@ -40,6 +40,7 @@ import {
 } from "./parts.tsx";
 import { useAccess, useOperatorManaged } from "./access/api.ts";
 import { AgentsAccess } from "./access/AgentsAccess.tsx";
+import { SshServers } from "./SshServers.tsx";
 import { accessHold, lanesOf, needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
@@ -382,6 +383,8 @@ export function AppPane({
         {tab === "settings" && (
           <div className="int-tab">
             <SettingsSummary tool={tool} />
+            {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
+            {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
             <Button
               size="small"
               variant="secondary"

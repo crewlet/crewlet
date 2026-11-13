@@ -160,6 +160,15 @@ func (h *harness) tick(after time.Duration) {
 	h.worker.Tick(h.t.Context())
 }
 
+func (h *harness) asks() map[integration.Kind]collect.Request {
+	h.t.Helper()
+	asked, err := h.store.Requests(h.t.Context())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return asked
+}
+
 func (h *harness) standing() collect.Status {
 	h.t.Helper()
 	all, err := h.store.Load(h.t.Context())

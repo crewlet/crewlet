@@ -253,6 +253,15 @@
             "null"
           ]
         },
+        "owner_wakes": {
+          "description": "Whether the agent seat that owns an atlas entry is woken when the entry drifts: its health turns to alerting, or its sources come to disagree (default true). At most one wake an entry a day. false wakes nobody; the entry still waits in Review.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "refresh_interval_seconds": {
           "description": "How often each connected integration is read whole for the atlas, in seconds. 0 takes the default of 3600; the floor is 300.",
           "minimum": 0,
@@ -2161,7 +2170,7 @@
           "x-crewlet-secret": true
         },
         "token": {
-          "description": "Read PAT for participants-based routing; empty degrades routing.",
+          "description": "Read PAT (read_api) for participants-based routing and the atlas's read of the group; empty degrades routing.",
           "type": [
             "string",
             "number",
@@ -5174,6 +5183,15 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "inventory": {
+          "description": "Let the engine itself read this server for the atlas on the atlas's refresh interval: its listening ports (ss -tln) and, where containers is on, its running containers (sudo -n docker ps). Each command is recorded as an agent's is, and only the ports, the container names and their images are kept. Off by default; the server accepts it after its setup is run again.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
             "null"
           ]
         },

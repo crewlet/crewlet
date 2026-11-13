@@ -1272,7 +1272,16 @@ function deltaClause(field: string, from: string, to: string, ctx: LabelContext)
 
 /** A field's name as a label, in the word a reader knows it by. */
 function fieldLabel(field: string): string {
-  return field === "routing_unit" ? "Team" : humanize(field);
+  switch (field) {
+    case "routing_unit":
+      return "Team";
+    // A COUNT, never the entries: the delta holds how many the task named
+    // before and after, since a reader of its history may not read the atlas.
+    case "atlas_entry":
+      return "Atlas entries";
+    default:
+      return humanize(field);
+  }
 }
 
 /**
@@ -1393,6 +1402,8 @@ function fieldWord(field: string): string {
       return "start date";
     case "routing_unit":
       return "routing team";
+    case "atlas_entry":
+      return "number of atlas entries it names";
     default:
       return humanize(field).toLowerCase();
   }

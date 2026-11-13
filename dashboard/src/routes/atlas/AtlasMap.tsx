@@ -20,6 +20,7 @@ import {
   GraphCanvas,
   IconButton,
   Link,
+  StatusDot,
   Text,
   graphReach,
   type GraphBand,
@@ -35,9 +36,9 @@ import { useNow } from "~/lib/clock.ts";
 import { leaveFullscreen } from "~/lib/fullscreen.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import type { TraceChoice } from "./filters.ts";
-import { MAP_LABELS, MAP_TONES, cardOf, carrying, lineOf } from "./graph.tsx";
+import { HEALTH_TONES, MAP_LABELS, MAP_TONES, cardOf, carrying, lineOf } from "./graph.tsx";
 import { EntryDisc, HealthWord, VendorLead } from "./parts.tsx";
-import { HEALTH, KINDS, LANES, MAP_ROWS, VENDORS, entries } from "./words.ts";
+import { HEALTH, KINDS, LANES, MAP_ROWS, VENDORS, entries, openTasks } from "./words.ts";
 
 /**
  * Entries stand in vendor groups, closed, past this many drawn. About
@@ -112,6 +113,7 @@ function bandsOf(
 
 export function AtlasMap({
   answer,
+  work,
   matched,
   selectedId,
   onSelect,
@@ -124,6 +126,8 @@ export function AtlasMap({
   fitKey,
 }: {
   answer: AtlasMapAnswer;
+  /** How many open tasks name each entry, by its id, or null where no work is read for the reader. */
+  work: ReadonlyMap<string, number> | null;
   /** The entries the search leaves, or null with no search: the rest are pushed back, never removed. */
   matched: ReadonlySet<string> | null;
   selectedId: string | null;
@@ -156,12 +160,12 @@ export function AtlasMap({
   const nodes = useMemo<GraphNode[]>(() => {
     const columns = grouped ? null : serviceColumns(answer);
     return answer.nodes.map((summary) => ({
-      ...cardOf(summary, now),
+      ...cardOf(summary, now, work?.get(summary.id)),
       lane: summary.lane,
       group: grouped ? groupOf(summary) : undefined,
       column: columns?.get(summary.id),
     }));
-  }, [answer, now, grouped]);
+  }, [answer, now, grouped, work]);
   const edges = useMemo<GraphEdge[]>(() => answer.edges.map(lineOf), [answer]);
   const groups = useMemo<GraphGroup[]>(
     () =>
@@ -218,7 +222,7 @@ export function AtlasMap({
           edges={edges}
           groups={groups}
           labels={MAP_LABELS}
-          tones={MAP_TONES}
+          tones={work ? MAP_TONES : HEALTH_TONES}
           collapseAbove={grouped ? ATLAS_OPEN_MAX : undefined}
           selectedId={selectedId}
           onSelect={onSelect}
@@ -231,7 +235,7 @@ export function AtlasMap({
             engaged && !narrow
               ? (id) => {
                   const one = byId.get(id);
-                  return one ? <HoverCard entry={one} /> : null;
+                  return one ? <HoverCard entry={one} open={work?.get(id) ?? 0} /> : null;
                 }
               : undefined
           }
@@ -274,8 +278,12 @@ export function AtlasMap({
   );
 }
 
-/** The card beside the entry the pointer or focus rests on: what it is, whose it is, and how it is. */
-function HoverCard({ entry }: { entry: AtlasSummary }) {
+/**
+ * The card beside the entry the pointer or focus rests on: what it is, whose
+ * it is, how it is, and how many open tasks name it, which an entry that is
+ * not quiet has no notch left to say.
+ */
+function HoverCard({ entry, open }: { entry: AtlasSummary; open: number }) {
   return (
     <div className="atlas-hover">
       <EntryDisc entry={entry} size="md" />
@@ -293,6 +301,11 @@ function HoverCard({ entry }: { entry: AtlasSummary }) {
           <Text variant="caption" tone="secondary">
             {entry.reason}
           </Text>
+        )}
+        {open > 0 && (
+          <StatusDot tone="info">
+            {openTasks(open)} {open === 1 ? "names" : "name"} it
+          </StatusDot>
         )}
       </div>
     </div>

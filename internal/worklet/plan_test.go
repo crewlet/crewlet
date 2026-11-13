@@ -811,6 +811,17 @@ func taskReads() map[string]indexedRead {
 			"agent", person, MaxOwnAsks),
 		"a seat's own open asks counted": seek("tracker_comments_asked_of_idx",
 			cappedCountStatement(ownAsksFrom, ownAsksWhere), "agent", person, TotalHintCeiling+1),
+		// THE WORK THAT NAMES AN ATLAS ENTRY: every entry's open tasks counted
+		// off the index that holds those edges alone, and one entry's tasks
+		// sought by its ids.
+		"the open work on each atlas entry": walk("tracker_relations_entry_idx", entryMarksStatement,
+			MaxEntryMarks+1),
+		"an atlas entry's open tasks counted": seek(reverse,
+			cappedCountStatement(taskTable, entryWorkWhere(2, true)), entryPlanA, entryPlanB,
+			string(RelationEntry), TotalHintCeiling+1),
+		"an atlas entry's finished tasks counted": seek(reverse,
+			cappedCountStatement(taskTable, entryWorkWhere(2, false)), entryPlanA, entryPlanB,
+			string(RelationEntry), store.EncodeTime(planNow), TotalHintCeiling+1),
 		// WHOM AN IDLE REVIEW'S HOLDER ASKED, by the open asks' item index.
 		"whom a review waits on": seek("tracker_comments_open_asks_idx", reviewAsksStatement,
 			task, "agent"),
@@ -912,6 +923,12 @@ func taskReads() map[string]indexedRead {
 	}
 	return reads
 }
+
+// Two atlas entries' ids, as an entry's work is asked by them.
+const (
+	entryPlanA = "7f3c2a10-5b1e-5c3d-9a4f-0d2e6b8c1a57"
+	entryPlanB = "0b9d4c1e-2f6a-5e7b-8c3d-4a5f6e7d8c9b"
+)
 
 // taskCensuses is every statement that counts the live work in its scope —
 // today's census of the flow, its blocked and overdue counts, and the

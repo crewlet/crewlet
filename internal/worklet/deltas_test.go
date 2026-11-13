@@ -91,7 +91,12 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 				"later needs no second edit", kind)
 			continue
 		}
-		if !sameDelta(got, moves([]string{"other-" + string(kind)}, nil)) {
+		// AN ATLAS ENTRY IS COUNTED, never named ([deltaSet.count]).
+		want := moves([]string{"other-" + string(kind)}, nil)
+		if kind == RelationEntry {
+			want = Delta{From: "0", To: "1"}
+		}
+		if !sameDelta(got, want) {
 			t.Errorf("the %s field recorded %+v", kind, got)
 		}
 	}
@@ -232,10 +237,11 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 //
 // [counterpartyDeltaFields] is what an activity answer's key map is built
 // from, and it is DERIVED from [RelationKinds] so a fifth kind of edge is
-// resolved with no second edit. [RelationPage] is the one exclusion, and it is
-// a fact about the type rather than about any row: a `page` edge names a
-// knowledge-base page, so asking `tracker_tasks` about one is asking whether a
-// page is a task.
+// resolved with no second edit. [RelationPage] and [RelationEntry] are the
+// exclusions, and each is a fact about the type rather than about any row: a
+// `page` edge names a knowledge-base page and an `atlas_entry` edge an entry
+// of the atlas, so asking `tracker_tasks` about one is asking whether it is a
+// task.
 //
 // A DECLARATION HELD AGAINST THE RULE, in the `internal/solo` roster
 // tradition, because the runtime cannot show it: a page id resolves to nothing
@@ -249,13 +255,13 @@ func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
 		named[field] = true
 	}
 	for _, kind := range RelationKinds {
-		want := kind != RelationPage
+		want := kind != RelationPage && kind != RelationEntry
 		if named[string(kind)] != want {
 			t.Errorf("the key map %s the %s edges; a relation names a task "+
-				"unless it is a %s, and the field list is derived from "+
+				"unless it is a %s or an %s, and the field list is derived from "+
 				"RelationKinds so that a kind added later needs no second edit",
 				map[bool]string{true: "resolves", false: "does not resolve"}[named[string(kind)]],
-				kind, RelationPage)
+				kind, RelationPage, RelationEntry)
 		}
 	}
 	// AND THE FOUR BEYOND THE EDGES: the mirror a blocker carries, a

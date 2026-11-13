@@ -25,4 +25,10 @@
 // declared here ([GitletRepo], [GitletCheck]): the fields a map needs and
 // nothing more. internal/atlas/gather reads the records and fills them, so
 // this package reads no store and calls nothing (TestDeriveImportsNoWritePath).
+//
+// # The engine's own infrastructure
+//
+// fleet.go draws the engine from its live nodes' presence ([FleetNode]): each
+// node, the broker, the object store, and the service over them. An address
+// the fleet says is an administrator's and always private (ADR-0142).
 package derive

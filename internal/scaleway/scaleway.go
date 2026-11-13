@@ -35,6 +35,12 @@
 // the seat's box reads them as SCW_SECRET_KEY and SCW_ACCESS_KEY, two lines of
 // `role.sandbox.env`, and the engine supplies the organization and the default
 // project itself ([accessVendor.BoxDefaults]).
+//
+// # The atlas reads the projects under the provisioner key
+//
+// The Organization and each of its projects are accounts of the atlas
+// (ADR-0137, atlas.go): one listing, under the permission set the provisioner
+// already holds, and nothing inside a project.
 package scaleway
 
 // Backend is the integration's name: the config block's key, the integration
