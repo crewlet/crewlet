@@ -290,6 +290,16 @@ leaves the Inbox as soon as somebody decides. Everything else waits in Review
 for every holder of Atlas together, so the Inbox does not fill with
 infrastructure changes.
 
+**An agent that owns an entry is woken about it.** When an entry whose owner
+is an agent turns to Alerting, or its sources come to disagree, the engine
+wakes that agent to look: at most once a day for each entry, and only about
+a change it has not already been told. The agent reads the entry itself and
+acts within its role; a disagreement is still yours to settle in Review. A
+paused agent, or one out of budget, is not woken until it runs again. To turn
+this off for the company, set `atlas.owner_wakes: false` in the company
+document ([The owning agent is woken when its entry
+drifts](../concepts/atlas.md#the-owning-agent-is-woken-when-its-entry-drifts)).
+
 ## Sources and Refresh now
 
 **Sources** (from the band, `#/company/atlas/sources`) lists each integration

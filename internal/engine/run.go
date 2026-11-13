@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/codesearch"
@@ -1012,6 +1013,9 @@ type Engine struct {
 	// atlas, a fleet singleton on a data node that publishes
 	// ([Engine.startAtlasCollect]).
 	atlasCollect *collect.Worker
+	// atlasWake wakes the agent seat that owns a drifting atlas entry
+	// ([Engine.startAtlasWake]).
+	atlasWake *atlaswake.Worker
 
 	// mailboxes registers each seat's mailbox with the fleet and retires
 	// the mailbox of a seat that has left the company. Built BEFORE the
@@ -2649,6 +2653,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// AND THE ATLAS'S READ OF THOSE INTEGRATIONS' VENDORS, a singleton on the
 	// same terms, on its own cadence (ADR-0129).
 	e.startAtlasCollect(ctx)
+	e.startAtlasWake(ctx)
 	e.startMemorySync(ctx)
 	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
@@ -3403,6 +3408,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	}
 	e.stopIntegrations()
 	e.stopAtlasCollect()
+	e.stopAtlasWake()
 	// AFTER the integration loop, which is what runs the passes that ask
 	// for a re-activation: disarming first would leave a window in which a
 	// pass could arm one more on a node that is shutting down.

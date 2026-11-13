@@ -19,7 +19,7 @@ var goPackages = map[string]bool{
 	"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,
 	"assistanttest": true, "capability": true, "cards": true, "catalog": true, "evals": true, "exec": true,
 	"live": true, "proposal": true, "tabular": true, "wire": true,
-	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
+	"atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "backuptest": true, "brandformat": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
 	"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "chatlet": true, "checkrun": true, "edits": true,

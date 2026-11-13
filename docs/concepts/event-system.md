@@ -193,6 +193,15 @@ A seat whose access changed, with open work waiting on a person, is asked for on
 - **One wake per change.** Its id is derived from the seat, the told record the change is measured from, the digest it is measured to and the instant the pending review first measured it, so a republish, or the same request from another node, collapses into the wake it already made, while the same change made again after a revert is a wake of its own. Every copy carries the told record's instant.
 - **One conversation per seat, and nobody sent it.** Reviews waiting together merge into one turn, the wake names no sender and no actor, and a review whose seat was already told the change (by any turn) is acked without one.
 
+### Atlas drift wakes
+
+The agent seat that owns an [atlas](atlas.md) entry is woken when the entry drifts ([The owning agent is woken when its entry drifts](atlas.md#the-owning-agent-is-woken-when-its-entry-drifts)). The node holding the `atlas-wake` duty publishes the wake on `crewlet.notifications.inbound` as a delivery of source `atlas_drift`, the alarms' route ([ADR-0143](../../adr/0143-the-agent-seat-that-owns-an-atlas-entry-is-woken-when-it-drifts-at-most-once-a-day.md)).
+
+- **Claimed, then published.** The seat's record on the entry in the coordination store is written first, at the revision it was read at, and the publish follows. A publish the broker refused is made again by the next pass, five minutes later, from what the record says.
+- **One wake an entry a day.** Its id is derived from the seat, the entry and the UTC day, and every copy carries the claim's instant, so a publish made again collapses into the wake it already made.
+- **One conversation per entry, and nobody sent it.** Two entries are two turns. The wake names no sender and no actor, and carries no body: the entry's id, its kind and the change classes are all it says.
+- **Not held, skipped.** Unlike other mail, a wake for a seat that is paused, unplaced or parked on its budget or its models is not published at all, so it is not waiting, out of date, when the seat resumes.
+
 ### A seat's mailbox exists before the seat is running
 
 A durable subscription **is** the mailbox, and it exists independently of whether anyone is consuming it. That is not a detail — publishing to a topic that no subscription covers **drops the event silently**, with nothing anywhere reporting a loss. On the shipped backend that is the broker's own rule rather than a convention the engine could soften: the agent and notification streams use interest retention, which keeps a message exactly while some durable consumer that has not acked it exists.

@@ -208,6 +208,7 @@ and write this node's own copy of the replicated estate.
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox, executor and executor sessions, and forgetting the chat read state of a human seat the company no longer has. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:atlas-collect` | The [atlas collect](atlas.md#what-integrations-read) duty: each connected integration's vendor read whole for the atlas, hourly by default, with only what changed recorded on the atlas log, and the deploy and dependency files of each GitHub and GitLab repository Gitlet does not mirror, read when its default branch moved. |
+| `worker:atlas-wake` | The [atlas wake](atlas.md#the-owning-agent-is-woken-when-its-entry-drifts) duty: the atlas read every five minutes for entries that drifted, and the agent seat that owns each woken, at most once an entry a UTC day. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 | `worker:retention` | The state logs' trim: each domain's floor terms evaluated, what all of them permit purged, and the conclusion published. |
 | `worker:embeddings` | The knowledge base's embeddings, computed once for the company and published as records every data node applies. |
