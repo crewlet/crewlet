@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -282,9 +283,9 @@ func (t *atlasWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if given && versions[plan.entry.ID()] != ifMatch {
-		return refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
+		return toPerson(refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
 			"nothing: %s is at version %d and the change was decided from %d. Read it again and decide.",
-			t.Name(), plan.entry, versions[plan.entry.ID()], ifMatch)), nil
+			t.Name(), plan.entry, versions[plan.entry.ID()], ifMatch)), caveat.AtlasChangedMeanwhile()), nil
 	}
 	return t.write(ctx, actor, plan, versions, args), nil
 }
@@ -324,9 +325,9 @@ func (t *atlasWrite) versions(ctx context.Context, n *atlasNow, plan atlasPlan) 
 			continue
 		}
 		if int64(row.Version) > n.recordedAt.Packed() {
-			r := refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
+			r := toPerson(refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
 				"nothing: %s changed while the change was being decided. Read it again and decide.",
-				t.Name(), subject))
+				t.Name(), subject)), caveat.AtlasChangedMeanwhile())
 			return nil, &r
 		}
 		out[id] = row.Version
@@ -461,7 +462,15 @@ func orAgain(again string) string {
 // anything else this node's fault.
 func atlasWriteFailure(ctx context.Context, tool string, actor Actor, entry atlas.Ref, err error) tools.Result {
 	if class, ok := WriterClass(err); ok {
-		return refusedBy(class, err, domainRefusal(tool, err))
+		r := refusedBy(class, err, domainRefusal(tool, err))
+		switch {
+		case !r.PersonRefusal.IsZero():
+		case errors.Is(err, atlasdomain.ErrStaleVersion):
+			r = toPerson(r, caveat.AtlasChangedMeanwhile())
+		case errors.Is(err, atlasdomain.ErrInvalid):
+			r = toPerson(r, atlasForm(err))
+		}
+		return r
 	}
 	again := sameCall(actor, tool)
 	if again == "" {
@@ -552,8 +561,8 @@ func (n *atlasNow) entry(a map[string]any, arg string) (member, *tools.Result) {
 		}
 		parsed, err := atlas.RecordedRef(atlas.Kind(kind), key)
 		if err != nil {
-			r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `%s`: %s.", n.tool, arg,
-				atlasdomain.Sentence(err)))
+			r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `%s`: %s.", n.tool, arg,
+				atlasdomain.Sentence(err))), atlasForm(err))
 			return member{}, &r
 		}
 		ref = parsed
@@ -620,8 +629,9 @@ func declared(winner atlas.Source, others []atlas.Claimed) (atlas.Source, bool) 
 
 // declaredRefusal is a write on what src declares.
 func (n *atlasNow) declaredRefusal(what string, src atlas.Source) *tools.Result {
-	r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s declare %s, and what they "+
-		"declare is changed there, never in the atlas.", n.tool, declarer(src), what))
+	r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s declare %s, and what they "+
+		"declare is changed there, never in the atlas.", n.tool, declarer(src), what)),
+		caveat.AtlasDeclaredElsewhere(declarer(src)))
 	return &r
 }
 
@@ -641,6 +651,22 @@ func (n *atlasNow) fact(a map[string]any, ref atlas.Ref) (atlas.Fact, *tools.Res
 	return f, nil
 }
 
+// atlasForm is a key or a value the vocabulary refused, as a person is told:
+// a credential's shape in words that never repeat it, any other rule in the
+// vocabulary's own sentence.
+func atlasForm(err error) caveat.Refusal {
+	if errors.Is(err, atlas.ErrCredential) {
+		return caveat.AtlasCredentialShaped()
+	}
+	// THE RULE ALONE: the sentence leads with the kind or the fact it is about
+	// ("service key: ..."), which the person's own form already names.
+	rule := atlasdomain.Sentence(err)
+	if i := strings.LastIndex(rule, ": "); i >= 0 {
+		rule = rule[i+2:]
+	}
+	return caveat.AtlasNotInItsForm(rule)
+}
+
 // claim builds one claim through the vocabulary's constructors, a refusal of
 // which is the caller's argument to change.
 func (n *atlasNow) claim(c atlas.Claim, err error) (*atlas.Claim, *tools.Result) {
@@ -648,8 +674,8 @@ func (n *atlasNow) claim(c atlas.Claim, err error) (*atlas.Claim, *tools.Result)
 		err = c.Recordable()
 	}
 	if err != nil {
-		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s wrote nothing: %s.", n.tool,
-			atlasdomain.Sentence(err)))
+		r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s wrote nothing: %s.", n.tool,
+			atlasdomain.Sentence(err))), atlasForm(err))
 		return nil, &r
 	}
 	return &c, nil
@@ -898,19 +924,21 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	}
 	ref, err := atlas.RecordedRef(kind, argString(a, "key"))
 	if err != nil {
-		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `key`: %s.", n.tool, atlasdomain.Sentence(err)))
+		r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `key`: %s.", n.tool,
+			atlasdomain.Sentence(err))), atlasForm(err))
 		return atlasPlan{}, &r
 	}
 	if src, ok := ref.EngineNamed(); ok {
-		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: a %s keyed %s is one %s "+
-			"declare, and enters the atlas from there.", n.tool, kind, ref.Key, declarer(src)))
+		r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: a %s keyed %s is one %s "+
+			"declare, and enters the atlas from there.", n.tool, kind, ref.Key, declarer(src))),
+			caveat.AtlasDeclaredElsewhere(declarer(src)))
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("added", ref)}
 	e, found := n.view.Find(ref.ID())
 	if found && e.State == atlas.StateRetired {
-		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, retired. "+
-			"Bring it back with %s.", n.tool, ref, AtlasRestoreTool))
+		r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, "+
+			"retired. Bring it back with %s.", n.tool, ref, AtlasRestoreTool)), caveat.AtlasEntryExists(true))
 		return atlasPlan{}, &r
 	}
 	// AN ADD THAT STOPPED PART OF THE WAY IS FINISHED BY THE SAME CALL: where
@@ -919,8 +947,8 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	// record nothing is refused as the second add it is.
 	mine := found && slices.Contains(e.Sources, n.person)
 	if found && !mine {
-		r := refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s is in "+
-			"the atlas already, as entry %s.", n.tool, ref, e.ID))
+		r := toPerson(refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s "+
+			"is in the atlas already, as entry %s.", n.tool, ref, e.ID)), caveat.AtlasEntryExists(false))
 		return atlasPlan{}, &r
 	}
 	step := func(name, key string) func(atlas.Claim, error) *tools.Result {
@@ -1010,8 +1038,8 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		}
 	}
 	if found && len(plan.steps) == 0 {
-		r := refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s is in "+
-			"the atlas already, as entry %s.", n.tool, ref, e.ID))
+		r := toPerson(refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s "+
+			"is in the atlas already, as entry %s.", n.tool, ref, e.ID)), caveat.AtlasEntryExists(false))
 		return atlasPlan{}, &r
 	}
 	return plan, nil

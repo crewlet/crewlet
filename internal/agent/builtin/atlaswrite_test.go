@@ -783,3 +783,38 @@ func TestConfirmingAContestedValueSettlesIt(t *testing.T) {
 		t.Errorf("after taking the report's value the name reads %+v", got)
 	}
 }
+
+// A PERSON IS TOLD AN ATLAS REFUSAL IN WORDS OF THEIR OWN (ADR-0060): what a
+// screen draws under the control names what was refused and what to do, never
+// a tool or an argument, and a credential's shape is refused without the
+// value being said again.
+//
+// Mutation: answer the vocabulary's refusal without a person's phrasing and
+// the dashboard draws only its code's generic sentence under Add entry.
+func TestAnAtlasRefusalIsWordedForThePersonWhoPressed(t *testing.T) {
+	t.Parallel()
+	w := atlasWrites(t, seededAtlasLedger())
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": atlasToken()}, "looks like a credential"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "Not A Slug"}, "1 to 40 lowercase letters"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "service", "key": "billing"}, "holds an entry with this kind and key already"},
+		{builtin.AtlasAddEntryTool, map[string]any{"kind": "host", "key": "ssh/web-9"}, "declared by the company's settings"},
+		{builtin.AtlasCorrectTool, map[string]any{"atlas_entry": "host:ssh/web-1", "fact": "address", "value": "10.0.0.5", "wrong": true},
+			"declared by the company's settings"},
+		{builtin.AtlasCorrectTool, map[string]any{"atlas_entry": "service:billing", "fact": "purpose", "value": atlasToken()},
+			"looks like a credential"},
+	} {
+		got, _ := atlasCall(t, w[c.tool], c.args)
+		said := got.PersonRefusal.Person()
+		if !got.Failed || !strings.Contains(said, c.want) {
+			t.Errorf("%s %v told a person %q, want words holding %q", c.tool, c.args, said, c.want)
+		}
+		if strings.Contains(said, atlasToken()) || strings.Contains(said, "atlas_") || strings.Contains(said, "`") {
+			t.Errorf("%s told a person %q, which repeats the value or names a tool or an argument", c.tool, said)
+		}
+	}
+}

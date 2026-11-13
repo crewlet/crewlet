@@ -319,3 +319,45 @@ func ModelAtLimit() Refusal {
 		"again once the limit lifts, or sooner if the company's models change.",
 		remedy: ModelProviders()}
 }
+
+// AtlasCredentialShaped is an atlas write whose key or value is shaped like a
+// credential. THE VALUE IS NEVER REPEATED: the sentence says what was refused
+// and what to record in its place.
+func AtlasCredentialShaped() Refusal {
+	return Refusal{person: "That looks like a credential, so nothing was recorded. The atlas keeps " +
+		"no secrets. Record the name or the address it belongs to instead."}
+}
+
+// AtlasNotInItsForm is an atlas write whose key or value its kind's grammar
+// does not take. why is the vocabulary's own words for the rule, which name
+// the form and never a tool or an argument.
+func AtlasNotInItsForm(why string) Refusal {
+	return Refusal{person: fmt.Sprintf("Nothing was recorded, because the atlas takes it in one form "+
+		"only (%s). Change it, then try again.", why)}
+}
+
+// AtlasDeclaredElsewhere is an atlas write on what the company's settings,
+// Gitlet or the engine's own records declare. where names which, as a person
+// reads it ("the company's settings").
+func AtlasDeclaredElsewhere(where string) Refusal {
+	return Refusal{person: fmt.Sprintf("That is declared by %s, and what they declare is changed "+
+		"there, never in the atlas. Nothing was recorded.", where)}
+}
+
+// AtlasEntryExists is an add of an entry the atlas holds already. retired is
+// one somebody retired, which is brought back rather than added again.
+func AtlasEntryExists(retired bool) Refusal {
+	if retired {
+		return Refusal{person: "The atlas holds this entry already, retired. Restore it instead " +
+			"of adding it again."}
+	}
+	return Refusal{person: "The atlas holds an entry with this kind and key already. Open it " +
+		"and correct it there."}
+}
+
+// AtlasChangedMeanwhile is an atlas write decided on an entry somebody
+// changed since it was read.
+func AtlasChangedMeanwhile() Refusal {
+	return Refusal{person: "Somebody changed this entry while you were deciding, so nothing was " +
+		"recorded. Look at it again, then decide."}
+}
