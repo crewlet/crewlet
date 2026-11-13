@@ -389,6 +389,26 @@ func TestAWakeSaysNothingOutsideTheClosedWords(t *testing.T) {
 	}
 }
 
+// A DRIFT WAKE'S DELIVERY IS FIRST-PARTY, as every engine producer's is. A
+// node whose build has no parser for a delivery's source tells by the mark a
+// source a newer build added, which it passes to a peer that parses it, from a
+// vendor's webhook nothing parses, which it acknowledges
+// (types.RawWebhook.FirstParty): an engine producer that leaves the mark off
+// has its deliveries acknowledged away by such a node, for every node.
+//
+// Mutation: leave the delivery unmarked, and it reads as a vendor's.
+func TestADriftWakesDeliveryIsFirstParty(t *testing.T) {
+	t.Parallel()
+	w, err := Encode(Request{Handle: "sre", Entry: checkout, Kind: atlas.KindService,
+		Changes: []Change{ChangeAlerting}, Day: "2026-11-13", At: noon})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.FirstParty {
+		t.Error("a drift wake's delivery is not marked first-party, so it reads as a vendor's")
+	}
+}
+
 // A PERSON'S SEAT IS NEVER WOKEN, whatever a delivery names: the parser holds
 // the roster against it too.
 func TestTheParserWakesNoPerson(t *testing.T) {

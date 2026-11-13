@@ -340,7 +340,10 @@ func Encode(r Request) (types.RawWebhook, error) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return types.RawWebhook{}, fmt.Errorf("atlaswake: encode the wake of %s: %w", r.Handle, err)
 	}
-	return types.RawWebhook{Body: body, BodyRaw: raw}, nil
+	// FIRST-PARTY, as every engine producer's delivery is, so a node of a
+	// build that has no parser for this source hands it to a peer that has
+	// rather than acknowledge it away (types.RawWebhook.FirstParty).
+	return types.RawWebhook{Body: body, BodyRaw: raw, FirstParty: true}, nil
 }
 
 // Decode is the request a delivery carries, the exact bytes first.

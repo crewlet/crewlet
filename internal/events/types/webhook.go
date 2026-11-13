@@ -68,11 +68,11 @@ type RawWebhook struct {
 
 	// FirstParty marks a delivery the engine's OWN producer made — a change
 	// feed's relay of a committed record, an alarm transition's wake, an
-	// access review's ask — and never a vendor's, which the API edge builds
-	// from a request and never marks. A node whose build has no parser for
-	// the delivery's source tells by it a source a NEWER build added, whose
-	// wake a peer on that build reads, from a vendor's webhook nothing here
-	// parses (internal/notify's Service).
+	// access review's ask, an atlas entry's drift wake — and never a
+	// vendor's, which the API edge builds from a request and never marks. A
+	// node whose build has no parser for the delivery's source tells by it a
+	// source a NEWER build added, whose wake a peer on that build reads, from
+	// a vendor's webhook nothing here parses (internal/notify's Service).
 	FirstParty bool `json:"first_party,omitempty"`
 
 	// Replayed marks a delivery a REPLAY relayed — a change feed's of its
