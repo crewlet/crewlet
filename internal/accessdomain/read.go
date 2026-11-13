@@ -257,7 +257,7 @@ type AuditQuery struct {
 // validate refuses a query naming what no record could hold.
 func (q AuditQuery) validate() error {
 	if q.Handle != "" {
-		if err := checkSeat(q.Handle); err != nil {
+		if err := checkHolder(q.Handle); err != nil {
 			return err
 		}
 	}
