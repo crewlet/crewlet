@@ -1850,7 +1850,7 @@ func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool, erro
 		// the walk's bytes are valid only while it hands them over.
 		last [][]byte
 	)
-	err := eachKey(r.SinceLastResult, func(name []byte, spend json.RawMessage) error {
+	err := eachKey(r.SinceLastResult, func(name []byte, spend json.RawMessage, _ int) error {
 		if i, met := place[string(name)]; met {
 			last[i] = append(last[i][:0], spend...)
 			return nil
@@ -2090,7 +2090,7 @@ func (r claudeResult) errorsSaid() string {
 		owed  int
 		first = true
 	)
-	if eachElement(r.Errors, func(element json.RawMessage) error {
+	if eachElement(r.Errors, func(element json.RawMessage, _ int) error {
 		if !first {
 			owed++
 		}

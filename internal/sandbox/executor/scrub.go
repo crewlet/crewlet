@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -786,19 +785,23 @@ func withoutBrokenDefinitions(line string) string {
 	if !strings.Contains(line, loadedToolsRecord) || !strings.Contains(line, redact.Marker) {
 		return line
 	}
-	attachment, ok := lastValue(line, lineSpan{end: len(line)}, "attachment")
+	raw := []byte(line)
+	attachment, ok := lastValue(raw, lineSpan{end: len(raw)}, "attachment")
 	if !ok {
 		return line
 	}
-	kind, ok := lastValue(line, attachment, "type")
-	if !ok || looseString(json.RawMessage(line[kind.start:kind.end])) != loadedToolsRecord {
+	kind, ok := lastValue(raw, attachment, "type")
+	if !ok || looseString(raw[kind.start:kind.end]) != loadedToolsRecord {
 		return line
 	}
-	entries, ok := lastValue(line, attachment, "entries")
+	entries, ok := lastValue(raw, attachment, "entries")
 	if !ok {
 		return line
 	}
-	return withoutDefinitions(line, entries)
+	if kept, cut := withoutDefinitions(raw, entries); cut {
+		return kept
+	}
+	return line
 }
 
 // lineSpan is where one JSON value sits in a transcript line:
@@ -808,42 +811,20 @@ type lineSpan struct{ start, end int }
 // lastValue is where in line the value under the LAST key named key of the
 // object at object sits, as JSON.parse reads a key written twice, and whether
 // the object holds such a key: it holds none where it is no object
-// [threadDecoding] reads, or is followed by more than blanks.
-//
-// NOT [eachKey], which hands a reader a value's bytes and never where they
-// sit: a cut out of the line needs the second.
-func lastValue(line string, object lineSpan, key string) (lineSpan, bool) {
-	dec := jsontext.NewDecoder(strings.NewReader(line[object.start:object.end]), threadDecoding)
-	if open, err := dec.ReadToken(); err != nil || open.Kind() != '{' {
-		return lineSpan{}, false
-	}
+// [threadDecoding] reads, or is followed by more than blanks. Read in the one
+// walk of an object ([eachKey]), which hands each value with where it sits.
+func lastValue(line []byte, object lineSpan, key string) (lineSpan, bool) {
 	var (
 		found lineSpan
 		ok    bool
-		name  []byte
 	)
-	for dec.PeekKind() != '}' {
-		quoted, err := dec.ReadValue()
-		if err != nil {
-			return lineSpan{}, false
+	if eachKey(line[object.start:object.end], func(name []byte, value json.RawMessage, at int) error {
+		if string(name) == key {
+			start := object.start + at
+			found, ok = lineSpan{start: start, end: start + len(value)}, true
 		}
-		// Unquoted before its value is read: the quoted name is the
-		// decoder's, valid only until its next read.
-		name, _ = jsontext.AppendUnquote(name[:0], quoted)
-		named := string(name) == key
-		value, err := dec.ReadValue()
-		if err != nil {
-			return lineSpan{}, false
-		}
-		if named {
-			end := object.start + int(dec.InputOffset())
-			found, ok = lineSpan{start: end - len(value), end: end}, true
-		}
-	}
-	if _, err := dec.ReadToken(); err != nil {
-		return lineSpan{}, false
-	}
-	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return nil
+	}) != nil {
 		return lineSpan{}, false
 	}
 	return found, ok
@@ -852,18 +833,15 @@ func lastValue(line string, object lineSpan, key string) (lineSpan, bool) {
 // withoutDefinitions is line less every definition of the list at list that
 // [brokenDefinition] refuses, each cut out with the comma that joined it to
 // the list (the one before it, or the one after it where every definition
-// before it goes as well), every other byte kept where it was; and line as it
-// is where no definition goes, or where the list is none [threadDecoding]
-// reads.
+// before it goes as well), every other byte kept where it was, and whether
+// any went: none goes where none is refused, or where the list is none
+// [threadDecoding] reads.
 //
-// ONE DEFINITION AT A TIME, in a single walk of the list: the line is copied
-// once the first definition is cut, and nothing is collected of a list a box
-// can write a million elements long ([eachElement] says what that costs).
-func withoutDefinitions(line string, list lineSpan) string {
-	dec := jsontext.NewDecoder(strings.NewReader(line[list.start:list.end]), threadDecoding)
-	if open, err := dec.ReadToken(); err != nil || open.Kind() != '[' {
-		return line
-	}
+// ONE DEFINITION AT A TIME, in the one walk of a list ([eachElement], which
+// says what a list a box can write a million elements long costs read whole):
+// the line is copied once the first definition is cut, and nothing is
+// collected of the list.
+func withoutDefinitions(line []byte, list lineSpan) (string, bool) {
 	var (
 		// cut is the line as it is kept, written from the first definition
 		// cut on: every byte before it is kept.
@@ -874,17 +852,14 @@ func withoutDefinitions(line string, list lineSpan) string {
 		kept bool
 		end  int
 	)
-	for dec.PeekKind() != ']' {
-		definition, err := dec.ReadValue()
-		if err != nil {
-			return line
-		}
-		next := list.start + int(dec.InputOffset())
+	err := eachElement(line[list.start:list.end], func(definition json.RawMessage, at int) error {
+		start := list.start + at
+		next := start + len(definition)
 		// ITS STRETCH OF THE LIST, kept or cut with it: from the end of the
 		// definition before it, the comma between them included, where one
 		// before it is kept; else from its own first byte, so that the comma
 		// after a definition cut before it goes with that one.
-		from := next - len(definition)
+		from := start
 		if kept {
 			from = end
 		}
@@ -892,21 +867,22 @@ func withoutDefinitions(line string, list lineSpan) string {
 			if !cutting {
 				cutting = true
 				cut.Grow(len(line))
-				cut.WriteString(line[:from])
+				cut.Write(line[:from])
 			}
 		} else {
 			if cutting {
-				cut.WriteString(line[from:next])
+				cut.Write(line[from:next])
 			}
 			kept = true
 		}
 		end = next
+		return nil
+	})
+	if err != nil || !cutting {
+		return "", false
 	}
-	if _, err := dec.ReadToken(); err != nil || !cutting {
-		return line
-	}
-	cut.WriteString(line[end:])
-	return cut.String()
+	cut.Write(line[end:])
+	return cut.String(), true
 }
 
 // brokenDefinition reports whether a loaded tool definition is one no request

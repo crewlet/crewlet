@@ -1041,7 +1041,7 @@ func recordKeys(t *testing.T, line string) ([]string, map[string]string) {
 	walk = func(raw json.RawMessage, path string) error {
 		switch wireKind(raw) {
 		case "an object":
-			return eachKey(raw, func(name []byte, value json.RawMessage) error {
+			return eachKey(raw, func(name []byte, value json.RawMessage, _ int) error {
 				at := path + "/" + string(name)
 				keys = append(keys, at)
 				if path == "" {
@@ -1051,7 +1051,7 @@ func recordKeys(t *testing.T, line string) ([]string, map[string]string) {
 			})
 		case "a list":
 			n := 0
-			return eachElement(raw, func(element json.RawMessage) error {
+			return eachElement(raw, func(element json.RawMessage, _ int) error {
 				n++
 				return walk(element, path+"/"+strconv.Itoa(n-1))
 			})
