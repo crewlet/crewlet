@@ -2314,8 +2314,9 @@ in `CREWLET_API_TOKEN` takes `admin`.
 
 A wake the notification service's inbound group passed round during a roll
 and no node took is that subscription's dead letter, not a wake feed's:
-neither command lists or discards it, and the first node able to read it
-replays it when it starts
+neither command lists or discards it. A node able to read it replays it only
+when it starts, so the next such start delivers it, and a node already
+running never does; `inbound_dead_lettered` is raised while it waits
 ([Dead letters](../concepts/event-system.md#dead-letters)).
 
 ### `crewlet feeds dead-letters`

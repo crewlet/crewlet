@@ -146,7 +146,7 @@ func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 }
 
 // A WAKE NO NODE TOOK WHILE IT WAS PASSED ROUND IS DEAD-LETTERED WITH ITS COPY,
-// AND THE FIRST NODE THAT READS IT REPLAYS IT AT ITS START.
+// AND THE NEXT START OF A NODE THAT READS IT REPLAYS IT.
 //
 // Nothing steers a pass to a node that can read it: every delivery of a newer
 // record's wake can go to older nodes, early in a roll, until the group's
@@ -160,15 +160,17 @@ func passedOff(t *testing.T, h *harness, ev *events.Event) queue.Kept {
 //     copy with the group's unhandled deliveries;
 //   - another older node starting reads it no better, delivers nothing and
 //     keeps the copy;
-//   - a newer node starting delivers the wake to the seat it names, under the
-//     id derived from the change, and drops the copy — and leaves the poison
-//     beside it, a delivery whose failure, not a pass, retired it.
+//   - a newer node starting after the copy is kept — the next start of a
+//     node that reads it; one already running replays nothing — delivers the
+//     wake to the seat it names, under the id derived from the change, and
+//     drops the copy, and leaves the poison beside it, a delivery whose
+//     failure, not a pass, retired it.
 //
 // Mutation: replay nothing at Start, and the seat is never woken; drop a copy
 // this node still defers, and the second older node's start empties the
 // subject; dead-letter a spent pass as a failure's, with the poison, and no
 // node replays it.
-func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) {
+func TestAPassedWakeNoNodeTookIsReplayedByTheNextStartOfANodeThatReadsIt(t *testing.T) {
 	ctx := t.Context()
 	older := newService(t, func(o *notify.Options, _ *harness) {
 		o.Parsers = []notify.Parser{versionedParser{reads: 1}}
@@ -202,7 +204,8 @@ func TestAPassedWakeNoNodeTookIsReplayedByTheFirstNodeThatReadsIt(t *testing.T) 
 	}
 	older.quiet(t, lead)
 
-	// THE FIRST NEWER NODE starts, and delivers what the group never did.
+	// A NEWER NODE STARTS after the copy is kept, and delivers what the group
+	// never did.
 	start(t, node(t, older, versionedParser{reads: 2}, nil))
 	woken := older.settledN(t, lead, 1)
 	if len(woken) != 1 || woken[0].ID != changefeed.WakeID("op-7", "engineering-lead") {

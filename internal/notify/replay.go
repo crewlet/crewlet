@@ -74,7 +74,9 @@ import (
 // such start, kept for the dead-letter stream's retention
 // (`stream.event_retention_hours`): a roll paused with one node of the newer
 // build among older ones delivers its kept copies as the roll goes on, at each
-// next node's start.
+// next node's start. While one waits, the engine's alarm reading names it
+// (`inbound_dead_lettered`), and one the retention lets go first is counted as
+// the wake it lost (internal/engine's feeddeadletters.go).
 
 // UnhandledSubject is where the inbound group's unhandled deliveries are kept
 // — its passed wakes, and those a hand-back retired — and where a node's start

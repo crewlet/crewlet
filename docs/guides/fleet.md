@@ -850,12 +850,12 @@ The consequences worth stating plainly:
   and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
   [Dead letters](../concepts/event-system.md#dead-letters).
 - **An older node hands a newer record's wake back to the fleet, and the
-  first newer node to start delivers what the fleet did not.** Every node
-  takes the notification service's deliveries from one consumer group,
-  `notify-inbound`, and a wake carries the record its feed relayed, so a
-  wake whose record the newer build wrote reaches the older nodes too, which
-  cannot read it. An older node that wins one hands it back rather than
-  acknowledge it for the whole fleet (`inbound_deferred` and
+  next node of the newer build to start delivers what the fleet did not.**
+  Every node takes the notification service's deliveries from one consumer
+  group, `notify-inbound`, and a wake carries the record its feed relayed,
+  so a wake whose record the newer build wrote reaches the older nodes too,
+  which cannot read it. An older node that wins one hands it back rather
+  than acknowledge it for the whole fleet (`inbound_deferred` and
   `delivery_passed`, both at `INFO`), and goes on taking its other
   deliveries. It comes back on the redelivery backoff, a second doubling to
   thirty, for the group's 25 deliveries, about ten minutes, and nothing
@@ -866,21 +866,25 @@ The consequences worth stating plainly:
   `dlq.crewlet.notifications.inbound.notify-inbound.unhandled.{digest}`
   (`dead_lettered` at `ERROR`, with `returned=pass` and
   `reason=newer_record`), as is one whose last delivery a node that sheds or
-  stops handed back after the passes, and the first node of the newer build
-  to start afterwards delivers its wake and drops it
-  (`inbound_dead_letters_replayed`), so a roll that takes longer
-  than ten minutes loses no wake. A roll that pauses with a newer node among
-  older ones delivers those wakes as it goes on, at each next node's start;
-  one paused for good keeps them for `stream.event_retention_hours`, and
-  restarting a node of the newer build delivers them. Waiting, each holds one
-  of the group's acknowledgement slots for up to its ten minutes, out of the
-  broker's 1000, so only a sustained 1.7 such wakes a second early in a roll
-  would delay the group's other mail, and none of it is lost. While any such
-  wake waits, `inbound_dead_lettered` is raised on every data node, naming
-  how many wait and how soon the first expires: finish the roll, or restart a
-  node of the newer build if it has paused, and the start delivers them. One
-  that expires first is counted as a lost wake
-  (`crewlet.notify.inbound.dead_letter_expired`). `crewlet feeds
+  stops handed back after the passes. A node of the newer build already
+  running never replays it: the next one to start after it is kept delivers
+  its wake and drops it (`inbound_dead_letters_replayed`), so a roll that
+  takes longer than ten minutes loses no wake to its length. A roll that
+  pauses with a newer node among older ones delivers those wakes as it goes
+  on, at each next node's start; one paused for good keeps them for
+  `stream.event_retention_hours`, and restarting a node of the newer build
+  delivers them. Two losses remain: a copy whose keep the broker refused
+  (`dead_letter_failed`), or that a node killed outright never finished
+  keeping, since nothing redelivers a message past its last delivery; and
+  one no start replays before the retention lets it go, counted below.
+  Waiting, each holds one of the group's acknowledgement slots for up to its
+  ten minutes, out of the broker's 1000, so only a sustained 1.7 such wakes
+  a second early in a roll would delay the group's other mail, and none of
+  it is lost. While any such wake waits, `inbound_dead_lettered` is raised
+  on every data node, naming how many wait and how soon the first expires:
+  finish the roll, or restart a node of the newer build if it has paused,
+  and the start delivers them. One that expires first is counted as a lost
+  wake (`crewlet.notify.inbound.dead_letter_expired`). `crewlet feeds
   dead-letters` does not list these: they are the notification service's,
   not a wake feed's. See
   [Delivery semantics](../concepts/event-system.md#delivery-semantics) and

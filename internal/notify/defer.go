@@ -42,11 +42,16 @@ func (r DeferReason) Valid() bool { return r == DeferNewerRecord }
 // group's 25 deliveries, about ten minutes, can go to older nodes while one
 // node of the newer build sits among them. One no node parsed by then is
 // dead-lettered with its copy on the group's unhandled subject
-// ([queue.RetiredTo]), and the first node that reads it to start afterwards
-// replays it and drops the letter (replay.go) — the change feed's dead
-// letters' own shape (internal/changefeed). The group's own budget is enough
-// for that reason: a dead letter follows, not a drop, so a roll longer than
-// ten minutes loses no wake.
+// ([queue.RetiredTo]), and the next start of a node that reads it replays it
+// and drops the letter (replay.go) — the change feed's dead letters' own shape
+// (internal/changefeed); a node of that build already running never does. The
+// group's own budget is enough for that reason: a dead letter follows, not a
+// drop, so a roll longer than ten minutes loses no wake to its length. What it
+// can lose is a copy whose keep the broker refused, or that a node killed
+// outright never finished keeping, since nothing redelivers a message past its
+// last delivery (internal/queue/jetstream's attachment.deadLetter), and one
+// no start replays before the dead letters' retention lets it go, which
+// `inbound_dead_lettered` names while it waits.
 type Deferral struct {
 	Reason DeferReason
 	// Err is what the parser met, for the log line.

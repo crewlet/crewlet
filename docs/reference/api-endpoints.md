@@ -12656,8 +12656,9 @@ feed starts able to read it replays it or the stream's age bound lets it go
 are an operator's view of those entries, and the one decision about them a
 person makes. A wake the notification service's inbound group passed and no
 node took is that subscription's dead letter rather than a feed's, so neither
-route lists or discards it; the first node able to read it replays it when it
-starts.
+route lists or discards it. A node able to read it replays it only when it
+starts, so the next such start delivers it, and a node already running never
+does; `inbound_dead_lettered` is raised while it waits.
 
 **`GET /feeds/dead-letters`** answers every wake feed this build declares, in
 one order, whatever logs the answering node is running: the entries are the
