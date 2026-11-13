@@ -782,7 +782,9 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // leafUuid is neither a string nor null leaves its head whole and is refused
 // by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
 // shape leaves its boundary's head and uuid whole and is refused by Preserved
-// alone. A record's own uuid that is no string
+// alone, as a retraction list of the wrong shape leaves its retry's head and
+// message whole and is refused by Retracted alone. A record's own uuid that
+// is no string
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
 // out as it reads with its uuid as written, and is refused by UUID alone. As
@@ -796,8 +798,9 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // for its calls; read the model or the id in Usage's decode, and a reply whose
 // usage is reshaped names no model, or is no reply; hold the mark of an API
 // error in Message or Usage, and a reply whose mark is reshaped reads no
-// message or no usage; hold a checkpoint's leaf or a compaction's metadata to
-// its type in the head, and the record that reshapes it is no record at all;
+// message or no usage; hold a checkpoint's leaf, a compaction's metadata or a
+// retraction list to its type in the head, and the record that reshapes it is
+// no record at all;
 // hold the uuid to its type in the head, and every record here whose uuid is
 // reshaped is no record at all.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
@@ -844,6 +847,17 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			line.Head.Subtype != subtypeCompactBoundary || !line.Head.Parentless() {
 			t.Errorf("a boundary whose compactMetadata is %s reads with the head %+v and the uuid %q, %v", name,
 				line.Head, uuid, err)
+		}
+	}
+	for name, list := range map[string]string{"a string": `"` + ctUUID(4) + `"`, "an object": `{}`, "null": `null`} {
+		line := ctLine(t, ctReplace(t, ctRetry(ctUUID(5), ctUUID(6), ctUUID(4)),
+			`"retractedMessageUuids":["`+ctUUID(4)+`"]`, `"retractedMessageUuids":`+list))
+		if err := line.Retracted(func(string) error { return nil }); err == nil {
+			t.Errorf("a retry whose retractedMessageUuids is %s retracts with no error; want one", name)
+		}
+		if m, err := line.Message(); err != nil || line.Head.Type != recordUser || !line.Head.Main() {
+			t.Errorf("a retry whose retractedMessageUuids is %s reads with the head %+v and the message %+v, %v",
+				name, line.Head, m, err)
 		}
 	}
 	summary := ctSummary(ctUUID(15), ctUUID(16))
@@ -1114,7 +1128,8 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // reply stopped, whether its harness wrote it for a failed request, the model
 // that wrote it, the reply it is, what its request took, what it says a
 // compaction kept, the leaf it says a resume starts from and whether it names
-// one at all, and its attachment's type, each beside the error it answered. A
+// one at all, its attachment's type, and the records it says its harness took
+// back, each beside the error it answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1174,6 +1189,12 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "leaf keyed: %t; %v\n", keyed, err)
 	attached, err := l.AttachmentType()
 	fmt.Fprintf(&b, "attachment type: %q; %v\n", attached, err)
+	var retracted []string
+	err = l.Retracted(func(uuid string) error {
+		retracted = append(retracted, uuid)
+		return nil
+	})
+	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
 	return b.String()
 }
 
@@ -1195,7 +1216,8 @@ func ctRaw(v json.RawMessage) string {
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
-// its marks, a compaction's metadata), a hook's attachment, an origin, a
+// its marks, a compaction's metadata, the uuids a record retracts), a hook's
+// attachment, an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
@@ -1226,6 +1248,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	synthetic := ctSynthetic(ctUUID(30), ctUUID(31))
 	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
 	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
+	retracting := ctFallback(ctUUID(5), ctUUID(6), ctUUID(2))
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1305,6 +1328,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 				ctUUID(9) + `"},"postTokens":2602`},
 		"a segment's headUuid, then HeadUuid": {record: segmenting, from: `"anchorUuid":"` + ctUUID(11) + `","tailUuid"`,
 			to: `"HeadUuid":"` + ctUUID(9) + `","anchorUuid":"` + ctUUID(11) + `","tailUuid"`},
+		"a retractedMessageUuids, then RetractedMessageUuids": {record: retracting,
+			from: `"retractedMessageUuids":["` + ctUUID(2) + `"]`,
+			to:   `"retractedMessageUuids":["` + ctUUID(2) + `"],"RetractedMessageUuids":["` + ctUUID(9) + `"]`},
+		"RETRACTEDMESSAGEUUIDS alone": {record: ctRetry(ctUUID(5), ctUUID(6)), from: `"retractedMessageUuids":[]`,
+			to: `"retractedMessageUuids":[],"RETRACTEDMESSAGEUUIDS":["` + ctUUID(9) + `"]`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -1402,6 +1430,9 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"leafUuid":"` + ctUUID(9) + `","leafUuid":"` + ctUUID(5) + `"`},
 		"a checkpoint's mark written twice": {record: ctLastPrompt, from: `"type":"last-prompt"`,
 			to: `"explicit":true,"type":"last-prompt","explicit":false`},
+		"a retractedMessageUuids written twice": {record: retracting,
+			from: `"retractedMessageUuids":["` + ctUUID(2) + `"]`,
+			to:   `"retractedMessageUuids":["` + ctUUID(9) + `"],"retractedMessageUuids":["` + ctUUID(2) + `"]`},
 		"a compaction's list written twice": {record: compacting, from: `,"preservedMessages":{`,
 			to: `,"preservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) + `"]},` +
 				`"preservedMessages":{`},
@@ -2310,6 +2341,108 @@ func ctQuoted(uuids []string) string {
 		return ""
 	}
 	return `"` + strings.Join(uuids, `","`) + `"`
+}
+
+// ctFallback is the system record 2.1.322 writes where a model refused a reply
+// as it streamed and the harness moved the request to another model, chained
+// to parent, naming the records it took back out of the conversation:
+// retracted, each written as given. No run reached one, which waits on a
+// refusal: its keys and their order are read from 2.1.322's code, the
+// record's own beside the keys every chained record carries.
+func ctFallback(parent, uuid string, retracted ...string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"system","subtype":"model_refusal_fallback",` +
+		`"direction":"retry","scope":"session","content":"Switched to claude-sonnet-4-5","level":"warning",` +
+		`"trigger":"refusal","originalModel":"claude-opus-4-5","fallbackModel":"claude-sonnet-4-5",` +
+		`"requestId":"req_test","apiRefusalCategory":null,"apiRefusalExplanation":null,"retractedMessageUuids":[` +
+		ctQuoted(retracted) + `],"refusedUserMessageUuid":null,"isMeta":false,"timestamp":"` + ctStamp +
+		`","uuid":"` + uuid + `",` + ctTail("2.1.322") + `}`
+}
+
+// ctRetry is the meta user record 2.1.322 sends where it retries a reply whose
+// call it could not parse, chained to parent, naming the records of that reply
+// it took back: retracted, each written as given. Abridged: its text is not
+// the harness's own. Read from 2.1.322's code, as ctFallback is.
+func ctRetry(parent, uuid string, retracted ...string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user",` +
+		`"message":{"role":"user","content":"The tool call could not be parsed; try again."},"isMeta":true,` +
+		`"turnCompanion":true,"uuid":"` + uuid + `","timestamp":"` + ctStamp + `","retractedMessageUuids":[` +
+		ctQuoted(retracted) + `],` + ctTail("2.1.322") + `}`
+}
+
+// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted hands each
+// entry of a record's retractedMessageUuids, in order and as written, on a
+// refused reply's fallback (a system record of that subtype), on a malformed
+// reply's retry (a meta user record) and on a reply (an assistant record), the
+// records 2.1.322 reads the key on; whatever its length, an entry of 24
+// characters, of 30 and of 23 among them, since the resume cuts each at 24
+// characters itself; nothing where the key is absent, or on a system record of
+// another subtype or an attachment, whatever it carries; and an error where
+// the key holds anything but a list of strings, null among it, on a record it
+// is read on. An error each returns ends the walk as it is.
+//
+// Mutation: read the key off every record, and a stop hook's summary or an
+// attachment carrying it retracts; read it off a refusal's fallback alone, as
+// 2.1.310 does, and a retry's names nothing; pass an entry that is no string
+// over, as 2.1.322 does, and a list 2.1.310's resume throws on reads; read a
+// null list as none, and it reads; drop an entry of 24 characters or fewer, or
+// of fewer than a uuid's 36, and the entries the resume cuts at 24 retract
+// nothing; or walk on past each's error, and the walk hands the entry after
+// it.
+func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
+	t.Parallel()
+	named := []string{ctUUID(4), ctUUID(5)}
+	reply := ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"type":"assistant"`,
+		`"retractedMessageUuids":[`+ctQuoted(named)+`],"type":"assistant"`)
+	cut := []string{ctUUID(7)[:24], ctUUID(8)[:30], ctUUID(9)[:23]}
+	for name, tc := range map[string]struct {
+		record string
+		uuids  []string
+	}{
+		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), named},
+		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), named},
+		"a reply":                    {reply, named},
+		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), nil},
+		"a fallback naming entries of 24, 30 and 23 characters": {ctFallback(ctUUID(5), ctUUID(6), cut...), cut},
+		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"),
+			[]string{"not a uuid"}},
+		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), nil},
+		"a stop hook's summary carrying the key": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)),
+			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), nil},
+		"an attachment carrying the key": {ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), nil},
+	} {
+		var got []string
+		err := ctLine(t, tc.record).Retracted(func(uuid string) error {
+			got = append(got, uuid)
+			return nil
+		})
+		if err != nil || !slices.Equal(got, tc.uuids) {
+			t.Errorf("%s retracts %q, %v; want %q", name, strings.Join(got, ","), err, strings.Join(tc.uuids, ","))
+		}
+	}
+	fallback := ctFallback(ctUUID(5), ctUUID(6), named...)
+	for name, list := range map[string]string{"null": `null`, "a string": `"` + ctUUID(4) + `"`,
+		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `["` + ctUUID(4) + `",7]`,
+		"a list holding null": `[null]`} {
+		for kind, record := range map[string]string{"a refused reply's fallback": fallback,
+			"a malformed reply's retry": ctRetry(ctUUID(5), ctUUID(6), named...)} {
+			line := ctLine(t, ctReplace(t, record, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
+				`"retractedMessageUuids":`+list))
+			if err := line.Retracted(func(string) error { return nil }); err == nil {
+				t.Errorf("%s whose retractedMessageUuids is %s retracts with no error; want one", kind, name)
+			}
+		}
+	}
+	stop := errors.New("stop")
+	var got []string
+	err := ctLine(t, fallback).Retracted(func(uuid string) error {
+		got = append(got, uuid)
+		return stop
+	})
+	if !errors.Is(err, stop) || !slices.Equal(got, named[:1]) {
+		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
+			got, named[0])
+	}
 }
 
 // ctListed is the list a compaction's boundary built by ctBoundary carries,

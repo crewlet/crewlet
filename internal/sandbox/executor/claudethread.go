@@ -460,7 +460,7 @@ type threadLine struct {
 	Head threadHead
 
 	uuid, message, attachment, origin, toolUseID, toolUseResult, apiError json.RawMessage
-	leafUUID, explicit, rewound, compactMetadata                          json.RawMessage
+	leafUUID, explicit, rewound, compactMetadata, retracted               json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -486,6 +486,7 @@ type threadWire struct {
 	Explicit      json.RawMessage `json:"explicit"`
 	Rewound       json.RawMessage `json:"rewound"`
 	Compacted     json.RawMessage `json:"compactMetadata"`
+	Retracted     json.RawMessage `json:"retractedMessageUuids"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -514,6 +515,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
 		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, compactMetadata: w.Compacted,
+		retracted: w.Retracted,
 	}, nil
 }
 
@@ -685,14 +687,15 @@ func wireDecode(raw []byte, v any) error {
 // ([threadLine.Message]), a reply's applied context edits
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
 // ([threadLine.Usage]), the records a compaction's boundary says it kept
-// ([threadLine.Preserved]), the lists a run's event stream and a person's
-// transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
-// tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
-// a run's result's errors, [claudeResult.errorsSaid]), a call's result
-// content, which the reader that tells a relaunch which of its calls a kept
-// session holds (exact telling) reads no further than its second element, and
-// a loaded-tools record's list, which the scrub cuts a definition out of where
-// it sits in the line ([withoutDefinitions]).
+// ([threadLine.Preserved]) and those a refused or malformed reply's retry
+// takes back ([threadLine.Retracted]), the lists a run's event stream and a
+// person's transcript of a session decode (a message's blocks,
+// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
+// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]), a
+// call's result content, which the reader that tells a relaunch which of its
+// calls a kept session holds (exact telling) reads no further than its second
+// element, and a loaded-tools record's list, which the scrub cuts a definition
+// out of where it sits in the line ([withoutDefinitions]).
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -988,6 +991,12 @@ const (
 	// probes kept holds either.
 	attachmentForkBriefing = "fork_briefing"
 	subtypeFileSnapshot    = "file_snapshot"
+
+	// subtypeRefusalFallback is the system record Claude Code writes where a
+	// model refused a reply and it moved the request to another model,
+	// naming the records it took back out of the conversation
+	// ([threadLine.Retracted]).
+	subtypeRefusalFallback = "model_refusal_fallback"
 
 	// subtypeCompactBoundary is a compaction's boundary ([threadRestarts]).
 	subtypeCompactBoundary = "compact_boundary"
@@ -1692,6 +1701,80 @@ func (l threadLine) AttachmentType() (string, error) {
 		return "", fmt.Errorf("an attachment: %w", err)
 	}
 	return wireString("attachment.type", a.Type)
+}
+
+// Retracted hands each, in order and as written, every entry of a record's
+// `retractedMessageUuids`, the uuids it says its harness took back out of the
+// conversation: on a user or assistant record and on a system record of
+// subtype model_refusal_fallback, the records 2.1.322 reads the key on,
+// 2.1.310 the last alone. Nothing, and no error, where the key is absent,
+// and on every record of another type or subtype, whatever it carries.
+//
+// WHAT THE RECORDS SAY, as 2.1.310 and 2.1.322 write and read them. Where a
+// model's reply is refused as it streams and the harness moves the request to
+// another model, or it retries a reply whose call it could not parse, it
+// takes the records that attempt wrote back out of the conversation, and
+// names them: a refusal's fallback on a system record of its own, a retry on
+// the meta user record it sends in their place, a reply it gives up with on
+// itself, naming none. THE SESSION'S OWN RESUME, once it has walked the
+// chain, drops every record but a system one whose uuid's first 24
+// characters are those of an entry any such record names, wherever on the
+// chain or beside it the record lies (2.1.322's eGe and 2.1.310's qGn, each
+// cutting an entry at 24 characters, cE and Gb): the first 24, since the
+// harness derives the uuids of the records it splits one message into from
+// that message's own, alike in those (2.1.322's cMn). So an entry of 24
+// characters or more drops by its first 24 alone, and one of fewer is no
+// uuid's first 24 and drops nothing; this accessor hands each as written,
+// whatever its length, for its reader to cut.
+//
+// NO SUBAGENT'S LOAD OR CONTINUATION RUNS THAT FILTER: a subagent's own load
+// hands its conversation as it walks it (2.1.322's Rye, 2.1.310's FBe), and a
+// SendMessage continuation runs its request's passes on that with no
+// retraction filter among them, so what a subagent's own records name is
+// handed on there. No thread the probes kept holds such a list.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which drops what a main thread's records name as each release does,
+// and the reading that tells a relaunch which of its calls a kept session
+// holds (exact telling), which reads a subagent's thread holding such a list
+// as not whole, since what the subagent's model was handed there is not what
+// its file holds.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// list of strings where present, walked an element at a time ([eachElement]).
+// Anything else, null and an entry that is no string among it, is this
+// accessor's error, never the line's: 2.1.322 passes such an entry over,
+// where 2.1.310's resume throws on one a refusal's fallback carries, so no
+// reader can say what a resume hands its model past it. An error each returns
+// ends the walk and is returned as it is.
+//
+// Read off the line's one decode, its raw `retractedMessageUuids`, never a
+// second read of the line.
+func (l threadLine) Retracted(each func(uuid string) error) error {
+	switch {
+	case l.retracted == nil:
+		return nil
+	case l.Head.Type == recordUser, l.Head.Type == recordAssistant:
+	case l.Head.Type == recordSystem && l.Head.Subtype == subtypeRefusalFallback:
+	default:
+		return nil
+	}
+	var refused error
+	err := eachElement(l.retracted, func(raw json.RawMessage, _ int) error {
+		uuid, err := wireRequiredString("an entry", raw)
+		if err != nil {
+			return err
+		}
+		refused = each(uuid)
+		return refused
+	})
+	switch {
+	case err == nil:
+		return nil
+	case refused != nil:
+		return refused
+	}
+	return fmt.Errorf("retractedMessageUuids: %w", err)
 }
 
 // threadPreserved is what a compaction's boundary says it kept of the thread
