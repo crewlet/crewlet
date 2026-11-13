@@ -280,6 +280,9 @@ func TestAServerNotOptedInIsNeverContacted(t *testing.T) {
 	a, d := &audit{}, &refusingDial{}
 	run := NewRunner(a, a)
 	run.dial = d.dial
+	// THE SIGNING INSTANT IS THE TEST'S, so a certificate's validity is held
+	// to exact instants rather than to a span read off two stamps.
+	run.now = func() time.Time { return inventoryNow }
 	read, err := NewAtlasSource(run).Collect(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +301,8 @@ func TestAServerNotOptedInIsNeverContacted(t *testing.T) {
 		if cert.Purpose != PurposeInventory || cert.Seat != accessdomain.EngineHolder || len(cert.HostIDs) != 1 ||
 			cert.Principals[0] != Principal(cert.HostIDs[0], LevelInventory) ||
 			cert.KeyID != "crewlet/_engine/inventory/"+cmd.ID ||
-			cert.ValidBefore.Sub(cert.ValidAfter) != Validity(PurposeInventory)+clockSkew {
+			!cert.ValidAfter.Equal(inventoryNow.Add(-clockSkew)) ||
+			!cert.ValidBefore.Equal(inventoryNow.Add(Validity(PurposeInventory))) {
 			t.Errorf("certificate %d is recorded as %+v", i, cert)
 		}
 		if cmd.Handle != accessdomain.EngineHolder || cmd.Host == "bastion" || cmd.Level != accessdomain.LevelRead ||
