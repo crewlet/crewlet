@@ -488,7 +488,7 @@ func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps)
 // donor's dial takes a second longer than the window and has to be awaited.
 func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
 	t.Parallel()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir(),
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)

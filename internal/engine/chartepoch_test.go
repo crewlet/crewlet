@@ -159,7 +159,7 @@ func TestReapplyingOneActivationPutsNoRecordOnTheLog(t *testing.T) {
 // however long ago the activation was.
 func TestARestartOnOneActivationWritesNothing(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	boot := func() *config.Bootstrap {
 		b := bootstrap(t, func(b *config.Bootstrap) {
 			b.Store.Path = filepath.Join(dir, "crewlet.db")

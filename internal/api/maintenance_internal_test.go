@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -125,7 +126,7 @@ func nodeEngine(t *testing.T, mode statelog.MaintenanceMode) *engine.Engine {
 // refuses to start.
 func bootNode(t *testing.T, mode statelog.MaintenanceMode) (*engine.Engine, *config.Bootstrap) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(dir, "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(dir, "stream")

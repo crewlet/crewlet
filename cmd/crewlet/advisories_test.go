@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // advisoryLine is one config_advisory record as a case reads it.
@@ -285,7 +286,7 @@ func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 		silenceProcessLog()
 	})
 	t.Setenv(config.NodeIDEnvVar, "not a node id")
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
 		fixtureStream(dir)+"  debug: true\n"+fixtureKeyring)
@@ -334,7 +335,7 @@ func TestRunLogsNoAdvisoryBesideARefusalItsFlagsDraw(t *testing.T) {
 		silenceProcessLog()
 	})
 	t.Setenv(config.NodeIDEnvVar, "not a node id")
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
 		fixtureStream(dir)+fixtureKeyring)

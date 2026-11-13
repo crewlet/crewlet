@@ -61,7 +61,7 @@ func TestAKeepAcrossASlowLinkKeepsOneEntryWhicheverNodeIsHandedTheRecord(t *test
 	t.Parallel()
 	ctx := t.Context()
 	member, err := js.StartServer(ctx, js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: slowKeepAuth()})
 	if err != nil {
 		t.Fatalf("start a member serving leaves: %v", err)

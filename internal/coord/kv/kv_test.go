@@ -47,7 +47,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 // a case that reads what the broker itself counts.
 func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	ns, err := server.NewServer(&server.Options{
 		ServerName:        "coordkv-test",
 		JetStream:         true,

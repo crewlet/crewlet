@@ -64,7 +64,7 @@ func readSecret(t *testing.T, b *config.Bootstrap, fleet coord.Secrets, name str
 // the value is gone at the next open.
 func TestAStoppedNodesFleetStoreIsReachedAndTheEngineReadsIt(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join(t.TempDir(), "stream")
+	dir := filepath.Join(brokertest.TempDir(t), "stream")
 	b := bootstrap(t, func(b *config.Bootstrap) { brokertest.StoreIn(&b.Stream, dir) })
 
 	fs, err := engine.OpenFleetStore(t.Context(), b)
@@ -105,7 +105,7 @@ func TestAStoppedNodesFleetStoreIsReachedAndTheEngineReadsIt(t *testing.T) {
 func TestTheFleetStoreIsRefusedWhileTheEngineHoldsItsBroker(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestANodeThatCannotReachTheStoreAloneIsSentToItsPeers(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]func(*config.Bootstrap){
 		"a member of a cluster": func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 			b.Stream.Cluster = config.StreamCluster{Name: "fleet",
 				Peers: []string{"nats://127.0.0.1:1"}}
 			b.Stream.Replicas = 3
@@ -185,7 +185,7 @@ func TestTheFleetStoreOpensNoLeafListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Stream.Leaf.Port = leafPort
 		b.Stream.Leaf.Host = "127.0.0.1"
 	})

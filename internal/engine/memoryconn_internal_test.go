@@ -35,7 +35,7 @@ func TestANodeCarriesSeatMemoryWhoeverRunsTheBroker(t *testing.T) {
 		rides     func(back *Backends) *nats.Conn
 	}{
 		{"an embedded broker", func(t *testing.T, b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		}, func(back *Backends) *nats.Conn { return back.Conn() }},
 		{"an operator's NATS server", func(t *testing.T, b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS

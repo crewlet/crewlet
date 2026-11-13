@@ -95,7 +95,7 @@ func strangerMember(t *testing.T, name, cluster, route string, auth js.FleetAuth
 		port := freePorts(t.Context(), t, 1)[0]
 		srv, err := js.StartServer(t.Context(), js.Config{ServerName: name,
 			ClusterName: cluster, ClusterHost: "127.0.0.1", ClusterPort: port,
-			ClusterURLs: []string{route}, StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+			ClusterURLs: []string{route}, StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes,
 			FleetAuth: auth})
 		if err == nil {
 			t.Cleanup(srv.Shutdown)

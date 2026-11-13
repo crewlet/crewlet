@@ -61,7 +61,7 @@ import (
 // as the engine's own cases that read a log line are.
 func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	reports := captureBootReports(t)
-	store := t.TempDir()
+	store := brokertest.TempDir(t)
 	seedAStream(t, store)
 	metas, err := filepath.Glob(filepath.Join(store, "jetstream", "*", "streams", "*", "meta.inf"))
 	if err != nil || len(metas) != 1 {

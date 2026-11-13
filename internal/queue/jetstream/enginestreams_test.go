@@ -36,7 +36,7 @@ func TestEngineStreamsAreWhatAQueueProvisions(t *testing.T) {
 			t.Parallel()
 			cfg := Config{EventRetention: tc.events}
 			if tc.onDisk {
-				cfg.StoreDir, cfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
+				cfg.StoreDir, cfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 			}
 			want := reportedStreams(t, newQueueWith(t, cfg).js)
 			if declared := len(engineStreams(cfg.EventRetention)); len(want) != declared {
@@ -94,7 +94,7 @@ func bareBroker(t *testing.T) jetstream.JetStream {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "engine-streams", JetStream: true, Port: -1,
-		DontListen: true, NoLog: true, NoSigs: true, StoreDir: t.TempDir(),
+		DontListen: true, NoLog: true, NoSigs: true, StoreDir: brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

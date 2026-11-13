@@ -754,6 +754,18 @@ runner refuses to host code, and a test binary's node refuses to build Gitlet
 with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
 stands in for the cache's volume or boots under `engine.SizedByTheMachine`.
 
+A test broker keeps its store in a directory from `brokertest.TempDir`, never
+from `t.TempDir`: a node fixture's `brokertest.StoreIn` directory, a broker a
+case opens or starts itself, and a server it builds from nats-server's options
+alike. A stopped nats-server can still land a consumer's last state flush after
+`Shutdown` and `WaitForShutdown` have returned, since its stop polls for the
+flush for 100 ms rather than joining it, and `t.TempDir`'s single removal then
+fails the case on a file the case never wrote. `brokertest.TempDir`'s removal
+tries again while, and only while, the directory comes back not empty, a
+bounded number of times and with no pause between; the retry goes once a
+pinned nats-server joins the flush loop. A store directory a case only
+validates, with no broker started on it, may stay a `t.TempDir`.
+
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`
 holds every bootstrap to anyway. The lease TTL is also the seat watchdog's

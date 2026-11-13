@@ -77,6 +77,10 @@ var fixtureCipher = func() secrets.Cipher {
 // ([openFleetStore]) start a broker on the same directory that reserves
 // nothing today, and one block for every caller keeps any document from naming
 // the directory without the size.
+//
+// A dir a broker is started in is a [brokertest.TempDir], whose removal
+// outlasts a stopped broker's late write where a t.TempDir's fails the case;
+// a document that is only parsed may name any directory.
 func fixtureStream(dir string) string {
 	return fmt.Sprintf("stream:\n  store_dir: %s\n  store_max_bytes: %d\n",
 		filepath.Join(dir, "stream"), brokertest.StoreMaxBytes)
@@ -140,7 +144,8 @@ func parseTierA(data []byte, r *config.Resolver) (*config.Bootstrap, error) {
 	return config.ParseBootstrap([]byte(runnableTierA(string(data))), r)
 }
 
-// bootstrapForStore writes a Tier A config naming a store in dir.
+// bootstrapForStore writes a Tier A config naming a store in dir, a
+// [brokertest.TempDir] ([fixtureStream] has why).
 func bootstrapForStore(t *testing.T, dir string) string {
 	t.Helper()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
@@ -167,7 +172,7 @@ func configCmd(t *testing.T, cfg string, args ...string) (string, string, error)
 // changes a config, runs the command, and nothing happens.
 func TestImportingIsIdempotentByContent(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	company := companyFile(t, dir, "company.yaml", nil)
 
@@ -215,7 +220,7 @@ func TestImportingIsIdempotentByContent(t *testing.T) {
 // have been caught here.
 func TestABrokenDocumentIsNeverStored(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	broken := companyFile(t, dir, "broken.yaml", func(doc string) string {
 		// A seat whose named provider does not exist.
@@ -236,7 +241,7 @@ func TestABrokenDocumentIsNeverStored(t *testing.T) {
 // that is the single most likely way a credential leaves the machine.
 func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	first := companyFile(t, dir, "one.yaml", nil)
 	if _, _, err := configCmd(t, cfg, "import", first); err != nil {
@@ -285,7 +290,7 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 // that printed both bare would show a type change as no change at all.
 func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "import",
 		companyFile(t, dir, "one.yaml", nil)); err != nil {
@@ -318,7 +323,7 @@ func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
 // best equipped to read a long diff was the only one who could not.
 func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	// A document whose every provider names one model, so two of them
 	// differ in far more LEAVES than the API's answer would carry.
@@ -370,7 +375,7 @@ func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 // reads as a broken command.
 func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "one.yaml", nil)); err != nil {
 		t.Fatalf("import: %v", err)
@@ -404,7 +409,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // TestReactivatingTheBootRevisionOfflineMintsAnEpoch in bootpublish_test.go.
 func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	imported, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil))
 	if err != nil {
@@ -477,7 +482,7 @@ func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
 
 func TestActivatingAnUnknownRevisionIsRefused(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	if _, _, err := configCmd(t, cfg, "activate", "no-such-revision"); err == nil {
 		t.Fatal("an unknown revision was activated")
@@ -504,7 +509,7 @@ func bootRevisionID(t *testing.T, cfg string) string {
 
 func TestTheConfigSubcommandsAreChecked(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	for _, tc := range []struct {
 		name string
@@ -530,7 +535,7 @@ func TestTheConfigSubcommandsAreChecked(t *testing.T) {
 // is what an operator who has not adopted the secret store has.
 func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	literal := companyFile(t, dir, "literal.yaml", func(doc string) string {
 		return strings.Replace(doc, `"${ANTHROPIC_API_KEY}"`,
@@ -636,7 +641,7 @@ func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
 // trace in the output to assert on, which is exactly why it survived.
 func TestAFlagAnotherSubcommandOwnsIsRefused(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })
 	for _, tc := range []struct {
@@ -682,7 +687,7 @@ func TestAFlagAnotherSubcommandOwnsIsRefused(t *testing.T) {
 // until this runs.
 func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	doc := companyFile(t, dir, "company.yaml", func(doc string) string { return doc })
 	if _, _, err := configCmd(t, cfg, "import", doc); err != nil {
@@ -725,7 +730,7 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 // This is the `config` twin of TestUsageAdvertisesEveryDispatchedCommand.
 func TestEveryConfigSubcommandIsDispatchedAndDocumented(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	for _, sub := range configSubcommands {
 		if !strings.Contains(configUsage, "crewlet config "+sub+" ") {

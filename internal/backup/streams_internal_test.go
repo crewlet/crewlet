@@ -32,7 +32,7 @@ func embeddedBroker(t *testing.T) (*nats.Conn, jetstream.JetStream) {
 		JetStreamDomain:   jsapi.Domain,
 		Port:              -1,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

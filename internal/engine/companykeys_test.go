@@ -36,7 +36,7 @@ const peopleDoc = companyDoc + `
 func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	e := newEngine(t, engine.Options{Bootstrap: boot,
 		Company: parsedCompany(t, peopleDoc)})

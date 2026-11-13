@@ -403,7 +403,7 @@ func bootDirectoryNodeWith(t *testing.T, roles []string,
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	b.Node.Roles = roles
 	if amend != nil {
 		amend(&b)

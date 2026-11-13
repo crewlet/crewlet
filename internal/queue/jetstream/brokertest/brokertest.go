@@ -1,6 +1,7 @@
-// Package brokertest is the size a test broker declares, so that whether a
-// suite passes does not depend on how much disk the machine running it has
-// free.
+// Package brokertest is what a test broker declares: its size, so that whether
+// a suite passes does not depend on how much disk the machine running it has
+// free, and the directory it keeps its store in, so that it does not depend on
+// when a stopped broker's last write lands either.
 //
 // # Why a test broker is not sized from the disk
 //
@@ -99,11 +100,28 @@
 // derivation is the case's own figures; and a case whose subject is the
 // derivation boots under engine.SizedByTheMachine.
 //
+// # And the directory the store is kept in
+//
+// Every directory a test's broker keeps its store in comes from [TempDir],
+// never from t.TempDir: the store of a node fixture ([StoreIn]'s directory), of
+// a broker a case opens or starts itself, of jetstreamtest's members, of
+// externaltest's server and of a server a case builds from nats-server's
+// options. A stopped nats-server can still write its store for a moment after
+// it reports it has stopped, a consumer's last state flush landing late, and
+// t.TempDir's one removal then fails the case on a file the case never wrote.
+// TempDir's removal tries again while, and only while, the directory comes
+// back not empty, a bounded number of times ([TempDir] has the race and the
+// bound, and when the retry goes). A broker running in a
+// child process the case waits for ends its writes with the process, and is
+// held to the same rule anyway, so a fixture is never asked which kind it
+// starts. A store directory set only to be validated, with no broker started
+// on it, is no broker's and may stay a t.TempDir.
+//
 // # Why not jetstreamtest or externaltest
 //
 // Importing jetstreamtest declares a multi-member suite (see internal/solo),
 // and externaltest is the external server alone. The embedded fixtures need the
-// figure without either.
+// figure, and the directory, without either.
 package brokertest
 
 import "github.com/crewlet/crewlet/internal/config"
@@ -123,7 +141,8 @@ import "github.com/crewlet/crewlet/internal/config"
 const StoreMaxBytes int64 = 16 << 30
 
 // StoreIn gives s an embedded broker whose store is dir, sized at
-// [StoreMaxBytes].
+// [StoreMaxBytes]. dir is in, or is, a [TempDir], whose removal at the end of
+// the test outlasts the broker's last late write (see the package doc).
 //
 // THE DIRECTORY AND THE SIZE TOGETHER: a store directory is what turns an
 // embedded broker's limit from a memory figure into a derivation from that

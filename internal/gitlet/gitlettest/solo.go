@@ -346,7 +346,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.ClientGit == "" {
 		o.ClientGit = gittest.Require(t)
 	}
-	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People), life: t,
+	f := &SoloFleet{o: o, dir: brokertest.TempDir(t), creds: NewCredentials(o.People), life: t,
 		runs: NewFixtureRuns(NewBoxTokens(t)),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future: a deletion is dated by its

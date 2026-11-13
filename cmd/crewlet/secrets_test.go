@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
@@ -23,7 +24,7 @@ import (
 // store path, and returns the config path.
 func bootstrapWithKeyring(t *testing.T, keys ...string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	var b strings.Builder
 	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s",
 		filepath.Join(dir, "index.db"), fixtureStream(dir))
@@ -181,7 +182,7 @@ func TestAnEmptyValueIsStoredRatherThanReadFromStdin(t *testing.T) {
 // stores plaintext.
 func TestWithoutAKeyringTheCommandSaysHowToGetOne(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	path := filepath.Join(dir, "config.yaml")
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
 		filepath.Join(dir, "index.db")) + fixtureStream(dir)

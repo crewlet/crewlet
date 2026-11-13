@@ -73,7 +73,7 @@ func TestATestsBrokerDeclaresItsSize(t *testing.T) {
 				if tc.ctx != nil {
 					ctx = tc.ctx(ctx)
 				}
-				dir := t.TempDir()
+				dir := brokertest.TempDir(t)
 				stop, err := start(ctx, tc.cfg(dir))
 				if !tc.refuse {
 					if err != nil {
@@ -109,7 +109,7 @@ func TestATestsBrokerDeclaresItsSize(t *testing.T) {
 func TestABrokerSizedByTheDiskHoldsTheDerivedLimit(t *testing.T) {
 	t.Parallel()
 	q, err := Open(SizedByTheDisk(t.Context(), "the case reads back the limit the volume derives"),
-		Config{StoreDir: t.TempDir()})
+		Config{StoreDir: brokertest.TempDir(t)})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
