@@ -50,6 +50,9 @@ func (f *Fleet) RecordObjectCollection(_ context.Context, value []byte) error {
 	if len(value) == 0 {
 		return errors.New("coord/memory: a collection report needs a value")
 	}
+	if err := coord.HoldValue("the collection report", len(value)); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.objectCollection = slices.Clone(value)

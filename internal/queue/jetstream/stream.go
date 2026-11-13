@@ -78,7 +78,7 @@
 // client crosses the network to it, and the engine allows such a link to be as
 // slow as the object store's floor, a mebibyte in thirty seconds
 // (objstore.MiBPace). The connection's pace is decided once, where it is made
-// (linkPaceOf), and every crossing on it reads it: a read's reply (DomainLog.At,
+// (linkOf), and every crossing on it reads it: a read's reply (DomainLog.At,
 // the dead letters' frames) and a write's request alike. So a write whose
 // caller set no deadline waits the request term (jsapi.RequestTerm, five
 // seconds) and, where its connection crosses a link, its bytes at that pace

@@ -14,7 +14,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
 )
@@ -544,7 +543,7 @@ const (
 	custodySuffix      = "_custody"
 	uploadsSuffix      = "_uploads"
 	// activationKey holds the pointer AND the current revision's sealed
-	// body, in one record — see [activationRecord].
+	// body, in one record — see [coord.ActivationRecord].
 	activationKey = "activation"
 )
 
@@ -1702,63 +1701,6 @@ func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.
 
 // ---- the config plane -------------------------------------------------- //
 
-// activationRecord is the pointer's stored form. The EPOCH IS NOT IN IT: the
-// key's revision is the epoch, so storing one too would give two answers that
-// could disagree.
-//
-// The ORIGIN fields travel beside the revision so a peer adopting it records
-// who wrote it. The record evolves additively: a later build must keep every
-// key here with the meaning it has here, because this build reads its pointer
-// during a rolling upgrade. See [coord.RevisionOrigin].
-type activationRecord struct {
-	RevisionID string    `json:"revision_id"`
-	At         time.Time `json:"at"`
-	Summary    string    `json:"summary,omitempty"`
-
-	// The revision's ORIGIN — see [coord.RevisionOrigin] — plus the
-	// credential it was written through. The kind is read as the value it
-	// is: an unknown spelling stays unknown ([iam.ActorKind.Valid]).
-	Author     string        `json:"author,omitempty"`
-	AuthorKind iam.ActorKind `json:"author_kind,omitempty"`
-	OperatorID string        `json:"operator_id,omitempty"`
-	Source     string        `json:"source,omitempty"`
-	CreatedAt  time.Time     `json:"created_at,omitzero"`
-
-	// Payload is the revision's sealed body, IN the pointer so the two are
-	// one write (see [coord.Plane.Activate] for the race two writes lost),
-	// and as the JSON object it is rather than as bytes, which the record
-	// would encode as base64 over an envelope whose ciphertext is base64
-	// already. Every pointer carries one: an activation is refused
-	// without a body ([coord.CanonicalPayload]).
-	Payload json.RawMessage `json:"payload,omitempty"`
-
-	// Restored is [coord.Activation.Restored]. Absent on a choice, which is
-	// every pointer but a boot's restore.
-	Restored bool `json:"restored,omitempty"`
-}
-
-// origin is the record's revision origin.
-func (r activationRecord) origin() coord.RevisionOrigin {
-	return coord.RevisionOrigin{
-		Author: r.Author, AuthorKind: r.AuthorKind, OperatorID: r.OperatorID,
-		Source: r.Source, CreatedAt: r.CreatedAt,
-	}
-}
-
-// encodeActivation is the record's wire form, with the payload embedded
-// VERBATIM: encoding/json HTML-escapes what it embeds unless told not to, and
-// a body that came back with `<` spelled `\u003c` would be a different body
-// from the one [coord.CanonicalPayload] promised.
-func encodeActivation(record activationRecord) ([]byte, error) {
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(record); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
-}
-
 // Activate publishes a new target revision.
 func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
@@ -1808,36 +1750,20 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		RevisionID: req.RevisionID,
 		At:         at,
 		Summary:    req.Summary,
-		Origin:     utcOrigin(req.Origin),
+		Origin:     req.Origin.UTC(),
 		Restored:   req.Restore,
 	}, nil
 }
 
-// pointerBytes is the pointer's stored form for req — its origin and its body
-// with it — at the instant at, which is decided against the pointer the write
-// replaces ([coord.ActivationAt]) and so is known only inside the write.
+// pointerBytes is the pointer's stored form for req ([coord.ActivationValue])
+// at the instant at, which is decided against the pointer the write replaces
+// ([coord.ActivationAt]) and so is known only inside the write.
 func pointerBytes(req coord.ActivationRequest, payload json.RawMessage, at time.Time) ([]byte, error) {
-	origin := utcOrigin(req.Origin)
-	raw, err := encodeActivation(activationRecord{
-		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
-		Author: origin.Author, AuthorKind: origin.AuthorKind, OperatorID: origin.OperatorID,
-		Source: origin.Source, CreatedAt: origin.CreatedAt,
-		Payload: payload, Restored: req.Restore,
-	})
+	raw, err := coord.ActivationValue(req, payload, at)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: encode the activation: %w", err)
+		return nil, fmt.Errorf("coord/kv: %w", err)
 	}
 	return raw, nil
-}
-
-// utcOrigin is an origin with its instant in UTC, as every other time this
-// store keeps; a zero instant stays zero, so an origin that named none still
-// encodes without one.
-func utcOrigin(o coord.RevisionOrigin) coord.RevisionOrigin {
-	if !o.CreatedAt.IsZero() {
-		o.CreatedAt = o.CreatedAt.UTC()
-	}
-	return o
 }
 
 // expectedSeq resolves the caller's expectation to the KV sequence to
@@ -1885,17 +1811,17 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 
 // pointer reads the activation pointer: its record, the KV sequence to
 // compare-and-set against, and whether there is one at all.
-func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
+func (f *FleetStore) pointer(ctx context.Context) (coord.ActivationRecord, uint64, bool, error) {
 	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return activationRecord{}, 0, false, nil
+		return coord.ActivationRecord{}, 0, false, nil
 	}
 	if err != nil {
-		return activationRecord{}, 0, false, unavailable("read the activation to compare against", err)
+		return coord.ActivationRecord{}, 0, false, unavailable("read the activation to compare against", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err = json.Unmarshal(entry.Value(), &record); err != nil {
-		return activationRecord{}, 0, false, fmt.Errorf("coord/kv: decode the activation: %w", err)
+		return coord.ActivationRecord{}, 0, false, fmt.Errorf("coord/kv: decode the activation: %w", err)
 	}
 	return record, entry.Revision(), true, nil
 }
@@ -2040,7 +1966,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) (json.RawMe
 	if err != nil {
 		return nil, false, unavailable("read the activation pointer", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return nil, false, unavailable("decode the activation pointer", err)
 	}
@@ -2063,7 +1989,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 	if err != nil {
 		return coord.Activation{}, false, unavailable("read the activation pointer", err)
 	}
-	var record activationRecord
+	var record coord.ActivationRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return coord.Activation{}, false, unavailable("decode the activation pointer", err)
 	}
@@ -2072,7 +1998,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		RevisionID: record.RevisionID,
 		At:         record.At,
 		Summary:    record.Summary,
-		Origin:     record.origin(),
+		Origin:     record.Origin(),
 		Restored:   record.Restored,
 	}, true, nil
 }

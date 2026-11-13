@@ -2071,6 +2071,8 @@ curl -X PATCH https://engine.example.com/config \
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
 
+**A document is held to what its activation carries.** Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert) hands the document to every node sealed inside the activation pointer, one value of the coordination store, which holds a key to 6,290,542 bytes ([Coordination](../concepts/coordination.md#what-one-key-holds)). A body is held to 4 MiB, but a patch is merged onto the active document and the seal writes it a third larger, so a write whose document — sealed, with its summary — would make a pointer past that is refused `413 body_too_large` **before anything is stored**, naming `document_bytes`, `pointer_bytes` and `max_pointer_bytes`; a dry run of it is refused the same way. Make the document or its summary smaller: a company document of about four and a half mebibytes is the most a pointer carries.
+
 **`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
 
 #### What a write answers
@@ -2778,6 +2780,7 @@ answers). The answer's `reload` is one of:
 | `{"revision_id": "…", "epoch": 42}` | The revision that re-published the company, and the epoch every node converges on |
 | `{"error": "revision_advanced", "detail": "…", "stored_revision_id": "…", "node": "…"}` | Another configuration write activated first. The value is sealed; `POST /config/reload` re-activates the company that runs now |
 | `{"error": "validation_error", "detail": "…"}` | The active company does not pass this build's validation, so it was not re-published |
+| `{"error": "body_too_large", "detail": "…"}` | The active company, sealed into the activation pointer beside this re-activation's summary, makes a pointer past what one key of the coordination store holds ([Coordination](../concepts/coordination.md#what-one-key-holds)), so it was not re-published: make the document smaller, then `POST /config/reload` |
 | `{"error": "unavailable", "detail": "…", "stored_revision_id": "…", "node": "…"}` | The re-activation was stored and the coordination store did not answer it: whether the fleet runs it is unknown |
 | `{"error": "no_active_revision" \| "internal_error", "detail": "…"}` | Nothing to re-activate, or a failure this node's log names |
 

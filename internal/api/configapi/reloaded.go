@@ -2,8 +2,10 @@ package configapi
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // Reloaded is what a re-activation a credential write made did, as the answer
@@ -50,6 +52,7 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 	var raced *RacedError
 	var unknown *ActivationUnknownError
 	var invalid *ValidationError
+	var tooLarge *DocumentTooLargeError
 	switch {
 	case errors.As(err, &raced):
 		return &Reloaded{Error: httpjson.CodeRevisionAdvanced, StoredRevisionID: raced.Stored,
@@ -67,6 +70,18 @@ func ReloadOutcome(applied Applied, err error) *Reloaded {
 		return &Reloaded{Error: httpjson.CodeValidationError,
 			Detail: "the active company does not pass this build's validation, so it cannot " +
 				"be re-activated as it stands: " + invalid.Err.Error()}
+	case errors.As(err, &tooLarge):
+		// REFUSED FOR ITS SIZE, before anything was stored: the active
+		// company, sealed into the activation pointer beside this
+		// re-activation's own summary, makes a pointer past what one key of
+		// the coordination store holds. A definite answer, never a fault this
+		// node's log alone could explain.
+		return &Reloaded{Error: httpjson.CodeBodyTooLarge,
+			Detail: fmt.Sprintf("the active company, sealed into the activation pointer beside "+
+				"this re-activation's summary, makes a pointer of %d bytes, past the %d one key "+
+				"of the coordination store holds, so it was not re-activated; the value is "+
+				"sealed: make the company document smaller, then POST /config/reload "+
+				"re-activates it", tooLarge.PointerBytes, coord.MaxValueBytes)}
 	case errors.Is(err, ErrNoActiveRevision):
 		return &Reloaded{Error: httpjson.CodeNoActiveRevision,
 			Detail: "the fleet runs no company to re-activate"}

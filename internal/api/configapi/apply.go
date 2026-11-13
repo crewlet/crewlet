@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/authz"
@@ -616,6 +618,88 @@ func unrestorableMasks(masked []config.Path) error {
 	return errors.Join(faults...)
 }
 
+// DocumentTooLargeError is a write whose document, sealed into the activation
+// pointer that carries it to every node, makes a pointer past what one key of
+// the coordination store holds ([coord.MaxValueBytes]). Refused BEFORE THE
+// REVISION IS STORED, since no node could ever be pointed at it: kept, it
+// would be history nothing can activate.
+type DocumentTooLargeError struct {
+	// DocumentBytes is the document the write made — a PATCH's merged onto
+	// the active one, whatever its body weighed.
+	DocumentBytes int
+	// PointerBytes is the pointer it makes: the document sealed, its summary
+	// and its origin, at their widest ([coord.ActivationBytes]).
+	PointerBytes int
+}
+
+func (e *DocumentTooLargeError) Error() string {
+	return fmt.Sprintf("configapi: the company document is %d bytes, and sealed into the "+
+		"activation pointer that carries it to every node it makes %d, past the %d one key of "+
+		"the coordination store holds: make the document or its summary smaller",
+		e.DocumentBytes, e.PointerBytes, coord.MaxValueBytes)
+}
+
+// Unwrap is [coord.ErrValueTooLarge], the store's word for the same refusal.
+func (e *DocumentTooLargeError) Unwrap() error { return coord.ErrValueTooLarge }
+
+// unmintedRevision stands in for the id of a revision not stored yet: the
+// store names every revision with a UUID ([store.Configs]), so one of the
+// same length sizes the pointer exactly where the id goes.
+var unmintedRevision = uuid.Nil.String()
+
+// carried refuses a write whose sealed document payload, with its summary and
+// origin at the instant at, makes an activation pointer past what one key of
+// the coordination store holds — see [DocumentTooLargeError].
+//
+// THE DOCUMENT HAS NO BOUND OF ITS OWN THAT THE POINTER'S IS: a body is held
+// to [MaxBodyBytes], and a patch merged onto the active document grows it by
+// up to that much each time, while the seal writes it base64-encoded, a third
+// larger. Sized here as the store will write it, and at its widest, so a write
+// this passes is one the store takes.
+func carried(document, payload []byte, summary string, at time.Time, origin coord.RevisionOrigin) error {
+	size, err := coord.ActivationBytes(coord.ActivationRequest{
+		RevisionID: unmintedRevision, Summary: summary, At: at, Origin: origin,
+	}, payload)
+	if err != nil {
+		return fmt.Errorf("configapi: size the activation: %w", err)
+	}
+	if coord.HoldValue("the activation pointer", size) != nil {
+		return &DocumentTooLargeError{DocumentBytes: len(document), PointerBytes: size}
+	}
+	return nil
+}
+
+// sealed is a prepared write's document sealed as its revision stores it, and
+// the origin its pointer carries, written at the instant at with summary — and
+// refused where that pointer is past what one key of the coordination store
+// holds ([carried]).
+func (s *Service) sealed(p *prepared, summary string, at time.Time) ([]byte, coord.RevisionOrigin, error) {
+	payload, err := secrets.Seal(s.cipher, p.document)
+	if err != nil {
+		return nil, coord.RevisionOrigin{}, fmt.Errorf("configapi: seal the config: %w", err)
+	}
+	origin := coord.RevisionOrigin{
+		Author: p.by.Name, AuthorKind: p.by.Kind, OperatorID: p.by.OperatorID,
+		Source: p.source, CreatedAt: at,
+	}
+	if err = carried(p.document, payload, summary, at, origin); err != nil {
+		return nil, coord.RevisionOrigin{}, err
+	}
+	return payload, origin, nil
+}
+
+// checks is a dry run's last check of a prepared write: the one [Service.commit]
+// makes before it stores anything, that the document, sealed with summary into
+// its activation pointer, is no larger than the pointer carries
+// ([DocumentTooLargeError]). A dry run is the same request checked the same
+// way, so one that passes is a write the commit takes: the pointer is sized
+// with both its instants at their widest ([coord.ActivationBytes]), never at
+// the instant the dry run happened to run.
+func (s *Service) checks(p *prepared, summary string) error {
+	_, _, err := s.sealed(p, summary, s.now())
+	return err
+}
+
 // commit seals, stores and points the fleet at a prepared write.
 //
 // Stored FIRST, then pointed at: a crash between the two leaves a revision
@@ -649,11 +733,11 @@ func unrestorableMasks(masked []config.Path) error {
 // a revision is stored under is the one [Service.Authorize] judged.
 func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
 	by := p.by
-	payload, err := secrets.Seal(s.cipher, p.document)
-	if err != nil {
-		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
-	}
 	at := s.now()
+	payload, origin, err := s.sealed(p, summary, at)
+	if err != nil {
+		return Applied{}, err
+	}
 	r := store.Revision{
 		ParentID: p.base.ID, Source: p.source, CreatedBy: by.Name,
 		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
@@ -685,10 +769,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		// revision records who wrote it, through which credential, from
 		// where and when — rather than itself, from `fleet`, at the
 		// instant it happened to apply it.
-		Origin: coord.RevisionOrigin{
-			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
-			Source: p.source, CreatedAt: at,
-		},
+		Origin: origin,
 	}
 	if p.pointed {
 		request.Expect = p.base.ID

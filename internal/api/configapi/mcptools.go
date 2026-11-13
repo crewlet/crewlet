@@ -119,6 +119,9 @@ func (s *Service) SetMCPTools(ctx context.Context, w MCPToolsWrite) (MCPToolsWri
 			return MCPToolsWritten{}, err
 		}
 		if w.DryRun {
+			if err = s.checks(prepared, w.Summary); err != nil {
+				return MCPToolsWritten{}, err
+			}
 			return MCPToolsWritten{Tools: tools, Answer: checkedAnswer(prepared)}, nil
 		}
 		// ASKED LAST, once the write is admitted and its document checked
