@@ -166,10 +166,10 @@ import (
 // and what the turn did after is not in it, or of a lost turn's, that it may not
 // hold the last of what the turn did ([prompts.BuildNextTurn]) — then handed
 // the launch's own fresh brief whole —
-// the task, the turn's earlier rounds and notes, and how the conversation's
-// earlier turns ended — none of which it read ([Runner.baseSession]). ITS GUARD
-// IS EMPTY: the skills that session loaded were another turn's, set up anew for
-// this one, which the lead says.
+// the task, the turn's earlier rounds, notes and answers, and how the
+// conversation's earlier turns ended — none of which it read
+// ([Runner.baseSession]). ITS GUARD IS EMPTY: the skills that session loaded
+// were another turn's, set up anew for this one, which the lead says.
 
 // sessionBasis asks the turn's launcher which kept session this relaunch
 // continues ([SessionProber]). A launcher that cannot say continues none.
@@ -202,10 +202,11 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // one that lacks it lacks the leads it opened with too (the turn's task where
 // the job continued the session its conversation's last turn left, a review
 // that sent the round back, an earlier answer), so it is told again the leads
-// that brief told ([Runner.leadsAgain]), after the section that says it was cut
-// off and before its calls, never ahead of the lead of its own brief; and the
-// call a person approved that a held lead among them tells is in no list of
-// the round's calls, as the lead's own is not.
+// that brief told ([Runner.leadsAgain]), to a run working in round current,
+// after the section that says it was cut off and before its calls, never ahead
+// of the lead of its own brief; and the call a person approved that a held lead
+// among them tells is in no list of the round's calls, as the lead's own is
+// not.
 //
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
 // last time: telling the calls after the save rewrites a payload past its
@@ -216,8 +217,9 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // they approved returned, and that call is made only once every check that
 // could refuse the relaunch has passed ([Runner.continueAgentRun]). Led after
 // the check, the brief costs nothing the check did not count.
-func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, leadHeld []string,
-	history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note, branch string) *keptBrief {
+func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, current int,
+	leadHeld []string, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
+	branch string) *keptBrief {
 
 	if !basis.Continues() {
 		return nil
@@ -231,7 +233,7 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// brief, which a later brief to this one's session tells in turn.
 	var again toldAgain
 	if basis.MayLackBrief() {
-		again = r.leadsAgain(ctx, history, b)
+		again = r.leadsAgain(ctx, history, current, b)
 		if again.section != "" {
 			after = append(after, again.section)
 		}
@@ -333,11 +335,11 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // with too (the turn's task where the job continued the session its
 // conversation's last turn left, a review that sent the round back, an earlier
 // answer), so it is told again the leads that brief told ([Runner.leadsAgain]),
-// after the section that says it was cut off and before every call of the
-// round, as a kept session cut off is ([Runner.keptSession]); and the call a
-// person approved that a held lead among them tells is in no list, as the
-// answer's own is not. told is which they were, for the job's record to mark
-// told by this brief in turn.
+// to a run working in round current, after the section that says it was cut off
+// and before every call of the round, as a kept session cut off is
+// ([Runner.keptSession]); and the call a person approved that a held lead among
+// them tells is in no list, as the answer's own is not. told is which they
+// were, for the job's record to mark told by this brief in turn.
 //
 // BUILT BEFORE ITS LEAD, as the kept session's brief is ([Runner.keptSession]):
 // telling the calls rewrites a payload past its budget with the seat's
@@ -351,8 +353,8 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // omitted is the reads of the round the brief counts without listing them
 // ([Runner.calledAfter]), which the launch records on the job it opens, for
 // the next brief to that copy to tell.
-func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls, history []ledger.Iteration,
-	surface *tools.Surface) (after []string, omitted []int, told toldAgain) {
+func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls, current int,
+	history []ledger.Iteration, surface *tools.Surface) (after []string, omitted []int, told toldAgain) {
 
 	if carry.session() == "" || !carry.boxKept() || !carry.keeps() {
 		return nil, nil, toldAgain{}
@@ -371,7 +373,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	if end == sandbox.HarnessEndCutOff {
 		after[0] = prompts.InterruptedCopy
 	}
-	again := r.leadsAgain(ctx, history, b)
+	again := r.leadsAgain(ctx, history, current, b)
 	if again.section != "" {
 		after = append(after, again.section)
 	}

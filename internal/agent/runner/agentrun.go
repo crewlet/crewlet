@@ -492,6 +492,16 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
 	user := r.executorBrief(ctx, notes, history, fresh)
+	// AND THE TURN'S ANSWERS, of a reviewer's send-back, in a segment that
+	// collected the turn's last run ([Runner.turnsAnswers]): a run that starts
+	// a session of its own on this brief holds none of the briefs before it,
+	// and its closed rounds' ledger carries none of a person's replies, so an
+	// answer that carried an earlier round on, an instruction to the turn,
+	// would be lost to it. After the turn's own brief, as a section of its own;
+	// and the base's continuation takes it whole below. Never on a turn's
+	// first launch, which nothing has carried on yet.
+	user = user.Then(prompts.KeyAnswersBefore,
+		r.turnsAnswers(round, history, r.cfg.Turn.Context.FenceBoundary()).section.Text)
 
 	// EVERY LAUNCH ASKS WHICH SESSION IT CONTINUES (continued.go): a
 	// relaunch — a reviewer's send-back, in a segment that collected the
@@ -525,7 +535,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// ITS LEAD IS THE REVIEW, which the run keeps beside its record as the
 		// review of the round it closed, for a later brief to a session that
 		// may lack this one to tell again.
-		briefs.kept = r.keptSession(ctx, basis, collected, nil, history, built, fresh, "").
+		briefs.kept = r.keptSession(ctx, basis, collected, round, nil, history, built, fresh, "").
 			led(r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
@@ -538,7 +548,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// earlier turns ended — which that session never read.
 		// ITS LEAD IS THE TURN'S TASK, which the run keeps beside its record
 		// with the closed rounds this brief rendered and the review it carried,
-		// for a later brief to a session that may lack this one to tell again.
+		// for a later brief to a session that may lack this one to tell again,
+		// with the turn's answers this brief tells after it, or is to tell where
+		// its read of them failed ([Runner.taskAgain]).
 		briefs.kept = r.baseSession(basis, user.Text, sandbox.BriefTold{Own: taskLead(round, history, notes)})
 	}
 	// AND THE FRESH BRIEF NAMES THE KEPT SESSION IT DOES NOT CONTINUE, after
@@ -741,12 +753,20 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	fence := r.cfg.Turn.Context.FenceBoundary()
 	var kept *keptBrief
 	if carry.keeps() {
-		kept = r.keptSession(ctx, basis, round, leadsHeld(carry), history, built, fresh, carry.branch())
+		kept = r.keptSession(ctx, basis, round, state.Round, leadsHeld(carry), history, built, fresh,
+			carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
 	// that carries the round on in the job's box rather than from its kept
 	// capture, built here for the same reason ([Runner.inPlaceAfter]).
-	inPlaceAfter, inPlaceOmitted, inPlaceTold := r.inPlaceAfter(ctx, carry, round, history, built)
+	inPlaceAfter, inPlaceOmitted, inPlaceTold := r.inPlaceAfter(ctx, carry, round, state.Round, history, built)
+	// AND THE TURN'S ANSWERS BEFORE THE ONE CARRYING THE ROUND ON NOW, for a
+	// run that starts a session of its own ([Runner.turnsAnswers]): it holds
+	// none of the briefs before it, so told only the newest carry's lead, an
+	// answer that carried an earlier job on, in this round or one a review sent
+	// back, would be lost to it. Built before the round's calls, so the call a
+	// person approved that one of them tells is in no list of them.
+	answers := r.turnsAnswers(state.Round, history, fence)
 	// AND EVERY CALL OF THE ROUND, for a run that starts a session of its own
 	// carrying the round on ([prompts.CalledBefore]): it remembers none of
 	// them, and told only that the run before it did things through the seat's
@@ -757,8 +777,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// since its box falls back to this brief wherever it cannot take the
 	// session up after all. The base's continuation takes it whole. Never the
 	// call a person approved that the reseed's lead tells, which is made only
-	// after this, below.
-	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, leadsHeld(carry), built, fence)
+	// after this, below, nor one an earlier answer it tells approved.
+	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, slices.Concat(leadsHeld(carry), answers.held),
+		built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
 	// each brief tells, each past its budget, are rewritten by the seat's
@@ -817,12 +838,14 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if notes := r.inPlaceNotes(carry, fresh); len(notes) > 0 {
 		continued += "\n\n" + strings.Join(notes, "\n\n")
 	}
-	// A FRESH RUN'S BRIEF is the round's own, what became of the run before
-	// it (what it asked and was told, or how it was cut off) and every call of
-	// the round so far: it remembers none of it. Each a section of its
-	// own, so the prompt published as the phase's opening frame where the box
-	// starts a session of its own keeps its outline ([prompts.Prompt.Then]).
-	reseed := user.Then(prompts.KeyCarriedOn, carry.reseed(fence)).
+	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
+	// its work on before, what became of the run before it (what it asked and
+	// was told, or how it was cut off) and every call of the round so far: it
+	// remembers none of it. Each a section of its own, so the prompt published
+	// as the phase's opening frame where the box starts a session of its own
+	// keeps its outline ([prompts.Prompt.Then]).
+	reseed := user.Then(prompts.KeyAnswersBefore, answers.section.Text).
+		Then(prompts.KeyCarriedOn, carry.reseed(fence)).
 		Then(prompts.KeyRoundSoFar, prompts.CalledBefore(freshTold))
 	// AND THE SESSION OF THE JOB IT FOLLOWS, as its launcher answered it
 	// above, led by what carries it on: what cut the run off, or the answer
@@ -840,7 +863,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// its box before anything of it was kept — continues the one its
 			// first launch froze, handed the reseed, which says what the
 			// round's jobs did and what became of the last, and so leaves out
-			// what the reseed leaves out.
+			// what the reseed leaves out; and the turn's answers it tells
+			// after the task are told again with the task ([Runner.taskAgain]).
 			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
 				Own: append(taskLead(state.Round, history, ""), own...)})
 		}

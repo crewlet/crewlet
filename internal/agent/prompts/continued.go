@@ -1037,8 +1037,11 @@ const leadsAgainHeader = "## Messages that carried this work on that the session
 // answers, the review and the turn's task the brief of the job whose session it
 // continues opened with, or told again in turn, where that session is not known
 // to hold that brief (its harness cut off, or never known to have ended its
-// own run), in the order they were sent; and how many earlier such messages the
-// engine no longer keeps to tell again (cut), said rather than left out.
+// own run), in the order they were sent; and how many earlier such messages are
+// not kept to tell again (cut), said rather than left out: those past the
+// engine's bound on them, and every one the store could not give back to the
+// brief's builder, all of them where its read failed, though the store may
+// keep them still, so said as not kept, never as no longer kept.
 //
 // SAID AS MESSAGES IT MAY ALREADY SHOW, ONE MESSAGE WHEREVER SHOWN, as notes
 // told again are ([NotesReadAgain]): a session cut off may hold any of them, an
@@ -1090,3 +1093,126 @@ func plural(n int, one, many string) string {
 // missing; never a word of what it said.
 const LeadUnread = "### A message that carried this work on cannot be read here" +
 	"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told again here."
+
+// KeyAnswersBefore keys the section [EarlierAnswers] is appended to a fresh
+// brief as (internal/agent/runner's continueAgentRun and executeAsAgentRun):
+// after the turn's own brief, and before what carries a round on now
+// ([KeyCarriedOn]) where one does, so the answers read in the order they came.
+const KeyAnswersBefore = "answers_before"
+
+// answersBeforeHeader opens the answers that carried the turn's work on before
+// the brief that tells them ([EarlierAnswers]).
+const answersBeforeHeader = "## Earlier answers that carried this work on"
+
+// EarlierAnswers is the section that tells the answers that carried the turn's
+// work on before the brief that tells them, each already rendered under a
+// heading of its own that names the round it came in ([AnswerRound];
+// internal/agent/runner's earlierAnswers), oldest first; and how many earlier
+// messages that carried the work on are not kept to tell (cut), said rather than
+// left out, even where no answer is left to tell. An empty prompt for nothing
+// to tell.
+//
+// SAID AS NOT KEPT TO TELL, never as no longer kept: the cut counts the
+// messages past the engine's bound on them, and every one the store could not
+// give back to the brief's builder, all of them where its read failed, though
+// the store may keep them still. Either way the brief cannot tell them, which
+// is all it says.
+//
+// AN ANSWER IS AN INSTRUCTION TO THE TURN, NOT TO ONE ROUND, nor to the one
+// session it was told to: a person told the work what to do. A run that starts
+// a session of its own holds none of the briefs before it, and its brief told
+// it only the newest of them, the one carrying its round on now, if any: an
+// answer that carried an earlier job on, in this round or in a round a review
+// sent back, was lost to it. Told every answer of the turn, in the order they
+// came, the later of two that differ standing, each naming its round, it can
+// tell which came before a later answer, and before the review that sent its
+// round back.
+//
+// fresh is a run that starts a session of its own, whose session holds none of
+// them, which the section says. Not fresh is the section told again inside the
+// turn's task (internal/agent/runner's taskAgain), which the brief telling it
+// says the session may already show ([LeadsToldAgain]); the cut is said there,
+// once, beside every lead told again, so it is given as zero.
+//
+// BUILT WITH AN OUTLINE, each answer a section of its own under its heading, so
+// the task told again nests it a level down by the headings its builder wrote,
+// and not a byte of the words under them moves ([Prompt.Nested]).
+func EarlierAnswers(answers []string, cut int, fresh bool) Prompt {
+	if len(answers) == 0 && (cut <= 0 || !fresh) {
+		return Prompt{}
+	}
+	n := strconv.Itoa(len(answers))
+	var intro string
+	switch {
+	case len(answers) == 0:
+		intro = "Runs before you on this task may have been carried on by answers that are not told here: the " +
+			strconv.Itoa(cut) + " earliest " + plural(cut, "message", "messages") + " that carried this work on " +
+			plural(cut, "is", "are") + " not kept to tell, so any answer among them is not told."
+	case len(answers) == 1 && fresh:
+		intro = "A run before you on this task stopped to ask, and was carried on by the answer below, in the " +
+			"round its heading names. Your session does not hold it."
+	case len(answers) == 1:
+		intro = "A run of this work stopped to ask, and was carried on by the answer below, in the round its " +
+			"heading names."
+	case fresh:
+		intro = "Runs before you on this task stopped to ask, and were carried on by the " + n + " answers " +
+			"below, in the order they came, each in the round its heading names. Your session holds none of " +
+			"them: where two of them differ, the later one stands."
+	default:
+		intro = "Runs of this work stopped to ask, and were carried on by the " + n + " answers below, in the " +
+			"order they came, each in the round its heading names: where two of them differ, the later one stands."
+	}
+	if cut > 0 && len(answers) > 0 && fresh {
+		intro += "\n\n(+" + strconv.Itoa(cut) + " earlier " + plural(cut, "message", "messages") +
+			" that carried this work on, which " + plural(cut, "is", "are") + " not kept to tell: any answer " +
+			"among them is not told here.)"
+	}
+	b := NewBuilder("\n\n")
+	b.Heading(KeyAnswersBefore, answersBeforeHeader+"\n"+intro)
+	for i, answer := range answers {
+		// A key per answer: a section's key is unique within its prompt,
+		// and each answer is its own heading.
+		b.Heading("answer_"+strconv.Itoa(i+1), answer)
+	}
+	return b.Build()
+}
+
+// AnswerRound is how an answer told to a run names the round of the turn it
+// came in (round), to a run working in round current, as a suffix of its
+// heading: this round; an earlier one, which a review sent back, since a later
+// round of a turn is begun by nothing else; or a later one, which no record of
+// this build makes and which is named as it is; "" for a round no record names.
+func AnswerRound(round, current int) string {
+	switch {
+	case round <= 0:
+		return ""
+	case round == current:
+		return " (in this round)"
+	case round < current:
+		return " (in round " + strconv.Itoa(round) + ", which a review sent back)"
+	}
+	return " (in round " + strconv.Itoa(round) + ")"
+}
+
+// HeldCallListed is what an answer told to a run says of the call it answered
+// that was made, where the brief that tells it lists the calls of round, the
+// round the answer came in, as work already done ([PriorWorkHeader], which
+// heads each round "Iteration" and its number): that the call it says is one of
+// those, made once, and that the list says how it ended. Never its outcome a
+// second time, which would tell one call twice, the second time as a call of its
+// own, as no list of a round's calls tells the one a lead tells.
+func HeldCallListed(round int) string {
+	n := strconv.Itoa(round)
+	return "The call was made once: it is among round " + n + "'s calls, under Iteration " + n + " of the work " +
+		"already done earlier in this turn, which says how it ended."
+}
+
+// AnswerUnread is an answer told to a run that the brief cannot read on the
+// node that builds it ([EarlierAnswers]), its heading naming its round as
+// [AnswerRound] says it (named): its seal under a key that node does not hold,
+// or one that does not open. Told rather than left out, as [LeadUnread] is, so
+// the run knows an answer is missing; never a word of what it said.
+func AnswerUnread(named string) string {
+	return "### An answer that carried this work on, which cannot be read here" + named +
+		"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told here."
+}
