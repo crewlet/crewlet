@@ -6,6 +6,7 @@ package prefetch
 import (
 	"context"
 	"errors"
+	"github.com/google/uuid"
 	"strings"
 	"sync"
 	"time"
@@ -314,6 +315,11 @@ type Request struct {
 	// whom it works for (ADR-0109), decided by the caller with the turn's own
 	// ceiling, the one a tool call is held to; false omits the systems block.
 	ReadsAtlas bool
+
+	// Linked is the ids of the atlas entries the turn's work item names
+	// (ADR-0140), in the item's own order, read by the caller with the item;
+	// the systems block lists them before what the ask names.
+	Linked []uuid.UUID
 
 	// Told is the changes to the seat's access it was told of recently, for
 	// marking the selected notes each may contradict ([ToldChange]). Nil marks
