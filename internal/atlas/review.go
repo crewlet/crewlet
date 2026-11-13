@@ -23,7 +23,9 @@ const (
 	// engine could check: hidden from the map until a person confirms it.
 	ReviewUnconfirmed ReviewKind = "unconfirmed"
 	// ReviewLikely is an entry an agent backed with a call or a file, that
-	// no person, integration or setting stands behind yet.
+	// no person, integration or setting stands behind yet. An entry that is
+	// likely only because a repository's files declare it is not one: a file
+	// suggests, and a suggestion asks nothing of anybody (ADR-0133).
 	ReviewLikely ReviewKind = "likely"
 )
 
@@ -151,7 +153,13 @@ func (v View) Review(kind ReviewKind, after string, limit int) (Review, error) {
 		case WordUnconfirmed:
 			add(e, ReviewUnconfirmed, "", e.LastSeen, nil)
 		case WordLikely:
-			add(e, ReviewLikely, "", e.LastSeen, nil)
+			// ONLY WHAT AN AGENT REPORTED WAITS. A repository's files make an
+			// entry likely too, and a scan declares many at once: listing
+			// them would bury the reports a person is asked to decide, and
+			// its entry page confirms one all the same.
+			if slices.ContainsFunc(e.Sources, func(s Source) bool { return s.Kind == SourceAgent }) {
+				add(e, ReviewLikely, "", e.LastSeen, nil)
+			}
 		}
 	}
 	slices.SortFunc(places, func(a, b reviewPlace) int {

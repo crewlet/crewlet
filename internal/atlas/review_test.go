@@ -9,10 +9,13 @@ import (
 // WHAT WAITS FOR A PERSON IS READ OFF THE VIEW ON EVERY READ: a fact a newer
 // report contradicts, an entry only an agent backed, and one nothing backs,
 // in that order, each once, and gone the moment its cause is. A retired entry
-// waits for nobody, and a page ends where the next begins.
+// waits for nobody, and a page ends where the next begins. An entry that is
+// likely only because a repository's files declare it waits for nobody
+// either, until an agent reports it too.
 //
 // Mutation: list an entry by its state instead of its confidence word and the
-// agent's backed entry is never offered for confirmation.
+// agent's backed entry is never offered for confirmation; list every likely
+// entry and what a repository's files declare fills the queue.
 func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
@@ -23,10 +26,11 @@ func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 		}
 		return c
 	}
-	ada, cf := PersonSource("ada"), IntegrationSource("cloudflare")
+	ada, cf, files := PersonSource("ada"), IntegrationSource("cloudflare"), CodeSource("shop")
 	backed, guessed := AgentSource("sre", "turn-1", EvidenceCall), AgentSource("sre", "turn-2", EvidenceNone)
 	checkout, orders := MustRef(KindService, "checkout-api"), MustRef(KindDatastore, "acme/orders-db")
 	cache, old := MustRef(KindDatastore, "acme/cache"), MustRef(KindService, "legacy")
+	declared := MustRef(KindQueue, "shop/jobs")
 	gone := ok(Exists(old, backed, now))
 	claims := []Claim{
 		ok(Exists(checkout, ada, now.Add(-3*time.Hour))),
@@ -34,6 +38,7 @@ func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 		ok(Says(checkout, FactName, "Checkout API", cf, now.Add(-time.Hour))),
 		ok(Exists(orders, backed, now.Add(-time.Hour))),
 		ok(Exists(cache, guessed, now.Add(-time.Hour))),
+		ok(Exists(declared, files, now.Add(-time.Hour))),
 		gone, ok(Denial(gone, ada, now)),
 	}
 	view := Fold(claims, now)
@@ -83,6 +88,16 @@ func TestTheReviewIsWhatWaitsForAPersonAndNothingElse(t *testing.T) {
 		if _, refused := view.Review(ReviewKind(bad.kind), bad.cursor, PageMax); refused == nil {
 			t.Errorf("a review asked with %+v was answered", bad)
 		}
+	}
+
+	// What the files declared is likely, and waits only once an agent reports it too.
+	if e, found := view.Find(declared.ID()); !found || e.Word != WordLikely {
+		t.Fatalf("what the files declared reads %+v, %v; want a likely entry", e, found)
+	}
+	reported := Fold(append(claims, ok(Exists(declared, backed, now))), now)
+	both, err := reported.Review(ReviewLikely, "", PageMax)
+	if err != nil || len(both.Items) != 2 {
+		t.Errorf("after an agent reported what the files declared the review lists %+v, %v; want both likely entries", both.Items, err)
 	}
 
 	// The person says the name again, after the report: nothing disagrees.

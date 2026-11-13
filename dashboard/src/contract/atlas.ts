@@ -221,7 +221,8 @@ type AtlasChange =
 
 /** Why an entry waits for a person (`atlas.ReviewKind`): its sources disagree
  *  on a fact or a relation, or only an agent reported it, with nothing the
- *  engine could check (`unconfirmed`) or backed by a call or a file (`likely`). */
+ *  engine could check (`unconfirmed`) or backed by a call or a file (`likely`).
+ *  What only a repository's files declare is likely and waits for nobody. */
 export type AtlasReviewKind = "disagreement" | "unconfirmed" | "likely";
 
 /** A place an atlas read reads (`gather.SourceName`). */

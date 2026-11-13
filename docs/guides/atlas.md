@@ -205,8 +205,8 @@ page:
 The confidence words are the engine's, never a model's: **Confirmed** (the
 company settings, the engine's own records, a person, or an integration's read
 with the company's credential), **Likely** (an agent backed by a call or a
-file it cites) and **Unconfirmed** (an agent with nothing the engine could
-check).
+file it cites, or a repository's deploy and dependency files) and
+**Unconfirmed** (an agent with nothing the engine could check).
 
 **Internal** beside an address marks one on a private network. The atlas keeps
 these, since they are the company's own map, and says so rather than hiding
@@ -267,6 +267,8 @@ is gone the moment its cause is:
 - **Likely**: an entry an agent backed with a call or a file, that no person,
   integration or setting stands behind yet. It stays here, even after
   somebody corrects one fact on it, until somebody confirms the entry itself.
+  What only a repository's files declare is likely as well and does not wait
+  here: **Confirm** it on its own page whenever you choose to.
 
 Pick several with their boxes to decide them together: **Accept as shown**
 confirms each entry and keeps each shown value, and **Retire** retires the
