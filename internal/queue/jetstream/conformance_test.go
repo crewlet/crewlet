@@ -479,12 +479,6 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return open(t, Config{MaxDeliver: attempts})
 		},
 
-		// Production's ack window, in place of testTimings' two seconds.
-		WithKeepingAckWindow: func(t *testing.T, attempts int) queue.EventQueue {
-			t.Helper()
-			return open(t, Config{MaxDeliver: attempts, AckWait: DefaultAckWait})
-		},
-
 		// Both reads report a failure AS a failure. Returning the error as
 		// an empty result would tell the suite the seat is holding no mail
 		// whenever the broker did not answer, inside the group that asserts
