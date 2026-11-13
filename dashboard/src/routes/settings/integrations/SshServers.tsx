@@ -66,7 +66,7 @@ export function SshServers({ managed }: { managed: string | null }) {
     setBusy(true);
     setError(null);
     try {
-      await rest.put(`${SSH_STATE}/hosts/${pathSegment(asking.host.id)}/inventory`, {
+      await rest.put(`/setup/integrations/ssh/hosts/${pathSegment(asking.host.id)}/inventory`, {
         inventory: asking.on,
       });
       await state.reload({ quiet: true });

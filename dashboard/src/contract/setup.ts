@@ -113,14 +113,14 @@ export interface SetupSSHServer {
 }
 
 /** One command of the atlas's inventory, as the server's gate takes it. */
-export interface SetupSSHInventoryCommand {
+interface SetupSSHInventoryCommand {
   command: string;
   /** Run only on a server whose read user may list containers. */
   containers: boolean;
 }
 
 /** The SSH integration's servers and the authority lines servers trust. */
-export interface SetupSSHServers {
+interface SetupSSHServers {
   ca_public_key?: string;
   next_ca_public_key?: string;
   /** The lines a rotation retired, newest last. */
