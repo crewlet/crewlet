@@ -2161,7 +2161,7 @@
           "x-crewlet-secret": true
         },
         "token": {
-          "description": "Read PAT for participants-based routing; empty degrades routing.",
+          "description": "Read PAT (read_api) for participants-based routing and the atlas's read of the group; empty degrades routing.",
           "type": [
             "string",
             "number",

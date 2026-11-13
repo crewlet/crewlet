@@ -2,6 +2,8 @@ package collect
 
 import (
 	"errors"
+	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -135,6 +137,44 @@ func (b *Builder) Says(where string, r atlas.Ref, f atlas.Fact, raw string) {
 func (b *Builder) Relates(where string, from atlas.Ref, rel atlas.Relation, to atlas.Ref) {
 	c, err := atlas.Relates(from, rel, to, b.src, b.at)
 	b.add(where, c, err)
+}
+
+// Pipeline is the pipeline of repo that name names under prefix (a namespace
+// of the key after the repository's, as "environment:"), and its exists
+// claim; false where it is withheld. A NAME SHAPED LIKE A CREDENTIAL IS
+// REFUSED BEFORE IT IS WRITTEN AS A KEY SEGMENT: the segment's escapes would
+// reshape it into text no rule knows, with the credential's body intact.
+func (b *Builder) Pipeline(where string, repo atlas.Ref, prefix, name string) (atlas.Ref, bool) {
+	if redact.Contains(name) {
+		b.Withhold(where, fmt.Errorf("%s key: %w", atlas.KindPipeline, atlas.ErrCredential))
+		return atlas.Ref{}, false
+	}
+	return b.Ref(where, atlas.KindPipeline, repo.Key+"#"+prefix+KeySegment(name))
+}
+
+// Deployed relates what a deployment says it put its code behind to the
+// pipeline that deployed it: the address raw, and the name it is served
+// under. Both are named by their exact keys and never claimed, since neither
+// lives at the forge: the relation shows once a source that holds the name
+// reports it.
+func (b *Builder) Deployed(where string, pipeline atlas.Ref, raw string) {
+	if strings.TrimSpace(raw) == "" {
+		return
+	}
+	address, host, err := Address(raw)
+	if err != nil {
+		b.Withhold(where, err)
+		return
+	}
+	if endpoint, ok := b.Names(where, atlas.KindEndpoint, address); ok {
+		b.Relates(where, endpoint, atlas.RelationDeployedBy, pipeline)
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return
+	}
+	if name, ok := b.Names(where, atlas.KindHostname, host); ok {
+		b.Relates(where, name, atlas.RelationDeployedBy, pipeline)
+	}
 }
 
 // Unread records one part of the vendor the credential may not read.

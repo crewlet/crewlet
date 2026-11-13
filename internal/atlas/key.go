@@ -286,3 +286,11 @@ func RepositoryKeyOf(address string) (string, error) {
 	}
 	return repositoryKey(host + "/" + path)
 }
+
+// ForgeRepositoryKey is the key of the repository at path on the forge whose
+// web address is web: what [RepositoryKeyOf] reduces that repository's own
+// address to. A forge served under a path of its host keys its repositories
+// under that path, as the address a mirror pulls from does.
+func ForgeRepositoryKey(web, path string) (string, error) {
+	return RepositoryKeyOf(strings.TrimRight(strings.TrimSpace(web), "/") + "/" + strings.Trim(strings.TrimSpace(path), "/"))
+}

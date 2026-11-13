@@ -257,6 +257,24 @@ func TestARepositoryIsKnownByOneKeyWhereverItIsNamed(t *testing.T) {
 			t.Errorf("%s: %q, %v", raw, key, err)
 		}
 	}
+	// A forge names a repository by its own address and the repository's
+	// path, under the path the forge is served at where it has one.
+	for web, want := range map[string]string{
+		"https://GitLab.com/":             "gitlab.com/acme/platform/api",
+		"https://git.acme.example/gitlab": "git.acme.example/gitlab/acme/platform/api",
+		"http://gitlab.internal:8929":     "gitlab.internal/acme/platform/api",
+	} {
+		key, err := atlas.ForgeRepositoryKey(web, "/Acme/Platform/API/")
+		if err != nil || key != want {
+			t.Errorf("%s: %q, %v, want %q", web, key, err, want)
+		}
+		if of, err := atlas.RepositoryKeyOf(strings.TrimRight(web, "/") + "/acme/platform/api.git"); err != nil || of != key {
+			t.Errorf("%s: a mirror's address reduces to %q, %v, and the forge's own to %q", web, of, err, key)
+		}
+	}
+	if _, err := atlas.ForgeRepositoryKey("gitlab.com", "acme/api"); err == nil {
+		t.Error("a forge address with no scheme was accepted")
+	}
 	if _, err := atlas.NewRef(atlas.KindRepository, "gitlet/api"); err != nil {
 		t.Error(err)
 	}
