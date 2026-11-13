@@ -1227,12 +1227,13 @@ it:
     run's next step. A read the session's end overtakes on its way to the notes is
     turned away to ask again too, never answered done with nothing recorded: the
     plugin would never confirm those notes again, and the turn's ending would
-    report them unconfirmed though they were delivered. That includes a seat
-    leaving the node, whose tools close here a moment before its session ends: a
-    read that finds the session ended is answered as the end answers it, not as a
-    run whose tools are closed. Each note carries an id the harness admits it
-    under, unique to the note and the job, so a poller that admits it twice admits
-    it once.
+    report them unconfirmed though they were delivered. So is a read on a run
+    whose tools are closed, which takes nothing more from its notes: a seat
+    leaving the node closes its tools here before its release ends its session,
+    and the read made again reaches the seat's next holder, which records it; a
+    person's stop closes them too, and the run's end then refuses the read. Each
+    note carries an id the harness admits it under, unique to the note and the
+    job, so a poller that admits it twice admits it once.
 
   A harness takes notes here only where its run is set up to ask for them; a run
   whose harness asks for none still has every note read, by its review. Both

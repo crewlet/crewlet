@@ -510,25 +510,27 @@ func readWith(ctx context.Context, t *testing.T, client *http.Client, url string
 // 204: the plugin never confirmed the note again, and the record kept it served
 // and unread, which the run's ending reports unconfirmed and a later launch
 // tells again as one the session may already show. So a closed inbox says it
-// took nothing ([mcpbridge.ErrInboxNotServing]); and a read that finds its
-// opening ended is answered as the end answers it, whatever the seat's fence
-// says, as a poll is: the seat leaves this node's grants, which closes the
-// fence, before its release ends the opening. Each is turned away as a call
-// reaching its opening as it ends is, a 503 with the Retry-After a poll the
-// opening cannot hold is given, never as a record that could not be written.
-// After the recovery the box's read made again is recorded by the opening that
-// serves it now.
+// took nothing ([mcpbridge.ErrInboxNotServing]); and a read on a run whose
+// tools are closed is turned away too: the seat leaves this node's grants,
+// which closes the fence, before its release ends the opening, so a read
+// meets the closed fence whether or not the release has come yet. Each is
+// turned away as a call reaching its opening as it ends is, a 503 with the
+// Retry-After a poll the opening cannot hold is given, never as a record that
+// could not be written. After the recovery the box's read made again is
+// recorded by the opening that serves it now.
 //
 // Mutation: answer a read its inbox did not take done, or as a record that
 // could not be written, and the run's end and the recovery go red; answer a
-// read on an ended opening by its closed fence, and the seat's leaving goes red.
+// fenced run's read done, and the seat's leaving goes red, before its release
+// and after it.
 func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
 	t.Parallel()
 	for _, end := range []struct {
 		name string
 		// end ends the opening, closing the seat's fence first where the
-		// seat leaves, and answers the inbox the box's next read reaches, nil
-		// where none on this node serves it.
+		// seat leaves, or closes the fence alone where the seat's release is
+		// still to come, and answers the inbox the box's next read reaches,
+		// nil where none on this node serves it.
 		end func(t *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox
 	}{
 		{"the run ends", func(_ *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
@@ -538,6 +540,11 @@ func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
 		{"the seat leaves this node", func(_ *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox {
 			fenced.Store(true)
 			f.bridge.ReleaseSeat(seat())
+			return nil
+		}},
+		{"the seat's grants drop, its release still to come", func(_ *testing.T, _ *steerFixture,
+			fenced *atomic.Bool) *fakeInbox {
+			fenced.Store(true)
 			return nil
 		}},
 		{"a recovery opens the job again", func(t *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
@@ -787,10 +794,16 @@ func TestSteerTakeIsServedUnlistedAndNeverRecorded(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE TOOLS ARE CLOSED TAKES NOTHING MORE FROM ITS NOTES — the seat
-// moved, or a person stopped it — on either way in: its steer_take answers
+// A RUN WHOSE TOOLS ARE CLOSED TAKES NOTHING MORE FROM ITS NOTES, its seat moved
+// or a person having stopped it, on either way in: its steer_take answers
 // nothing, its poll holds as though nothing waited, and its read records
-// nothing. The notes wait for whatever reads the turn next.
+// nothing. The notes wait for whatever reads the turn next. AND ITS READ IS
+// TURNED AWAY TO ASK AGAIN, never answered done: the plugin would never confirm
+// the notes again, though OpenCode delivered them, and the read's next try
+// reaches the seat's next holder, which records it, or the run's end, which
+// refuses it.
+//
+// Mutation: answer a fenced run's read done, and the read goes red.
 func TestAFencedRunTakesNothingMoreFromItsNotes(t *testing.T) {
 	t.Parallel()
 	const hold = 300 * time.Millisecond
@@ -813,19 +826,15 @@ func TestAFencedRunTakesNothingMoreFromItsNotes(t *testing.T) {
 	if res == nil || res.StatusCode != http.StatusOK || len(notes) != 0 || took < hold {
 		t.Errorf("a fenced run's poll answered %v %+v after %s, want nothing at its hold", res, notes, took)
 	}
-	read, err := f.server.Client().Post(mcpbridge.SteerURL(url)+"/read", "application/json",
-		strings.NewReader(`{"ids":["n-1"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = read.Body.Close()
+	read := readWith(t.Context(), t, f.server.Client(), mcpbridge.SteerURL(url)+"/read", "n-1")
 	inbox.mu.Lock()
 	reads, takes := len(inbox.reads), len(inbox.takes)
 	inbox.mu.Unlock()
-	if read.StatusCode != http.StatusNoContent || reads != 0 || takes != 0 {
-		t.Errorf("a fenced run's read answered %d; the inbox was read %d and taken %d times",
-			read.StatusCode, reads, takes)
+	if read.status() != http.StatusServiceUnavailable || reads != 0 || takes != 0 {
+		t.Fatalf("a fenced run's read answered %d %q; the inbox was read %d and taken %d times, "+
+			"want a 503 to ask again and neither", read.status(), read.refusal, reads, takes)
 	}
+	wantTurnedAway(t, read, "unavailable")
 }
 
 // THE NOTES ROUTE REACHES THE SESSION'S HOLDER THROUGH THE RELAY, like every

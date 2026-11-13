@@ -348,13 +348,13 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with, and a read that reached its opening as it ended
-// ([Bridge.serveSteer], [readNotes]): the pace the bridge's own relay reads a
-// seat's lease again at while it waits for the seat's next holder
-// ([holderRetryCeiling]), because that holder is what serves the session's
-// next opening: a node that is going hands its seats on, and an opening that
-// ended was replaced, moved with its seat, or ended with its run, whose route
-// then answers 401.
+// away with, and a read that reached its opening as it ended, or that a run
+// whose tools are closed takes no more ([Bridge.serveSteer], [readNotes]): the
+// pace the bridge's own relay reads a seat's lease again at while it waits for
+// the seat's next holder ([holderRetryCeiling]), because that holder is what
+// serves the session's next opening: a node that is going hands its seats on,
+// and an opening that ended was replaced, moved with its seat, or ended with
+// its run, whose route then answers 401.
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
@@ -364,22 +364,24 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 	httpjson.Write(w, http.StatusOK, steerNotes{Notes: notes})
 }
 
-// readNotes records the notes a read names — none for a run whose tools are
-// closed, which takes nothing more from its notes (see [Bridge.pollNotes]); its
-// read is answered as done, because there is nothing for the poller to retry.
+// readNotes records the notes a read names through the opening's inbox.
 //
-// A READ ITS OPENING'S END OVERTOOK ON ITS WAY IN IS TURNED AWAY TO ASK AGAIN,
-// as one that reached the opening after its end took the inbox is
-// ([Bridge.serveSteer]), never answered done with nothing recorded: the
-// plugin would never confirm its notes again, and the record would keep each
-// served and unread. The end is found at either of the read's last two steps:
+// A READ IS RECORDED OR TURNED AWAY TO ASK AGAIN, NEVER ANSWERED DONE WITH
+// NOTHING RECORDED: the plugin would never confirm its notes again, and the
+// record would keep each served and unread, for the run's ending to report
+// unconfirmed though OpenCode delivered it, and a later launch to tell again
+// as one the session may already show. It is turned away as a read that
+// reached the opening after its end took the inbox is ([Bridge.serveSteer]),
+// at either of its last two steps:
 //
-//   - A FENCED OPENING THAT HAS ENDED answers as its end answers, as a held
-//     poll does, rather than as a run whose tools are closed: a seat leaving
-//     this node leaves its grants, which closes the fence, before its release
-//     ends the opening, and its box goes on with the seat's next holder, which
-//     the read's next try reaches. An opening that has ended is answered in
-//     its end's words, never its fence's ([binding.stop]).
+//   - A RUN WHOSE TOOLS ARE CLOSED takes nothing more from its notes (see
+//     [Bridge.pollNotes]), and records no read either, whether or not its
+//     opening has ended yet. A seat leaving this node leaves its grants,
+//     which closes the fence, before its release ends the opening, and its
+//     box goes on with the seat's next holder, which the read's next try
+//     reaches and which records it. A person's stop closes the fence too, and
+//     the run's end then refuses the read's next try. Answered done, the read
+//     was recorded nowhere, and the seat's next holder was never asked.
 //   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
 //     ([ErrInboxNotServing]): the end closed it after the route found it
 //     serving, or a recovery's opening serves the box before its inbox is
@@ -404,11 +406,7 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		return
 	}
 	if fence(opened.session) != nil {
-		if opened.over() {
-			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
 	switch err := inbox.Read(r.Context(), body.IDs); {
