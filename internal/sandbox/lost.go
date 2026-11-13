@@ -161,7 +161,12 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		boxed, _, err := c.boxResult(ctx, run, BoxReadCollect)
 		switch {
 		case err == nil:
+			// THE BOX ANSWERED, which ends the run of failed reads behind
+			// this one whatever a later step does: a drain the store does
+			// not answer, or that this node cuts short, hands the claim
+			// back with that run ended ([Release.BoxAnswered]).
 			result, read = boxed, true
+			run.BoxAnswered = true
 		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent),
 			!c.collectGivenUp(run, err, c.now()):
 			return nil, c.collectFailed(ctx, run, err)
@@ -263,9 +268,12 @@ func cutOff(result Result, cause LossCause) Result {
 //
 // NEVER A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]),
 // whatever the window counted before it: the bound is on a box that does not
-// answer, and this box answered. Given up, a lost job's round was carried on
-// without its read ([Coordinator.carryOnLost]), uncharged for what its box
-// still held.
+// answer, and the store's silence says nothing about the box. The host's read
+// of the run's row comes before the box is asked at all, and every other such
+// step comes after a read the box answered, which ends the run of failures
+// behind it as the claim goes back ([Release.BoxAnswered]). Given up, a lost
+// job's round was carried on without its read ([Coordinator.carryOnLost]),
+// uncharged for what its box still held.
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
 	switch {
 	case errors.Is(cause, ErrStoreSilent):

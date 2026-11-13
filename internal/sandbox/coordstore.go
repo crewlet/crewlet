@@ -977,6 +977,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, errors.New("sandbox: a release cannot report a collection that both read its box " +
 			"back and failed to")
 	}
+	if release.BoxAnswered && !release.CollectFailedAt.IsZero() {
+		return false, errors.New("sandbox: a release cannot both count a failed collection and end the run " +
+			"of failures it counts onto")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -1026,6 +1030,13 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.CollectedAt.IsZero() && !release.CollectedAt.IsZero() {
 				run.Launch.CollectedAt = release.CollectedAt.UTC()
 			}
+		}
+		// AND AT ONE WHOSE READ ANSWERED though a later step handed it back
+		// uncounted: the box answered, and the job is not collected
+		// ([Release.BoxAnswered]).
+		if release.BoxAnswered {
+			run.Launch.CollectFailures = 0
+			run.Launch.CollectFailingSince = time.Time{}
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it

@@ -1792,6 +1792,11 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	if err != nil {
 		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
+	// THE BOX ANSWERED, which ends the run of failed collections behind this
+	// one whatever a later step does: a step after the read that the store
+	// does not answer, or that this node cuts short, hands the claim back
+	// uncounted with that run ended ([Release.BoxAnswered]).
+	run.BoxAnswered = true
 	// THE JOB'S CALLS STILL IN FLIGHT, waited for on the run's log before
 	// anything reads what the job did ([Coordinator.drainCalls]): its session
 	// ended to new calls first — a park's and a run's ended at its cap alike —
@@ -1918,7 +1923,13 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // unreachable, as it always was. A collection that read the box ends the run
 // of failures behind it, as the waiter's reconnect that succeeds ends its
 // streak: a box collected and then handed back because its resume failed is a
-// box that answered, and its next failure starts a run of its own.
+// box that answered, and its next failure starts a run of its own. So is a box
+// whose read answered before a later step of its collection, one the
+// coordination store did not answer or one this node cut short, handed the
+// claim back uncounted ([Release.BoxAnswered]): left open, the run of failures
+// from before a store's silence was measured across it, and the first failure
+// after the silence gave up as lost a box that had answered every read. A later
+// step its delivery's deadline cut is counted onto the run instead, as below.
 //
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
 // box its provider reclaimed. It went between the poll that found its job over
@@ -2033,6 +2044,13 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 	// resumed both hold it — and handing it back to running leaves it there.
 	// A release the store does not answer counts the failure once, when it
 	// lands ([Coordinator.unclaimCollection]).
+	//
+	// AND COUNTED ONTO THE RUN OF FAILURES BEHIND IT, even where the box
+	// answered this attempt's read: what failed then is a step after it that
+	// the delivery's deadline cut, and a collection that always outlasts its
+	// delivery after the read would otherwise start a run of its own each
+	// time and never be given up ([Release.BoxAnswered]).
+	run.BoxAnswered = false
 	if err := c.unclaimCollection(ctx, run, failure{collectFailed: now}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a

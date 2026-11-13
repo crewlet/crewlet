@@ -120,6 +120,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
+		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -2214,6 +2215,61 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 	if got := mustGet(t, s, "t1").Launch; got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
 	}
+}
+
+// A RELEASE WHOSE COLLECTION READ THE BOX ENDS THE RUN OF FAILURES WITHOUT
+// COLLECTING THE JOB. A collection whose read answered, and that a later step
+// handed back uncounted (a coordination store that did not answer the step, or
+// a node that stopped), ends the job's run of failed collections as a
+// collected one does, so the next failure starts a run of its own. But the job
+// is not collected: it stays stoppable, and the collection made again charges
+// and records it. And a release cannot both count a failed collection and end
+// the run of failures it counts onto.
+func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.CollectFailedAt = first
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release of a failed collection = %v, %v", released, err)
+	}
+
+	answered := releaseOf(mustClaim(t, s, "t1"))
+	answered.BoxAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a collection whose read answered = %v, %v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.Launch.CollectFailures != 0 ||
+		!got.Launch.CollectFailingSince.IsZero() {
+		t.Fatalf("the job's row reads %s with %d failed collections since %v; want it running with its "+
+			"run of failures ended", got.Status, got.Launch.CollectFailures, got.Launch.CollectFailingSince)
+	}
+	if got.Launch.Collected || !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release whose read answered recorded the job collected (%v at %v)", got.Launch.Collected,
+			got.Launch.CollectedAt)
+	}
+	stop := sandbox.RunStop{By: "founder"}
+	if decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	}); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job whose read answered = %+v, %v, %v; want it decided, the job uncollected",
+			decided.Stop, ok, err)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	claimed := mustClaim(t, s, "t2")
+	both := releaseOf(claimed)
+	both.BoxAnswered, both.CollectFailedAt = true, first
+	if _, err := s.ReleaseClaim(ctx, "t2", both); err == nil {
+		t.Error("a release that both counts a failed collection and ends the run it counts onto was accepted")
+	}
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed || got.Launch.CollectFailures != 0 {
+		t.Errorf("the refused release wrote the row: %s with %d failed collections", got.Status,
+			got.Launch.CollectFailures)
+	}
+	mustRelease(t, s, claimed)
 }
 
 func testAReleaseNeverClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {

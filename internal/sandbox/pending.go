@@ -224,6 +224,26 @@ type Release struct {
 	// does not hold one already.
 	CollectedAt time.Time
 
+	// BoxAnswered is whether the claim's collection READ THE JOB'S BOX BACK
+	// and was handed back UNCOUNTED by a step after the read: one the
+	// coordination store did not answer ([ErrStoreSilent]), or one this node
+	// cut short by stopping. It ENDS the job's run of failed collections as
+	// Collected does (the release clears [LaunchRecord.CollectFailures] and
+	// [LaunchRecord.CollectFailingSince]) and records nothing more: the job
+	// is not collected ([LaunchRecord.Collected]), so it stays stoppable, and
+	// the collection made again charges and records it.
+	//
+	// The bound is on failures OF THE BOX, consecutive, and a box that
+	// answered while the store was silent is a box that answered. Left open
+	// behind it, the run of failures from before the silence was measured
+	// across it, and the first failure after it gave up as lost a box that
+	// had answered every read in between. A release that counts a failed
+	// collection cannot say it too, and one that does is refused: a counted
+	// failure continues the run of failures it is counted onto, or a
+	// collection that always outlasted its delivery after reading the box
+	// would start a run of its own each time and never be given up.
+	BoxAnswered bool
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -1779,6 +1799,14 @@ type PendingRun struct {
 	// because it is a fact about one claim and the next claim starts
 	// without it.
 	Collected bool `json:"-"`
+
+	// BoxAnswered is TRANSIENT as well, and set earlier: the moment THIS
+	// claim's read of the job's box answered, before any step after the
+	// read, so a hand-back that one of those steps makes uncounted (the
+	// coordination store did not answer it, or this node stopped) still
+	// ends the job's run of failed collections ([Release.BoxAnswered]).
+	// Never persisted, for the reason Collected is not.
+	BoxAnswered bool `json:"-"`
 
 	// Deadline is when the turn that launched this run stops being worked
 	// on: its wall-clock cap — a scheduled fire's — measured from when the

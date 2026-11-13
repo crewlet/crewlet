@@ -65,14 +65,15 @@ type claimRelease struct {
 
 // releaseFor is the release that gives run's claim back: what the claim
 // recorded on its way rides back with it (its charge, the launch's own record,
-// whether its collection read the box), failed is what the release counts onto
-// the job's record, and hold, where set, holds the run's resume back
-// ([Release.Hold]).
+// whether its collection read the box, and whether it collected the job),
+// failed is what the release counts onto the job's record, and hold, where
+// set, holds the run's resume back ([Release.Hold]).
 func releaseFor(run PendingRun, failed failure, hold *Refusal) Release {
 	return Release{
 		Launch: run.LaunchID, To: claimedFrom(run), Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
-		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, Fence: fenceOf(run), Hold: hold,
+		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, BoxAnswered: run.BoxAnswered,
+		Fence: fenceOf(run), Hold: hold,
 	}
 }
 
