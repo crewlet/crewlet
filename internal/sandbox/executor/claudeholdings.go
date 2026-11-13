@@ -245,7 +245,11 @@ import (
 // 2.1.300), which says what another box can continue: a question of the
 // harness's resume, not of how its records read. A writer below it, none
 // recorded, and one whose release this code cannot read, a number past what
-// an int holds among it, are no reading ([readsRelease]).
+// an int holds among it, are no reading ([readsRelease]). The carry gate
+// ([ClaudeCode.Continues]) takes a release it cannot read for a current one
+// on purpose ([releaseAtLeast]), failing open toward continuing a session,
+// where the reading fails closed, because what it counts held is never told
+// again.
 const holdingsWriterFloor = "2.1.310"
 
 // holdingsMaxAgents is the most subagents a reading reads the members of.
