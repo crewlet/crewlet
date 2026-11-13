@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -115,7 +116,7 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			// THE ALARMS' WAKES ROUTE ON EVERY NODE, whatever halves it
 			// runs: a transition is routed by the chart alone.
 			// AND THE ACCESS REVIEWS, which name their seat and read no row.
-			want := []string{alarmwake.Source, accessreview.Source}
+			want := []string{alarmwake.Source, accessreview.Source, atlaswake.Source}
 			if tc.tracker {
 				want = append(want, worklet.Source)
 			}

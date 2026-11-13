@@ -47,6 +47,7 @@ var dutyTTLs = map[string]struct {
 	"delegatedSweepTTL":    {delegatedSweepTTL, true},
 	"integrationDutyTTL":   {integrationDutyTTL, true},
 	"atlasCollectDutyTTL":  {atlasCollectDutyTTL, true},
+	"atlasWakeDutyTTL":     {atlasWakeDutyTTL, true},
 	"learningDutyTTL":      {learningDutyTTL, true},
 	// THE IDENTITY DUTIES' LEASE is three of a duty's interval, and the longest
 	// is the roster's (identityduties_internal_test.go): the one claim site

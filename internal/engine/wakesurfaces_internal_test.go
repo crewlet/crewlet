@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -144,6 +145,14 @@ func wakeSurfaces() map[string]wakeSurface {
 		// about a change somebody made.
 		accessreview.Source: {accessreview.Prompt{}, routedWake(accessreview.Source,
 			accessreview.Prompt{}, accessreview.EventType, nil), provenance.SourceChangeNote},
+		// A DRIFT WAKE NAMES NOBODY AND CARRIES NO BODY: a body a later
+		// build writes is the atlas's, read at its writers' trust.
+		atlaswake.Source: {atlaswake.Prompt{}, routedWake(atlaswake.Source, atlaswake.Prompt{},
+			atlaswake.EventType, map[string]string{
+				atlaswake.EntryField:   "0d4b2f0e-7c1a-8b3d-9e5f-6a7b8c9d0e1f",
+				atlaswake.KindField:    "service",
+				atlaswake.ChangesField: "alerting",
+			}), provenance.SourceAtlas},
 		promptlessSource: {notify.Generic{}, routedWake(promptlessSource, notify.Generic{},
 			"something_happened", nil), provenance.SourceNotification},
 	}
@@ -177,7 +186,8 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 	// THE ALARMS' SOURCE IS THE ENGINE'S TOO, and no first-party surface:
 	// a node's alarm transition names no sender (internal/alarmwake), so it
 	// is no namespace of handles, and is listed here by itself.
-	want := map[string]bool{promptlessSource: true, alarmwake.Source: true, accessreview.Source: true}
+	want := map[string]bool{promptlessSource: true, alarmwake.Source: true, accessreview.Source: true,
+		atlaswake.Source: true}
 	for _, source := range firstPartySources {
 		want[source] = true
 	}

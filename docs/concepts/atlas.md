@@ -207,6 +207,19 @@ What waits is computed on every read and stored nowhere ([Review](../guides/atla
 
 **Only drift on what a person set reaches that person's Inbox.** Where a newer report from an integration, an agent or the engine differs from a value a person set or confirmed, the atlas shows both and settles neither, and the person who said it is told under Needs you. Nothing else in Review reaches an Inbox: a disagreement nobody's word is part of, and an entry waiting to be confirmed, belong to every holder of the atlas together and wait in Review with its count. The notice is read off the same computation (`atlas_review` asked with `mine`), so it is gone the moment somebody keeps one of the two values.
 
+## The owning agent is woken when its entry drifts
+
+An entry whose owner is an agent seat does not wait for a person to notice it. When it **drifts**, the engine wakes that seat ([ADR-0143](../../adr/0143-the-agent-seat-that-owns-an-atlas-entry-is-woken-when-it-drifts-at-most-once-a-day.md)). Drift is one of three changes: the entry's health turns to `alerting`, a newer report differs from a value a person set or confirmed (`contested`), or two sources disagree with nobody to settle it (`disputed`). A warning (`needs_look`) wakes nobody.
+
+- **Only the owning agent seat.** The owner is the one the entry's row shows: a seat a person or the engine's records name, never one only suggested. A person is never woken (they are told through Review, the Inbox and the Setup Advisor), and neither is a unit or its lead.
+- **At most once an entry a day, and once a change.** A seat is woken about an entry at most once in a UTC day, and only about a change it has not been told. A disagreement that stays open is told once, not every day; one that ends and returns is a new change. The bound is a record in the coordination store, so it holds on every node and across restarts.
+- **Never a seat that takes no work.** A seat that is paused, held by no node, or parked on a spent budget or on its models' limit is not woken, and its day is not spent: once it runs again it is told what is still open.
+- **A pointer, not a report.** The wake carries the entry's id, its kind and the change classes, and nothing else: no name, no value and no text a vendor, an agent or a person wrote. The seat reads the entry with `atlas_get` and `atlas_trace`, as itself, and acts within its role. An agent never settles a disagreement, which stays a person's decision in Review.
+- **As the seat reads the atlas.** The drift is read in the atlas as the owning seat is shown it, so a wake never points at an entry or a value outside its reach. A repository only Gitlet reports is read only as somebody, so it is not read for drift.
+- **A switch.** `atlas.owner_wakes: false` in the company document wakes nobody; the entries still wait in Review.
+
+The fleet duty that does this, `atlas-wake`, reads the atlas every five minutes ([Singleton duties](seat-ownership.md#singleton-duties)).
+
 ## Reading the atlas
 
 People holding the `atlas` permission read the atlas in the dashboard, under Company › Atlas ([Reading the atlas](../guides/atlas.md)), and through twelve questions, each also a REST route: a page of its entries, the map, one entry, a trace from one, the counts a filter menu offers, its own log as lines, that log counted a day at a time, what waits for a person, each source's standing, the open work on each entry, one entry's work, and the entries a list of ids names ([The atlas](../reference/api-endpoints.md#the-atlas)). Each reads the atlas as its reader: Gitlet's repositories only for a holder of Gitlet, and an integration's standing or a connection test only for an administrator. A standing alarm on a tool server or a model entry, and the health the nodes beat, are every holder's.
@@ -331,4 +344,6 @@ A task in Worklet names the entries it touches: the server a change is rolled ou
 | Each source's standing: its last complete read and that read's digest, calls and withheld values, its last fault, the listings it was refused, each server's last whole read, and the entries it has stopped seeing since when | the whole company, current value only | the coordination store, apart from the integration statuses |
 | A person's ask that a source be read now: who asked and when | the whole company, current value only, until the duty honours it | the coordination store, in a bucket of its own |
 | Which node reads the vendors | the fleet, one holder at a time | the `worker:atlas-collect` lease |
-| How often: `atlas.refresh_interval_seconds`, and whether agents record: `atlas.agent_records` | the company | the company document |
+| For each agent seat and each entry it owns: the UTC day the seat was last woken about it, and a digest of each change it was told | the whole company, now: whichever node holds the duty must not wake the seat a second time that day | the coordination store, one record a seat and entry, written only at the revision read |
+| Which node reads the atlas for drift | the fleet, one holder at a time | the `worker:atlas-wake` lease |
+| How often: `atlas.refresh_interval_seconds`, whether agents record: `atlas.agent_records`, and whether an owning agent is woken: `atlas.owner_wakes` | the company | the company document |
