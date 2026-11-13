@@ -1,0 +1,423 @@
+package executor
+
+import (
+	"bytes"
+	"cmp"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"slices"
+)
+
+// WHICH RECORDS OF A THREAD CLAUDE CODE'S RESUME HANDS ITS MODEL, as the
+// reading of a kept session walks them ([threadChain]): its own rule, read in
+// 2.1.310's and 2.1.322's shipped code, never a rule of the reading's.
+//
+// A RESUME HANDS ITS MODEL A CHAIN, never the file. It walks from one record,
+// the LEAF, to the record its `parentUuid` names, and on, until a parent that
+// is null, the empty string or absent ends the walk, and reverses what it
+// walked. Off that chain it hands over only what a reply on it recovers: the
+// reply's other records, found by their `message.id`, which every record of
+// one reply carries, and the results whose parent is one of them, which is how
+// the results of calls made at once, each chained to its own call, reach the
+// model though the thread's last record descends from one of them alone
+// (probe T's trees, both releases). A record of any other reply off the chain,
+// and a user record that is no call's result, reaches the model by no path: so
+// an attempt the harness withdrew and failed to remove from the file, which no
+// later record descends from, holds a call no continuation hands over, and the
+// reading holds none of its calls.
+//
+// A RECORD IS HANDED ([threadChain.handed]) where it lies past its thread's
+// last restart and is on the chain from the leaf, or is a reply's record whose
+// id is that of a reply on the chain past the last restart, or is a user
+// record of results whose parent is such a record. Past the last restart,
+// since a compaction that kept a segment deletes every record before its
+// boundary from what the resume walks, so nothing reached through one is sure
+// to be handed; and the walk stops at the last restart for that reason.
+//
+// THE LEAF of a main thread is the nearest user or assistant record up from
+// its last record, the leaf Claude Code's resume starts from wherever nothing
+// else moves it, which the reading holds to be so ([holdingsWalk.mainEnd]):
+//
+//   - a checkpoint (a last-prompt record) the session's last record does not
+//     descend from moves it there, and one a rewind, a withdrawal or a fork
+//     marked moves it wherever it names, or to nothing: each is no reading;
+//   - where a compaction kept a segment, the resume picks its leaf among the
+//     thread's leaves, the checkpoint first where it is one: so in a main
+//     thread holding a compaction's boundary, a checkpoint that is a user or
+//     assistant record other than the leaf is taken for the leaf, the earlier
+//     of the two the pick can land on;
+//   - a record the resume keeps out of a session's last record's place (a
+//     sidechain's, a fork's briefing, a file's snapshot), an assistant record
+//     whose content is a string, which its load drops where it is blank and
+//     rewrites where it is not, and a user or assistant record whose message
+//     does not decode, which its load drops, are each no reading. No main
+//     thread the probes kept holds any of them.
+//
+// A SUBAGENT'S THREAD is walked from its last record of its own in the file
+// ([holdingsWalk.subagentEnd]): rule 2 asks what its model had seen when it
+// wrote the reply its answer carries, which is the conversation its last
+// record continues. Its walk must reach the thread's root; one that breaks
+// leaves the thread not whole.
+//
+// WHERE THE WALK CANNOT BE READ, THE READING TELLS. A parent naming no record,
+// or a record the walk already took, ends a main thread's walk, and what lies
+// past it is told: the harness takes a parent by timestamp there, which only
+// lengthens its chain, so the records walked to the break are handed either
+// way. In a subagent's thread either leaves the thread not whole. A record of
+// no lowercase canonical uuid, a uuid held twice, or more records than
+// [holdingsMaxRecords] is no reading of a main thread and leaves a subagent's
+// not whole. And recovery is read only through a result's parent: the
+// harness also recovers a result through the call its id names, behind a flag,
+// which the reading leaves told.
+//
+// A subagent's thread can name a parent that comes later in the file (the
+// attachments of its start: 74 of the 89 subagent threads the probes kept),
+// so a parent is looked up once the thread is read whole.
+
+// holdingsMaxRecords is the most user, assistant, attachment and system
+// records of one thread a reading walks the chain of.
+//
+// 262,144, TWICE THE LINES A THREAD AT THE PLAINTEXT'S BOUND HOLDS: 256 MiB
+// ([threadPlainMax]) of lines of 2,053 bytes, a real main thread's average
+// (probe P6), is 130,754, and a session at the archive's bound inflates to
+// about 118 MiB. One thread's records are held at a time, each a uuid's place
+// in a map, a parent and its marks, the uuid of a parent that came later, and
+// each reply's id as a digest: at the bound, every record a reply of its own
+// id naming a parent that comes later, 35 MiB live, its heap peaking at 69 MiB
+// (BenchmarkAReadingAtItsBounds, on two cores). Past it, a main thread is no
+// reading and a subagent's thread not whole.
+const holdingsMaxRecords = 1 << 18
+
+// What a record's parent is, where it is no record of the thread
+// ([threadChain.parent]).
+const (
+	// chainRoot is a parent that ends the walk: null, the empty string or
+	// absent, each falsy to the harness's walk.
+	chainRoot int32 = -1
+	// chainNowhere is a parent naming no record of the thread.
+	chainNowhere int32 = -2
+	// chainLater is a parent not read when its child was, looked up once the
+	// thread is read whole ([threadChain.resolve]).
+	chainLater int32 = -3
+)
+
+// What a record is to the walk ([threadChain.marks]).
+const (
+	// markUserOrAssistant is a user or assistant record: the leaf of a main
+	// thread is the nearest one up from its last record.
+	markUserOrAssistant uint8 = 1 << iota
+	// markReply is a counted assistant record whose reply's id was read
+	// ([threadChain.replies]).
+	markReply
+	// markResults is a user record holding a call's result.
+	markResults
+)
+
+// errChainBound is a thread holding more records than a reading walks the
+// chain of ([holdingsMaxRecords]).
+var errChainBound = errors.New("its thread holds more records than a reading walks the chain of")
+
+// threadChain is one thread's records as the walk reads them: by uuid, each
+// with its parent and its marks, and each counted reply's id as a digest.
+type threadChain struct {
+	// bound is the most records it files ([holdingsMaxRecords]).
+	bound int
+	// index is each record by its uuid, kept until the thread is read whole.
+	index map[[16]byte]int32
+	// parent is each record's parent: a record, or chainRoot, chainNowhere or
+	// chainLater; marks each record's marks.
+	parent []int32
+	marks  []uint8
+	// later are the parents not read when their child was.
+	later []chainLaterParent
+	// replies are the counted replies' records and their ids' SHA-256, in
+	// record order; a reply's id is the box's word, as long as a line, and two
+	// ids are the same reply only where the harness compares them equal.
+	replies []chainReply
+	// scopeFrom is the first record past the thread's last restart.
+	scopeFrom int32
+	// lastOwn is the thread's last record of its own, -1 where none.
+	lastOwn int32
+	// broken is whether a record could not be filed ([threadChain.add]):
+	// none is filed after it, and a subagent's thread is not whole.
+	broken bool
+	// onChain marks the records walked from the leaf, and handedReplies the
+	// ids of the replies among them past the last restart.
+	onChain       []uint64
+	handedReplies map[[32]byte]struct{}
+}
+
+// chainLaterParent is a record whose parent was not read when it was.
+type chainLaterParent struct {
+	record int32
+	parent [16]byte
+}
+
+// chainReply is a counted reply's record and its id's digest.
+type chainReply struct {
+	record int32
+	id     [32]byte
+}
+
+// newThreadChain is the walk of a thread not read yet, filing at most bound
+// records.
+func newThreadChain(bound int) *threadChain {
+	return &threadChain{bound: bound, index: map[[16]byte]int32{}, lastOwn: -1}
+}
+
+// add files line, a user, assistant, attachment or system record of the
+// thread, its own where own, with marks, and answers its place: an error
+// where its uuid is no lowercase canonical UUID or is another record's, or
+// where the thread holds c.bound already.
+func (c *threadChain) add(line threadLine, own bool, marks uint8) (int32, error) {
+	uuid, err := line.UUID()
+	if err != nil {
+		return -1, err
+	}
+	id, ok := canonicalUUID(uuid)
+	switch {
+	case !ok:
+		return -1, errors.New("its uuid is no lowercase canonical UUID, so no parent can name it as the harness " +
+			"does")
+	case len(c.parent) >= c.bound:
+		return -1, fmt.Errorf("%w, %d", errChainBound, c.bound)
+	}
+	if _, held := c.index[id]; held {
+		return -1, errors.New("its uuid is another record's, and the harness walks the last of the two")
+	}
+	record := int32(len(c.parent))
+	parent, named := chainParent(line.Head)
+	if parent == chainLater {
+		if p, held := c.index[named]; held {
+			parent = p
+		} else {
+			c.later = append(c.later, chainLaterParent{record: record, parent: named})
+		}
+	}
+	c.index[id] = record
+	c.parent = append(c.parent, parent)
+	c.marks = append(c.marks, marks)
+	if own {
+		c.lastOwn = record
+	}
+	return record, nil
+}
+
+// chainParent is what head's `parentUuid` makes its record's parent: chainRoot
+// where it is absent, null or the empty string; chainNowhere where it is no
+// lowercase canonical UUID, which no record of a thread the reading walks
+// carries; and else chainLater, the record whose uuid is named.
+func chainParent(head threadHead) (int32, [16]byte) {
+	if head.Parent == nil || bytes.Equal(head.Parent, jsonNull) {
+		return chainRoot, [16]byte{}
+	}
+	named, err := wireRequiredString("parentUuid", head.Parent)
+	switch {
+	case err != nil:
+		return chainNowhere, [16]byte{}
+	case named == "":
+		return chainRoot, [16]byte{}
+	}
+	id, ok := canonicalUUID(named)
+	if !ok {
+		return chainNowhere, [16]byte{}
+	}
+	return chainLater, id
+}
+
+// canonicalUUID is s as the 16 bytes it writes, where s is a UUID in its
+// canonical form in lowercase hex: 8, 4, 4, 4 and 12 digits between hyphens.
+//
+// LOWERCASE ALONE, as every uuid Claude Code writes is: the harness names a
+// parent by comparing strings, so an uppercase spelling names no record its
+// lowercase twin is, and read as the same 16 bytes it would link two records
+// the harness never links.
+func canonicalUUID(s string) (id [16]byte, ok bool) {
+	if len(s) != 36 {
+		return [16]byte{}, false
+	}
+	for i, n := 0, 0; i < len(s); {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if s[i] != '-' {
+				return [16]byte{}, false
+			}
+			i++
+			continue
+		}
+		hi, okHi := lowerHex(s[i])
+		lo, okLo := lowerHex(s[i+1])
+		if !okHi || !okLo {
+			return [16]byte{}, false
+		}
+		id[n] = hi<<4 | lo
+		n++
+		i += 2
+	}
+	return id, true
+}
+
+// lowerHex is the value of b, a lowercase hex digit.
+func lowerHex(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	}
+	return 0, false
+}
+
+// mark adds marks to record's.
+func (c *threadChain) mark(record int32, marks uint8) { c.marks[record] |= marks }
+
+// reply files record, a counted reply's, under its id.
+func (c *threadChain) reply(record int32, id string) {
+	c.replies = append(c.replies, chainReply{record: record, id: sha256.Sum256([]byte(id))})
+	c.mark(record, markReply)
+}
+
+// restart says the record filed last is at or before the thread's last
+// restart.
+func (c *threadChain) restart() { c.scopeFrom = int32(len(c.parent)) }
+
+// resolve looks up the parents not read when their children were, now the
+// thread is read whole: each the record it names, or chainNowhere.
+func (c *threadChain) resolve() {
+	for _, l := range c.later {
+		parent, held := c.index[l.parent]
+		if !held {
+			parent = chainNowhere
+		}
+		c.parent[l.record] = parent
+	}
+	c.later = nil
+}
+
+// done releases what only reading the thread needed: the records by uuid.
+func (c *threadChain) done() { c.index = nil }
+
+// chainEnd is what ended a walk.
+type chainEnd int
+
+const (
+	// endRoot is a record whose parent ends the walk.
+	endRoot chainEnd = iota
+	// endNowhere is a parent naming no record.
+	endNowhere
+	// endTaken is a record the walk had already taken.
+	endTaken
+	// endRestart is a record at or before the thread's last restart.
+	endRestart
+)
+
+// String is what ended a walk, in words for an error.
+func (e chainEnd) String() string {
+	switch e {
+	case endNowhere:
+		return "a parent naming no record"
+	case endTaken:
+		return "a record it had already taken"
+	case endRestart:
+		return "its last restart"
+	}
+	return "a root"
+}
+
+// up walks from record to its parents until stop holds of one, answering
+// that one, or until the walk ends, answering -1 and what ended it: a root, a
+// parent naming no record, more steps than the thread holds records (a record
+// already taken), or, where scoped, a record at or before the last restart.
+func (c *threadChain) up(record int32, scoped bool, stop func(int32) bool) (int32, chainEnd) {
+	for range len(c.parent) {
+		if scoped && record < c.scopeFrom {
+			return -1, endRestart
+		}
+		if stop(record) {
+			return record, endRoot
+		}
+		switch parent := c.parent[record]; {
+		case parent == chainRoot:
+			return -1, endRoot
+		case parent < 0:
+			return -1, endNowhere
+		default:
+			record = parent
+		}
+	}
+	return -1, endTaken
+}
+
+// walk marks the chain from leaf, as far as it can be read and, where
+// scoped, no further than the thread's last restart, and the ids of the
+// replies on it past that restart; and answers what ended it.
+func (c *threadChain) walk(leaf int32, scoped bool) chainEnd {
+	c.onChain = make([]uint64, (len(c.parent)+63)/64)
+	end := endTaken
+	for record := leaf; ; {
+		if scoped && record < c.scopeFrom {
+			end = endRestart
+			break
+		}
+		if c.on(record) {
+			break
+		}
+		c.onChain[record/64] |= 1 << (record % 64)
+		parent := c.parent[record]
+		if parent == chainRoot {
+			end = endRoot
+			break
+		}
+		if parent < 0 {
+			end = endNowhere
+			break
+		}
+		record = parent
+	}
+	c.handedReplies = map[[32]byte]struct{}{}
+	for _, r := range c.replies {
+		if r.record >= c.scopeFrom && c.on(r.record) {
+			c.handedReplies[r.id] = struct{}{}
+		}
+	}
+	return end
+}
+
+// on reports whether record is on the chain walked.
+func (c *threadChain) on(record int32) bool {
+	return c.onChain != nil && c.onChain[record/64]&(1<<(record%64)) != 0
+}
+
+// handed reports whether the resume hands its model record (the file
+// comment): past the last restart, and on the chain, or a reply's record of
+// an id a reply on the chain carries, or a user record of results whose
+// parent is one. False for -1, no record of the thread.
+func (c *threadChain) handed(record int32) bool {
+	if record < c.scopeFrom || int(record) >= len(c.parent) {
+		return false
+	}
+	if c.on(record) {
+		return true
+	}
+	switch marks := c.marks[record]; {
+	case marks&markReply != 0:
+		return c.replyHanded(record)
+	case marks&markResults != 0:
+		parent := c.parent[record]
+		return parent >= c.scopeFrom && c.marks[parent]&markReply != 0 && c.replyHanded(parent)
+	}
+	return false
+}
+
+// replyHanded reports whether a reply on the chain past the last restart
+// carries the id of record's reply.
+func (c *threadChain) replyHanded(record int32) bool {
+	i, found := slices.BinarySearchFunc(c.replies, record, func(r chainReply, record int32) int {
+		return cmp.Compare(r.record, record)
+	})
+	if !found {
+		return false
+	}
+	_, handed := c.handedReplies[c.replies[i].id]
+	return handed
+}

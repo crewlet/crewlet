@@ -52,7 +52,12 @@ import (
 //     to the plaintext's bound;
 //   - one line at the line's bound of the smallest results a message holds, all
 //     of which [threadLine.Message] keeps, and one of the smallest blocks of a
-//     kind no reader names, each of which it keeps a kind of.
+//     kind no reader names, each of which it keeps a kind of;
+//   - the soundness critic's two shapes of ids the call-id rule refuses: 96
+//     Agent calls each under an id of a mebibyte, and [holdingsMaxAgents]
+//     metadata each naming its call by an id of 65,000 bytes;
+//   - a main thread at [holdingsMaxRecords], each record at its worst for what
+//     the chain's walk holds ([benchRecords]).
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	const (
 		line     = 2053           // a real main thread's average line, probe P6
@@ -72,6 +77,9 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 		{"lines_at_the_lines_bound", benchLines(threadPlainMax-benchSlack, threadLineMax, bound)},
 		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`)},
 		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`)},
+		{"legs_of_ids_a_mebibyte_long", benchLongLegs},
+		{"metadata_of_ids_most_of_their_bound", benchLongMetas},
+		{"a_thread_at_its_records_bound", benchRecords},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "archive.tar.gz")
@@ -235,8 +243,14 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		agent, started, call := fmt.Sprintf("a%016x", i), fmt.Sprintf("toolu_agent_%04d", i),
 			fmt.Sprintf("toolu_sub_%04d", i)
 		output := "sub " + call + " done"
-		main.WriteString(ctAssistant(ctUUID(1), ctUUID(2), hsCallOf(started, claudeToolAgent, hsAgentInput)) + "\n")
-		main.WriteString(ctResult(ctUUID(2), ctUUID(3), `[{"tool_use_id":"`+started+`","type":"tool_result",`+
+		// EACH RECORD ITS OWN UUID, the main thread one chain: a uuid two
+		// records carry is no reading.
+		parent, use, answer := ctUUID(1), ctUUID(1000+2*i), ctUUID(1001+2*i)
+		if i > 0 {
+			parent = ctUUID(999 + 2*i)
+		}
+		main.WriteString(ctAssistant(parent, use, hsCallOf(started, claudeToolAgent, hsAgentInput)) + "\n")
+		main.WriteString(ctResult(use, answer, `[{"tool_use_id":"`+started+`","type":"tool_result",`+
 			`"content":[{"type":"text","text":"the subagent's report"}]}]`, hsCompleted(agent)) + "\n")
 		side := func(record string) string {
 			return strings.Replace(record, `"isSidechain":false`, `"isSidechain":true,"agentId":"`+agent+`"`, 1)
@@ -256,6 +270,65 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	}
 	benchMember(b, tw, hsMain, main.String())
 	return ask
+}
+
+// benchLongLegs writes a main thread of 96 Agent calls, each under an id of a
+// mebibyte, as the soundness critic measured 97.7 MiB held live before the
+// reading kept no id the call-id rule refuses ([holdingsWalk.leg]).
+func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+	var main strings.Builder
+	main.WriteString(ctBrief(ctUUID(1)) + "\n")
+	for i := range 96 {
+		id := fmt.Sprintf("toolu_%02d_", i) + strings.Repeat("l", 1<<20)
+		main.WriteString(ctAssistant(ctUUID(1+i), ctUUID(2+i), hsCallOf(id, claudeToolAgent, hsAgentInput)) + "\n")
+	}
+	benchMember(b, tw, hsMain, main.String())
+	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+}
+
+// benchLongMetas writes [holdingsMaxAgents] subagents' metadata, each naming
+// the call that started it by an id of 65,000 bytes, as the soundness critic
+// measured 65.3 MiB held live before the reading kept no id a metadata names
+// that the call-id rule refuses ([subagentMetaOf]).
+func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+	long := strings.Repeat("t", 65000)
+	for i := range holdingsMaxAgents {
+		benchMember(b, tw, claudeProjectPrefix+ctSession+"/subagents/agent-"+fmt.Sprintf("a%016x", i)+".meta.json",
+			strings.Replace(ctMeta, hsStarted, long, 1))
+	}
+	benchMember(b, tw, hsMain, ctBrief(ctUUID(1))+"\n")
+	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+}
+
+// benchRecords writes a main thread of [holdingsMaxRecords] records, the most
+// a reading walks the chain of, at their worst for what the walk holds: each a
+// reply of its own id, so each is a reply the walk keeps a digest of, all of
+// them on the chain from the thread's last record, so the walk keeps every
+// digest as handed, and all but the brief and the last naming as their parent
+// a record that comes later, so the walk keeps each one's parent to look up
+// once the thread is read whole. The brief roots the chain; the last record
+// names the first reply; each reply names the next, the last of them the
+// brief.
+func benchRecords(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+	replies := holdingsMaxRecords - 2
+	record := func(parent, uuid, i int) string {
+		return `{"parentUuid":"` + ctUUID(parent) + `","isSidechain":false,"message":{"id":"msg_` +
+			fmt.Sprintf("%08d", i) + `","type":"message","role":"assistant","model":"claude-sonnet-4-5",` +
+			`"content":[{"type":"text","text":"x"}],"stop_reason":"end_turn"},"type":"assistant","uuid":"` +
+			ctUUID(uuid) + `"}` + "\n"
+	}
+	var main strings.Builder
+	main.WriteString(ctBrief(ctUUID(1)) + "\n")
+	for i := range replies {
+		parent := 3 + i
+		if i == replies-1 {
+			parent = 1
+		}
+		main.WriteString(record(parent, 2+i, i))
+	}
+	main.WriteString(record(2, 2+replies, replies))
+	benchMember(b, tw, hsMain, main.String())
+	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
 }
 
 // benchBlocks writes a main thread of one user record of blocks at the line's

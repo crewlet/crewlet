@@ -303,16 +303,17 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 
 // ONLY A CHAINED RECORD OF ITS OWN THREAD HOLDS A CALL. In the main thread: a
 // user or assistant record with a parentUuid, `isSidechain` false and no
-// `agentId`. A request's blob repeating the result, a queue operation, a
-// sidechain record and an agent's record in the main file, and a user record
-// out of the chain each hold nothing, so the call they repeat holds its use
-// alone and is told; a counted record's result holds it. In subagent A's
-// thread: one with a parentUuid, A's `agentId` and `isSidechain` true. A
-// result there naming no agent or another, or no sidechain, holds nothing, and
-// leaves A's thread not whole, so A is not reported and its call is told under
-// its heading; one out of the chain holds nothing either, and restarts A's
-// thread, since Claude Code's walk reads a record of no parentUuid as a root
-// ([threadRestarts.See]).
+// `agentId`. A request's blob repeating the result, a queue operation, an
+// agent's record in the main file, and a user record out of the chain each
+// hold nothing, so the call they repeat holds its use alone and is told; a
+// counted record's result holds it. (A sidechain's record in the main file is
+// no reading at all: [TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread].)
+// In subagent A's thread: one with a parentUuid, A's `agentId` and
+// `isSidechain` true. A result there naming no agent or another, or no
+// sidechain, holds nothing, and leaves A's thread not whole, so A is not
+// reported and its call is told under its heading; one out of the chain holds
+// nothing either, and restarts A's thread, since Claude Code's walk reads a
+// record of no parentUuid as a root ([threadRestarts.See]).
 //
 // Mutation: count a record that is not chained, or not its own thread's, and
 // the case's result holds its call; or pass a user or assistant record that is
@@ -332,7 +333,6 @@ func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 			`"message":{"role":"user","content":` + content + `}}`, false},
 		"a queue operation": {`{"type":"queue-operation","operation":"enqueue","sessionId":"` + ctSession +
 			`","message":{"role":"user","content":` + content + `}}`, false},
-		"a sidechain record": {ctReplace(t, result, `"isSidechain":false`, `"isSidechain":true`), false},
 		"an agent's record": {ctReplace(t, result, `"isSidechain":false`,
 			`"isSidechain":false,"agentId":"`+ctAgent+`"`), false},
 		"a record out of the chain": {ctReplace(t, result, `"parentUuid":"`+ctUUID(2)+`",`, ``), false},
@@ -589,12 +589,14 @@ func TestAResultItsHarnessReplacedIsNotLive(t *testing.T) {
 // PARALLEL RESULTS AFTER THE LAST RESTART ARE LIVE, off the chain or on it.
 // Measured (probe T, 2.1.310 and 2.1.322): parallel calls leave a tree, the
 // thread's last record descending from the last result, so the first result
-// lies off the chain, and a continuation hands its model every whole-line
-// result after the last restart all the same, with its call: T1's, T2's and
-// T4's siblings, T5's Agent answer beside its sibling, and T4's linear calls
-// past the 5 MiB load path. Each is live, and each call the bridge answered is
-// held; T3's answered call is held, and its open call, whose result the file
-// never held, holds its use alone and is told.
+// lies off the chain, and a continuation hands its model each such result all
+// the same, with its call, as the resume recovers it: a result whose parent is
+// a record of a reply on the chain, its own call's. T1's, T2's and T4's
+// siblings, T5's Agent answer beside its sibling, and T4's linear calls past
+// the 5 MiB load path are each live, and each call the bridge answered is
+// held; T3's answered call, its record a sibling the chain skips, is held, and
+// its open call, whose result the file never held, holds its use alone and is
+// told.
 //
 // Mutation: hold a result only on the chain its thread's last record
 // descends from, and every off-chain sibling is told.
@@ -646,6 +648,291 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 				t.Errorf("the open call: Holds = %t, its records %+v; want its use alone, told", held, records)
 			}
 		})
+	}
+}
+
+// hsReplyOf is a model's reply of the id reply, chained to parent, whose
+// content is content: ctAssistant's, whose own id every record of it shares.
+func hsReplyOf(t *testing.T, parent, uuid, reply, content string) string {
+	t.Helper()
+	return ctReplace(t, ctAssistant(parent, uuid, content), `"id":"msg_test"`, `"id":"`+reply+`"`)
+}
+
+// hsCheckpoint is a last-prompt record naming leaf, its keys after it beside.
+func hsCheckpoint(t *testing.T, leaf, beside string) string {
+	t.Helper()
+	return ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, `"leafUuid":`+leaf+beside)
+}
+
+// A RESULT IS LIVE ONLY WHERE THE RESUME HANDS ITS MODEL ITS RECORDS, as
+// Claude Code's resume builds the conversation (2.1.310 and 2.1.322): the
+// chain walked from the thread's leaf, the nearest user or assistant record up
+// from its last record, parent by parent; and off it, the records of a reply
+// on it, found by the reply's id, and a result whose parent is one. In the
+// main thread:
+//
+//   - a call made beside another in one reply, its result off the chain, is
+//     held, recovered through its parent, its own call's record; and so is a
+//     call whose record and result both lie off the chain beside a record of
+//     its reply on it (T1 to T5 measure both,
+//     [TestParallelResultsAfterTheLastRestartAreLive]);
+//   - an attempt the harness withdrew and left in the file, its reply's id on
+//     no record of the chain, is handed to no model with the result after it,
+//     and its call is told, though both lie past every restart; the same
+//     attempt the thread goes on from is held;
+//   - a record of no parentUuid ends the walk, so what lies before it is off the
+//     chain and told, under a user record whose parentUuid is the empty string
+//     or absent (S7's first shape, which a restart marks too) and under an
+//     attachment of none, which no restart marks;
+//   - a parent naming no record ends the walk there, and what lies past it is
+//     told, whatever the harness's guess by timestamp would link; a record the
+//     walk already took ends it the same way;
+//   - the walk stops at the last restart, so a call reached only through a
+//     record before it is told: a compaction that kept a segment deletes every
+//     record before its boundary from what the resume walks;
+//   - where the thread holds a compaction's boundary and its checkpoint is a
+//     user or assistant record before the leaf, the checkpoint is the leaf, and
+//     a call after it is told; with no boundary, the call is held.
+//
+// In a subagent's thread, the chain from its last record of its own: a
+// withdrawn attempt's call there is told, its subagent still reported; and a
+// walk that meets a parent naming no record, or a record it already took,
+// before the thread's root leaves the subagent not whole.
+//
+// Mutation: hand over every record past the last restart, and the withdrawn
+// attempt's call is held; recover through any reply's id, on the chain or
+// not, and so is it; take a parent naming no record for the record before it in
+// the file, and the call past it is held; walk past the last restart, and the
+// call reached through a record before it is held; leave the checkpoint out of
+// the leaf, and the call after it is held; or read a subagent's chain that
+// breaks as whole, and its subagent is reported.
+func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
+	t.Parallel()
+	const x, y, outX, outY = "toolu_chain_x", "toolu_chain_y", "chain x done", "chain y done"
+	callX, callY := hsLogged(x, outX), hsLogged(y, outY)
+	text := `[{"type":"text","text":"done."}]`
+	result := func(parent, uuid int, id, out string) string {
+		return ctResult(ctUUID(parent), ctUUID(uuid), hsAnswer(id, hsBlock(t, out)), hsBlock(t, out))
+	}
+	user := func(parent, uuid int) string { return ctSpan(ctUUID(parent), ctUUID(uuid), "") }
+	// pair is the reply calling x, uuid 2, and its result, uuid 3.
+	pair := []string{hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_x", hsUse(x)), result(2, 3, x, outX)}
+	after := func(parent int) string { return hsReplyOf(t, ctUUID(parent), ctUUID(5), "msg_after", text) }
+	for name, tc := range map[string]struct {
+		lines []string
+		held  map[string]bool
+	}{
+		"a call beside another in one reply, its result off the chain": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_pair", hsUse(x)),
+			hsReplyOf(t, ctUUID(2), ctUUID(3), "msg_pair", hsUse(y)),
+			result(2, 4, x, outX), result(3, 6, y, outY), hsReplyOf(t, ctUUID(6), ctUUID(5), "msg_after", text),
+		}, held: map[string]bool{x: true, y: true}},
+		"a call whose record and result lie off the chain beside a record of its reply on it": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_pair", text),
+			hsReplyOf(t, ctUUID(2), ctUUID(3), "msg_pair", hsUse(x)), result(3, 4, x, outX), after(2),
+		}, held: map[string]bool{x: true}},
+		"a withdrawn attempt left in the file": {lines: append(slices.Clone(pair), after(1)),
+			held: map[string]bool{x: false}},
+		"the same attempt, the thread going on from it": {lines: append(slices.Clone(pair), after(3)),
+			held: map[string]bool{x: true}},
+		"a user record whose parentUuid is the empty string": {lines: append(slices.Clone(pair),
+			ctReplace(t, user(3, 4), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":""`), after(4)),
+			held: map[string]bool{x: false}},
+		"a user record of no parentUuid": {lines: append(slices.Clone(pair),
+			ctReplace(t, user(3, 4), `"parentUuid":"`+ctUUID(3)+`",`, ""), after(4)),
+			held: map[string]bool{x: false}},
+		"an attachment of no parentUuid, which no restart marks": {lines: append(slices.Clone(pair),
+			ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens, ctTokensRendered),
+				`"parentUuid":"`+ctUUID(3)+`",`, ""), after(4)),
+			held: map[string]bool{x: false}},
+		"a parent naming no record": {lines: append(slices.Clone(pair), user(99, 4), after(4)),
+			held: map[string]bool{x: false}},
+		"a record the walk already took": {lines: append(slices.Clone(pair), user(5, 4), after(4)),
+			held: map[string]bool{x: false}},
+		"a call reached only through a record before the last restart": {lines: []string{
+			user(21, 6), ctMicrocompactBoundary(ctUUID(1), ctUUID(10)),
+			hsReplyOf(t, ctUUID(10), ctUUID(21), "msg_x", hsUse(x)), result(21, 22, x, outX),
+			hsReplyOf(t, ctUUID(6), ctUUID(20), "msg_after", text),
+		}, held: map[string]bool{x: false}},
+		"a checkpoint before the leaf, in a thread a compaction cut": {lines: []string{
+			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), ctCompactSummary(ctUUID(10), ctUUID(11)),
+			hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text),
+			hsReplyOf(t, ctUUID(12), ctUUID(13), "msg_x", hsUse(x)), result(13, 14, x, outX),
+			hsCheckpoint(t, `"`+ctUUID(12)+`"`, ""),
+		}, held: map[string]bool{x: false}},
+		"a checkpoint before the leaf, in a thread no compaction cut": {lines: []string{
+			hsReplyOf(t, ctUUID(1), ctUUID(12), "msg_before", text),
+			hsReplyOf(t, ctUUID(12), ctUUID(13), "msg_x", hsUse(x)), result(13, 14, x, outX),
+			hsCheckpoint(t, `"`+ctUUID(12)+`"`, ""),
+		}, held: map[string]bool{x: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(callX, callY))
+			hsReadWhole(t, got, err)
+			for id, want := range tc.held {
+				call := callX
+				if id == y {
+					call = callY
+				}
+				if held, _ := got.Holds(call); held != want {
+					t.Errorf("%s: Holds = %t, its records %+v; want %t", id, held, got.Calls[id], want)
+				}
+			}
+		})
+	}
+	t.Run("a withdrawn attempt in a subagent's thread", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.thread = []string{s.thread[0],
+			hsSide(t, hsReplyOf(t, ctUUID(101), ctUUID(102), "msg_withdrawn", hsUse(hsSubCall))), s.thread[2],
+			hsSide(t, ctReplace(t, hsFinished(t, ctUUID(101), ctUUID(104)), `"id":"msg_test"`, `"id":"msg_retry"`))}
+		got := hsSubagentRead(t, s)
+		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
+			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+		}
+	})
+	for name, edit := range map[string]func(*testing.T, *hsSession){
+		"a parent naming no record in a subagent's thread": func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, hsFinished(t, ctUUID(199), ctUUID(104)))
+		},
+		"a record its walk already took, in a subagent's thread": func(t *testing.T, s *hsSession) {
+			s.thread[3] = hsSide(t, hsFinished(t, ctUUID(105), ctUUID(104)))
+			s.thread = append(s.thread, hsSide(t, ctAttachment(ctUUID(104), ctUUID(105), ctTokens, ctTokensRendered)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			edit(t, &s)
+			hsReports(t, s, hsNotWhole)
+		})
+	}
+}
+
+// A MAIN THREAD WHOSE LEAF THE READING CANNOT FOLLOW IS NO READING: where
+// Claude Code's resume may start from another record than the nearest user or
+// assistant record up from the thread's last, or its load drops or rewrites a
+// record the walk would read, the reading cannot say what the resume hands its
+// model, and tells every call. A checkpoint a rewind or a withdrawal marked;
+// one whose leaf is no string; one naming a record the last record does not
+// descend from, a branch the thread left; a sidechain's record, a fork's
+// briefing or a file's snapshot, each of which the resume keeps out of a
+// session's last record's place; a reply whose content is a string, which its
+// load drops where it is blank and rewrites where it is not; a user or
+// assistant record its walk never counts whose message does not decode, which
+// its load drops; and a record of no uuid, of an uppercase one, or of one
+// another record carries. None is in a main thread the probes kept. The thread
+// itself is read and holds its call, and so does it beside a checkpoint its
+// last record descends from, one naming no record, one naming no canonical
+// uuid, and one a compaction's boundary cleared.
+//
+// Mutation: read past a marked checkpoint, one whose leaf is no string, or one
+// the last record does not descend from; file a sidechain's record, a fork's
+// briefing or a file's snapshot as any other; take a reply of string content
+// for one of blocks, or a message that does not decode for none on a record
+// the walk does not count; or file a record of no lowercase canonical uuid, or
+// of another's, and each such thread is read.
+func TestAMainThreadWhoseLeafTheReadingCannotFollowIsUnread(t *testing.T) {
+	t.Parallel()
+	const x, out = "toolu_leaf", "leaf done"
+	call := hsLogged(x, out)
+	pair := hsCall(ctUUID(1), 2, x, hsBlock(t, out))
+	with := func(lines ...string) []string { return append(slices.Clone(pair), lines...) }
+	cleared := hsReplyOf(t, ctUUID(1), ctUUID(9), "msg_left", `[{"type":"text","text":"left."}]`)
+	for name, tc := range map[string]struct {
+		lines []string
+		read  bool
+	}{
+		"the thread": {lines: pair, read: true},
+		"a checkpoint its last record descends from": {lines: with(hsCheckpoint(t, `"`+ctUUID(2)+`"`, "")),
+			read: true},
+		"a checkpoint naming no record":         {lines: with(hsCheckpoint(t, `"`+ctUUID(99)+`"`, "")), read: true},
+		"a checkpoint naming no canonical uuid": {lines: with(hsCheckpoint(t, `"x"`, "")), read: true},
+		"a checkpoint a compaction's boundary cleared": {lines: []string{cleared, hsCheckpoint(t, `"`+ctUUID(9)+`"`, ""),
+			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), ctCompactSummary(ctUUID(10), ctUUID(11)),
+			ctAssistant(ctUUID(11), ctUUID(2), hsUse(x)), pair[1]}, read: true},
+		"a checkpoint a rewind marked": {lines: with(hsCheckpoint(t, `"`+ctUUID(2)+`"`,
+			`,"explicit":true,"rewound":true`))},
+		"a checkpoint a withdrawal marked":    {lines: with(hsCheckpoint(t, `null`, `,"explicit":true`))},
+		"a checkpoint whose leaf is a number": {lines: with(hsCheckpoint(t, `7`, ""))},
+		"a checkpoint naming a branch the thread left": {lines: []string{cleared, pair[0], pair[1],
+			hsCheckpoint(t, `"`+ctUUID(9)+`"`, "")}},
+		"a sidechain's record": {lines: with(ctReplace(t, ctSpan(ctUUID(3), ctUUID(4), ""), `"isSidechain":false`,
+			`"isSidechain":true`))},
+		"a fork's briefing": {lines: with(ctAttachment(ctUUID(3), ctUUID(4),
+			`{"type":"fork_briefing","text":"the fork's brief"}`, ""))},
+		"a file's snapshot": {lines: with(ctReplace(t, ctMicrocompactBoundary(ctUUID(3), ctUUID(4)),
+			`"subtype":"microcompact_boundary"`, `"subtype":"file_snapshot"`))},
+		"a reply whose content is a string": {lines: with(hsReplyOf(t, ctUUID(3), ctUUID(4), "msg_said", `"done."`))},
+		"a reply whose content is a blank string": {lines: with(hsReplyOf(t, ctUUID(3), ctUUID(4), "msg_said",
+			`" "`))},
+		"an agent's record whose message does not decode": {lines: with(ctReplace(t,
+			ctResult(ctUUID(3), ctUUID(4), `42`, `42`), `"isSidechain":false`,
+			`"isSidechain":false,"agentId":"`+ctAgent+`"`))},
+		"a record of no uuid": {lines: with(ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			ctTokensRendered), `"uuid":"`+ctUUID(4)+`",`, ""))},
+		"a record of an uppercase uuid": {lines: with(ctAttachment(ctUUID(3), "AAAAAAAA-0000-4000-8000-000000000004",
+			ctTokens, ctTokensRendered))},
+		"a record of a uuid another carries": {lines: with(ctAttachment(ctUUID(3), ctUUID(2), ctTokens,
+			ctTokensRendered))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(call))
+			if !tc.read {
+				hsNoReading(t, got, err)
+				return
+			}
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(call); !held {
+				t.Errorf("Holds = false, its records %+v; want its call held", got.Calls[x])
+			}
+		})
+	}
+}
+
+// A THREAD IS WALKED WITHIN ITS RECORDS' BOUND ([holdingsMaxRecords], lowered
+// here, as a test lowers the plaintext's): a main thread of as many records as
+// it allows is walked, and one of one more is no reading; a subagent's thread
+// of one more is not whole, and files no record past it, so what the walk
+// holds stays within the bound.
+//
+// Mutation: file a thread's records past the bound, and the longer main
+// thread is walked, and the longer subagent's thread whole.
+func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
+	t.Parallel()
+	ask := hsAsk(hsLogged(hsSubCall, hsSubOut))
+	main := hsThread(hsCall(ctUUID(1), 2, hsSubCall, hsBlock(t, hsSubOut))...)
+	for _, tc := range []struct {
+		records int
+		walked  bool
+	}{{3, true}, {2, false}} {
+		w := newHoldingsWalk(ctSession, ask, hsBounds())
+		w.records = tc.records
+		err := w.mainThread(t.Context(), strings.NewReader(main))
+		if walked := err == nil; walked != tc.walked || (!walked && !errors.Is(err, errChainBound)) {
+			t.Errorf("a main thread of 3 records within %d: %v; want it walked %t", tc.records, err, tc.walked)
+		}
+	}
+	thread := ctThread(hsForeground(t).thread...)
+	for _, tc := range []struct {
+		records int
+		whole   bool
+	}{{4, true}, {3, false}} {
+		w := newHoldingsWalk(ctSession, ask, hsBounds())
+		w.records = tc.records
+		a := &subagentFacts{}
+		w.agents[ctAgent] = a
+		if err := w.subagentThread(t.Context(), ctAgent, a, strings.NewReader(thread)); err != nil {
+			t.Fatalf("a subagent's thread within %d: %v", tc.records, err)
+		}
+		if whole := a.broken == ""; whole != tc.whole || (!whole && !strings.Contains(a.broken, "cannot walk")) {
+			t.Errorf("a subagent's thread of 4 records within %d is not whole for %q; want it whole %t",
+				tc.records, a.broken, tc.whole)
+		}
 	}
 }
 
@@ -2085,7 +2372,7 @@ func TestNoIDTheCallIDRuleRefusesIsKept(t *testing.T) {
 			Input: json.RawMessage(hsSendInput)},
 		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent, Input: json.RawMessage(hsAgentInput)},
 	} {
-		if err := w.leg(call); err != nil {
+		if err := w.leg(call, 0); err != nil {
 			t.Fatalf("filing a call of %s: %v", call.Name, err)
 		}
 	}
