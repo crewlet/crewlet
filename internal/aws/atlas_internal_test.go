@@ -315,7 +315,11 @@ func TestAFaultOrARefusedSignInFailsTheReadWhole(t *testing.T) {
 func TestTheReaderIsOffUntilAskedForAndSaysTheStepWhenTheStackLacksIt(t *testing.T) {
 	t.Parallel()
 	f := newFakeCloud()
-	_, err := awsSource(t).Collect(context.Background(), f.input(t, func(p *config.AWSProvisioning) { p.AtlasRead = false }))
+	off := f.input(t, func(p *config.AWSProvisioning) { p.AtlasRead = false })
+	if collect.Connected(awsSource(t), off.Config) || !collect.Connected(awsSource(t), f.input(t).Config) {
+		t.Fatal("the AWS source is connected whatever the switch says: off, it must not be read or listed")
+	}
+	_, err := awsSource(t).Collect(context.Background(), off)
 	if !errors.Is(err, integration.ErrNotConfigured) || len(f.sessions) != 0 {
 		t.Fatalf("with the reader off the read = %v after %d sign-ins, want not configured and none", err, len(f.sessions))
 	}

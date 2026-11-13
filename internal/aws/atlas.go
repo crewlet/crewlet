@@ -32,6 +32,13 @@ type atlasSource struct{}
 
 func (atlasSource) Kind() integration.Kind { return integration.KindAWS }
 
+// On reports whether c adds the atlas's role to its stack: the reader is the
+// company's choice, so it is a source only once asked for ([collect.Optional]).
+func (atlasSource) On(c *config.Company) bool {
+	return c != nil && c.Integrations.AWS != nil && c.Integrations.AWS.Provisioning != nil &&
+		c.Integrations.AWS.Provisioning.AtlasRead
+}
+
 // The parts of AWS a read can be refused.
 const (
 	partReader        = "reader"
@@ -54,8 +61,7 @@ const accountKeyPrefix = string(atlas.VendorAWS) + "/"
 // queues, buckets and DNS, and reports them as claims in the integration's
 // voice. It writes nothing at AWS.
 func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
-	if in.Config == nil || in.Config.Integrations.AWS == nil || in.Config.Integrations.AWS.Provisioning == nil ||
-		!in.Config.Integrations.AWS.Provisioning.AtlasRead {
+	if !(atlasSource{}).On(in.Config) {
 		return collect.Read{}, fmt.Errorf("aws: %w: integrations.aws.provisioning.atlas_read is off, so the "+
 			"account is not read for the atlas", integration.ErrNotConfigured)
 	}

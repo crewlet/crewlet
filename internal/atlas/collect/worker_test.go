@@ -325,3 +325,68 @@ func TestAStandingRoundTripsThroughTheStore(t *testing.T) {
 		t.Error("a nil backend was wrapped")
 	}
 }
+
+// optionalSource is fakeSource as a source the company turns on by choice.
+type optionalSource struct {
+	*fakeSource
+	on bool
+}
+
+func (s optionalSource) On(*config.Company) bool { return s.on }
+
+// AN OPTIONAL SOURCE THE COMPANY HAS NOT ASKED FOR IS NEITHER READ NOR KEPT:
+// its integration is connected, and still the duty reads nothing and keeps no
+// standing for it, and the report of sources does not list it; asked for, it
+// is read like any other.
+//
+// Mutation: read Connected as the integration alone, and the first tick reads
+// the source.
+func TestAnOptionalSourceIsReadOnlyOnceAsked(t *testing.T) {
+	t.Parallel()
+	company := &config.Company{Name: "acme"}
+	company.Integrations.Cloudflare = &config.Cloudflare{Enabled: true, Provisioning: &config.CloudflareProvisioning{
+		AccountID: "0123456789abcdef0123456789abcdef", APIToken: "${CF_TOKEN}"}}
+	src := optionalSource{fakeSource: &fakeSource{}}
+	if collect.Connected(src, company) {
+		t.Fatal("an optional source nobody asked for counts as connected")
+	}
+	if !collect.Connected(&fakeSource{}, company) || collect.Connected(src, &config.Company{Name: "acme"}) {
+		t.Fatal("Connected does not follow the integration")
+	}
+	store, err := collect.NewCoordStore(memory.NewFleet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.fakeSource.set(world(t, t0, originA), nil)
+	clock := t0
+	build := func(s collect.Source) *collect.Worker {
+		w, err := collect.New(collect.Options{Sources: []collect.Source{s}, Store: store, Log: newFakeLog(),
+			Input:    func(context.Context) (collect.Input, bool) { return collect.Input{Config: company}, true },
+			Interval: func() time.Duration { return time.Hour }, Now: func() time.Time { return clock }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	build(src).Tick(t.Context())
+	if src.reads != 0 {
+		t.Fatal("an optional source nobody asked for was read")
+	}
+	if _, kept := mustLoadStore(t, store)[integration.KindCloudflare]; kept {
+		t.Fatal("an optional source nobody asked for keeps a standing")
+	}
+	src.on = true
+	build(src).Tick(t.Context())
+	if src.reads != 1 {
+		t.Fatal("an optional source the company asked for was not read")
+	}
+}
+
+func mustLoadStore(t *testing.T, store *collect.CoordStore) map[integration.Kind]collect.Status {
+	t.Helper()
+	all, err := store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return all
+}

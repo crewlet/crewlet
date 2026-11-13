@@ -22,6 +22,13 @@
 // to its stack by choice: the Regions in use, instances, databases, load
 // balancers, queues, buckets and public DNS.
 //
+// # A source may be the company's choice
+//
+// A source that reads under an identity the company adds by choice (AWS's
+// atlas role) is [Optional]: while the company has not asked for it, it is
+// not read and not listed among the sources, though its integration is
+// connected ([Connected], the one rule the duty and the report both read).
+//
 // # Its own duty, never the reconcile loop
 //
 // The reconcile loop's contract forbids a write on a converged pass, its
