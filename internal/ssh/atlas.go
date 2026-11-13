@@ -55,7 +55,10 @@ func (s AtlasSource) Collect(ctx context.Context, in collect.Input) (collect.Rea
 	b := collect.NewBuilder(integration.KindSSH, in.Now)
 	use := Use{Limits: block.Commands, SourceAddresses: block.Provisioning.SourceAddresses}
 	for i, h := range block.Hosts {
-		if !h.Inventory {
+		// WHAT A SERVER OPTS IN TO IS ONE LIST: nothing where its inventory
+		// is off, so such a server is skipped before anything is resolved.
+		commands := h.InventoryCommands()
+		if len(commands) == 0 {
 			continue
 		}
 		if use.CA == nil {
@@ -74,7 +77,7 @@ func (s AtlasSource) Collect(ctx context.Context, in collect.Input) (collect.Rea
 		if !ok {
 			continue
 		}
-		for _, command := range h.InventoryCommands() {
+		for _, command := range commands {
 			if err := ctx.Err(); err != nil {
 				return collect.Read{}, err
 			}

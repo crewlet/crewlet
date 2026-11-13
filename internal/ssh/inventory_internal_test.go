@@ -272,8 +272,8 @@ func (d *refusingDial) dial(_ context.Context, _, address string) (net.Conn, err
 // server. The runner refuses a command a server does not opt in to before
 // anything is signed, dialled or recorded.
 //
-// Mutation: read every registered server, or run a command before its
-// certificate is recorded, and a case is red.
+// Mutation: let a server that does not opt in list the inventory's commands
+// (config.SSHHost.InventoryCommands), and its address is dialled.
 func TestAServerNotOptedInIsNeverContacted(t *testing.T) {
 	t.Parallel()
 	in, ca := inventoryCompany(t)
