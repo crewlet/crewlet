@@ -453,6 +453,66 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 	}
 }
 
+// A RESULT READ BEFORE ITS CALL'S USE IS NOT LIVE: what a continuation sends
+// pairs a result with the call before it in its own conversation, and the API
+// refuses a result no call precedes, so a result whose line comes before its
+// call's use, which no harness writes, is handed to no model with its call:
+// its call is told, in the main thread as in a reported subagent's. Nor is a
+// result in another thread than its call's use, though its line comes later.
+// The same records in the order written are live, and held.
+//
+// Mutation: read a result as live wherever its call's use lies, and the result
+// before its use holds its call; or compare their lines across threads, and
+// the result after a use in another thread reads as live.
+func TestAResultReadBeforeItsCallsUseIsNotLive(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_order", "order done"
+	call := hsLogged(id, out)
+	use := ctAssistant(ctUUID(3), ctUUID(2), hsUse(id))
+	result := ctResult(ctUUID(1), ctUUID(3), hsAnswer(id, hsBlock(t, out)), hsBlock(t, out))
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		"its use, then its result": {hsCall(ctUUID(1), 2, id, hsBlock(t, out)), true},
+		"its result, then its use": {[]string{result, use}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			records := got.Calls[id]
+			if held, _ := got.Holds(call); held != tc.held || records.Uses != 1 || records.Results != 1 ||
+				records.Live != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want held %t, its one use and result live %t", held, records,
+					tc.held, tc.held)
+			}
+		})
+	}
+	t.Run("its use in a subagent's thread, its result after it in the main thread", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.main = append(s.main, hsAnswerOf(t, ctUUID(3), ctUUID(5), hsSubCall, hsSubOut, hsBlock(t, hsSubOut)))
+		s.thread = []string{s.thread[0], s.thread[1], ctReplace(t, s.thread[3], `"parentUuid":"`+ctUUID(103)+`"`,
+			`"parentUuid":"`+ctUUID(102)+`"`)}
+		got := hsSubagentRead(t, s)
+		if records := got.Calls[hsSubCall]; records.Uses != 1 || records.Results != 1 || records.Live {
+			t.Errorf("its records %+v; want its one use and its one result, not live", records)
+		}
+	})
+	t.Run("in a subagent's thread, its result, then its use", func(t *testing.T) {
+		t.Parallel()
+		s := hsForeground(t)
+		s.thread[1], s.thread[2] = s.thread[2], s.thread[1]
+		got := hsSubagentRead(t, s)
+		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
+			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
+				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
+		}
+	})
+}
+
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model
 // a preview in a result's place, it records the replacement beside the
 // result's own record, which keeps the whole output, and a resume hands its

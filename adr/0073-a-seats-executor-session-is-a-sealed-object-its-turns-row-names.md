@@ -2380,7 +2380,9 @@ chain) starts what a resumed session is handed over, and a result is live by
 FILE ORDER in the main thread, past its last restart: probe T measured every
 continuation hand its model every whole-line result after the last restart,
 verbatim and with its call, the results off the chain that parallel calls leave
-among them. A result its harness replaced for its model is live in no thread:
+among them. A result is live only past its call's use in its own thread, since
+the API refuses a result no call of its own precedes. A result its harness
+replaced for its model is live in no thread:
 behind a flag Anthropic's servers set, Claude Code hands its model a preview in
 place of the largest results a reply's calls returned past a budget, records
 the replacement beside the result's own record, which keeps the whole output,

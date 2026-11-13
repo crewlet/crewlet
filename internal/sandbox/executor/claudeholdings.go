@@ -104,6 +104,12 @@ import (
 // leaves the subagent unreported (rule 2), so its results matter only where
 // none is, and its parallel results need no rule of their own.
 //
+// AND A RESULT IS LIVE ONLY PAST ITS CALL'S USE, IN ITS OWN THREAD: what a
+// continuation sends pairs a result with the call before it in the one
+// conversation, and the API refuses a result no call of its own precedes, so
+// a result whose call's use comes after it, or lies in another thread, is
+// handed to no model with that call. No harness writes either.
+//
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE, in whichever thread: behind a
 // flag Anthropic's servers set, Claude Code hands its model a preview in
 // place of the largest of the results a reply's calls returned past a budget,
@@ -405,9 +411,11 @@ type callFacts struct {
 	// thread is a thread not counted before.
 	threads      int
 	thread, last string
-	// resultThread and line are the thread and the place of its first
-	// result's line; failed, textBytes and opening that result's
-	// ([sandbox.CallRecords]).
+	// useThread and useLine are the thread and the place of its first use's
+	// line, resultThread and line its first result's; failed, textBytes and
+	// opening are that result's ([sandbox.CallRecords]).
+	useThread    string
+	useLine      int
 	resultThread string
 	line         int
 	failed       bool
@@ -653,6 +661,9 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int) {
 	switch call.Kind {
 	case blockToolUse:
 		facts.uses++
+		if facts.uses == 1 {
+			facts.useThread, facts.useLine = thread, n
+		}
 	case blockToolResult:
 		facts.results++
 		if facts.results > 1 {
@@ -1119,9 +1130,10 @@ func (w *holdingsWalk) failed(ctx context.Context, err error) error {
 }
 
 // holdings is what the reading found: every asked call some counted record
-// names, live where its first result is ([holdingsWalk.live]) and no record
-// replaced it ([callFacts.replaced]), and every subagent whose thread names
-// one, reported or not (rule 2).
+// names, live where its first result is ([holdingsWalk.live]), its first use
+// comes before it in its thread, and no record replaced it
+// ([callFacts.replaced]); and every subagent whose thread names one,
+// reported or not (rule 2).
 func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 	calls := make(map[string]sandbox.CallRecords, len(w.calls))
 	for id, f := range w.calls {
@@ -1133,7 +1145,8 @@ func (w *holdingsWalk) holdings() sandbox.SessionHoldings {
 		if f.threads == 1 {
 			records.Thread = f.thread
 		}
-		records.Live = f.results > 0 && !f.replaced && w.live(f.resultThread, f.line)
+		records.Live = f.results > 0 && f.uses > 0 && f.useThread == f.resultThread && f.useLine < f.line &&
+			!f.replaced && w.live(f.resultThread, f.line)
 		calls[id] = records
 	}
 	sends := w.sendsTo()
