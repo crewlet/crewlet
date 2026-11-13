@@ -77,6 +77,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "an entry's Confirm, Correct and More menu, and the dialog each opens",
     suite: "routes/atlas/writes.test.tsx",
   },
+  "routes/atlas/LinkEntry.tsx": {
+    why:
+      "the task rail's Link an atlas entry dialog (update_work_item's linked_entries), opened " +
+      "only by a reader who may change the task and never offered to anybody else",
+    suite: "routes/worklet/WorkItem.test.tsx",
+  },
   "routes/atlas/Sources.tsx": {
     why: "Refresh now on a source's card, held inside the engine's floor and for a reader who may not ask",
     suite: "routes/atlas/Sources.test.tsx",

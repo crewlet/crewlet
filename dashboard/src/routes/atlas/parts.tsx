@@ -7,7 +7,6 @@
 
 import { VendorMark } from "@crewlethq/icons";
 import { ArrowUpRightGlyph, CornerDownLeftGlyph } from "@crewlethq/icons/glyphs";
-import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import {
   EmptyValue,
   EntityChip,
@@ -21,7 +20,6 @@ import { href } from "~/app/router.tsx";
 import type {
   AtlasCoverage,
   AtlasHealth,
-  AtlasKind,
   AtlasRead,
   AtlasSource,
   AtlasSummary,
@@ -37,20 +35,17 @@ import {
   COVERAGE,
   EVIDENCE,
   HEALTH,
-  KINDS,
   RECORDS,
   VENDORS,
   WORDS,
   entries,
   valueWord,
 } from "./words.ts";
+import { KindGlyph } from "./glyph.tsx";
 // THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
 import "~/styles/atlas.css";
 
-/** The kind's glyph, decorative: the kind word is always said beside it. */
-export function KindGlyph({ kind, size = "sm" }: { kind: AtlasKind; size?: "sm" | "md" }) {
-  return <NamedGlyph name={KINDS[kind].glyph} size={size} />;
-}
+export { KindGlyph };
 
 /** A vendor's mark, where the kit draws one: decorative, its name is beside it. */
 export function VendorLead({ vendor }: { vendor: AtlasVendor | undefined }) {

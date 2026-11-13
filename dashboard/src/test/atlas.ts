@@ -13,6 +13,7 @@ import type {
   AtlasEntry,
   AtlasEntryAnswer,
   AtlasEntriesAnswer,
+  AtlasEntryWorkAnswer,
   AtlasFacetsAnswer,
   AtlasFactView,
   AtlasFamily,
@@ -22,6 +23,8 @@ import type {
   AtlasLogAnswer,
   AtlasMapAnswer,
   AtlasMapEdge,
+  AtlasNamed,
+  AtlasNamedAnswer,
   AtlasRead,
   AtlasReviewAnswer,
   AtlasReviewItem,
@@ -32,7 +35,9 @@ import type {
   AtlasTraceAnswer,
   AtlasVendor,
   AtlasWord,
+  AtlasWorkAnswer,
 } from "~/contract/atlas.ts";
+import type { WorkSummary } from "~/protocol/index.ts";
 
 export const SEEN = "2026-11-11T09:00:00Z";
 
@@ -834,4 +839,60 @@ export function sourcesAnswer(over: Partial<AtlasSourcesAnswer> = {}): AtlasSour
     refresh_floor_seconds: 300,
     ...over,
   };
+}
+
+/** One task as a list row, open unless its status says otherwise. */
+export function taskRow(key: string, title: string, over: Partial<WorkSummary> = {}): WorkSummary {
+  return {
+    id: idFor(`task:${key}`),
+    key,
+    project: key.split("-")[0] ?? "",
+    title,
+    type: "task",
+    status: "in_progress",
+    status_group: "active",
+    updated: SEEN,
+    version: 1,
+    ...over,
+  };
+}
+
+/** `atlas_work`: how many open tasks name each entry, or why none was read. */
+export function workAnswer(open: Record<string, number>, unread?: string): AtlasWorkAnswer {
+  return unread ? { unread, open: {} } : { open };
+}
+
+/** `atlas_entry_work`: the tasks naming one entry, each total the list's length unless given. */
+export function entryWorkAnswer(
+  open: WorkSummary[] = [],
+  recent: WorkSummary[] = [],
+  over: Partial<AtlasEntryWorkAnswer<WorkSummary>> = {},
+): AtlasEntryWorkAnswer<WorkSummary> {
+  return {
+    open,
+    recent,
+    open_total: { total: open.length },
+    recent_total: { total: recent.length },
+    ...over,
+  };
+}
+
+/**
+ * `atlas_named`: each asked id beside the fixture's entry it names, in the
+ * order asked, and the ids that name none. `merged` maps a member's id to the
+ * entry it merged into, as the engine answers a link stored under a member.
+ */
+export function namedAnswer(
+  fixture: AtlasFixture,
+  ids: readonly string[],
+  merged: Readonly<Record<string, string>> = {},
+): AtlasNamedAnswer {
+  const named: AtlasNamed[] = [];
+  const missing: string[] = [];
+  for (const id of new Set(ids)) {
+    const entry = fixture.nodes.find((node) => node.id === (merged[id] ?? id));
+    if (entry) named.push({ id, entry });
+    else missing.push(id);
+  }
+  return { named, missing };
 }
