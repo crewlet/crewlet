@@ -266,6 +266,11 @@ func TestAWakeCarriesThePositionOfTheChangeThatCausedIt(t *testing.T) {
 	if w.Replayed {
 		t.Error("a delivered change's wake is marked replayed")
 	}
+	// AND FIRST-PARTY, so a node of a build that has no parser for the
+	// feed's source passes it to a peer rather than acknowledge it away.
+	if !w.FirstParty {
+		t.Error("a delivered change's wake is not marked first-party")
+	}
 
 	writeChange(t, docs, "u2")
 	settle(t, func() bool { return pub.count() == 2 }, "the second change never became a wake")

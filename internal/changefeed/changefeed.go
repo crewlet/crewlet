@@ -839,7 +839,8 @@ func (f *Feed) derive(ctx context.Context, rec Record, replayed bool) (outcome, 
 		return outcomeClaimed, nil, nil
 	}
 	ev := events.New(types.RawWebhook{
-		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec), Replayed: replayed,
+		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec), FirstParty: true,
+		Replayed: replayed,
 	}, events.NewTrace())
 	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {

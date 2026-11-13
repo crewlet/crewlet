@@ -736,7 +736,11 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		// before a control plane exists.
 		Admits: e.admits,
 		// AND A LINKED CHANGE'S SETTLE, which no wake carries (ADR-0121).
-		Observe:     e.observeInbound,
+		Observe: e.observeInbound,
+		// EVERY SOURCE THIS BUILD'S OWN PRODUCERS WRITE, whether or not
+		// this company runs it, so a first-party delivery from any other —
+		// a newer build's — is passed to a peer that parses it.
+		FirstParty:  declaredInboundSources(),
 		DeadLetters: letters,
 	})
 	if err != nil {

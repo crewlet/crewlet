@@ -212,6 +212,16 @@ type Options struct {
 	// delivery back, so a failure there is its own to recover from.
 	Observe func(ctx context.Context, source string, w types.RawWebhook)
 
+	// FirstParty is every source this BUILD's own producers write a
+	// delivery under (types.RawWebhook.FirstParty) — whether or not this
+	// company runs it: the engine's native halves' feeds, its alarms' wakes
+	// and its access reviews. A first-party delivery from a source NOT
+	// among them is one a newer build added, which this node passes to a
+	// peer that parses it ([DeferNewerSource]); one from a declared source
+	// this company does not run is acknowledged, as a source nothing here
+	// parses.
+	FirstParty []string
+
 	// DeadLetters is what the replay of the inbound group's unhandled
 	// deliveries lists, reads and drops them through (replay.go). Nil is
 	// Queue's own verbs. The engine hands over the ledger its alarm reading
@@ -241,6 +251,9 @@ type Service struct {
 	admits   Admitter
 	now      func() time.Time
 	observe  func(ctx context.Context, source string, w types.RawWebhook)
+
+	// firstParty is [Options.FirstParty], as a set.
+	firstParty map[string]bool
 
 	// retired is every source whose parser this process once had and
 	// [Service.Unregister] took away, which is the only way to tell a
@@ -297,6 +310,11 @@ func New(opts Options) (*Service, error) {
 		admits:   opts.Admits,
 		now:      opts.Now,
 		observe:  opts.Observe,
+
+		firstParty: make(map[string]bool, len(opts.FirstParty)),
+	}
+	for _, source := range opts.FirstParty {
+		s.firstParty[source] = true
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -600,6 +618,24 @@ func (s *Service) handle(ctx context.Context, ev *events.Event, replaying bool) 
 					"still registered at "+ev.Source)
 			s.skip(ctx, ev.Source, "", ReasonRetired, nil)
 			return queue.Ack()
+		}
+		// AND A FIRST-PARTY SOURCE THIS BUILD DOES NOT DECLARE IS A NEWER
+		// BUILD'S. The engine's own producers mark what they publish, and
+		// this build knows every source they write under, so a first-party
+		// delivery from any other is a source a newer build added — a
+		// domain given a wake feed during a roll — which a peer on that
+		// build parses. Acked here, its wake was gone for every node, which
+		// is crewlet#993's loss on the branch before the parser: it is
+		// PASSED for that peer, as a newer record is, and kept with the
+		// group's unhandled deliveries for a later replay should no such
+		// peer win it. A vendor's delivery, and one from a declared source
+		// this company does not run, is acknowledged as before.
+		if w.FirstParty && !s.firstParty[ev.Source] {
+			d := &Deferral{Reason: DeferNewerSource, Err: fmt.Errorf(
+				"no parser for %q, a first-party source this build does not declare", ev.Source)}
+			log.InfoContext(ctx, "inbound_deferred", "source", ev.Source,
+				"event", ev.ID, "reason", string(d.Reason), "error", d.Err)
+			return queue.Pass(string(d.Reason), d)
 		}
 		log.WarnContext(ctx, "inbound_source_unparsed", "source", ev.Source, "event", ev.ID)
 		s.skip(ctx, ev.Source, "", ReasonUnparsed, nil)

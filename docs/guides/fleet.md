@@ -857,7 +857,11 @@ The consequences worth stating plainly:
   which cannot read it. An older node that wins one hands it back rather
   than acknowledge it for the whole fleet (`inbound_deferred` and
   `delivery_passed`, both at `INFO`), and goes on taking its other
-  deliveries. It comes back on the redelivery backoff, a second doubling to
+  deliveries. So does a delivery from a first-party source the newer build
+  added — a domain given a wake feed, say — which an older node has no
+  parser for (`reason=newer_source`): the engine's own producers mark what
+  they publish, so it is told apart from a vendor's webhook nothing parses,
+  which is acknowledged as before. It comes back on the redelivery backoff, a second doubling to
   thirty, for the group's 25 deliveries, about ten minutes, and nothing
   steers those deliveries to a node of the newer build: early in a roll, one
   newer node among many older ones, every one of them can go to an older

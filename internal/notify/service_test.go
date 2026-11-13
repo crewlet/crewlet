@@ -672,6 +672,65 @@ func TestAnUnparsedSourceIsRecorded(t *testing.T) {
 	}
 }
 
+// firstPartyDelivery is a delivery the engine's own producer made under
+// source, marked first-party as every one is.
+func firstPartyDelivery(source string) *events.Event {
+	ev := events.New(types.RawWebhook{
+		Body: map[string]any{"record": "r-1"}, Headers: map[string]string{}, FirstParty: true,
+	}, events.NewTrace())
+	ev.Source = source
+	return ev
+}
+
+// A FIRST-PARTY DELIVERY FROM A SOURCE THIS BUILD DOES NOT DECLARE IS PASSED
+// FOR A PEER; A VENDOR'S, AND ONE FROM A DECLARED SOURCE NOBODY RUNS, ARE
+// ACKNOWLEDGED.
+//
+// Every node takes inbound mail from one group, so a delivery acked here is
+// gone for every node. A first-party source this build neither parses nor
+// declares is one a newer build's producer added — a domain given a wake feed
+// during a roll — and a peer on that build parses it: acked as a source
+// nothing parses, its wake was lost for the whole fleet. It is passed, as a
+// newer record is, with no skip recorded. A vendor's webhook nothing parses
+// is an integration wired at the edge alone, and a declared first-party source
+// this company does not run is one nobody here will ever parse: both are
+// acknowledged and recorded, as before.
+//
+// Mutation: read no first-party mark, and the newer source is acknowledged
+// away; pass every unparsed delivery, and the vendor's and the unrun source's
+// circle for ten minutes and wait in the dead letters for nobody.
+func TestAFirstPartyDeliveryFromASourceThisBuildDoesNotDeclareIsPassed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ev   *events.Event
+		pass bool
+	}{
+		"a first-party source a newer build added":       {firstPartyDelivery("artifacts"), true},
+		"a vendor's source nothing parses":               {delivery("mystery"), false},
+		"a first-party source this company does not run": {firstPartyDelivery("chat"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newService(t, func(o *notify.Options, _ *harness) {
+				o.FirstParty = []string{"tracker", "chat"}
+			})
+			got := h.svc.Handle(t.Context(), tc.ev)
+			if !tc.pass {
+				if got.Outcome != queue.OutcomeAck {
+					t.Fatalf("Handle = %+v, want an ack", got)
+				}
+				if skips := h.skips(t); len(skips) != 1 ||
+					notify.SkipReason(skips[0].Reason) != notify.ReasonUnparsed {
+					t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonUnparsed)
+				}
+				return
+			}
+			if got.Outcome != queue.OutcomePass || got.Reason != string(notify.DeferNewerSource) {
+				t.Fatalf("Handle = %+v, want a pass for %q", got, notify.DeferNewerSource)
+			}
+			h.quiet(t, skipTopic)
+		})
+	}
+}
+
 // A delivery from a surface this company DISCONNECTED is a webhook still
 // registered at the third-party app, and its record says so rather than
 // reading as an integration nothing ever parsed — the two send an operator to

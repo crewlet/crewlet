@@ -15,12 +15,22 @@ type DeferReason string
 // that peer, never acked here as a payload no parser can read (crewlet#993).
 const DeferNewerRecord DeferReason = "newer_record"
 
+// DeferNewerSource is a FIRST-PARTY delivery (types.RawWebhook.FirstParty)
+// from a source this build neither parses nor declares: one a newer build's
+// producer added — a state-log domain given a wake feed, say — which a peer on
+// that build parses, so the delivery is handed back to the fleet for it, never
+// acked here as a source nothing parses ([Service.Handle]).
+const DeferNewerSource DeferReason = "newer_source"
+
 // Valid reports whether r is one of the reasons this build names.
-func (r DeferReason) Valid() bool { return r == DeferNewerRecord }
+func (r DeferReason) Valid() bool { return r == DeferNewerRecord || r == DeferNewerSource }
 
 // Deferral is a delivery this node cannot parse and a peer can: what a
 // [Parser] answers in place of an error it would otherwise return, for a
-// record its domain refuses as newer than this build.
+// record its domain refuses as newer than this build — and what
+// [Service.Handle] makes itself of a first-party delivery from a source no
+// parser of this build reads and this build does not declare, a newer
+// build's ([DeferNewerSource]).
 //
 // NEVER ACKED. Every node takes inbound mail from ONE fleet-wide consumer
 // group ([InboundGroup]), so a delivery this node acks is one no peer ever

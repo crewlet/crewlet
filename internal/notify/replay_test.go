@@ -752,6 +752,31 @@ func TestAVendorCopyReplayedTwiceWakesItsSeatUnderOneID(t *testing.T) {
 	}
 }
 
+// A REPLAYED COPY FROM A SOURCE A NEWER BUILD ADDED IS KEPT, for a start of a
+// node of that build: this node's build neither parses nor declares the
+// source, so it passes the copy as it passes the delivery, and the replay
+// keeps one it passes.
+//
+// Mutation: drop a copy the replay passed, and the newer build's wake is lost
+// with it.
+func TestAReplayedCopyFromASourceANewerBuildAddedIsKept(t *testing.T) {
+	older := newService(t, func(o *notify.Options, _ *harness) {
+		o.FirstParty = []string{"tracker"}
+	})
+	ev := events.New(types.RawWebhook{
+		Body: map[string]any{"record": "r-1"}, Headers: map[string]string{}, FirstParty: true,
+	}, events.NewTrace())
+	ev.Source = "artifacts"
+	at := staged(t, older, "a newer source's copy", ev)
+
+	older.svc.ReplayNow(t.Context())
+	if left := inboundLetters(t, older.q, notify.UnhandledSubject()); len(left) != 1 || left[0].Seq != at {
+		t.Fatalf("after the replay the unhandled subject holds %d entries, want the newer "+
+			"source's copy, kept", len(left))
+	}
+	older.quiet(t, skipTopic)
+}
+
 // droppedThrough is a queue's dead-letter verbs that record every drop: the
 // ledger an engine hands the service in their place.
 type droppedThrough struct {
