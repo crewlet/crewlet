@@ -68,7 +68,10 @@ import (
 // build reading 13 would keep the question and drop what approving it means.
 // Version 15 is a change the task waits on that nothing moves
 // ([TaskPatch.DeadWait], [TaskPatch.DeadWaitEnded], ADR-0128).
-const RecordVersion = 15
+// Version 16 is a task naming an atlas entry ([RelationEntry], ADR-0140): a
+// build reading 15 would keep the edge and leave it out of the history row's
+// deltas, which are derived from the kinds it knows.
+const RecordVersion = 16
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -147,6 +150,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Comment.Act", Since: 14, Op: string(OpPatch), Path: []string{"mutation", "comment", "act"}},
 	{Name: "TaskPatch.DeadWait", Since: 15, Op: string(OpPatch), Path: []string{"mutation", "dead_wait"}},
 	{Name: "TaskPatch.DeadWaitEnded", Since: 15, Op: string(OpPatch), Path: []string{"mutation", "dead_wait_ended"}},
+	{Name: "Relation.Kind atlas_entry", Since: 16, Path: []string{"mutation", "relations", "kind"},
+		Equals: string(RelationEntry)},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

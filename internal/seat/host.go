@@ -159,6 +159,13 @@ type Config struct {
 	// lets the beat write it unbounded.
 	GitBackground func() int64
 
+	// Infra is what this node says of what it runs on ([coord.NodeInfra.Meta]),
+	// which the host writes on every beat under [coord.InfraKey]. Read once
+	// from the node's own file at boot, so the beat reads memory and nothing
+	// can overrun it. Nil on a node that says nothing, whose row carries no
+	// such key.
+	Infra map[string]any
+
 	// RoleNeeded reports whether the COMPANY needs a role at all right now —
 	// false for git where the company hosts no code. Nil: every role is
 	// needed (every role but gitlet always is).
@@ -265,6 +272,7 @@ type Host struct {
 	// gitBackground is Config.GitBackground; nil on a node without the gitlet
 	// role.
 	gitBackground func() int64
+	infra         map[string]any
 	// roleNeeded is Config.RoleNeeded; nil needs every role.
 	roleNeeded func(placement.NodeRole) bool
 	hooks      Hooks
@@ -371,6 +379,7 @@ func New(cfg Config) (*Host, error) {
 		profile:       profile,
 		status:        cfg.Status,
 		gitBackground: cfg.GitBackground,
+		infra:         cfg.Infra,
 		roleNeeded:    cfg.RoleNeeded,
 		hooks:         cfg.Hooks,
 		clock:         cfg.Clock,

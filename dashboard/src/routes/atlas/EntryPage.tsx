@@ -1,9 +1,9 @@
 /**
  * An entry's page: what it is, what is wrong with it, the entry among its
  * neighbours, its facts and its recent changes (Overview), what it depends on
- * and what depends on it (Relations), and what each source says about it
- * (Sources), where a disagreement between sources is shown with both values
- * and never settled on the reader's behalf.
+ * and what depends on it (Relations), the tasks that name it (Work), and what
+ * each source says about it (Sources), where a disagreement between sources
+ * is shown with both values and never settled on the reader's behalf.
  */
 
 import { useId, useMemo } from "react";
@@ -13,6 +13,7 @@ import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
+import { countLabel } from "~/routes/worklet/taskRows.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
@@ -56,13 +57,23 @@ import {
   type EntryReads,
 } from "./entry.tsx";
 import { FactValue, sourceName } from "./parts.tsx";
+import {
+  EntryWork,
+  WORK_LABEL,
+  WORK_TAB,
+  WorkLabel,
+  openTotal,
+  openWords,
+  useEntryWork,
+} from "./Work.tsx";
 import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 
-const TABS = ["overview", "relations", "sources", "history"] as const;
+const TABS = ["overview", "relations", WORK_TAB, "sources", "history"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Readonly<Record<Tab, string>> = {
   overview: "Overview",
   relations: "Relations",
+  [WORK_TAB]: WORK_LABEL,
   sources: "Sources",
   history: "History",
 };
@@ -104,6 +115,8 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
   const above = usedBy(answer);
   const disputed = disagreements(entry);
   const conflicts = disputed.facts.length + disputed.relations.length;
+  const work = useEntryWork(entry.id);
+  const open = openTotal(work);
   return (
     <div className="atlas-entry">
       <EntryHead answer={answer} self={selfOf(reads)} size="page" now={now} />
@@ -120,6 +133,16 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
             value,
             label: TAB_LABELS[value],
             ...(value === "relations" ? { count: below.length + above.length || null } : {}),
+            // A PLACE CLOSED TO THE READER IS LOCKED, NEVER HIDDEN: the tab
+            // stays, with the key and the access to ask for.
+            ...(value === WORK_TAB
+              ? {
+                  label: <WorkLabel reading={work} />,
+                  menuLabel: WORK_LABEL,
+                  count: open && open.total > 0 ? countLabel(open.total, open.capped) : null,
+                  live: openWords(open),
+                }
+              : {}),
             ...(value === "sources"
               ? {
                   count: entry.sources.length,
@@ -138,6 +161,7 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
         <div className="tabpanel" role="tabpanel" id={panelId} tabIndex={0}>
           {tab === "overview" && <Overview entry={entry} reads={reads} now={now} />}
           {tab === "relations" && <Relations answer={answer} below={below} above={above} />}
+          {tab === WORK_TAB && <EntryWork reading={work} />}
           {tab === "sources" && <Sources entry={entry} names={namesOf(reads)} now={now} />}
           {tab === "history" && (
             <Section spacing="tight" headingLevel={2} title="Every change, newest first">

@@ -14,11 +14,13 @@ import (
 
 // THE COMPANY'S SYSTEMS THE WORK NAMES. A seat asked about `orders-db` or
 // `api.acme.example` would otherwise probe a server or a vendor for what the
-// company already knows about it. So a turn whose ask names an entry of the
-// atlas exactly is told, in a few lines, what each is, how sure the atlas is
-// of it and what it relies on, and to read the rest with the atlas tools.
-// There is no constant section: a turn whose ask names nothing is told
-// nothing, and the block is bounded however much the ask names.
+// company already knows about it. So a turn whose work item names entries of
+// the atlas, or whose ask names one exactly, is told, in a few lines, what
+// each is, how sure the atlas is of it and what it relies on, and to read the
+// rest with the atlas tools. The entries the work item names come first: a
+// person or an agent linked them on purpose, and a name in the ask is a match.
+// There is no constant section: a turn that names nothing is told nothing,
+// and the block is bounded however much it names.
 
 // The block's bounds, each its reason beside it.
 const (
@@ -40,7 +42,7 @@ type Systems interface {
 }
 
 // SystemsLead opens the block: what the entries are, and what to do next.
-var SystemsLead = "What you were asked names these entries of the company's atlas. Each line is what " +
+var SystemsLead = "Your work item, or what you were asked, names these entries of the company's atlas. Each line is what " +
 	"the atlas holds: the kind, how sure it is, and what the entry relies on. Read an entry in full with `" +
 	toolname.AtlasGet + "`, and what depends on it with `" + toolname.AtlasTrace + "`, before probing a " +
 	"server or a vendor for what the company already knows."
@@ -55,7 +57,8 @@ type systemsBlock struct {
 // the turn may read none, or the atlas could not be read (logged).
 func (f *Fetcher) systems(ctx context.Context, r Request) systemsBlock {
 	asked := r.Ask.Text()
-	if f.src.Systems == nil || r.Seat == nil || !r.ReadsAtlas || strings.TrimSpace(asked) == "" {
+	if f.src.Systems == nil || r.Seat == nil || !r.ReadsAtlas ||
+		(strings.TrimSpace(asked) == "" && len(r.Linked) == 0) {
 		return systemsBlock{}
 	}
 	view, readable, err := f.src.Systems.Systems(ctx, r)
@@ -66,8 +69,8 @@ func (f *Fetcher) systems(ctx context.Context, r Request) systemsBlock {
 	if !readable {
 		return systemsBlock{}
 	}
-	named := view.Named(asked)
 	index := view.Index()
+	named := systemsOf(view, index, r.Linked, asked)
 	var lines []string
 	var listed []atlas.Entry
 	size := 0
@@ -95,6 +98,30 @@ func (f *Fetcher) systems(ctx context.Context, r Request) systemsBlock {
 	}
 	fenced := provenance.Present(r.Boundary, &label, body)
 	return systemsBlock{text: SystemsLead + "\n\n" + fenced, named: len(lines)}
+}
+
+// systemsOf is the entries the block may list, each once: the live ones the
+// work item names, in its order and through whichever entry each id merged
+// into, then the ones the ask names. An id the seat's atlas does not hold
+// (retired since, purged, or outside what the seat reads) names nothing.
+func systemsOf(view atlas.View, index map[uuid.UUID]int, linked []uuid.UUID, asked string) []atlas.Entry {
+	var out []atlas.Entry
+	listed := map[uuid.UUID]bool{}
+	add := func(e atlas.Entry) {
+		if !listed[e.ID] && e.State != atlas.StateRetired {
+			listed[e.ID] = true
+			out = append(out, e)
+		}
+	}
+	for _, id := range linked {
+		if at, held := index[id]; held {
+			add(view.Entries[at])
+		}
+	}
+	for _, e := range view.Named(asked) {
+		add(e)
+	}
+	return out
 }
 
 // systemLine is one entry in a line: its name, kind and key, how sure the

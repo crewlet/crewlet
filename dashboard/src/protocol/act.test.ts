@@ -539,7 +539,7 @@ describe("what a change came to", () => {
     const heard: [string | null, readonly string[]][] = [];
     floors.onWritten((domain, refreshes) => heard.push([domain, refreshes]));
     await act("update_work_item", { item: "ENG-1", if_match: 3 }, { floors });
-    expect(heard).toEqual([["tracker", ["work_search"]]]);
+    expect(heard).toEqual([["tracker", ["work_search", "atlas_work", "atlas_entry_work"]]]);
     expect(floors.floor("tracker")).toBeNull();
   });
 

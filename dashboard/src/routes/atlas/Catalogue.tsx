@@ -5,12 +5,14 @@
  * heading counts all of it, loaded or not.
  *
  * A row is selected with the map: pressing one opens its sheet and lights its
- * path, and the row under the pointer is lit on the map.
+ * path, and the row under the pointer is lit on the map. A row whose entry
+ * open tasks name says how many under its health, as a link to them.
  */
 
 import { useMemo } from "react";
 import {
   EmptyValue,
+  Link,
   Skeleton,
   Sparkline,
   StatusDot,
@@ -38,7 +40,8 @@ import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
 import { EntryDisc, HealthWord, OwnerChip, RelationChips, VendorLead, WordTag } from "./parts.tsx";
-import { HEALTH, HEALTH_ORDER, KINDS, VENDORS, entries } from "./words.ts";
+import { HEALTH, HEALTH_ORDER, KINDS, VENDORS, entries, openTasks } from "./words.ts";
+import { workHref } from "./Work.tsx";
 
 const rowsOf = (answer: AtlasEntriesAnswer) => answer.rows;
 const idOf = (row: AtlasSummary) => row.id;
@@ -64,6 +67,7 @@ export function Catalogue({
   params,
   facets,
   activity,
+  work,
   narrowed,
   emptyHint,
   selectedId,
@@ -76,6 +80,8 @@ export function Catalogue({
   facets: AtlasFacetsAnswer | null;
   /** The atlas log counted by day and entry, for each row's line and last change. */
   activity: QueryResult<AtlasActivityAnswer>;
+  /** How many open tasks name each entry, by its id, or null where no work is read for the reader. */
+  work: ReadonlyMap<string, number> | null;
   narrowed: boolean;
   /** What fills the atlas, said under an empty one. */
   emptyHint: string;
@@ -210,7 +216,7 @@ export function Catalogue({
               header: "Health",
               width: "minmax(8rem, 1fr)",
               title: (row) => row.reason,
-              cell: (row) => <HealthWord health={row.health} />,
+              cell: (row) => <HealthCell row={row} open={work?.get(row.id) ?? 0} />,
             },
             {
               key: "relations",
@@ -258,6 +264,25 @@ export function Catalogue({
         />
       </QueryState>
     </section>
+  );
+}
+
+/**
+ * An entry's health, and under it how many open tasks name it, as the way to
+ * them. A second line of a cell every row already has, so the mark costs the
+ * grid no column and stays on a phone's card.
+ */
+function HealthCell({ row, open }: { row: AtlasSummary; open: number }) {
+  if (open === 0) return <HealthWord health={row.health} />;
+  return (
+    <TableTwoLineCell
+      value={<HealthWord health={row.health} />}
+      detail={
+        <Link href={workHref(row.id)} variant="subtle" size="inherit">
+          <StatusDot tone="info">{openTasks(open)}</StatusDot>
+        </Link>
+      }
+    />
   );
 }
 

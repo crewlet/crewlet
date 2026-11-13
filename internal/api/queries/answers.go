@@ -1180,6 +1180,7 @@ func Register(r *Registry, s Sources) {
 	if s.Atlas != nil {
 		// THE ATLAS, read as its asker on the atlas app (atlas.go).
 		registerAtlas(r, s)
+		registerAtlasWork(r, s)
 	}
 }
 

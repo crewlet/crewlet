@@ -155,6 +155,15 @@ func (d deltaSet) set(field string, before, after []string) {
 	}
 }
 
+// count records that a set moved as how many members it held before and
+// after, for a set whose members a history row must not name.
+func (d deltaSet) count(field string, before, after []string) {
+	added, removed := setMoves(before, after)
+	if len(added) > 0 || len(removed) > 0 {
+		d[field] = Delta{From: strconv.Itoa(len(before)), To: strconv.Itoa(len(after))}
+	}
+}
+
 // setMoves is what after holds that before does not, and the reverse — each
 // sorted, each member once.
 func setMoves(before, after []string) (added, removed []string) {

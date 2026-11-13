@@ -1084,6 +1084,11 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	if h.gitBackground != nil {
 		meta[coord.GitBackgroundKey] = h.gitBackground()
 	}
+	// WHAT THIS NODE RUNS ON, the same on every beat: a copy per beat, since
+	// the payload belongs to this beat alone ([coord.InfraKey]).
+	if h.infra != nil {
+		meta[coord.InfraKey] = maps.Clone(h.infra)
+	}
 	if h.status == nil {
 		return meta
 	}

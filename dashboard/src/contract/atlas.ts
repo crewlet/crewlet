@@ -650,6 +650,51 @@ export interface AtlasReviewAnswer extends AtlasRead {
   counts: Partial<Record<AtlasReviewKind, number>>;
 }
 
+/** A count of tasks the engine may have stopped at its ceiling: `capped`
+ *  says `total` is a floor. */
+interface AtlasWorkTotal {
+  total: number;
+  capped?: boolean;
+}
+
+/** `atlas_work`: how many open tasks name each entry, by the entry's id.
+ *  `unread` is the engine's sentence for why no work was read (the asker does
+ *  not use Worklet, or the company's work is not kept there), and `open` is
+ *  empty with it. `capped` says more entries have open work than one read
+ *  counts, and which were left out is not known. */
+export interface AtlasWorkAnswer {
+  unread?: string;
+  open: Record<string, number>;
+  capped?: boolean;
+}
+
+/** `atlas_entry_work`: the tasks naming one entry, the open ones most
+ *  recently changed first and the ones finished in the last 30 days, each
+ *  list with its whole count. `Row` is the tracker's own list row, bound
+ *  where the wire's questions are declared. */
+export interface AtlasEntryWorkAnswer<Row> {
+  unread?: string;
+  open: Row[];
+  recent: Row[];
+  open_total: AtlasWorkTotal;
+  recent_total: AtlasWorkTotal;
+}
+
+/** One asked id and the entry it names: `id` exactly as asked, and the
+ *  entry it merged into, so two ids of one merged entry carry one `entry.id`. */
+export interface AtlasNamed {
+  id: string;
+  entry: AtlasSummary;
+}
+
+/** `atlas_named`: the entries a list of ids names, as the asker reads them:
+ *  one item per distinct asked id that names an entry, in the order asked,
+ *  and the asked ids that name no entry the asker's atlas holds. */
+export interface AtlasNamedAnswer {
+  named: AtlasNamed[];
+  missing: string[];
+}
+
 /** What each fact admits (`atlas.Fact.Spec`): the grammar its value is written
  *  in, the closed words of a word fact, the kinds that carry it (none listed:
  *  every kind), and its traits. `many` is a fact an entry holds several values

@@ -3972,7 +3972,10 @@ var ATLAS_READS = [
 	"atlas_facets",
 	"atlas_log",
 	"atlas_activity",
-	"atlas_review"
+	"atlas_review",
+	"atlas_work",
+	"atlas_entry_work",
+	"atlas_named"
 ];
 var ACTIONS = {
 	create_work_item: {
@@ -4011,6 +4014,7 @@ var ACTIONS = {
 			"if_match",
 			"linked",
 			"linked_pages",
+			"linked_entries",
 			"title",
 			"body",
 			"labels",
@@ -4024,7 +4028,11 @@ var ACTIONS = {
 		],
 		domain: "tracker",
 		apps: ["worklet"],
-		refreshes: ["work_search"],
+		refreshes: [
+			"work_search",
+			"atlas_work",
+			"atlas_entry_work"
+		],
 		scope: "person"
 	},
 	restore_work_item: {

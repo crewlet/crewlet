@@ -69,6 +69,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "Company › Atlas's Add entry, and the dialog every atlas write is made in",
     suite: "routes/atlas/writes.test.tsx",
   },
+  "routes/atlas/AdvisorFix.tsx": {
+    why: "an atlas finding's fix in Settings › Advisor: an owner, a monitor or a read asked for, one press per entry",
+    suite: "routes/atlas/AdvisorFix.test.tsx",
+  },
   "routes/atlas/Decisions.tsx": {
     why: "the decisions a disagreement or a waiting entry allows, on an entry's Sources tab and in Review",
     suite: "routes/atlas/writes.test.tsx",
@@ -76,6 +80,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/atlas/EntryActions.tsx": {
     why: "an entry's Confirm, Correct and More menu, and the dialog each opens",
     suite: "routes/atlas/writes.test.tsx",
+  },
+  "routes/atlas/LinkEntry.tsx": {
+    why:
+      "the task rail's Link an atlas entry dialog (update_work_item's linked_entries), opened " +
+      "only by a reader who may change the task and never offered to anybody else",
+    suite: "routes/worklet/WorkItem.test.tsx",
   },
   "routes/atlas/Sources.tsx": {
     why: "Refresh now on a source's card, held inside the engine's floor and for a reader who may not ask",

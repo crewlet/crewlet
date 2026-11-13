@@ -65,6 +65,9 @@ const ATLAS_READS = [
   "atlas_log",
   "atlas_activity",
   "atlas_review",
+  "atlas_work",
+  "atlas_entry_work",
+  "atlas_named",
 ] as const;
 
 export const ACTIONS = {
@@ -113,6 +116,10 @@ export const ACTIONS = {
     // "Attach a page": each is a delta (`{add: [...]}`) on the item the
     // conversation is about, never the whole relation set.
     //
+    // `linked_entries` IS THE RAIL'S "Link an atlas entry": the same delta,
+    // of the atlas entries the task touches. The marks the atlas draws from
+    // them are read outside the tracker's session set, so they are refreshed.
+    //
     // THE TASK PAGE EDITS THE REST: the title and description, the labels
     // (which REPLACE the set), the schedule, a custom field by slug, one
     // checklist gesture at a time, and whether the person follows it.
@@ -125,6 +132,7 @@ export const ACTIONS = {
       "if_match",
       "linked",
       "linked_pages",
+      "linked_entries",
       "title",
       "body",
       "labels",
@@ -138,7 +146,7 @@ export const ACTIONS = {
     ],
     domain: "tracker",
     apps: ["worklet"],
-    refreshes: ["work_search"],
+    refreshes: ["work_search", "atlas_work", "atlas_entry_work"],
     scope: "person",
   },
   restore_work_item: {

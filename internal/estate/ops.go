@@ -67,6 +67,8 @@ type TrackerReader interface {
 		worklet.ReadyWork, error)
 	PickupAnswer(ctx context.Context, q worklet.PickupAnswerQuery) (types.PickupAnswer, error)
 	OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time) (worklet.OwnAsks, error)
+	EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error)
+	EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now time.Time) (worklet.EntryWork, error)
 	Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error)
 	Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error)
 	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
@@ -899,6 +901,28 @@ var opOwnAsks = define("tracker.own_asks", opRead, trackerDomain, false,
 			return worklet.OwnAsks{}, errNoHalf
 		}
 		return b.Tracker.OwnAsks(ctx, a.Query, a.Now)
+	})
+
+var opEntryMarks = define("tracker.entry_marks", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, level statelog.ReadLevel) (worklet.EntryMarks, error) {
+		if b.Tracker == nil {
+			return worklet.EntryMarks{}, errNoHalf
+		}
+		return b.Tracker.EntryMarks(ctx, level)
+	})
+
+// entryWorkArgs is [opEntryWork]'s input.
+type entryWorkArgs struct {
+	Query worklet.EntryWorkQuery
+	Now   time.Time
+}
+
+var opEntryWork = define("tracker.entry_work", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a entryWorkArgs) (worklet.EntryWork, error) {
+		if b.Tracker == nil {
+			return worklet.EntryWork{}, errNoHalf
+		}
+		return b.Tracker.EntryWork(ctx, a.Query, a.Now)
 	})
 
 var opProjects = define("tracker.projects", opRead, trackerDomain, false,
