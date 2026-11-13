@@ -23,7 +23,8 @@
 // ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
 // ([WorkerQueue]), the imports and pull mirrors (internal/gitlet/mirror,
 // which the engine registers), and the atlas's read of a repository's deploy
-// and dependency files (internal/atlas/codescan, registered the same way),
+// and dependency files (internal/atlas/codescan, registered the same way, its
+// git reads made through [Loop.GitRead] so they share the loop's bound),
 // each a listing of the
 // repositories it has work in (Worker.Due) and the work of one
 // (Worker.Work), each read from the rows. A repository is worked by ONE turn

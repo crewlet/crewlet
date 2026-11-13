@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/codescan"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -17,9 +18,10 @@ import (
 // internal/atlas/codescan).
 
 // buildAtlasCodeScan builds the scan and registers it with this node's home
-// loop: Gitlet's reads over the router's code seam, each repository's
-// standing in the fleet's coordination store, and the atlas log as this node
-// holds it. A node with no coordination store has nowhere to record a
+// loop: Gitlet's rows over the router's code seam, its git reads through the
+// loop's own bound (so they wait with the home's, never ahead of the seats),
+// each repository's standing in the fleet's coordination store, and the atlas
+// log as this node holds it. A node with no coordination store has nowhere to record a
 // standing and registers nothing.
 func (e *Engine) buildAtlasCodeScan(home *gitlethome.Loop) error {
 	if e.backends == nil || e.backends.Fleet == nil {
@@ -30,7 +32,7 @@ func (e *Engine) buildAtlasCodeScan(home *gitlethome.Loop) error {
 		return err
 	}
 	scanner, err := codescan.New(codescan.Options{
-		Code: e.router.Code(), Log: atlasCodeLog{engine: e}, Store: store,
+		Code: atlasCodeReads{rows: e.router.Code(), git: home}, Log: atlasCodeLog{engine: e}, Store: store,
 		// A GITLET NODE HOLDS THE ESTATE, but it records on the atlas log only
 		// where it publishes: read per pass, since the core runtime is built
 		// beside Gitlet and a node restarted to write nothing must not.
@@ -43,6 +45,25 @@ func (e *Engine) buildAtlasCodeScan(home *gitlethome.Loop) error {
 		return err
 	}
 	return home.Register(scanner)
+}
+
+// atlasCodeReads is Gitlet as the scan reads it: the rows through the router,
+// and git through the home loop, which bounds every worker's reads together.
+type atlasCodeReads struct {
+	rows interface {
+		Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	}
+	git *gitlethome.Loop
+}
+
+// Read reads Gitlet's rows.
+func (r atlasCodeReads) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+	return r.rows.Read(ctx, q)
+}
+
+// GitRead is one of the home's own git reads.
+func (r atlasCodeReads) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+	return r.git.GitRead(ctx, q)
 }
 
 // atlasLogSides is this node's atlas log, both sides, where it publishes.
