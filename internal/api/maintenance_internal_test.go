@@ -129,12 +129,7 @@ func bootNode(t *testing.T, mode statelog.MaintenanceMode) (*engine.Engine, *con
 	dir := brokertest.TempDir(t)
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(dir, "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(dir, "stream")
-	// THE BROKER'S RESERVATIONS FROM A FIXED SIZE rather than from whatever
-	// this machine's disk has free, which is a fact about the machine and not
-	// about the node: derived, a runner with under ten gibibytes free refuses
-	// the state logs' floors before the engine is up.
-	boot.Stream.StoreMaxBytes = 16 << 30
+	brokertest.StoreIn(&boot.Stream, filepath.Join(dir, "stream"))
 	boot.API.Auth.Admin = iam.AdminServe
 	key, err := secrets.GenerateKey()
 	if err != nil {
