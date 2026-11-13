@@ -846,6 +846,12 @@ func annotationsFor(name string) tools.Annotations {
 		// has resumed it, and the annotation describes the tool rather
 		// than the engine's protection.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case AtlasRefreshTool:
+		// AN ASK, which replaces nothing and is the same ask made twice, so
+		// neither destructive nor a second change. Open-world: honouring it,
+		// the engine reads a vendor outside itself.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
 		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
 		// executor it has out with its box, and neither is run again —

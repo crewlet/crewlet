@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
 
@@ -101,6 +103,47 @@ func (e *Engine) atlasSources() []collect.Source {
 	return append(collect.Registered(), sshint.NewAtlasSource(e.sshRun()))
 }
 
+// AtlasSourceReport is every source this build reads that the running
+// company connects, as a reader is shown it at now: its standing and the ask
+// waiting on it, both off the coordination store, since the node answering
+// is rarely the node holding the duty. False where this node runs no company
+// or has no coordination store to read.
+func (e *Engine) AtlasSourceReport(ctx context.Context, now time.Time) (collect.Report, bool, error) {
+	company := e.Company()
+	if company == nil || company.Config == nil || e.backends == nil || e.backends.Fleet == nil {
+		return collect.Report{}, false, nil
+	}
+	store, err := e.AtlasSourceStore()
+	if err != nil {
+		return collect.Report{}, false, err
+	}
+	standings, err := store.Load(ctx)
+	if err != nil {
+		return collect.Report{}, false, err
+	}
+	asked, err := store.Requests(ctx)
+	if err != nil {
+		return collect.Report{}, false, err
+	}
+	var kinds []integration.Kind
+	for _, src := range e.atlasSources() {
+		if kind := src.Kind(); company.Config.DeclaresIntegration(kind.String()) {
+			kinds = append(kinds, kind)
+		}
+	}
+	return collect.Describe(kinds, standings, asked, company.Config.Atlas.RefreshInterval(), now), true, nil
+}
+
+// AskAtlasRefresh records a person's ask that a source be read now, for the
+// node holding the duty to honour.
+func (e *Engine) AskAtlasRefresh(ctx context.Context, kind integration.Kind, req collect.Request) error {
+	store, err := e.AtlasSourceStore()
+	if err != nil {
+		return err
+	}
+	return store.Ask(ctx, kind, req)
+}
+
 // atlasCollectLog is the atlas log's two sides as the duty takes them: this
 // node's own, since the duty runs only where the log is published.
 type atlasCollectLog struct {
@@ -115,6 +158,9 @@ func (e *Engine) AtlasCollect() *collect.Worker { return e.atlasCollect }
 // for the API: read from coordination rather than the worker's memory, since
 // the node answering is usually not the node holding the duty.
 func (e *Engine) AtlasSourceStore() (*collect.CoordStore, error) {
+	if e.backends == nil {
+		return nil, errors.New("engine: this node has no coordination store to read a source's standing from")
+	}
 	return collect.NewCoordStore(e.backends.Fleet)
 }
 

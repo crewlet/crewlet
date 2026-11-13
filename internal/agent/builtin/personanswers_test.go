@@ -165,6 +165,8 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		map[string]any{"handle": "agent-cto", "reason": "looping"})
 	out[builtin.ResumeSeatTool], _ = pauses.call(t, builtin.ResumeSeatTool,
 		map[string]any{"handle": "agent-cto"})
+	_, refresh := refreshRig(t)
+	out[builtin.AtlasRefreshTool], _ = callRefresh(t, refresh, refreshAs(boundTo("ada", iam.GrantAtlas)), "cloudflare")
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
 		AgentHandle: "swe", Status: steer.StatusAccepted}}}
 	out[builtin.SteerTurnTool], _ = steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")

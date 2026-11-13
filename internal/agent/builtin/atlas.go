@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
@@ -70,6 +71,19 @@ type AtlasDeps struct {
 	// Log is the atlas's own log as this node reaches it, read per call, and
 	// false where it reaches no copy. Nil serves no question about the log.
 	Log func(ctx context.Context) (AtlasLogReads, bool)
+	// Sources is each source's standing and the ask waiting on it, as this
+	// node reaches them. Nil serves no question about the sources.
+	Sources AtlasSourceDesk
+}
+
+// AtlasSources is every source the company connects as a reader is shown it
+// at now, [gather.ErrNoSource] where this node reaches no standing, and false
+// where it runs no company yet.
+func (d AtlasDeps) AtlasSources(ctx context.Context, now time.Time) (collect.Report, bool, error) {
+	if d.Sources == nil {
+		return collect.Report{}, false, fmt.Errorf("the atlas's sources: %w", gather.ErrNoSource)
+	}
+	return d.Sources.AtlasSourceReport(ctx, now)
 }
 
 // AtlasLogReads is the atlas's log read as lines and counted
