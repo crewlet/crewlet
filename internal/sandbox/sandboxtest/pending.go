@@ -81,6 +81,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
@@ -557,6 +558,76 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A LAUNCH RECORDS WHAT THE BRIEF IT HANDED LEFT OUT, AND EVERY WRITE OF THE
+// JOB'S RECORD KEEPS IT. The reads of the round the brief a job's run read
+// counted without listing them, and those of the fresh brief its box falls back
+// to beside a brief that continues a session, are written with the brief by the
+// attach that names the job's command (never by the attach before the job,
+// which names none and unsays nothing), and every write of the record after it
+// writes them back as it read them, under their own keys: a status, a lease, a
+// park, a bridged call, a claim and its release, each of which comes before the
+// relaunch that reads them. Only the next launch, which replaces the job's
+// record whole, says none again.
+//
+// Mutation: drop either set from the attach, record them on the attach before
+// the job, or leave them off the wire, and a check goes red.
+func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-omitted"
+	mustBeginLaunch(t, s, run(turn))
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", BriefOmitted: []int{1},
+		FreshOmitted: []int{2}}, sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach before the job: %v", err)
+	}
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
+		t.Errorf("the attach before the job recorded %v and %v left out, want none: it names no command",
+			got.BriefOmitted, got.FreshOmitted)
+	}
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", CommandID: "cmd-omitted",
+		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15}},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach that names the job's command: %v", err)
+	}
+	check := func(step string) {
+		t.Helper()
+		got := mustGet(t, s, turn).Launch
+		if !slices.Equal(got.BriefOmitted, []int{13, 14}) || !slices.Equal(got.FreshOmitted, []int{15}) {
+			t.Errorf("after %s the job's record says its briefs left out %v and %v, want [13 14] and [15]",
+				step, got.BriefOmitted, got.FreshOmitted)
+		}
+	}
+	check("the attach that names the job's command")
+	if suspended, err := s.MarkSuspended(ctx, turn, suspension()); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	check("the park of its launch")
+	if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write")
+	if _, err := s.ClaimOwnership(ctx, turn, "node-b", 2); err != nil {
+		t.Fatal(err)
+	}
+	check("a lease")
+	launch := mustGet(t, s, turn).LaunchID
+	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("a bridged call")
+	claimed := mustClaim(t, s, turn)
+	check("the claim")
+	mustRelease(t, s, claimed)
+	check("its release")
+	park(t, s, turn)
+	check("a park on a question")
+	mustBeginLaunch(t, s, run(turn))
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
+		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
+			got.FreshOmitted)
 	}
 }
 

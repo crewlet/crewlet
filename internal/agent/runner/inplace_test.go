@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -434,7 +435,10 @@ func TestARunCarriedOnInItsBoxArmsItsJobsLoadsOnlyWhereItsHarnessEndedItsOwnRun(
 // rewrite left no room for is never launched and paid for whole past the
 // ceiling. Where the job's box is gone no launch continues in it, so its calls
 // are neither rewritten nor charged, and the relaunch is not refused for a brief
-// nothing would send.
+// nothing would send. The copy's harness ended its own run, and the call it
+// lacks is a read its job's brief counted without listing it: the fresh brief
+// beside it, which tells the round from its start, counts that read past its
+// own read cap too, so the rewrite is the copy's brief's alone.
 //
 // Mutation: build the calls the copy may lack after the relaunch asks the meter,
 // and the run whose box is kept is launched; build them whether or not the box
@@ -455,15 +459,23 @@ func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWi
 			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
-			// ONE CALL OF THE ROUND, its body past the ledger's value budget.
-			bridged := []runner.BridgedCall{numbered("jira_create",
-				map[string]any{"summary": "before the refusal", "body": strings.Repeat("b", 2000)}, 1, 1)}
+			// TWELVE READS THE COPY HOLDS, and ONE ITS JOB'S BRIEF COUNTED
+			// WITHOUT LISTING IT, its argument past the ledger's value budget.
+			var bridged []runner.BridgedCall
+			for n := 1; n <= ledger.MaxReadCalls; n++ {
+				bridged = append(bridged, numbered("slack_history", map[string]any{"channel": fmt.Sprintf("C%d", n)},
+					n, n))
+			}
+			owed := ledger.MaxReadCalls + 1
+			bridged = append(bridged, numbered("slack_history", map[string]any{"channel": strings.Repeat("b", 2000)},
+				owed, owed))
 			meter := &ceilingMeter{ceiling: 100}
 			relauncher := &playLauncher{}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 				budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
 					For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
 				resume: &runner.Resume{State: parked.State, Bridged: bridged,
+					HarnessEnd: sandbox.HarnessEndOwnRun, Owed: []int{owed},
 					Rotated: &runner.Rotated{SessionID: "sess-1", BoxKept: tc.boxKept}}})
 
 			_, _, err := collector.Resume(t.Context(), nil)

@@ -4113,6 +4113,13 @@ type BoxRef struct {
 	// Brief is which brief the launch handed the job's run
 	// ([LaunchRecord.Brief]), written with the job's command as Handed is.
 	Brief BriefKind
+
+	// BriefOmitted is what that brief left out of the round the launch carries
+	// on, and FreshOmitted what the fresh one its box falls back to left out,
+	// beside a brief that continues a session ([BriefTold],
+	// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]): written with
+	// the job's command as Brief is.
+	BriefOmitted, FreshOmitted []int
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4309,6 +4316,24 @@ type LaunchRecord struct {
 	// publishes beside whether the run did continue the session, which only
 	// its box can say ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
+
+	// BriefOmitted is the reads of the round the launch carried on that the
+	// brief it handed the job's run counted without listing them, and
+	// FreshOmitted those the fresh brief its box falls back to counted so,
+	// written beside a brief that continues a session: by their places in the
+	// round's log ([BriefTold]), written with Brief by the attach that names
+	// the job's command, where the launch carried a round on. Read through
+	// [LaunchRecord.OmittedCalls], by the brief the job's run read.
+	//
+	// ON THE JOB'S RECORD, because what a session holds is what its briefs
+	// TOLD: the job's copy of its session in its box, and a capture of it
+	// placed by its own read, hold those reads only as a count, and a relaunch
+	// continuing either reads the record after this launch is long gone, on
+	// whichever node; the next launch replaces the record whole once it has
+	// read it. Never on the executor log, whose turn row carries no save point
+	// to read a set against.
+	BriefOmitted []int `json:"brief_omitted,omitempty"`
+	FreshOmitted []int `json:"fresh_omitted,omitempty"`
 
 	// FreshSessionID is the session of its own the job's script starts in the
 	// continued one's place, where its launch continued one and its box
@@ -4521,6 +4546,41 @@ type LaunchRecord struct {
 	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
 	// record by the relaunch that replaces it whole, since it is the job's.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// OmittedCalls is the reads of the round the brief the job's run read counted
+// without listing them ([LaunchRecord.BriefOmitted], [BriefTold]), resolved by
+// which brief the launch handed it ([LaunchRecord.Brief]) and which session its
+// box said it started ([LaunchRecord.SessionStart]):
+//
+//   - a fresh brief: its own set;
+//   - a brief that continues a session, which the box took up: that brief's;
+//   - one whose box started a session of its own in that one's place, its
+//     restore having failed: the fresh brief's, which it was handed instead;
+//   - one whose box never said, or said it in a word this build does not know,
+//     and a brief this build does not know: BOTH, the union, since the run read
+//     one of the two and the record cannot say which: told again rather than
+//     never, the safe direction for every reader of it.
+//
+// Nil where the brief left none out, and on a record a build before this one
+// wrote, which names none.
+func (l LaunchRecord) OmittedCalls() []int {
+	switch {
+	case l.Brief == BriefFresh:
+		return l.BriefOmitted
+	case l.Brief.Continues() && l.SessionStart == SessionStartContinued:
+		return l.BriefOmitted
+	case l.Brief.Continues() && l.SessionStart == SessionStartFresh:
+		return l.FreshOmitted
+	}
+	union := slices.Clone(l.BriefOmitted)
+	for _, place := range l.FreshOmitted {
+		if !slices.Contains(union, place) {
+			union = append(union, place)
+		}
+	}
+	slices.Sort(union)
+	return union
 }
 
 // SessionRan is the harness session the job the row holds worked in, for a

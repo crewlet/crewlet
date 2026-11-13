@@ -258,7 +258,10 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 // in all, every late read and the first three after the save, whose heading
 // counts the six it leaves out. Only what the brief shows is rewritten: a read
 // after the save past the cap costs no rewrite of its long argument, and a late
-// write's long body costs one.
+// write's long body costs one. On a compactor that remembers its rewrites for
+// the turn, as the engine's does, so the fresh brief beside the continuation,
+// which tells the same calls from the round's start, rewrites none of them
+// again.
 //
 // Mutation: render the two lists with a cap each, and eighteen reads are told;
 // spend the cap on the calls after the save first, and three late reads are;
@@ -295,7 +298,7 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	relauncher := &probingLauncher{basis: basis}
 	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: rewrite}, nil).
+		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: rewrite}, compact.NewCache()).
 			For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
 		resume: &runner.Resume{State: parked.State, Bridged: bridged, Lost: &lost}})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
@@ -345,21 +348,32 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 // relaunch that carries a lost job's round on asks the meter once every
 // rewrite its briefs make is spent — before anything is launched, and before
 // the call a person approved would be made — so a run the rewrite left no room
-// for is never launched and paid for whole past the ceiling.
+// for is never launched and paid for whole past the ceiling. The read after the
+// save is one the fresh brief beside the continuation counts past its read cap
+// rather than lists, so its rewrite is the continuation's alone.
 //
 // Mutation: build the continued session's brief after the relaunch asks the
-// meter, as it was built beside its lead, and the run is launched.
+// meter, as it was built beside its lead, and the run is launched; rewrite a
+// read the fresh brief counts without listing, and it is charged twice.
 func TestACarriedOnRelaunchLaunchesNothingWhenTheCallsAfterItsSaveFillTheWindow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
-	// ONE WRITE AFTER THE SAVE, its body past the ledger's value budget.
-	bridged := []runner.BridgedCall{numbered("jira_create",
-		map[string]any{"summary": "after the save", "body": strings.Repeat("b", 2000)}, 2, 2)}
+	// TWELVE READS THE SESSION HOLDS, and ONE AFTER THE SAVE, its argument past
+	// the ledger's value budget.
+	var bridged []runner.BridgedCall
+	for n := 1; n <= ledger.MaxReadCalls; n++ {
+		bridged = append(bridged, numbered("slack_history", map[string]any{"channel": fmt.Sprintf("C%d", n)}, n,
+			n))
+	}
+	bridged = append(bridged, numbered("slack_history", map[string]any{"channel": strings.Repeat("b", 2000)},
+		ledger.MaxReadCalls+1, ledger.MaxReadCalls+1))
 	meter := &ceilingMeter{ceiling: 100}
-	relauncher := &probingLauncher{basis: keptBasis}
+	saved := keptBasis
+	saved.Through = ledger.MaxReadCalls
+	relauncher := &probingLauncher{basis: saved}
 	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).

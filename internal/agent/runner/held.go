@@ -382,6 +382,7 @@ func (a Asked) heldReseed(b provenance.Boundary) string {
 			"first, and your seat withdrew the call\n\n")
 		w.WriteString(a.Held.called("It", "its") + " " + a.withdrew(b) + "\n\n")
 		w.WriteString("The call was not made.\n\n")
+		w.WriteString(happened + "\n\n")
 		w.WriteString(a.freshMachine("under your access as it stands now"))
 		return w.String()
 	}
@@ -389,6 +390,7 @@ func (a Asked) heldReseed(b provenance.Boundary) string {
 	w.WriteString(a.Held.called("It", "its") + " " + a.Held.what(a.heldBy(b)) + "\n\n")
 	w.WriteString(a.heldSaid(b))
 	w.WriteString(a.Held.told(b) + "\n\n")
+	w.WriteString(happened + "\n\n")
 	w.WriteString(a.freshMachine("with this incorporated"))
 	return w.String()
 }

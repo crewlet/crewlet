@@ -513,6 +513,70 @@ type Continuation struct {
 	// ([PendingRun.BriefRead]). NIL marks none: a launch that knows no such
 	// read.
 	BriefRead *int
+
+	// Told is what Brief told of the round, and Fresh what the launch's own
+	// Brief, the one a session of the run's own is handed, told of it: the
+	// launch records the one of the brief it hands its run on the job it
+	// opens, and Fresh beside a brief that continues a session, which its box
+	// falls back to where it cannot take the session up
+	// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+	Told, Fresh BriefTold
+}
+
+// BriefTold is what one brief a launch hands its run told of the round the
+// launch carries on ([Continuation.Told], [Continuation.Fresh],
+// [SessionContinuation.Told]): the calls of the round it left out.
+//
+// A SESSION HOLDS WHAT ITS BRIEF TOLD, NEVER WHAT ITS BUDGETS LEFT OUT. A brief
+// tells a round's calls held to the prior-work ledger's budgets, and counts the
+// reads past the ledger's read cap rather than listing them
+// (internal/agent/runner's calledAfter): the session it is handed holds that
+// such a read was made, and none of what it returned. Recorded on the job the
+// launch opens, the set reaches every later reader of what that job's session
+// holds: a relaunch continuing its copy in its box (internal/agent/runner's
+// Resume.Owed), and a capture of it placed by its own read
+// ([SessionCapture.Omitted]), each of which tells those reads again rather than
+// counting them held.
+//
+// IN MEMORY ONLY, on a launch's request: what lands is the record's, written by
+// the attach that names the job's command.
+type BriefTold struct {
+	// Omitted is the reads of the round the brief counted without listing
+	// them, by their places in the round's log ([BridgeCall.Appended]): of the
+	// calls it was to tell (those the session it continues lacks, through the
+	// read the brief was built from, [Continuation.BriefRead]), the ones it did
+	// not. Nil where it left none out. Never a late call, which every brief
+	// tells again, nor one the log dropped from its middle, which keeps no
+	// place to name and is counted by every brief that tells it; and never
+	// more than a round's log lists ([MaxBridgeCalls]), which a launch refuses
+	// past before anything is opened ([LaunchRequest.toldBounded]).
+	Omitted []int
+}
+
+// toldBounded reports why r carries a set of calls a brief left out longer
+// than a round's log lists ([MaxBridgeCalls]), naming the field, nil where it
+// carries none: a set past it names calls no log of the round holds, which the
+// engine's runner, telling at most a log's calls, never builds. Refused before
+// the row is written, so a request built with one costs nothing.
+func (r LaunchRequest) toldBounded() error {
+	type told struct {
+		field string
+		set   BriefTold
+	}
+	var sets []told
+	if c := r.Continue; c != nil {
+		sets = append(sets, told{"continue.told", c.Told}, told{"continue.fresh", c.Fresh})
+	}
+	if s := r.Session; s != nil {
+		sets = append(sets, told{"session.told", s.Told})
+	}
+	for _, t := range sets {
+		if n := len(t.set.Omitted); n > MaxBridgeCalls {
+			return fmt.Errorf("sandbox: %s names %d calls its brief left out, past the %d a round's log "+
+				"lists", t.field, n, MaxBridgeCalls)
+		}
+	}
+	return nil
 }
 
 // LaunchResult reports what a launch produced.
@@ -601,6 +665,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// is what a box's request to Gitlet is admitted against, so a
 	// repository it could not carry, or one it names twice, is never on it.
 	if err = checkRepos(req); err != nil {
+		return LaunchResult{}, err
+	}
+	// AND THE SETS OF CALLS ITS BRIEFS LEFT OUT, which the row carries one of
+	// beside its round's log ([BriefTold]).
+	if err = req.toldBounded(); err != nil {
 		return LaunchResult{}, err
 	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
@@ -891,6 +960,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// The command id is written SECOND, once the job exists: a row naming a
 	// command that was never started would have the waiter poll for a
 	// completion marker nothing is ever going to write.
+	briefOmitted, freshOmitted := continued.omitted(req)
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
@@ -906,6 +976,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
 		// publishes beside whether its run did continue the session.
 		Brief: continued.kind,
+		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
+		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
+		// job's session holds ([BriefTold]).
+		BriefOmitted: briefOmitted, FreshOmitted: freshOmitted,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

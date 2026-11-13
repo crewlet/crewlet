@@ -104,7 +104,7 @@ func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLa
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: 1, Launch: row.LaunchID,
 		State: sandbox.CaptureLanded, Final: true, Interrupted: true,
-		Through: new(2), NoteCursor: 4, ContextTokens: contextTokens,
+		Through: new(2), Omitted: []int{1}, NoteCursor: 4, ContextTokens: contextTokens,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
 		ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
 		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/4f2a/home"}
@@ -178,8 +178,9 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // ACCOUNTS FOR IT. The engine's launcher answers the runner's question from the
 // coordinator's choice and the turn's row on the executor log: the session, its
 // place, the calls it had been answered — its save point, how many of the
-// round's calls the log had taken when its capture read it — the notes it had
-// read, whether its harness was cut off, where it was last worked, what its
+// round's calls the log had taken when its capture read it, and the reads at
+// or below it that its job's brief counted without listing them — the notes it
+// had read, whether its harness was cut off, where it was last worked, what its
 // last request carried, which the launch's floor is made of, the harness that
 // wrote it, which the member the launch picks must run, and the turn whose
 // session it is, which a run that starts one of its own instead is told it may
@@ -194,7 +195,7 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	k := newKeptLaunch(t, 40000, 0, 0)
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
-		Harness: "claude-code", Through: 2, NoteCursor: 4, Interrupted: true,
+		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
 		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)

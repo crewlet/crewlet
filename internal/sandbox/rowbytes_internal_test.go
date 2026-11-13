@@ -511,10 +511,18 @@ func worstRow(t *testing.T) PendingRun {
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
 			Served: uuid.NewString(), Read: told}
 	}
+	// THE READS A BRIEF LEFT OUT, as a launch records them on the job's record
+	// and a capture states them: a whole log's calls ([MaxBridgeCalls]), each a
+	// place at its widest.
+	omitted := make([]int, MaxBridgeCalls)
+	for i := range omitted {
+		omitted[i] = math.MaxInt
+	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
-		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), BridgeSeq: math.MaxInt,
-		BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt, ContextTokens: math.MaxInt64,
-		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128), ArchiveFormat: 99,
+		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
+		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
+		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		SessionID: plain(128), ArchiveFormat: 99,
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
@@ -633,6 +641,7 @@ func worstRow(t *testing.T) PendingRun {
 		})
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
+		BriefOmitted: omitted, FreshOmitted: omitted,
 		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
 		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
 		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,

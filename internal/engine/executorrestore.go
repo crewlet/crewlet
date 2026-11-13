@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -179,6 +180,9 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 		KeptTurn: continued.KeptTurn,
+		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
+		// BRIEF'S COUNT, which the brief continuing it tells.
+		Owed: slices.Clone(captured.Omitted),
 	}
 }
 
@@ -337,18 +341,19 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 // where the sandbox layer hands it; or the session the turn's conversation's
 // last turn left, which the sandbox layer reads off the turn's record as its
 // first launch froze it and continues only in a box of its own, with the one
-// brief for that.
+// brief for that. Either with what its briefs left out of the round the launch
+// carries on, which the launch records where it hands one ([sandbox.BriefTold]).
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	switch {
 	case s == nil:
 		return nil
 	case s.Basis.ContinuesBase():
-		return &sandbox.SessionContinuation{Base: true, Replaced: s.Replaced}
+		return &sandbox.SessionContinuation{Base: true, Replaced: s.Replaced, Told: s.Told}
 	case !s.Basis.Continues():
 		return nil
 	}
 	return &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
-		Brief: s.Brief, Replaced: s.Replaced}
+		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told}
 }
 
 // sessionDecision is how the launch decided its run takes up a session, in the

@@ -1786,8 +1786,12 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			if box.Handed != "" {
 				job = handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Sealed: box.Handed}
 			}
-			// And which brief ([LaunchRecord.Brief]).
+			// And which brief ([LaunchRecord.Brief]), and what it and the
+			// fresh one beside it left out of the round the launch carried on
+			// ([LaunchRecord.BriefOmitted]).
 			run.Launch.Brief = box.Brief
+			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
+			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
 			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in a continued
 			// one's place, for which of the two its box said it ran
 			// ([PendingRun.SessionRan]).

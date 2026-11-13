@@ -368,10 +368,24 @@ type Resume struct {
 	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction for a
 	// word that never came.
 	// An own run's copy is told the calls the round's log took late alone,
-	// which it is not known to hold, and its guard counts none of their loads;
+	// which it is not known to hold, and the reads its job's brief counted
+	// without listing them (Owed), and its guard counts none of their loads;
 	// and it is told first that a successful submission among the calls it
 	// does hold is none of the round's ([Runner.calledAfter]).
 	HarnessEnd sandbox.HarnessEnd
+
+	// Owed is the reads of the round the brief the job State parked was
+	// handed counted without listing them, its read cap spent, by their places
+	// in the round's log: the set the job's record keeps of the brief its run
+	// read (sandbox.LaunchRecord.OmittedCalls). The copy of the job's session
+	// in its box holds them only as that count, so a relaunch carrying the
+	// round on in that box tells them, first, under words of their own, where
+	// the job's harness ended its own run ([Runner.inPlaceAfter]), and its
+	// guard counts none of their loads ([heldAt]). Nil where the brief left
+	// none out, or where the record names none, as an older build's does: the
+	// copy is then read as holding every call of the round its brief was to
+	// tell.
+	Owed []int
 
 	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent

@@ -136,7 +136,10 @@ var modelCalls = map[string]modelCall{
 	// nothing an earlier read wrote opens or closes a later fence. What the
 	// continuation adds — the notes the session has not read, the calls made
 	// after it was saved, the engine's record of its box — is fenced or
-	// defused under the relaunching segment's token.
+	// defused under the relaunching segment's token; and so is every call of
+	// the round a fresh run carrying it on is told, its arguments a model's and
+	// a failed call's error whatever the tool said, in the reseed and in the
+	// base's continuation, which takes the reseed whole.
 	//
 	// TWO THINGS RIDE UNFENCED, defused, ON PURPOSE: an answer by turn and a
 	// note a person sends the turn. Each is a person's instruction to this
@@ -165,6 +168,7 @@ var modelCalls = map[string]modelCall{
 	}},
 	"internal/agent/runner/agentrun.go:continueAgentRun": {tests: []string{
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
+		"internal/agent/runner.TestAFreshRunsToldCallsAreDefusedUnderItsToken",
 		"internal/engine.TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped",
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
 		"internal/agent/prefetch.TestEveryBlockDefusesWhatItReads",
@@ -207,6 +211,7 @@ var modelCalls = map[string]modelCall{
 	// whose fences its own entries hold.
 	"internal/agent/runner/continued.go:baseSession": {tests: []string{
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins",
+		"internal/agent/runner.TestAFreshRunsToldCallsAreDefusedUnderItsToken",
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhatItsNewBoxHolds",
 		"internal/agent/runner.TestAScheduledFireIsToldWhereItBegins",
 		"internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard",

@@ -1287,6 +1287,11 @@ type SessionContinuation struct {
 	// branch to check out, the uncommitted work gone, the earlier box's
 	// absolute paths).
 	Replaced string
+
+	// Told is what Brief and Replaced told of the round the launch carries
+	// on, the same for both since they tell the same calls ([BriefTold]):
+	// recorded on the job the launch opens where it hands either.
+	Told BriefTold
 }
 
 // BriefKind is which of the four briefs a launch handed its run: a run that
@@ -1346,6 +1351,9 @@ type continuedLaunch struct {
 	brief, fresh, session string
 	carried               *CarriedSession
 	kind                  BriefKind
+	// told is what brief told of the round the launch carries on
+	// ([BriefTold]): the fresh brief's where it continues no session.
+	told BriefTold
 	// kept says the session is the turn's kept capture rather than the job
 	// before's own copy in its box ([LaunchDecision.Kept]).
 	kept bool
@@ -1359,9 +1367,36 @@ func (l continuedLaunch) decision() LaunchDecision {
 	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation}
 }
 
-// freshLaunch is a launch that continues no session.
+// omitted is what the launch req records on the job it opens of the calls of
+// the round it carries on that the brief it hands its run left out, and, where
+// that brief continues a session, the fresh one its box falls back to
+// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+//
+// NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
+// turn's first launch tells no round's calls, and a send-back opens a new
+// round, whose log restarts, so a set of the collected round's calls would be
+// read against another round's log. A closed round's reads past the read cap
+// are counted under the prior-work ledger's rule for them.
+func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
+	if req.Continue == nil {
+		return nil, nil
+	}
+	if l.kind.Continues() {
+		fresh = req.Continue.Fresh.Omitted
+	}
+	return l.told.Omitted, fresh
+}
+
+// freshLaunch is a launch that continues no session: what its fresh brief told
+// of the round it carries on where it carries one on, and nothing where it
+// does not (a turn's first launch, a send-back), whose request names no
+// continuation to read it off.
 func freshLaunch(req LaunchRequest) continuedLaunch {
-	return continuedLaunch{brief: req.Brief, kind: BriefFresh, release: func() {}}
+	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, release: func() {}}
+	if req.Continue != nil {
+		launch.told = req.Continue.Fresh
+	}
+	return launch
 }
 
 // continueSession is how the launch req continues its turn's session in box —
@@ -1390,6 +1425,9 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		}
 		if why == "" {
+			// WHAT ITS BRIEFS LEFT OUT OF THE ROUND, the same for the brief
+			// for either box ([SessionContinuation.Told]).
+			launch.told = want.Told
 			return launch
 		}
 		c.notContinued(ctx, req, why)
@@ -1397,7 +1435,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if !opened.sessionExhausted(continued.SessionID) {
 			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-				kind: BriefContinued, release: func() {}}
+				kind: BriefContinued, told: continued.Told, release: func() {}}
 		}
 		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}

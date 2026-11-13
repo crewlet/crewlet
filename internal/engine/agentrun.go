@@ -982,7 +982,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	if c == nil {
 		return nil
 	}
-	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead}
+	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead,
+		Told: c.Told, Fresh: c.Fresh}
 	if c.SignInReplaced {
 		out.Reason = sandbox.FollowUpSignInReplaced
 	}

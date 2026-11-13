@@ -1791,6 +1791,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// turn has read, and arms its guard without the job's own loads,
 		// unless its harness ended its own run ([runner.Resume.HarnessEnd]).
 		HarnessEnd: in.Run.Launch.HarnessEnd,
+		// AND THE READS THE BRIEF ITS RUN READ COUNTED WITHOUT LISTING THEM,
+		// off the job's own record by that brief: the copy of its session in
+		// its box holds them only as that count, so a relaunch carrying the
+		// round on in that box tells them ([runner.Resume.Owed]).
+		Owed: in.Run.Launch.OmittedCalls(),
 		// WHICH BOX DID THE WORK, and what it delivered — see
 		// [runRecordOf].
 		Run: runRecordOf(in.Run, in.Account),

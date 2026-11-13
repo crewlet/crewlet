@@ -21,7 +21,9 @@ import (
 // [InterruptedCopy], [MayBeInterruptedCopy]), with the calls and the notes it
 // may lack ([CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
 // not the one it was last worked in, what that changes. The fresh brief a run
-// that starts a session of its own is handed is [BuildPhaseUserMessage]'s.
+// that starts a session of its own is handed is [BuildPhaseUserMessage]'s, and,
+// for one carrying a round on, what became of the run before it and every call
+// of the round so far ([CalledBefore]), which its session holds none of.
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
@@ -206,32 +208,32 @@ const lateCallsHeader = "## Calls the run that made them stopped waiting for, or
 	" making it again."
 
 // lateSubmission tells a run that a successful `submit_work` among the calls
-// under [lateCallsHeader] is no submission of the work it carries on: the run
-// that made it had stopped waiting for it before it returned — replaced, and the
-// run carrying the work on never told it, or told it failed where it gave up on
-// it — and the work's submission is the one a run carrying it on makes
-// (internal/agent/runner's sinceAnswer, which never takes a late one, and
-// replays the newest). Read as the work's, a late one would leave a run that
-// took it for done ending without its own, and the work collected as one that
-// submitted nothing.
+// under [lateCallsHeader] or [lateBeforeHeader] is no submission of the work
+// it carries on: the run that made it had stopped waiting for it before it
+// returned — replaced, and the run carrying the work on never told it, or told
+// it failed where it gave up on it — and the work's submission is the one a
+// run carrying it on makes (internal/agent/runner's sinceAnswer, which never
+// takes a late one, and replays the newest). Read as the work's, a late one
+// would leave a run that took it for done ending without its own, and the work
+// collected as one that submitted nothing.
 const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's submission:" +
 	" the run that made it had stopped waiting for it before it returned. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
 
 // earlierSubmission tells a run that a successful `submit_work` among the calls
-// listed before it, under [calledAfterHeader] or [calledSinceHeader], is no
-// submission of the work it carries on. Every call a brief tells was made
-// before the relaunch whose brief tells it, and none of those is the work's
-// submission (internal/agent/runner's sinceAnswer and carriedRound): the
-// collection takes a submission only from the calls made after the round's
-// last answer, so one made before a run's question, or before an earlier
-// answer, is not the round's; a round lost, or refused on a replaced sign-in,
-// whose calls since that answer hold one is collected on it, never carried
-// on, so a brief carrying such a round on tells only one made before that
-// answer; and a send-back's continuation can tell the submission its review
-// sent back. Told as `→ success` with no such word, it read as the work's: a
-// run that took it for done could end without its own, and the work be
-// rescued as incomplete.
+// listed before it, under [calledAfterHeader], [calledSinceHeader] or
+// [calledBeforeHeader], is no submission of the work it carries on. Every call
+// a brief tells was made before the relaunch whose brief tells it, and none of
+// those is the work's submission (internal/agent/runner's sinceAnswer and
+// carriedRound): the collection takes a submission only from the calls made
+// after the round's last answer, so one made before a run's question, or
+// before an earlier answer, is not the round's; a round lost, or refused on a
+// replaced sign-in, whose calls since that answer hold one is collected on it,
+// never carried on, so a brief carrying such a round on tells only one made
+// before that answer; and a send-back's continuation can tell the submission
+// its review sent back. Told as `→ success` with no such word, it read as the
+// work's: a run that took it for done could end without its own, and the work
+// be rescued as incomplete.
 const earlierSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's" +
 	" submission: the work was carried on after it. When your work is done, call `" + toolname.SubmitWork +
 	"` yourself."
@@ -272,10 +274,29 @@ type AfterSave struct {
 	// Late, which LateSubmission says.
 	HeldSubmission bool
 
+	// Owed are the reads of the round an earlier message to the session
+	// counted without listing them, its read cap spent, which the session holds
+	// only as that count (internal/agent/runner's heldAt, Resume.Owed and
+	// SessionBasis.Owed): the reads its job's brief left out, as the prior-work
+	// ledger renders them within its budgets, under one read cap with Calls'
+	// and Late's, spent on these LAST (ledger.FormatCallGroups), "" for none.
+	// Told first, in a section of their own ([owedHeader]): they are the
+	// oldest calls the brief tells. Reads only, since only a read is ever
+	// counted rather than listed, and settled before that message was built,
+	// so none is a submission or a call whose outcome is unknown.
+	Owed string
+
+	// OwedDropped is how many of those reads the round's record has since
+	// dropped from the middle of a long run's record, which no list can tell
+	// one by one: counted in Owed's section ([owedDropped]), with Tally where
+	// no later count of the brief needs it ([tallyBesideLast]).
+	OwedDropped int
+
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
-	// one read cap with Late's, spent on Late first (ledger.FormatCallGroups),
-	// "" for none.
+	// one read cap with Late's and Owed's, spent on Late first and on Owed
+	// last (ledger.FormatCallGroups), "" for none. For a run that starts a
+	// session of its own ([CalledBefore]), every call of the round but Late's.
 	Calls string
 
 	// EarlierSubmission says a successful `submit_work` is among Calls, which
@@ -301,7 +322,9 @@ type AfterSave struct {
 	// Tally is the record's line for every call it dropped
 	// (ledger.FormatElided), those made before the save among them: what
 	// Dropped's calls were, by tool, beside calls the session holds. Said
-	// only beside a Dropped or a LateDropped it accounts for, and once.
+	// only beside a count it accounts for (OwedDropped, Dropped or
+	// LateDropped), and once: beside the LAST of them the brief gives, since
+	// every count says the tally is below it ([tallyBesideLast]).
 	Tally string
 
 	// Interrupted says the session was, or may have been, cut off
@@ -320,9 +343,10 @@ type AfterSave struct {
 	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
 	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
 	// prior-work ledger renders them within its budgets, under one read cap
-	// with Calls', spent on these first, "" for none: none of them is among
-	// Calls. Told in a section of their own, under
-	// [lateCallsHeader], whatever Interrupted says.
+	// with Calls' and Owed's, spent on these first, "" for none: none of them
+	// is among Calls. Told in a section of their own, under
+	// [lateCallsHeader], whatever Interrupted says ([lateBeforeHeader] for a
+	// run that starts a session of its own).
 	//
 	// AND THE CALLS STILL IN FLIGHT AS THE ROUND WAS READ, rendered and capped
 	// with them: each one whose outcome is unknown (ledger.Call.Unfinished),
@@ -338,8 +362,8 @@ type AfterSave struct {
 
 	// LateDropped is how many such calls the record dropped from the middle of
 	// a long run's record (sandbox.BridgeLog.LateElided), counted in Late's
-	// section ([droppedLate]) whatever the session's save point, beside Tally
-	// where no count of calls after the save carries it: a dropped call keeps
+	// section ([droppedLate]) whatever the session's save point, beside Tally,
+	// the last count a brief gives ([tallyBesideLast]): a dropped call keeps
 	// no mark and no number, so no point can be read against it. Said under
 	// the words of calls after a save, they would be calls the session lacks,
 	// made by its own run after it was saved, which a late call is not, and
@@ -354,80 +378,259 @@ type AfterSave struct {
 // record lists, then how many more it kept only in a tally and that tally, the
 // way every other reader of a long run's calls is told what was dropped — of a
 // session cut off, as calls it may already show ([AfterSave.Interrupted]) —
-// and then, in a section of its own, the calls that finished only after the run
-// that made them stopped waiting for them and the ones whose outcome is unknown
-// ([AfterSave.Late]), and how many more such calls the record dropped
-// ([AfterSave.LateDropped]). "" where there is none of either and the session
+// and then, in a section of their own, the calls that finished only after the
+// run that made them stopped waiting for them and the ones whose outcome is
+// unknown ([AfterSave.Late]), and how many more such calls the record dropped
+// ([AfterSave.LateDropped]). "" where there is none of any and the session
 // holds no submission of its round.
+//
+// THE READS AN EARLIER MESSAGE COUNTED WITHOUT LISTING THEM COME FIRST
+// ([AfterSave.Owed]), in a section of their own: the session holds them only
+// as that count, they are the oldest calls the brief tells, and they are told
+// in words true of reads the session was told were made, never as calls after
+// its save. Under the words of calls after a save they would be calls its own
+// run made after it was saved, which they are not.
+//
+// THE TALLY ONCE, beside the LAST count that needs it in the order the
+// sections come (the reads dropped since the earlier message counted them,
+// then the calls dropped after the save, then the late calls dropped), since
+// every count says the tally is below it ([tallyBesideLast]).
 //
 // A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
 // right after the list it is in and in words true of that list: the calls
 // after the save ([AfterSave.EarlierSubmission]) and the late ones
 // ([AfterSave.LateSubmission]). AND ONE THE SESSION HOLDS IS SAID FIRST
-// ([AfterSave.HeldSubmission]), before either section and where neither lists
-// a call: it is in no list, and the session that shows it is the one the
-// brief continues.
+// ([AfterSave.HeldSubmission]), before every section and where none lists a
+// call: it is in no list, and the session that shows it is the one the brief
+// continues.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if after.HeldSubmission {
 		sections = append(sections, heldSubmission)
 	}
-	if since := calledSince(after); since != "" {
+	tally := tallyBesideLast(after.Tally, after.OwedDropped, after.Dropped, after.LateDropped)
+	if owed := toldList(owedHeader, after.Owed, "", owedDropped(after.OwedDropped), tally[0]); owed != "" {
+		sections = append(sections, owed)
+	}
+	if since := calledSince(after, tally[1]); since != "" {
 		sections = append(sections, since)
 	}
-	late := strings.TrimSpace(after.Late)
-	if late != "" || after.LateDropped > 0 {
-		parts := []string{lateCallsHeader}
-		if late != "" {
-			parts = append(parts, late)
-		}
-		if after.LateSubmission {
-			parts = append(parts, lateSubmission)
-		}
-		if after.LateDropped > 0 {
-			parts = append(parts, droppedLate(after.LateDropped))
-			// THE TALLY ONCE: beside the calls after the save where the record
-			// dropped any of those, and here where it dropped only late ones.
-			if tally := strings.TrimSpace(after.Tally); tally != "" && after.Dropped <= 0 {
-				parts = append(parts, tally)
-			}
-		}
-		sections = append(sections, strings.Join(parts, "\n"))
+	if late := lateSection(lateCallsHeader, after, tally[2]); late != "" {
+		sections = append(sections, late)
 	}
 	return strings.Join(sections, "\n\n")
 }
 
+// tallyBesideLast is where a brief says tally, the record's line for every
+// call it dropped from its middle, among counts, the counts of dropped calls it
+// gives in the order it gives them: beside the last of them above zero, and ""
+// beside every other, so the tally is said once and only where a count needs
+// it.
+//
+// THE LAST, NEVER THE FIRST: every count says the tally is below it
+// ([owedDropped], [droppedAfter], [droppedLate], [droppedBefore]), which only
+// the last place makes true of each. Said beside an earlier count, a later one
+// would send the run looking below it for a line that is above it, and the run
+// would find nothing there to tell it what a dropped call was.
+func tallyBesideLast(tally string, counts ...int) []string {
+	at := make([]string, len(counts))
+	for i := len(counts) - 1; i >= 0; i-- {
+		if counts[i] > 0 {
+			at[i] = tally
+			break
+		}
+	}
+	return at
+}
+
 // calledSince is [CalledAfter]'s section of the calls after the save — or,
 // of a session cut off, since the newest point it is known to hold — "" where
-// the record lists none and dropped none.
+// the record lists none and dropped none; tally is the record's tally where
+// this section's count is the last the brief gives, "" where a later one says
+// it ([tallyBesideLast]).
 //
 // A SUCCESSFUL SUBMISSION AMONG THE CALLS IS SAID NOT TO STAND right after
 // them ([AfterSave.EarlierSubmission]), before the count of calls dropped
 // after the save and its tally, which list none: the sentence speaks of the
 // calls listed above it, as [lateSubmission] follows the late calls.
-func calledSince(after AfterSave) string {
-	calls := strings.TrimSpace(after.Calls)
-	if calls == "" && after.Dropped <= 0 {
-		return ""
-	}
+func calledSince(after AfterSave, tally string) string {
 	header := calledAfterHeader
 	if after.Interrupted {
 		header = calledSinceHeader
 	}
+	dropped := ""
+	if after.Dropped > 0 {
+		dropped = droppedAfter(after.Dropped, after.Interrupted)
+	}
+	return toldList(header, after.Calls, saidIf(after.EarlierSubmission, earlierSubmission), dropped, tally)
+}
+
+// lateSection is the section of the late calls and the ones whose outcome is
+// unknown ([AfterSave.Late]) under header, a submission among them said not to
+// stand right after them ([AfterSave.LateSubmission]), and how many more the
+// record dropped ([AfterSave.LateDropped]) with tally beside that count, the
+// last a brief gives ([tallyBesideLast]): "" where none is listed and none
+// dropped.
+func lateSection(header string, after AfterSave, tally string) string {
+	dropped := ""
+	if after.LateDropped > 0 {
+		dropped = droppedLate(after.LateDropped)
+	}
+	return toldList(header, after.Late, saidIf(after.LateSubmission, lateSubmission), dropped, tally)
+}
+
+// toldList is one told list's section: header, then the calls listed under it
+// and the line said of them (of, "" for none), then the count of the ones the
+// record dropped (dropped, "" for none) and the record's tally beside it (tally,
+// "" where the brief says it elsewhere). "" where nothing is listed and nothing
+// dropped: a header over no call names nothing.
+func toldList(header, calls, of, dropped, tally string) string {
+	calls = strings.TrimSpace(calls)
+	if calls == "" && dropped == "" {
+		return ""
+	}
 	parts := []string{header}
 	if calls != "" {
 		parts = append(parts, calls)
-		if after.EarlierSubmission {
-			parts = append(parts, earlierSubmission)
+		if of != "" {
+			parts = append(parts, of)
 		}
 	}
-	if after.Dropped > 0 {
-		parts = append(parts, droppedAfter(after.Dropped, after.Interrupted))
-		if tally := strings.TrimSpace(after.Tally); tally != "" {
+	if dropped != "" {
+		parts = append(parts, dropped)
+		if tally = strings.TrimSpace(tally); tally != "" {
 			parts = append(parts, tally)
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// saidIf is line where set says to say it, "" where it does not.
+func saidIf(set bool, line string) string {
+	if !set {
+		return ""
+	}
+	return line
+}
+
+// owedHeader introduces the reads of the round an earlier message to the
+// session counted without listing them, its read cap spent ([AfterSave.Owed]).
+//
+// AS READS THE SESSION WAS TOLD WERE MADE, never as calls after its save: the
+// message that counted them is in the session, so it holds that they were
+// made, but not what any of them returned, which is what this list adds. A
+// read fetched data only, so it may be run again for its data, and a read
+// whose outcome is unknown is never among them: one still in flight as its
+// round was read is told among the late calls, under their own words.
+const owedHeader = "## Reads an earlier message counted but did not list" +
+	"\nAn earlier message to the session above counted these reads of this work without listing them, to keep" +
+	" its list short. Each was made, and its outcome stands: one marked `→ success` fetched data only, so re-run" +
+	" it if you need its data now, never invent it; one marked `→ error` did not take effect."
+
+// owedDropped says that n of the reads an earlier message counted without
+// listing them ([AfterSave.OwedDropped]) are no longer kept one by one, and
+// what that asks of the run: a read fetched data only, so it runs one again
+// for data it needs, rather than check whether it took effect. "" for none.
+func owedDropped(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	reads := "reads"
+	if n == 1 {
+		reads = "read"
+	}
+	return "(+" + strconv.Itoa(n) + " further such " + reads + ", which the record no longer keeps one by one:" +
+		" past two hundred calls a run's record keeps its first and last and only a tally of those between," +
+		" and the tally below counts other calls as well. Re-run a read if you need its data now.)"
+}
+
+// KeyCarriedOn and KeyRoundSoFar key the sections a fresh brief carrying a
+// round on is appended under (internal/agent/runner's continueAgentRun): what
+// became of the run before it (the reseed), and the round's calls so far
+// ([CalledBefore]). Appended with [Prompt.Then], so the prompt the phase
+// publishes as its opening frame keeps its outline where the box starts a
+// session of its own.
+const (
+	KeyCarriedOn  = "carried_on"
+	KeyRoundSoFar = "round_so_far"
+)
+
+// calledBeforeHeader introduces the calls of the round a run that starts a
+// session of its own carries on: the calls the runs before it made, which its
+// session holds none of.
+//
+// NEVER "THE SESSION ABOVE": a run that starts a session of its own has none
+// above, and a session it started remembers none of these calls, so they are
+// told as calls the runs before it made, in the order they made them.
+const calledBeforeHeader = "## Calls the runs before you made on this task" +
+	"\nThe runs before you on this task made these calls through your tools, in the order they made them." +
+	" They happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
+	" write among them again; one marked `→ error` did not take effect."
+
+// lateBeforeHeader is [lateCallsHeader] for a run that starts a session of its
+// own: no session above shows anything of the calls, so the words say nothing
+// of one, and keep the rest. Each is a call its run stopped waiting for before
+// it finished, or one whose outcome is unknown, ONE call made once, and a call
+// marked `→ error` did not take effect unless it says its outcome is unknown,
+// which may have, to be checked before it is made again (internal/agent/runner's
+// UnfinishedNote).
+const lateBeforeHeader = "## Calls the runs before you stopped waiting for, or whose outcome is unknown" +
+	"\nRuns before you on this task made these calls through your tools, and each is one the run that made" +
+	" it stopped waiting for before it finished (it gave up on it, or it was cut off or replaced) or one whose" +
+	" outcome is unknown. Each is ONE call, made once, and the outcome told here stands: a call marked" +
+	" `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked `→ error` did not take" +
+	" effect, unless it says its outcome is unknown: that one may have, so check whether it did before" +
+	" making it again."
+
+// CalledBefore is the section telling a run that starts a session of its own,
+// carrying a round on (internal/agent/runner's continueAgentRun), what the runs
+// before it did through the seat's tools: every call of the round, as
+// internal/agent/runner's calledAfter tells them from the round's start. First
+// the calls its record lists, with a successful `submit_work` among them said
+// not to stand ([AfterSave.EarlierSubmission]), then how many more it kept only
+// in a tally; and then, in a section of their own, the calls that finished only
+// after the run that made them stopped waiting for them and the ones whose
+// outcome is unknown ([AfterSave.Late]), with a late submission said not to
+// stand and how many such calls the record dropped; and the record's tally
+// once, beside the last of those counts, which each says is below it
+// ([tallyBesideLast]). Read from Calls, EarlierSubmission, Dropped, Tally,
+// Late, LateSubmission and LateDropped; "" where the round made no call.
+//
+// IN WORDS OF ITS OWN, never [CalledAfter]'s: those speak of a session above,
+// and a run of its own has none, and remembers none of the calls. Told them as
+// calls made after a save, or ones the session may show, it would look for
+// them in a transcript it does not have. Told nothing of them, the reseed
+// alone saying only that the run before it did things through the seat's
+// tools, it could make them again: a second post, a second delegation.
+func CalledBefore(told AfterSave) string {
+	var sections []string
+	dropped := ""
+	if told.Dropped > 0 {
+		dropped = droppedBefore(told.Dropped)
+	}
+	tally := tallyBesideLast(told.Tally, told.Dropped, told.LateDropped)
+	if before := toldList(calledBeforeHeader, told.Calls, saidIf(told.EarlierSubmission, earlierSubmission),
+		dropped, tally[0]); before != "" {
+		sections = append(sections, before)
+	}
+	if late := lateSection(lateBeforeHeader, told, tally[1]); late != "" {
+		sections = append(sections, late)
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// droppedBefore says that n of the calls the runs before a run of its own made
+// are counted only in their record's tally, which names them, and what a call
+// counted only there asks of the run: it has no outcome to go by.
+func droppedBefore(n int) string {
+	calls := "calls"
+	if n == 1 {
+		calls = "call"
+	}
+	return "(+" + strconv.Itoa(n) + " further " + calls + " the runs before you made, which their record did" +
+		" not keep one by one: past two hundred calls a run's record keeps its first and last and only a tally" +
+		" of those between, and the tally below names them. A call counted only in the tally has no outcome" +
+		" here: check whether its tool already did what it was for before doing it again.)"
 }
 
 // droppedAfter says that n of the calls a session's run made after it was
