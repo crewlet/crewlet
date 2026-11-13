@@ -567,12 +567,49 @@ func TestAStoreThatDoesNotAnswerACollectionNeverCountsAgainstItsBox(t *testing.T
 	}
 }
 
-// outlastedStore is a run store whose record of a job's running out of context
-// is answered only once its asker's context has ended, as the store answers a
-// request its caller's deadline cut.
-type outlastedStore struct{ PendingStore }
+// outlastedStore is a run store that answers the step named in at only once its
+// asker's context has ended, as the store answers a request its caller's
+// deadline cut, and every other call as the store beneath it does: "Get", the
+// read of a run's row; "WatchLog", every watch of a log; "WatchLog again", a
+// first watch that stops hearing at once, delivering nothing, and the watch
+// made again after it, outlasted; and "RetireSessions".
+type outlastedStore struct {
+	PendingStore
+	at string
 
-func (*outlastedStore) RetireSessions(ctx context.Context, turnID string, _ []string) error {
+	mu      sync.Mutex
+	watches int
+}
+
+func (s *outlastedStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if s.at != "Get" {
+		return s.PendingStore.Get(ctx, turnID)
+	}
+	<-ctx.Done()
+	return PendingRun{}, false, fmt.Errorf("sandbox: read run %s: %w", turnID, ctx.Err())
+}
+
+func (s *outlastedStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	s.mu.Lock()
+	s.watches++
+	first := s.watches == 1
+	s.mu.Unlock()
+	switch {
+	case s.at == "WatchLog again" && first:
+		closed := make(chan LogView)
+		close(closed)
+		return closed, nil
+	case s.at != "WatchLog" && s.at != "WatchLog again":
+		return s.PendingStore.WatchLog(ctx, turnID)
+	}
+	<-ctx.Done()
+	return nil, fmt.Errorf("sandbox: watch the log of run %s: %w", turnID, ctx.Err())
+}
+
+func (s *outlastedStore) RetireSessions(ctx context.Context, turnID string, sessions []string) error {
+	if s.at != "RetireSessions" {
+		return s.PendingStore.RetireSessions(ctx, turnID, sessions)
+	}
 	<-ctx.Done()
 	return fmt.Errorf("sandbox: recording the sessions run %s ran out of context in: %w", turnID, ctx.Err())
 }
@@ -582,29 +619,68 @@ func (*outlastedStore) RetireSessions(ctx context.Context, turnID string, _ []st
 // cut is the deadline's, not the store's silence: taken for the store's, a
 // collection whose read takes the delivery's time up to its last store step
 // would be handed back uncounted and asked again for ever, as one whose read
-// always outlasts the delivery would be if that were not counted.
+// always outlasts the delivery would be if that were not counted. Every step
+// the store's silence is judged at is held to it on its own, since each judges
+// its own context: the host's read of the run's row (cut there by the
+// delivery's deadline, which bounds the host's read, and answered as the read
+// running out of time, never as the store's silence), the drain's watch of the
+// run's log and the watch made again after one that stopped hearing, and the
+// record of the sessions the job ran out of context in.
 //
-// Mutation: wrap a store step's error in ErrStoreSilent whatever its context
-// says (storeSilent), and the attempt the deadline cut is handed back
-// uncounted.
+// Mutation: wrap any one step's error in ErrStoreSilent whatever its context
+// says, or have storeSilent wrap every step's so, and the attempt the deadline
+// cut at that step is handed back uncounted.
 func TestACollectionThatRanOutOfTimeIsCountedWhicheverStepItWasIn(t *testing.T) {
 	t.Parallel()
-	rig := newCoordRig(t)
-	rig.launch("t1")
-	rig.runner.Finish(Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"})
-	rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending}
+	account := Result{Success: true, Text: "the box's account"}
+	ranOut := Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"}
+	for _, tc := range []struct {
+		name string
+		// box is what t1's job left in its box, and arrange launches it
+		// with the step outlasted.
+		box     Result
+		arrange func(t *testing.T, rig *coordRig)
+	}{
+		{"the host's read of the run's row", account, func(t *testing.T, rig *coordRig) {
+			host := rig.hostOn(t, "node-a", &outlastedStore{PendingStore: rig.pending, at: "Get"})
+			rig.onNode(t, "node-b", hostAnswers{host: host}, nil)
+			rig.launchedBy("t1", "node-a")
+		}},
+		{"the drain's watch of the run's log", account, func(_ *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "WatchLog"}
+		}},
+		{"the drain's watch made again", account, func(_ *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "WatchLog again"}
+		}},
+		{"the record of the session it ran out of context in", ranOut, func(_ *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.pending = &outlastedStore{PendingStore: rig.coordinator.pending, at: "RetireSessions"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			tc.arrange(t, rig)
+			rig.runner.Finish(tc.box)
 
-	// A SECOND, so every step before the retirement has its time: the box read
-	// and the drain over the rig's own store take milliseconds.
-	short, stop := context.WithTimeout(t.Context(), time.Second)
-	defer stop()
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(short, payload, ev); err == nil || errors.Is(err, ErrStoreSilent) {
-		t.Fatalf("OnCompleted = %v; want the deadline's failure handed back, never the store's silence", err)
-	}
-	row := rig.get("t1")
-	if row.Status != StatusRunning || row.Launch.CollectFailures != 1 {
-		t.Errorf("the run is %s with %d failed collections after one its deadline cut at the store's step; "+
-			"want it handed back and counted", row.Status, row.Launch.CollectFailures)
+			// A SECOND, so every step before the outlasted one has its
+			// time: the box read and the drain over the rig's own store
+			// take milliseconds, and a watch made again waits its pause of
+			// a tenth of one first.
+			short, stop := context.WithTimeout(t.Context(), time.Second)
+			defer stop()
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(short, payload, ev); err == nil || errors.Is(err, ErrStoreSilent) {
+				t.Fatalf("OnCompleted = %v; want the deadline's failure handed back, never the store's silence",
+					err)
+			}
+			row := rig.get("t1")
+			if row.Status != StatusRunning || row.Launch.CollectFailures != 1 {
+				t.Errorf("the run is %s with %d failed collections after one its deadline cut at %s; want it "+
+					"handed back and counted", row.Status, row.Launch.CollectFailures, tc.name)
+			}
+		})
 	}
 }
