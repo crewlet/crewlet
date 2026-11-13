@@ -541,18 +541,31 @@ func (b *Broker) invoke(
 		// than circling a mailbox no budget can ever retire it from.
 		dead = b.handBackLocked(sub, evs, client.maxRedeliveries, res.Reason)
 	case queue.OutcomeNak:
+		// A FAILURE OF THE MESSAGE IS REMEMBERED until the message
+		// leaves, so a later return that spends its budget — a
+		// hand-back, a node's own failure — keeps it with the poison
+		// ([queue.RetiredTo]); a node's own failure ([queue.NakNode]) is
+		// not.
+		if res.FailsMessage() {
+			for _, ev := range evs {
+				sub.failed[ev.ID] = struct{}{}
+			}
+		}
 		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.OutcomeNak, "")
 	case queue.OutcomePass:
 		// BEHIND THE WAITING MAIL, AS A FAILURE, AND NOTHING QUIESCED: the
 		// broker withholds a pass for the failure path's backoff, and the
 		// attachment that passed goes on taking mail — see the doc above.
 		// And a pass that spends the budget keeps its copy where the broker
-		// keeps it, with its group's unhandled deliveries
-		// ([queue.RetiredTo]).
+		// keeps it, with its group's unhandled deliveries unless the
+		// message failed as itself before ([queue.RetiredTo]).
 		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries, queue.OutcomePass, res.Reason)
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
-		// is nothing to put back.
+		// is nothing to put back, and nothing of them to remember.
+		for _, ev := range evs {
+			delete(sub.failed, ev.ID)
+		}
 	}
 	// IN FLIGHT UNTIL WHAT THE HANDLER RETURNED IS SETTLED, a dead letter's
 	// keep included ([queue.EventQueue.WaitForHandlers]): instant here,
@@ -590,7 +603,8 @@ func (b *Broker) invoke(
 // backend that ships logs `dead_lettered` with its deliveries.
 func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []deadLetter) {
 	for _, d := range dead {
-		queue.LogDeadLettered(ctx, log, sub.topic, sub.group, d.ev, d.deliveries, d.spent, d.reason)
+		queue.LogDeadLettered(ctx, log, sub.topic, sub.group, d.ev, d.deliveries, d.spent, d.reason,
+			d.failed)
 	}
 }
 
@@ -627,11 +641,13 @@ type deadLetter struct {
 	ev *events.Event
 	// deliveries is how many times it was delivered, the last included.
 	deliveries int
-	// spent is the return that spent its budget and reason why: what
-	// decides where its copy is kept ([queue.RetiredTo]) and what its line
-	// says.
+	// spent is the return that spent its budget and reason why, which its
+	// line says; failed is whether the message failed as itself at any of
+	// its deliveries, which decides where its copy is kept
+	// ([queue.RetiredTo]).
 	spent  queue.Outcome
 	reason string
+	failed bool
 }
 
 // runHandler recovers a panicking handler into a Nak, preserving "an
@@ -696,8 +712,10 @@ func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget
 // and the two callers differ precisely there.
 //
 // spent is the return being charged — a Nak, a Defer or a Pass — and reason
-// why: a retired event's copy is kept where the contract keeps that return's
-// ([queue.RetiredTo]).
+// why, for the line; a retired event's copy is kept where the contract keeps
+// the copy of a message that did or did not fail as itself
+// ([queue.RetiredTo]), which [subscription.failed] remembers — the caller
+// records a failure of the message there before it charges one.
 func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int,
 	spent queue.Outcome, reason string) ([]*events.Event, []deadLetter) {
 
@@ -712,16 +730,19 @@ func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int
 		if count > budget {
 			delete(sub.redeliveries, ev.ID)
 			// KEPT AS ITS WIRE BYTES, with no header, beside every other
-			// dead letter and on the subject the contract keeps this
-			// return's copy on, as the broker this twin stands for
-			// republishes the message's own data there: so DeadLettersOn
-			// lists it, DeadLetterFrame reads its bytes and DropDeadLetter
-			// removes it exactly as there. The event was decoded from
-			// JSON, so it encodes again.
+			// dead letter and on the subject the contract keeps the copy
+			// of a message that did or did not fail as itself on, as the
+			// broker this twin stands for republishes the message's own
+			// data there: so DeadLettersOn lists it, DeadLetterFrame reads
+			// its bytes and DropDeadLetter removes it exactly as there.
+			// The event was decoded from JSON, so it encodes again.
+			_, failed := sub.failed[ev.ID]
+			delete(sub.failed, ev.ID)
 			if wire, err := json.Marshal(ev); err == nil {
-				b.keepLocked(queue.RetiredTo(sub.topic, sub.group, spent), nil, wire)
+				b.keepLocked(queue.RetiredTo(sub.topic, sub.group, failed), nil, wire)
 			}
-			dead = append(dead, deadLetter{ev: ev, deliveries: count, spent: spent, reason: reason})
+			dead = append(dead, deadLetter{ev: ev, deliveries: count, spent: spent, reason: reason,
+				failed: failed})
 			continue
 		}
 		sub.redeliveries[ev.ID] = count

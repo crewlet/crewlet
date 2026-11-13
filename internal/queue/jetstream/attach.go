@@ -249,28 +249,85 @@ type attachment struct {
 	// where the alternative was a slow first one. The budget is unchanged
 	// and still counts deliveries, because dead-lettering is about how
 	// many times a message has been handed to anybody at all.
-	failures   map[uint64]uint64
+	//
+	// # And whether a failure here was the message's own
+	//
+	// Beside the count, which a node's own failure ([queue.NakNode]) moves
+	// as much as the message's — both are spaced — each record says whether
+	// one of the failures here was the MESSAGE's, and whether this
+	// attachment wrote its failure mark on the broker (failuremarks.go):
+	// what this attachment knows of where the message is kept should a
+	// return spend its budget, without asking the broker.
+	failures   map[uint64]*failureRecord
 	failuresMu sync.Mutex
 }
 
-// failed records one failure of a message and reports the count.
-func (a *attachment) failed(seq uint64) uint64 {
+// failureRecord is what one attachment knows of one message's failures
+// ([attachment.failures]).
+type failureRecord struct {
+	// count is how many times the message failed here, the node's own
+	// failures included: what its spacing doubles by.
+	count uint64
+	// itself is whether one of them was the message's own
+	// ([queue.Result.FailsMessage]).
+	itself bool
+	// mark is the sequence the failure mark this attachment wrote of the
+	// message is stored at ([Queue.markFailure]), zero for none.
+	mark uint64
+}
+
+// failed records one failure of a message and reports the count; itself says
+// whether it was the message's own, and the record answers whether its mark is
+// still to be written — the message's own failure, here for the first time or
+// with the mark not written yet.
+func (a *attachment) failed(seq uint64, itself bool) (count uint64, mark bool) {
 	a.failuresMu.Lock()
 	defer a.failuresMu.Unlock()
 	if a.failures == nil {
-		a.failures = map[uint64]uint64{}
+		a.failures = map[uint64]*failureRecord{}
 	}
-	a.failures[seq]++
-	return a.failures[seq]
+	rec := a.failures[seq]
+	if rec == nil {
+		rec = &failureRecord{}
+		a.failures[seq] = rec
+	}
+	rec.count++
+	rec.itself = rec.itself || itself
+	return rec.count, itself && rec.mark == 0
+}
+
+// marked records that this attachment wrote seq's failure mark, stored at
+// mark.
+func (a *attachment) marked(seq, mark uint64) {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	if rec := a.failures[seq]; rec != nil {
+		rec.mark = mark
+	}
+}
+
+// failedItself reports whether a failure of seq here was the message's own.
+func (a *attachment) failedItself(seq uint64) bool {
+	a.failuresMu.Lock()
+	defer a.failuresMu.Unlock()
+	rec := a.failures[seq]
+	return rec != nil && rec.itself
 }
 
 // settled forgets a message that will not come back — acked, terminated, or
-// handed on. Without it the map would hold every sequence this attachment
-// ever failed for the life of the seat.
-func (a *attachment) settled(seq uint64) {
+// handed on — and answers where the failure mark this attachment wrote of it
+// is stored, zero for none, which its settling deletes. Without it the map
+// would hold every sequence this attachment ever failed for the life of the
+// seat.
+func (a *attachment) settled(seq uint64) (mark uint64) {
 	a.failuresMu.Lock()
 	defer a.failuresMu.Unlock()
+	rec := a.failures[seq]
 	delete(a.failures, seq)
+	if rec == nil {
+		return 0
+	}
+	return rec.mark
 }
 
 func (a *attachment) setQuiesced(v bool) { a.quiesced.Store(v) }
@@ -1047,12 +1104,14 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// must not carry those two failures into a later redelivery of
 		// the same sequence, and the map would otherwise hold every
 		// sequence this seat ever failed for the life of the attachment.
+		var mark uint64
 		if md, err := msg.Metadata(); err == nil {
-			a.settled(md.Sequence.Stream)
+			mark = a.settled(md.Sequence.Stream)
 		}
 		if err := msg.Ack(); err != nil {
 			a.log.Warn("ack_failed", "error", err.Error())
 		}
+		a.clearMark(ctx, mark)
 
 	case queue.OutcomeDefer:
 		// Defer means: this process has lost the right to do this work.
@@ -1076,7 +1135,7 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		a.setQuiesced(true)
 
 	case queue.OutcomeNak:
-		a.nakOrDeadLetter(ctx, msg, ev)
+		a.nakOrDeadLetter(ctx, msg, ev, res.FailsMessage())
 
 	case queue.OutcomePass:
 		// Neither a failure nor a deferral, and the attachment goes on
@@ -1090,10 +1149,11 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 // so a message no node reads is dead-lettered with its copy rather than handed
 // round for ever, and spaced as a failure is, by [Queue.nakBackoff].
 //
-// AS A PASS, should this return be the one that spends the budget: its copy is
-// kept on its group's unhandled subject ([queue.RetiredTo]), apart from the
-// group's poison, which is where a reader that can handle it finds it again,
-// and its line names reason.
+// AS NO FAILURE, should this return be the one that spends the budget: its copy
+// is kept on its group's unhandled subject, apart from the group's poison,
+// which is where a reader that can handle it finds it again — unless one of
+// its deliveries failed as itself ([queue.RetiredTo]) — and its line names
+// reason.
 //
 // BY ITS DELIVERY COUNT, NOT [attachment.failures]. A pass is no failure, so
 // counting it as one would start this node's first genuine failure of the
@@ -1116,7 +1176,7 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Eve
 	if md, err := msg.Metadata(); err == nil {
 		delivered = md.NumDelivered
 	}
-	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(delivered), queue.OutcomePass, reason)
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(delivered), queue.OutcomePass, reason, false)
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
@@ -1128,16 +1188,60 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Eve
 // this is where the dead-letter subject is known and the message body is in
 // hand. MaxDeliver stays configured as a backstop so a bug here cannot
 // produce an infinite loop.
-func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev *events.Event) {
+//
+// itself is whether the failure is the MESSAGE's own ([queue.Result.FailsMessage]),
+// rather than this node's ([queue.NakNode]): the message's own is marked on
+// the broker, once, before the message goes back ([attachment.markFailed]), so
+// whichever member retires it keeps it with the poison.
+func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev *events.Event,
+	itself bool) {
+
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE STILL GOES BACK, at the
 	// shortest spacing: the alternative is dropping a delivery over a
 	// header, and returnMsg reads the same metadata for the budget and
 	// already treats an unreadable one as "not yet spent".
 	var failures uint64 = 1
 	if md, err := msg.Metadata(); err == nil {
-		failures = a.failed(md.Sequence.Stream)
+		var mark bool
+		failures, mark = a.failed(md.Sequence.Stream, itself)
+		if mark {
+			a.markFailed(ctx, md)
+		}
 	}
-	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(failures), queue.OutcomeNak, "")
+	a.returnMsg(ctx, msg, ev, a.q.nakBackoff(failures), queue.OutcomeNak, "", itself)
+}
+
+// markFailed writes the failure mark of the message md describes, which failed
+// as itself here (failuremarks.go), BEFORE the message goes back, so the member
+// its next delivery reaches reads it. A mark that could not be written is
+// logged and written again at the message's next failure here; meanwhile a
+// member that retires it keeps it with the unhandled deliveries, the safe
+// direction. Under ctx's values without its cancellation, as a keep is
+// ([attachment.retire]): a stop is no reason to forget a failure.
+func (a *attachment) markFailed(ctx context.Context, md *jetstream.MsgMetadata) {
+	mark, err := a.q.markFailure(context.WithoutCancel(ctx), failureSubject(a.key, md))
+	if err != nil {
+		a.log.WarnContext(ctx, "failure_mark_unkept", "seq", md.Sequence.Stream, "error", err.Error(),
+			"detail", "the message failed as itself, and the member that retires it may not know: "+
+				"kept with the unhandled deliveries rather than the poison, should its budget be "+
+				"spent before a failure here writes the mark")
+		return
+	}
+	a.marked(md.Sequence.Stream, mark)
+}
+
+// clearMark deletes the failure mark stored at mark, zero for none, of a
+// message now settled: nothing will read it again. One that could not be
+// deleted — gone already, replaced by another member's — goes with the marks'
+// stream's age.
+func (a *attachment) clearMark(ctx context.Context, mark uint64) {
+	if mark == 0 {
+		return
+	}
+	if err := a.q.clearFailure(context.WithoutCancel(ctx), mark); err != nil {
+		a.log.DebugContext(ctx, "failure_mark_undeleted", "mark", mark, "error", err.Error(),
+			"detail", "the settled message's failure mark goes with its stream's age")
+	}
 }
 
 // handBack returns a HEALTHY message, ev — a deferral, a hold, a pause,
@@ -1150,15 +1254,16 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev 
 // it means — so a message whose deliveries went on handoffs is dead-lettered
 // with a line rather than discarded by the broker's backstop in silence.
 func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
-	a.returnMsg(ctx, msg, ev, 0, queue.OutcomeDefer, reason)
+	a.returnMsg(ctx, msg, ev, 0, queue.OutcomeDefer, reason, false)
 }
 
 // returnMsg is the one place a message goes back, and the one place the
 // delivery budget is spent. delay 0 returns it immediately. ev is the event it
 // carries, for the line; spent is the return it is — a failure (Nak), a
-// hand-back (Defer) or a pass — and reason why, which decide where its dead
-// letter is kept and what its line says should this return spend its budget
-// ([attachment.retire]).
+// hand-back (Defer) or a pass — and reason why, which its line says should
+// this return spend its budget; itself is whether this return is a failure of
+// the message's own, which with the message's earlier failures decides where
+// its dead letter is kept ([attachment.retire]).
 //
 // A DELIVERY AT OR PAST THE BUDGET IS RETIRED, not only the budget's own: the
 // broker's backstop stands [keepRetries] deliveries past it ([backstopFor]),
@@ -1166,11 +1271,11 @@ func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events
 // stopped never settled, is delivered again — to a handler first, which may
 // handle it — and retired by whichever return meets it there.
 func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *events.Event,
-	delay time.Duration, spent queue.Outcome, reason string) {
+	delay time.Duration, spent queue.Outcome, reason string, itself bool) {
 
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
-		a.retire(ctx, msg, ev, md, spent, reason)
+		a.retire(ctx, msg, ev, md, spent, reason, itself)
 		return
 	}
 	if delay <= 0 {
@@ -1186,10 +1291,14 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 
 // retire keeps msg, the delivery md describes, as its subscription's dead
 // letter once spent — the return it was answered with — spent its budget, and
-// terminates it: on the subject the contract keeps that return's copy on
-// ([queue.RetiredTo]), a failure's with the group's poison and a pass's or a
-// hand-back's with the group's unhandled deliveries, where a reader that can
+// terminates it: on the subject the contract keeps the copy of a message that
+// did or did not fail as itself at any delivery ([queue.RetiredTo]) — with the
+// group's poison, or with its unhandled deliveries, where a reader that can
 // handle it now finds it.
+//
+// WHETHER IT FAILED IS THE MESSAGE'S, NOT THIS RETURN'S ([attachment.failedAsItself]):
+// this return a failure of its own, a failure of it here before, or the mark a
+// member it failed on wrote on the broker.
 //
 // TERMINATED ONLY ONCE THE COPY IS KEPT. A keep that fails — refused, cut by a
 // stop that closed the connection, a dead-letter stream electing its leader —
@@ -1219,26 +1328,57 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 // ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), once the copy is kept,
 // never one spelled here, so both backends name one situation alike.
 func (a *attachment) retire(ctx context.Context, msg jetstream.Msg, ev *events.Event,
-	md *jetstream.MsgMetadata, spent queue.Outcome, reason string) {
+	md *jetstream.MsgMetadata, spent queue.Outcome, reason string, itself bool) {
 
 	a.q.keeping.Begin()
 	defer a.q.keeping.End()
-	subject := queue.RetiredTo(a.key.topic, a.key.group, spent)
-	if err := a.q.deadLetter(context.WithoutCancel(ctx), subject, letterOf(md), msg.Data()); err != nil {
+	keep := context.WithoutCancel(ctx)
+	failed, found := a.failedAsItself(keep, md, itself)
+	subject := queue.RetiredTo(a.key.topic, a.key.group, failed)
+	if err := a.q.deadLetter(keep, subject, letterOf(md), msg.Data()); err != nil {
 		a.keepFailed(ctx, msg, md, subject, err)
 		return
 	}
 	// Terminated here, so nothing will redeliver this sequence and its
 	// failure count is dead weight.
-	a.settled(md.Sequence.Stream)
+	own := a.settled(md.Sequence.Stream)
 	queue.LogDeadLettered(ctx, a.log, a.key.topic, a.key.group, ev,
-		int(min(md.NumDelivered, math.MaxInt32)), spent, reason)
+		int(min(md.NumDelivered, math.MaxInt32)), spent, reason, failed)
 	// Term, not Ack: the message is being discarded from this
 	// subscription deliberately, and Term says so to anyone reading
 	// consumer state.
 	if err := msg.Term(); err != nil {
 		a.log.Warn("term_failed", "error", err.Error())
 	}
+	// ITS MARKS, whoever wrote them: the message is settled.
+	a.clearMark(ctx, own)
+	if found != own {
+		a.clearMark(ctx, found)
+	}
+}
+
+// failedAsItself reports whether the message md describes failed as itself at
+// any of its deliveries: this return a failure of its own (itself), a failure
+// of it here before ([attachment.failedItself]), or a mark on the broker that
+// the member it failed on wrote (failuremarks.go), read only when neither
+// answers — and, where it read one, where that mark is stored. A mark the
+// broker could not be asked for answers no: the message is kept with the
+// unhandled deliveries, the safe direction, and the line says so.
+func (a *attachment) failedAsItself(ctx context.Context, md *jetstream.MsgMetadata,
+	itself bool) (failed bool, found uint64) {
+
+	if itself || a.failedItself(md.Sequence.Stream) {
+		return true, 0
+	}
+	found, marked, err := a.q.failureMarked(ctx, failureSubject(a.key, md))
+	if err != nil {
+		a.log.WarnContext(ctx, "failure_mark_unread", "seq", md.Sequence.Stream, "error", err.Error(),
+			"detail", "whether the message failed as itself on another member is unknown, so it "+
+				"is kept with the unhandled deliveries: a copy its reader may find failing, never "+
+				"a healthy delivery kept with the poison")
+		return false, 0
+	}
+	return marked, found
 }
 
 // keepFailed answers a retirement whose keep failed with err: the message

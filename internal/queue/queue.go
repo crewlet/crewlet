@@ -55,11 +55,12 @@
 //     sequence (DeadLetterFrame), what a whole subtree of subjects holds is
 //     counted without listing it (DeadLetterMarks), and an entry is removed
 //     one at a time (DropDeadLetter). A subscription's entry is the
-//     message's copy with no header, kept by the return that spent its
-//     budget (RetiredTo): a failure's on the pair's dead-letter subject,
-//     poison, and a pass's or a hand-back's on its UNHANDLED subject, a
-//     healthy delivery no member handled, where a reader that can handle it
-//     now finds it again.
+//     message's copy with no header, kept by whether the message failed as
+//     itself at any of its deliveries (RetiredTo): one that did on the
+//     pair's dead-letter subject, poison, and every other — passed, handed
+//     back, failed only for a reason of the node's own — on its UNHANDLED
+//     subject, a healthy delivery no member handled, where a reader that
+//     can handle it now finds it again.
 //   - A failed verb is MARKED with one of three sentinels when the failure is
 //     one a caller acts on, and nothing else about it may be branched on:
 //     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
@@ -245,7 +246,9 @@ const (
 	// it there. A pass is no failure either, so a message passed until a
 	// hand-back spent its last delivery — a newer record's wake older nodes
 	// passed round during a roll, whose last delivery met a node that sheds
-	// or stops — is kept where its passes would have kept it.
+	// or stops — is kept where its passes would have kept it. A hand-back
+	// judges nothing, though: a message one of whose deliveries FAILED as
+	// itself is poison, kept with the poison whichever return spent it.
 	//
 	// IT RETURNS AT THE HEAD, on every backend: a hand-back is a plain,
 	// unspaced Nak, and the broker serves a redelivery before new mail —
@@ -372,7 +375,17 @@ type Result struct {
 	// Err is the failure that caused a Nak, or what a pass met, logged
 	// beside its reason.
 	Err error
+	// NodeFault marks a Nak as a failure of THIS NODE's rather than of the
+	// message ([NakNode]): returned as any failure is, and never counted
+	// as the message's own ([Result.FailsMessage]).
+	NodeFault bool
 }
+
+// FailsMessage reports whether r is a failure of the MESSAGE: a Nak that is
+// not this node's own ([NakNode]). A message one of whose deliveries was so
+// answered is kept with its group's poison once its budget is spent, whatever
+// return spent it ([RetiredTo]).
+func (r Result) FailsMessage() bool { return r.Outcome == OutcomeNak && !r.NodeFault }
 
 // DeferCause is why a delivery was handed back ([Defer]).
 type DeferCause string
@@ -409,8 +422,26 @@ func (c DeferCause) Valid() bool { return slices.Contains(DeferCauses, c) }
 // Ack acknowledges the delivery.
 func Ack() Result { return Result{} }
 
-// Nak negatively acknowledges, requesting redelivery.
+// Nak negatively acknowledges, requesting redelivery: a failure of the
+// message, which keeps it with its group's poison should its budget be spent
+// ([RetiredTo]).
 func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
+
+// NakNode negatively acknowledges a delivery that failed for a reason of THIS
+// NODE's, never of the message: a broker it could not reach
+// ([ErrUnavailable]), a queue that is not live ([ErrNotLive]), a stop that
+// ended its handler. Returned exactly as a [Nak] is — spaced, behind the mail
+// that was waiting, the attachment taking mail on — because the condition may
+// clear in a moment, here or on a peer; but never counted as the message's own
+// failure ([Result.FailsMessage]), so a message whose budget it spends is kept
+// with its group's unhandled deliveries, as a healthy delivery no member
+// handled, and not with its poison ([RetiredTo]).
+//
+// NOT A DEFER, which is the outcome for a node that has lost the right to the
+// work: a deferral quiesces the attachment until something resumes it, and a
+// node whose broker blipped would stop taking every delivery of its group for
+// the sake of one.
+func NakNode(err error) Result { return Result{Outcome: OutcomeNak, Err: err, NodeFault: true} }
 
 // Defer leaves the delivery unacked and quiesces the attachment, for cause.
 func Defer(cause DeferCause, reason string) Result {
@@ -420,7 +451,8 @@ func Defer(cause DeferCause, reason string) Result {
 // Pass hands the delivery back to its group for a peer and goes on consuming
 // ([OutcomePass]): reason is why, and err what this node met, both logged —
 // reason on the dead letter's line too, should this pass spend the delivery's
-// budget, whose copy is kept on its group's unhandled subject ([RetiredTo]).
+// budget, whose copy is kept on its group's unhandled subject unless one of its
+// deliveries failed as itself ([RetiredTo]).
 //
 // The group's own budget, about ten minutes, is all a pass gets, and enough:
 // a dead letter follows, not a drop, and the replay at the next start of a node
@@ -693,28 +725,44 @@ func LetterFits(header, body []byte) bool {
 }
 
 // RetiredTo is the dead-letter subject a subscription keeps its message on
-// once a return spent the message's delivery budget, by that return's outcome,
-// spent — a Nak, a Defer or a Pass. A FAILURE's copy is kept on the pair's
-// dead-letter subject ([topics.DeadLetter]): poison, which an operator
-// investigates and nothing replays. Every other return's is kept on the pair's
-// UNHANDLED subject ([topics.Unhandled]): a pass's, a deferral's, or the
-// backend's own hand-back of a delivery it would not hand over (a hold, a
-// pause, a stop), which it retires as a deferral. Each of those is a HEALTHY
+// once a return spent the message's delivery budget, by whether the message
+// FAILED AS ITSELF at any of its deliveries, failed — the one that spent the
+// budget or an earlier one ([Result.FailsMessage]). A message that did is kept
+// on the pair's dead-letter subject ([topics.DeadLetter]): poison, which an
+// operator investigates and nothing replays. Every other message is kept on
+// the pair's UNHANDLED subject ([topics.Unhandled]): one whose deliveries were
+// passed, handed back — by a handler's deferral or by the backend itself, of a
+// delivery a hold, a pause, a stop met before its handler ran — or failed
+// only for a reason of the node's own ([NakNode]). Each of those is a HEALTHY
 // delivery that no member of the group handled — [OutcomeDefer] and
 // [OutcomePass] both say so of what they return — so a reader that can handle
 // one now lists that subject and handles each copy as a delivery
-// (internal/notify, at every start), and finds no poison among them.
+// (internal/notify), and finds no poison among them: save a message whose
+// failure the member it failed on could not mark for the rest of the group,
+// which errs that way rather than keep a healthy delivery with the poison.
+//
+// BY THE MESSAGE'S DELIVERIES, NOT BY THE RETURN THAT SPENT ITS BUDGET. Only
+// the last return decided it, and a hand-back or a node's own failure is no
+// judgment of the message: one whose deliveries had all failed, and whose last
+// a node that shed or stopped handed back, was kept with the unhandled
+// deliveries and replayed at every start, failing each time; and one whose
+// last delivery met a node that could not reach its broker was kept with the
+// poison, a wake nobody replays. So each backend remembers which of its
+// messages failed as themselves, FLEET-WIDE, since one message's deliveries go
+// to every member of its group: the twin beside its redeliveries, and the
+// JetStream backend as a mark on its broker (internal/queue/jetstream's
+// failure marks).
 //
 // THE SUBJECT SAYS WHICH, AND NEVER A HEADER. A delivery is as large as the
 // transport carries, so a copy at that ceiling has no room for a header beside
 // it, and a copy marked by its header was lost to its own reader there: kept
-// with none, read as poison and never replayed. Both are kept bare, as the
-// message's own bytes and nothing beside them, wherever they are kept.
+// with none, read as poison and never replayed. Both are kept as the message's
+// own bytes and no keeper's header, wherever they are kept.
 //
 // THE CONTRACT'S RULE, which both backends call, so the twin keeps a copy
 // where the broker does.
-func RetiredTo(topic, group string, spent Outcome) string {
-	if spent == OutcomeNak {
+func RetiredTo(topic, group string, failed bool) string {
+	if failed {
 		return topics.DeadLetter(topic, group)
 	}
 	return topics.Unhandled(topic, group)
@@ -1661,6 +1709,10 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 // `handler_failed` at Warn for each would read as a fleet failing its mail. It
 // is logged at Info under its own name, with its reason and what the node met.
 //
+// A FAILURE NAMES WHOSE IT IS (`fault`): the message's, or the node's own
+// ([NakNode]), which a reader of the line tells apart without its error's
+// words, as the backend does when it decides where the message is kept.
+//
 // UNDER ctx, because the line is correlated by the trace a context carries
 // (internal/logging), and a backend that logs under its handler's context
 // would otherwise spell the line itself to keep that: the in-memory twin did,
@@ -1669,7 +1721,7 @@ func LogResult(ctx context.Context, l *slog.Logger, topic, group string, ev *eve
 	switch r.Outcome {
 	case OutcomeNak:
 		l.WarnContext(ctx, "handler_failed", "topic", topic, "group", group,
-			"event_type", eventType(ev), "error", errText(r.Err))
+			"event_type", eventType(ev), "error", errText(r.Err), "fault", faultOf(r))
 	case OutcomeDefer:
 		l.InfoContext(ctx, "delivery_deferred", "topic", topic, "group", group,
 			"event_type", eventType(ev), "reason", r.Reason)
@@ -1697,7 +1749,7 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 	case OutcomeNak:
 		l.WarnContext(ctx, "batch_handler_failed", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
-			"event_type", eventType(head), "error", errText(r.Err))
+			"event_type", eventType(head), "error", errText(r.Err), "fault", faultOf(r))
 	case OutcomeDefer:
 		l.InfoContext(ctx, "batch_delivery_deferred", "topic", topic, "group", group,
 			"batch_key", batchKey, "event_count", len(evs),
@@ -1709,13 +1761,23 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 	}
 }
 
+// faultOf names whose a failure is, on its line: the node's ([NakNode]) or the
+// message's.
+func faultOf(r Result) string {
+	if r.NodeFault {
+		return "node"
+	}
+	return "message"
+}
+
 // LogDeadLettered emits the standard line for a subscription's message whose
 // delivery budget a return spent, once its backend has kept the copy:
 // `dead_lettered`, at Error, with the event's type, how many times it was
 // delivered (deliveries, the last included), the return that spent it
 // (`returned`: nak, defer or pass) and why (`reason`, empty for a failure),
-// and the subject its copy is kept on ([RetiredTo]) — which says whether it is
-// poison or a delivery no member handled.
+// and the subject its copy is kept on ([RetiredTo], by whether the message
+// failed as itself at any delivery) — which says whether it is poison or a
+// delivery no member handled.
 //
 // ONE LINE FOR ONE SITUATION ON EVERY BACKEND, which is why it lives in the
 // contract, for [LogBatchResult]'s reason: the twin spelled its own, as
@@ -1726,11 +1788,11 @@ func LogBatchResult(ctx context.Context, l *slog.Logger, topic, group, batchKey 
 //
 // UNDER ctx, for [LogResult]'s reason.
 func LogDeadLettered(ctx context.Context, l *slog.Logger, topic, group string, ev *events.Event,
-	deliveries int, spent Outcome, reason string) {
+	deliveries int, spent Outcome, reason string, failed bool) {
 
 	l.ErrorContext(ctx, "dead_lettered", "topic", topic, "group", group,
 		"event_type", eventType(ev), "deliveries", deliveries, "returned", spent.String(),
-		"reason", reason, "subject", RetiredTo(topic, group, spent))
+		"reason", reason, "subject", RetiredTo(topic, group, failed))
 }
 
 // LogListenerPanic emits the standard line for a publish listener that

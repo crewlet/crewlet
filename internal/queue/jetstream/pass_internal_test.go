@@ -137,7 +137,10 @@ type answeredMsg struct {
 	delays []time.Duration
 	naked  int
 	termed int
+	acked  int
 }
+
+func (m *answeredMsg) Ack() error { m.acked++; return nil }
 
 func (m *answeredMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.md, nil }
 

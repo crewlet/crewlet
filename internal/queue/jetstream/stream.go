@@ -642,6 +642,20 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			maxAge:     eventRetention,
 			duplicates: queue.DeadLetterWindow,
 		},
+		{
+			// Which of a subscription's messages failed as themselves at
+			// a delivery: an empty mark per message, ONE PER SUBJECT, so
+			// whether a message is marked is one read of its subject's
+			// newest message (failuremarks.go). By the event stream's
+			// age, as the dead letters it decides the subject of: a
+			// mark nobody deleted — its message settled by a member that
+			// never wrote it — goes with them.
+			name:          streamFailures,
+			subjects:      []string{failurePrefix + ">"},
+			retention:     jetstream.LimitsPolicy,
+			maxAge:        eventRetention,
+			maxPerSubject: 1,
+		},
 	}
 }
 

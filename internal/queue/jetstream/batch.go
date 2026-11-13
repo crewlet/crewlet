@@ -298,19 +298,21 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			// failed for the life of the attachment. That is
 			// ordinary operation here — an answer a parked executor
 			// is still owed is NAKed and acked on a later pass.
+			var mark uint64
 			if md, err := d.msg.Metadata(); err == nil {
-				a.settled(md.Sequence.Stream)
+				mark = a.settled(md.Sequence.Stream)
 			}
 			if err := d.msg.Ack(); err != nil {
 				a.log.Warn("ack_failed", "error", err.Error())
 			}
+			a.clearMark(ctx, mark)
 		}
 	case queue.OutcomeDefer:
 		a.nakAll(ctx, items, res.Reason)
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
-			a.nakOrDeadLetter(ctx, d.msg, d.ev)
+			a.nakOrDeadLetter(ctx, d.msg, d.ev, res.FailsMessage())
 		}
 	case queue.OutcomePass:
 		// Each message by its own delivery count, under the partition's

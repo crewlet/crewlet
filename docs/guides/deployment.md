@@ -855,9 +855,9 @@ down still serves its own company, so that connection closing never stops the
 node — the donor [dials again](retention.md) by itself.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the seven engine streams
+uses, on every start and idempotently: the eight engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the thirteen state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`, `CREWLET_FAILED`), the thirteen state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,

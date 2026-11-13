@@ -303,6 +303,14 @@ type subscription struct {
 	// redeliveries mirrors the broker's per-message counter.
 	redeliveries map[uuid.UUID]int
 
+	// failed is every message one of whose deliveries failed as itself
+	// ([queue.Result.FailsMessage]), until it leaves the subscription:
+	// what decides whether a message whose budget a return spends is
+	// kept with the poison ([queue.RetiredTo]). The broker's own record of
+	// it is a mark the fleet shares (internal/queue/jetstream's failure
+	// marks); this subscription is the whole fleet's already.
+	failed map[uuid.UUID]struct{}
+
 	// draining and the two flags below make inline dispatch re-entrant
 	// without recursion: a handler that publishes into the subscription it
 	// is draining asks the running pass to go round again rather than
@@ -834,7 +842,8 @@ func (b *Broker) ensureLocked(topic, group string) *subscription {
 	if sub, ok := b.subs[key]; ok {
 		return sub
 	}
-	sub := &subscription{topic: topic, group: group, redeliveries: map[uuid.UUID]int{}}
+	sub := &subscription{topic: topic, group: group, redeliveries: map[uuid.UUID]int{},
+		failed: map[uuid.UUID]struct{}{}}
 	b.subs[key] = sub
 	return sub
 }

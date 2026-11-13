@@ -378,9 +378,13 @@ type Queue struct {
 	inFlight queue.Inflight
 
 	// keeping counts the dead letters a return of this client's is keeping
-	// right now ([attachment.returnMsg]): what [Queue.Stop] waits for
-	// before it closes the connection under them.
+	// right now ([attachment.retire]): what [Queue.Stop] waits for before
+	// it closes the connection under them.
 	keeping queue.Inflight
+
+	// marks is the failure marks' stream as this client reads and purges
+	// it (failuremarks.go).
+	marks failureMarks
 
 	// consumerProposals counts the consumer CREATES and UPDATES this
 	// client has asked the broker for. See [Queue.ConsumerProposals].

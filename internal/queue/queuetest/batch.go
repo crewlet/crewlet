@@ -472,8 +472,8 @@ func (s *suite) runBatch(t *testing.T) {
 	// are not spaced, which the backend's own case reads); leave the pass
 	// out of a backend's partition
 	// outcomes, and c1 is never returned or dead-lettered; quiesce on a
-	// passed partition, and c2 is never handled; dead-letter a passed
-	// partition as a failure's, and its copy is kept with the group's poison.
+	// passed partition, and c2 is never handled; count a passed partition as
+	// a failure of its messages, and its copy is kept with the group's poison.
 	t.Run("a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)

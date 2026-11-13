@@ -79,11 +79,12 @@ import (
 // the wake it lost (internal/engine's feeddeadletters.go).
 
 // UnhandledSubject is where the inbound group's unhandled deliveries are kept
-// — its passed wakes, and those a hand-back retired — and where a node's start
-// replays them from: [queue.RetiredTo] of [topics.NotificationsInbound] and
-// [InboundGroup] for a return that was no failure.
+// — its passed wakes, those a hand-back retired, and those only a node's own
+// failure did — and where a node's start replays them from: [queue.RetiredTo]
+// of [topics.NotificationsInbound] and [InboundGroup] for a message that never
+// failed as itself.
 func UnhandledSubject() string {
-	return queue.RetiredTo(topics.NotificationsInbound, InboundGroup, queue.OutcomePass)
+	return queue.RetiredTo(topics.NotificationsInbound, InboundGroup, false)
 }
 
 // letterFate is what one replay made of one unhandled copy.

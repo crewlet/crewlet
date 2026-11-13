@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -343,9 +344,9 @@ func (s *suite) runDeadLetters(t *testing.T) {
 		// across the leaf's link, raw where the leader's reply would not
 		// cross it (internal/queue/jetstream's copyread.go).
 		//
-		// Mutation: keep a passed copy with the pair's poison (RetiredTo
-		// answering topics.DeadLetter for a pass), and the unhandled subject
-		// holds nothing.
+		// Mutation: count a pass as a failure of its message, and its copy is
+		// kept with the pair's poison while the unhandled subject holds
+		// nothing.
 		newQueueWithAttempts := s.needAttempts(t)
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
 		const topic, group = "passed.large", "grp"
@@ -647,34 +648,64 @@ func frameOf(ctx context.Context, t *testing.T, q queue.EventQueue, subject stri
 }
 
 // keptUnhandled holds the dead letters of topic and group to one unhandled
-// copy: kept with no header on the pair's unhandled subject
-// ([queue.RetiredTo]), and none on its poison subject, its body reading back
-// as the event labelled label — the subject being what a reader that can
-// handle the copy now finds it by, and the body what it handles.
+// copy, the event labelled label ([keptAs]).
 func keptUnhandled(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group, label string) {
 	t.Helper()
-	unhandled := topics.Unhandled(topic, group)
+	keptAs(ctx, t, q, topic, group, false, label)
+}
+
+// keptAs holds the dead letters of topic and group to one copy of each event
+// labelled labels, in any order: kept with no header on the subject the pair
+// keeps a message that did, or did not, fail as itself on ([queue.RetiredTo]),
+// failed, and none on the other — the subject being what a reader that can
+// handle a copy now finds it by, and the body what it handles.
+func keptAs(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, failed bool,
+	labels ...string) {
+
+	t.Helper()
+	kept, other := queue.RetiredTo(topic, group, failed), queue.RetiredTo(topic, group, !failed)
+	what := "unhandled"
+	if failed {
+		what = "poison"
+	}
 	head, _, _ := strings.Cut(topic, ".")
 	under := topics.DeadLettersUnder(head)
-	got := listedAsMarked(ctx, t, q, under, unhandled)
-	if len(got) != 1 {
-		t.Fatalf("%s lists %d entries, want the one unhandled copy: %q", unhandled, len(got),
-			headersOf(got))
+	// THE KEEPS FIRST: a handler's return is settled after the handler has
+	// recorded it, so a listing taken the moment a case saw the delivery
+	// can come before the keep that delivery's return makes.
+	awaitState(t, fmt.Sprintf("%d %s copies to be kept", len(labels), what), func() bool {
+		return marksOf(ctx, t, q, under).Counts[kept] >= uint64(len(labels))
+	})
+	got := listedAsMarked(ctx, t, q, under, kept)
+	if len(got) != len(labels) {
+		t.Fatalf("%s lists %d entries, want the %s copies of %q: %q", kept, len(got), what,
+			labels, headersOf(got))
 	}
-	if len(got[0].Header) != 0 {
-		t.Errorf("the unhandled copy is kept under %q, want no header: its subject says "+
-			"what it is", got[0].Header)
+	var read []string
+	for _, k := range got {
+		if len(k.Header) != 0 {
+			t.Errorf("a copy is kept under %q, want no header: its subject says what it is", k.Header)
+		}
+		var ev events.Event
+		if err := json.Unmarshal(frameOf(ctx, t, q, kept, k.Seq), &ev); err != nil {
+			t.Errorf("a %s copy reads back as no event (%v): a reader that found it would have "+
+				"nothing to handle", what, err)
+		}
+		read = append(read, labelOf(&ev))
 	}
-	var ev events.Event
-	if err := json.Unmarshal(frameOf(ctx, t, q, unhandled, got[0].Seq), &ev); err != nil ||
-		labelOf(&ev) != label {
-		t.Errorf("the unhandled copy reads back as no event labelled %s (%v): a reader that "+
-			"found it would have nothing to handle", label, err)
+	slices.Sort(read)
+	if want := slices.Sorted(slices.Values(labels)); !slices.Equal(read, want) {
+		t.Errorf("the %s copies read back as %q, want %q", what, read, want)
 	}
-	if poison := listedAsMarked(ctx, t, q, under, topics.DeadLetter(topic, group)); len(poison) != 0 {
-		t.Errorf("the pair's poison subject holds %d entries, want none: a copy no failure "+
-			"retired, kept with the poison, is read as a failure's and never replayed",
-			len(poison))
+	if held := listedAsMarked(ctx, t, q, under, other); len(held) != 0 {
+		if failed {
+			t.Errorf("the pair's unhandled subject holds %d entries, want none: a message that "+
+				"failed as itself, kept there, is poison a reader handles again and again", len(held))
+		} else {
+			t.Errorf("the pair's poison subject holds %d entries, want none: a copy no failure "+
+				"retired, kept with the poison, is read as a failure's and never replayed",
+				len(held))
+		}
 	}
 }
 

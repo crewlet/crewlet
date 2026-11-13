@@ -537,17 +537,21 @@ func DeadLetter(topic, group string) string {
 }
 
 // Unhandled returns the dead-letter subject for a (topic, group) pair's
-// UNHANDLED deliveries: the copies of messages whose delivery budget a return
-// that was no failure spent — a pass, a deferral, the backend's own hand-back
-// of a delivery it would not hand over — so that no member of the group ever
-// handled them. [DeadLetter] is the pair's other subject, for a FAILURE's copy:
-// poison, which nothing replays.
+// UNHANDLED deliveries: the copies of messages whose delivery budget was spent
+// and that never failed as themselves — passed, handed back by a deferral or by
+// the backend itself, failed only for a reason of the node's own — so that no
+// member of the group ever handled them. [DeadLetter] is the pair's other
+// subject, for the copy of a message one of whose deliveries FAILED AS ITSELF:
+// poison, which nothing replays (internal/queue's RetiredTo decides which).
 //
 // TWO SUBJECTS RATHER THAN ONE MARKED BY A HEADER, because a delivery is as
 // large as the transport carries and a copy at that ceiling has no room for a
 // header beside it. Marked by where it is kept, every unhandled copy is found
 // by the reader that replays the pair's unhandled deliveries
-// (internal/notify), whatever its size, and no poison is ever among them.
+// (internal/notify), whatever its size, and finds no poison among them — save
+// a message whose failure the member it failed on could not mark for the rest
+// of the group (internal/queue/jetstream's failure marks), kept there rather
+// than a healthy one kept with the poison.
 //
 // [DeadLetter]'s form with one segment more, `unhandled`, before a digest of
 // its own: under the topic's head as every dead letter of the topic is

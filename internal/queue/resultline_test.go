@@ -21,8 +21,13 @@ import (
 // one must never be handed the other. The in-memory twin spelled its own
 // lines and logged a partition's deferral as `delivery_deferred`.
 //
+// A FAILURE NAMES WHOSE IT IS, the message's or its node's own
+// ([queue.NakNode]), as the backend reads it when it decides where the message
+// is kept.
+//
 // Mutation: log a partition's deferral as `delivery_deferred`, and the
-// partition's row reads a single delivery's name.
+// partition's row reads a single delivery's name; name every failure the
+// message's, and a node's own reads as poison.
 func TestEachPathLogsAnOutcomeUnderItsOwnName(t *testing.T) {
 	t.Parallel()
 	ev := &events.Event{Type: "external_notification"}
@@ -42,12 +47,17 @@ func TestEachPathLogsAnOutcomeUnderItsOwnName(t *testing.T) {
 		want   map[string]any
 	}{
 		{"a failed delivery", single, queue.Nak(failed), map[string]any{
-			"msg": "handler_failed", "level": "WARN", "error": failed.Error()}},
+			"msg": "handler_failed", "level": "WARN", "error": failed.Error(), "fault": "message"}},
+		{"a delivery its node failed", single, queue.NakNode(failed), map[string]any{
+			"msg": "handler_failed", "level": "WARN", "error": failed.Error(), "fault": "node"}},
 		{"a deferred delivery", single, queue.Defer(queue.DeferDraining, "the node drains"), map[string]any{
 			"msg": "delivery_deferred", "level": "INFO", "reason": "the node drains"}},
 		{"a failed partition", partition, queue.Nak(failed), map[string]any{
 			"msg": "batch_handler_failed", "level": "WARN", "error": failed.Error(),
-			"batch_key": "conversation-1", "event_count": float64(1)}},
+			"batch_key": "conversation-1", "event_count": float64(1), "fault": "message"}},
+		{"a partition its node failed", partition, queue.NakNode(failed), map[string]any{
+			"msg": "batch_handler_failed", "level": "WARN", "error": failed.Error(),
+			"batch_key": "conversation-1", "event_count": float64(1), "fault": "node"}},
 		{"a deferred partition", partition, queue.Defer(queue.DeferDraining, "the node drains"), map[string]any{
 			"msg": "batch_delivery_deferred", "level": "INFO", "reason": "the node drains",
 			"batch_key": "conversation-1", "event_count": float64(1)}},
@@ -197,9 +207,9 @@ func TestNoBackendWritesItsOwnResultLine(t *testing.T) {
 // the subject its copy went to — which tells an operator whether it is poison
 // or a delivery no member handled, waiting for a reader that can.
 //
-// Mutation: name the subject by the pair's poison whatever the return, and a
-// pass's line sends an operator to the wrong subject; drop the reason, and a
-// hand-back's line no longer says what blocked it.
+// Mutation: name the subject by the pair's poison whatever the message's
+// failures, and a pass's line sends an operator to the wrong subject; drop the
+// reason, and a hand-back's line no longer says what blocked it.
 func TestADeadLetterIsOneLineNamingWhereItsCopyIsKept(t *testing.T) {
 	t.Parallel()
 	const topic, group = "crewlet.notifications.inbound", "notify-inbound"
@@ -207,14 +217,17 @@ func TestADeadLetterIsOneLineNamingWhereItsCopyIsKept(t *testing.T) {
 	for _, tc := range []struct {
 		spent  queue.Outcome
 		reason string
+		failed bool
 	}{
-		{queue.OutcomeNak, ""},
-		{queue.OutcomePass, "newer_record"},
-		{queue.OutcomeDefer, "shedding"},
+		{queue.OutcomeNak, "", true},
+		{queue.OutcomeNak, "", false},
+		{queue.OutcomePass, "newer_record", false},
+		{queue.OutcomeDefer, "shedding", false},
+		{queue.OutcomeDefer, "shedding", true},
 	} {
 		var buf bytes.Buffer
 		queue.LogDeadLettered(t.Context(), slog.New(slog.NewJSONHandler(&buf, nil)), topic, group,
-			ev, 25, tc.spent, tc.reason)
+			ev, 25, tc.spent, tc.reason, tc.failed)
 		var line map[string]any
 		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
 			t.Fatalf("decoding %q: %v", buf.String(), err)
@@ -222,7 +235,7 @@ func TestADeadLetterIsOneLineNamingWhereItsCopyIsKept(t *testing.T) {
 		want := map[string]any{"msg": "dead_lettered", "level": "ERROR", "topic": topic,
 			"group": group, "event_type": "external_notification", "deliveries": float64(25),
 			"returned": tc.spent.String(), "reason": tc.reason,
-			"subject": queue.RetiredTo(topic, group, tc.spent)}
+			"subject": queue.RetiredTo(topic, group, tc.failed)}
 		for key, value := range want {
 			if got := line[key]; got != value {
 				t.Errorf("a %s's dead letter logs %s = %v, want %v, in %s", tc.spent, key, got,
