@@ -452,8 +452,11 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 	for relative, rec := range seeded {
 		files[relative] = rec.Source
 	}
+	commit := func(dir string, names []string, next map[string][]byte) error {
+		return hostbox.WriteCredentials(dir, names, next, nil)
+	}
 	for _, login := range loginsOf(files) {
-		got, err := writeBackLogin(ctx, l, login, seeded, hostbox.WriteCredentials)
+		got, err := writeBackLogin(ctx, l, login, seeded, commit)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_writeback_failed",
 				"sandbox_id", l.id, "dir", login.dir, "error", err.Error())

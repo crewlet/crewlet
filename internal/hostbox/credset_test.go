@@ -2,6 +2,7 @@ package hostbox
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +53,7 @@ func runWriter(dir string) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		if err := WriteCredentials(dir, twoLoginNames, twoLogins[i%2]); err != nil {
+		if err := WriteCredentials(dir, twoLoginNames, twoLogins[i%2], nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -119,7 +121,7 @@ func TestAWriteThatStopsPartWayIsFinishedByTheNextRead(t *testing.T) {
 	obstacle := filepath.Join(dir, "config.toml")
 	writeRaw(t, filepath.Join(obstacle, "in-the-way"), map[string]string{"x": "x"})
 
-	err := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
 	if err == nil {
 		t.Fatal("a write whose second file could not be written reported success")
 	}
@@ -162,7 +164,7 @@ func TestAWriteThatFailsBeforeItsJournalWritesNothing(t *testing.T) {
 	// A directory where the journal goes: its rename cannot land.
 	writeRaw(t, filepath.Join(CredentialJournal(dir), "in-the-way"), map[string]string{"x": "x"})
 
-	err := WriteCredentials(dir, twoLoginNames, twoLogins[1])
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[1], nil)
 	if err == nil || Committed(err) {
 		t.Fatalf("a write whose journal could not land = %v, want a failure that did not commit", err)
 	}
@@ -172,6 +174,104 @@ func TestAWriteThatFailsBeforeItsJournalWritesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "config.toml")); !os.IsNotExist(err) {
 		t.Errorf("a write that never committed wrote config.toml: %v", err)
+	}
+}
+
+// A WRITE REPORTS EVERY STEP IT TAKES AND NO OTHER, each once it has happened.
+// The steps are where a suite parks a writer's process to kill it, so a step
+// reported for a file that did not move, or ahead of what it names, is a kill
+// at an instant no writer is ever at, and a step not reported is an instant no
+// kill reaches. Each step is checked on disk as it is reported: the journal
+// stands from the commit until the close, and a file written or removed is
+// written or removed.
+//
+// Mutation: report written for a file left alone as already in place (the
+// same login again sees it); report closed after a settle that failed (the
+// refused second file sees it); report committed ahead of the journal's
+// rename (the journal that cannot land sees it).
+func TestAWriteReportsEveryStepItTakesAndNoOther(t *testing.T) {
+	t.Parallel()
+	type reached struct {
+		step CredentialStep
+		name string
+	}
+	asText := func(login map[string][]byte) map[string]string {
+		out := map[string]string{}
+		for name, content := range login {
+			out[name] = string(content)
+		}
+		return out
+	}
+	alone := map[string][]byte{"auth.json": twoLogins[1]["auth.json"]}
+	for name, c := range map[string]struct {
+		before map[string]string // the directory's files before the write
+		// inTheWay is a name a directory stands at, beside the directory
+		// when it is the journal's and inside it otherwise.
+		inTheWay string
+		login    map[string][]byte
+		// committed and applied: the write is the login of record, and it
+		// was put in place.
+		committed, applied bool
+		want               []reached
+	}{
+		"a write that drops a file": {
+			before: asText(twoLogins[0]), login: alone, committed: true, applied: true,
+			want: []reached{
+				{StepCommitted, ""}, {StepWritten, "auth.json"}, {StepRemoved, "config.toml"}, {StepClosed, ""},
+			},
+		},
+		"the same login again": {
+			before: asText(twoLogins[0]), login: twoLogins[0], committed: true, applied: true,
+			want: []reached{{StepCommitted, ""}, {StepClosed, ""}},
+		},
+		"a removal of a file that is not there": {
+			login: alone, committed: true, applied: true,
+			want: []reached{{StepCommitted, ""}, {StepWritten, "auth.json"}, {StepClosed, ""}},
+		},
+		"a write whose second file is refused": {
+			inTheWay: "config.toml", login: twoLogins[0], committed: true,
+			want: []reached{{StepCommitted, ""}, {StepWritten, "auth.json"}},
+		},
+		"a write whose journal cannot land": {
+			inTheWay: "journal", login: twoLogins[0],
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := filepath.Join(t.TempDir(), "credentials")
+			writeRaw(t, dir, c.before)
+			switch c.inTheWay {
+			case "":
+			case "journal":
+				writeRaw(t, filepath.Join(CredentialJournal(dir), "in-the-way"), map[string]string{"x": "x"})
+			default:
+				writeRaw(t, filepath.Join(dir, c.inTheWay, "in-the-way"), map[string]string{"x": "x"})
+			}
+			var got []reached
+			err := WriteCredentials(dir, twoLoginNames, c.login, func(step CredentialStep, name string) {
+				got = append(got, reached{step, name})
+				_, statErr := os.Lstat(CredentialJournal(dir))
+				if standing := statErr == nil; standing != (step != StepClosed) {
+					t.Errorf("at %s %q a journal stands: %t", step, name, standing)
+				}
+				switch step {
+				case StepWritten:
+					if raw, err := os.ReadFile(filepath.Join(dir, name)); err != nil || !bytes.Equal(raw, c.login[name]) {
+						t.Errorf("at written %q the file holds %q (%v), want %q", name, raw, err, c.login[name])
+					}
+				case StepRemoved:
+					if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+						t.Errorf("at removed %q the file is still there: %v", name, err)
+					}
+				}
+			})
+			if !slices.Equal(got, c.want) {
+				t.Errorf("the write reported %v, want %v", got, c.want)
+			}
+			if Committed(err) != c.committed || (err == nil) != c.applied {
+				t.Errorf("the write answered %v, want committed %t and applied %t", err, c.committed, c.applied)
+			}
+		})
 	}
 }
 
@@ -259,8 +359,8 @@ func TestWhatAKilledWriteStagedIsGoneByTheNextHold(t *testing.T) {
 			_, err := ReadCredentials(dir, twoLoginNames)
 			return err
 		},
-		"a write":  func(dir string) error { return WriteCredentials(dir, twoLoginNames, twoLogins[1]) },
-		"a logout": func(dir string) error { return WriteCredentials(dir, twoLoginNames, nil) },
+		"a write":  func(dir string) error { return WriteCredentials(dir, twoLoginNames, twoLogins[1], nil) },
+		"a logout": func(dir string) error { return WriteCredentials(dir, twoLoginNames, nil, nil) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -304,7 +404,7 @@ func TestTheJournalIsStagedWhereTheNextHoldLooks(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "credentials")
 	writeRaw(t, filepath.Join(stagedJournal(dir), "in-the-way"), map[string]string{"x": "x"})
-	err := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
 	if err == nil || Committed(err) || !strings.Contains(err.Error(), filepath.Base(stagedJournal(dir))) {
 		t.Fatalf("a write with an obstacle where its journal is staged = %v, want a refusal naming %s",
 			err, stagedJournal(dir))
@@ -347,7 +447,7 @@ func TestAWriteReplacesOneLeftStanding(t *testing.T) {
 	}
 
 	// The logout: every name it knows, none of them held.
-	if err := WriteCredentials(dir, twoLoginNames, nil); err != nil {
+	if err := WriteCredentials(dir, twoLoginNames, nil, nil); err != nil {
 		t.Fatalf("WriteCredentials: %v", err)
 	}
 	got, err := readLogin(t, dir)
@@ -382,7 +482,7 @@ func TestAJournalThisBuildCannotFinishIsRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, readErr := ReadCredentials(dir, twoLoginNames)
-			writeErr := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+			writeErr := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
 			for verb, err := range map[string]error{"read": readErr, "write": writeErr} {
 				if err == nil || !strings.Contains(err.Error(), CredentialJournal(dir)) ||
 					!strings.Contains(err.Error(), "remove it to discard that write") {
@@ -414,7 +514,7 @@ func TestAWriteOfWhatIsNoLoginIsRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "credentials")
-			if err := WriteCredentials(dir, c.names, c.login); err == nil || Committed(err) {
+			if err := WriteCredentials(dir, c.names, c.login, nil); err == nil || Committed(err) {
 				t.Fatalf("WriteCredentials = %v, want a refusal that committed nothing", err)
 			}
 			if _, err := os.Stat(CredentialJournal(dir)); !os.IsNotExist(err) {

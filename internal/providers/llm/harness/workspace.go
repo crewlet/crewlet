@@ -2047,7 +2047,7 @@ func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[
 // as [hostbox.WriteCredentials] makes it, a write that committed and could not
 // be put in place at once logged and answered as written.
 func (w *Workspace) commitLoginLocked(ctx context.Context, who string, names []string, files map[string][]byte) error {
-	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files)
+	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files, nil)
 	if err != nil && hostbox.Committed(err) {
 		log.WarnContext(ctx, "harness_login_unapplied", "provider", who, "agent", w.harness,
 			"path", w.CredentialsDir(), "error", err)

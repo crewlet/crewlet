@@ -173,7 +173,7 @@ func leaveWriteStanding(t *testing.T, ws *Workspace, before, after map[string]st
 		login[name] = []byte(body)
 	}
 	var unapplied *hostbox.UnappliedError
-	if err := hostbox.WriteCredentials(scratch, names, login); !errors.As(err, &unapplied) {
+	if err := hostbox.WriteCredentials(scratch, names, login, nil); !errors.As(err, &unapplied) {
 		t.Fatalf("the premise: a write stopped by its second file = %v", err)
 	}
 	for from, to := range map[string]string{
@@ -743,7 +743,7 @@ func TestASeedNeverReadsAWriteInProgress(t *testing.T) {
 				for name, body := range logins[i%2] {
 					login[name] = []byte(body)
 				}
-				err = hostbox.WriteCredentials(p.ws.CredentialsDir(), p.ws.loginNames(), login)
+				err = hostbox.WriteCredentials(p.ws.CredentialsDir(), p.ws.loginNames(), login, nil)
 				release()
 				if err != nil {
 					return err
