@@ -777,7 +777,12 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // and its stop_reason whole and is refused by those two alone, Usage and
 // Model, or Usage and MessageID. A reply's mark of an API error that is no
 // boolean leaves its message, its stop_reason, its model and its usage whole
-// and is refused by APIError alone. A record's own uuid that is no string
+// and is refused by APIError alone. An attachment that is no object is refused
+// by AttachmentType too, never read as one of no type; a checkpoint whose
+// leafUuid is neither a string nor null leaves its head whole and is refused
+// by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
+// shape leaves its boundary's head and uuid whole and is refused by Preserved
+// alone. A record's own uuid that is no string
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
 // out as it reads with its uuid as written, and is refused by UUID alone. As
@@ -791,8 +796,10 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // for its calls; read the model or the id in Usage's decode, and a reply whose
 // usage is reshaped names no model, or is no reply; hold the mark of an API
 // error in Message or Usage, and a reply whose mark is reshaped reads no
-// message or no usage; hold the uuid to its type in the head, and every record
-// here whose uuid is reshaped is no record at all.
+// message or no usage; hold a checkpoint's leaf or a compaction's metadata to
+// its type in the head, and the record that reshapes it is no record at all;
+// hold the uuid to its type in the head, and every record here whose uuid is
+// reshaped is no record at all.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -807,6 +814,37 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	}
 	if _, _, err := attachment.Hook(); err == nil {
 		t.Error("an attachment that is no object reads as a hook's record or none, never as one it cannot read")
+	}
+	if kind, err := attachment.AttachmentType(); err == nil {
+		t.Errorf("an attachment that is no object reads as one of the type %q, never as one it cannot read", kind)
+	}
+	if leaf, marked, err := attachment.Checkpoint(); leaf != "" || marked || err != nil {
+		t.Errorf("a record whose attachment is no object reads as the checkpoint %q (%t), %v", leaf, marked, err)
+	}
+	for name, leaf := range map[string]string{"a number": `7`, "an object": `{"uuid":"` + ctUUID(5) + `"}`,
+		"a boolean": `true`, "a list": `["` + ctUUID(5) + `"]`} {
+		line := ctLine(t, ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, `"leafUuid":`+leaf))
+		if got, marked, err := line.Checkpoint(); err == nil {
+			t.Errorf("a checkpoint whose leafUuid is %s names %q (%t), want an error", name, got, marked)
+		}
+		if keyed, err := line.LeafKeyed(); err == nil {
+			t.Errorf("a checkpoint whose leafUuid is %s reads as keyed %t, want an error", name, keyed)
+		}
+		if h := line.Head; h.Type != recordLastPrompt || h.Chained() {
+			t.Errorf("a checkpoint whose leafUuid is %s reads with the head %+v", name, h)
+		}
+	}
+	for name, metadata := range map[string]string{"a string": `"kept"`, "a list": `[]`, "a number": `7`} {
+		line := ctLine(t, ctReplace(t, ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), `"compactMetadata":{`,
+			`"compactMetadata":`+metadata+`,"was":{`))
+		if p, err := line.Preserved(func(string) error { return nil }); err == nil {
+			t.Errorf("a boundary whose compactMetadata is %s keeps %+v, want an error", name, p)
+		}
+		if uuid, err := line.UUID(); uuid != ctUUID(5) || err != nil ||
+			line.Head.Subtype != subtypeCompactBoundary || !line.Head.Parentless() {
+			t.Errorf("a boundary whose compactMetadata is %s reads with the head %+v and the uuid %q, %v", name,
+				line.Head, uuid, err)
+		}
 	}
 	summary := ctSummary(ctUUID(15), ctUUID(16))
 	for name, record := range map[string]string{
@@ -1074,9 +1112,11 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // head, its own uuid, its hook, its message and its calls, its origin's kind,
 // its own toolUseResult, whether it says tool results were cleared, why its
 // reply stopped, whether its harness wrote it for a failed request, the model
-// that wrote it, the reply it is and what its request took, each beside the
-// error it answered. A raw value it hands out is printed by [ctRaw], so an
-// absent one and a null one never read alike.
+// that wrote it, the reply it is, what its request took, what it says a
+// compaction kept, the leaf it says a resume starts from and whether it names
+// one at all, and its attachment's type, each beside the error it answered. A
+// raw value it hands out is printed by [ctRaw], so an absent one and a null
+// one never read alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1122,6 +1162,18 @@ func ctAllButUUID(l threadLine) string {
 	usage, used, err := l.Usage()
 	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
+	var listed []string
+	preserved, err := l.Preserved(func(uuid string) error {
+		listed = append(listed, uuid)
+		return nil
+	})
+	fmt.Fprintf(&b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
+	leaf, marked, err := l.Checkpoint()
+	fmt.Fprintf(&b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
+	keyed, err := l.LeafKeyed()
+	fmt.Fprintf(&b, "leaf keyed: %t; %v\n", keyed, err)
+	attached, err := l.AttachmentType()
+	fmt.Fprintf(&b, "attachment type: %q; %v\n", attached, err)
 	return b.String()
 }
 
@@ -1142,11 +1194,14 @@ func ctRaw(v json.RawMessage) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
-// own toolUseResult, a reply's mark of an API error), a hook's attachment, an
-// origin, a message (its content, its stop_reason, its id, its model and its
-// usage), a message's blocks, its usage's counts and iterations, each
-// iteration's type and counts, its report of the context edits applied, and
-// each edit the report lists. So a line hands out exactly what it hands out
+// own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
+// its marks, a compaction's metadata), a hook's attachment, an origin, a
+// message (its content, its stop_reason, its id, its model and its usage), a
+// message's blocks, its usage's counts and iterations, each iteration's type
+// and counts, its report of the context edits applied, each edit the report
+// lists, and what a compaction's metadata says it kept (its list, the list's
+// anchor and uuids, its segment and the segment's ends). So a line hands out
+// exactly what it hands out
 // without the other key, through every accessor. 2.1.322 already spells a
 // call's id `toolUseId` (a subagent's metadata names the call that started it
 // so), a key away from a hook's firing.
@@ -1169,6 +1224,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
 	cleared := ctReported(t, ctEdits(ctClearing))
 	synthetic := ctSynthetic(ctUUID(30), ctUUID(31))
+	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
+	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1226,6 +1283,28 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"isApiErrorMessage":false,"IsApiErrorMessage":true`},
 		"IsApiErrorMessage alone": {record: call, from: `"type":"assistant"`,
 			to: `"IsApiErrorMessage":true,"type":"assistant"`},
+		"a checkpoint's leafUuid, then LeafUuid": {record: ctLastPrompt, from: `"leafUuid":"` + ctUUID(5) + `"`,
+			to: `"leafUuid":"` + ctUUID(5) + `","LeafUuid":"` + ctUUID(9) + `"`},
+		"a checkpoint's LEAFUUID alone": {record: ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`",`, ""),
+			from: `"type":"last-prompt"`, to: `"type":"last-prompt","LEAFUUID":"` + ctUUID(9) + `"`},
+		"a checkpoint's Explicit alone": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"type":"last-prompt","Explicit":true`},
+		"a checkpoint's Rewound alone": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"type":"last-prompt","Rewound":true`},
+		"a compactMetadata, then CompactMetadata": {record: compacting, from: `,"slug":"` + ctSlug + `"`,
+			to: `,"CompactMetadata":{"preservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) +
+				`"]}},"slug":"` + ctSlug + `"`},
+		"a preservedMessages, then PreservedMessages": {record: compacting, from: `,"postTokens":2602`,
+			to: `,"PreservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) + `"]},"postTokens":2602`},
+		"a list's anchorUuid, then AnchorUuid": {record: compacting, from: `"uuids":[`,
+			to: `"AnchorUuid":"` + ctUUID(9) + `","uuids":[`},
+		"a list's uuids, then UUIDs": {record: compacting, from: `"allUuids":[`,
+			to: `"UUIDs":["` + ctUUID(9) + `"],"allUuids":[`},
+		"a preservedSegment, then PreservedSegment": {record: segmenting, from: `,"postTokens":2602`,
+			to: `,"PreservedSegment":{"headUuid":"` + ctUUID(9) + `","anchorUuid":"` + ctUUID(9) + `","tailUuid":"` +
+				ctUUID(9) + `"},"postTokens":2602`},
+		"a segment's headUuid, then HeadUuid": {record: segmenting, from: `"anchorUuid":"` + ctUUID(11) + `","tailUuid"`,
+			to: `"HeadUuid":"` + ctUUID(9) + `","anchorUuid":"` + ctUUID(11) + `","tailUuid"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -1319,6 +1398,13 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"toolUseID":"` + other + `",` + firing},
 		"a mark of an API error written twice": {record: synthetic, from: `"isApiErrorMessage":false`,
 			to: `"isApiErrorMessage":true,"isApiErrorMessage":false`},
+		"a checkpoint's leafUuid written twice": {record: ctLastPrompt, from: `"leafUuid":"` + ctUUID(5) + `"`,
+			to: `"leafUuid":"` + ctUUID(9) + `","leafUuid":"` + ctUUID(5) + `"`},
+		"a checkpoint's mark written twice": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"explicit":true,"type":"last-prompt","explicit":false`},
+		"a compaction's list written twice": {record: compacting, from: `,"preservedMessages":{`,
+			to: `,"preservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) + `"]},` +
+				`"preservedMessages":{`},
 	} {
 		variant := ctReplace(t, tc.record, tc.from, tc.to)
 		if got, want := ctAll(ctLine(t, variant)), ctAll(ctLine(t, tc.record)); got != want {
@@ -2122,6 +2208,205 @@ func TestAReplySaysWhichReplyItIs(t *testing.T) {
 		ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
 	if got, err := ctLine(t, record).MessageID(); err == nil {
 		t.Errorf("a reply whose message is null is the reply %q, want an error", got)
+	}
+}
+
+// A LAST-PROMPT RECORD SAYS THE LEAF ITS RESUME STARTS FROM: Checkpoint reads
+// its leafUuid where it is a string, "" where it is absent, null or the empty
+// string, each naming no leaf to the harness; it is marked where its
+// `explicit` or its `rewound` is the JSON true, a rewind's, a withdrawal's or
+// a fork's, and by nothing else, as the harness tests each (=== true); and a
+// record of another type is none, whatever keys it carries. LeafKeyed says
+// whether the record carries a leafUuid at all, whatever it holds, null and
+// the empty string among it, as the harness tests it (!== undefined), and is
+// false where the key is absent and on a record of another type. A leafUuid
+// of another type is an error of both
+// ([TestAKeyOneReaderReadsCostsThatReaderAlone]).
+//
+// Mutation: read a mark as set by any value but true, and a record whose
+// explicit is false or the string "true" moves the leaf; ignore rewound, and
+// a rewind does not; read the keys off every record, and a reply carrying
+// them is a checkpoint; or key the leaf by its truth, as Checkpoint names one,
+// and a record whose leafUuid is null or the empty string reads as keyed by
+// none.
+func TestALastPromptSaysTheLeafItsResumeStartsFrom(t *testing.T) {
+	t.Parallel()
+	leafed := func(to string) string {
+		return ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, to)
+	}
+	named := `"leafUuid":"` + ctUUID(5) + `"`
+	for name, tc := range map[string]struct {
+		record        string
+		leaf          string
+		marked, keyed bool
+	}{
+		"its metadata, naming a leaf":   {record: ctLastPrompt, leaf: ctUUID(5), keyed: true},
+		"naming none":                   {record: leafed(`"leafUuid":null`), keyed: true},
+		"naming none, the empty string": {record: leafed(`"leafUuid":""`), keyed: true},
+		"with no leafUuid":              {record: leafed(`"lastPromptAt":1`)},
+		"a rewind's": {record: leafed(named + `,"explicit":true,"rewound":true`), leaf: ctUUID(5),
+			marked: true, keyed: true},
+		"a withdrawal's":           {record: leafed(`"leafUuid":null,"explicit":true`), marked: true, keyed: true},
+		"rewound alone":            {record: leafed(named + `,"rewound":true`), leaf: ctUUID(5), marked: true, keyed: true},
+		"explicit false":           {record: leafed(named + `,"explicit":false`), leaf: ctUUID(5), keyed: true},
+		"explicit the string true": {record: leafed(named + `,"explicit":"true"`), leaf: ctUUID(5), keyed: true},
+		"rewound the number 1":     {record: leafed(named + `,"rewound":1`), leaf: ctUUID(5), keyed: true},
+		"a reply carrying a checkpoint's keys": {record: ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"type":"assistant"`, named+`,"explicit":true,"type":"assistant"`)},
+	} {
+		line := ctLine(t, tc.record)
+		leaf, marked, err := line.Checkpoint()
+		if leaf != tc.leaf || marked != tc.marked || err != nil {
+			t.Errorf("%s names the leaf %q, marked %t, %v; want %q, marked %t", name, leaf, marked, err, tc.leaf,
+				tc.marked)
+		}
+		if keyed, err := line.LeafKeyed(); keyed != tc.keyed || err != nil {
+			t.Errorf("%s reads as keyed %t, %v; want %t", name, keyed, err, tc.keyed)
+		}
+	}
+}
+
+// AN ATTACHMENT SAYS ITS TYPE: AttachmentType reads an attachment record's
+// attachment's type as written, a fork's briefing's among them; "" where the
+// attachment or its type is absent, and on a record that is no attachment,
+// whatever it carries; and an error where the attachment is no object or its
+// type no string, never "", which a reader can take for no fork's briefing
+// only by its own choice ([TestAKeyOneReaderReadsCostsThatReaderAlone]).
+//
+// Mutation: read the type off every record, and a reply carrying an
+// attachment reads as one; or read it as any JSON value, and a number reads as
+// "".
+func TestAnAttachmentSaysItsType(t *testing.T) {
+	t.Parallel()
+	briefing := ctAttachment(ctUUID(1), ctUUID(2), `{"type":"fork_briefing","text":"the fork's brief"}`, "")
+	for name, tc := range map[string]struct {
+		record string
+		kind   string
+	}{
+		"a fork's briefing": {record: briefing, kind: attachmentForkBriefing},
+		"a reminder of tokens": {record: ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered),
+			kind: "total_tokens_reminder"},
+		"an attachment of no type": {record: ctReplace(t, briefing, `"type":"fork_briefing",`, "")},
+		"an attachment record with none": {record: ctReplace(t, briefing,
+			`"attachment":{"type":"fork_briefing","text":"the fork's brief"},`, "")},
+		"a reply carrying an attachment": {record: ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"type":"assistant"`, `"attachment":{"type":"fork_briefing"},"type":"assistant"`)},
+	} {
+		if kind, err := ctLine(t, tc.record).AttachmentType(); kind != tc.kind || err != nil {
+			t.Errorf("%s is an attachment of the type %q, %v; want %q", name, kind, err, tc.kind)
+		}
+	}
+	for name, kind := range map[string]string{"null": `null`, "a number": `7`, "an object": `{}`} {
+		line := ctLine(t, ctReplace(t, briefing, `"type":"fork_briefing"`, `"type":`+kind))
+		if got, err := line.AttachmentType(); err == nil {
+			t.Errorf("an attachment whose type is %s is of the type %q, want an error", name, got)
+		}
+	}
+}
+
+// ctQuoted is uuids, each quoted, joined as a JSON list's elements.
+func ctQuoted(uuids []string) string {
+	if len(uuids) == 0 {
+		return ""
+	}
+	return `"` + strings.Join(uuids, `","`) + `"`
+}
+
+// ctListed is the list a compaction's boundary built by ctBoundary carries,
+// as written: its `preservedMessages`, the key before it included.
+func ctListed(summary string, kept ...string) string {
+	ids := ctQuoted(kept)
+	return `,"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids + `],"allUuids":[` + ids + `]}`
+}
+
+// A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
+// it: Preserved reads a compact_boundary record's preservedMessages where it
+// carries one, its anchor and each uuid it lists handed in order, kept where
+// it lists any; else its preservedSegment, the anchor and the segment's two
+// ends; and nothing where the boundary carries neither, a null for either, or
+// no compactMetadata, null among it, or on a record of another type or
+// subtype, whatever it carries. Every other shape, a metadata, a list, an
+// anchor or an end of another type, an entry that is no string, is an error.
+// An error each returns ends the walk as it is.
+//
+// Mutation: read the segment where a list is, and the list's records go
+// unread; take a list of none for one that keeps records, and a boundary that
+// keeps nothing relinks; read a null list as one, and a boundary naming its
+// segment alone is an error; or read a null metadata as one, and a boundary
+// that keeps nothing is an error.
+func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
+	t.Parallel()
+	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
+	boundary := ctBoundary(ctUUID(7), ctUUID(8), kept...)
+	listed := ctListed(ctUUID(8), kept...)
+	segment := ctReplace(t, boundary, listed, "")
+	for name, tc := range map[string]struct {
+		record string
+		want   threadPreserved
+		uuids  []string
+	}{
+		"a boundary listing what it kept beside its segment": {boundary,
+			threadPreserved{Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary naming its segment alone": {segment, threadPreserved{Kept: true, Anchor: ctUUID(8),
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
+			`,"preservedMessages":null`), threadPreserved{Kept: true, Anchor: ctUUID(8), Segment: true,
+			Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
+			threadPreserved{Anchor: ctUUID(8)}, nil},
+		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
+		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"}`, `"preservedSegment":null`),
+			threadPreserved{}, nil},
+		"a boundary whose metadata is null": {ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{"trigger":"manual"`, `"compactMetadata":null,"was":{"trigger":"manual"`),
+			threadPreserved{}, nil},
+		"a boundary with no metadata": {ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{"trigger":"manual"`, `"was":{"trigger":"manual"`), threadPreserved{}, nil},
+		"a microcompaction's boundary carrying a list": {ctReplace(t, boundary, `"subtype":"compact_boundary"`,
+			`"subtype":"microcompact_boundary"`), threadPreserved{}, nil},
+		"a stop hook's summary carrying a list": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)), `"hookCount":1`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`"]}},`+
+				`"hookCount":1`), threadPreserved{}, nil},
+	} {
+		var got []string
+		p, err := ctLine(t, tc.record).Preserved(func(uuid string) error {
+			got = append(got, uuid)
+			return nil
+		})
+		if err != nil || p != tc.want || !slices.Equal(got, tc.uuids) {
+			t.Errorf("%s keeps %+v, listing %q, %v; want %+v, listing %q", name, p, strings.Join(got, ","), err,
+				tc.want, strings.Join(tc.uuids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"a metadata that is a string": ctReplace(t, ctReplace(t, boundary, listed, ""), `"compactMetadata":{`,
+			`"compactMetadata":"kept","was":{`),
+		"a list that is a string": ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`),
+		"a list's uuids that are a string": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`),
+		"a list's uuids holding a number": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`",7]}`),
+		"a list of no anchor": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`),
+		"a segment whose head is a number": ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`, `"headUuid":3`),
+		"a segment of no tail":             ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, ""),
+	} {
+		if p, err := ctLine(t, record).Preserved(func(string) error { return nil }); err == nil {
+			t.Errorf("%s keeps %+v with no error; want one", name, p)
+		}
+	}
+	stop := errors.New("stop")
+	var got []string
+	_, err := ctLine(t, boundary).Preserved(func(uuid string) error {
+		got = append(got, uuid)
+		return stop
+	})
+	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
+		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
+			got, kept[0])
 	}
 }
 
