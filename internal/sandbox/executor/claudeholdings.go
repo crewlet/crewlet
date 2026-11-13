@@ -761,6 +761,11 @@ func (w *holdingsWalk) mainLine(chain *threadChain, line threadLine) (threadMess
 			return threadMessage{}, -1, refused("is a fork's briefing, which the resume keeps out of a "+
 				"session's last record's place", nil)
 		}
+	case head.Type == recordSystem:
+		// A SYSTEM RECORD IS NO USER OR ASSISTANT RECORD, though a checkpoint
+		// can name one (a stop hook's summary, which the harness writes
+		// last): no leaf the resume starts from is one, and it holds no
+		// message the reading reads.
 	default:
 		if message, err = line.Message(); err != nil {
 			return threadMessage{}, -1, refused("is no record", err)

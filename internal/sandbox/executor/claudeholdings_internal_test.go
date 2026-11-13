@@ -735,7 +735,9 @@ func hsProgress(parent, uuid string) string {
 //     record before its boundary from what the resume walks;
 //   - where the thread holds a compaction's boundary and its checkpoint is a
 //     user or assistant record before the leaf, the checkpoint is the leaf, and
-//     a call after it is told; with no boundary, the call is held.
+//     a call after it is told; with no boundary, the call is held; and a
+//     checkpoint naming a stop hook's summary, a system record no resume
+//     starts from, is never the leaf, and the call after it is held.
 //
 // In a subagent's thread, the chain from its last record of its own: a
 // withdrawn attempt's call there is told, its subagent still reported, and so
@@ -758,7 +760,9 @@ func hsProgress(parent, uuid string) string {
 // record before the last restart, or a result whose parent lies there, and
 // its call is held; walk past the last restart, and the call reached
 // through a record before it is held; leave the checkpoint out of the leaf,
-// and the call after it is held; walk a subagent's thread from its last
+// and the call after it is held; take a system record for a user or
+// assistant record, and the call after a checkpoint naming a stop hook's
+// summary is told; walk a subagent's thread from its last
 // record of any agent, and the attempt a record of no agent hangs off is
 // held; or read a subagent's chain that breaks as whole, and its subagent is
 // reported.
@@ -853,6 +857,12 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 			hsReplyOf(t, ctUUID(12), ctUUID(13), "msg_x", hsUse(x)), result(13, 14, x, outX),
 			hsCheckpoint(t, `"`+ctUUID(12)+`"`, ""),
 		}, held: map[string]bool{x: false}},
+		"a checkpoint naming a stop hook's summary before the leaf, in a thread a compaction cut": {lines: []string{
+			ctBoundary(ctUUID(10), ctUUID(11), ctUUID(9)), ctCompactSummary(ctUUID(10), ctUUID(11)),
+			hsReplyOf(t, ctUUID(11), ctUUID(12), "msg_before", text), ctSummary(ctUUID(12), ctUUID(20)),
+			hsCheckpoint(t, `"`+ctUUID(20)+`"`, ""), hsReplyOf(t, ctUUID(20), ctUUID(13), "msg_x", hsUse(x)),
+			result(13, 14, x, outX),
+		}, held: map[string]bool{x: true}},
 		"a checkpoint before the leaf, in a thread no compaction cut": {lines: []string{
 			hsReplyOf(t, ctUUID(1), ctUUID(12), "msg_before", text),
 			hsReplyOf(t, ctUUID(12), ctUUID(13), "msg_x", hsUse(x)), result(13, 14, x, outX),
