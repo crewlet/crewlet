@@ -186,7 +186,7 @@ func (f *finder) manifest(m manifest) {
 			return
 		}
 	}
-	if want, ok := workloads[m.Kind]; !ok || !grouped || group != want {
+	if want, ok := workloads()[m.Kind]; !ok || !grouped || group != want {
 		return
 	}
 	containers := m.Spec.Template.Spec.Containers
@@ -236,7 +236,7 @@ func (f *finder) helmChart(raw []byte) error {
 		return nil
 	}
 	for _, dep := range c.Dependencies {
-		e, known := engines[strings.ToLower(strings.TrimSpace(dep.Name))]
+		e, known := engines()[strings.ToLower(strings.TrimSpace(dep.Name))]
 		if !known {
 			continue
 		}
@@ -290,9 +290,15 @@ type renderFile struct {
 	} `yaml:"databases"`
 }
 
-// renderStores is the service types of a render.yaml that are a database.
-var renderStores = map[string]engine{
-	"redis": {atlas.KindDatastore, "redis"}, "keyvalue": {atlas.KindDatastore, "valkey"},
+// renderStore is the database a render.yaml's service type is, if it is one.
+func renderStore(serviceType string) (engine, bool) {
+	switch serviceType {
+	case "redis":
+		return engine{atlas.KindDatastore, "redis"}, true
+	case "keyvalue":
+		return engine{atlas.KindDatastore, "valkey"}, true
+	}
+	return engine{}, false
 }
 
 // render reads a render.yaml: each service on the company's Render account,
@@ -307,7 +313,7 @@ func (f *finder) render(raw []byte) error {
 		if name == "" {
 			continue
 		}
-		if e, ok := renderStores[s.Type]; ok {
+		if e, ok := renderStore(s.Type); ok {
 			f.store(f.where("services", name), e, vendorRender.slug, name, "")
 			continue
 		}
@@ -331,7 +337,7 @@ func (f *finder) terraform(raw []byte) {
 	capabilities := map[string][]atlas.Capability{}
 	seen := map[string]bool{}
 	note := func(provider string) {
-		if _, ok := providers[provider]; ok {
+		if _, ok := providers()[provider]; ok {
 			seen[provider] = true
 		}
 	}
@@ -362,7 +368,7 @@ func (f *finder) terraform(raw []byte) {
 				provider = "google"
 			}
 			note(provider)
-			for _, row := range resourceCapabilities[provider] {
+			for _, row := range resourceCapabilities()[provider] {
 				if strings.HasPrefix(rest, row.prefix) {
 					capabilities[provider] = append(capabilities[provider], row.capability)
 					break
@@ -378,9 +384,7 @@ func (f *finder) terraform(raw []byte) {
 		}
 	}
 	for _, provider := range sortedKeys(seen) {
-		v := providers[provider]
-		v.capabilities = append(append([]atlas.Capability{}, v.capabilities...), capabilities[provider]...)
-		f.account(f.where("provider", provider), v)
+		f.account(f.where("provider", provider), providers()[provider], capabilities[provider]...)
 	}
 }
 

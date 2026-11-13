@@ -144,8 +144,9 @@ func (f *finder) store(where string, e engine, namespace, name, tag string) (atl
 }
 
 // account claims the company's account at v: keyed by the vendor alone, since
-// a file names the vendor and never which account.
-func (f *finder) account(where string, v vendor) (atlas.Ref, bool) {
+// a file names the vendor and never which account. uses is what the file
+// says the account is used for, beside what the vendor's row says.
+func (f *finder) account(where string, v vendor, uses ...atlas.Capability) (atlas.Ref, bool) {
 	key := string(v.known)
 	if v.known == atlas.VendorOther {
 		key += "/" + v.slug
@@ -156,7 +157,8 @@ func (f *finder) account(where string, v vendor) (atlas.Ref, bool) {
 	}
 	f.b.Says(where, r, atlas.FactVendor, string(v.known))
 	f.b.Says(where, r, atlas.FactName, v.name)
-	for _, c := range v.capabilities {
+	f.b.Says(where, r, atlas.FactCapability, string(v.capability))
+	for _, c := range uses {
 		f.b.Says(where, r, atlas.FactCapability, string(c))
 	}
 	return r, true
@@ -210,14 +212,14 @@ func parseImage(raw string) (image, error) {
 
 // engine is the database or queue the image is known to run, by its name.
 func (i image) engine() (engine, bool) {
-	e, ok := engines[strings.ToLower(path.Base(i.path))]
+	e, ok := engines()[strings.ToLower(path.Base(i.path))]
 	return e, ok
 }
 
 // forgeRepository is the forge repository an image in a forge's registry is
 // built from: the first two parts of its path, on that forge.
 func (i image) forgeRepository() (string, bool) {
-	forge, ok := registries[i.host]
+	forge, ok := registries()[i.host]
 	parts := strings.Split(i.path, "/")
 	if !ok || len(parts) < 2 {
 		return "", false
