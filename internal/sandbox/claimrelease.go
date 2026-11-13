@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // A COLLECTION'S HAND-BACK THE COORDINATION STORE DID NOT ANSWER IS KEPT OWED.
@@ -34,24 +35,36 @@ import (
 // says, and a seat that moves before the release lands has the claim reaped by
 // its next holder, as a claim whose node stopped is ([Coordinator.reapTail]).
 //
-// # Nothing of the job is claimed on this node while its release is owed
+// # No claim of the job is taken on this node while its release is out
 //
 // A release names its claim by the job, the status and the lease, and a claim
 // this node takes of the same job again carries all three. A release that
 // landed though its answer was lost puts the run back in running, where the
 // completion's retry claims it again; the release asked again then would give
 // back that claim while its collection is still working, and the claim after
-// it would collect and resume the job a second time beside the first. So a
-// completion of the job is refused here while its release is owed
-// ([Coordinator.OnCompleted], [errReleaseOwed]) and comes back on the queue's
-// backoff, as one whose claim the store does not take does, and the waiter
-// announces the job again once the release has put the run back in running.
-// Nothing can claim it between the release and the record that it is owed: a
-// completion is claimed only by the seat's holder, and the seat's control
-// topic hands this node its deliveries one at a time.
+// it would collect and resume the job a second time beside the first. So the
+// release is RECORDED AS OUT BEFORE IT IS SENT, and kept recorded while it is
+// owed ([Coordinator.releases]), and no claim of the job is taken here while
+// it is ([Coordinator.claimCompletion], [errReleaseOwed]): the completion comes
+// back on the queue's backoff, as one whose claim the store does not take
+// does, and the waiter announces the job again once the release has put the
+// run back in running.
+//
+// A CLAIM ALREADY ON ITS WAY when the release went out is not refused, and
+// cannot be. The node's admission orders two claims of a job only where both
+// are admitted turns, one at a time on the seat, and a claim made at the
+// turn's deadline asks for none ([Coordinator.completeAtDeadline]), beside the
+// control topic's deliveries and the completions re-fired off their own
+// goroutines ([Coordinator.Readmit]): such a claim can pass the refusal before
+// the release is recorded and reach the store after it has landed. It wins
+// only then, so ITS WIN IS PROOF THE RELEASE LANDED, whatever the release's own
+// answer said: the release is settled there and never made again, and a
+// release owed is not made again while a claim of its job is still on its way
+// ([Coordinator.claiming]), which decides first.
 
-// errReleaseOwed is a completion refused because this node still owes the
-// release of the claim it took on the same job ([Coordinator.oweRelease]).
+// errReleaseOwed is a completion refused because this node is still giving
+// back, or still owes, the release of the claim it took on the same job
+// ([Coordinator.oweRelease]).
 var errReleaseOwed = errors.New("sandbox: this node still owes the release of the job's last claim")
 
 // claimRelease is a claim's hand-back: the run as claimed, the release that
@@ -83,43 +96,69 @@ func releaseFor(run PendingRun, failed failure, hold *Refusal) Release {
 // this file). It reports as [Coordinator.unclaimAt] does: nil where the claim
 // went back, is owed, or had moved on, and the release's own error where the
 // run was ended in its place.
+//
+// RECORDED AS OUT FIRST, so no claim of the job starts on this node while the
+// release is on its way ([Coordinator.claimCompletion]).
 func (c *Coordinator) unclaimCollection(ctx context.Context, run PendingRun, failed failure) error {
-	return c.unclaimOwing(ctx, claimRelease{
-		run: run, release: releaseFor(run, failed, nil), detail: collectUnrevertedDetail,
-	})
+	cr := &claimRelease{run: run, release: releaseFor(run, failed, nil), detail: collectUnrevertedDetail}
+	c.mu.Lock()
+	c.releases[run.TurnID] = cr
+	c.mu.Unlock()
+	return c.unclaimOwing(ctx, cr)
 }
 
 // unclaimOwing makes cr's release, for a collection's hand-back and for each
 // retry of one this node owes: a release the store did not answer is owed
 // again ([Coordinator.oweRelease]), and any other answer settles what was owed
-// and is acted on as [Coordinator.unclaimAt] acts on it.
+// and is acted on as [Coordinator.unclaimAt] acts on it. A release a claim of
+// its job TOOK OVER while it was out, by winning on the run it put back, has
+// landed, and nothing more is owed for it ([Coordinator.claimCompletion]); so
+// has one the seat's release dropped, whose claim its next holder reaps.
 //
 // A CONTEXT OF ITS OWN, as [Coordinator.unclaimAt]'s is, because the failure it
 // hands back is often the cancellation itself.
-func (c *Coordinator) unclaimOwing(ctx context.Context, cr claimRelease) error {
+func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	released, err := c.pending.ReleaseClaim(ctx, cr.run.TurnID, cr.release)
-	if errors.Is(err, coord.ErrUnavailable) {
+	turnID := cr.run.TurnID
+	released, err := c.pending.ReleaseClaim(ctx, turnID, cr.release)
+	unanswered := errors.Is(err, coord.ErrUnavailable)
+	c.mu.Lock()
+	out := c.releases[turnID] == cr
+	owed := false
+	if !unanswered {
+		if out {
+			delete(c.releases, turnID)
+		}
+		if r := c.retries[turnID]; r != nil && r.release == cr {
+			r.release, owed = nil, true
+		}
+	}
+	c.mu.Unlock()
+	switch {
+	case unanswered && out:
 		c.oweRelease(ctx, cr, err)
 		return nil
+	case unanswered:
+		// TAKEN OVER while it was out: nothing is owed here.
+		return nil
 	}
-	if c.releaseDone(cr.run.TurnID) && err == nil && released {
+	if owed && err == nil && released {
 		log.InfoContext(ctx, "sandbox_claim_reverted",
-			"turn_id", cr.run.TurnID, "launch_id", cr.run.LaunchID, "revert_to", cr.release.To,
+			"turn_id", turnID, "launch_id", cr.run.LaunchID, "revert_to", cr.release.To,
 			"detail", "the claim's hand-back the coordination store did not answer has landed; the run "+
 				"is back where the claim found it, for its completion's retry")
 	}
 	// THE SEAT STILL COUNTS THE RUN: every collection hands back a claim its
 	// seat counts as it was, since running and resumed both hold it.
-	return c.releaseAnswered(ctx, cr, true, released, err)
+	return c.releaseAnswered(ctx, *cr, true, released, err)
 }
 
 // oweRelease keeps a claim's release the store did not answer for this node's
 // retry ([Coordinator.retryOwed]) on the hand-back's spacing, with the seat's
 // mail held behind it; if the seat moves first, its next holder's recovery
 // pass reaps the claim. See the top of this file.
-func (c *Coordinator) oweRelease(ctx context.Context, cr claimRelease, cause error) {
+func (c *Coordinator) oweRelease(ctx context.Context, cr *claimRelease, cause error) {
 	run := cr.run
 	log.WarnContext(ctx, "sandbox_claim_revert_owed",
 		"turn_id", run.TurnID, "launch_id", run.LaunchID, "revert_to", cr.release.To, "error", cause.Error(),
@@ -133,30 +172,72 @@ func (c *Coordinator) oweRelease(ctx context.Context, cr claimRelease, cause err
 			window: answerWindow(run)}
 		c.retries[run.TurnID] = r
 	}
-	r.release = &cr
+	r.release = cr
 	c.mu.Unlock()
 	c.owe(ctx, run.AgentHandle, run.TurnID)
 	c.scheduleOwed(run.TurnID, answerRetryCeiling)
 }
 
-// releaseDone forgets a claim's release this node owed, once the store has
-// answered it, and reports whether one was owed.
-func (c *Coordinator) releaseDone(turnID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	r := c.retries[turnID]
-	if r == nil || r.release == nil {
-		return false
-	}
-	r.release = nil
-	return true
-}
-
-// releasing reports whether this node still owes the release of the claim it
-// took on turnID's job launch.
+// releasing reports whether this node is giving back, or owes, the release of
+// the claim it took on turnID's job launch.
 func (c *Coordinator) releasing(turnID, launch string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r := c.retries[turnID]
-	return r != nil && r.release != nil && r.release.run.LaunchID == launch
+	return c.releasingLocked(turnID, launch)
+}
+
+// releasingLocked is [Coordinator.releasing] for a caller holding c.mu.
+func (c *Coordinator) releasingLocked(turnID, launch string) bool {
+	cr := c.releases[turnID]
+	return cr != nil && cr.run.LaunchID == launch
+}
+
+// claimCompletion claims ev's job for this node's collection of it, as
+// [PendingStore.ClaimForResume] does, unless this node is giving back or owes
+// the release of the job's last claim: refused then, with [errReleaseOwed],
+// and the completion comes back for its retry. See the top of this file.
+//
+// THE REFUSAL AND THE COUNT OF CLAIMS ON THEIR WAY ARE ONE STEP, so a claim
+// either finds the release recorded, or is counted before the release can be
+// made again ([Coordinator.retryOwed]). A claim that WINS while the release is
+// still recorded is proof the release landed: the release is settled, never
+// made again, and the seat's mail it held is let go.
+func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFinished, fence Fence,
+) (PendingRun, bool, error) {
+	turnID, launch := ev.TurnID, ev.LaunchID
+	c.mu.Lock()
+	if c.releasingLocked(turnID, launch) {
+		c.mu.Unlock()
+		log.InfoContext(ctx, "sandbox_completion_release_owed",
+			"turn_id", turnID, "agent", ev.AgentHandle, "launch_id", launch,
+			"detail", "this node is still giving back the job's last claim, or owes its release, which the "+
+				"coordination store did not answer; the job is claimed again once that release lands")
+		return PendingRun{}, false, errReleaseOwed
+	}
+	c.claiming[turnID]++
+	c.mu.Unlock()
+	run, won, err := c.pending.ClaimForResume(ctx, turnID, CompletionTail(launch), fence)
+	c.mu.Lock()
+	if c.claiming[turnID]--; c.claiming[turnID] <= 0 {
+		delete(c.claiming, turnID)
+	}
+	landed, owed := false, false
+	if cr := c.releases[turnID]; won && cr != nil && cr.run.LaunchID == launch {
+		delete(c.releases, turnID)
+		landed = true
+		if r := c.retries[turnID]; r != nil && r.release == cr {
+			r.release, owed = nil, true
+		}
+	}
+	c.mu.Unlock()
+	if landed {
+		log.InfoContext(ctx, "sandbox_claim_reverted",
+			"turn_id", turnID, "launch_id", launch,
+			"detail", "a claim of the job that was on its way when its last claim's hand-back went out won "+
+				"on the run that hand-back put back, so the hand-back landed; it is not made again")
+	}
+	if owed {
+		c.settleOwed(ctx, ev.AgentHandle, turnID)
+	}
+	return run, won, err
 }

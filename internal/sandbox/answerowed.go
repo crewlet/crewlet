@@ -658,9 +658,10 @@ type answerRetry struct {
 
 	// release is a collection's hand-back the coordination store did not
 	// answer, which the series' next attempt makes again before anything
-	// else: the claim is this node's until the store answers it, and no
-	// completion of its job is claimed here meanwhile
-	// ([Coordinator.oweRelease], claimrelease.go). Nil for every other
+	// else, unless a claim of its job has taken it over or is on its way:
+	// the claim is this node's until the store answers it, and no completion
+	// of its job is claimed here meanwhile ([Coordinator.oweRelease],
+	// [Coordinator.claimCompletion], claimrelease.go). Nil for every other
 	// series.
 	release *claimRelease
 
@@ -1441,7 +1442,28 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// as it stands. Owed again while the store is still silent, and once
 		// it answers, the series settles, leaving anything else it keeps to
 		// its next attempt (claimrelease.go).
-		_ = c.unclaimOwing(ctx, *release)
+		//
+		// BUT NOT ONCE A CLAIM OF ITS JOB HAS TAKEN IT OVER, by winning on
+		// the run it put back, and NOT WHILE ONE IS ON ITS WAY: made then, it
+		// could land after that claim and give it back. The claim decides
+		// first, and a claim that starts from here on is refused while the
+		// release stays recorded ([Coordinator.claimCompletion]).
+		c.mu.Lock()
+		out := c.releases[turnID] == release
+		onItsWay := c.claiming[turnID] > 0
+		if series := c.retries[turnID]; !out && series != nil && series.release == release {
+			series.release = nil
+		}
+		c.mu.Unlock()
+		switch {
+		case !out:
+			c.settleOwed(ctx, handle, turnID)
+			return
+		case onItsWay:
+			c.scheduleOwed(turnID, answerRetryCeiling)
+			return
+		}
+		_ = c.unclaimOwing(ctx, release)
 		if !c.releasing(turnID, release.run.LaunchID) {
 			c.settleOwed(ctx, handle, turnID)
 		}
@@ -2275,18 +2297,20 @@ func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 // settleOwed forgets an owed answer — resumed, declined or moved on — and
 // lifts the seat's inbox hold if nothing else needs it.
 //
-// NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, or a
-// claim it suspects ([answerRetry.revive]). Either is a run whose only driver is
+// NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, a
+// claim it suspects ([answerRetry.revive]), or a collection's release the store
+// did not answer ([answerRetry.release]). Each is a run whose only driver is
 // this series, and a settle that dropped it — on a refusal that only says the
-// row is not what the settling path expected — left a claim with the person's
-// answer on it that nothing drove. The series stays, with an attempt armed if
-// none is, and the seat's hold with it.
+// row is not what the settling path expected — left a claim, with the
+// person's answer or the job's result on it, that nothing drove. The series
+// stays, with an attempt armed if none is, and the seat's hold with it.
 func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
-	if r := c.retries[turnID]; r != nil && (r.ending != nil || r.revive != nil) {
+	if r := c.retries[turnID]; r != nil && (r.ending != nil || r.revive != nil || r.release != nil) {
 		// AN ENDING STILL OWES THE SEAT ITS REPLY — kept by the ending this
-		// very attempt made — or A CLAIM IS STILL SUSPECTED, which only this
-		// series will ever look at: the series, and the seat's hold, stay.
+		// very attempt made — or A CLAIM IS STILL SUSPECTED, or ITS RELEASE
+		// IS STILL OWED, which only this series will ever look at: the
+		// series, and the seat's hold, stay.
 		if r.stop == nil {
 			c.scheduleOwedLocked(turnID, answerRetryCeiling)
 		}
@@ -2325,16 +2349,24 @@ func (c *Coordinator) releaseOwed(handle string) {
 		}
 		delete(c.retries, turnID)
 	}
+	// AND THE RELEASES OF ITS CLAIMS THIS NODE WAS GIVING BACK OR OWED: the
+	// successor reaps those claims, and a record of them kept here would
+	// refuse this node every later claim of their jobs.
+	for turnID, cr := range c.releases {
+		if cr.run.AgentHandle == handle {
+			delete(c.releases, turnID)
+		}
+	}
 	delete(c.owed, handle)
 }
 
 // dropOwed forgets one owed answer's series on a seat this node does not hold,
 // whatever it still owed the row: an ending it kept, a claim it suspects, a
-// revival it was retrying. Each is on the row, and the holder's recovery pass
-// reads the row and finishes, revives or reaps what it finds — where this
-// node's own writes, under a lease the holder has fenced or is about to, would
-// only race it. Unlike [Coordinator.settleOwed], which keeps such a series for
-// the row it alone drives.
+// revival it was retrying, a collection's release it owed. Each is on the row,
+// and the holder's recovery pass reads the row and finishes, revives or reaps
+// what it finds — where this node's own writes, under a lease the holder has
+// fenced or is about to, would only race it. Unlike [Coordinator.settleOwed],
+// which keeps such a series for the row it alone drives.
 func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
 	if r := c.retries[turnID]; r != nil {
@@ -2343,6 +2375,7 @@ func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
 		}
 		delete(c.retries, turnID)
 	}
+	delete(c.releases, turnID)
 	if owed := c.owed[handle]; owed != nil {
 		delete(owed, turnID)
 		if len(owed) == 0 {

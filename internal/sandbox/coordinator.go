@@ -1063,6 +1063,14 @@ type Coordinator struct {
 	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
 	// under mu.
 	retries map[string]*answerRetry
+	// releases are the collections' hand-backs this node is making or owes,
+	// by turn id, recorded before each is sent; and claiming counts the
+	// claims of a job's completion this node has asked the store for and not
+	// yet heard back on, by turn id. Between them no claim of a job is taken
+	// while its last claim's release is out, and none is given back by it
+	// (claimrelease.go). Under mu.
+	releases map[string]*claimRelease
+	claiming map[string]int
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
@@ -1218,6 +1226,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
+		releases:     map[string]*claimRelease{},
+		claiming:     map[string]int{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -1625,19 +1635,6 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
-	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE OWES THE RELEASE OF ITS
-	// LAST CLAIM ([Coordinator.oweRelease]): that release, asked again, would
-	// give back a claim taken now while its collection is still working. The
-	// completion comes back on the queue's backoff, as one whose claim the
-	// store does not take does, and the waiter announces the job again once
-	// the release has put the run back in running.
-	if c.releasing(ev.TurnID, ev.LaunchID) {
-		log.InfoContext(ctx, "sandbox_completion_release_owed",
-			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "launch_id", ev.LaunchID,
-			"detail", "this node still owes the release of the job's last claim, which the coordination "+
-				"store did not answer; the job is claimed again once that release lands")
-		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, errReleaseOwed)
-	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
 	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
 	// waiter that drives its box announces its completion again on its next
@@ -1710,7 +1707,12 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence,
 ) error {
 	ctx := adm.ctx
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
+	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
+	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
+	// made again, would give back a claim taken now while its collection is
+	// still working. The completion comes back on the queue's backoff, as one
+	// whose claim the store does not take does.
+	run, won, err := c.claimCompletion(ctx, ev, fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
 	}

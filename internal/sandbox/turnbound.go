@@ -99,7 +99,9 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
+	// A CLAIM OF THE JOB LIKE ANY OTHER, held to what this node still owes
+	// the job's last claim ([Coordinator.claimCompletion]).
+	run, won, err := c.claimCompletion(ctx, ev, fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s to end it at its deadline: %w", ev.TurnID, err)
 	}
