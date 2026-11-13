@@ -2074,6 +2074,7 @@ type Fleet interface {
 	AtlasCodeScans
 	SeatAccess
 	AccessReviews
+	AtlasWakes
 	ConversationHolds
 	BoxReadings
 	Mailboxes
