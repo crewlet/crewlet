@@ -117,6 +117,16 @@
 // starts. A store directory set only to be validated, with no broker started
 // on it, is no broker's and may stay a t.TempDir.
 //
+// HELD WHERE THE SIZE IS, and for its reason: a rule kept by hand holds only
+// for the cases converted the day it was written, and a store in a t.TempDir
+// fails one rare run in many, which a rerun hides. So a test binary refuses to
+// start an embedded broker whose store directory lies in no directory TempDir
+// made (jetstream.ErrStoreOutsideTempDir), told by the name TempDir gives each
+// one (testbinary.StoreDirPrefix), however the case reached it. A server a
+// case builds from nats-server's own options never gets there, and this
+// package's TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir fails one
+// whose store a testing.TB's TempDir made, on the walk the size gate reads.
+//
 // # Why not jetstreamtest or externaltest
 //
 // Importing jetstreamtest declares a multi-member suite (see internal/solo),
@@ -142,7 +152,9 @@ const StoreMaxBytes int64 = 16 << 30
 
 // StoreIn gives s an embedded broker whose store is dir, sized at
 // [StoreMaxBytes]. dir is in, or is, a [TempDir], whose removal at the end of
-// the test outlasts the broker's last late write (see the package doc).
+// the test outlasts the broker's last late write (see the package doc); a
+// test binary refuses to start the broker in any other
+// (jetstream.ErrStoreOutsideTempDir).
 //
 // THE DIRECTORY AND THE SIZE TOGETHER: a store directory is what turns an
 // embedded broker's limit from a memory figure into a derivation from that

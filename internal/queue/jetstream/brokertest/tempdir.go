@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/testbinary"
 )
 
 // TempDir is t.TempDir for a directory a test's broker keeps its store in,
@@ -48,7 +50,9 @@ import (
 // The retry, and this note, go once the pinned nats-server joins a consumer's
 // flush loop in its stop rather than polling for it, which takes the late
 // writes to none (shutdownAndClean has the measurement): a test's store can
-// then live in t.TempDir like any other file.
+// then live in t.TempDir like any other file, and the two that hold every
+// broker test to this directory go with it — jetstream.ErrStoreOutsideTempDir
+// and TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir.
 func TempDir(t testing.TB) string {
 	t.Helper()
 	return tempDir(t, os.RemoveAll)
@@ -61,7 +65,10 @@ func TempDir(t testing.TB) string {
 // broker test gets — the retry and the report both — rather than a copy of it.
 func tempDir(t testing.TB, removeAll func(string) error) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "crewlet-test-store-") //nolint:usetesting // t.TempDir's own removal is the one this replaces: a late flush fails it
+	// NAMED WITH testbinary.StoreDirPrefix, which is how a test binary tells
+	// a store directory TempDir made from any other: an embedded broker
+	// started in no such directory is refused (jetstream.ErrStoreOutsideTempDir).
+	dir, err := os.MkdirTemp("", testbinary.StoreDirPrefix) //nolint:usetesting // t.TempDir's own removal is the one this replaces: a late flush fails it
 	if err != nil {
 		t.Fatalf("make a directory for a test broker's store: %v", err)
 	}

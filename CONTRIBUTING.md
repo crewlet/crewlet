@@ -763,8 +763,15 @@ flush for 100 ms rather than joining it, and `t.TempDir`'s single removal then
 fails the case on a file the case never wrote. `brokertest.TempDir`'s removal
 tries again while, and only while, the directory comes back not empty, a
 bounded number of times and with no pause between; the retry goes once a
-pinned nats-server joins the flush loop. A store directory a case only
-validates, with no broker started on it, may stay a `t.TempDir`.
+pinned nats-server joins the flush loop. So a test binary refuses to start an
+embedded broker whose store lies in no `brokertest.TempDir`
+(`jetstream.ErrStoreOutsideTempDir`, told by the name it gives its
+directories), however the case reached it, and `brokertest`'s
+`TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir` fails a server built
+from nats-server's options whose store is a test's own temporary directory (a
+`testing.TB`'s `TempDir`, or `os.MkdirTemp` in a test file). A store
+directory a case only validates, with no broker started on it, may stay a
+`t.TempDir`.
 
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`

@@ -838,9 +838,13 @@ func routeURLs(peers []string, username, password string) ([]*url.URL, error) {
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	// A TEST'S BROKER DECLARES ITS SIZE, before anything is built for it
-	// ([ErrUndeclaredSize]).
+	// A TEST'S BROKER DECLARES ITS SIZE AND KEEPS ITS STORE IN A
+	// brokertest.TempDir, both before anything is built for it
+	// ([ErrUndeclaredSize], [ErrStoreOutsideTempDir]).
 	if err := undeclaredSize(ctx, cfg); err != nil {
+		return nil, err
+	}
+	if err := storeOutsideTempDir(cfg); err != nil {
 		return nil, err
 	}
 	// THE AUTHENTICATOR, with this start's own keys: the engine's on every
@@ -1584,8 +1588,10 @@ type stoppable interface {
 // here can join a goroutine the server keeps no handle to. Until a pinned
 // release makes it, a TEST keeps its store in brokertest.TempDir, whose
 // removal tries again while a late write leaves the directory not empty
-// (crewlet/crewlet#1079), where a t.TempDir's single removal failed the case;
-// that retry goes, and this paragraph with it, once the pin joins the loop.
+// (crewlet/crewlet#1079), where a t.TempDir's single removal failed the case,
+// and a test binary refuses to start a broker whose store is anywhere else
+// ([ErrStoreOutsideTempDir]); that retry and that refusal go, and this
+// paragraph with them, once the pin joins the loop.
 //
 // It exists because the two shapes had drifted: the ordinary teardown waited
 // and the two failure paths inside [startEmbedded] did not, which is the
