@@ -214,12 +214,12 @@ type Options struct {
 
 	// FirstParty is every source this BUILD's own producers write a
 	// delivery under (types.RawWebhook.FirstParty) — whether or not this
-	// company runs it: the engine's native halves' feeds, its alarms' wakes
-	// and its access reviews. A first-party delivery from a source NOT
-	// among them is one a newer build added, which this node passes to a
-	// peer that parses it ([DeferNewerSource]); one from a declared source
-	// this company does not run is acknowledged, as a source nothing here
-	// parses.
+	// company runs it: the engine's native halves' feeds, its alarms' wakes,
+	// its access reviews and its atlas's drift wakes. A first-party delivery
+	// from a source NOT among them is one a newer build added, which this
+	// node passes to a peer that parses it ([DeferNewerSource]); one from a
+	// declared source this company does not run is acknowledged, as a source
+	// nothing here parses.
 	FirstParty []string
 
 	// DeadLetters is what the replay of the inbound group's unhandled
