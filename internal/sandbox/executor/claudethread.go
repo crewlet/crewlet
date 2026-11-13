@@ -721,7 +721,8 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage, at int
 // the stream may hold. Its readers: a run's result's spend model by model
 // ([claudeResult.sinceLastResult]), and the scrub's reading of a loaded-tools
 // record, which finds where the record's attachment and the attachment's list
-// sit in the line ([lastValue]).
+// sit in the line ([lastValue]) and the name of each definition it lists
+// ([brokenDefinition]).
 //
 // THE NAME IS HANDED AS BYTES, in a buffer the walk reuses, never as a
 // string: a string would be an allocation for every key, which a reader that

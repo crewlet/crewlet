@@ -888,20 +888,33 @@ func withoutDefinitions(line []byte, list lineSpan) (string, bool) {
 // brokenDefinition reports whether a loaded tool definition is one no request
 // may carry: not an object, or named by nothing [providerToolName] takes. The
 // name is the one Claude Code sends the definition under, read as Claude
-// Code reads it ([wireDecode]): the key `name` exactly, the last written
-// where it is written twice.
+// Code's JSON.parse reads it: the value of the key `name` exactly, the last
+// written where it is written twice, whatever a `name` before it holds; a
+// value that is no string names nothing. Read in the one walk of an object
+// ([eachKey]).
 //
-// NOT encoding/json's decode, which fills a field from a key that differs
-// from its name only in case, the last such key winning: a definition
-// holding a renamed `name` and then a sound `NAME` was read as sound and
-// kept, and sent under the renamed name (2.1.310 and 2.1.322 key every
-// definition they send again by its `name`), which had every request of the
-// restored session refused.
+// NOT A DECODE OF THE DEFINITION into a name. encoding/json's fills a field
+// from a key that differs from its name only in case, the last such key
+// winning: a definition holding a renamed `name` and then a sound `NAME` was
+// read as sound and kept, and sent under the renamed name (2.1.310 and 2.1.322
+// key every definition they send again by its `name`), which had every
+// request of the restored session refused. And a decode into a string fails
+// at the first `name` that is none, whichever `name` JSON.parse reads: a
+// definition holding a number and then a sound `name` was cut, though Claude
+// Code sends it under the sound one.
 func brokenDefinition(definition []byte) bool {
-	var named struct {
-		Name string `json:"name"`
+	// name is the last `name`'s value, a copy of its own: what the walk hands
+	// over is valid only while it does.
+	var name []byte
+	if eachKey(definition, func(key []byte, value json.RawMessage, _ int) error {
+		if string(key) == "name" {
+			name = append(name[:0], value...)
+		}
+		return nil
+	}) != nil {
+		return true
 	}
-	return wireDecode(definition, &named) != nil || !providerToolName(named.Name)
+	return !providerToolName(looseString(name))
 }
 
 // rewriteDocument streams one JSON value from src to dst a token at a time,
