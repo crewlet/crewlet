@@ -58,6 +58,13 @@ type fakeExpo struct {
 
 	ops []string
 	rw  *httpxtest.Rewriter
+
+	// projects is the account's projects as the atlas's listing answers
+	// them, pageCap the most the fake serves a page, and queries the text
+	// of each operation it was sent.
+	projects []map[string]any
+	pageCap  int
+	queries  map[string]string
 }
 
 func newFakeExpo() *fakeExpo {
@@ -151,11 +158,11 @@ func (f *fakeExpo) setRole(id string, role expo.Role) {
 }
 
 // writes is every operation the fake answered that is not one of the two
-// reads a seat's token makes: anything a person would have to undo at Expo.
+// reads a seat's token makes or the atlas's listing: anything a person would have to undo at Expo.
 func (f *fakeExpo) writes() []string {
 	var out []string
 	for _, op := range f.operations() {
-		if op != "CrewletViewer" && op != "CrewletRole" {
+		if op != "CrewletViewer" && op != "CrewletRole" && op != "CrewletAtlasProjects" {
 			out = append(out, op)
 		}
 	}
@@ -189,6 +196,10 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	op := body.OperationName
 	f.ops = append(f.ops, op)
+	if f.queries == nil {
+		f.queries = map[string]string{}
+	}
+	f.queries[op] = body.Query
 	tok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 	if tok == nil || tok.revoked || f.actors[tok.owner] == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -247,6 +258,28 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.data(w, map[string]any{"account": map[string]any{"byName": map[string]any{
 			"viewerUserPermission": map[string]any{"role": role}}}})
+	case "CrewletAtlasProjects":
+		name, _ := vars["name"].(string)
+		if _, ok := actor.roles[name]; !ok {
+			f.gqlError(w, fakeRefusal{code: "UNAUTHORIZED_ERROR", message: "not a member of " + name})
+			return
+		}
+		first, _ := vars["first"].(float64)
+		after, _ := vars["after"].(string)
+		from, _ := strconv.Atoi(after)
+		per := int(first)
+		if f.pageCap > 0 {
+			per = min(per, f.pageCap)
+		}
+		to := min(from+per, len(f.projects))
+		edges := []any{}
+		for _, p := range f.projects[min(from, to):to] {
+			edges = append(edges, map[string]any{"cursor": "c", "node": p})
+		}
+		f.data(w, map[string]any{"account": map[string]any{"byName": map[string]any{
+			"id": "account-1", "name": name, "owners": []any{map[string]any{"email": "owner@example.com"}},
+			"appsPaginated": map[string]any{"edges": edges,
+				"pageInfo": map[string]any{"hasNextPage": to < len(f.projects), "endCursor": strconv.Itoa(to)}}}}})
 	default:
 		f.gqlError(w, fakeRefusal{code: "GRAPHQL_VALIDATION_FAILED", message: "unknown operation " + op})
 	}
