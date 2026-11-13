@@ -1205,7 +1205,12 @@ it:
     this node or the seat's next holder. That holds as well for a poll the
     stopping node is relaying to another node that holds the session: the
     stopping node lets go of it at once rather than wait out the holder's hold
-    on its listener's grace. Every note a poll answers is first recorded
+    on its listener's grace. And it holds for a poll or a read that reaches the
+    opening just as it ends, which is turned away the same way, to ask again,
+    and never answered as a run with no notes route (`404`): that ends the
+    harness's plugin for the rest of the run, and a run that goes on, its
+    seat moved or its session opened again, would take no more notes between
+    its steps. Every note a poll answers is first recorded
     **served** to the run's job on the run's record, in a write before the answer,
     so a note its harness may deliver is never one the record says nothing of;
     one the record could not mark is not answered, nor is any after it — the

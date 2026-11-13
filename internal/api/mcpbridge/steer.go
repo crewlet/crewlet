@@ -171,12 +171,29 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 // address and the Host ([loopbackRefusal]), are judged by the routing it
 // shares with the MCP endpoint ([Bridge.routed]) before it is reached, and a
 // relayed call for a held session never reaches it ([Bridge.admitRelayed]).
+//
+// A CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN, as a
+// poll the opening can no longer hold is ([Bridge.pollNotes]): a 503 with a
+// Retry-After. The routing found the opening before its end took it out of
+// the bridge's table, and the end took its inbox before the call was served:
+// the run ended, the seat left this node, or a recovery opened the job again.
+// The call's next try is routed afresh, to the opening that serves the box
+// now, here or on the seat's next holder, or refused where the run is over.
+// NEVER THE 404 of a session that never had an inbox, which says the run has
+// no notes route at all: the OpenCode plugin reads that as it reads a refused
+// token, and stops asking for the rest of its run, so a box that goes on
+// would never be handed a note between its steps again.
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
+	if opened.session.Steer == nil {
+		// A SESSION WITH NO INBOX (a run with nothing to steer, the
+		// assistant's deep work) has no notes route at all.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		return
+	}
 	inbox := opened.inbox()
 	if inbox == nil {
-		// A SESSION WITH NO INBOX — a run with nothing to steer, the
-		// assistant's deep work — has no notes route at all.
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		// THE OPENING ENDED, which took the inbox its session has.
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
 	switch verb := r.PathValue("verb"); {
@@ -317,10 +334,11 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with: the pace the bridge's own relay reads a seat's lease again at
-// while it waits for the seat's next holder ([holderRetryCeiling]), because
-// that holder is what serves the session's next opening — a node that is
-// going hands its seats on, and an opening that ended was replaced, moved
+// away with, and a read that reached its opening as it ended
+// ([Bridge.serveSteer]): the pace the bridge's own relay reads a seat's lease
+// again at while it waits for the seat's next holder ([holderRetryCeiling]),
+// because that holder is what serves the session's next opening: a node that
+// is going hands its seats on, and an opening that ended was replaced, moved
 // with its seat, or ended with its run, whose route then answers 401.
 const steerPollRetry = holderRetryCeiling
 
