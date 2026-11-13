@@ -232,6 +232,23 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"HoldingsOf": {{
+		// IT ENDS NOTHING: it reads the run's record and the turn's row on
+		// the executor log, hands the runner it is given an opener of the
+		// kept session's object, and answers what that session holds of the
+		// round's calls, writing nothing. Asked with a restore to read, so
+		// the drive reaches the run's record rather than answering that this
+		// node continues nothing.
+		name:    "a relaunch asking what the kept session it continues holds of its round's calls",
+		arrange: func(_ *testing.T, rig *coordRig) { rig.coordinator.restore = &keptRestore{} },
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			if _, err := rig.coordinator.HoldingsOf(t.Context(), "t1", run.LaunchSeq, 1,
+				askingAbout("toolu_01a"), &holdingsSpy{}); err != nil {
+				t.Logf("HoldingsOf: %v", err)
+			}
+		},
+	}},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
