@@ -928,7 +928,7 @@ func (l threadLine) OriginKind() (string, error) {
 // kept session holds (exact telling) reads it on every user, assistant,
 // attachment and system record, to walk the chain Claude Code's resume
 // walks, from a record to the one its [threadHead.Parent] names
-// ([threadChain]), and holds it to a lowercase canonical UUID: one of
+// ([holdingsChain]), and holds it to a lowercase canonical UUID: one of
 // another form is no reading of a main thread to it.
 //
 // Read off the line's one decode, its raw `uuid`, never a second read of the
@@ -1589,7 +1589,7 @@ func (l threadLine) ReplacedResults(each func(id string)) error {
 //
 // ITS READER is the one that tells a relaunch which of its calls a kept
 // session holds (exact telling), which holds a record a retraction names to
-// be handed to no model ([threadChain.retract]).
+// be handed to no model ([holdingsChain.retract]).
 //
 // HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // list of strings where present, walked an element at a time ([eachElement]).
@@ -1661,7 +1661,7 @@ type threadPreserved struct {
 // ITS READER is the one that tells a relaunch which of its calls a kept
 // session holds (exact telling), which reads what a relink moves under the
 // records it walks, and where a relinked resume may start
-// ([threadChain.relinks]).
+// ([holdingsChain.relinks]).
 //
 // HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
 // `compactMetadata` an object; its `preservedMessages`, where present and not
@@ -1776,7 +1776,7 @@ func preservedSegment(raw json.RawMessage) (threadPreserved, error) {
 //
 // ITS READER is the one that tells a relaunch which of its calls a kept
 // session holds (exact telling), to walk the chain as Claude Code's resume
-// walks it ([threadChain]): off the chain from its leaf, the resume hands its
+// walks it ([holdingsChain]): off the chain from its leaf, the resume hands its
 // model only the other records of a reply on it, found by this id, and the
 // results whose parent is one of them, as 2.1.310 and 2.1.322 recover them.
 //
@@ -1843,7 +1843,7 @@ func (l threadLine) MessageID() (string, error) {
 // ITS READER is the one that tells a relaunch which of its calls a kept
 // session holds (exact telling), which reads no session whose leaf a marked
 // record may have moved, and holds the leaf a record names to the record the
-// session's last record descends from ([threadChain]).
+// session's last record descends from ([holdingsChain]).
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is:
 // `leafUuid` a string or null where present. Any other type is this
