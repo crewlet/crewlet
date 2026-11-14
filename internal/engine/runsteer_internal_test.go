@@ -498,6 +498,91 @@ func TestAConfirmationIsTurnedAwayOnlyForANoteItNamesThatWaitsForItsKey(t *testi
 	}
 }
 
+// EVERY NOTE THAT WAITS FOR ITS KEY IS SAID ONCE, WHEREVER ITS CONFIRMATION IS
+// TURNED AWAY. A confirmation naming two notes this node cannot open says each
+// of them, at WARN, the first time it is turned away for them, and never
+// again however often the plugin makes it again: once a note, as the open of
+// one is said, so a second note is not hidden behind the first. And the first
+// time is the first turn-away, whatever else turns it away: a confirmation
+// reaching the inbox once the job's completion claimed the run, so that its
+// take left the note this node opens waiting too, says the notes waiting for
+// their key as well, and the confirmation made again once the claim is handed
+// back, which records the note this node opens, says nothing more.
+//
+// Mutation: say the turn-away once a turn, and the second note goes unsaid;
+// ask whether the take left a note before asking for a note waiting for its
+// key, and the confirmation turned away under the claim says neither. Not
+// parallel: it installs the process's log sink.
+func TestEveryNoteThatWaitsForItsKeyIsSaidOnceWhereverItsConfirmationIsTurnedAway(t *testing.T) {
+	logs := captureSteerLogs(t)
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	oldRing := recordseal.OneKey("k-old", "the old fleet key material")
+	newRing := recordseal.OneKey("k-new", "the new fleet key material")
+	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
+	sealer, _ := steersOver(t, oldRing, store)
+	holder, _ := steersOver(t, both, store)
+	keyless, _ := steersOver(t, newRing, store)
+	launch := workingRun(t, store, holder, "run-1")
+	fileSealed(t, sealer, "run-1", steer.Note{ID: "n-old-1", Text: "use staging", By: "founder"})
+	fileSealed(t, sealer, "run-1", steer.Note{ID: "n-old-2", Text: "and the canary", By: "founder"})
+	fileSealed(t, holder, "run-1", steer.Note{ID: "n-new", Text: "and keep the flag off", By: "founder"})
+	served := boundInbox(t, holder, store, "run-1", launch)
+	viewHolds(t, served, 3)
+	if notes, _ := served.Wait(ctx, 0); len(notes) != 3 {
+		t.Fatalf("the poll was answered %+v, want n-old-1, n-old-2 and n-new", notes)
+	}
+	inbox := boundInbox(t, keyless, store, "run-1", launch)
+	viewHolds(t, inbox, 1)
+	said := func() []string {
+		var notes []string
+		for line := range strings.SplitSeq(logs.String(), "\n") {
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == "steer_read_key_unknown" {
+				if rec["level"] != "WARN" {
+					t.Errorf("steer_read_key_unknown was logged at %v, want WARN", rec["level"])
+				}
+				id, _ := rec["note_id"].(string)
+				notes = append(notes, id)
+			}
+		}
+		slices.Sort(notes)
+		return notes
+	}
+	ids := []string{"n-old-1", "n-old-2", "n-new"}
+
+	// THE JOB'S COMPLETION CLAIMS THE RUN, so the take leaves n-new waiting
+	// too.
+	if _, ok, err := store.ClaimForResume(ctx, "run-1", sandbox.CompletionTail(launch),
+		sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	}
+	if got := said(); !slices.Equal(got, []string{"n-old-1", "n-old-2"}) {
+		t.Fatalf("the confirmation turned away under the claim said %v, want n-old-1 and n-old-2 once each", got)
+	}
+
+	// HANDED BACK: made again, it records n-new and is turned away for the
+	// two, which it does not say again.
+	if ok, err := store.ReleaseClaim(ctx, "run-1",
+		sandbox.Release{Launch: launch, To: sandbox.StatusRunning}); err != nil || !ok {
+		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+	}
+	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Fatalf("the confirmation made again answered %v, want ErrInboxNotServing", err)
+	}
+	if read := readOn(ctx, store, "run-1", "n-new"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Fatalf("the confirmation made again left n-new read %+v, want it read at job %s's step", read, launch)
+	}
+	if got := said(); !slices.Equal(got, []string{"n-old-1", "n-old-2"}) {
+		t.Errorf("after the confirmation made again, steer_read_key_unknown said %v, want n-old-1 and n-old-2 "+
+			"once each", got)
+	}
+}
+
 // AN ANCHOR THAT DOES NOT OPEN DECIDES NO AUTHORITY: a person's authority to
 // steer a turn is decided on the seat the run's record names, so a record with
 // no anchor, one that does not verify, or one sealed for another turn names no
