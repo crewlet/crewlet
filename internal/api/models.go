@@ -95,8 +95,9 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 	var handed map[string]string
 	if values != nil {
 		// A CANDIDATE IS TESTED BY THE REAL CALL: the smoke run is what
-		// signs the harness in with it, so it always runs, within the entry's
-		// own timeout capped at the credential budget.
+		// signs the harness in with it, so it always runs, and alone
+		// (harness.DiagnoseOptions.Values), within the entry's own timeout
+		// capped at the credential budget.
 		smoke = true
 		budget = min(llmapi.CredentialBudget, time.Duration(spec.Timeout()*float64(time.Second)))
 		profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides)
