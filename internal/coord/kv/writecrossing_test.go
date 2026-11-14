@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -357,29 +358,47 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 	}
 }
 
-// A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS WRITE, AND ONLY
-// ACROSS A LINK.
+// A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS WRITE, AS THE
+// STORE GIVES IT, AND ONLY ACROSS A LINK.
 //
 // A caller that bounds a write of a run's row for a reason of its own adds the
 // time a value at what one key holds takes to cross its node's connection
 // (coord.SandboxRuns.ValueCrossing), since the store keeps a caller's deadline
-// as it is: the store's own rule for a write — every send the client may make
-// of it, its value and the most header a write carries behind the request's
-// protocol line — at the slowest pace a link is allowed, which is the
-// contract's figure (coord.MaxValueCrossing), and none on a member's own
-// connection, where a write crosses nothing.
+// as it is. So that figure is what the store gives such a write itself beyond
+// the request term, read off a settled bucket's own budget for a put of a
+// value at what one key holds under the longest key a run's write is sent
+// under, at the slowest pace a link is allowed — the contract's figure
+// (coord.MaxValueCrossing) — and none on a member's own connection, where a
+// write crosses nothing. Exact, in a bubble.
 //
 // Mutation: give an in-process store a crossing, and every budget a data node
-// holds a row's write to waits nine minutes past its reason; drop a send or
-// the header from the derivation, or move the contract's figure, and the
-// figure and the store's own rule part.
+// holds a row's write to waits nine minutes past its reason; drop the key or a
+// send from the figure, count a send more in the budget, or move the
+// contract's figure, and the figure and the store's own budget part.
 func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	t.Parallel()
-	want := jsapi.WriteSends * jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, objstore.MiBPace)
-	if coord.MaxValueCrossing != want {
-		t.Errorf("coord.MaxValueCrossing = %v, want the store's own rule for a value at what one key "+
-			"holds across a link at the slowest pace allowed, %v", coord.MaxValueCrossing, want)
+	turnID := uuid.Must(uuid.NewV7()).String()
+	for _, key := range append([]string{encodeKey(turnID)}, partKeys(turnID)...) {
+		if len(key) > longestRunKey {
+			t.Fatalf("a run's key %q is %d bytes, past the %d a run's value is counted at", key, len(key),
+				longestRunKey)
+		}
 	}
+	synctest.Test(t, func(t *testing.T) {
+		d := &deadlined{}
+		b := settled(termed{term: jsapi.RequestTerm}, d, AcrossLink)
+		key := strings.Repeat("k", longestRunKey)
+		if _, err := b.Put(context.Background(), key, make([]byte, coord.MaxValueBytes)); err != nil {
+			t.Fatalf("put a value at what one key holds: %v", err)
+		}
+		if len(d.writes) != 1 || !d.writes[0].set {
+			t.Fatalf("the put reached the client %d times, want once, with a deadline", len(d.writes))
+		}
+		if given := d.writes[0].deadline.Sub(d.writes[0].at) - jsapi.RequestTerm; given != coord.MaxValueCrossing {
+			t.Errorf("a settled bucket across a link gives a run's value at what one key holds %v beyond "+
+				"the request term, and coord.MaxValueCrossing says %v", given, coord.MaxValueCrossing)
+		}
+	})
 	nc := embeddedNATS(t)
 	for reach, crossing := range map[Reach]time.Duration{
 		InProcess:  0,
@@ -391,4 +410,14 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 				reach, got, crossing)
 		}
 	}
+}
+
+// partKeys is the key of every part a run whose turn id is turnID keeps beside
+// its record.
+func partKeys(turnID string) []string {
+	var keys []string
+	for _, part := range coord.RunParts() {
+		keys = append(keys, runPartKey(turnID, part))
+	}
+	return keys
 }

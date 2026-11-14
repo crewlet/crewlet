@@ -38,9 +38,9 @@ import (
 // The rest are bounded by their own fields far below it.
 const MaxValueBytes = 6_290_542
 
-// MaxValueCrossing is the longest a write of one value at [MaxValueBytes]
+// MaxValueCrossing is the longest a write of a run's value at [MaxValueBytes]
 // takes to cross a node's connection to the store, for every time the store
-// may send it: 540.021972654 seconds, nine minutes, on a node whose
+// may send it: 540.025663374 seconds, nine minutes, on a node whose
 // connection crosses a link at the slowest pace the engine allows one to be.
 // A node reaches the store at no slower pace, so a budget that waits on a
 // write a node elsewhere in the fleet makes — how long a read of a run's
@@ -55,11 +55,14 @@ const MaxValueBytes = 6_290_542
 // across a link the engine allows to carry as little as a mebibyte in thirty
 // seconds (internal/objstore's MiBPace); the store gives a write the time its
 // request takes to cross for each of the sends the client may make of it, up
-// to three (internal/jsapi's Sending and WriteSends). A value at its bound is
-// a message of 6,290,688 bytes with the most header a write carries, sent
-// behind its protocol line's kibibyte: 180.007324218 seconds a send, three
-// sends. internal/coord/kv derives it from the same rule its own writes are
-// given ([SandboxRuns.ValueCrossing]) and holds this figure to it.
+// to three (internal/jsapi's Sending and WriteSends), counting the key it is
+// sent under beside its value and the most header a write carries. A value
+// at its bound, under the longest key a run's write is sent under — 43 bytes,
+// a part's beside a turn id the engine mints — is 6,290,731 bytes sent behind
+// its protocol line's kibibyte: 180.008554458 seconds a send, three sends.
+// internal/coord/kv derives it from the one rule its own writes are given
+// ([SandboxRuns.ValueCrossing]), and holds this figure to what its own budget
+// gives such a write.
 //
 // ONLY THE CROSSING, never the store's own term: a caller's own reason for a
 // bound — a store's slow moment, a leader's election outlasted — is the part a
@@ -67,7 +70,7 @@ const MaxValueBytes = 6_290_542
 // ([SandboxRuns.ValueCrossing]), and a reason held alone, as a write of a
 // value of megabytes was held to five seconds and to thirty, cuts the write
 // while its bytes are still crossing (crewlet/crewlet#1076).
-const MaxValueCrossing = 540_021_972_654 * time.Nanosecond
+const MaxValueCrossing = 540_025_663_374 * time.Nanosecond
 
 // ErrValueTooLarge is a write refused because its value is past
 // [MaxValueBytes]. It is refused BEFORE ANYTHING IS SENT, so nothing was

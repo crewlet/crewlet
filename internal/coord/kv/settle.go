@@ -161,16 +161,31 @@ func (r Reach) pace() time.Duration {
 	return 0
 }
 
-// valueCrossing is how long a write of a value at what one key holds
+// valueCrossing is how long a write of a run's value at what one key holds
 // ([coord.MaxValueBytes]) takes to cross a connection that reaches the buckets
 // as r, for every send the client may make of it: what the store's own rule
-// gives such a write beyond the request term ([settledBucket.budget], every
-// one of [jsapi.WriteSends] crossings of its value and the most header a
-// write carries, [kvHeaderBytes], behind the request's protocol line, which
-// [jsapi.Sending] counts and the key rides), at r's pace — none in process.
-// coord.MaxValueCrossing is this across a link, and a test holds it so.
+// gives such a write beyond the request term ([settledBucket.budget]) — one
+// [sendCrossing] of the value and the longest key a run's write is sent under
+// ([longestRunKey]) for each of [jsapi.WriteSends] sends, at r's pace — none
+// in process. coord.MaxValueCrossing is this across a link, and a test holds
+// it to what the bucket's own budget gives such a write.
+//
+// THE STORE'S RULE, NEVER A COPY OF IT: counted apart, the figure dropped the
+// key the budget counts, and a change to either — a send more, a byte of
+// header — would have parted them with nothing to say so.
 func (r Reach) valueCrossing() time.Duration {
-	return jsapi.WriteSends * jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, r.pace())
+	return jsapi.WriteSends * sendCrossing(longestRunKey, coord.MaxValueBytes, r.pace())
+}
+
+// sendCrossing is how long ONE send of a write of a key of keyBytes and a
+// value of valueBytes takes to cross a connection carrying a mebibyte in as
+// long as pace: both, beside the most header a write of the client's carries
+// ([kvHeaderBytes]), behind the request's protocol line, which [jsapi.Sending]
+// counts — none at no pace. The one rule of a write's crossing here: a
+// settled write's budget gives it for each send ([settledBucket.budget]), and
+// a run's value is counted at it ([Reach.valueCrossing]).
+func sendCrossing(keyBytes, valueBytes int, pace time.Duration) time.Duration {
+	return jsapi.Sending(keyBytes+valueBytes+kvHeaderBytes, pace)
 }
 
 // checkReach refuses a configuration that does not say how its connection
@@ -229,7 +244,7 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 // TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient holds the
 // package to it.
 func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
-	return jsapi.Budget(b.js, jsapi.Sending(len(key)+len(value)+kvHeaderBytes, b.pace))
+	return jsapi.Budget(b.js, sendCrossing(len(key), len(value), b.pace))
 }
 
 // carriedBack refuses value for key past what one key holds
