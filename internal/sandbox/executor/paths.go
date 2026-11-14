@@ -62,6 +62,16 @@
 // layer: one figure for the launch floor, best effort, which counts nothing
 // from a line it cannot read.
 //
+// What Claude Code's resume hands its model of such a thread, which of its
+// records and in what order, is modelled once, by [threadChain]
+// (claudechain.go), for every reader that judges a resumed session by it:
+// from the shipped code of the releases it was read from, a set and never a
+// range ([claudeResumeRead]), per variant of the release and the flags a
+// reading cannot see, with three answers, handed, not handed and cannot tell,
+// and the reason for each. Its type doc is the model, each rule beside the
+// offsets of the code it restates, and a thread holding a shape no model holds
+// is cannot tell whole.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
