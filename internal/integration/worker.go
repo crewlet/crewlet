@@ -152,6 +152,16 @@ var ErrCredentialRejected = errors.New("integration: the third-party app refused
 // disconnect that is simply early.
 var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
 
+// ErrBlockNotRemoved reports a disconnect whose own teardown finished and
+// whose last step, the revision that removes the integration from the company
+// document, was refused.
+//
+// A DIFFERENT FAILURE FROM THE VENDOR'S, and said as one: nothing at the
+// third-party app is in the way, so "the vendor has not let the disconnect
+// finish" would send a person to look in the wrong place. What refused it is
+// the company's own settings, and the error beneath names the setting.
+var ErrBlockNotRemoved = errors.New("integration: the company's settings refused the change that removes this integration")
+
 // Guard is the ONE claim every writer at one surface passes through, and the
 // bound on the work it admits.
 //

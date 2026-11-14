@@ -429,7 +429,7 @@ func testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls(t *testing.T, s s
 // A PARKED STATE PAST ITS SHARE IS REFUSED, BEFORE ANYTHING IS WRITTEN. The park
 // condenses a state to fit (internal/agent/execstate), so one still past its
 // share of the row is a turn whose own context will not fit, and written it
-// would be refused by the broker on that write and every write after it. A
+// would be refused by the store on that write and every write after it. A
 // state at its share is written.
 //
 // Mutation: write the state whatever its size, and the run is parked on a row
@@ -815,11 +815,13 @@ func rewriteLog(t *testing.T, runs coord.SandboxRuns, turnID string, change func
 // store holds every such field to the bound the executor log holds it to and
 // refuses a stamp past one by name, leaving the record as it was; a stamp
 // within them is taken. So is the process the stamp names as its taker held to
-// what a run's row carries of a process incarnation.
+// what a run's row carries of a process incarnation, and the reads its job's
+// brief left out to what a round's log lists.
 //
 // Mutation: stamp the capture whatever it carries, and a release of a megabyte
 // of digits is on the row; drop the taker from the stamp's bounds, and a
-// kilobyte taker is.
+// kilobyte taker is; drop the reads left out from them, and a set past a log's
+// calls is.
 func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	ctx := t.Context()
 	r := run("t-bytes-capture")
@@ -842,6 +844,16 @@ func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStor
 		t.Fatalf("the stamp refused for its taker changed the record: %d bytes to %d", len(before), len(after))
 	}
 	stamp.Taker = "node-a:" + incarnationSuffix
+	stamp.Omitted = make([]int, sandbox.MaxBridgeCalls+1)
+	if took, err := s.StampCapture(ctx, r.TurnID, stamp); !errors.Is(err, sandbox.ErrCaptureUnbounded) || took {
+		t.Fatalf("a stamp naming more reads left out than a log lists = %v, %v; want ErrCaptureUnbounded", took,
+			err)
+	}
+	if after := raw(t, runs, r.TurnID); !bytes.Equal(after, before) {
+		t.Fatalf("the stamp refused for its reads left out changed the record: %d bytes to %d", len(before),
+			len(after))
+	}
+	stamp.Omitted = make([]int, sandbox.MaxBridgeCalls)
 	if took, err := s.StampCapture(ctx, r.TurnID, stamp); err != nil || !took {
 		t.Errorf("a stamp within its bounds = %v, %v; want it taken", took, err)
 	}

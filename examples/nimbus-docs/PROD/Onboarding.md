@@ -28,7 +28,7 @@ For every market/competitive research effort:
 
 1. File a story in `PROD` (`Research: <topic>`) under the relevant
    epic and assign it to yourself.
-2. Use the **Tavily** MCP server (`web_search` family of tools) for
+2. Use your web search and fetch tools for
    current information — the LLM's training data is stale on AI-tooling
    releases and pricing.
 3. Publish findings as a page in the `PROD` project under the `Research`
@@ -51,7 +51,7 @@ runtimes (Ray, KubeRay, Dask). Inference-stack adjacents: vLLM, TGI,
 SGLang, LMDeploy. Orchestration adjacents: Flyte, Kubeflow, Argo
 Workflows.
 
-Use Tavily to keep this list current. Flag any new entrant within a
+Use web search to keep this list current. Flag any new entrant within a
 week of their launch.
 
 ### Backlog construction for Phase 2 framework
@@ -123,11 +123,10 @@ There is no docs repo yet. Your first deliverable is to propose one:
    project) titled `ADR-NNN: Documentation site stack`. Compare
    Docusaurus, Astro Starlight, MkDocs Material, and Sphinx Book.
    Recommend one.
-2. Once approved by the CTO and PM, create `nimbus-hq/docs` in GitLab
-   (or coordinate with whoever has group-admin rights — file a task
-   in `PROD` for that step).
+2. Once approved by the CTO and PM, push the first commit to the `docs`
+   repository on Gitlet, which starts empty.
 3. Land an empty skeleton with the chosen stack, a Getting Started
-   stub, and CI that builds the site on every MR.
+   stub, and checks that build the site on every change.
 
 The docs site eventually lives at `docs.nimbus.example` (or similar — the
 Frontend SWE owns the marketing site routing).
@@ -170,8 +169,8 @@ in `examples/` of the framework repo:
 | `nimbus.serve` | `examples/hello-serve/` |
 | `nimbus.finetune` | `examples/hello-finetune/` |
 
-Run every example in CI on a real (or simulated) cluster on every MR.
-If an example breaks, the MR is blocked. That's how you stop bit-rot.
+Run every example in CI on a real (or simulated) cluster on every change.
+If an example breaks, the change is blocked. That's how you stop bit-rot.
 
 ### Working with the AI Systems Engineer
 
@@ -180,7 +179,7 @@ If an example breaks, the MR is blocked. That's how you stop bit-rot.
 - They ship a new SDK surface; you draft the reference page + the
   tutorial within the same week and ask for their technical review
   before merge.
-- They change a public API; you update the docs in the same MR (file a
+- They change a public API; you update the docs in the same change (file a
   sub-task on yourself in `PROD` if the dev work lands first).
 
 ### Working with the Frontend SWE
@@ -193,16 +192,18 @@ If an example breaks, the MR is blocked. That's how you stop bit-rot.
 
 ### Public-channel triage
 
-When `nimbus-hq/<framework>` and `nimbus-hq/console` have public
-issues enabled, watch them. For each new issue:
+Questions about the framework and the console reach the company in chat
+and on work items. Watch `#product` and the work items filed against
+`nimbusflow` and `console`. For each new one:
 
 - **Bug or feature request** → file a work item against the owning
-  role (likely `ENG`), link the GitLab issue, comment on GitLab with
-  the work-item link.
+  role (likely `ENG`), and answer where it was asked with the work-item
+  link.
 - **Usage question** → answer if you can; add to the `FAQ Backlog`
   page in the PROD project. Convert the top 3 FAQ items into docs each
   week.
-- **Doc bug** → fix it in the next MR; thank the reporter on GitLab.
+- **Doc bug** → fix it in your next change to `docs`, and thank whoever
+  reported it where they reported it.
 
 ### What stays out of Developer Relations
 
@@ -226,6 +227,6 @@ The clean handoffs:
 - **Competitive launch happens** → PM briefs DevRel within 48 hours so
   the docs reflect any positioning shift.
 - **DevRel files a research question** (e.g. "what does Ray do for
-  X?") → PM picks it up via Tavily and publishes a competitive note.
+  X?") → PM picks it up with web search and publishes a competitive note.
 - **PM drafts a Phase-N launch plan** → DevRel reviews for developer
   empathy before the CEO/CTO see it.

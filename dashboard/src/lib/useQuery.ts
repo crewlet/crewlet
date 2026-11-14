@@ -27,6 +27,7 @@ import {
 } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { session, SessionFloors } from "~/protocol/session.ts";
+import { useAskedAgainOnFailure } from "./failedReads.ts";
 
 export interface QueryResult<T> {
   data: T | null;
@@ -245,6 +246,10 @@ export function useQuery<K extends QueryName>(
       if (SessionFloors.moves(what, domain, refreshes)) refetch();
     });
   }, [enabled, what, refetch]);
+
+  // A FAILED READ IS ASKED AGAIN BY "Try again" ([retryFailedReads]), and by
+  // nothing else new: its poll and its reconnect still ask as they did.
+  useAskedAgainOnFailure(enabled && state.error !== null, refetch);
 
   // A TAB COMING BACK ASKS AGAIN.
   //

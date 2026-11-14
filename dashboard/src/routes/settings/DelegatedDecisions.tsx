@@ -3,13 +3,19 @@
  * seats decide requests by, the limits the engine holds every delegate to,
  * and what the delegates decided, read whole off `delegated_decisions`.
  *
- * # Read only
+ * # The rules are changed where they are read
  *
- * The rules are the company document's `delegated_decisions` block and are
- * changed there; this screen draws them as the engine runs them, numbered as
- * an escalation names them ("rule 2"), with the paths a merge or deploy rule
- * always puts to people and the checks it requires on a repository's branch.
- * The limits are the engine's own and no document changes them.
+ * The rules are the company document's `delegated_decisions` block. This
+ * screen draws them as the engine runs them, numbered as an escalation names
+ * them ("rule 2"), with the paths a merge or deploy rule always puts to people
+ * and the checks it requires on a repository's branch, and changes them as
+ * any setting is changed (`lib/useSettingWrite.ts`): the switch turns
+ * delegation on or off, Add a rule and each rule's pencil open a sheet filled
+ * from the document (`DelegatedRuleDialog.tsx`), and each rule's bin removes
+ * it after asking. Every change is a merge patch the engine checks against
+ * the whole company before it is stored (`lib/delegatedRules.ts`), drawn for
+ * every reader and disabled with the reason for one who cannot write the
+ * document. The limits are the engine's own and no document changes them.
  *
  * # What was decided, in three lists
  *
@@ -26,19 +32,23 @@
  * else is told so by the engine's refusal.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Button,
   Card,
   EmptyValue,
   IconButton,
   Input,
+  Modal,
   PageNote,
   Select,
   SettingsTable,
+  Switch,
   Tag,
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  VisuallyHidden,
   type DataGridColumn,
 } from "@crewlethq/ui";
 import {
@@ -48,9 +58,17 @@ import {
   FlagGlyph,
   GaugeGlyph,
   ListChecksGlyph,
+  PencilGlyph,
+  PlusGlyph,
   SearchGlyph,
   ShieldCheckGlyph,
+  TrashGlyph,
 } from "@crewlethq/icons/glyphs";
+import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { enabledPlan, removeRulePlan } from "~/lib/delegatedRules.ts";
+import { useSettingWrite, type SettingWrite } from "~/lib/useSettingWrite.ts";
+import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { DelegatedRuleDialog, RULES_REREAD, type RuleTarget } from "./DelegatedRuleDialog.tsx";
 import { useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
@@ -151,9 +169,11 @@ export function DelegatedDecisions() {
   // TODAY, SO FAR, unless the reader went back: the engine's own default is the
   // last whole day, which Home's digest reads.
   const params = useMemo(() => ({ day: day || "today" }), [day]);
-  const { data, loading, error, refusal, detail } = useQuery("delegated_decisions", params, {
-    pollMs: day === "" ? RUNNING_POLL_MS : DELEGATED_POLL_MS,
-  });
+  const { data, loading, error, refusal, detail, refetch } = useQuery(
+    "delegated_decisions",
+    params,
+    { pollMs: day === "" ? RUNNING_POLL_MS : DELEGATED_POLL_MS },
+  );
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
   const shown = (rows: readonly DelegatedVerdictRow[]) =>
@@ -163,12 +183,13 @@ export function DelegatedDecisions() {
     <>
       <PageNote>
         What agent seats decide in a person&rsquo;s place, the rules they decide by and what they
-        decided. The rules are read from the company document, where they are changed.
+        decided. The rules are a setting of the company document: change them here, and the engine
+        checks each change against the whole company first.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
           <>
-            <RulesCard answer={data} nameOf={nameOf} />
+            <RulesCard answer={data} nameOf={nameOf} onApplied={refetch} />
             <LimitsCard answer={data} />
             <PageToolbar>
               <Input
@@ -271,10 +292,202 @@ export function DelegatedDecisions() {
   );
 }
 
-/** Whether delegation is on, and each rule as the engine numbers it. */
-function RulesCard({ answer, nameOf }: { answer: DelegatedDecisionsAnswer; nameOf: NameOf }) {
+/** Which of the card's controls the one write in flight came from. */
+type RulesGesture =
+  | { readonly kind: "none" }
+  | { readonly kind: "switch" }
+  | { readonly kind: "sheet"; readonly target: RuleTarget }
+  | { readonly kind: "remove"; readonly rule: DelegatedRule };
+
+/**
+ * Whether delegation is on, and each rule as the engine numbers it, with the
+ * controls that change them.
+ *
+ * ONE WRITE FOR THE CARD, which the switch, the sheet and a removal each
+ * drive: the rules are one list in the document, so two changes of it in
+ * flight at once would each be built on a list the other replaces. What a
+ * saved change came to (applying, refused by this node) is said beside the
+ * card's state until this node applied it and the read carries it.
+ */
+function RulesCard({
+  answer,
+  nameOf,
+  onApplied,
+}: {
+  answer: DelegatedDecisionsAnswer;
+  nameOf: NameOf;
+  onApplied: () => void;
+}) {
+  const access = useConfigWriteAccess();
+  const write = useSettingWrite({ reread: RULES_REREAD, onApplied });
+  const [gesture, setGesture] = useState<RulesGesture>({ kind: "none" });
+  const saved = write.state.kind === "saved" ? write.state : null;
+  // A SAVE CLOSES THE SHEET OR THE QUESTION: the mark beside the card's state
+  // says the change is applying, which is the answer the person waits for.
+  useEffect(() => {
+    if (saved && (gesture.kind === "sheet" || gesture.kind === "remove")) {
+      setGesture({ kind: "none" });
+    }
+  }, [saved, gesture.kind]);
+  const begin = (next: RulesGesture) => {
+    write.reset();
+    setGesture(next);
+  };
+  const mark =
+    saved && (saved.standing === "applying" || saved.standing === "refused")
+      ? `Saved, ${standingWords(saved.standing)}`
+      : "";
+  const columns = ruleColumns(nameOf, access, (next) => begin(next));
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<ShieldCheckGlyph size="sm" />}
+        count={answer.rules.length}
+        subtitle={
+          answer.enabled
+            ? "Requests of these kinds go to their delegates first."
+            : "Off: every request goes to people at once. The rules are kept."
+        }
+        actions={
+          <span className="row gap-2">
+            {mark && (
+              <span className="t-caption" role="status">
+                {mark}
+              </span>
+            )}
+            <Switch
+              size="sm"
+              label={answer.enabled ? "On" : "Off"}
+              checked={answer.enabled}
+              disabledReason={access.can ? (write.busy ? "Saving…" : undefined) : access.reason}
+              title={access.can ? undefined : access.reason}
+              onCheckedChange={(on) => {
+                begin({ kind: "switch" });
+                write.submit(enabledPlan(on));
+              }}
+            />
+            <Button
+              size="small"
+              variant="secondary"
+              leadingIcon={<PlusGlyph size="sm" />}
+              disabledReason={access.can ? undefined : access.reason}
+              title={access.can ? undefined : access.reason}
+              onClick={() => begin({ kind: "sheet", target: { kind: "add" } })}
+            >
+              Add a rule
+            </Button>
+          </span>
+        }
+      >
+        <Card.Title id="delegated-rules">Rules</Card.Title>
+      </Card.Header>
+      {gesture.kind === "switch" && write.state.kind !== "idle" && !saved && (
+        <div className="delegated-rules-status">
+          <SettingWriteStatus write={write} unchanged="Already so." onReload={onApplied} />
+        </div>
+      )}
+      <DataGrid<DelegatedRule>
+        name="rules"
+        aria-labelledby="delegated-rules"
+        rows={answer.rules}
+        rowKey={(r) => String(r.rule)}
+        columns={columns}
+        empty={{
+          title: "No rules",
+          hint: "The company document names none, so every request goes to people. Add a rule to delegate one kind of request.",
+          icon: "shield-check",
+        }}
+      />
+      {gesture.kind === "sheet" && (
+        <DelegatedRuleDialog
+          target={gesture.target}
+          write={write}
+          onReload={onApplied}
+          onClose={() => setGesture({ kind: "none" })}
+        />
+      )}
+      {gesture.kind === "remove" && (
+        <RemoveRuleDialog
+          rule={gesture.rule}
+          last={answer.rules.length}
+          write={write}
+          onReload={onApplied}
+          onClose={() => {
+            write.reset();
+            setGesture({ kind: "none" });
+          }}
+        />
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Removing one rule, asked first: requests of its kinds go to people at once
+ * from then on, and every later rule's number moves up one, which an
+ * escalation names it by.
+ */
+function RemoveRuleDialog({
+  rule,
+  last,
+  write,
+  onReload,
+  onClose,
+}: {
+  rule: DelegatedRule;
+  /** The number of the last rule, to say which move up. */
+  last: number;
+  write: SettingWrite;
+  onReload: () => void;
+  onClose: () => void;
+}) {
+  const kinds = andList(rule.kinds.map(kindWords));
+  return (
+    <Modal
+      open
+      size="sm"
+      role="alertdialog"
+      title={`Remove rule ${rule.rule}?`}
+      icon={<TrashGlyph size="sm" />}
+      onClose={onClose}
+      dismissable={!write.busy}
+      onSubmit={() => {
+        if (write.busy) return;
+        if (write.state.kind === "warned") write.confirm();
+        else write.submit(removeRulePlan(rule.rule, rule.kinds));
+      }}
+      stackBody
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="danger" loading={write.busy}>
+            {write.state.kind === "warned" ? "Remove anyway" : "Remove rule"}
+          </Button>
+        </>
+      }
+    >
+      <p className="t-body" style={{ margin: 0 }}>
+        {`Requests for ${kinds.toLowerCase()} go to people at once.`}
+        {rule.rule < last
+          ? ` Rules after it move up one: rule ${rule.rule + 1} becomes rule ${rule.rule}.`
+          : ""}
+      </p>
+      <SettingWriteStatus write={write} unchanged="Already removed." onReload={onReload} />
+    </Modal>
+  );
+}
+
+/** The rule grid's columns, ending in each rule's change and removal. */
+function ruleColumns(
+  nameOf: NameOf,
+  access: ConfigWriteAccess,
+  begin: (gesture: RulesGesture) => void,
+): DataGridColumn<DelegatedRule>[] {
   const names = (handles: readonly string[]) => andList(handles.map(nameOf));
-  const columns: DataGridColumn<DelegatedRule>[] = [
+  const held = access.can ? undefined : access.reason;
+  return [
     {
       key: "rule",
       header: "Rule",
@@ -382,39 +595,35 @@ function RulesCard({ answer, nameOf }: { answer: DelegatedDecisionsAnswer; nameO
       drop: 1,
       cell: (r) => <span className="t-num">{`1 in ${fmtCount(r.sample_one_in)}`}</span>,
     },
+    {
+      key: "actions",
+      header: <VisuallyHidden>Actions</VisuallyHidden>,
+      action: true,
+      shrink: true,
+      cell: (r) => (
+        <span className="row gap-1">
+          <IconButton
+            size="sm"
+            variant="ghost"
+            icon={<PencilGlyph size="sm" />}
+            label={`Change rule ${r.rule}`}
+            disabledReason={held}
+            title={held}
+            onClick={() => begin({ kind: "sheet", target: { kind: "edit", number: r.rule } })}
+          />
+          <IconButton
+            size="sm"
+            variant="ghost"
+            icon={<TrashGlyph size="sm" />}
+            label={`Remove rule ${r.rule}`}
+            disabledReason={held}
+            title={held}
+            onClick={() => begin({ kind: "remove", rule: r })}
+          />
+        </span>
+      ),
+    },
   ];
-  return (
-    <Card padding="none">
-      <Card.Header
-        icon={<ShieldCheckGlyph size="sm" />}
-        count={answer.rules.length}
-        subtitle={
-          answer.enabled
-            ? "Requests of these kinds go to their delegates first."
-            : "Off: every request goes to people at once. The rules are kept."
-        }
-        actions={
-          <Tag variant={answer.enabled ? "success" : "neutral"} dot>
-            {answer.enabled ? "On" : "Off"}
-          </Tag>
-        }
-      >
-        <Card.Title id="delegated-rules">Rules</Card.Title>
-      </Card.Header>
-      <DataGrid<DelegatedRule>
-        name="rules"
-        aria-labelledby="delegated-rules"
-        rows={answer.rules}
-        rowKey={(r) => String(r.rule)}
-        columns={columns}
-        empty={{
-          title: "No rules",
-          hint: "The company document's delegated_decisions block names none, so every request goes to people.",
-          icon: "shield-check",
-        }}
-      />
-    </Card>
-  );
 }
 
 /** The limits the engine holds every delegate to: its own, never the document's. */

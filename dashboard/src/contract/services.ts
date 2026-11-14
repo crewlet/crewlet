@@ -50,4 +50,14 @@ export interface OrgServices {
   knowledge: KnowledgeBackend;
   chat: ChatBackend;
   code: CodeBackend;
+  /**
+   * Which of the four THE NODE THAT ANSWERED serves only once it restarts,
+   * each by its key here: the engine's own services the company turned on
+   * while that node was already running without them. Until it restarts every
+   * question about one is refused there (`native_backend_needs_restart`), so
+   * its places are not drawn and its address says what brings it
+   * (`app/ServiceNotice.tsx`). Absent where the node serves everything the
+   * company runs.
+   */
+  restart?: string[];
 }

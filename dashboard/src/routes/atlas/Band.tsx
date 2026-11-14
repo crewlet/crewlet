@@ -34,6 +34,42 @@ import type { QueryResult } from "~/lib/useQuery.ts";
 import { EntryDisc } from "./parts.tsx";
 import { HEALTH, HEALTH_ORDER, VENDORS, WORDS, WORD_COLORS, entries } from "./words.ts";
 
+/** The healths that need a person, the most urgent first: what the attention tile counts. */
+const WRONG = HEALTH_ORDER.filter((one) => one !== "quiet");
+
+/**
+ * How many entries need attention, each health a link to the catalogue and
+ * the map narrowed to it (`health=`, the filter's own key). A bare "6 in all"
+ * beside two cards left the other four nowhere a reader could go.
+ */
+function AttentionLinks({
+  health,
+  unconfirmed,
+}: {
+  health: AtlasFacetsAnswer["health"];
+  unconfirmed: boolean;
+}) {
+  const counted = WRONG.filter((one) => (health[one] ?? 0) > 0);
+  if (counted.length === 0) return null;
+  return (
+    <span className="atlas-band__counts">
+      {counted.map((one) => (
+        <Link
+          key={one}
+          size="inherit"
+          href={href(["company", "atlas"], {
+            health: one,
+            ...(unconfirmed ? { unconfirmed: "true" } : {}),
+          })}
+          aria-label={`${entries(health[one] ?? 0)}: ${HEALTH[one].label}. Show them in the catalogue`}
+        >
+          {HEALTH[one].label} {(health[one] ?? 0).toLocaleString()}
+        </Link>
+      ))}
+    </span>
+  );
+}
+
 /** How many entries the attention tile names before it only counts the rest. */
 export const ATTENTION_SHOWN = 2;
 
@@ -46,6 +82,7 @@ const WORD_ORDER = Object.keys(WORDS) as AtlasWord[];
 export function Band({
   facets,
   attention,
+  unconfirmed = false,
   activity,
   waiting,
   onShow,
@@ -53,8 +90,10 @@ export function Band({
 }: {
   /** The whole atlas counted, whatever the search and the filters narrow the page to. */
   facets: AtlasFacetsAnswer;
-  /** The most urgent entries, the most urgent first. */
-  attention: readonly AtlasSummary[];
+  /** The most urgent entries, the most urgent first; null until their read answers. */
+  attention: readonly AtlasSummary[] | null;
+  /** The band counts the unconfirmed entries too, so its links keep them in. */
+  unconfirmed?: boolean;
   activity: QueryResult<AtlasActivityAnswer>;
   /** How many items wait for a person, by reason; null until the engine has counted. */
   waiting: Partial<Record<AtlasReviewKind, number>> | null;
@@ -99,16 +138,21 @@ export function Band({
             <Text variant="label" className="atlas-band__title">
               Needs attention now
             </Text>
-            {wrong > 0 && (
-              <Text variant="caption" tone="tertiary">
-                {wrong.toLocaleString()} in all
-              </Text>
-            )}
+            <AttentionLinks health={facets.health} unconfirmed={unconfirmed} />
           </div>
-          {attention.length === 0 ? (
-            <Text variant="body" tone="secondary">
-              Nothing needs attention.
-            </Text>
+          {attention === null ? (
+            // THE LIST HAS NOT ANSWERED: the count beside the title is
+            // another read's, and neither speaks for the other.
+            <Skeleton variant="text" rows={2} label="Reading what needs attention" />
+          ) : attention.length === 0 ? (
+            // ONLY WHERE THE COUNT AGREES. Two reads a moment apart can
+            // disagree; the links above then stand alone rather than under a
+            // sentence that contradicts them.
+            wrong === 0 && (
+              <Text variant="body" tone="secondary">
+                Nothing needs attention.
+              </Text>
+            )
           ) : (
             <div className="atlas-band__attention">
               {attention.slice(0, ATTENTION_SHOWN).map((row) => (
@@ -125,7 +169,15 @@ export function Band({
                       <Text variant="body" truncate className="atlas-band__name">
                         {row.name}
                       </Text>
-                      <Text variant="caption" tone="secondary" truncate>
+                      {/* THE REASON IS WHAT THE CARD IS FOR: two lines of it (the
+                          product's one clamp, `.clamp` in base.css), and the
+                          whole sentence on hover where two do not hold it. */}
+                      <Text
+                        variant="caption"
+                        tone="secondary"
+                        className="clamp"
+                        title={row.reason ?? undefined}
+                      >
                         {row.reason ?? HEALTH[row.health].label}
                       </Text>
                     </span>

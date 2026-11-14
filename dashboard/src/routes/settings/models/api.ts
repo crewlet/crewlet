@@ -28,17 +28,15 @@
 
 import { answerOf, outcomeOf, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
+import { QueryError, queryErrorCode } from "~/protocol/index.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
-import {
-  MODEL_CHECK_BUDGET_SECONDS,
-  MODEL_CREDENTIAL_BUDGET_SECONDS,
-  MODEL_RETRY_BUDGET_SECONDS,
-} from "~/contract/models.ts";
+import { MODEL_CREDENTIAL_BUDGET_SECONDS, MODEL_RETRY_BUDGET_SECONDS } from "~/contract/models.ts";
 import type {
   CheckAnswer,
   CredentialCheck,
   CredentialStored,
   HostLoginAnswer,
+  ModelCheck,
   ModelDevice,
   ModelReference,
   ModelRepoint,
@@ -151,19 +149,121 @@ export async function storeCredential(
   );
 }
 
-/** `POST /llm/providers/{key}/check`: the model's test, with a real call when `smoke`. */
+/**
+ * How often a running test is asked about (`llm_check`): two seconds, the
+ * engine's own hold before it answers a test running, against a test's 3 to
+ * 80 seconds, so a person learns of the end within two seconds of it.
+ */
+const CHECK_POLL_MS = 2000;
+
+/**
+ * The latest test of a model as a screen asks it: the `llm_check` question,
+ * which any node answers ({@link useCheckModel} supplies it).
+ */
+export type AskCheck = (key: string) => Promise<ModelCheck>;
+
+/** Query failures a poll asks again after: the node could not answer yet. */
+const PASSING_QUERY_FAILURES = ["unavailable", "timeout"];
+
+/**
+ * `POST /llm/providers/{key}/check`: the model's test, with a real call when
+ * `smoke`. The test runs on the answering node's own time, so the route
+ * answers it running (`202`) and this asks `ask` every {@link CHECK_POLL_MS}
+ * until it is not: what the test found, or a refusal carrying why it found
+ * nothing — it ended without an answer, its node stopped, its record is gone,
+ * or another test of the model replaced it first. Such a refusal is the
+ * test's own, never the route's, so its `code` is the question's failure or
+ * the empty string, which no flow branches on.
+ */
 export async function checkModel(
   key: string,
   options: { smoke: boolean; entity?: Record<string, unknown> },
+  ask: AskCheck,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CheckAnswer>> {
-  return settle(
+  const started = await settle<ModelCheck>(
     rest.request("POST", `/llm/providers/${pathSegment(key)}/check`, {
       body: { smoke: options.smoke, ...(options.entity ? { entity: options.entity } : {}) },
-      timeoutMs: waitFor(MODEL_CHECK_BUDGET_SECONDS),
       ...(signal ? { signal } : {}),
     }),
   );
+  if (started.kind === "refused") return started;
+  let check = started.value;
+  while (check.state === "running") {
+    await pause(CHECK_POLL_MS, signal);
+    let polled: ModelCheck;
+    try {
+      polled = await ask(key);
+    } catch (err) {
+      if (signal?.aborted) throw signal.reason;
+      const code = (err instanceof QueryError && queryErrorCode(err.message)) || "";
+      if (PASSING_QUERY_FAILURES.includes(code)) continue;
+      return testRefusal(started.status, code, unreadSentence(code), check);
+    }
+    if (signal?.aborted) throw signal.reason;
+    if (polled.id !== check.id) {
+      return testRefusal(
+        started.status,
+        "",
+        "Another test of this model began before this one's outcome was read. Test it again.",
+        polled,
+      );
+    }
+    check = polled;
+  }
+  if (check.state === "ended" && check.check) {
+    return { kind: "ok", status: started.status, value: check.check };
+  }
+  return testRefusal(
+    started.status,
+    "",
+    check.failure || "The test ended without saying what it found. Test it again.",
+    check,
+  );
+}
+
+/** Why a running test's outcome could not be read, in words. */
+function unreadSentence(code: string): string {
+  return code === "not_found"
+    ? "The test's outcome is gone: the model was removed, or its result is no longer kept. Test it again."
+    : `The test's outcome could not be read (${code || "no answer"}). Test it again.`;
+}
+
+/** A test that found nothing, as a refusal of its own ({@link checkModel}). */
+function testRefusal(
+  status: number,
+  code: string,
+  sentence: string,
+  check: ModelCheck,
+): ModelAnswer<CheckAnswer> {
+  return {
+    kind: "refused",
+    status,
+    code,
+    sentence,
+    detail: sentence,
+    hint: "",
+    body: check as unknown as Record<string, unknown>,
+  };
+}
+
+/** Waits `ms`, or rejects at once as the caller's abort does. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop);
+      resolve();
+    }, ms);
+    const stop = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", stop, { once: true });
+  });
 }
 
 /**

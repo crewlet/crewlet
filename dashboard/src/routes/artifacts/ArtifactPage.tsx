@@ -79,6 +79,7 @@ import {
   ImageGlyph,
   InfoGlyph,
   PencilGlyph,
+  PaperclipGlyph,
   PinGlyph,
   RotateCcwClockGlyph,
   SettingsGlyph,
@@ -117,7 +118,7 @@ import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { contentIsData, keepsData } from "~/lib/artifacts/kinds.ts";
-import { KIND_WORDS, purgeSentence } from "~/lib/artifacts/words.ts";
+import { KIND_WORDS, RUNS_ITS_OWN_PAGE, purgeSentence } from "~/lib/artifacts/words.ts";
 import {
   newActOpID,
   type ArtifactDetail,
@@ -129,6 +130,7 @@ import { Denied, copyAddress, deniedReason, openInNewTab } from "./parts.tsx";
 import { ArtifactShare } from "./Share.tsx";
 import { ViewTab } from "./ViewTab.tsx";
 import { HistoryTab } from "./HistoryTab.tsx";
+import { AssetsPanel } from "./AssetsPanel.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { DetailsPanel } from "./DetailsPanel.tsx";
 import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
@@ -370,7 +372,10 @@ function Loaded({
 
   // ---- the panel at the side ------------------------------------------------
   const hasData = keepsData(detail) && store !== null;
-  const panel = panelOf(route.query, keepsData(detail));
+  // FILES ARE A PAGE'S: the asset store is what a page of its own shows, so a
+  // native kind, which draws itself, offers no Files panel.
+  const hasFiles = RUNS_ITS_OWN_PAGE[detail.kind];
+  const panel = panelOf(route.query, { data: keepsData(detail), files: hasFiles });
   // AN OLDER LINK'S `tab=` OR `rail=` is read as the panel it became, and the
   // address rewritten in place.
   useEffect(() => {
@@ -674,6 +679,17 @@ function Loaded({
           }
         : { onSelect: () => {}, disabled: true, description: renameAccess.reason }),
     },
+    ...(hasFiles
+      ? [
+          {
+            key: "files",
+            label: "Files",
+            description: "Pictures and data its page shows",
+            icon: <PaperclipGlyph size="sm" />,
+            onSelect: () => toggle("files"),
+          },
+        ]
+      : []),
     {
       key: "settings",
       label: "Settings",
@@ -755,6 +771,7 @@ function Loaded({
       />
     ),
     data: () => (store ? <DataTab detail={detail} store={store} /> : null),
+    files: () => <AssetsPanel detail={detail} />,
     people: () => (
       <PeopleRail
         variant="plain"

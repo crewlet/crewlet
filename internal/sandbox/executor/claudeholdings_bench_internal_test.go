@@ -77,11 +77,11 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 		// Code's resume, so its reading is no reading.
 		past bool
 	}{
-		{"an_ordinary_session", benchLines(ordinary, line, measured), false},
-		{"a_session_at_the_archives_bound", benchLines(atBound, line, measured), false},
-		{"lines_to_the_plaintexts_bound", benchLines(threadPlainMax-benchSlack, line, bound), false},
+		{"an_ordinary_session", benchSessionLines(ordinary, line, measured), false},
+		{"a_session_at_the_archives_bound", benchSessionLines(atBound, line, measured), false},
+		{"lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack, line, bound), false},
 		{"subagents_at_their_bound", benchSubagents, false},
-		{"lines_at_the_lines_bound", benchLines(threadPlainMax-benchSlack, threadLineMax, bound), false},
+		{"lines_at_the_lines_bound", benchSessionLines(threadPlainMax-benchSlack, threadLineMax, bound), false},
 		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`), true},
 		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`), false},
 		{"legs_of_ids_a_mebibyte_long", benchLongLegs, false},
@@ -192,11 +192,11 @@ func (f *benchFill) text(n, line int, ratio float64) string {
 	return noise + rest
 }
 
-// benchLines writes a main thread of about plain bytes of lines of n bytes
-// each, its break included, each inflating from its gzip by about ratio: a
-// model's call and its result in turn, or, where n is the line's bound, user
+// benchSessionLines writes a main thread of about plain bytes of lines of n
+// bytes each, its break included, each inflating from its gzip by about ratio:
+// a model's call and its result in turn, or, where n is the line's bound, user
 // records of text. The first [sandbox.MaxBridgeCalls] calls are asked.
-func benchLines(plain int64, n int, ratio float64) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
 	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		fill := newBenchFill()
 		lines := plain / int64(n)

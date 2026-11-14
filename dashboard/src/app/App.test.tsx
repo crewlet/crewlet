@@ -223,7 +223,9 @@ describe("the overlays the frame opens", () => {
     mountAs(Promise.resolve(person));
     fireEvent.click(await screen.findByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
-    expect(menu.parentElement).toBe(document.body);
+    // THE PANEL IS WHAT IS PORTALLED: the kit draws the menu's items inside
+    // its panel, with the menu's header beside them.
+    expect(menu.closest(".crewlet-menu")?.parentElement).toBe(document.body);
     expect(menu.closest(".crewlet-layer-host")).toBeNull();
     fireEvent.keyDown(menu, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
@@ -1329,8 +1331,12 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   );
   await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
+  // AND THE TASK'S OWN GESTURES (move, trash), held with the sentence for a
+  // reader the engine does not serve them to, as every write control is.
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",
+    "Move to project…This can’t be changed from here.",
+    "Move to trashThis can’t be changed from here.",
     "Keep in Starred",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));

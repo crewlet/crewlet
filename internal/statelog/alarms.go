@@ -2108,10 +2108,21 @@ var table = []rule{
 				r.ObjectsBucketMaxBytes > 0 && float64(r.ObjectsBucketMaxBytes-r.ObjectsBucketBytes) <
 					ObjectsHeadroomAlarmFraction*float64(r.ObjectsBucketMaxBytes)
 		},
-		remedy: "Once the bucket is full every upload is refused. Raise its reservation " +
-			"(`nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the " +
-			"broker can grant), or move the files to an S3-compatible bucket with " +
-			"`crewlet objects migrate --to s3` (see docs/concepts/object-store.md).",
+		// THE GESTURES EVERY DEPLOYMENT HAS COME FIRST, as the full bucket's own
+		// refusal says them (natsobj.FullRemedy): a bucket that exists keeps
+		// the reservation it was created with, `store.objects.nats_max_bytes`
+		// sizes only a bucket a node creates, and `nats stream update` reaches
+		// no single embedded node, which has no client listener. Offered first,
+		// it was the one step this alarm's most common reader could not take.
+		remedy: "Once the bucket is full every upload is refused. Move the files to an " +
+			"S3-compatible bucket with `crewlet objects migrate -to s3` (see " +
+			"docs/concepts/object-store.md), or let the collector remove the files " +
+			"nothing names any more (Settings, File storage, shows what it holds). Where " +
+			"the nats tool reaches the broker (an external one, or an embedded fleet's " +
+			"member through its loopback listener with the operator key) the reservation " +
+			"can be raised instead: `nats stream update OBJ_crewlet_files " +
+			"--max-bytes=<bytes>`, within what the broker can grant. A single embedded " +
+			"node has no listener, and keeps the reservation its bucket was created with.",
 	},
 	{
 		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:

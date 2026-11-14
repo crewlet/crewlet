@@ -59,6 +59,86 @@ func TestAResumeTheBudgetRefusedIsHeldUntilItsWindowTurns(t *testing.T) {
 	}
 }
 
+// launchHeldIn is the hold a resumed turn answers with when its seat's budget
+// refused its relaunch below its floor in window w, which ends at until.
+func launchHeldIn(until time.Time, w BudgetWindow) error {
+	return &HeldError{
+		Refusal: Refusal{Condition: "budget", Reason: "budget: day window leaves too little", Until: until,
+			Window: w},
+		Err: errors.New("an executor run needs at least 29000 tokens"),
+	}
+}
+
+// A RELAUNCH THE BUDGET REFUSED BELOW ITS FLOOR LEAVES ITS WINDOW FOR THE NEXT
+// ONE, A COMPLETION'S AND AN ANSWER'S ALIKE. The hold names the window the
+// relaunch was refused in, and the release counts it onto the job's record, so
+// the resume that comes back once the window has turned over hands the turn a
+// run that names it, and the turn's next relaunch waits for its floor no longer
+// than that window: a floor a busy company's window never leaves at the
+// launch's read held the turn for ever. A completion's is held on its row; an
+// answer's is turned back to wait in its own series, with no hold on the row,
+// and its window is counted all the same, since its next attempt's relaunch
+// reads the row, on this node or the seat's next holder.
+//
+// Mutation: drop the window from a held completion's release, or from a
+// turned-back answer's, and the resume that comes back names none.
+func TestARelaunchRefusedBelowItsFloorLeavesItsWindowForTheNext(t *testing.T) {
+	t.Parallel()
+	day := BudgetWindow{Period: "day", Label: "2026-09-23"}
+	t.Run("a completion's, held on its row", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		resets := rig.now.Add(time.Hour)
+		rig.resumer.failWith(launchHeldIn(resets, day))
+		rig.runner.Finish(Result{Success: true, Text: "first pass"})
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("a held resume was NAKed: %v", err)
+		}
+		if got := rig.get("t1"); got.HeldFor != "budget" || got.Launch.RelaunchRefusedIn != day {
+			t.Fatalf("row held for %q, its job's record naming %+v, want held and naming %+v", got.HeldFor,
+				got.Launch.RelaunchRefusedIn, day)
+		}
+		// THE JOB ANNOUNCED AGAIN once the window has turned over, as the
+		// poll announces it.
+		rig.resumer.failWith(nil)
+		rig.now = resets.Add(time.Second)
+		payload, ev = rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("the resume once the window turned: %v", err)
+		}
+		calls := rig.resumer.calls()
+		if len(calls) != 1 || calls[0].Run.Launch.RelaunchRefusedIn != day {
+			t.Fatalf("the resume after the window turned was handed %d runs naming %+v, want one naming %+v",
+				len(calls), calls, day)
+		}
+	})
+	t.Run("an answer's, turned back to its series", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		answeredAndOwed(t, rig)
+		rig.resumer.failWith(launchHeldIn(rig.now.Add(time.Hour), day))
+		rig.resumer.failsInTurn = true
+		if rig.fireRetries() != 1 {
+			t.Fatal("a turned-back answer stopped waiting")
+		}
+		if got := rig.get("t1"); got.Status != StatusAnswered || got.HeldFor != "" ||
+			got.Launch.RelaunchRefusedIn != day {
+			t.Fatalf("row %q held for %q, its job's record naming %+v, want the answer back, unheld, its job "+
+				"naming %+v", got.Status, got.HeldFor, got.Launch.RelaunchRefusedIn, day)
+		}
+		rig.resumer.failWith(nil)
+		rig.coordinator.Readmit("budget", "swe")
+		rig.fireRetries()
+		calls := rig.resumer.calls()
+		if len(calls) != 1 || calls[0].Run.Launch.RelaunchRefusedIn != day {
+			t.Fatalf("the answer's next attempt was handed %d runs naming %+v, want one naming %+v", len(calls),
+				calls, day)
+		}
+	})
+}
+
 // A SIGNAL FOR THE CONDITION LIFTS THE HOLD AT ONCE: a revision raising the
 // seat's ceiling need not wait out the window it would have waited for.
 func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {

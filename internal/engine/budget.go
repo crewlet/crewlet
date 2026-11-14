@@ -159,8 +159,11 @@ func (e *Engine) budgets() budgetCounter {
 
 // budgetBasis is what one epoch says a seat's spend is judged by: the
 // company's ceilings, the seat's own, the clock their windows are cut on, and
-// the room an executor launch needs (turn_engine.executor_min_budget_tokens) —
-// the one threshold below "full" a window can turn a seat's turns away at.
+// the static floor of an executor launch
+// (turn_engine.executor_min_budget_tokens), beside which a launch's brief is
+// counted ([launchFloor]): the one threshold below "full" a window can turn a
+// seat's turns away at before a launch of them is refused below a floor of its
+// own ([floorOf]).
 type budgetBasis struct {
 	org, seat coord.Caps
 	zone      *time.Location
@@ -226,13 +229,19 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // the turn's own context assembly filled refused the executor's first round,
 // and every call after it, with no stamp at all. The meter stamps it the first
 // time it holds a call there ([meter.Refused]).
+//
+// AND IT KNOWS WHAT ITS TURN SPENT, window by window ([meter.chargedIn]):
+// everything its turn charged before an executor launch is in the windows that
+// launch's floor is read against, its context assembly on every dispatch, its
+// review and its rewrites before every relaunch, so the most room a window can
+// ever leave the launch is its ceiling less that ([windowRoom]).
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
 	basis      budgetBasis
 	now        func() time.Time
 
-	// mu guards full and recorded.
+	// mu guards full, recorded and charged.
 	mu sync.Mutex
 	// full is every capped window this meter has seen with no room left
 	// for a single token, at most one per scope and period, each as the
@@ -246,6 +255,12 @@ type meter struct {
 	// call in a window still full is a refusal of its own too. See
 	// [meter.Refused].
 	recorded map[heldWindow]bool
+	// charged is what this meter has put on the counter in each window: every
+	// round its [meter.Spend] charged, admitted or refused alike, since the
+	// counter records both, and every auxiliary call its [meter.Record]
+	// posted, each as the counter answered it. Once per METER, as recorded
+	// is: a resumed segment's own spend is its own. See [meter.chargedIn].
+	charged map[chargedWindow]int
 }
 
 // heldWindow names one window a meter holds: the scope as a refusal names it
@@ -254,6 +269,15 @@ type heldWindow struct {
 	scope  string
 	period period.Period
 	window string
+}
+
+// chargedWindow names one window a meter has charged in: the period and the
+// window's label, which is its identity ([period.Window]). No scope, since
+// every charge a meter makes reaches the company's window and the seat's
+// alike.
+type chargedWindow struct {
+	period period.Period
+	label  string
 }
 
 var (
@@ -284,8 +308,9 @@ func (m *meter) windows() coord.Windows {
 // deadline.
 func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome, err error) {
 	defer origin.Stamp(&err)
+	windows := m.windows()
 	got, err := m.budgets.Charge(context.WithoutCancel(ctx), coord.ChargeRequest{
-		Seat: m.agentScope, Tokens: tokens, Windows: m.windows(),
+		Seat: m.agentScope, Tokens: tokens, Windows: windows,
 		OrgCaps: m.basis.org, SeatCaps: m.basis.seat,
 	})
 	if err != nil {
@@ -294,6 +319,9 @@ func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome,
 		// budget event an operator acts on, the second is an outage.
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: %w", err)
 	}
+	// IN THE WINDOWS IT WAS CHARGED IN, refused or not: the counter counts
+	// a round it refuses as it counts one it admits.
+	m.tally(windows, tokens)
 	// WHAT THE ANSWER MAKES CERTAIN is kept before the caller is told
 	// anything, a caller that hung up included: the window is full whether
 	// or not this caller is still listening, and the turn's next call is
@@ -338,13 +366,54 @@ func (m *meter) Spend(ctx context.Context, tokens int) (_ toolloop.SpendOutcome,
 // A partial write ([coord.SeatUncountedError]: the company counted it and the
 // seat did not) answers no counters, so nothing is kept from it, and the next
 // round's charge is the gate as it is after any answer the meter cannot read.
+// Nor is it tallied as the turn's spend ([meter.chargedIn]): a launch of this
+// turn then reckons the company's window to leave it that much more room than
+// it can, and where the difference decides its floor, that floor is past what
+// the window has left, so the launch waits past that window for the next, the
+// side a floor errs on.
 func (m *meter) Record(ctx context.Context, tokens int, at time.Time) error {
-	got, err := m.budgets.PostCharge(ctx, m.agentScope, tokens, coord.WindowsAt(at, m.basis.zone))
+	windows := coord.WindowsAt(at, m.basis.zone)
+	got, err := m.budgets.PostCharge(ctx, m.agentScope, tokens, windows)
 	if err != nil {
 		return fmt.Errorf("engine: record auxiliary spend: %w", err)
 	}
+	m.tally(windows, tokens)
 	m.keepFilled(got)
 	return nil
+}
+
+// tally adds tokens to what this meter has charged in each window of w.
+func (m *meter) tally(w coord.Windows, tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.charged == nil {
+		m.charged = map[chargedWindow]int{}
+	}
+	for _, window := range w {
+		m.charged[chargedWindow{period: window.Period, label: window.Label}] += tokens
+	}
+}
+
+// chargedIn is what this meter has charged in each window of w, by period, zero
+// for a window it charged nothing in: what its turn has spent there, which the
+// counters hold whatever else reaches those windows.
+//
+// BY THE WINDOW'S LABEL, never by its period alone: a turn that ran across a
+// boundary spent its earlier rounds in the window before, which the window now
+// current never held.
+func (m *meter) chargedIn(w coord.Windows) map[period.Period]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[period.Period]int, len(w))
+	for _, window := range w {
+		if tokens := m.charged[chargedWindow{period: window.Period, label: window.Label}]; tokens > 0 {
+			out[window.Period] = tokens
+		}
+	}
+	return out
 }
 
 // Held is [meter.Refused] as the turn's auxiliary calls ask it: the error the

@@ -326,3 +326,22 @@ test("a seat's learned skills are locked to a reader who may not read its trail"
   expect(screen.getByText(/This seat’s lead can see it too\./)).toBeTruthy();
   expect(asked.some((a) => a.kind === "agent_memory")).toBe(false);
 });
+
+// A READ IN FLIGHT IS A SKELETON, never the two tabs over an empty page, and
+// never the claim that nothing was learned before anything was asked.
+const skeleton = () => document.querySelector(".crewlet-skeleton");
+
+test("the tool skills in flight are a skeleton, not an empty space", async () => {
+  mount({ pages: () => new Promise(() => {}) });
+  await settle();
+  expect(skeleton()).not.toBeNull();
+  expect(screen.queryByText("No tool skills yet")).toBeNull();
+});
+
+test("a seat's learned skills in flight are a wait, not a seat that learned nothing", async () => {
+  location.hash = "#/doclet/skills?kind=learned";
+  mount({ agent_memory: () => new Promise(() => {}) });
+  await settle();
+  expect(screen.queryByText(/has learned no skills yet/)).toBeNull();
+  expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+});

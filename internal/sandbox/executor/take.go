@@ -120,9 +120,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		_ = body.Close()
 	}
 	sum := &cksum{}
-	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it is
-	// kept (measure.go), beside the take and never holding it up.
-	meter := newContextMeter(carries.layout(), archive.SessionID)
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what Claude Code counts it
+	// at, read off the archive as it is kept (measure.go), beside the take and
+	// within its context, never holding it up.
+	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
 	go func() {
 		defer close(out.done)
 		reopen := func() (io.ReadCloser, error) {
@@ -156,7 +157,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
-	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context}, nil
+	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
+		Count: meter.count}, nil
 }
 
 // errTakeClosed is a scrub whose reader was closed before it reopened the

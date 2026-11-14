@@ -21,10 +21,13 @@
  *
  * A declared repository's settings are the company document's (`code.repos`),
  * settled by every activation, so Settings shows them and leads to Settings ›
- * Configuration, where they are changed. One a tool made is changed here —
- * its search mode and its mirrors (`RepoWrites.tsx`, `code_update_repo`) —
- * and any repository's unreachable history is purged here, after a
- * confirmation naming who keeps copies. Every write is confirmed, never
+ * Configuration, where they are changed. One a tool or a person made is
+ * changed here: its search mode and its mirrors (`RepoWrites.tsx`,
+ * `code_update_repo`), its protection rules (`Protect.tsx`,
+ * `code_protect_branch`) and its delete (`RepoLife.tsx`, `code_delete_repo`,
+ * asked once its name is typed). Any repository's unreachable history is
+ * purged here, after a confirmation naming who keeps copies. A deleted repository says so above its tabs and
+ * offers its restore (`code_restore_repo`). Every write is confirmed, never
  * optimistic: the page is redrawn from the read the write's floor brings.
  * The header's state pill says `importing` while an import runs, and the
  * Overview's rail how far it went and where its mirrors stand.
@@ -69,6 +72,8 @@ import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
+import { ProtectButton, RuleControls } from "./Protect.tsx";
+import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
 import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
 import { useRevisions } from "./refs.tsx";
 
@@ -156,6 +161,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
           }))}
         />
       </header>
+      {detail.status === "deleted" && <DeletedNotice repo={detail} />}
       {detail.redirect && (
         // A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads
         // the repository it found, and says what it is called now.
@@ -415,10 +421,10 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          A tool made this repository. Its search mode and its mirrors are changed below, and its
-          other settings by the code tools’ lifecycle requests:{" "}
-          <span className="mono">code_update_repo</span> and{" "}
-          <span className="mono">code_protect_branch</span>, which a seat or your assistant calls.
+          This repository was made here or by a tool, so it is changed here: its search mode, its
+          mirrors, its protection rules and its delete are below. Its description, owner, default
+          branch and path owners are changed by the code tools (
+          <span className="mono">code_update_repo</span>), which a seat or your assistant calls.
         </Callout>
       )}
       <section aria-label="Search mode">
@@ -456,6 +462,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       />
       <section aria-label="Protection rules">
         <h3 className="t-label">Protection rules</h3>
+        <ProtectButton repo={repo} />
         {rules.length === 0 ? (
           <p className="muted">No rule protects a ref: anybody who may write may push to any.</p>
         ) : !full ? (
@@ -475,6 +482,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                     {gate ? `; a merge into it is ${gateLine(gate)}` : ""}
                   </span>
                   {source && <span className="t-caption">{ruleSourceLine(source)}</span>}
+                  <RuleControls repo={repo} held={{ rule, gate }} />
                 </li>
               );
             })}
@@ -497,6 +505,15 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
             ))}
           </ul>
         )}
+      </section>
+      {/* LAST, as the one write that takes the repository away. */}
+      <section aria-label="Delete repository">
+        <h3 className="t-label">Delete repository</h3>
+        <p className="muted">
+          A deleted repository takes no clone and no push, and is restored as it was until it is
+          purged.
+        </p>
+        <DeleteRepoControl repo={repo} />
       </section>
     </Stack>
   );

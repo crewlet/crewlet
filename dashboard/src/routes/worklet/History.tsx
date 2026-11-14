@@ -117,6 +117,7 @@ import { ArrangePicker } from "./toolbar/WorkBar.tsx";
  * at most a hundred changes.
  */
 const HISTORY_OFFER: Offer = {
+  screen: "worklet.history",
   ranges: ["1d", "7d", "30d", "90d"],
   custom: true,
   fallback: "7d",

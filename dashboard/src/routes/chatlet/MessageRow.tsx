@@ -323,6 +323,23 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           },
         ]
       : []),
+    // ERASING IS AN ADMINISTRATOR'S, and only theirs (`chat.erase`): a delete
+    // leaves a tombstone everybody sees, and an erase leaves nothing but the
+    // reason the erase record keeps. Drawn for a moderator alone, as the
+    // room's other destructions are (`RoomAdmin.tsx`).
+    ...(scope.moderates
+      ? [
+          {
+            key: "erase",
+            label: "Erase for good",
+            description: "Leaves no trace. Only the reason you give is kept.",
+            icon: <TrashGlyph size="sm" />,
+            danger: true,
+            onSelect: () =>
+              nav.openDialog({ kind: "erase", channelID: scope.channelID, message: view }),
+          },
+        ]
+      : []),
   ];
 
   const actions =

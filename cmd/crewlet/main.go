@@ -2512,6 +2512,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// one this process booted on would describe a company that
 			// is no longer running.
 			Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
+			// WHICH OF THE COMPANY'S OWN SERVICES THIS NODE SERVES ONLY
+			// ONCE RESTARTED, so the org projection says it beside the
+			// backends and a reader is not shown a workspace whose every
+			// question this node refuses.
+			AwaitingRestart: e.AwaitingRestart,
 			// THE LEAD RELATIONS the personal questions are scoped by —
 			// somebody's inbox, their day, their person record — asked
 			// through the SAME seam every other surface asks, so a lead
@@ -3780,6 +3785,17 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary str
 		Patch: patch, Summary: summary, By: by, Engine: true,
 	})
 	return err
+}
+
+// Disconnect is the one write of a disconnect: the block gone and the agents
+// on through it turned off, as one revision ([configapi.Service.Disconnect]).
+func (w engineConfigWriter) Disconnect(ctx context.Context, kind integration.Kind, summary string,
+	by iam.Actor) ([]string, error) {
+
+	done, err := w.surface.Disconnect(ctx, configapi.DisconnectRequest{
+		Kind: string(kind), Summary: summary, By: by, Engine: true,
+	})
+	return done.SeatsOff, err
 }
 
 // Reload re-activates the current document, which is how a pass that sealed a

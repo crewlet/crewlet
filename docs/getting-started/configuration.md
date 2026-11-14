@@ -127,11 +127,13 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   also counts toward how long an executor's box waits
                                         #   for a call (Code Sandbox § The tool bridge)
   executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
-                                        #   this remaining budget (0 = no floor). A seat's or
-                                        #   the company's token_budget ceiling below it is
+                                        #   this remaining budget with the launch's brief
+                                        #   beside it (0 = no floor for a launch whose
+                                        #   session's context is unknown). A seat's or the
+                                        #   company's token_budget ceiling below it is
                                         #   refused: no launch could ever fit. A relaunch that
                                         #   continues its turn's session needs the larger of
-                                        #   this and the session's context with its brief
+                                        #   that and the session's context with its brief
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
   extension_enabled: true               # round-cap extension judge for the onboarding pass
                                         #   (an executor run is its harness's loop, which no
@@ -339,8 +341,12 @@ both, and a bare number is refused over JSON as well
 as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (25000 by
 default) is refused too, on a seat that runs an executor and on the company,
 since no launch could ever fit under it; and a seat whose window leaves less
-than that floor waits [parked](../concepts/agent-runtime.md#the-budget-park)
-until it turns over. A relaunch that continues its turn's session needs [that
+than that floor, with its launch's brief beside it, waits
+[parked](../concepts/agent-runtime.md#the-budget-park) until it turns over. A
+launch whose brief takes its floor past the most room a window can leave it,
+its ceiling less what the launch's own turn spent there first, is held at the
+floor alone, or at that room where the turn's own spend left less than the
+floor, and its first request may take the window past its ceiling. A relaunch that continues its turn's session needs [that
 session's own floor](../concepts/code-sandbox.md#what-a-continued-launch-costs),
 and below it its resumed segment is held on the window, never parked.
 

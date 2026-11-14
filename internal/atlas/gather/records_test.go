@@ -450,3 +450,55 @@ func TestWhatPeopleRecordedFoldsIntoTheRead(t *testing.T) {
 			a.Complete(gather.SourceLog), len(a.View.Entries))
 	}
 }
+
+// EVERY CLAIM A RECORD SOURCE DERIVES IS OF AN ENTRY ITS SOURCE IS SAID TO
+// DESCRIBE (gather.SourceName.Claims). A write to the atlas waits on a source
+// that could not be read only where that answers true for an entry it
+// touches, so a source that states a fact of an entry outside its answer
+// would let a write land beside a fact it never saw.
+//
+// Mutation: narrow atlas.Record.Claims for any family (answer false for a
+// tool server, a Gitlet check, the fleet's broker) and this names the entry.
+func TestARecordSourceClaimsOnlyTheEntriesItIsSaidToDescribe(t *testing.T) {
+	c := company()
+	src := records(t, c)
+	src.Gitlet = &fakeGitlet{repos: []gitlet.RepoSummary{repo("web")}, page: 10}
+	a := read(t, c, src)
+	family := map[atlas.Record]gather.SourceName{
+		atlas.RecordGitlet: gather.SourceGitlet, atlas.RecordIntegrations: gather.SourceIntegrations,
+		atlas.RecordToolServers: gather.SourceToolServers, atlas.RecordFleet: gather.SourceNodes,
+	}
+	seen := map[gather.SourceName]int{}
+	for _, e := range a.View.Entries {
+		for _, s := range e.Sources {
+			if s.Kind != atlas.SourceRecords {
+				continue
+			}
+			name, stated := family[atlas.Record(s.Name)]
+			if !stated {
+				t.Errorf("%s holds a claim from the %s records, a family no source is said to state facts from",
+					e.Ref, s.Name)
+				continue
+			}
+			seen[name]++
+			if !slices.ContainsFunc(e.Members, name.Claims) {
+				t.Errorf("the %s source claims %s, an entry it is not said to describe", name, e.Ref)
+			}
+			if !name.StatesFacts() {
+				t.Errorf("the %s source claims %s and is said to state no fact", name, e.Ref)
+			}
+		}
+	}
+	for _, name := range family {
+		if seen[name] == 0 {
+			t.Errorf("this read holds no claim from the %s source, so its entries were not checked", name)
+		}
+	}
+	// A SOURCE OF HEALTH AND USE STATES NOTHING, of any entry.
+	for _, name := range []gather.SourceName{gather.SourceSeatAccess, gather.SourceServerTests,
+		gather.SourceAccessLog, gather.SourceUsage, gather.SourceAlarms} {
+		if name.StatesFacts() {
+			t.Errorf("the %s source is said to state facts, and its read only joins health and use", name)
+		}
+	}
+}

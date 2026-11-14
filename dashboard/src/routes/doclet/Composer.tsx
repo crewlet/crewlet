@@ -69,11 +69,11 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
-import type { PageSummary, PageStatus } from "~/protocol/index.ts";
+import type { PageStatus } from "~/protocol/index.ts";
 import { useAssistantDraft, useDraftState, writeParts, writeVia } from "~/app/assistant/draft.ts";
 import { composerDraft, type ComposerValues } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
-import { DocletBar, PageGlyph, pagePath, useSpaces } from "./parts.tsx";
+import { DocletBar, PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 
 /** The composer's own entry in the slash menu: a new page links to any page. */
@@ -103,23 +103,6 @@ type Template = (typeof TEMPLATES)[number]["value"];
 
 /** How many pages that already cover the title the side lists. */
 const SIMILAR_MAX = 3;
-
-/** The pages of a space as places to file under, each with the path above it. */
-function placesIn(pages: readonly PageSummary[]): { page: PageSummary; path: string }[] {
-  const byID = new Map(pages.map((p) => [p.id, p]));
-  const pathOf = (page: PageSummary): string => {
-    const steps: string[] = [];
-    const seen = new Set<string>();
-    let at = page.parent_id ? byID.get(page.parent_id) : undefined;
-    while (at && !seen.has(at.id)) {
-      seen.add(at.id);
-      steps.unshift(at.title);
-      at = at.parent_id ? byID.get(at.parent_id) : undefined;
-    }
-    return steps.join(" / ");
-  };
-  return pages.map((page) => ({ page, path: pathOf(page) }));
-}
 
 export function Composer() {
   const nav = useNavigator();

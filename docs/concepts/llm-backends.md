@@ -1515,8 +1515,8 @@ a call still in flight when the turn launches its next run (a delegated worker
 outliving the harness that asked for it) cost lands on no run's record, where
 the next run's resume would pay for it as its own. The call itself is listed in
 its round's log, marked late, where the next run carries the round on — a loss's
-relaunch, a person's answer's, a replaced sign-in's — and dropped where the next
-run starts a new round ([A call that ends after its job's
+relaunch, a person's answer's, a replaced sign-in's, a refused session's — and
+dropped where the next run starts a new round ([A call that ends after its job's
 relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). One its
 harness cancelled — Claude Code and OpenCode cancel a call at its server's
 timeout, which the box is handed as the bridge's own bound, and the model reads
@@ -4045,7 +4045,14 @@ again at once, and one still limited parks again with the vendor's fresh word.
 
 **Test** runs `crewlet llm doctor`'s checks on the answering node, line by line,
 with or without the real completions; a test of an existing model is a real call
-on its sign-in and is remembered as any call is.
+on its sign-in and is remembered as any call is. With its real completions a
+test takes up to three minutes, longer than a proxy in front of the API should
+hold a request open, so it runs on that node's own time: the request is answered
+with the test running, and the page reads how it ended from whichever node its
+next request reaches, through the test's record in the coordination store. One
+test of a model runs at a time across the fleet; a person who asks while one
+runs is shown that one. A test whose node stops before it ends says so, and the
+person tests again.
 
 **Host logins are read, never made.** A model that signs in with a harness login
 shows that login's state on each node (`signed_in`, `signed_out` or `unknown`,

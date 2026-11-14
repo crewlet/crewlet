@@ -796,6 +796,38 @@ test("the expensive tasks under a refused window say the refusal and settle", as
   expect(params("work_items").filter((p) => p.sort === "-spend_tokens")).toEqual([]);
 });
 
+// THE LIST WAITS ON TWO READS, and neither in flight is an empty answer. The
+// tasks are asked only once the window's own read has answered, and a
+// question not yet asked reports neither loading nor data: a flag read off it
+// alone said no task had spent tokens for the whole of the first read.
+test("the expensive tasks are a wait while the window's read is in flight, not an empty list", async () => {
+  mount("#/settings/spend/tasks?window=30d", <ExpensiveTasks />, { viewer: VIEWER });
+  await settle();
+  expect(screen.queryByText("No task last changed in this window has spent tokens")).toBeNull();
+  expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+  expect(params("work_items").filter((p) => p.sort === "-spend_tokens")).toEqual([]);
+});
+
+test("the expensive tasks are a wait while their own read is in flight, and empty only once it says so", async () => {
+  mount("#/settings/spend/tasks?window=30d", <ExpensiveTasks />, {
+    tokens: rollup(1),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(screen.queryByText("No task last changed in this window has spent tokens")).toBeNull();
+  expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+  cleanup();
+
+  mount("#/settings/spend/tasks?window=30d", <ExpensiveTasks />, {
+    tokens: rollup(1),
+    viewer: VIEWER,
+    work_items: items([]),
+  });
+  await settle();
+  expect(screen.getByText("No task last changed in this window has spent tokens")).toBeTruthy();
+  expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+});
+
 // THE MOST EXPENSIVE TASKS ARE THE TRACKER'S ORDER, with what drove each —
 // the reopens included — and no price anywhere.
 test("the expensive tasks are the engine's order, with their reopens", async () => {

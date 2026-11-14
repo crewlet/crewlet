@@ -926,12 +926,42 @@ const chainPrefixBytes = 10
 //     The heap peaks over what is held by the collector's headroom: at its
 //     default, 157 MiB for that line and 63 MiB at both bounds.
 //
-// NOT YET MEASURED is the slot a node's collection reads in: the chain is
-// charged to the collection read's own pass and slot, beside the resumed
-// count's walk of the same thread, which is not on main beside the chain yet
-// (crewlet/crewlet#1093). Whichever of the two lands second measures the
-// resumed count's worst reading beside the chain's worst in that one pass,
-// and lowers both bounds where the sum passes that slot.
+// THE COLLECTION'S PASS: a node's collection reads its job's main thread
+// once, in one walk of its whole lines ([walkThread]), for every reading it
+// asks of it, the resumed count ([resumedReading]) now, and the chain is
+// charged to that walk, a reading beside the count, never a read of its own.
+// That read takes none of the process's transcript slots
+// ([TranscriptReadsAtOnce]): a collection reads its own job's thread, within
+// the one wait its readings share (internal/sandbox's MainThreadReadWait), so
+// the slot it reads in is its own, held to what one transcript slot's read
+// holds at its worst, the about 133 MiB above. MEASURED as above, the chain
+// first and the count after it on each line, the order that holds the
+// message See hands back while the count decodes the same line, the times at
+// the default GOGC:
+//
+//   - a thread at the plaintext's bound, the chain beside the count: 2.78 to
+//     2.85 s, against the chain's own 2.05 to 2.11 s in the same runs, End's
+//     24 to 28 ms of it, and 33 MiB held at most, the chain alone 33 to
+//     35 MiB in the same runs; twice that time is within
+//     MainThreadReadWait's fifteen seconds;
+//   - THE COUNT'S WORST LINES, each the last record that fills both bounds,
+//     so read while the chain holds all it filed, each at [threadLineMax] of
+//     bytes no UTF-8 holds, which the decode of a string reads as U+FFFD,
+//     three bytes a byte: a reply's id, which the count and the chain each
+//     decode, 109 MiB held at most; its usage's one iteration's type, 93 to
+//     105 MiB; its one applied context edit's type, 93 MiB;
+//   - the reading's worst line beside the count: 101 to 102 MiB, the chain's
+//     own 101 to 102, since the count decodes nothing of a user record's
+//     results;
+//   - WHAT THE COUNT KEEPS from line to line at its most, a restart's uuid
+//     and a run's id each filling a line so, then the reading's worst line:
+//     149 to 150 MiB held at most while the count kept both as it decoded
+//     them, 24 MiB each, past the slot; 101 to 102 MiB once it keeps no more
+//     of them than a uuid's bytes and a digest ([resumedReading]).
+//
+// So the pass holds 109 MiB at its worst, within the slot, and both bounds
+// stay at 2^17. Its peak at the default GOGC is 176 to 191 MiB, at that
+// reply's id.
 //
 // MISUSE IS ANSWERED, NEVER A PANIC, where a node's collection could reach
 // it: a line handed out of turn is whyLineGap; a question asked before End, or

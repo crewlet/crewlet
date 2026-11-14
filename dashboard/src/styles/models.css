@@ -45,6 +45,16 @@
   gap: var(--spacing-2);
 }
 
+/* The seconds a wait has run so far: figures of one width, so the sentence
+   beside them does not shift as they count. */
+.models-waiting__elapsed {
+  margin-inline-start: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .models-doctor,
 .models-checklist,
 .models-repoint,

@@ -235,7 +235,7 @@ func TestAResumeHandsTheRunnerTheRoundsCallsAsItsLogNumberedThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BridgeLog: %v", err)
 	}
-	resumed := runnerResume(resumeInput{Run: opened, Bridged: logged}, nil, nil)
+	resumed := runnerResume(resumeInput{Run: opened, Bridged: logged}, nil, nil, nil)
 	if got := len(resumed.Bridged) + ledger.Count(resumed.Elided); got != taken || logged.Appends() != taken {
 		t.Errorf("the runner is handed %d of the round's calls, listed and tallied, of the %d its log took "+
 			"(it counts %d)", got, taken, logged.Appends())
@@ -506,7 +506,7 @@ func TestAnUpdateTheStoreRefusesLeavesTheCallsIdentityOnRecord(t *testing.T) {
 			t.Fatalf("the log holds %+v in flight, want the call whose update was refused, by its identity",
 				logged.InFlight)
 		}
-		resumed := runnerResume(resumeInput{Run: launched, Bridged: logged}, nil, nil)
+		resumed := runnerResume(resumeInput{Run: launched, Bridged: logged}, nil, nil, nil)
 		if len(resumed.Unfinished) != 1 || resumed.Unfinished[0].Name != "post_message" ||
 			resumed.Unfinished[0].Digest != strings.Repeat("a", 64) || !resumed.Unfinished[0].Unfinished {
 			t.Errorf("the runner is handed %+v of the call whose update was refused, want it by its identity, "+

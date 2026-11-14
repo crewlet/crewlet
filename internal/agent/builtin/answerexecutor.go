@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -430,10 +431,8 @@ func (t *answerExecutor) mayAnswer(ctx context.Context, actor Actor,
 // answeredBy is what answering the run asks the authority about for the caller
 // named handle: the requester's own seat where the caller is the requester (the
 // rule's self arm), and the run's seat otherwise, where its lead is admitted.
+// [runanswer.QuestionOf] states it, so the screens that offer the answer read
+// the same object this decides on.
 func (p runParties) answeredBy(handle string) authz.Object {
-	owner := p.handle
-	if p.requester != "" && handle == p.requester {
-		owner = p.requester
-	}
-	return authz.Object{Kind: authz.KindPerson, ID: p.seat.String(), Owner: owner}
+	return runanswer.QuestionOf(p.seat, p.handle, p.requester, handle).Object
 }

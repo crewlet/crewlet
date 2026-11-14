@@ -1132,3 +1132,104 @@ test("Re-run checks runs every failed check of the change's head again", async (
     args: { change: "web!42", all_failed: true },
   });
 });
+
+/** The reader, served the change's later writes as well. */
+const STEWARD = {
+  ...VIEWER,
+  acts: [
+    ...VIEWER.acts,
+    "code_rebase_change",
+    "code_dequeue_change",
+    "code_revert_change",
+    "code_resolve_finding",
+  ],
+};
+
+// A MERGED CHANGE IS REVERTED BY A CHANGE OF ITS OWN, confirmed in the page,
+// merged too only where the person asks. Mutation: send on the first press, or
+// send `merge` unasked, and this fails.
+test("a merged change is reverted by a change of its own, merged only when asked", async () => {
+  const acted = stubEngine(detail({ state: "merged", readiness: undefined }), () =>
+    json({ outcome: "applied" }),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+
+  const revert = await screen.findByRole("button", { name: "Revert" });
+  await waitFor(() => expect(revert.getAttribute("title")).toBeNull());
+  fireEvent.click(revert);
+  // NOT AN ALERT: a revert opens a change and moves nothing it does not merge.
+  let dialog = await screen.findByRole("dialog", { name: "Revert web!42?" });
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open the revert" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_revert_change", args: { change: "web!42" } });
+
+  fireEvent.click(revert);
+  dialog = await screen.findByRole("dialog", { name: "Revert web!42?" });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Merge the revert/ }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Revert and merge" }));
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_revert_change",
+    args: { change: "web!42", merge: true },
+  });
+});
+
+// A REBASE IS ASKED FROM THE HEAD ON SCREEN, after a confirmation that says
+// it moves the branch by a forced push. Mutation: drop expected_head, or send
+// on the first press, and this fails.
+test("a rebase is confirmed, then asked from the head on screen", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+
+  const rebase = await screen.findByRole("button", { name: "Rebase" });
+  await waitFor(() => expect(rebase.getAttribute("title")).toBeNull());
+  fireEvent.click(rebase);
+  const dialog = await screen.findByRole("dialog", { name: "Rebase web!42 onto main?" });
+  expect(dialog.textContent).toMatch(/forced push/);
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rebase" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_rebase_change",
+    args: { change: "web!42", expected_head: HEAD },
+  });
+});
+
+// TAKE OUT OF THE QUEUE IS DRAWN ON EVERY LIVE CHANGE and held where the page
+// read it in no queue. Mutation: hide it, or let it press, and this fails.
+test("a change in no queue holds Take out of the queue with the reason", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const out = await screen.findByRole("button", { name: "Take web!42 out of the queue" });
+  await waitFor(() => expect(out.getAttribute("title")).toMatch(/not in main's merge queue/));
+});
+
+// A FINDING IS ANSWERED UNDER ITSELF: one code_resolve_finding naming it, the
+// answer chosen and the note. Mutation: name another finding, or drop the
+// note, and this fails.
+test("a finding is answered under itself, with the answer chosen and a note", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", STEWARD);
+
+  fireEvent.click(await screen.findByText("1 outdated on this file"));
+  const open = await screen.findByRole("button", { name: /Answer the finding/ });
+  await waitFor(() => expect(open.getAttribute("title")).toBeNull());
+  const finding = open.getAttribute("aria-label") ?? "";
+  fireEvent.click(open);
+  const form = await screen.findByRole("form", { name: finding });
+  fireEvent.click(within(form).getByRole("combobox", { name: "Answer" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Won't fix" }));
+  fireEvent.change(within(form).getByRole("textbox", { name: "Note" }), {
+    target: { value: "Out of scope here" },
+  });
+  fireEvent.click(within(form).getByRole("button", { name: "Send answer" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.tool).toBe("code_resolve_finding");
+  expect(acted[0]!.args).toMatchObject({
+    change: "web!42",
+    resolution: "wont_fix",
+    note: "Out of scope here",
+  });
+  expect(acted[0]!.args.findings).toHaveLength(1);
+});

@@ -53,6 +53,17 @@ describe("the keys the assistant may write", () => {
     expect(parseUrlPatch({ blocked: "false" }, keys).ok).toBe(false);
   });
 
+  // THE AXES THE MENU OFFERS AT THIS SCOPE: inside a project every task is in
+  // it, the engine refuses `group_by=project`, and the list answered a
+  // refusal the menu could never have sent.
+  test("take group by project across the company and refuse it inside a project", () => {
+    expect(parseUrlPatch({ group_by: "project" }, arrangement).ok).toBe(true);
+    const inProject = workKeys("arrangement", labels, false);
+    expect(parseUrlPatch({ group_by: "project" }, inProject).ok).toBe(false);
+    expect(parseUrlPatch({ group_by2: "project" }, inProject).ok).toBe(false);
+    expect(parseUrlPatch({ group_by: "parent" }, inProject).ok).toBe(true);
+  });
+
   test("take only an axis, a sort and a shape the list draws", () => {
     expect(parseUrlPatch({ group_by: "assignee", sort: "due", shape: "board" }, keys).ok).toBe(
       true,

@@ -1,5 +1,23 @@
 # yaml-language-server: $schema=../schema/company.schema.json
 # Nimbus — Cloud-native infrastructure control plane + open AI framework
+#
+# A WHOLE COMPANY WITH NO OUTSIDE ACCOUNT.  Every surface its seats work on
+# is the engine's own: Chatlet for chat, Worklet for work items, Doclet for
+# pages and Gitlet for the code, each held in the fleet's own store with
+# nothing to sign up for, provision or point a webhook at.  The one thing it
+# needs from outside is a model — Claude Code on the plan you already pay
+# for — and, for similarity recall, an OpenAI key for embeddings.
+# examples/nimbus.config.yaml's header has the commands that run it.
+#
+# Every vendor surface is additive and documented on its own page — chat on
+# Mattermost or Slack (docs/integrations/mattermost.md,
+# docs/integrations/slack.md), a code host on GitLab or GitHub
+# (docs/integrations/gitlab.md, docs/integrations/github.md), the tracker
+# and the wiki on Jira and Confluence (docs/integrations/jira.md,
+# docs/integrations/confluence.md).  Chat, the tracker and the wiki are each
+# ONE axis: a vendor there replaces the engine's own (`chat.backend`,
+# `tracker.backend`, `knowledge.backend` below) rather than joining it.  A
+# code host is the exception: Gitlet runs beside GitLab or GitHub.
 name: "Nimbus"
 mission: "Turn any hardware into cloud-native infrastructure — and give AI teams one open framework to build on top of it"
 vision: >
@@ -14,12 +32,12 @@ vision: >
 
 policies:
   - "Communicate decisions in writing"
-  - "Capture personal-context facts you need to recall later (delegation context, stakeholder preferences, ongoing operational state) via `reflect_and_persist` — pass `ttl_days` for facts that age out naturally (e.g. delegation context lasts the MR lifetime)"
+  - "Capture personal-context facts you need to recall later (delegation context, stakeholder preferences, ongoing operational state) via `reflect_and_persist` — pass `ttl_days` for facts that age out naturally (e.g. delegation context lasts the change's lifetime)"
   - "Document team-shared knowledge (decisions, conventions, runbooks) as pages in the company knowledge base so other agents can read it — `reflect_and_persist` writes are personal-only"
   - "Use work items to manage all product backlog items — never track tasks only in memory"
   - "Use pages to document architecture decisions, runbooks, and meeting notes — search before creating new docs"
-  - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD space); do not push to projects you do not own without an explicit handoff from their owner"
-  - "The Phase-2 AI framework is developed in a dedicated project owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
+  - "Each engineering role owns specific repositories (see the `Repo Ownership` page in the LEAD space); in a repository you do not own, work only on your own branch and propose it as a change for its owner to review"
+  - "The Phase-2 AI framework is developed in a dedicated repository owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
 
 # The company's ONE clock, as an IANA zone (default UTC).  Every calendar
 # edge the engine cuts is cut on it: where "today" and "this week" begin
@@ -44,12 +62,17 @@ timezone: "Europe/Berlin"
 # runs Berlin midnight to midnight, ``week`` is the ISO week from Monday,
 # ``month`` the calendar month, and each opens again on its own when it
 # turns over.  0 is refused rather than read as "unlimited" — leave the key
-# out instead.  Here the month is the bill (roughly four weeks of the
-# schedules below plus ordinary chat traffic for seven seats) and the day
-# is the fuse: a runaway loop burns at most one day's allowance before the
-# company stops, rather than the month's.  No per-agent ``token_budget`` is
-# set below, so these two are the only ceilings in force and the whole
-# company shares them.
+# out instead.  Here the month is the company's allowance (roughly four
+# weeks of the schedules below plus ordinary chat traffic for seven seats)
+# and the day is the fuse: a runaway loop burns at most one day's allowance
+# before the company stops, rather than the month's.  No per-agent
+# ``token_budget`` is set below, so these two are the only ceilings in
+# force and the whole company shares them.
+#
+# THEY STILL APPLY ON A SUBSCRIPTION.  A plan is not metered per token by
+# its vendor, but the harness reports its usage and the engine counts it —
+# so the day ceiling is what stops a scheduling loop burning a whole plan
+# window overnight.
 #
 # Usage is durable — the counter lives in the fleet's coordination store,
 # so it survives engine restarts and is one number for the whole company
@@ -77,40 +100,133 @@ token_budget:
 
 providers:
   llm:
+    # ── The one model: Claude Code on YOUR subscription ─────────────
+    #
     # Every model is reached through a harness the engine drives — the
     # vendor's own harness, not an HTTP client of Crewlet's.  This company
-    # runs on OpenCode, which reaches any model on any provider it speaks
-    # to: open models through OpenRouter here, set LLM_MODEL to
-    # <provider>/<model> as OpenCode spells it (`opencode models` lists
-    # them), and the provider's key under ITS OWN variable in `env`.
+    # runs on Claude Code, headless, on the flat-rate plan you already pay
+    # for, so no model key is metered per token.  Crewlet never sees a
+    # password: the harness holds the vendor's own OAuth login and
+    # `crewlet llm login` only decides WHERE that credential lands.
     #
-    # Prefer Anthropic's models on an API key?  Swap the default for:
-    #   default:
-    #     harness: claude-code
-    #     model: sonnet
-    #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
-    # Every seat's executor is its harness's own run, which only claude-code and
-    # opencode have.  OpenAI's models (`harness: codex`, `model: gpt-5`, the
-    # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
-    # and side passes, through llm_review / llm_subagent / llm_auxiliary.
+    # On an Anthropic API key instead, the same entry takes
+    # `auth: { mode: api-key }` (it reads ANTHROPIC_API_KEY) in place of the
+    # plan.  `harness: opencode` is the other harness that runs a seat's
+    # executor, and reads `model` in its own grammar, <provider>/<model>
+    # (anthropic/claude-sonnet-5).  OpenAI's models (`harness: codex`) and
+    # the rest serve only a seat's reviewer, workers and side passes,
+    # through llm_review / llm_subagent / llm_auxiliary.
     #
-    # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
-    # package) on the machine running `crewlet run`.  Check the whole entry
-    # end to end before the first turn with the command below, once the
-    # variables examples/nimbus.config.yaml's header exports are set (the
-    # doctor loads that file):
+    # PREREQUISITE: the `claude` binary on the machine running
+    # `crewlet run`, and one of these, once, with the keyring and founder
+    # token examples/nimbus.config.yaml's header exports set (the command
+    # loads that file):
+    #
+    #   crewlet llm login default -from-host  -company examples/nimbus.company.yaml \
+    #                                         -config  examples/nimbus.config.yaml
+    #
+    # `-from-host` COPIES the login this machine already has into Crewlet's
+    # own directory; your own ~/.claude is never read at runtime, because
+    # each seat's child process gets its own HOME.  Plain
+    # `crewlet llm login default` instead brokers `claude auth login`
+    # attached to your terminal, for a machine with no login yet.  It
+    # returns you to your shell once you have signed in — if a login
+    # command ever leaves you sitting in an interactive session, it did
+    # not run the vendor's auth subcommand.
+    #
+    # `-capture-token` is the better route where you can take it — it mints
+    # a headless CLAUDE_CODE_OAUTH_TOKEN, so there is no credential file to
+    # sync and no refresh token shared with your personal login — but it
+    # writes into the ENCRYPTED SECRET STORE, sealed under the Tier A
+    # keyring examples/nimbus.config.yaml declares (`crewlet secrets keygen
+    # -key-id 2026-01` prints the key to export).
+    #
+    # Then, before the first turn:
+    #
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
-    # With the engine stopped the doctor reaches the fleet's secret store
-    # itself, through this node's own broker.  Once the engine runs, it
-    # reads the store through it: run the doctor with CREWLET_API_TOKEN set
-    # to $CREWLET_API_TOKEN_FOUNDER.
+    #
+    # With the engine stopped both commands reach the fleet's secret store
+    # themselves, through this node's own broker.  Once the engine runs,
+    # they go through it: run them with CREWLET_API_TOKEN set to
+    # $CREWLET_API_TOKEN_FOUNDER.
+    #
+    # `doctor` is the command that matters here.  An entry can be
+    # configured perfectly and still not work — a missing binary, a
+    # profile whose flags drifted from the installed version, an expired
+    # login, or the one nothing else catches: a harness that never reaches
+    # the seat's tools — the `crewlet` MCP server it is handed — and
+    # answers in prose with nothing called, which ends the phase without
+    # its submission.  Only a real run calling a real tool proves that, so
+    # `doctor` runs one.
+    #
     # See docs/concepts/llm-backends.md.
     default:
-      harness: opencode
-      model: "${LLM_MODEL}"
-      env:
-        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      harness: claude-code          # the default, written out
+      model: sonnet                 # whatever `claude --model` accepts:
+                                    #   haiku | sonnet | opus, or a full
+                                    #   model id.  Sonnet, because this
+                                    #   company's seats write and review
+                                    #   code across its projects; haiku
+                                    #   is cheaper against a plan window
+                                    #   and faster to launch, but the
+                                    #   weakest at calling the seat's tools
+                                    #   when it should, which is what
+                                    #   `crewlet llm doctor` exercises.
+      run_in: direct                # where a seat's executor runs on this
+                                    #   entry: a cell of providers.sandbox
+                                    #   below.  On the ENTRY rather than the
+                                    #   seat, because it is a property of
+                                    #   this runtime: the subscription login
+                                    #   lives on the engine host, so a local
+                                    #   cell reaches it directly and a remote
+                                    #   one would need a headless token.
+      # ONE LOGIN, NAMED.  state_dir defaults to a directory derived PER
+      # PROVIDER KEY (~/.crewlet/llm-harness/default here), so a second entry
+      # on this same login — a per-phase model on the same plan, say —
+      # names this same path to share it.  That is deliberately explicit:
+      # two unrelated providers must never silently collide and prune each
+      # other's state.  The login is shared per harness: each keeps its
+      # files in a subdirectory named for it (here .../claude/claude-code),
+      # so an entry on this path that drove another harness would share
+      # nothing.
+      #
+      # A LITERAL PATH — unlike every credential field here it is not
+      # ${VAR}-expanded, because it names where the engine keeps files
+      # rather than a secret (the same reason the store path is a Tier A
+      # field).  So it lives under ./nimbus-data with everything else
+      # this example writes, which does mean `rm -rf nimbus-data` logs
+      # the harness out; `crewlet llm login default -from-host` puts it back
+      # with no browser round-trip.  Point it at a persistent volume
+      # when the engine runs in an ephemeral container.
+      state_dir: "./nimbus-data/llm-harness/claude"
+      max_concurrent: 4             # harness processes on this host at once (the
+                                    #   reviewer, workers, side passes),
+                                    #   ACROSS the whole company; executor
+                                    #   runs are not counted — each seat
+                                    #   runs one at a time.  Written out rather than
+                                    #   left to the identical default,
+                                    #   because on this backend it is the
+                                    #   knob that shapes the deployment:
+                                    #   each process is a full Node runtime
+                                    #   at ~200-400 MB resident (4 keeps peak
+                                    #   near 1.5 GB), and a subscription plan
+                                    #   throttles concurrency far below what
+                                    #   an API key allows — so a higher
+                                    #   number mostly buys rate-limit errors.
+                                    #   Note it is a SEPARATE ceiling from
+                                    #   Tier A's node.max_concurrent (32
+                                    #   turn segments): a reviewer, worker
+                                    #   or side pass past this queues for a
+                                    #   harness slot, and the learning passes
+                                    #   below queue for the same four.
+      auth:
+        mode: subscription          # subscription (default) | api-key | inherit-env | env.
+                                    #   Deliberately not inherit-env: a
+                                    #   backend that silently picked up a
+                                    #   stray ANTHROPIC_API_KEY would bill
+                                    #   the metered account while you
+                                    #   believed you were on a flat rate.
     # Ask Crewlet's own entry, for the assistant block below.
     # Its own slots keep a person in the drawer from queueing behind a
     # seat's long call, its timeout is sized for one interactive round, and
@@ -131,17 +247,32 @@ providers:
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
   # Code sandbox — where every agent seat's executor runs.  A seat's
-  # executor is its harness's own run (OpenCode, the default entry's
-  # harness, with that SAME model and OPENROUTER_API_KEY), in a box from this
-  # catalogue; an engineering seat's run implements the work and opens a
-  # merge request under the agent's OWN GitLab identity (the token the
-  # engine mints and seals for the seat as GITLAB_TOKEN_<HANDLE>, which the
-  # seat names as GITLAB_TOKEN in role.sandbox.env below and which the
-  # engine binds to its glab tool server).
+  # executor is its harness's own run (Claude Code, the default entry's
+  # harness, with that SAME model and that same plan login), in a box from
+  # this catalogue; an engineering seat's run checks a repository out of
+  # Gitlet (``code`` below) with `code_checkout`, implements the work on the
+  # seat's own branch and proposes it as a change.
   # Here every box is a `direct` box on the engine host, which keeps each
   # run's state apart but does not isolate the host: see the catalogue
-  # below.  See docs/concepts/code-sandbox.md and
-  # docs/integrations/gitlab.md.
+  # below.  See docs/concepts/code-sandbox.md.
+  #
+  # NO EXTRA CREDENTIAL.  The harness those boxes run is the `default`
+  # entry's `claude-code`, and on a LOCAL cell the backend seeds that
+  # provider's credential files into the box and writes the refreshed one
+  # back afterwards — so the run uses the subscription `crewlet llm login`
+  # already established.  (That seeding is exactly why a remote `e2b` cell
+  # would NOT work on this login as it stands: the credential files carry a
+  # refresh token whose rotation is fleet state and deliberately never
+  # leave the engine host, so a remote box needs a headless token —
+  # `crewlet llm login default -capture-token` — instead.  The engine
+  # refuses such a run up front rather than provisioning a box that cannot
+  # authenticate.)  Nor does the box's git need one: the engine hands each
+  # run its own Gitlet credential, scoped to the repositories it checks out
+  # and ending with the run, and configures the box's git to present it —
+  # at the address CREWLET_BOX_GIT_URL names, which
+  # examples/nimbus.config.yaml's header exports.  A node without it refuses
+  # every checkout (`sandbox_git_url_unset`) rather than grant a box a
+  # repository it cannot reach.
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
     # providers.llm entry places its runs in one with its `run_in`.
@@ -155,14 +286,16 @@ providers:
     # account, no API key, nothing to provision — as a first run on your own
     # machine while its seats take work from you alone.  Every executor is
     # its harness, fully permissioned, as the engine's user, so before a
-    # seat takes work from anyone else (a chat other people are in, a shared
-    # tracker or code host), or on a host others share, move the executors
-    # into `container` (below) or `e2b`.
+    # seat takes work from anyone else (a person you invite onto a seat, a
+    # vendor chat or code host), or on a host others share, move the
+    # executors into `container` (below) or `e2b`.
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and give the entry those seats run on
-    # `run_in: e2b`.
-    # A `template` there must carry the harness (opencode here) as well
+    # `run_in: e2b` — signed in with `-capture-token`, above, since the
+    # plan's credential files never leave this host — or keep them local
+    # in `container`, which the plan login still seeds.
+    # A `template` there must carry the harness (Claude Code here) as well
     # as the toolchains those seats' setup steps check for (Go, Node with
     # corepack, uv): naming one replaces E2B's prebuilt per-agent template
     # for every e2b box in the company, and a step only checks for its tool,
@@ -172,13 +305,14 @@ providers:
     #
     # PREREQUISITE for the local backend: the harness the entries drive
     # must be installed on that machine, since `direct` runs it as a child
-    # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
-    # 1.x install is refused by name — and `claude-code` is the other
-    # supported one.  So must each engineering seat's toolchain (Go; Node
-    # with corepack; uv): a `direct` box's setup commands run on that
-    # machine as the engine's user, so the seats' steps below CHECK for
-    # their tools and name what is missing, rather than install anything
-    # on the host.
+    # process: the `claude` binary here, Claude Code's own CLI, and
+    # `opencode` (OpenCode 2, the @opencode/cli package) for an entry on
+    # the other harness that runs an executor.  So must each engineering seat's toolchain (Go; Node
+    # with corepack; uv), and git 2.40 or newer, Gitlet's floor for every
+    # client, which a checkout's first command checks: a `direct` box's
+    # setup commands run on that machine as the engine's user, so the
+    # seats' steps below CHECK for their tools and name what is missing,
+    # rather than install anything on the host.
     local:
       # The local backend serves both local cells, chosen per entry:
       #
@@ -218,111 +352,29 @@ providers:
     # by ALL seats here exactly once; keep stack-specific provisioning
     # (Go/Node/Python below) on the owning role.  The engine ships NO steps
     # of its own — provisioning is entirely this config.
+    #
+    # NO GIT-AUTH STEP, and nothing is missing: the company's code is on
+    # Gitlet, and a repository there is GRANTED to a run rather than
+    # cloned by a recipe.  The run's agent calls `code_checkout` through
+    # its tool bridge, the engine writes the grant on the run's record and
+    # answers the commands that clone it, and the box's git already carries
+    # the run's own credential and the seat's commit identity, set by the
+    # engine.  A recipe that configured git for Gitlet would only be a
+    # second copy of that, which the engine's own configuration overrides.
+    # A seat on a vendor code host needs one; docs/integrations/gitlab.md
+    # has the recipe.
     setup:
-      # git-auth: make the seat's own GitLab PAT (declared as
-      # GITLAB_TOKEN in role.sandbox.env by the three engineering seats
-      # below, so MRs land under the agent's identity) work for HEADLESS
-      # git.  Without this a bare `git clone https://gitlab.com/...` dies
-      # with "could not read Username" — git has no way to supply the
-      # token on its own.  The helper is SCOPED to gitlab.com at both
-      # layers (the credential config key AND a host check in the script)
-      # so the PAT can never be offered to a foreign host, e.g. a malicious
-      # submodule URL; without a token it stays silent so public clones
-      # fall through to anonymous.  For PAT basic-auth GitLab ignores the
-      # username, so `oauth2` is just a conventional placeholder.  The
-      # `brief` below is what tells the harness about all of this.
-      #
-      # An engine-wide step reaches EVERY agent seat's box, the CEO's,
-      # CTO's, PM's and DevRel's too, and those seats declare no
-      # GITLAB_TOKEN: their runs read GitLab through their tools and hand
-      # code to the seat that owns the project.  The step is still shared
-      # rather than copied onto three roles, because it does nothing
-      # harmful without a token, and its brief says so — a brief that
-      # promised every box a PAT would send those seats' runs pushing
-      # with nothing to push as.
-      - name: git-auth
-        # Reads $GITLAB_TOKEN from the run env when the seat declares it in
-        # role.sandbox.env below, pointing at its OWN PAT (so MRs land
-        # under the agent's identity). Setup commands also see the run env,
-        # which is how the identity lines below read the engine-provided
-        # $CREWLET_AGENT_HANDLE / $CREWLET_AGENT_EMAIL facts.
-        #
-        # The helper lives in the BOX'S HOME, not /usr/local/bin: neither
-        # local cell writes a setup FILE anywhere else.  Every seat here
-        # runs `direct` (default_run_in above), and a direct box has no
-        # filesystem of its own, so a path outside its home would be the
-        # engine host itself; a container box mounts only its home.  A
-        # system path would fail every seat's box at setup, so validation
-        # refuses this document if a file names one.  A setup COMMAND is
-        # not confined the same way — under `direct` it runs on the engine
-        # host, as the engine's user.
-        #
-        # A `files:` entry named relative to the home (.local/bin/...)
-        # would land in the same place; the helper is written by a command
-        # because git has to be given its ABSOLUTE path, which only the
-        # box's shell knows ("$HOME", expanded), and it has to be made
-        # executable.  It is registered as a quoted shell snippet
-        # ("!'...'") because git runs a helper's value through the shell,
-        # and a direct box's home, under local.state_dir above, holds a
-        # space wherever the engine was started from a directory that
-        # does.  The same step works unchanged in a container or an E2B
-        # box, where $HOME is /home/user.
-        commands:
-          - mkdir -p "$HOME/.local/bin"
-          - |
-            cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
-            #!/bin/sh
-            # Supply this seat's GitLab token for gitlab.com credential
-            # requests ONLY. Reads $GITLAB_TOKEN from the environment
-            # (never persisted to disk).
-            [ "$1" = "get" ] || exit 0
-            [ -n "$GITLAB_TOKEN" ] || exit 0
-            ok=""
-            while IFS= read -r line; do
-                [ -z "$line" ] && break
-                [ "$line" = "host=gitlab.com" ] && ok=1
-            done
-            [ -n "$ok" ] || exit 0
-            echo "username=oauth2"
-            echo "password=$GITLAB_TOKEN"
-            SH
-          - chmod +x "$HOME/.local/bin/git-credential-crewlet"
-          - 'git config --global credential."https://gitlab.com".helper "!''$HOME/.local/bin/git-credential-crewlet''"'
-          # insteadOf is multi-valued: --add on both, or the second REPLACES
-          # the first and scp-style git@gitlab.com: remotes stay SSH.
-          - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
-          - 'git config --global --add url."https://gitlab.com/".insteadOf "ssh://git@gitlab.com/"'
-          # Commit identity from the engine's generic agent-identity env —
-          # commits attribute to the seat without any per-role duplication.
-          - 'git config --global user.name "$CREWLET_AGENT_HANDLE"'
-          - 'git config --global user.email "$CREWLET_AGENT_EMAIL"'
-        env:
-          # Headless git must fail fast, never block on a prompt it can't
-          # answer.
-          GIT_TERMINAL_PROMPT: "0"
-        brief: >-
-          When $GITLAB_TOKEN is in your environment it is this seat's own
-          GitLab PAT, for all GitLab work: git is configured to
-          authenticate to gitlab.com with it automatically, so just clone,
-          fetch, and push over plain HTTPS, e.g.
-          `git clone https://gitlab.com/<group>/<project>.git`. SSH-style
-          remotes (`git@gitlab.com:...`) are rewritten to HTTPS for you.
-          Never embed the token in a URL. To open a merge request, use
-          GitLab push options — no harness needed:
-          `git push -o merge_request.create -o merge_request.target=main
-          -o merge_request.title="<title>" origin HEAD:<your-branch>`
-          creates the MR under your own identity. Without $GITLAB_TOKEN
-          this seat has no GitLab identity: public projects still clone
-          anonymously, but nothing you push is accepted, so hand a code
-          change to the seat that owns the project instead. Your git
-          commit identity is preconfigured.
       - name: nimbus-conventions
         brief: >-
-          All Nimbus projects live under gitlab.com/nimbus-hq. Deliver via a
-          branch + merge request — never push to the default branch
-          directly. Keep MRs small and focused, and stay inside the
-          projects your brief names: each project has exactly one owning
-          seat.
+          Every Nimbus repository lives on Gitlet, the company's own git
+          host. Check one out with `code_checkout` — it answers the
+          commands that clone it into your working directory on your own
+          branch, `seats/<your handle>/<the work item's key>` — and push
+          there; no seat pushes to `main`. Propose your branch as a change
+          (`open_change` on the checkout, or the change tools), keep each
+          change small and focused, and stay inside the repositories your
+          brief names: each has one owning seat, and work in another
+          seat's repository goes to its owner as a change.
 
 # Ask Crewlet: a drawer in the dashboard that answers questions
 # and prepares changes for approval, acting only as the signed-in person.
@@ -461,120 +513,48 @@ scheduling:
   jitter_seconds: 30                       # spread schedules that share a popular cron minute (e.g. 9am)
 
 
-# Inbound / notification integrations — the non-tool side (engine/service
-# accounts for watcher lookups + webhook routing, the Mattermost websocket
-# fleet, the GitLab webhook + provisioning config,
-# outbound transports).  The Mattermost/GitLab MCP *tool* servers
-# are the ``mcp_servers`` entries below.  This block is the inbound mirror of
-# ``mcp_servers`` (outbound tool actions).
-integrations:
-  # How often a CONVERGED integration is read back, in seconds.  This is the
-  # only thing that ever finds access somebody revoked by hand at a vendor —
-  # nothing tells the engine — so it decides how long a card can say
-  # Connected over an agent that has already been cut off.  Unset takes ten
-  # minutes; the floor is 60.  A converged pass costs one read per seat and
-  # per project at every vendor, so a small company can afford a minute and a
-  # large one should lengthen it.
-  # check_interval_seconds: 600
+# NO ``integrations:`` BLOCK, and that is the point of this example: every
+# surface below is the engine's own, so there is no vendor account to
+# provision, no per-seat vendor token to seal and no webhook to register.
+# Each integration a company adds goes here — Mattermost or Slack for chat,
+# GitLab or GitHub for code, Jira and Confluence for the tracker and the
+# wiki — and its page shows the blocks: docs/integrations/.
 
-  # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
-  # Nimbus runs Worklet and Doclet, so there is no third-party account to
-  # provision, no per-seat vendor token to paste, and no webhook to
-  # register for either of them.  A company that wants Jira or Confluence
-  # instead adds ``integrations.jira`` / ``integrations.confluence`` here
-  # and names that vendor in the ``tracker`` / ``knowledge`` blocks below.
-  # The two axes are independent, so one may be Worklet or Doclet while the
-  # other is a vendor.  Naming a vendor AND ``worklet`` or ``doclet`` is
-  # refused: work would be filed in two places with nothing keeping them
-  # in step.
-  # See docs/integrations/jira.md and docs/integrations/confluence.md.
-
-  # Chat.  Nimbus runs a self-hosted code host (GitLab), Worklet and
-  # Doclet, and its chat is Mattermost, running beside GitLab
-  # in this repo's docker-compose.  Slack is equally supported and the
-  # config shape is nearly identical; see docs/integrations/slack.md to
-  # run this org on Slack instead.
-  #
-  # Enabling this turns on BOTH directions: the outbound transport, and
-  # the inbound websocket fleet that holds one connection per agent seat.
-  # That is the structural difference from every other integration here —
-  # Mattermost has no usable inbound webhook, so nothing has to reach the
-  # engine.  This org runs behind NAT with no tunnel and no public URL.
-  #
-  # Each agent's bot is turned on, and given its roles and channels, by
-  # ``role.integrations.mattermost`` below; the engine creates the bot,
-  # seals its token as MATTERMOST_BOT_TOKEN_<HANDLE> and binds it to the
-  # agent's ``mattermost`` tool server.  The server, admin and team come
-  # from the bootstrap, with no OAuth click anywhere:
-  #
-  #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
-  #   set -a; . ./.env; set +a                     # the URL + admin token it wrote
-  #
-  # then run the engine with the admin token sealed: its reconcile loop
-  # creates each agent's bot as its seat is turned on, and the
-  # integration's Agents tab shows each one.  `crewlet mattermost doctor`
-  # checks the server and the bots against this file.
-  #
-  # See docs/integrations/mattermost.md.
-  #
-  # ``typing_status`` drives the working indicator an agent shows while it
-  # reasons about a message, cleared when it replies or decides to stay
-  # silent.  ``addressed`` shows it only when someone is actually waiting
-  # on THAT agent — a DM, a direct @mention, or a thread it already
-  # follows — which is what keeps a shared channel from lighting up one
-  # indicator per bot on every message.  ``always`` (the default) covers
-  # every Mattermost-triggered turn.  There is deliberately no ``off``: a
-  # reader who sees nothing cannot tell an agent working from an agent
-  # that is dead, so an operator who finds it noisy wants ``addressed``.
-  #
-  # There is deliberately no ``status_phrases`` here, unlike the Slack
-  # block this replaced: Mattermost renders a fixed client-side "is
-  # typing…" and has no API for the text, so any wording the engine
-  # supplied would never be shown.  The setting exists only under
-  # ``integrations.slack``.
-  mattermost:
-    enabled: true
-    url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
-    team: nimbus
+# Which chat this company talks on: Chatlet, the engine's own — channels,
+# threads, direct messages, mentions and reactions, held as records on the
+# company's own log and read in the dashboard.  Every seat is given its chat
+# tools (``post_message``, ``reply_in_thread``, ``send_dm``,
+# ``read_channel`` and the rest) with no MCP server to run, and every person
+# talks as the human seat they hold, so the founder below needs no contact
+# identity to be reached: she is ``@jane-founder``.
+#
+# ONE AXIS, as the tracker and the knowledge base below are: ``vendor``
+# (Mattermost or Slack) REPLACES Chatlet rather than joining it, and a
+# company naming ``chatlet`` beside an ``integrations.mattermost`` or
+# ``integrations.slack`` block is refused — with two live chat homes a
+# person replies where the agents are not reading.
+#
+# An unset ``backend`` DERIVES the same answer from the absence of a vendor
+# chat block; it is written out because this is the reference example and a
+# reader should see the choice rather than infer it.
+#
+# Each unit's room is the ``channel`` it names in the org chart below: the
+# engine creates and staffs it — every seat in the unit's subtree and its
+# lead — and a message there wakes the unit's own agent seats.  A child unit
+# that names none inherits its parent's.  See docs/concepts/chatlet.md.
+chat:
+  backend: chatlet
+  chatlet:
+    # ``typing_status`` drives the working indicator a seat shows while it
+    # reasons about a message.  ``addressed`` shows it only when someone is
+    # actually waiting on THAT seat — a direct message, a direct @mention,
+    # or a thread it already follows — which keeps a room from lighting up
+    # one indicator per seat on every message.  ``always`` (the default)
+    # covers every turn a message wakes.
     typing_status: addressed
-    # The engine provisions each agent's bot from this block; a seat's
-    # roles and channels are on its own ``integrations.mattermost``.
-    provisioning:
-      username_prefix: ""          # handles are already agent-*, so a prefix would double it
-      channels: [town-square, engineering, product]
-      display_name_suffix: " (AI)"
-
-  # GitLab on gitlab.com.  ``url`` is required.  ``signing_secret`` is the
-  # HMAC key the hook signs with, and it is NOT a version default: GitLab
-  # signs only when a hook has a ``signing_token`` set on it, whatever the
-  # version.  Registering the value in GitLab's other secret field —
-  # ``token`` — makes the instance echo it back in cleartext instead, which
-  # is what `crewlet gitlab provision` exists to get right.  The value must
-  # be whsec_ over standard base64 of a 32-byte key; the provisioner mints
-  # one, and GitLab's own "Generate signing token" button produces the same
-  # shape.  ``token`` below is a read-only PAT that enables
-  # participants-based routing (comments + state changes reach everyone
-  # participating in an issue/MR, GitLab's own notification reach).
-  # Nothing provisions it: supply a ``read_api`` PAT yourself, or leave it
-  # unresolved and thread activity reaches only the people a payload
-  # names.  The ``provisioning`` sub-block is read by the engine's own
-  # reconcile loop AND by ``crewlet gitlab provision`` — both create one
-  # service account per engineering seat, memberships, per-agent PATs and
-  # project webhooks from it.  See docs/integrations/gitlab.md.
-  gitlab:
-    enabled: true
-    url: "https://gitlab.com"
-    signing_secret: "${GITLAB_SIGNING_SECRET}"       # the hook's signing_token; a delivery without a valid signature is refused
-    token: "${GITLAB_ROUTING_TOKEN}"                  # read PAT → participants-based routing
-    # webhook_name: crewlet                          # which hooks on the instance are this deployment's; two deployments need two names
-    provisioning:
-      group: nimbus-hq                               # top-level group the agent service accounts join
-      projects:                                      # existing Nimbus projects (nimbusflow is created later)
-        - nimbus-hq/nimbuscore
-        - nimbus-hq/nimbusk0s
-        - nimbus-hq/console
-        - nimbus-hq/website
-      group_webhook: auto                            # one group hook if the plan allows, else per-project
+    # ``message_retention_days`` is left at its default, a year (30..3650;
+    # 0 keeps messages for ever), and ``default_channel_private`` at false:
+    # a room created without a stated visibility is readable by every seat.
 
 # Which tracker and which knowledge base this company runs.  Nimbus runs
 # Worklet and Doclet: its work items and its pages live in the fleet's own
@@ -620,21 +600,46 @@ knowledge:
   # and routing, and refused as a unit's own ``space``.
   # See docs/concepts/knowledge-system.md.
 
-# Gitlet, the engine's own git host, beside GitLab rather than instead of it:
-# the control-plane repositories stay where the engineering seats open their
-# merge requests (``integrations.gitlab`` above), and these two are hosted by
-# the engine itself, on its own log — a repository is rows every data node
-# holds, and each push's bytes are one object in the object store.
+# Gitlet, the engine's own git host, holds every Nimbus repository: each is
+# rows every data node holds, and each push's bytes are one object in the
+# object store.  Seats read it through the ``code_*`` tools, and an
+# engineering seat's executor checks a repository out with ``code_checkout``
+# (see the sandbox above).  People clone and push over HTTPS at
+# ``<api.external_url>/git/<name>.git`` with a token of their own
+# (``crewlet iam token -login`` mints one) as git's password.
 #
 # Every activation reconciles this list: a name added is created, a changed
 # setting is settled, and a repository removed from it is DELETED —
 # restorable by declaring it again for ``deleted_retention_days`` (unset:
 # 7) — and purged after that, its name free again.  An owner is a unit (by
-# its id, or its name when it has none) or a seat (by its handle).  A
-# protection rule matches branches or tags by glob (``*`` one path
-# component, ``**`` any number); a ref no rule matches may be force-pushed
-# or deleted, so ``crewlet validate`` warns about a default branch left
-# unprotected.  ``direct_push: none`` freezes the refs it matches.
+# its id, or its name when it has none) or a seat (by its handle).
+#
+# WHO MAY DO WHAT IS DERIVED FROM THE CHART, never listed: a seat's
+# ``code.access`` (on each role below) caps it, and its relation to the
+# owner decides within that cap.  The four control-plane and console
+# repositories and the framework's belong to the Core unit, so its
+# engineers — ``full_access`` — write them, and Core's effective lead, the
+# CTO, maintains them; which engineer owns which repository is the
+# company's own convention, written down on the Repo Ownership page and in
+# each seat's brief rather than in a grant.  Every other seat reads them
+# (``visibility`` unset is ``company``).  A ``full_access`` seat also owns
+# ``refs/heads/seats/<handle>/`` on every repository it reads, which is
+# where DevRel proposes a docstring or an example into an engineer's
+# repository.
+#
+# A protection rule matches branches or tags by glob (``*`` one path
+# component, ``**`` any number).  A plain rule on ``main`` refuses every
+# seat's push to it (``direct_push`` unset is ``persons``) and every force
+# and delete, so a seat's work reaches ``main`` only as a change it proposes
+# and merges — a ref no rule matches may be force-pushed or deleted, which
+# is why ``crewlet validate`` warns about a default branch left unprotected.
+# ``direct_push: none`` freezes the refs it matches, a person's push
+# included.
+#
+# The framework and the docs site start EMPTY: the first commit a seat
+# pushes starts the branch, so declaring them now is the decision to have
+# them, which the AI Systems Engineer and DevRel then fill.
+#
 # ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
 # which only its tools make, are at most 50 a seat (``max_per_seat``) and
 # deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
@@ -647,114 +652,69 @@ knowledge:
 # ``identity_domain`` is the domain a commit the engine builds through a tool
 # spells its addresses in: its committer, ``Crewlet <engine@example.com>``,
 # and the author of a seat whose role states no email address,
-# ``<handle>@example.com``.  Unset is ``seats.invalid``, a name nobody owns.
+# ``<handle>@example.com`` — the identity a box's own commits carry too.
+# Unset is ``seats.invalid``, a name nobody owns.
 # See docs/concepts/gitlet.md.
 code:
   backend: gitlet
   identity_domain: example.com
   repos:
-    - name: nimbus-web
-      owner: {unit: Engineering}
-      description: The customer-facing web app.
+    - name: nimbuscore
+      owner: {unit: core}
+      description: The Go HTTP/REST control-plane service. Agent SWE's.
       protect:
         - branch: main
         - branch: release/*
           direct_push: none
+    - name: nimbusk0s
+      owner: {unit: core}
+      description: The k0s-based worker image. Agent SWE's.
+      protect:
+        - branch: main
+    - name: console
+      owner: {unit: core}
+      description: The authenticated management dashboard (React + Vite + TypeScript). Agent Frontend SWE's.
+      protect:
+        - branch: main
+    - name: website
+      owner: {unit: core}
+      description: The public marketing site. Agent Frontend SWE's.
+      protect:
+        - branch: main
+    - name: nimbusflow
+      owner: {unit: core}
+      description: The Phase-2 Python-first AI framework. Agent AI Systems Engineer's.
+      protect:
+        - branch: main
+    - name: docs
+      owner: {unit: developer-relations}
+      description: The developer docs site. Agent DevRel's.
+      protect:
+        - branch: main
     - name: infra
       owner: {seat: agent-cto}
       description: Deployment manifests for the Nimbus control plane.
       protect:
         - branch: main
 
-# All tool MCP servers live here.  Mattermost and GitLab are
-# ``shared: false`` templates — each agent gets its own stdio instance
-# with the agent's own sealed token, which the engine binds under the key
-# each server reads (the gitlab server is `glab mcp serve`, which reads
-# GITLAB_TOKEN).  Tavily is a shared web-search
-# backend the PM and DevRel call (their "use web search" guideline is
-# unenforceable without it; swap for Brave/Exa if preferred).
-#
-# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: Worklet
-# and Doclet are BUILTIN tools, granted to every seat without a server to
-# run, a process to supervise or a token to mint.  A company on Jira and Confluence adds the community
-# ``mcp-atlassian`` server here and a per-seat credential in each role's
-# ``mcp_env``; see docs/integrations/jira.md.
-mcp_servers:
-  - name: mattermost                         # the engine binds each agent's own bot token
-    # How an agent SENDS. The websocket fleet is inbound-only, so without
-    # this an agent receives a message, reasons about it, and then has no
-    # tool to answer with.  Pinned so a rename cannot disarm a skill: the
-    # enforced platform-mentions skill triggers on `mattermost_post_message`
-    # by name, and an unpinned rename would silently disarm it.
-    # MATTERMOST_TOKEN is each agent's own bot token, bound by the engine.
-    shared: false
-    command: uvx
-    args: ["mcp-server-mattermost==0.6.1"]
-    tool_prefix: "mattermost_"
-    env:
-      MATTERMOST_URL: "${MATTERMOST_URL}"
-  - name: gitlab                             # official glab CLI MCP server; the engine binds each agent's own token
-    # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
-    # process PER ROLE with that role's own sealed GitLab token as
-    # GITLAB_TOKEN, so each agent acts as itself and there is no separate
-    # server to run or host.  Requires the `glab` CLI on the PATH of
-    # every engine host that runs seats.  The served surface is the full
-    # glab command tree (MR approve/diff/notes, issue CRUD, CI, glab_api
-    # for anything else).  Alternative: @zereight/mcp-gitlab as a shared
-    # streamable-HTTP server — see
-    # docs/integrations/gitlab.md § MCP tool server.
-    shared: false
-    command: glab
-    args: ["mcp", "serve"]
-    # glab answers a tool call with everything its command wrote, standard
-    # error included, so what it prints there unasked reaches the agent
-    # and breaks the JSON: the daily update notice (or the failed check,
-    # where gitlab.com is unreachable) and the "What's new" banner after
-    # an upgrade, which GLAB_CHECK_UPDATE does not cover.  The third stops
-    # a usage event to the instance on every call, naming the command and
-    # the project it ran against, sent under the seat's token and waited
-    # on for up to two seconds; leave it out and GitLab's usage statistics
-    # count the agents' commands.  Here, not in each seat's mcp_env — none
-    # is a credential — and never in the engine's own environment (a
-    # sourced .env, an image's ENV): a stdio server is handed only an
-    # allowlist of it.  "false" exactly; glab warns into every result on a
-    # spelling it cannot parse.
-    env:
-      GLAB_CHECK_UPDATE: "false"
-      GLAB_SHOW_WHATS_NEW: "false"
-      GLAB_SEND_TELEMETRY: "false"
-  - name: tavily
-    # The newest release: a file somebody copies is run long after it was
-    # written and nothing moves a pin in it, so an example fetches
-    # everything at its newest — except a server a bundled skill triggers
-    # on by tool name, like the Mattermost one above.  No skill names one
-    # of these tools.
-    command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
-    env:
-      TAVILY_API_KEY: "${TAVILY_API_KEY}"
-    shared: true
-    # The server advertises no annotation on any of its tools — read at
-    # 0.2.22, which lists these five — and each only reads the web.
-    # Unannotated, every one counts as a possible delivery and as having
-    # acted, so a turn that only searched could pass the delivery check,
-    # has its no_action sent back, and is given up rather than redelivered
-    # if it breaks; these say what the server does not.
-    tool_annotations:
-      tavily_search:   { read_only: true, open_world: true }
-      tavily_extract:  { read_only: true, open_world: true }
-      tavily_crawl:    { read_only: true, open_world: true }
-      tavily_map:      { read_only: true, open_world: true }
-      tavily_research: { read_only: true, open_world: true }
+# NO ``mcp_servers:``, and nothing is missing.  Chat, work items, pages and
+# code are BUILTIN tools on this company — Chatlet's, Worklet's, Doclet's
+# and Gitlet's — granted to every seat without a server to run, a process to
+# supervise or a token to mint.  Web research needs no server either: a
+# seat's Claude Code keeps its own web search and fetch (WebSearch,
+# WebFetch) on the same plan login, so the PM's and DevRel's "use web
+# search" guidelines are met with no search vendor's account.  A company
+# adds a server here for a system the engine has no tool for — its own
+# APIs, or a vendor surface — each with its own credential; see
+# docs/guides/tools-and-mcp.md.
 
 # Root-level seats — above all units.  The founder is a HUMAN seat at
 # the top of the chart: agents know who she is (identity prompts say
 # "Reports to: Jane Founder (human)" for the CEO), the Agent CEO
-# escalates to her in chat or on the work item with an @-mention, and her
-# tracker/Mattermost/GitLab activity is attributed to her by name in agent
-# prompts.  She manages only the top agent — lead inheritance handles
-# the rest of the tree.  The ``contact`` IDs are how agents mention and
-# reach her; the engine never messages her as itself.
+# escalates to her in chat or on the work item with an @-mention, and what
+# she writes in chat, on a work item, on a page or on a change is
+# attributed to her seat by name in agent prompts.  She manages only the
+# top agent — lead inheritance handles the rest of the tree.
 # See docs/concepts/humans-in-the-org.md § The founder seat.
 roles:
   - name: Jane Founder
@@ -771,22 +731,20 @@ roles:
     manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
                                                #   handle and units by their key, so a
                                                #   changed display name moves no reference
-    contact:
-      # Mattermost identifies people by username, not an opaque ID — this
-      # is the account you sign in as.  `founder` is what
-      # scripts/mattermost-dev-bootstrap.sh creates.
-      mattermost_user_id: founder
-      gitlab_username: jane-founder
-      # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
-      # a person in the identity directory, invited ONTO this seat — from
-      # its card in Company › Structure (Invite), or `crewlet iam invite
-      # <address> -seat jane-founder`, the SEAT's handle declared above
-      # (`founder` above is her Mattermost username).  Every person holds
-      # a human seat from the moment they join, so there is no separate
-      # bind: the directory binds her here as her invitation is redeemed,
-      # and what she files there is filed by her.  A contact block is how
-      # to REACH a person; a credential is something they hold, and the
-      # company document names none of them.
+    # NO ``contact`` block.  A contact identity is how agents reach a
+    # person on a VENDOR surface — a Mattermost username, a Slack user id,
+    # a GitLab username — and this company runs none: on Chatlet, Worklet,
+    # Doclet and Gitlet she acts AS this seat, so a mention of
+    # ``@jane-founder`` is how she is reached.
+    #
+    # WHO SHE IS ON THE DASHBOARD is not written here either.  She signs in
+    # as a person in the identity directory, invited ONTO this seat — from
+    # its card in Company › Structure (Invite), or `crewlet iam invite
+    # <address> -seat jane-founder`.  Every person holds a human seat from
+    # the moment they join, so there is no separate bind: the directory
+    # binds her here as her invitation is redeemed, and what she says in
+    # chat, files or pushes is hers.  A credential is something a person
+    # holds, and the company document names none of them.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can
@@ -801,6 +759,11 @@ units:
                                                #   name on every import of this file
     type: department
     lead: agent-ceo                            # the LEAD'S HANDLE, never its display name
+    # The unit's ROOM on Chatlet (``chat`` above): created and staffed by the
+    # engine with every seat in the unit's subtree and its lead, and
+    # inherited by a child unit that names none, so Executives talk here too.
+    # Two units naming one channel is refused: a room belongs to one unit.
+    channel: leadership
     children:
       - name: Executives
         id: executives
@@ -815,8 +778,8 @@ units:
         # or a Jira project and a Confluence space, depending on which
         # backends the company runs; the org chart does not change when it
         # switches.
-        # NEITHER is a tool credential (those are per-agent under role
-        # ``mcp_env`` below) and neither scopes knowledge reads.
+        # NEITHER is a tool credential (a vendor tool's would be per-agent,
+        # under a role's ``mcp_env``) and neither scopes knowledge reads.
         project: "LEAD"
         space: "LEAD"
         roles:
@@ -855,11 +818,6 @@ units:
               - Regularly check in on progress by reviewing the boards and team updates rather than requesting ad-hoc status reports.
               - Store strategic insights, competitive intelligence, and key decisions in your personal knowledge base for future reference.
               - When documenting strategic decisions or company-wide announcements, publish them as pages in the LEAD space so all team members can reference them — the knowledge base is the company's own, so every agent's ``## Relevant knowledge`` search reaches them.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
             # Role-scoped recurring work: a weekday-morning backlog review.
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
@@ -909,16 +867,15 @@ units:
               - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
               - Regularly review the board to ensure stories are progressing and no work is falling through the cracks.
               - When you need background on a past architecture decision, search the team's pages first before asking the team.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
+            code:
+              access: full_access             # maintains the Core unit's repositories as
+                                              #   its effective lead, and owns ``infra``
 
   - name: Product
     id: product
     type: department
     lead: agent-pm
+    channel: product                           # its room; both teams below inherit it
     children:
       - name: Product Management
         id: product-management
@@ -962,11 +919,11 @@ units:
               - You should then pick up your tasks one by one, update each one's status, and always update your knowledge_base accordingly after finishing the task.
               - For the responsibilities that require up-to-date analysis/comparison/data-gathering/benchmarking, you should use web search tools and deep search tools to get the latest information.
               - When completing market research or competitive analysis, publish the findings as a page and link it from the work item.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
+            code:
+              access: review                  # reads every repository and reviews DevRel's
+                                              #   docs changes; pushes nothing.  The CEO
+                                              #   sets none and reads, the least a seat
+                                              #   is given
 
       - name: Developer Relations
         id: developer-relations
@@ -994,17 +951,17 @@ units:
               framework docs (you draft, they technical-review) and with the Backend
               SWE on control-plane API references (auto-generated from Swagger plus
               hand-written conceptual overviews).  You own the docs site (likely a
-              separate ``nimbus-hq/docs`` repo using a static-site generator —
+              separate ``docs`` repository using a static-site generator —
               propose the choice in an ADR page) and the developer-facing
               section of the marketing website.
             responsibilities:
-              - "Found and own the docs repo (propose ``nimbus-hq/docs`` with a Docusaurus / Astro / Starlight stack — file an ADR)"
+              - "Found and own the ``docs`` repository (it starts empty: propose a Docusaurus / Astro / Starlight stack in an ADR, then push its first commit)"
               - "Ship a Getting Started tutorial that takes a new developer from zero to a running framework job, end-to-end"
               - "Maintain the public concept reference for both the control plane and the Phase-2 framework — keep it in sync as APIs evolve"
               - "Translate every AI Systems Engineer ADR into a developer-facing doc page; translate every Frontend SWE new page into a screenshot-driven walkthrough"
               - "Build at least three runnable examples per framework feature (``examples/hello-train``, ``examples/hello-serve``, ``examples/hello-finetune``) and keep them in CI so they never bit-rot"
               - "Publish a launch blog post on the website when v0.1 of the framework ships"
-              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and back-file work items for the actual issues"
+              - "Watch the questions people ask in the company's rooms and on work items about every Nimbus repository; turn recurring ones into FAQ pages and file work items for the actual issues"
               - "Coordinate with PM on launch messaging and positioning"
               - "Pick up work items assigned to you, transition them through the workflow, and log work time accurately"
               - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate on the work item"
@@ -1013,24 +970,19 @@ units:
               - When the AI Systems Engineer ships a new framework feature, draft the doc page within 48 hours and ask them for technical review before merging.
               - Test every Getting Started tutorial yourself against a clean environment before declaring a doc story Done — if a step is missing, the tutorial is wrong.
               - File a work item against the owning role for every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) rather than papering over it in the docs.
-              - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each week.
-              - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
-            mcp_env:
-              gitlab:                        # the engine binds this agent's own GitLab token
-                GITLAB_HOST: gitlab.com
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
-              gitlab:
-                enabled: true
-                access_level: 40                # Maintainer: merges to protected main
+              - Track the most common questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each week.
+              - Use web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
+            code:
+              access: full_access             # writes the docs repository, and proposes
+                                              #   docstrings and examples into the
+                                              #   engineers' repositories from its
+                                              #   own seats/agent-devrel/ branches
 
   - name: Engineering
     id: engineering
     type: department
     lead: agent-cto
+    channel: engineering                       # its room; Core inherits it
     children:
       - name: Core
         id: core
@@ -1087,18 +1039,18 @@ units:
               (custom controllers, operators, CRDs, admission webhooks), bare-metal
               provisioning (PXE, iPXE, Tinkerbell), Cluster API (CAPI), k0s, Headscale,
               and multi-region/multi-cluster lifecycle management.  You ship the
-              ``gitlab.com/nimbus-hq/nimbuscore`` HTTP/REST control-plane service and
-              the ``nimbus-hq/nimbusk0s`` worker image.  You understand distributed
+              ``nimbuscore`` HTTP/REST control-plane service and
+              the ``nimbusk0s`` worker image.  You understand distributed
               systems fundamentals — consensus, eventual consistency, leader election,
               circuit breakers — and apply them pragmatically.  You write code that is
               observable from day one (structured logging, OpenTelemetry traces,
               Prometheus metrics), and you keep the framework team's runtime
               requirements in mind when you extend cluster primitives — new endpoints
               for job placement, GPU reservation, dataset volumes, etc. land in
-              nimbuscore on your watch.  You believe in small, focused merge requests
+              nimbuscore on your watch.  You believe in small, focused changes
               and test coverage that catches real bugs rather than chasing percentages.
             responsibilities:
-              - "Own the ``nimbuscore`` Go control-plane service and the ``nimbusk0s`` worker image — accept stories for both, push to those projects"
+              - "Own the ``nimbuscore`` Go control-plane service and the ``nimbusk0s`` worker image — accept stories for both, and propose changes to those repositories"
               - "Extend nimbuscore APIs as the Phase-2 framework needs them (job placement, GPU reservation, dataset volumes, multi-cluster scheduling primitives) — coordinate the shape with the AI Systems Engineer before you ship"
               - "Pick up work items assigned to you, transition them through the workflow (To Do → In Progress → In Review → Done), and log work time accurately"
               - "Read and understand acceptance criteria before writing any code — ask the assigner for clarification in a work-item comment if criteria are ambiguous"
@@ -1107,7 +1059,7 @@ units:
               - "Add structured logging, metrics, and trace spans to all new code paths"
               - "Update or create documentation (code comments, ADRs, runbooks) for any non-trivial implementation decisions"
               - "Escalate blockers to the CTO promptly with a clear description of the problem, what you've tried, and what you need"
-              - "Do not touch ``console``, ``website``, or the Phase-2 framework repo — those are owned by Frontend SWE and AI Systems Engineer respectively; coordinate on the work item rather than crossing project boundaries"
+              - "Do not touch ``console``, ``website``, or ``nimbusflow`` — those are owned by Frontend SWE and AI Systems Engineer respectively; coordinate on the work item rather than crossing repository boundaries"
               - "Store implementation learnings, architectural decisions, and debugging insights in your personal knowledge base for future reference"
               - "When writing runbooks or implementation docs, publish them as pages and link from the work item"
             behavioral_guidelines:
@@ -1118,16 +1070,19 @@ units:
               - When you encounter a bug or edge case during implementation, file a new work item for it, link it to the current story, and note it in a comment rather than silently expanding scope.
               - Always update your knowledge base with key decisions, patterns discovered, and lessons learned after completing each task.
               - Search the team's pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
-              - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it with a comment rather than implementing outside your projects.
-            mcp_env:
-              gitlab:                        # the engine binds this agent's own GitLab token
-                GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run,
-            # which implements the work item in nimbuscore / nimbusk0s and
-            # opens an MR as Agent SWE's own GitLab identity (the
-            # ${GITLAB_TOKEN_AGENT_SWE} token the engine seals for it).  The merge-request
-            # review-requested webhook then wakes this seat to review the
-            # MR + move the work item.
+              - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it with a comment rather than implementing outside your repositories.
+            # FULL ACCESS on Gitlet: with it the seat writes the Core unit's
+            # repositories (``code`` above) and is offered the code write and
+            # merge tools.  Left unset a seat only reads, the least the
+            # engine hands out.
+            code:
+              access: full_access
+            # Executor box: this seat's executor is Claude Code's own run,
+            # which checks nimbuscore or nimbusk0s out of Gitlet, implements
+            # the work item on the seat's own branch and proposes it as a
+            # change.  Every record of that change — a review, a finding, a
+            # comment — wakes the seats it concerns, this one included, to
+            # answer it and move the work item.
             sandbox:
               # The box runs where the default entry places it:
               # providers.sandbox.default_run_in (direct). A seat whose
@@ -1137,33 +1092,30 @@ units:
               # `container` needs providers.sandbox.local.image, an image
               # carrying the harness AND this seat's toolchain (the go
               # step below checks for Go inside it), and `e2b` needs an
-              # `e2b:` block with its api_key and a `template` carrying the
-              # same — Go 1.21 or later here: the engine installs nothing
+              # `e2b:` block with its api_key, a headless token for the
+              # entry (`crewlet llm login default -capture-token`: the plan's
+              # credential files never leave this host) and a `template`
+              # carrying the same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
               # for the harness rather than for this seat's repos.
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
-              # under the reserved `crewlet` server — its mattermost tools,
-              # the shared tavily search and the work item's tools included
+              # under the reserved `crewlet` server — its chat, work-item,
+              # page and code tools, ``code_checkout`` included
               # (docs/concepts/code-sandbox.md, "The tool bridge") — so
               # listing a server here would put the same tools in the box
               # twice.  Name one only when the box needs a credential the
-              # seat itself does not hold.  No code-host server either: the
-              # run pushes and opens the MR with git push options.
-              # This seat's own PAT, injected into the box run env — the
-              # engine-wide git-auth step (and the harness, per that
-              # step's brief) uses it. Explicit per seat, so MRs land under
-              # THIS agent's GitLab identity; the engine itself knows
-              # nothing about GitLab.
-              env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_SWE}"
+              # seat itself does not hold.
+              # No ``env:`` either: the box's access to Gitlet is the run's
+              # own, minted by the engine at launch, and a code host's token
+              # is the only thing a seat here would ever have declared in it.
               # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
               # and a `brief` paragraph telling the harness what the
               # step made true about its box.  Steps apply in order:
-              # providers.sandbox.setup (engine-wide — the git-auth +
-              # nimbus-conventions steps above) → these role steps.
+              # providers.sandbox.setup (engine-wide — the
+              # nimbus-conventions step above) → these role steps.
               setup:
                 - name: go
                   # nimbuscore / nimbusk0s are Go repos.  This seat's box
@@ -1188,18 +1140,13 @@ units:
                   env:
                     GOTOOLCHAIN: auto
                   brief: >-
-                    Go workspace: you own gitlab.com/nimbus-hq/nimbuscore (the Go
-                    HTTP/REST control-plane service) and
-                    gitlab.com/nimbus-hq/nimbusk0s (the worker image). A Go
+                    Go workspace: you own the nimbuscore (the Go HTTP/REST
+                    control-plane service) and nimbusk0s (the worker image)
+                    repositories on Gitlet. A Go
                     toolchain (1.21 or later) is installed and GOTOOLCHAIN=auto
                     fetches at least the version each repo's go.mod go/toolchain
                     line requires. Run `go build ./...` and `go test ./...`
                     before pushing.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
 
           - name: Agent Frontend SWE
             handle: agent-frontend-swe
@@ -1208,10 +1155,10 @@ units:
               Senior frontend engineer who has shipped enterprise developer-tooling UIs
               at scale.  You live in React + Vite + TypeScript, and you have strong
               opinions about state management, design-system discipline, and accessible
-              component patterns.  You own ``gitlab.com/nimbus-hq/console`` (the
+              component patterns.  You own ``console`` (the
               authenticated management dashboard — Clusters, ControlPlane, Usage &
               Billing, and the upcoming AI Services pages: Models, Fine-tuning,
-              Datasets, Jobs, Serving Endpoints) and ``gitlab.com/nimbus-hq/website``
+              Datasets, Jobs, Serving Endpoints) and ``website``
               (the public marketing landing page).  You consume the nimbuscore REST API
               via generated TypeScript clients off the Swagger spec, and you coordinate
               with the SWE before adding a UI for an endpoint that does not
@@ -1219,14 +1166,14 @@ units:
               loading skeletons, and snappy interactions; you do not ship features
               without empty, loading, and error states.
             responsibilities:
-              - "Own ``console`` and ``website`` — accept stories for both, push to those projects"
+              - "Own ``console`` and ``website`` — accept stories for both, and propose changes to those repositories"
               - "Deliver the AI Services pages the console README already advertises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — coordinate the API shape with the SWE first"
               - "Keep the TypeScript API client in sync with the latest nimbuscore Swagger — regenerate when the SWE ships a new endpoint"
               - "Pick up work items assigned to you, transition them through the workflow, and log work time accurately"
               - "Write component tests for non-trivial UI logic and at least one end-to-end smoke test per new page"
               - "File design questions for the PM/CEO in a work-item comment before implementing UX that has no precedent in the console"
               - "Escalate blockers to the CTO promptly"
-              - "Do not touch ``nimbuscore``, ``nimbusk0s``, or the Phase-2 framework repo — coordinate on the work item"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, or ``nimbusflow`` — coordinate on the work item"
               - "When you ship a new console page, publish a short user-facing screenshot/walkthrough as a page so DevRel can pick it up for docs"
             behavioral_guidelines:
               - Read the full work item before touching code; if a story needs a backend endpoint that does not exist yet, file a SWE story for it and block your own work item on that dependency rather than mocking the API.
@@ -1234,25 +1181,20 @@ units:
               - Reuse existing components in ``src/components`` before adding new ones; if you add a new component, document its props in a short comment block.
               - For every new page, include empty / loading / error states from the first commit — never ship a happy-path-only UI.
               - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM on the work item rather than guessing.
-            mcp_env:
-              gitlab:                        # the engine binds this agent's own GitLab token
-                GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run,
-            # which implements the UI story in console / website and opens
-            # an MR as Agent Frontend SWE's own GitLab identity
-            # (${GITLAB_TOKEN_AGENT_FRONTEND_SWE}).
+            code:
+              access: full_access             # writes the Core unit's repositories
+            # Executor box: this seat's executor is Claude Code's own run,
+            # which checks console or website out of Gitlet, implements the
+            # UI story on the seat's own branch and proposes it as a change.
             sandbox:
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
-              # under the reserved `crewlet` server — its mattermost tools,
-              # the shared tavily search and the work item's tools included
+              # under the reserved `crewlet` server — its chat, work-item,
+              # page and code tools, ``code_checkout`` included
               # (docs/concepts/code-sandbox.md, "The tool bridge") — so
               # listing a server here would put the same tools in the box
               # twice.  Name one only when the box needs a credential the
-              # seat itself does not hold.  No code-host server either: the
-              # run pushes and opens the MR with git push options.
-              env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_FRONTEND_SWE}"   # this seat's own PAT, for the git-auth step and the harness
+              # seat itself does not hold.
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
@@ -1271,20 +1213,15 @@ units:
                   env:
                     CI: "1"
                   brief: >-
-                    Node workspace: you own gitlab.com/nimbus-hq/console (the
-                    React + Vite + TypeScript management dashboard) and
-                    gitlab.com/nimbus-hq/website (the marketing site). Run
+                    Node workspace: you own the console (the React + Vite +
+                    TypeScript management dashboard) and website (the
+                    marketing site) repositories on Gitlet. Run
                     each repo's pinned package manager through corepack, as
                     its packageManager field names it — `corepack pnpm
                     install`, `corepack pnpm test` — never a bare `pnpm`,
                     which may be missing or another version. Run the repo's
                     lint and test scripts before pushing; every new page needs
                     empty/loading/error states.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
@@ -1306,7 +1243,7 @@ units:
               ruthlessly user-empathetic about the SDK surface; you would rather
               delete a feature than ship one that surprises a researcher at 2am.
             responsibilities:
-              - "Found and own the Phase-2 framework repo (propose a name — e.g. ``nimbus-hq/nimbusflow`` — and create it once the CTO/CEO approve)"
+              - "Found and own the Phase-2 framework repository, ``nimbusflow`` (it starts empty: push its first commit once the CTO/CEO approve the design)"
               - "Design and ship the framework's core surfaces: Python SDK (``@nimbus.remote`` / ``nimbus.train`` / ``nimbus.serve``), harness, runtime scheduler, worker protocol, and the nimbuscore-side integration"
               - "Write ADR pages in the ENG project for every architectural choice (actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack choice)"
               - "Propose new nimbuscore endpoints to the SWE as joint design docs — never bypass nimbuscore by talking to the cluster directly"
@@ -1320,28 +1257,24 @@ units:
               - For any feature that requires a new nimbuscore endpoint, file a SWE story with the endpoint shape sketched out, link it from your story, and do not start coding the framework side until the contract is agreed.
               - Write ADR pages (under "AI Framework / Architecture Decisions") for every non-trivial design choice; link from the epic.
               - Ship a working ``examples/`` script for every public surface before marking the story Done — if you cannot demo it in 10 lines, the API is wrong.
-              - For perf-sensitive code, capture a baseline benchmark in the MR description before optimising; otherwise you are guessing.
+              - For perf-sensitive code, capture a baseline benchmark in the change's description before optimising; otherwise you are guessing.
               - When you discover a missing primitive in the Nimbus platform (a cluster capability, a console page, a webhook), file a story for the owning role rather than working around it.
-            mcp_env:
-              gitlab:                        # the engine binds this agent's own GitLab token
-                GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run —
-            # the harness the default entry drives, so a Python framework change
-            # needs no extra harness secret — which implements the
-            # framework story in the Phase-2 repo and opens an MR as Agent
-            # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
+            code:
+              access: full_access             # writes the Core unit's repositories
+            # Executor box: this seat's executor is Claude Code's own run —
+            # the harness the default entry drives, on its plan login, so a
+            # Python framework change needs no extra harness secret — which
+            # checks nimbusflow out of Gitlet, implements the framework story
+            # on the seat's own branch and proposes it as a change.
             sandbox:
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
-              # under the reserved `crewlet` server — its mattermost tools,
-              # the shared tavily search and the work item's tools included
+              # under the reserved `crewlet` server — its chat, work-item,
+              # page and code tools, ``code_checkout`` included
               # (docs/concepts/code-sandbox.md, "The tool bridge") — so
               # listing a server here would put the same tools in the box
               # twice.  Name one only when the box needs a credential the
-              # seat itself does not hold.  No code-host server either: the
-              # run pushes and opens the MR with git push options.
-              env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the harness
+              # seat itself does not hold.
               setup:
                 - name: python
                   # The Phase-2 framework repo is Python-first, managed with
@@ -1354,16 +1287,11 @@ units:
                   commands:
                     - "command -v uv >/dev/null 2>&1 || { echo 'no uv on PATH: install uv on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
                   brief: >-
-                    Python workspace: you own the Phase-2 framework repo
-                    (gitlab.com/nimbus-hq/nimbusflow once created). uv is
+                    Python workspace: you own the Phase-2 framework
+                    repository on Gitlet, nimbusflow. uv is
                     installed — `uv sync` sets up the env, `uv run pytest`
                     runs the suite; run it before pushing. Ship a runnable
                     examples/ script with every public-surface change.
-            integrations:
-              mattermost:
-                enabled: true
-                roles: [system_user]
-                channels: [town-square, engineering, product]
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.

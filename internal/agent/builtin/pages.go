@@ -608,20 +608,55 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 // then. An absent or empty status is published, which is what every caller
 // that predates the argument meant.
 func createStatus(args map[string]any) (doclet.Status, string) {
+	status, named, ok := statusArg(args)
+	switch {
+	case !ok:
+		return "", fmt.Sprintf(WritePageTool+" writes a page as `%s` or `%s`, and was "+
+			"asked for %s. Leave `status` out to publish it.",
+			doclet.StatusPublished, doclet.StatusDraft, clip(fmt.Sprint(args["status"])))
+	case !named:
+		return doclet.StatusPublished, ""
+	}
+	return status, ""
+}
+
+// saveStatus is the status a save moves a page to, nil where the call names
+// none and the page keeps its own, or the sentence that refuses the one it
+// named.
+//
+// PUBLISHED OR DRAFT, as a new page's is ([createStatus]) and for its reason:
+// the trash is a state a page is moved into, by the gesture that stamps when.
+// This is the one way a draft is published, so an absent status changes
+// nothing rather than publishing: an edit to a draft keeps it a draft.
+func saveStatus(args map[string]any) (*doclet.Status, string) {
+	status, named, ok := statusArg(args)
+	switch {
+	case !ok:
+		return nil, fmt.Sprintf(SavePageTool+" moves a page to `%s` or `%s`, and was "+
+			"asked for %s. Leave `status` out to keep the one it has.",
+			doclet.StatusPublished, doclet.StatusDraft, clip(fmt.Sprint(args["status"])))
+	case !named:
+		return nil, ""
+	}
+	return &status, ""
+}
+
+// statusArg reads a call's `status`: the status it names, whether it names
+// one at all (an absent, null or empty one names none), and false where what
+// it names is neither of the two a page is written or saved in.
+func statusArg(args map[string]any) (status doclet.Status, named, ok bool) {
 	raw, present := args["status"]
 	if !present || raw == nil {
-		return doclet.StatusPublished, ""
+		return "", false, true
 	}
-	text, ok := argval.String(raw)
-	switch status := doclet.Status(strings.TrimSpace(text)); {
-	case ok && status == "":
-		return doclet.StatusPublished, ""
-	case ok && (status == doclet.StatusPublished || status == doclet.StatusDraft):
-		return status, ""
+	text, isText := argval.String(raw)
+	switch asked := doclet.Status(strings.TrimSpace(text)); {
+	case isText && asked == "":
+		return "", false, true
+	case isText && (asked == doclet.StatusPublished || asked == doclet.StatusDraft):
+		return asked, true, true
 	}
-	return "", fmt.Sprintf(WritePageTool+" writes a page as `%s` or `%s`, and was "+
-		"asked for %s. Leave `status` out to publish it.",
-		doclet.StatusPublished, doclet.StatusDraft, clip(fmt.Sprint(raw)))
+	return "", false, false
 }
 
 // ---- save_page --------------------------------------------------------- //
@@ -645,7 +680,7 @@ var _ tools.SeatCallable = (*savePage)(nil)
 func (t *savePage) Name() string { return SavePageTool }
 
 func (t *savePage) Description() string {
-	return "Change an existing page: its body, title, labels or parent. " +
+	return "Change an existing page: its body, title, labels, parent or status. " +
 		"You MUST pass the `base_version` you read with " + GetPageTool + " — an edit " +
 		"against a version somebody else has already moved past is refused " +
 		"rather than silently overwriting what they wrote."
@@ -679,6 +714,15 @@ func (t *savePage) Parameters() map[string]any {
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Replaces the whole label set.",
+			},
+			"status": map[string]any{
+				"type": "string",
+				"enum": []any{string(doclet.StatusPublished), string(doclet.StatusDraft)},
+				"description": "published makes a draft a page every reader and " +
+					"every search finds; draft takes a published page back to " +
+					"unfinished. Leave it out to keep the status the page has. " +
+					"Moving it is the page's creator's, its container's lead's " +
+					"or an admin's.",
 			},
 			"message": map[string]any{
 				"type":        "string",
@@ -757,7 +801,24 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			return *refused, nil
 		}
 	}
-	save := doclet.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
+	// A STATUS IS READ BEFORE ANYTHING LANDS, and a move of it is decided
+	// before the save for the rename's reason: publishing a draft, or taking
+	// a page back to one, decides whether the company reads the page at all,
+	// which is [authz.ActionPagePublish] on the stored page and not the save
+	// anybody who uses Doclet may make. A status the page already has moves
+	// nothing and asks nothing.
+	status, bad := saveStatus(args)
+	if bad != "" {
+		return failed(bad), nil
+	}
+	if status != nil && *status != detail.Page.Status {
+		if refused := t.deps.mayWrite(ctx, authz.ActionPagePublish,
+			PageObject(detail.Page)); refused != nil {
+			return *refused, nil
+		}
+	}
+	save := doclet.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message")),
+		Status: status}
 	if _, ok := args["body"]; ok {
 		// The body get_page answered arrives fenced, and the likeliest edit
 		// sends the fence back with it; see [unfence].
@@ -877,7 +938,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	read := newForeignRead(turn, actor.Handle)
 	read.attribute(nil, true)
 	return read.answer(ctx, SavePageTool, map[string]any{
-		"id": got.Page.ID, "title": got.Page.Title,
+		"id": got.Page.ID, "title": got.Page.Title, "status": string(got.Page.Status),
 		"version": got.Page.Version, "revision": revision,
 		"outcome": outcomeOf(outcome), "position": positionOf(at),
 	}, "")

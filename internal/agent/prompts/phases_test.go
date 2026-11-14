@@ -226,10 +226,14 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	}
 	// The rule that actually prevents the double-post — and the same rule for
 	// the calls a record counts by tool rather than lists, the only line a
-	// round a park dropped is drawn with.
+	// round a park dropped is drawn with, held to its own words for a call it
+	// says has an unknown outcome: the `→ error` rule says the same "check
+	// whether it did before making it again", so those words alone would hold
+	// the counted line to nothing, and without its clause the header would say
+	// such a call ALREADY RAN.
 	contains(t, withPrior, "Already done earlier in this turn", "### Iteration 1", "ALREADY RAN",
 		"**A line counting calls by tool**", "those it does not count as failed ALREADY RAN",
-		"check whether it did before making it again")
+		"one it says has an unknown outcome may have taken effect: check whether it did before making it again")
 
 	endings, _ := BuildConversationEndings(provenance.NewBoundary(), ConversationEndings{Seat: "cto", Head: "t-1",
 		Turns: []TurnEnding{{Turn: "t-1", Outcome: "completed", Delivered: true, DeliveredTo: "slack"}}})

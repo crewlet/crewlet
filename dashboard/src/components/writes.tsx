@@ -51,7 +51,8 @@ import { isAccessOption } from "~/lib/grants.ts";
 import { AccessGrantDialog } from "~/components/advisorFix.tsx";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
-import { useAnswerHold, useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
+import { useAnswerHold } from "~/lib/useWriteAccess.ts";
+import { useSeatMessage } from "~/lib/seatMessage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -547,21 +548,77 @@ export function SaveViewButton({
   );
 }
 
+/**
+ * A saved view's name and who sees it, changed on its own page.
+ *
+ * THE SAME WRITE AS SAVING ONE, naming the view it replaces (`id`) and sending
+ * the rest of it as it stands, so a rename changes the name and nothing the
+ * view asks. Whether the reader may is the engine's (a protected personal
+ * view is its owner's alone), said in its own words. There is no delete: the
+ * engine offers none.
+ */
+export function EditViewButton({
+  view,
+}: {
+  /** The view as the inventory answered it, its container spelled as the tool takes it. */
+  view: {
+    id: string;
+    name: string;
+    container: string;
+    type: string;
+    params: Record<string, string>;
+    personal: boolean;
+  };
+}) {
+  const write = useAct("save_work_view");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        leadingIcon={<PencilGlyph />}
+        showRefusal={false}
+        onPress={() => setOpen(true)}
+      >
+        Edit view
+      </WriteButton>
+      {open && (
+        <SaveViewDialog
+          container={view.container}
+          type={view.type}
+          params={view.params}
+          editing={view}
+          write={write}
+          onClose={() => {
+            write.dismiss();
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function SaveViewDialog({
   container,
   type,
   params,
+  editing,
   write,
   onClose,
 }: {
   container: string;
   type: string;
   params: Record<string, string>;
+  /** The view this replaces, for an edit; absent for a new one. */
+  editing?: { id: string; name: string; personal: boolean };
   write: ReturnType<typeof useAct<"save_work_view">>;
   onClose: (id?: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [mine, setMine] = useState(false);
+  const [name, setName] = useState(editing?.name ?? "");
+  const [mine, setMine] = useState(editing?.personal ?? false);
   const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
   const blocked = !name.trim()
     ? "Give the view a name first."
@@ -574,8 +631,15 @@ function SaveViewDialog({
     if (!pressable(write, blocked)) return;
     const title = name.trim();
     const result = await write.run(
-      { container, name: title, type, params, ...(mine ? { personal: true } : {}) },
-      { done: `Saved the view ${title}` },
+      {
+        ...(editing ? { id: editing.id } : {}),
+        container,
+        name: title,
+        type,
+        params,
+        ...(mine ? { personal: true } : {}),
+      },
+      { done: editing ? `Saved ${title}` : `Saved the view ${title}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const id = (result.receipt as { id?: unknown } | null)?.id;
@@ -586,8 +650,8 @@ function SaveViewDialog({
     <Modal
       open
       size="sm"
-      title="Save this view"
-      icon={<PinGlyph />}
+      title={editing ? "Edit view" : "Save this view"}
+      icon={editing ? <PencilGlyph /> : <PinGlyph />}
       onClose={() => onClose()}
       onSubmit={() => void submit()}
       closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
@@ -603,7 +667,7 @@ function SaveViewDialog({
             onPress={() => void submit()}
             blocked={blocked}
           >
-            Save view
+            {editing ? "Save changes" : "Save view"}
           </WriteButton>
         </>
       }
@@ -1243,23 +1307,8 @@ function AnswerRunDialog({
 // ---------------------------------------------------------------------------
 
 /**
- * Message a seat — as a task that ASKS it.
- *
- * MESSAGE IS THE TRACKER'S ASK, and it stays that wherever chat is. It opens
- * the one New task sheet with the seat as assignee and `ask` naming it, so the
- * question is filed as work the seat owes an answer on, and the answer lands
- * in the asker's Inbox. A company on the engine's own chat also offers a
- * DIRECT conversation with the seat beside it (`routes/agents/DirectMessage.
- * tsx`) — a remark that obliges nothing — and the two are different gestures,
- * so neither stands in for the other. The sheet's Create is the write; this
- * button opens it, and is held with the reason where the reader could not
- * file one — a door that opened onto a sheet that then refused would teach
- * the reason one press too late.
- *
- * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
- * ask of your own seat is a question only you could answer. Decided here
- * rather than by each screen that draws the button, because the page held it
- * while the peek drew it bare.
+ * Message a seat (`lib/seatMessage.ts`): a direct conversation where one can
+ * be, an ask elsewhere, held with the press's own reason either way.
  */
 export function MessageSeatButton({
   handle,
@@ -1268,25 +1317,22 @@ export function MessageSeatButton({
   handle: string;
   variant?: "primary" | "secondary";
 }) {
-  const write = useAct("create_work_item");
-  const access = useMessageSeatAccess(handle);
-  const openNewTask = useOpenNewTask();
-  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no
-  // Worklet there is nothing to file it in and no button (`lib/services.ts`).
-  const runs = useServicesRun();
-  if (!runs.tracker) return null;
+  const direct = useAct("open_dm");
+  const ask = useAct("create_work_item");
+  const message = useSeatMessage(handle);
+  if (message === null) return null;
   return (
     <WriteButton
-      write={write}
+      write={message.kind === "direct" ? direct : ask}
       size="small"
       variant={variant}
       leadingIcon={<MessageSquareGlyph size="sm" />}
       showRefusal={false}
       // THE ACT'S OWN REASON IS THE BUTTON'S where it cannot act at all, and
-      // the access above is that same reason then — so this is only ever the
-      // own-seat hold, which ranks after everything else.
-      blocked={access.can ? undefined : access.reason}
-      onPress={() => openNewTask({ assignee: handle, ask: handle })}
+      // the hold above is that same reason then, so this is only ever the
+      // own-seat or no-seat hold, which ranks after everything else.
+      blocked={message.held || undefined}
+      onPress={message.open}
     >
       Message
     </WriteButton>

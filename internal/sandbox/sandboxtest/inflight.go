@@ -46,11 +46,14 @@ func beginCall(t *testing.T, s sandbox.PendingStore, turnID string, a sandbox.Br
 // update whose answer was lost — each writes nothing more. So a call a reader
 // took for one whose outcome is unknown, its entry read in flight, has that
 // unknown replaced by its own outcome once its update lands, while the run's
-// record stands. And a withdrawal takes the entry of a call that was then not
-// run out, listing nothing.
+// record stands. The finished call is listed with neither who ran it nor its
+// bound, which only its entry carries, though its update hands it both. And a
+// withdrawal takes the entry of a call that was then not run out, listing
+// nothing.
 //
 // Mutation: list the call without taking its entry out, and the log holds the
-// call twice, finished and in flight.
+// call twice, finished and in flight; keep a finished call's runner and bound
+// as handed (kept-call-keeps-its-runner), and the call is listed with both.
 func testACallsEntryIsUpdatedOnceByItsIdentity(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-in-flight-once"
 	job := mustLaunched(t, s, run(turn))
@@ -73,6 +76,9 @@ func testACallsEntryIsUpdatedOnceByItsIdentity(t *testing.T, s sandbox.PendingSt
 
 	finished := madeAt("post_message", 1, 1)
 	finished.Digest, finished.Output = digestOf(1), "posted"
+	// AND WHO RAN IT UNTIL WHEN, as a writer may hand them: the finished call
+	// keeps neither ([sandbox.BridgeCall.Runner]).
+	finished.Runner, finished.Until = entry.Runner, entry.Until
 	for range 2 {
 		if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: job, Round: round, Call: finished}) {
 			t.Fatal("the call's update was not recorded")

@@ -212,6 +212,102 @@ type atlasNow struct {
 	chart      *org.Organization
 	person     atlas.Source
 	at         time.Time
+
+	// coverage is how each source's read went, and decidedOn every entry the
+	// plan read from the view, by each of its members, with whole set where
+	// it read the view rather than named entries ([atlasNow.unread]).
+	coverage  []gather.Coverage
+	decidedOn []atlas.Ref
+	whole     bool
+}
+
+// find is the entry ref names, as the view holds it, and the plan is decided
+// on it from here on, found or not: that the view holds no such entry is as
+// much a reading of the sources as what it says of one it holds.
+func (n *atlasNow) find(ref atlas.Ref) (atlas.Entry, bool) {
+	e, found := n.view.Find(ref.ID())
+	n.decidedOn = append(n.decidedOn, ref)
+	if found {
+		n.decidedOn = append(n.decidedOn, e.Members...)
+	}
+	return e, found
+}
+
+// findID is the entry an id names. AN ID THE VIEW DOES NOT HOLD NAMES NO KEY,
+// so which source would have held it cannot be told, and the plan is decided
+// on the whole view.
+func (n *atlasNow) findID(id uuid.UUID) (atlas.Entry, bool) {
+	e, found := n.view.Find(id)
+	if !found {
+		n.whole = true
+		return e, false
+	}
+	n.decidedOn = append(n.decidedOn, e.Members...)
+	return e, true
+}
+
+// entries is every entry of the view, for a plan decided on all of them.
+func (n *atlasNow) entries() []atlas.Entry {
+	n.whole = true
+	return n.view.Entries
+}
+
+// unread refuses a change decided on something a source could not say just
+// now. A CHANGE IS DECIDED ON WHAT THE ATLAS HOLDS ABOUT THE ENTRIES IT
+// TOUCHES: a source this node serves that answered in part, and that can
+// state a fact of one of them ([gather.SourceName.Claims]), may hold the very
+// fact the write would claim beside, or the entry the plan read as absent.
+//
+// AND ON NOTHING ELSE. A source that says nothing of those entries holds
+// nothing the write could collide with, so its failing is no reason to refuse:
+// held to every source read in full, one unreachable Gitlet node or one
+// record store behind stopped every person's add, correction and ownership
+// change in the atlas, of entries that source never names. A source that
+// only joins health and use states no fact, and never refuses a write.
+//
+// One this node does not serve, and Gitlet where the caller may not read it,
+// hold nothing the write may touch.
+func (n *atlasNow) unread() *tools.Result {
+	for _, c := range n.coverage {
+		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !n.gitlet {
+			continue
+		}
+		about := n.whole && c.Source.StatesFacts() ||
+			slices.ContainsFunc(n.decidedOn, func(ref atlas.Ref) bool { return c.Source.Claims(ref) })
+		if !about {
+			continue
+		}
+		return unreadSource(n.tool, c.Source)
+	}
+	return nil
+}
+
+// unreadSource is the refusal of a change decided on a source that could not
+// be read in full: the source by name to the model, and in a person's words
+// to a person, since "try again" with nothing named leaves them no way to
+// tell a blip from a source that is down.
+func unreadSource(tool string, source gather.SourceName) *tools.Result {
+	r := toPerson(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
+		"could not be read in full just now, and this change is decided on what it holds. Try again shortly.",
+		tool, strings.ReplaceAll(string(source), "_", " "))), caveat.AtlasSourceUnread(sourceWords(source)))
+	return &r
+}
+
+// sourceWords names a source that states facts as a person reads it.
+func sourceWords(source gather.SourceName) string {
+	switch source {
+	case gather.SourceGitlet:
+		return "Gitlet's repositories"
+	case gather.SourceIntegrations:
+		return "the integrations' status"
+	case gather.SourceToolServers:
+		return "the tool servers' listings"
+	case gather.SourceNodes:
+		return "the engine's own nodes"
+	case gather.SourceLog:
+		return "what people recorded in it"
+	}
+	return "its " + strings.ReplaceAll(string(source), "_", " ")
 }
 
 // atlasWrite is one write tool.
@@ -275,6 +371,12 @@ func (t *atlasWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	plan, refusal := t.verb.plan(n, args)
+	// BEFORE THE PLAN'S OWN ANSWER, a refusal included: a plan that read an
+	// entry as absent, or as free of a declared fact, from a source that did
+	// not answer has decided nothing.
+	if unread := n.unread(); unread != nil {
+		return *unread, nil
+	}
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -350,24 +452,6 @@ func (t *atlasWrite) now(ctx context.Context, turn *turnctx.Turn, actor Actor) (
 		return nil, &r
 	}
 	return n, nil
-}
-
-// wholeRead refuses a change decided on an atlas read in part. A CHANGE IS
-// DECIDED ON ALL OF WHAT THE CALLER READS: a source this node serves that
-// answered in part may hold the very fact the write would claim beside. One
-// this node does not serve, and Gitlet where the caller may not read it, hold
-// nothing the write may touch.
-func wholeRead(tool string, coverage []gather.Coverage, gitletRead bool) *tools.Result {
-	for _, c := range coverage {
-		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !gitletRead {
-			continue
-		}
-		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
-			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
-			tool, strings.ReplaceAll(string(c.Source), "_", " ")))
-		return &r
-	}
-	return nil
 }
 
 // write records a plan's steps in order, each under its own operation derived
@@ -549,7 +633,7 @@ func (n *atlasNow) entry(a map[string]any, arg string) (member, *tools.Result) {
 	}
 	var ref atlas.Ref
 	if id, err := uuid.Parse(raw); err == nil && id.String() == raw {
-		e, ok := n.view.Find(id)
+		e, ok := n.findID(id)
 		if !ok {
 			return member{}, n.notFound(arg)
 		}
@@ -577,7 +661,7 @@ func (n *atlasNow) entry(a map[string]any, arg string) (member, *tools.Result) {
 			"in the atlas by a person who uses Gitlet and can read it.", n.tool))
 		return member{}, &r
 	}
-	e, found := n.view.Find(ref.ID())
+	e, found := n.find(ref)
 	if !found && ref.OnGitlet() {
 		// GITLET LISTS THE CALLER EVERY REPOSITORY THEY MAY READ, so one it
 		// did not list is one they may not change.
@@ -942,7 +1026,7 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("added", ref)}
-	e, found := n.view.Find(ref.ID())
+	e, found := n.find(ref)
 	if found && e.State == atlas.StateRetired {
 		r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, "+
 			"retired. Bring it back with %s.", n.tool, ref, AtlasRestoreTool)), caveat.AtlasEntryExists(true))
@@ -1655,7 +1739,7 @@ func planPurge(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			atlasdomain.MaxPurgedValueBytes))
 		return atlasPlan{}, &r
 	}
-	for _, e := range n.view.Entries {
+	for _, e := range n.entries() {
 		for _, member := range e.Members {
 			i := slices.IndexFunc(e.Sources, func(s atlas.Source) bool { return s.Kind.Computed() })
 			if member.Key == value && i >= 0 {

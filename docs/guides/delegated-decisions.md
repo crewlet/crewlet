@@ -59,6 +59,17 @@ a request a delegate made itself goes to people the moment it is held. The
 document is refused otherwise, and refused with a rule that names nobody to
 escalate to.
 
+An administrator can change all of it from **Settings › Delegated
+decisions** as well: its switch turns delegation on or off, **Add a rule**
+and each rule's pencil open the rule's fields filled from the company
+document, and each rule's bin removes it after asking (the rules after it move
+up one, and an escalation names a rule by its number). Each change is a
+`PATCH /config` of the `delegated_decisions` block, checked against the whole
+company before it is stored, so a rule the engine refuses is refused there in
+the same words, and nothing is saved. Turning delegation off removes
+`enabled`, and an empty spot-check rate leaves `sample_one_in` out, so the
+document says the default rather than today's value of it.
+
 ## What a delegate does
 
 A request of a delegated kind goes to its delegates first, as a turn of its

@@ -809,9 +809,9 @@ The rule lives in the store rather than beside one tool because it was once one 
 
 **A remark is its author's.** Editing a comment is the author's alone: nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or an administrator's (`admin`): a lead is not automatically a moderator of what is said on their team's pages. Both need the `doclet` app beside the authorship.
 
-**A page's creator tidies it.** Renaming a page, trashing it and restoring it are its **creator's** (whoever wrote it first, which a save never changes) as well as its container's lead's and an administrator's, each with the `doclet` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
+**A page's creator tidies it.** Renaming a page, publishing a draft or taking a page back to a draft, trashing it and restoring it are its **creator's** (whoever wrote it first, which a save never changes) as well as its container's lead's and an administrator's, each with the `doclet` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
 
-**A page container is led through a unit's `space:`.** The rules that are a container's lead's — renaming, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
+**A page container is led through a unit's `space:`.** The rules that are a container's lead's (renaming, publishing, trashing and restoring a page) ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
 
 ### The trash is emptied after thirty days
 
@@ -1017,8 +1017,8 @@ Knowledge docs follow a **directory-based convention** — the files are pure pr
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
 `examples/nimbus-docs/` is a worked set of these: the pages the Nimbus
-example company publishes. Both bundled examples run **Doclet**, so
-neither is an argument to this CLI: they publish
+example company publishes. The bundled example runs **Doclet**, so
+it is no argument to this CLI: its pages publish
 through the assistant path above. A company that moves to Confluence adds
 the `confluence:` block per [Confluence](../integrations/confluence.md),
 and its company YAML is then the positional argument the importer reads

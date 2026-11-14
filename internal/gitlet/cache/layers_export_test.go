@@ -56,6 +56,7 @@ func InstallQueued(c *Cache) []string {
 		out = append(out, e.id)
 	}
 	waiting := slices.Clone(in.waiting)
+	//fixedwait:measure a sort comparator over retry instants, whose order no caller reads
 	slices.SortStableFunc(waiting, func(a, b *installEntry) int { return a.wait.retryAt.Compare(b.wait.retryAt) })
 	for _, e := range waiting {
 		out = append(out, e.id)

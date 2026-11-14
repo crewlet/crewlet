@@ -9,10 +9,11 @@
  * the test has not run on what will be saved.
  */
 
-import { Button, Callout, Spinner, Text } from "@crewlethq/ui";
+import { Button, Callout, Text } from "@crewlethq/ui";
 import type { ModelSignInRoute } from "~/contract/models.ts";
 import type { CheckAnswer, CredentialLimited } from "~/protocol/models.ts";
 import { DoctorLines, type SignInFacts } from "../../flows/TestDialog.tsx";
+import { Waiting } from "../../Waiting.tsx";
 import { WINDOW } from "../../words.ts";
 import type { Draft, Method } from "../draft.ts";
 
@@ -62,6 +63,7 @@ export function TestStep({
   current,
   editing,
   signIn,
+  pasted,
   onRun,
 }: {
   draft: Draft;
@@ -70,6 +72,8 @@ export function TestStep({
   current: string;
   editing: boolean;
   signIn: SignInFacts;
+  /** Whether the draft carries a credential typed here, which its test signs in with alone. */
+  pasted: boolean;
   onRun: () => void;
 }) {
   const running = test.kind === "running";
@@ -84,10 +88,14 @@ export function TestStep({
         </Button>
       </span>
       {running ? (
-        <div className="models-waiting" role="status">
-          <Spinner size="sm" />
-          <Text variant="body">Running the harness once. This can take up to two minutes.</Text>
-        </div>
+        // WHAT THE WAIT IS, AND ITS REAL LENGTH: a pasted credential is one
+        // harness run; a model with nothing new to sign in with gets its whole
+        // check, which is three runs one after another.
+        <Waiting>
+          {pasted
+            ? "Running the harness once to sign in with what you pasted. It usually answers in 5 to 20 seconds, and is given two minutes at most."
+            : "Running the harness three times: one answer, then a check of its local tools and of its web access. Each usually takes 5 to 20 seconds, and the three are given three minutes at most."}
+        </Waiting>
       ) : null}
       {stale ? (
         <Text as="p" variant="caption" tone="secondary">

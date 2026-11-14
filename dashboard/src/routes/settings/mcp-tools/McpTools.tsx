@@ -140,6 +140,19 @@ function ListPage({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
   );
 }
 
+/**
+ * Where a saved wizard leaves its reader.
+ *
+ * AN EDIT RETURNS TO WHERE IT WAS OPENED, as Cancel does: the list's row menu
+ * back to the list, the server's page back to that page. Sending every save
+ * to the server's page took a person working down the list away from it. A
+ * new server goes to its own page, where it is first seen, and so does one a
+ * person signs in next, since that page is where they do it.
+ */
+export function savedLanding(editing: boolean, signInNext: boolean): "origin" | "server" {
+  return editing && !signInNext ? "origin" : "server";
+}
+
 export function McpTools({
   server,
   tool,
@@ -195,10 +208,12 @@ export function McpTools({
         step={flow.step}
         onClose={flow.close}
         onSaved={(name, signInNext) => {
-          nav.to(
-            ["settings", "mcp-tools", "servers", name],
-            signInNext ? { tab: "connection", flow: "signin" } : undefined,
-          );
+          if (savedLanding(editing !== null, signInNext) === "origin") flow.close();
+          else
+            nav.to(
+              ["settings", "mcp-tools", "servers", name],
+              signInNext ? { tab: "connection", flow: "signin" } : undefined,
+            );
           data.reload();
         }}
       />
@@ -228,7 +243,9 @@ export function McpTools({
           data={data}
           name={target}
           flow={flow}
-          onRemoved={() => nav.to(["settings", "mcp-tools"])}
+          // BACK TO WHERE IT WAS OPENED: the list (on the lens it was on)
+          // stays the list; the removed server's own page goes to the list.
+          onRemoved={() => (server ? nav.to(["settings", "mcp-tools"]) : flow.close())}
         />
       ) : null}
     </>

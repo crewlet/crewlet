@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/google/uuid"
 
@@ -292,8 +293,11 @@ func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 // rule: a shape refusal proves something wrote into the directory.
 //
 // The refusal is COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
-// is, so a caller it wakes reads both: its log line is written late here,
-// which answered first, the case reads before it lands.
+// is, so a caller it wakes reads both. Its log line is kept late here, in a
+// synctest bubble: only once every other goroutine of the case is durably
+// blocked (synctest.Wait) — so a caller the refusal answered first has read
+// the log before the line lands, however late it ran, and one it answers
+// after reads the line kept.
 //
 // Mutations: drop tidy's hold to gitproc.CheckShape, and the round behind the
 // sweep answers a directory the pool refuses; answer a swept round's shape
@@ -312,65 +316,77 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			w := newSyncWorld(t, onMemory)
-			w.logs.slow = "code_cache_rebuild_refused"
-			repo := w.repo(t, 1)
-			tip, _ := w.push(t, repo, "refs/heads/main", nil)
-			if arm.tagged {
-				w.tag(t, repo, "v1", true)
-			}
-			at := arm.at
-			var (
-				armed = make(chan struct{}, 1)
-				spoil = shapeDamages[0].spoil
-			)
-			c := w.open(t, func(o *cache.Options) {
-				at(o, func(dir string) {
-					select {
-					case <-armed:
-						spoil(t, dir) // behind the sweep, in the round that swept it
-					default:
+			synctest.Test(t, func(t *testing.T) {
+				w := newSyncWorld(t, onMemory)
+				w.logs.logging = func(msg string) {
+					if msg == "code_cache_rebuild_refused" {
+						// Kept once every other goroutine of the case is
+						// durably blocked — the caller parked on its answer,
+						// or one answered first done reading the log. The
+						// round reports the refusal holding no lock
+						// (Cache.run), and reports it once, so nothing
+						// queues behind the hold and no other Wait meets it.
+						synctest.Wait()
 					}
+				}
+				repo := w.repo(t, 1)
+				tip, _ := w.push(t, repo, "refs/heads/main", nil)
+				if arm.tagged {
+					w.tag(t, repo, "v1", true)
+				}
+				at := arm.at
+				var (
+					armed = make(chan struct{}, 1)
+					spoil = shapeDamages[0].spoil
+				)
+				c := w.open(t, func(o *cache.Options) {
+					at(o, func(dir string) {
+						select {
+						case <-armed:
+							spoil(t, dir) // behind the sweep, in the round that swept it
+						default:
+						}
+					})
 				})
+				s := w.sync(t, c, repo)
+				defer s.Release()
+
+				armed <- struct{}{}
+				spoil(t, s.Dir)
+				rebuilt, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildShape})
+				if err != nil {
+					t.Fatalf("Rebuild(shape) of a shape the sweep did not end: %v", err)
+				}
+				defer rebuilt.Release()
+				if cache.Incarnation(rebuilt) != 2 {
+					t.Fatalf("answered incarnation %d, want the rebuilt 2", cache.Incarnation(rebuilt))
+				}
+				if _, err := runGit(t, w.pool, rebuilt.Dir, "", "cat-file", "-e", tip); err != nil {
+					t.Errorf("git in the rebuilt incarnation: %v", err)
+				}
+				if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "shape"); got != 1 {
+					t.Errorf("%s{reason=shape} = %d, want the one rebuild", metrics.CodeCacheRebuilds, got)
+				}
+				if lines := w.logs.lines(t, "code_sync_damaged"); len(lines) != 1 || lines[0]["swept"] != true {
+					t.Errorf("code_sync_damaged = %v, want one line, swept true", lines)
+				}
+
+				armed <- struct{}{}
+				spoil(t, rebuilt.Dir)
+				if _, err := c.Rebuild(t.Context(), rebuilt, cache.Failure{Reason: cache.RebuildShape}); !errors.Is(err, cache.ErrRebuildRefused) {
+					t.Fatalf("a second shape the sweep did not end, inside the cooldown = %v, want ErrRebuildRefused", err)
+				}
+				if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {
+					t.Errorf("%s{rule=cooldown} = %d, want 1", metrics.CodeCacheRebuildRefusals, got)
+				}
+				if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "unchanged"); got != 0 {
+					t.Errorf("%s{rule=unchanged} = %d: a shape refusal proves the directory moved",
+						metrics.CodeCacheRebuildRefusals, got)
+				}
+				if lines := w.logs.lines(t, "code_cache_rebuild_refused"); len(lines) != 1 || lines[0]["reason"] != "shape" {
+					t.Errorf("code_cache_rebuild_refused = %v, want one line under shape", lines)
+				}
 			})
-			s := w.sync(t, c, repo)
-			defer s.Release()
-
-			armed <- struct{}{}
-			spoil(t, s.Dir)
-			rebuilt, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildShape})
-			if err != nil {
-				t.Fatalf("Rebuild(shape) of a shape the sweep did not end: %v", err)
-			}
-			defer rebuilt.Release()
-			if cache.Incarnation(rebuilt) != 2 {
-				t.Fatalf("answered incarnation %d, want the rebuilt 2", cache.Incarnation(rebuilt))
-			}
-			if _, err := runGit(t, w.pool, rebuilt.Dir, "", "cat-file", "-e", tip); err != nil {
-				t.Errorf("git in the rebuilt incarnation: %v", err)
-			}
-			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "shape"); got != 1 {
-				t.Errorf("%s{reason=shape} = %d, want the one rebuild", metrics.CodeCacheRebuilds, got)
-			}
-			if lines := w.logs.lines(t, "code_sync_damaged"); len(lines) != 1 || lines[0]["swept"] != true {
-				t.Errorf("code_sync_damaged = %v, want one line, swept true", lines)
-			}
-
-			armed <- struct{}{}
-			spoil(t, rebuilt.Dir)
-			if _, err := c.Rebuild(t.Context(), rebuilt, cache.Failure{Reason: cache.RebuildShape}); !errors.Is(err, cache.ErrRebuildRefused) {
-				t.Fatalf("a second shape the sweep did not end, inside the cooldown = %v, want ErrRebuildRefused", err)
-			}
-			if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {
-				t.Errorf("%s{rule=cooldown} = %d, want 1", metrics.CodeCacheRebuildRefusals, got)
-			}
-			if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "unchanged"); got != 0 {
-				t.Errorf("%s{rule=unchanged} = %d: a shape refusal proves the directory moved",
-					metrics.CodeCacheRebuildRefusals, got)
-			}
-			if lines := w.logs.lines(t, "code_cache_rebuild_refused"); len(lines) != 1 || lines[0]["reason"] != "shape" {
-				t.Errorf("code_cache_rebuild_refused = %v, want one line under shape", lines)
-			}
 		})
 	}
 }

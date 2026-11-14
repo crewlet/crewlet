@@ -1,15 +1,12 @@
 /**
  * Inbox's widget: the updates waiting for the reader, as the Inbox lists them.
  *
- * THE SIDEBAR'S READING. The unread primary notices are what the Inbox row's
- * badge counts, and the count on this card IS that count: `useInboxCounts`,
- * the one reading the frame asks for every surface that says how much waits
- * (`lib/useInboxCounts.ts`), floor and all ("50+"). The card's own question
- * asks only for the few rows it draws, so its page is no count: counted off
- * that page, the card said "6 unread" beside a sidebar saying "12", and never
- * marked its figure as the floor the page's cursor said it was. A row opens
- * that notice in the Inbox, where reading it marks it read; nothing here
- * marks anything.
+ * ITS OWN COUNT, NOT THE BADGE'S. The badge counts what waits on the reader
+ * (`lib/useInboxCounts.ts`); this card lists their unread primary updates,
+ * which inform and ask nothing, so it counts those, off its own read: the
+ * rows it draws and, where the engine handed back a cursor, a floor ("8+").
+ * A row opens that notice in the Inbox, where reading it marks it read;
+ * nothing here marks anything.
  */
 
 import { useMemo } from "react";
@@ -20,7 +17,6 @@ import { useNow } from "~/lib/clock.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { Badge } from "~/routes/inbox/InboxColumn.tsx";
 import {
@@ -56,11 +52,10 @@ function Updates() {
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
   const rows = noticeRows(read.data?.notices ?? []);
-  const { waiting, capped } = useInboxCounts();
-  const unread = waiting === null ? null : countLabel(waiting, capped);
+  const unread = read.data ? countLabel(rows.length, Boolean(read.data.next_cursor)) : null;
   return (
     <WidgetCard
-      title={waiting !== null && waiting > 0 ? `Inbox · ${unread} unread` : "Inbox"}
+      title={unread !== null && rows.length > 0 ? `Inbox · ${unread} unread` : "Inbox"}
       from="inbox"
     >
       {!viewer.loading && owner === "" ? (
@@ -124,7 +119,7 @@ function Updates() {
               );
             })}
           </List>
-          {waiting !== null && (capped || waiting > rows.length) ? (
+          {read.data?.next_cursor ? (
             <a className="home-card-more t-link" href={href(["inbox"])}>
               {`All ${unread} unread`}
             </a>

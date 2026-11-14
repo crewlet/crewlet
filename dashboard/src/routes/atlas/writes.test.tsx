@@ -21,6 +21,7 @@ import { Atlas } from "./Atlas.tsx";
 import { ChangesPage } from "./ChangesPage.tsx";
 import { EntryPage } from "./EntryPage.tsx";
 import { touchingSentence } from "./entry.tsx";
+import { SEATLESS } from "./access.tsx";
 import { PURGE_HELD } from "./EntryActions.tsx";
 import { Review } from "./Review.tsx";
 import { addArgs, draftKey, factsOf, relationsFrom, reviewDecisions, undecided } from "./writes.ts";
@@ -206,6 +207,39 @@ describe("a reader who may not write", () => {
     fireEvent.click(held);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(posted).toEqual([]);
+  });
+
+  // A SIGN-IN WITH NO SEAT (an API token, an account bound to none) is offered
+  // no atlas change by the engine, whatever it holds. MUTATION: leave the
+  // shared catch-all sentence and every control says "this can't be changed
+  // from here", with neither the cause nor anywhere to go.
+  test("a sign-in with no seat is told that is why, once, with where a person takes a seat", async () => {
+    const token = { ...ADA, grants: ["admin", "atlas"], handle: "", owner: "token:ci", acts: [] };
+    mountEntry(token);
+    const confirm = await screen.findByRole("button", { name: "Confirm" });
+    await waitFor(() => expect(reasonOf(confirm)).toContain(SEATLESS));
+    expect(reasonOf(screen.getByRole("button", { name: "Correct" }))).toContain(SEATLESS);
+    const note = document.querySelector(".atlas-actions__note")!;
+    expect(note.textContent).toContain(SEATLESS);
+    expect(
+      within(note as HTMLElement)
+        .getByRole("link")
+        .getAttribute("href"),
+    ).toBe("#/company/org");
+    fireEvent.click(screen.getByRole("button", { name: /More to do with web-1/ }));
+    for (const name of [/Set owner/, /Link a page/, /Merge with/, /Split/, /Retire/, /Purge/]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled"), String(name)).toBe("true");
+      expect(item.textContent, String(name)).toContain(SEATLESS);
+      expect(item.textContent, String(name)).not.toContain(WRITE_REASONS.not_served);
+    }
+  });
+
+  test("a reader who holds a seat is never told they hold none", async () => {
+    mountEntry({ ...ADA, acts: [] });
+    const confirm = await screen.findByRole("button", { name: "Confirm" });
+    await waitFor(() => expect(reasonOf(confirm)).toContain(WRITE_REASONS.not_served));
+    expect(document.querySelector(".atlas-actions__note")).toBeNull();
   });
 
   test("a purge is held for anybody but an administrator, in words", async () => {

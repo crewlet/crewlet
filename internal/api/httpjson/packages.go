@@ -64,7 +64,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"procgrouptest": true, "prompts": true,
 		"prereqtest": true, "presence": true, "provenance": true,
 		"provision": true, "queries": true, "queue": true, "queuetest": true, "readaudit": true, "recordseal": true,
-		"redact": true, "redacttest": true, "references": true, "regexlit": true, "regexlittest": true, "rendezvous": true, "replicated": true, "routing": true, "runner": true, "runtoken": true,
+		"redact": true, "redacttest": true, "references": true, "regexlit": true, "regexlittest": true, "rendezvous": true, "replicated": true, "routing": true, "runner": true, "runanswer": true, "runtoken": true,
 		"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true, "scenario": true,
 		"schedule": true, "scheduletest": true, "search": true, "seat": true,
 		"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,

@@ -76,6 +76,13 @@ type LimitRow struct {
 	// says which default a set value replaced says Off where the default is
 	// no limit, rather than keeping its own copy of which zeros are off.
 	DefaultOff bool `json:"default_off"`
+	// Settable is whether Key is a setting of the company document, so a
+	// write of it (`PATCH /config`) changes Value. False for a cap the
+	// engine holds as a constant and reports under a path no document
+	// carries: the schedule timeout, which each schedule sets for itself.
+	// A screen offers a change exactly where this is true, rather than
+	// keeping its own list of which keys the document has.
+	Settable bool `json:"settable"`
 }
 
 // LimitsAnswer is what `limits` answers.
@@ -91,6 +98,9 @@ type limit struct {
 	unit      LimitUnit
 	read      func(*config.Company) float64
 	zeroIsOff bool
+	// constant marks a row read from the engine itself rather than from
+	// the company: no document key sets it.
+	constant bool
 }
 
 // limits is every cap the answer reports, in the order a screen draws them.
@@ -132,6 +142,7 @@ var limits = []limit{
 	// value is always the engine's: a screen shows it as the default a
 	// schedule inherits, and each schedule's own is on `schedules`.
 	{key: "schedules.timeout_seconds", group: LimitSchedules, unit: LimitSeconds,
+		constant: true,
 		read: func(*config.Company) float64 {
 			return float64(org.DefaultScheduleTimeout / time.Second)
 		}},
@@ -148,6 +159,7 @@ func limitsAnswer(c *config.Company) LimitsAnswer {
 			Value: value, Default: def,
 			Off:        l.zeroIsOff && value == 0,
 			DefaultOff: l.zeroIsOff && def == 0,
+			Settable:   !l.constant,
 		})
 	}
 	return out

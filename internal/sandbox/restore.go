@@ -1302,6 +1302,11 @@ type SessionContinuation struct {
 	// branch to check out, the uncommitted work gone, the earlier box's
 	// absolute paths).
 	Replaced string
+
+	// Told is what Brief and Replaced told of the round the launch carries
+	// on, the same for both since they tell the same calls ([BriefTold]):
+	// recorded on the job the launch opens where it hands either.
+	Told BriefTold
 }
 
 // BriefKind is which of the four briefs a launch handed its run: a run that
@@ -1361,12 +1366,45 @@ type continuedLaunch struct {
 	brief, fresh, session string
 	carried               *CarriedSession
 	kind                  BriefKind
+	// told is what brief told of the round the launch carries on
+	// ([BriefTold]): the fresh brief's where it continues no session.
+	told BriefTold
 	// kept says the session is the turn's kept capture rather than the job
 	// before's own copy in its box ([LaunchDecision.Kept]).
 	kept bool
+	// measure is what the session carried at its newest request the engine
+	// measured, along its lineage, saying where it came from: the job
+	// before's record of its own copy, where the launch continues that copy
+	// in place; the kept capture's own measure of its archive, its job named
+	// as the archive's; the frozen base's, for the session the conversation's
+	// last turn left; and none for a session of the run's own. Written on the
+	// job's record with its command ([BoxRef.Context]), so a job that makes no
+	// request of its own is measured by the copy it took up, and never by a
+	// copy of another lineage.
+	measure *SessionMeasure
+	// restart is the newest place the session restarts at, as the launch
+	// knows it: the job before's collection's read of its own copy, where the
+	// launch continues that copy in place; the kept capture's own read of its
+	// archive; a session of the run's own, which restarts nowhere ("");
+	// nil where it is not known, the session the conversation's last turn
+	// left among it, which no count describes. Written on the job's record
+	// with its command ([BoxRef.Restart]): what a later relaunch compares the
+	// job's own copy with, to know whether the job restarted it after its
+	// brief ([RestartedSince]).
+	restart *string
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
+}
+
+// carriedMeasure is a figure a launch carries along its session's lineage from
+// source, of launch's job where source names one: none where it is no count of
+// a session's context, as a capture that measured nothing records 0.
+func carriedMeasure(tokens int64, source MeasureSource, launch string) *SessionMeasure {
+	if tokens <= 0 {
+		return nil
+	}
+	return &SessionMeasure{Tokens: tokens, Source: source, Launch: launch}
 }
 
 // decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
@@ -1374,9 +1412,38 @@ func (l continuedLaunch) decision() LaunchDecision {
 	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation}
 }
 
-// freshLaunch is a launch that continues no session.
+// omitted is what the launch req records on the job it opens of the calls of
+// the round it carries on that the brief it hands its run left out, and, where
+// that brief continues a session, the fresh one its box falls back to
+// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+//
+// NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
+// turn's first launch tells no round's calls, and a send-back opens a new
+// round, whose log restarts, so a set of the collected round's calls would be
+// read against another round's log. A closed round's reads past the read cap
+// are counted under the prior-work ledger's rule for them.
+func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
+	if req.Continue == nil {
+		return nil, nil
+	}
+	if l.kind.Continues() {
+		fresh = req.Continue.Fresh.Omitted
+	}
+	return l.told.Omitted, fresh
+}
+
+// freshLaunch is a launch that continues no session: what its fresh brief told
+// of the round it carries on where it carries one on, and nothing where it
+// does not (a turn's first launch, a send-back), whose request names no
+// continuation to read it off.
 func freshLaunch(req LaunchRequest) continuedLaunch {
-	return continuedLaunch{brief: req.Brief, kind: BriefFresh, release: func() {}}
+	// A SESSION OF THE RUN'S OWN restarts nowhere yet: its basis is known, and
+	// is none.
+	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {}}
+	if req.Continue != nil {
+		launch.told = req.Continue.Fresh
+	}
+	return launch
 }
 
 // continueSession is how the launch req continues its turn's session in box —
@@ -1405,14 +1472,22 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		}
 		if why == "" {
+			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
+			// they opened with, the same for the brief for either box
+			// ([SessionContinuation.Told]).
+			launch.told = want.Told
 			return launch
 		}
 		c.notContinued(ctx, req, why)
 	}
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if !opened.sessionExhausted(continued.SessionID) {
+			// THE COPY THE BOX HOLDS, measured as the job before's record
+			// holds it, read by the reset that opened this job in the write
+			// that replaced that record ([PriorBox.Context]).
 			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-				kind: BriefContinued, release: func() {}}
+				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context,
+				restart: opened.Prior.Restart, release: func() {}}
 		}
 		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
@@ -1455,12 +1530,18 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if brief == "" {
 		return continuedLaunch{}, "the launch was given no brief that continues the session in this box"
 	}
+	// MEASURED AS THE CAPTURE MEASURED ITS ARCHIVE, the capture's job named as
+	// the archive's, never as that job's request.
+	measure := carriedMeasure(kept.ContextTokens, MeasureCapture, kept.Launch)
+	// AND WHERE THE ARCHIVE RESTARTS LAST, as the capture's own read of it
+	// found it.
+	restart := restartOf(kept.ResumedCount)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
 	if reused && !kept.Interrupted {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			kept: true, release: func() {}}, ""
+			kept: true, measure: measure, restart: restart, release: func() {}}, ""
 	}
 	archive := ArchiveOf(row)
 	check, err := restorer.CheckCarry(ctx, box, archive)
@@ -1487,7 +1568,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// the run — which replaces the box's copy where its harness was cut off.
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		kept: true, carried: carried,
+		kept: true, carried: carried, measure: measure, restart: restart,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()
@@ -1583,6 +1664,7 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: base.Interrupted}
 	return continuedLaunch{brief: want.Replaced, fresh: req.Brief, session: base.SessionID,
 		kind: BriefContinuedConversation, kept: true, carried: carried,
+		measure: carriedMeasure(base.ContextTokens, MeasureBase, ""),
 		release: func() {
 			_ = body.Close()
 			fetched.remove()

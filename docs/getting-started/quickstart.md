@@ -385,9 +385,9 @@ is emitted, naming the window and when it resets. Until then the agent's new
 messages wait on its inbox rather than being lost, and they are delivered when
 the window turns over — or at once, if you raise the ceiling. Every turn
 launches an executor, which needs `turn_engine.executor_min_budget_tokens`
-(25000 by default) left in every capped window: a seat whose window leaves less
-waits parked the same way, and a `token_budget` ceiling below that floor is
-refused when you write it. The run's own spend is charged when it is
+(25000 by default) with the run's brief beside it left in every capped window:
+a seat whose window leaves less waits parked the same way, and a
+`token_budget` ceiling below that floor is refused when you write it. The run's own spend is charged when it is
 collected.
 
 Usage is **durable** — it lives in the fleet's
@@ -718,13 +718,13 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and twenty-seven
+over the tracker, five over the pages and nine in the chat) and twenty-eight
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering an executor's question, asking for a read
+running one of its schedules now, steering a running turn, answering an executor's question, asking for a read
 of one of the atlas's sources now, answering a
 question from the company's knowledge and, where the company hosts its code,
 reading who read a unit's repository and marking your own code notices. With
@@ -1072,13 +1072,14 @@ each), then wire them in:
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
-- Explore the [Nimbus example](../../examples/) — a seven-seat company on
-  Mattermost, running on Claude Code with your Claude plan rather than an API
-  key (`nimbus-claude-code`), every seat running that harness as its own agentic
-  loop, in a `direct` box on the engine host — a first run on your own
-  machine while its seats take work from you alone, like this page's.
-  It is the next step up from this page and still needs nothing but the chat
-  server in this repo's compose file; every integration above adds on top of
-  it
+- Explore the [Nimbus example](../../examples/) — a seven-seat company with
+  no outside account: Chatlet, Worklet, Doclet and Gitlet for its chat, work,
+  pages and code, running on Claude Code with your Claude plan rather than an
+  API key, every seat running that harness as its own agentic loop, in a
+  `direct` box on the engine host — a first run on your own machine while its
+  seats take work from you alone, like this page's. It is the next step up
+  from this page and needs nothing this page did not; every integration
+  above adds on top of it, and every setting carries its reasoning in a
+  comment
 - Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options
