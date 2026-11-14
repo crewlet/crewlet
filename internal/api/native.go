@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -140,14 +142,56 @@ func (n NativeReads) Into(s *queries.Sources) {
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
-// yet, or the company does not run this half (Worklet, Doclet or Chatlet,
-// named by half). See the file comment for why the two are different
-// answers.
-func nativeAbsent(started bool, half string) error {
+// yet, the company turned the half on while this node's runtime was already
+// running without it, or the company does not run this half (Worklet, Doclet
+// or Chatlet, named by half). See the file comment for why the first and the
+// last are different answers.
+//
+// # A half turned on live is not a half the company does not run
+//
+// A node builds its native runtime once per process, so a revision that turns
+// a half on activates here and is served only after a restart
+// ([engine.Engine.AwaitingRestart]). Answered as "this company does not run
+// it", the company's own Chatlet read on every screen as a surface this node
+// never has, with nothing saying a restart brings it. So it is an
+// `unavailable` answer under `native_backend_needs_restart` with no wait:
+// only the restart clears it, and another node serves the question meanwhile,
+// which is what Gitlet's own routes already answered for the same cause.
+func nativeAbsent(e *engine.Engine, started bool, half string) error {
+	return halfAbsent(started, started && awaitsRestart(e, half), half)
+}
+
+// halfAbsent is [nativeAbsent] once the node's posture has been read: whether
+// it has met its company, and whether that company turned half on over a
+// runtime built without it.
+func halfAbsent(started, restart bool, half string) error {
 	if !started {
 		return errNoCompanyYet
 	}
+	if restart {
+		return fmt.Errorf("%w: %w", queries.ErrUnavailable, &stream.Unserved{
+			Code:   httpjson.CodeNativeBackendNeedsRestart,
+			Detail: httpjson.NeedsRestart(half),
+		})
+	}
 	return fmt.Errorf("%w: this company does not run %s", queries.ErrUnknown, half)
+}
+
+// halfServices is each native half by the name the org projection's
+// `services` gives its service, which is how the engine names the ones
+// awaiting a restart.
+var halfServices = map[string]string{
+	"Worklet": "tracker", "Doclet": "knowledge", "Chatlet": "chat",
+}
+
+// awaitsRestart reports whether the company this node serves runs half and
+// this node's runtime was built without it.
+func awaitsRestart(e *engine.Engine, half string) bool {
+	c := e.Company()
+	if c == nil {
+		return false
+	}
+	return slices.Contains(e.AwaitingRestart(c.Config), halfServices[half])
 }
 
 // liveWork is the tracker's read side, resolved per question.
@@ -158,7 +202,7 @@ func (l liveWork) reader() (estate.Work, error) {
 	if r, ok := engine.OperatorWork(l.engine); ok {
 		return r, nil
 	}
-	return estate.Work{}, nativeAbsent(started, "Worklet")
+	return estate.Work{}, nativeAbsent(l.engine, started, "Worklet")
 }
 
 // Kept answers whether this node serves the tracker half, by the same
@@ -406,7 +450,7 @@ func (l livePages) reader() (estate.Pages, error) {
 	if r, ok := engine.OperatorPages(l.engine); ok {
 		return r, nil
 	}
-	return estate.Pages{}, nativeAbsent(started, "Doclet")
+	return estate.Pages{}, nativeAbsent(l.engine, started, "Doclet")
 }
 
 // Kept answers whether this node serves the knowledge half, by the same
@@ -483,7 +527,7 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 	started := l.engine.NativeStarted()
 	p, ok := engine.OperatorPages(l.engine)
 	if !ok {
-		return search.Backlinks{}, nativeAbsent(started, "Doclet")
+		return search.Backlinks{}, nativeAbsent(l.engine, started, "Doclet")
 	}
 	return p.LinkedFrom(ctx, pageID)
 }
@@ -503,7 +547,7 @@ func (l liveWorkSearch) Search(ctx context.Context, q worklet.SearchQuery) (
 	started := l.engine.NativeStarted()
 	s := engine.WorkSearcher(l.engine)
 	if s == nil {
-		return worklet.SearchAnswer{}, nativeAbsent(started, "Worklet")
+		return worklet.SearchAnswer{}, nativeAbsent(l.engine, started, "Worklet")
 	}
 	return s.Search(ctx, q)
 }
@@ -517,7 +561,7 @@ func (l liveChat) reader() (estate.Chat, error) {
 	if r, ok := engine.OperatorChat(l.engine); ok {
 		return r, nil
 	}
-	return estate.Chat{}, nativeAbsent(started, "Chatlet")
+	return estate.Chat{}, nativeAbsent(l.engine, started, "Chatlet")
 }
 
 // Reach is a post's dry run ([queries.ChatDrafter]), through the same router
@@ -604,7 +648,7 @@ func (l liveChatSearch) Search(ctx context.Context, q estate.ChatQuery) (
 	started := l.engine.NativeStarted()
 	s, ok := engine.OperatorChatSearch(l.engine)
 	if !ok {
-		return estate.ChatSearchAnswer{}, nativeAbsent(started, "Chatlet")
+		return estate.ChatSearchAnswer{}, nativeAbsent(l.engine, started, "Chatlet")
 	}
 	return s.Search(ctx, q)
 }

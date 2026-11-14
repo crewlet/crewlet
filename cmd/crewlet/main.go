@@ -2512,6 +2512,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// one this process booted on would describe a company that
 			// is no longer running.
 			Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
+			// WHICH OF THE COMPANY'S OWN SERVICES THIS NODE SERVES ONLY
+			// ONCE RESTARTED, so the org projection says it beside the
+			// backends and a reader is not shown a workspace whose every
+			// question this node refuses.
+			AwaitingRestart: e.AwaitingRestart,
 			// THE LEAD RELATIONS the personal questions are scoped by —
 			// somebody's inbox, their day, their person record — asked
 			// through the SAME seam every other surface asks, so a lead

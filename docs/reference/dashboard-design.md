@@ -1041,6 +1041,22 @@ counts as not held, and a service's page waits for the projection before it
 mounts: nothing is asked of a service before somebody has said the company
 runs it.
 
+**A service this node starts only once restarted is hidden the same way, and
+says so.** A node builds Worklet, Doclet, Chatlet and Gitlet once, as it boots,
+so a company that turns one on while a node is running has it on that node only
+after the node restarts, and until then every question about it there is
+refused (`native_backend_needs_restart`). The org projection names such a
+service in `services.restart` (`lib/services.ts`' `awaitsRestart`), and the
+dashboard treats it as not run HERE: its sidebar row, destinations, chords and
+controls leave, as for a service the company does not run. Its address draws
+the notice in place with what is true instead of "not in use here": the
+company turned it on while this node was running, the node starts it when it
+restarts, and the step the reader can take: the engine's nodes
+(`#/settings/nodes`) for a reader who may open that page, and who to ask for
+anybody else. It once drew the workspace in the sidebar and "Not available on
+this node" on every one of its screens, with nothing saying a restart brings
+it.
+
 **A guarded section says so and nothing else.** Opened by a reader the engine
 has SAID holds none of the access it needs, a guarded section is replaced by
 one refusal (`app/frame/GrantRequired.tsx`) — "Nodes needs Admin access",

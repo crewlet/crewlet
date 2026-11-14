@@ -6603,6 +6603,17 @@ product: which vendors a `vendor` company talks on is told to a holder of
 `chatlet` as the [`viewer`](#queries) answer's `chat_vendors`. Absent only from
 `{}`, so a reader never mistakes "no company yet" for `none`.
 
+**`services.restart` is which of the four THE ANSWERING NODE serves only once it
+restarts**, each by its key (`tracker`, `knowledge`, `chat`, `code`): one of
+Crewlet's own services the company turned on while this node's runtime was
+already running without it ([A native backend changes at a
+restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)).
+Until the node restarts, every question about such a service is refused there
+`unavailable` under `native_backend_needs_restart` with no `Retry-After`, so a
+client treats it as a service it cannot reach on this node rather than one the
+company does not run. Absent where the node serves everything the company
+runs.
+
 **`token_budget` is the ceilings as written**, on the company and on each seat
 that names its own: one number per calendar window it caps (`day`, `week`,
 `month`, on the company clock), and nothing for a window it leaves open — so
@@ -8187,6 +8198,12 @@ that moves the company onto Jira or Confluence (or turns on a half it was built
 without) activates normally, logs `native_backend_needs_restart`, and changes
 what these questions answer only at the node's next restart (see
 [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)).
+Until then a question about a half the revision turned ON is refused
+`unavailable` (`503`) under `native_backend_needs_restart` with no
+`Retry-After`, its detail naming the half ("this node was already running when
+the company turned Chatlet on, and it starts Chatlet when it restarts: restart
+this node, or ask another one"), never as a half the company does not run
+(`unknown_query`); the org answer names it in [`services.restart`](#get-org).
 
 **A copy that has not caught up refuses.** Every one of these answers
 `unavailable` (`503`, with a `Retry-After`) where the copy that answers is

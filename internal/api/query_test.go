@@ -485,7 +485,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		a := seededApp(t, nil)
 		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
-				return nil, api.NativeAbsent(false, "Worklet")
+				return nil, api.NativeAbsent(false, false, "Worklet")
 			})
 
 		rec := httptest.NewRecorder()
@@ -517,12 +517,55 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		}
 	})
 
+	// A HALF THE COMPANY TURNED ON WHILE THIS NODE WAS RUNNING is neither: the
+	// company runs it, and only this node's restart serves it here. It read
+	// as `unknown_query`, "not available on this node", on every screen of a
+	// workspace the company had just turned on. Both transports say the
+	// restart's own code, in the half's name, with no wait. Mutation: drop
+	// the restart arm of `halfAbsent` and both answer unknown_query.
+	t.Run("a half turned on while the node was running", func(t *testing.T) {
+		t.Parallel()
+		a := seededApp(t, nil)
+		a.Queries().Register("rooms", queries.Everybody(),
+			func(context.Context, queries.Params) (any, error) {
+				return nil, api.NativeAbsent(true, true, "Chatlet")
+			})
+		want := httpjson.Sentence(httpjson.NeedsRestart("Chatlet"))
+
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/rooms", nil)))
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("REST body: %v", err)
+		}
+		if rec.Code != http.StatusServiceUnavailable ||
+			body["error"] != string(httpjson.CodeNativeBackendNeedsRestart) ||
+			body["detail"] != want {
+			t.Errorf("REST = %d %v, want 503 %s saying %q",
+				rec.Code, body, httpjson.CodeNativeBackendNeedsRestart, want)
+		}
+		if got := rec.Header().Get("Retry-After"); got != "" {
+			t.Errorf("REST Retry-After = %q, want none: only a restart clears it", got)
+		}
+
+		socket := overSocket(t, a, "rooms", nil)
+		if socket["error"] != "unavailable" ||
+			socket["refusal"] != string(httpjson.CodeNativeBackendNeedsRestart) ||
+			socket["detail"] != want {
+			t.Errorf("socket answer = %v, want unavailable naming %s saying %q",
+				socket, httpjson.CodeNativeBackendNeedsRestart, want)
+		}
+		if got := socket["retry_after"]; got != float64(0) {
+			t.Errorf("socket retry_after = %v, want 0: waiting changes nothing", got)
+		}
+	})
+
 	t.Run("a half the company keeps elsewhere", func(t *testing.T) {
 		t.Parallel()
 		a := seededApp(t, nil)
 		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
-				return nil, api.NativeAbsent(true, "Worklet")
+				return nil, api.NativeAbsent(true, false, "Worklet")
 			})
 		status, answered := overREST(t, a, "board", nil)
 		body, _ := answered.(map[string]any)

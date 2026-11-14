@@ -284,8 +284,11 @@ func wireAPI(
 			// of service answers from a peer's.
 			Usage:   e.UsageReads(),
 			Company: company,
-			NodeID:  nodeID,
-			Chart:   engine.ChartAuthorityOf(e),
+			// WHICH SERVICES THIS NODE SERVES ONLY ONCE RESTARTED, as
+			// cmd/crewlet hands it to the org projection.
+			AwaitingRestart: e.AwaitingRestart,
+			NodeID:          nodeID,
+			Chart:           engine.ChartAuthorityOf(e),
 			// WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, as cmd/crewlet
 			// hands it: api.New refuses a missing one by name.
 			Holders: e,
