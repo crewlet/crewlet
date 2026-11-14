@@ -8,6 +8,7 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
+import { QueryError } from "~/protocol/index.ts";
 import { asReaders } from "~/test/decisions.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -435,6 +436,32 @@ describe("the figures", () => {
     expect(card.textContent).not.toMatch(/not named yet|once they are/);
     const link = within(card).getByRole("link", { name: /CTO|Cto/ });
     expect(link.getAttribute("href")).toBe("#/company/org/seats/cto");
+  });
+
+  // A FAILED READ IS NEVER AN EMPTY HOME: with every question failing, the
+  // board said nothing at all under the greeting, since each widget waited for
+  // a viewer read that had failed. Each now says the read failed, with Try
+  // again. Mutation: return nothing while the viewer is unknown, and this fails.
+  test("every read failing draws the failed-read state in each widget, never an empty board", async () => {
+    const fail = () => Promise.reject(new QueryError("query_failed"));
+    const answers: Record<string, Answer> = {};
+    for (const k of [
+      ...Object.keys(QUIET),
+      "viewer",
+      "advisor",
+      "executors",
+      "inbox",
+      "atlas_review",
+    ]) {
+      answers[k] = fail;
+    }
+    mount({ answers });
+    await settle();
+    await settle();
+    expect(
+      screen.getAllByText("This didn’t load: the engine failed to answer.").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
   });
 
   test("the crew is the engine's word for every seat", async () => {

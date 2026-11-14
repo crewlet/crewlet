@@ -610,7 +610,12 @@ export function Inbox() {
           a token's session, ordinary, never a person, since every person holds
           a human seat. The conditions a person decides are listed for all
           three, which is why the screen is not simply locked. */}
-      {viewer.anonymous ? (
+      {viewer.failed !== null ? (
+        // WHO THE READER IS COULD NOT BE READ, so neither could their updates
+        // or decisions: said, with its Try again, rather than a list with its
+        // groups silently missing.
+        <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
+      ) : viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
           Nobody is signed in. Sign in to see your updates and decisions.
         </Callout>

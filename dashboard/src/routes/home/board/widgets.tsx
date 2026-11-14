@@ -9,6 +9,7 @@ import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { SERVICE_NAMES, useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { QueryState } from "~/components/common.tsx";
 import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
 import { canUse, contribName, widgetDef } from "./registry.tsx";
 import { isExternal, type ContribWidget, type Leaf, type LinksWidget } from "./model.ts";
@@ -118,7 +119,18 @@ function Contributed({ widget }: { widget: ContribWidget }) {
       </Unavailable>
     );
   }
-  if (viewer.loading) return null;
+  // WHO THE READER IS DECIDES WHAT A WIDGET MAY ASK, so it waits for that
+  // answer: on a skeleton while it is out, and on the failed read, with its Try
+  // again, where it failed. It drew nothing at all, so a failed viewer read
+  // left Home a greeting over an empty board.
+  if (viewer.failed !== null) {
+    return (
+      <Card padding="none" className="home-card">
+        <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
+      </Card>
+    );
+  }
+  if (viewer.loading) return <WidgetSkeleton />;
   if (!canUse(def, viewer.grants)) {
     // THE PAGE WHERE THE PAGE IS CLOSED, the widget where only what it reads
     // is: Integrations opens for every reader while its widget is an Admin's.

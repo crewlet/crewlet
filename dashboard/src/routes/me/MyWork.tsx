@@ -460,7 +460,13 @@ export function MyWork({ section }: { section: MeSection }) {
         </Callout>
       )}
       {!whose &&
-        (viewer.anonymous ? (
+        (viewer.failed !== null ? (
+          // WHO THE READER IS COULD NOT BE READ: said, with its Try again,
+          // never a day that belongs to nobody.
+          <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
+        ) : viewer.loading ? (
+          <Skeleton variant="text" rows={4} label="Loading your work" />
+        ) : viewer.anonymous ? (
           <EmptyState
             icon={<KeyGlyph size={32} />}
             title="Nobody is signed in"
