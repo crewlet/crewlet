@@ -140,10 +140,6 @@ const (
 	pairPolls
 	// pairAssistant is an assistant record, plain or not.
 	pairAssistant
-	// pairCounted is a record whose calls the reading counts: a user or
-	// assistant record of the main thread, chained and its own
-	// ([threadHead.Main]).
-	pairCounted
 )
 
 // holdingsPairing is what the pairing rule files of one thread as it is read,
@@ -155,10 +151,9 @@ type holdingsPairing struct {
 }
 
 // see files the marks of line, record h of the thread, whose message is m (a
-// user or assistant record's, decoded once by the chain), and whether the
-// reading counts its calls. A record filed past the chain's bound, or none at
-// all, has none.
-func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage, counted bool) {
+// user or assistant record's, decoded once by the chain). A record filed past
+// the chain's bound, or none at all, has none.
+func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 	if h <= 0 {
 		return
 	}
@@ -166,9 +161,6 @@ func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage, c
 		p.marks = append(p.marks, 0)
 	}
 	var mark pairMark
-	if counted {
-		mark |= pairCounted
-	}
 	switch line.Head.Type {
 	case recordAssistant:
 		mark |= pairAssistant
@@ -238,13 +230,10 @@ func plainResults(line threadLine, m threadMessage) bool {
 		summaryErr == nil && !summary && !line.TaskDelivery() && originErr == nil && origin == ""
 }
 
-// counts hands each, for every call id a block of a counted record carries,
-// its key and whether the block is its use, once End decided chain.
+// counts hands each, for every call id a block of a user or assistant record
+// carries, its key and whether the block is its use, once End decided chain.
 func (p *holdingsPairing) counts(chain *threadChain, each func(key chainCallID, use bool)) {
 	for h := chainHandle(1); int(h) <= len(p.marks); h++ {
-		if p.mark(h)&pairCounted == 0 {
-			continue
-		}
 		for _, key := range chain.Uses(h) {
 			each(key, true)
 		}

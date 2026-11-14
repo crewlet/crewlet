@@ -54,11 +54,12 @@ import (
 //   - more subagents named than [holdingsMaxAgents] is no reading;
 //   - a thread is read a whole line at a time ([threadReader]), the context
 //     asked between lines, every head fed to that thread's own restarts
-//     ([threadRestarts.See]), and every counted record's message decoded
-//     ([threadLine.Message]): in the main thread a user or assistant record,
-//     chained and the main thread's own ([threadHead.Main]); in subagent A's
-//     thread one chained, of A's `agentId` and `isSidechain` true. Every other
-//     line counts for nothing; but every line of the main thread is handed to
+//     ([threadRestarts.See]), and every user and assistant record's message
+//     decoded ([threadLine.Message]) and its calls counted, wherever it lies
+//     and whoever's it is ([holdingsWalk.mainRecord]); rule 2 reads in
+//     subagent A's thread only the records chained, of A's `agentId` and
+//     `isSidechain` true. Every other line counts for nothing; but every line
+//     of the main thread is handed to
 //     the model of Claude Code's resume ([threadChain]), which decides once
 //     the thread is read whole which records the resume hands its model and
 //     in what orders, and a subagent's user, assistant, attachment and system
@@ -740,20 +741,15 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		if restart {
 			w.lastRestart = line.N
 		}
-		head := line.Head
-		turn := head.Type == recordUser || head.Type == recordAssistant
-		counted := turn && head.Chained() && head.Main()
-		pairing.see(record, line, message, counted)
-		if !turn {
+		pairing.see(record, line, message)
+		if line.Head.Type != recordUser && line.Head.Type != recordAssistant {
 			continue
 		}
 		if err = w.idsFold(line, message); err != nil {
 			return err
 		}
-		if counted {
-			if err = w.mainRecord(line, message, int32(record)); err != nil {
-				return err
-			}
+		if err = w.mainRecord(line, message, int32(record)); err != nil {
+			return err
 		}
 	}
 }
@@ -852,10 +848,10 @@ func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing 
 			ids = append(ids, id)
 		}
 	}
-	// A LEG'S CALL IS ONE USE AND ONE RESULT OF ITS ID over the records the
-	// reading counts, whatever tool another use of the id names and wherever
-	// a result of it lies: the request keeps the first use of an id and the
-	// first result of it in the message after it (C1).
+	// A LEG'S CALL IS ONE USE AND ONE RESULT OF ITS ID over every user and
+	// assistant record of the thread, whatever tool another use of the id
+	// names and wherever a result of it lies: the request keeps the first use
+	// of an id and the first result of it in the message after it (C1).
 	type keyCount struct{ uses, results int }
 	counts := map[chainCallID]*keyCount{}
 	legIDs := make([]string, 0, len(w.legs))
@@ -893,10 +889,23 @@ func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing 
 	return nil
 }
 
-// mainRecord files what line, a counted record of the main thread whose
-// message is message, its record in the main thread's chain, says: each asked
-// call's use or result, each leg's call and its first result, and a task
-// notification.
+// mainRecord files what line, a user or assistant record of the main thread
+// whose message is message, its record in the model of the resume, says: each
+// asked call's use or result, each leg's call and its first result, and a
+// task notification.
+//
+// EVERY USER AND ASSISTANT RECORD OF THE FILE, chained or not, the main
+// thread's own or not, before or after any restart: the resume loads and
+// walks each such record whatever its `isSidechain` or `agentId` says, and its
+// request keeps the first use of a call's id and the first result of it in
+// the message after that use. So a second record carrying an asked call's id
+// is another carrier of it, which may stand in its place, and counting it
+// tells the call, its uses or results past one; a leg's the same
+// ([holdingsWalk.mainEnd]). MEASURED: no user or assistant record of the
+// probes' main threads lacks `isSidechain` or carries an `agentId` but a
+// sidechain's, which is no reading ([threadChain]), and none of the 11,727
+// user, assistant, attachment and system records of their 521 thread files
+// lacks a `parentUuid`, so nothing measured moves.
 func (w *holdingsWalk) mainRecord(line threadLine, message threadMessage, record int32) error {
 	calls := message.Calls()
 	for _, call := range calls {
@@ -1054,7 +1063,7 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 	}
 }
 
-// notification files line, a counted user record of the main thread whose
+// notification files line, a user record of the main thread whose
 // message is message, record in its chain, as a task notification of a
 // subagent's leg where it is one: a text whose origin says so, its lines
 // naming the subagent and a leg whose call was read ([taskNotification]).
@@ -1211,16 +1220,22 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *holdi
 	if head.Type != recordUser && head.Type != recordAssistant {
 		return
 	}
+	message, err := line.Message()
+	if err != nil {
+		a.notWhole(fmt.Sprintf("line %d of its thread is no record", line.N), err)
+		return
+	}
+	// EVERY USER AND ASSISTANT RECORD'S CALLS ARE COUNTED, its own or not,
+	// chained or not, as the main thread's are ([holdingsWalk.mainRecord]): a
+	// record that is not its own leaves the subagent not whole besides.
+	for _, call := range message.Calls() {
+		w.count(agent, call, line.N, record)
+	}
 	if head.AgentID != agent || head.Sidechain == nil || !*head.Sidechain {
 		a.notWhole(fmt.Sprintf("line %d of its thread is a %s record that is not its own", line.N, head.Type), nil)
 		return
 	}
 	if !head.Chained() {
-		return
-	}
-	message, err := line.Message()
-	if err != nil {
-		a.notWhole(fmt.Sprintf("line %d of its thread is no record", line.N), err)
 		return
 	}
 	stop, stopErr := line.StopReason()
@@ -1241,14 +1256,11 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *holdi
 		if head.Type == recordUser && len(message.Calls()) > 0 {
 			chain.mark(record, markResults)
 		}
-		// A REPLY'S ID THAT DOES NOT DECODE costs only what it could recover,
-		// as in the main thread ([holdingsWalk.mainLine]).
+		// A REPLY'S ID THAT DOES NOT DECODE costs only what it could recover:
+		// the reply recovers no record off the chain, and none recovers it.
 		if id, idErr := line.MessageID(); head.Type == recordAssistant && idErr == nil && id != "" {
 			chain.reply(record, id)
 		}
-	}
-	for _, call := range message.Calls() {
-		w.count(agent, call, line.N, record)
 	}
 	if head.Type == recordUser && legStart(message) {
 		a.endLeg()
@@ -1595,9 +1607,9 @@ func (w *holdingsWalk) unreported(agent string, a *subagentFacts, sends []string
 		return fmt.Sprintf("it is linked to no call: its metadata names %s, which is not one Agent or Task "+
 			"call of the main thread", a.meta.call)
 	}
-	// 2. WHOLE. A thread with no chained record never comes to be asked: the
-	// subagent of a reading's answer is one a counted record of whose thread,
-	// a chained one, names an asked call.
+	// 2. WHOLE. A thread with no record naming an asked call never comes to
+	// be asked: the subagent of a reading's answer is one a user or assistant
+	// record of whose thread names one.
 	if a.broken != "" {
 		return "its thread is not whole: " + a.broken
 	}

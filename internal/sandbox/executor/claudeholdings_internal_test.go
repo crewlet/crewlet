@@ -307,27 +307,92 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 	})
 }
 
-// ONLY A CHAINED RECORD OF ITS OWN THREAD HOLDS A CALL. In the main thread: a
-// user or assistant record with a parentUuid, `isSidechain` false and no
-// `agentId`. A request's blob repeating the result, a queue operation and an
-// agent's record in the main file each hold nothing, so the call they repeat
-// holds its use alone and is told; a counted record's result holds it. A user
-// record out of the chain, whose call another reply made, is one Claude
-// Code's resume may hang under that reply (behind tengu_foamy_spring), which
-// its model cannot place: no reading. (A sidechain's record in the main file
-// is no reading at all: [TestAMainThreadTheResumeModelCannotPlaceIsUnread].)
-// In subagent A's thread: one with a parentUuid, A's `agentId` and
-// `isSidechain` true. A result there naming no agent or another, or no
-// sidechain, holds nothing, and leaves A's thread not whole, so A is not
-// reported and its call is told under its heading; one out of the chain holds
-// nothing either, and restarts A's thread, since Claude Code's walk reads a
-// record of no parentUuid as a root ([threadRestarts.See]).
+// A CALL'S ID ON ANY RECORD OF ITS FILE IS ANOTHER CARRIER of it, counted
+// beside the call's own: Claude Code's resume loads and walks every user and
+// assistant record whatever its `isSidechain` or `agentId` says, and its
+// request keeps the first use of an id and the first result of it in the
+// message after that use, so a second carrier may stand in the call's place,
+// and its call is told, its uses or results past one. In the main thread, so
+// told: a reply of no `isSidechain` calling it first; one of an `agentId`;
+// one of no `parentUuid`, a root the walk reaches; and a result of no
+// `isSidechain` before the call's own, of another text. With none of them the
+// call is held; and a result of an `agentId` that is its only one is the
+// call's result as any other, and holds it. A request's blob repeating the
+// result and a queue operation are no record of the map, and hold nothing,
+// so the call they repeat holds its use alone and is told. A user record out
+// of the chain, whose call another reply made, is one Claude Code's resume
+// may hang under that reply (behind tengu_foamy_spring), which its model
+// cannot place: no reading. (A sidechain's record in the main file is no
+// reading at all: [TestAMainThreadTheResumeModelCannotPlaceIsUnread].) In
+// subagent A's thread rule 2 reads only one with a parentUuid, A's `agentId`
+// and `isSidechain` true: a result there naming no agent or another, or no
+// sidechain, is counted and leaves A's thread not whole, so A is not reported
+// and its call is told under its heading; one out of the chain is counted
+// too, and restarts A's thread, since Claude Code's walk reads a record of no
+// parentUuid as a root ([threadRestarts.See]).
 //
-// Mutation: count a record that is not chained, or not its own thread's, and
-// the case's result holds its call; or pass a user or assistant record that is
-// not A's own by and leave A's thread whole, and A is reported.
-func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
+// Mutation: count only the main thread's own records, and the carriers of no
+// `isSidechain` or of an `agentId` leave their call held; count only chained
+// ones, and the root's does; count only a subagent's own chained records, and
+// its records of another's count nothing; or pass a user or assistant record
+// that is not A's own by and leave A's thread whole, and A is reported.
+func TestACallsIDOnAnyRecordOfItsFileIsAnotherCarrier(t *testing.T) {
 	t.Parallel()
+	const x = "toolu_carried_x"
+	callX := hsLogged(x, "ok")
+	said := rcSaid("done")
+	reply := func(parent, n int, id, content string) string { return rcReply(parent, n, id, n*100, content) }
+	results := func(parent, n int, ids ...string) string { return rcResults(parent, n, n*100, ids...) }
+	// unsided is line with no `isSidechain`, agented it with subagent
+	// ctAgent's `agentId`, and rooted it with no `parentUuid`.
+	unsided := func(t *testing.T, line string) string {
+		t.Helper()
+		return ctReplace(t, line, `"isSidechain":false,`, "")
+	}
+	agented := func(t *testing.T, line string) string {
+		t.Helper()
+		return ctReplace(t, line, `"isSidechain":false,`, `"isSidechain":false,"agentId":"`+ctAgent+`",`)
+	}
+	rooted := func(t *testing.T, line string, parent int) string {
+		t.Helper()
+		return ctReplace(t, line, `"parentUuid":"`+rcUUID(parent)+`",`, "")
+	}
+	brief := rcPrompt(0, 1, 0)
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		// [1, 2, 3, 4]
+		"no other carrier": {lines: []string{brief, reply(1, 2, "msg_u", rcCalls(x)), results(2, 3, x),
+			reply(3, 4, "msg_after", said)}, held: true},
+		// [1, 2, 3, 4, 5]: the request keeps 2's use, and answers it.
+		"a reply of no isSidechain calling it first": {lines: []string{brief,
+			unsided(t, reply(1, 2, "msg_n", rcCalls(x))), reply(2, 3, "msg_u", rcCalls(x)), results(3, 4, x),
+			reply(4, 5, "msg_after", said)}},
+		"a reply of an agentId calling it first": {lines: []string{brief,
+			agented(t, reply(1, 2, "msg_n", rcCalls(x))), reply(2, 3, "msg_u", rcCalls(x)), results(3, 4, x),
+			reply(4, 5, "msg_after", said)}},
+		// [2, 3, 4, 5]: 2 roots the walk, a restart.
+		"a reply of no parentUuid calling it first": {lines: []string{brief,
+			rooted(t, reply(1, 2, "msg_n", rcCalls(x)), 1), reply(2, 3, "msg_u", rcCalls(x)), results(3, 4, x),
+			reply(4, 5, "msg_after", said)}},
+		// [1, 2, 3, 4, 5]: 3 and 4 fold into one message, 3's block first.
+		"a result of no isSidechain before its own, of another text": {lines: []string{brief,
+			reply(1, 2, "msg_u", rcCalls(x)), ctReplace(t, unsided(t, results(2, 3, x)), `"content":"ok"`,
+				`"content":"not the log's"`), results(2, 4, x), reply(4, 5, "msg_after", said)}},
+		// [1, 2, 3, 4]
+		"its only result of an agentId": {lines: []string{brief, reply(1, 2, "msg_u", rcCalls(x)),
+			agented(t, results(2, 3, x)), reply(3, 4, "msg_after", said)}, held: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, ctThread(tc.lines...)), ctSession, hsAsk(callX))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(callX); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[x], tc.held)
+			}
+		})
+	}
 	const id, out = "toolu_own", "own done"
 	call := hsLogged(id, out)
 	content := hsAnswer(id, hsBlock(t, out))
@@ -341,8 +406,6 @@ func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 			`"message":{"role":"user","content":` + content + `}}`},
 		"a queue operation": {record: `{"type":"queue-operation","operation":"enqueue","sessionId":"` + ctSession +
 			`","message":{"role":"user","content":` + content + `}}`},
-		"an agent's record": {record: ctReplace(t, result, `"isSidechain":false`,
-			`"isSidechain":false,"agentId":"`+ctAgent+`"`)},
 		"a record out of the chain": {record: ctReplace(t, result, `"parentUuid":"`+ctUUID(2)+`",`, ``),
 			unread: true},
 	} {
@@ -380,12 +443,12 @@ func TestOnlyAChainedRecordOfItsOwnThreadHoldsACall(t *testing.T) {
 			got := hsSubagentRead(t, s)
 			records, report := got.Calls[hsSubCall], got.Subagents[ctAgent]
 			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-			if held != tc.held || records.Uses != 1 || (records.Results == 1) != tc.held ||
+			if held != tc.held || records.Uses != 1 || records.Results != 1 ||
 				records.Thread != ctAgent || report.Reported != tc.held ||
 				(!tc.held && (under != ctAgent || !strings.Contains(report.Why, hsNotWhole))) {
-				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want held %t, with one use in its "+
-					"subagent's thread, the subagent reported only where its call is held, and else not whole",
-					held, under, records, report, tc.held)
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want held %t, with one use and "+
+					"one result in its subagent's thread, the subagent reported only where its call is held, and "+
+					"else not whole", held, under, records, report, tc.held)
 			}
 		})
 	}
