@@ -288,8 +288,14 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/chatlet/RoomActions.tsx": {
     why:
       "the room's More menu on the top bar: Leave (leave_channel), each held with its " +
-      "sentence beside Add people, the description, the topic and the star",
+      "sentence beside Add people, the description, the topic, the star and Archive room",
     suite: "routes/chatlet/TopBar.test.tsx",
+  },
+  "routes/chatlet/RoomAdmin.tsx": {
+    why:
+      "a room's Archive and Reopen (update_channel archived), asked in a dialog and held " +
+      "with the engine's sentence for anybody but its creator, its team's lead or an admin",
+    suite: "routes/chatlet/Details.test.tsx",
   },
   "routes/chatlet/outbox.ts": {
     why:

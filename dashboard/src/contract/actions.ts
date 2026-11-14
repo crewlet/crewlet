@@ -418,11 +418,12 @@ export const ACTIONS = {
   update_channel: {
     // A ROOM'S TOPIC AND DESCRIPTION DIALOGS, and only what moved; the
     // template a person set them from, which the transcript records as one
-    // line; and an administrator's auto-join switch in Add people. Archiving
-    // is not offered there (it closes the room for everybody in it and is its
-    // creator's, its unit's lead's or an admin's), and neither is how long the
-    // room keeps what is said, which is an admin's own gesture.
-    args: ["channel", "topic", "purpose", "template", "auto_join"],
+    // line; an administrator's auto-join switch in Add people; and Archive
+    // room or Reopen room (`archived`), which closes the room to new messages
+    // for everybody in it and is its creator's, its unit's lead's or an
+    // admin's. How long the room keeps what is said is not this tool's: it is
+    // an admin's own route (`PUT /chatlet/channels/{id}/retention`).
+    args: ["channel", "topic", "purpose", "template", "auto_join", "archived"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],

@@ -5326,6 +5326,18 @@ else. A document another system manages (ADR-0030) is the one hold that never
 clears from this page, so there an admin is offered no control either, and a
 line above the cards says where the charter is changed instead.
 
+**A room's destructions are the third set.** How long a Chatlet room keeps
+its messages, deleting everything it said before a day, and erasing a message
+for good are an administrator's alone (`chat.channel.retention`, `chat.prune`,
+`chat.erase`), each irreversible and confirmed by repeating what it destroys.
+Held for every reader of every room and every message menu they would be the
+loudest thing in a conversation and never news, so they are drawn for an admin
+(Room details' About, and a message's More as **Erase for good**) and left out
+for everybody else; an admin whose write is held (offline, not yet known) sees
+them disabled with the reason. **Archive room** is not one of them: it is the
+room's creator's, its team's lead's or an admin's, so it is drawn for every
+reader of a named room and held, in the engine's own words, for anybody else.
+
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
 press (a dialog is a form Enter submits without touching the button, a reply
@@ -5486,7 +5498,11 @@ a tool arrives in it with the control that sends it. The controls
 | Add people | A room's details (Members), its first-step card and More | `add_channel_members{channel, members}`: never on a unit's room (the org chart's) or a direct conversation (its people are its identity); the answer names who it actually put in. Leaving a new room's dialog with nobody chosen asks once |
 | Gets every message (a switch on each agent) | A room's details (Members) | `set_channel_members{channel, members, expected_members}`: every member's following as the pane read it with the one agent moved, stated against that read, so a change somebody made meanwhile is refused as a conflict, said in the pane and read again rather than written over. Each agent's row says "Gets every message" or "Answers when named". Refused where Add people is: a team's room shows its agents as the org chart sets them, the switch held with that reason, and a direct conversation, an archived room and a room you are not in offer no change. People have no switch |
 | When new agents and people join, add them | Add people, to an admin, on a public room | `update_channel{channel, auto_join}`: an admin's alone, on a public room alone; it adds the seats that join the company from then on and nobody already in it |
-| Topic · Description · A template | A room's details (About), its first-step cards and More | `update_channel{channel, topic?, purpose?, template?}`: only the field changed; each held to 250 characters, counted as the engine counts them (code points, so an emoji is one); a template sets both in one change that names it, one line in the transcript. Archiving and the room's horizon are not offered anywhere in the dashboard: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| Archive room · Reopen room, then Archive or Reopen in its dialog | A named room's More and its details (About) | `update_channel{channel, archived}`: its creator's, its team's lead's (or a team above's) or an admin's, and held with that sentence for anybody else; an archived room is read and searched for ever and takes no new messages, and Browse rooms › Archived lists it |
+| Messages are kept › Edit, then Save | A room's details (About), to an admin | `PUT /chatlet/channels/{id}/retention?confirm=` with `{retention_days}`: the company's setting (`null`, confirmed `company`), for ever (`0`) or a number of days; any choice but for ever asks `delete` typed back first, since a shorter horizon deletes what it no longer covers |
+| Delete older messages, then Delete | A room's details (About), to an admin | `POST /chatlet/channels/{id}/prune?cutoff=&confirm=` with the start of the chosen day as both, once the room's name is typed back |
+| Erase for good, then Erase | A chat message's More menu, to an admin | `POST /chatlet/channels/{id}/erase?confirm=1` with `{message_ids, reason}`: the reason is required, and is all the erase record keeps |
+| Topic · Description · A template | A room's details (About), its first-step cards and More | `update_channel{channel, topic?, purpose?, template?}`: only the field changed; each held to 250 characters, counted as the engine counts them (code points, so an emoji is one); a template sets both in one change that names it, one line in the transcript. Archiving and the room's horizon are their own rows above, never these dialogs: an archive closes the room for everybody in it, and the horizon decides what survives on every data node |
 | Every message · Mentions · Muted | The top bar's notification choice, and a room's details (Notifications) | `mark_chat_read{notify}`: the reader's own mark, waking nobody; Muted is the mute |
 | Follow · Unfollow | A thread's pane, and Threads | `mark_chat_read{follow}` / `{unfollow}`: the reader's own mark; a thread they started, replied in or were named in is followed without one, and replying in one they unfollowed follows it again |
 | Save for later · Remove from Saved | A chat message's tray, and Saved | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending, and a saved message that is gone stays listed until it is removed |
@@ -8758,9 +8774,13 @@ as they are typed in.
   notification choice (Every message, Mentions, the default, or Muted), and
   **More**, which leads with **Catch up with Ask Crewlet** (or **Summarize**,
   with nothing unread) and then the details, what was shared, Add people, the
-  description and topic, the star, Mark as read, Copy link and Leave. Each is
-  offered only where the engine would take it, by the room's one reading of its
-  rules. Ask Crewlet itself is the page bar's button, so the bar has none.
+  description and topic, the star, Mark as read, Copy link, **Archive room**
+  (or **Reopen room** on an archived one, both asked in a dialog that says what
+  it does for everybody in the room) and Leave. Each is offered only where the
+  engine would take it, by the room's one reading of its rules; Archive is the
+  room's creator's, its team's lead's or an admin's, and held with that
+  sentence for anybody else (`routes/chatlet/roomLifecycle.ts`). Ask Crewlet
+  itself is the page bar's button, so the bar has none.
   On a view beside the rooms (Activity, Threads, Drafts and sent, Saved, New
   message, Search, Browse rooms) the bar also carries the view's own tools
   (Activity's Unread only, Browse rooms' New room) before Search, so no view
@@ -8861,7 +8881,9 @@ as they are typed in.
   (`pane=details:{room}:{tab}`) groups the room's facts in cards (its name,
   which never changes; its topic and description, each with Edit where the
   engine would take the change; its team, who made it and when, how long it
-  keeps what is said, and Leave where a person may leave), its Members (find,
+  keeps what is said, with Edit for an admin, whether it is archived and
+  since when, and Leave where a person may leave; under them Archive room or
+  Reopen room, and for an admin **Delete older messages**), its Members (find,
   Add people where the engine adds anybody, people before agents, each opening
   their profile), what it **Shared** (every link said in it, newest first, as
   the room unfurls it, each opening the message it came in) and its

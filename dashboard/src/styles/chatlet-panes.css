@@ -231,6 +231,14 @@
   outline-offset: var(--size-focus-ring-inset-offset);
 }
 
+/* A room's lifecycle and record under its facts: Archive or Reopen, and an
+   administrator's Delete older messages, on one row that wraps. */
+.chat-about__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
 /* Members: the rows' hover fill bleeds past the edge by the row's own inset,
    so the faces stand on the edge the search field above starts at. */
 .chat-member-list,

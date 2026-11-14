@@ -4,7 +4,7 @@
  *
  * EVERY CHAT WRITE IS DRAWN FOR A READER WHO CANNOT MAKE IT, AND SAYS WHY:
  * this is the suite `app/writeGate.test.tsx` names for the room's More menu
- * (Leave, the star) and the frame's star. Each is drawn for nobody signed in
+ * (Leave, the star, Archive room) and the frame's star. Each is drawn for nobody signed in
  * (`WRITE_REASONS.anonymous`), a person without the Chatlet app, a person the
  * engine makes no chat change for and a credential acting as no seat
  * (`WRITE_REASONS.not_served`), and held with the sentence that says what
@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADA, actEngine, applied } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS } from "~/test/chatAccess.ts";
+import { ARCHIVE_HELD } from "./roomLifecycle.ts";
 
 import { mountInFrame, mountScreen } from "./frameKit.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
@@ -96,10 +97,13 @@ const seatless = (viewer: Record<string, unknown>) => viewer.login !== "" && vie
 describe.each(WRITE_READERS.filter((r) => !seatless(r.viewer)))(
   "for $who",
   ({ viewer, reason }) => {
-    test("Leave and the star are drawn and held with why", async () => {
+    test("Leave, the star and Archive room are drawn and held with why", async () => {
       await moreFor(viewer);
       await heldWithin(await item(/^Leave #general/), reason);
       await heldWithin(await item(/^Add to Starred/), reason);
+      // ARCHIVING IS ITS CREATOR'S, its team's lead's or an admin's, so the
+      // room's own rule outranks the browser's for anybody else.
+      await heldWithin(await item(/^Archive room/), ARCHIVE_HELD);
     });
   },
 );
@@ -109,6 +113,32 @@ describe.each(WRITE_READERS.filter((r) => seatless(r.viewer)))("for $who", ({ vi
     mountScreen({ hash: `#/chatlet/${ROOM}`, viewer, answers });
     expect(await screen.findByText(/read as the seat you hold/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+  });
+});
+
+// ITS CREATOR ARCHIVES IT, asked first in a dialog; a reopen is the same
+// press on an archived room. Mutation: send the press from the menu itself,
+// or let any member archive, and this goes red.
+describe("archiving the room", () => {
+  test("its creator is offered Archive room, which asks before it archives", async () => {
+    const presses = actEngine((tool) => applied(tool, { channel: ROOM }));
+    const mine = { ...channel, created_by: "ada" };
+    const mounted = mountInFrame(
+      <RoomScopeProvider channelID={ROOM}>
+        <ChatTopBar />
+      </RoomScopeProvider>,
+      {
+        hash: `#/chatlet/${ROOM}`,
+        viewer: ADA,
+        answers: { ...answers, chat_channel: { ...answers.chat_channel, channel: mine } },
+      },
+    );
+    mounted.store.applyOrg(CHAT_ORG as never);
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    const archive = await item(/^Archive room/);
+    await waitFor(() => expect(archive.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(archive);
+    expect(presses).toHaveLength(0);
   });
 });
 

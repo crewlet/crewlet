@@ -2537,7 +2537,8 @@ is what makes every data node delete exactly the same rows; nodes each reading
 their own clock would diverge by whatever their clocks disagree by,
 permanently, with no read that repairs it. A room may carry a horizon of its
 own, which beats the company's — set by an administrator on the human write
-surface ([`PUT /chatlet/channels/{channel_id}/retention`](../reference/api-endpoints.md#a-chat-erase-prune-or-horizon),
+surface (the dashboard's Room details, About › Messages are kept,
+[`PUT /chatlet/channels/{channel_id}/retention`](../reference/api-endpoints.md#a-chat-erase-prune-or-horizon),
 or [`crewlet chatlet retention`](../reference/cli.md#crewlet-chatlet)). Each node's
 chat keyword index follows the same range afterwards, because a forward-only
 walk cannot see a row that vanished. See [Chatlet § Retention](../concepts/chatlet.md#retention).
