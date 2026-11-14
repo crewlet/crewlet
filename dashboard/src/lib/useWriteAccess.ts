@@ -527,6 +527,32 @@ export function useConfigWriteAccess(): ConfigWriteAccess {
   return configWriteAccess(viewer, link, held);
 }
 
+/**
+ * Whether this browser may RELOAD the company document now (`POST
+ * /config/reload`), and why not: [configWriteAccess] without the managed
+ * block. A reload re-publishes the fleet's document's own bytes and changes
+ * nothing a managing system renders, so it stays open on a managed document
+ * (ADR-0030): it is the break-glass that carries a rotated credential to
+ * every node, which the managing system cannot know is needed.
+ */
+export function configReloadAccess(
+  viewer: ViewerState,
+  link: Link,
+  held: string | null = null,
+): ConfigWriteAccess {
+  const access = configWriteAccess(viewer, link, held);
+  if (access.can || access.block !== "managed") return access;
+  return held ? { can: false, block: "held", reason: held } : { can: true };
+}
+
+/** [configReloadAccess] for the screen this browser is on. */
+export function useConfigReloadAccess(): ConfigWriteAccess {
+  const viewer = useViewer();
+  const link = linkOf(useConnection());
+  const held = useContext(Held);
+  return configReloadAccess(viewer, link, held);
+}
+
 // ---------------------------------------------------------------------------
 // A change to one part of the org chart
 // ---------------------------------------------------------------------------

@@ -1648,6 +1648,12 @@ export interface ConfigWarning {
   message: string;
   /** What an advisory is about, for the setup advisor; absent on most warnings. */
   class?: string;
+  /**
+   * On a dry run's answer only: whether THIS write brings the warning, rather
+   * than the active revision already carrying it (`configapi.checkedWarning`).
+   * A write's own answer and every other reader leave it out.
+   */
+  introduced?: boolean;
 }
 
 /** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
