@@ -2,9 +2,9 @@ import { plural } from "./format.ts";
 import { andList } from "./words.ts";
 
 /**
- * Calls a run's record did not keep, counted by tool — an entry of the
- * executors board's `bridge_elided_calls`, or of a collected executor's phase
- * record's `elided_calls`. `name` is absent where not even the tool was kept.
+ * Calls a record did not keep, counted by tool — an entry of the executors
+ * board's `bridge_elided_calls`, or of a phase record's `elided_calls`. `name`
+ * is absent where not even the tool was kept.
  */
 export interface DroppedCalls {
   name?: string;

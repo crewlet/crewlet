@@ -54,6 +54,7 @@ vi.mock("./api.ts", async (actual) => {
     testDraft: vi.fn(pending),
     probeAddress: vi.fn(pending),
     storeValue: vi.fn(pending),
+    readServer: vi.fn(pending),
     readCatalogue: vi.fn(async () => ({
       reading: "admin",
       curated: [],
@@ -313,6 +314,31 @@ test("agent access draws each agent's tools as the engine counts them, and who i
   mountAt({ hash: "#/settings/mcp-tools?view=agents" });
   expect(screen.getByText("Counting each agent's tools")).toBeDefined();
   expect(screen.queryByText("Agents by server")).toBeNull();
+});
+
+// EACH AGENT'S TOOLS SAY HOW MANY BUILT-INS THAT AGENT IS OFFERED: the engine
+// counts them per agent, since a turn's surfaces leave some off a seat short
+// of a grant, so the figure drawn is the agent's own and never one total said
+// to be every agent's.
+test("an agent's tools say how many built-ins that agent is offered", () => {
+  const [backend, pm] = ADMIN_STATUS.agents!;
+  current = mcpData("admin", () => {}, {
+    agents: [
+      { ...backend!, builtin_tools: 31 },
+      { ...pm!, builtin_tools: 29 },
+    ],
+  });
+  mountAt({ hash: "#/settings/mcp-tools?view=agents&agent=backend-engineer" });
+  expect(
+    screen.getByText("Plus 31 built-in tools it is offered, which the budget does not count."),
+  ).toBeDefined();
+  cleanup();
+
+  mountAt({ hash: "#/settings/mcp-tools?view=agents&agent=pm" });
+  expect(
+    screen.getByText("Plus 29 built-in tools it is offered, which the budget does not count."),
+  ).toBeDefined();
+  expect(screen.queryByText(/every agent holds/)).toBeNull();
 });
 
 // A CALL WAITING TOO LONG raises its server's alarm, whose fix opens the

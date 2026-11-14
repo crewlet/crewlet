@@ -1278,7 +1278,13 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 		// ledger reads as one block rather than as prose beside orphaned
 		// tool rows. There is no separate reasoning to report: a harness's
 		// thinking stays inside its own loop.
-		res.Narration = []toolloop.Narration{{Round: runRound, Content: answer}}
+		//
+		// A COPY OF THE ANSWER, which the record carries whole as its
+		// response: held to the record's share of prose (recordbytes.go),
+		// its cut saying the response holds the rest, so a long report is
+		// not carried twice and its copy never reads as the whole lost.
+		copied, _ := answerCopy.Text(answer, answerCopyBytes)
+		res.Narration = []toolloop.Narration{{Round: runRound, Content: copied}}
 	}
 	return phaseResult{Text: answer, Rounds: runRound, Result: res,
 		Caps: roundCaps{max: runRound, ceiling: runRound}, RunElided: elided}

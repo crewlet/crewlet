@@ -942,7 +942,8 @@ func New(opts Options) (*App, error) {
 		sources.Now = now
 	}
 	// Which built-ins a seat is offered: the registry the engine applied,
-	// and the pair its runner adds, which only the engine holds.
+	// the pair its runner adds, which only the engine holds, and what that
+	// registry withholds from each agent, which only the engine decides.
 	sources.Builtins = opts.Runtime.Builtins
 	// And what every node's MCP servers list, which only the engine
 	// watches.

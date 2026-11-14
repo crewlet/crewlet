@@ -102,9 +102,10 @@ func flatBudget(d time.Duration) func(sandbox.PendingRun, sandbox.BoxRead) time.
 
 // A BOX READ WAITS AS LONG AS ITS KIND TAKES: a stop's and a loss's read end the
 // job before they take its session, and so does a collection's of a turn with a
-// cap, whose host ends a job still working once the cap has passed — so each
-// of their asks waits for that end on top of a collection's of a turn with
-// none. The budget is the one for the read asked of the run asked about, never
+// cap, whose host ends a job still working once the cap has passed, and records
+// that it did — so each of their asks waits for that end on top of a
+// collection's of a turn with none, and a capped collection's for that record
+// on top of a stop's. The budget is the one for the read asked of the run asked about, never
 // one figure for every read, which a node's asks are built with.
 //
 // Mutation: ask with one budget whatever the read, or read it off the read
@@ -130,9 +131,12 @@ func TestABoxReadWaitsAsLongAsItsKindTakes(t *testing.T) {
 		t.Errorf("a stop's ask waits %v, no longer than a collection's %v: nothing waits for the job's end",
 			fresh.budget(uncapped, sandbox.BoxReadStop), fresh.budget(uncapped, sandbox.BoxReadCollect))
 	}
-	if fresh.budget(capped, sandbox.BoxReadCollect) != fresh.budget(capped, sandbox.BoxReadStop) {
-		t.Errorf("a capped collection's ask waits %v, a stop's %v: the end its host makes past the cap is "+
-			"not waited for", fresh.budget(capped, sandbox.BoxReadCollect), fresh.budget(capped, sandbox.BoxReadStop))
+	// A CAPPED COLLECTION WAITS THE END AS A STOP'S DOES, and its host's record
+	// that the cap ended a job it saw working besides.
+	if fresh.budget(capped, sandbox.BoxReadCollect) <= fresh.budget(capped, sandbox.BoxReadStop) {
+		t.Errorf("a capped collection's ask waits %v, a stop's %v: the end its host makes past the cap, "+
+			"and its record of it, are not waited for", fresh.budget(capped, sandbox.BoxReadCollect),
+			fresh.budget(capped, sandbox.BoxReadStop))
 	}
 
 	run := runOnHost(t, store, a, "t1")

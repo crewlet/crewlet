@@ -1,8 +1,8 @@
 // Package linktest is a slow link a test puts between a node and the broker it
 // reaches across one — a leaf's link to its member, a client's dial to an
 // external server — so a case can show what a write waits for when its bytes
-// take a while to cross, on a loopback interface that otherwise carries them
-// at once.
+// take a while to cross, and what a read waits for when its reply does, on a
+// loopback interface that otherwise carries them at once.
 //
 // ONE RELAY FOR EVERY PACKAGE whose writes cross a link: the queue's
 // (internal/queue/jetstream) and the coordination store's (internal/coord/kv)
@@ -22,22 +22,24 @@ import (
 // Link is a TCP relay a case puts between a node and the broker it
 // reaches across a link — a leaf and its member's leaf listener, a client and
 // an external server — which carries what the NODE sends at rate bytes a
-// second and what the broker sends back at once: the direction a write's
-// bytes cross is the slow one, and its acknowledgement comes straight back —
-// unless the case holds the broker's bytes back for a while ([Link.Delay]), as
-// a reply is held on a slow link behind what was sent ahead of it.
+// second, and what the broker sends back either at once ([Slow]) or at a rate
+// of its own ([SlowEachWay]): a write's bytes cross towards the broker, and a
+// read's reply — a stream leader's message of megabytes, base64-encoded a
+// third larger — crosses back, on a real link as slowly. A case may also hold
+// the broker's bytes back for a while ([Link.Delay]), as a reply is held on a
+// slow link behind what was sent ahead of it.
 //
-// # It reads what the node sends as fast as it comes
+// # It reads what each side sends as fast as it comes
 //
-// and holds what the link has not carried yet, so the node's own writes never
-// wait on it: what is paced is the DELIVERY to the broker, as on a slow
-// network the sender's buffers take its bytes and the receiver hears them at
-// the link's pace. A relay that paced its reads instead would push back into
-// the sender's socket, and a broker whose writes stop moving closes its link
-// once its own write deadline passes — so a case meant to show a write waiting
-// on a slow link would show a link torn down instead, and a node's client,
-// whose library publishes from a buffer of its own, would block in its write
-// rather than wait for its acknowledgement.
+// and holds what the link has not carried yet, so neither side's writes wait
+// on it: what is paced is the DELIVERY to the other side, as on a slow network
+// the sender's buffers take its bytes and the receiver hears them at the
+// link's pace. A relay that paced its reads instead would push back into the
+// sender's socket, and a broker whose writes stop moving closes its link once
+// its own write deadline passes — so a case meant to show a write, or a read's
+// reply, waiting on a slow link would show a link torn down instead, and a
+// node's client, whose library publishes from a buffer of its own, would block
+// in its write rather than wait for its acknowledgement.
 //
 // It ends with the case that started it: its listener, every connection it
 // carries and every goroutine it runs.
@@ -46,6 +48,9 @@ type Link struct {
 	target string
 	// rate is how many bytes a second the link carries towards the broker.
 	rate int64
+	// back is how many bytes a second it carries back towards the node:
+	// none for a link that carries them at once ([Slow]).
+	back int64
 	// done is closed when the case ends, which ends every delivery waiting
 	// on the link's pace.
 	done chan struct{}
@@ -60,8 +65,25 @@ type Link struct {
 }
 
 // Slow listens on a loopback port and carries every connection made to it on
-// to target, at rate bytes a second towards target, until the case ends.
+// to target, at rate bytes a second towards target and what target sends back
+// at once, until the case ends.
 func Slow(t testing.TB, target string, rate int64) *Link {
+	t.Helper()
+	return open(t, target, rate, 0)
+}
+
+// SlowEachWay is [Slow] whose link carries what target sends back at rate
+// bytes a second too: a link that is slow both ways, as a real one is, so a
+// read whose reply carries a value of megabytes waits for it to cross as a
+// write of the value does.
+func SlowEachWay(t testing.TB, target string, rate int64) *Link {
+	t.Helper()
+	return open(t, target, rate, rate)
+}
+
+// open is a link to target carrying rate bytes a second towards it and back
+// bytes a second from it, none for at once.
+func open(t testing.TB, target string, rate, back int64) *Link {
 	t.Helper()
 	if rate <= 0 {
 		t.Fatalf("a slow link carries %d bytes a second, which carries nothing", rate)
@@ -74,7 +96,7 @@ func Slow(t testing.TB, target string, rate int64) *Link {
 	if err != nil {
 		t.Fatalf("bind the slow link: %v", err)
 	}
-	l := &Link{ln: ln, target: target, rate: rate, done: make(chan struct{})}
+	l := &Link{ln: ln, target: target, rate: rate, back: back, done: make(chan struct{})}
 	l.wg.Go(func() { l.accept(ctx) })
 	t.Cleanup(l.close)
 	return l
@@ -157,11 +179,27 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 	})
 	wg.Go(func() {
 		defer closeBoth()
-		held.deliver(out, l.rate, l.done)
+		held.deliver(out, l.rate, l.done, nil)
+	})
+	if l.back == 0 {
+		wg.Go(func() {
+			defer closeBoth()
+			l.answer(in, out)
+		})
+		wg.Wait()
+		return
+	}
+	// PACED BACK AS WELL: what the broker sends is read as fast as it comes
+	// and delivered to the node at the link's pace, held back first for as
+	// long as a [Link.Delay] says.
+	replies := &backlog{more: make(chan struct{}, 1)}
+	wg.Go(func() {
+		defer closeBoth()
+		replies.fill(out)
 	})
 	wg.Go(func() {
 		defer closeBoth()
-		l.answer(in, out)
+		replies.deliver(in, l.back, l.done, l.held)
 	})
 	wg.Wait()
 }
@@ -273,14 +311,26 @@ func (b *backlog) next(done <-chan struct{}) ([]byte, bool) {
 // deliver writes each chunk to dst once a link carrying rate bytes a second
 // would have carried it: a chunk's own time after the one before it was
 // written, so the link never carries faster than rate, and an idle link lets
-// no burst through at once.
-func (b *backlog) deliver(dst io.Writer, rate int64, done <-chan struct{}) {
+// no burst through at once. hold, where it is not nil, is how long a chunk is
+// still to be held back before it starts to cross ([Link.Delay]).
+func (b *backlog) deliver(dst io.Writer, rate int64, done <-chan struct{}, hold func() time.Duration) {
 	for {
 		chunk, ok := b.next(done)
 		if !ok {
 			return
 		}
-		crossing := time.NewTimer(time.Duration(len(chunk)) * time.Second / time.Duration(rate)) //fixedwait:simulated a link carrying the node's bytes at its rate
+		if hold != nil {
+			if wait := hold(); wait > 0 {
+				late := time.NewTimer(wait) //fixedwait:simulated bytes queued on the link behind others the broker sent first
+				select {
+				case <-late.C:
+				case <-done:
+					late.Stop()
+					return
+				}
+			}
+		}
+		crossing := time.NewTimer(time.Duration(len(chunk)) * time.Second / time.Duration(rate)) //fixedwait:simulated a link carrying a side's bytes at its rate
 		select {
 		case <-crossing.C:
 		case <-done:

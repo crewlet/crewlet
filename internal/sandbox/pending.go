@@ -2600,6 +2600,16 @@ type PendingStore interface {
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
+	// RowCrossing is how long a change of a run's row or of a part beside
+	// it, at its bound ([RowBytes]), takes to cross this node's connection
+	// to the store — the read its decision is taken on, and the write, for
+	// every time the store may send it — the store's own figure
+	// ([coord.SandboxRuns.ValueCrossing]): thirteen minutes on a link at the
+	// slowest pace the engine allows, and none in the store's own process.
+	// What a caller's budget for such a change adds to its own reason
+	// ([RowBudget]).
+	RowCrossing() time.Duration
+
 	// StampCapture records one capture of the turn's harness session on its
 	// row ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was
 	// taken.

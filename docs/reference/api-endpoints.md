@@ -452,7 +452,7 @@ every other route.
 | `GET` | `/worklet/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set: the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/worklet/projects` | Every **project** work is filed into, with its `task_counts` (`{todo, active, done, closed}`, one per status group, read from maintained columns and never aggregated per poll; there is no `open`, which folded the waiting work into the started work, so a caller wanting every unfinished item adds `todo` and `active`), its `target_date` (the day, `YYYY-MM-DD` on the company's clock, the lead means it to be finished; omitted when none is set), its `last_change` (when the project's work last changed and who changed it, ABSENT for a project nothing has been filed into), its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose and `?unit=` to the projects one unit owns, **named by the unit's key or by its name where exactly one unit carries it, in any case**, and matched against the team's key and its name. `?archived=` SELECTS a set rather than widening one: `false` (the default) for the live projects, `only` for the retired ones alone and `true` for both, so "what did we retire" is a query rather than a caller's own filter over a wider answer. `?sort=` orders the whole selected set before the page is taken: one of `key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each optionally with a leading `-` for descending, defaulting to `key`, with the key breaking every tie; a project with no `last_change` or no `target_date` sorts last in both directions. An `archived` or `sort` value that is neither is a **400** naming the parameter and what it accepts. `?limit=` caps at 200, which is also the default. The answer carries a `census` (`{active, archived}`, the same question under the same `q` and `unit` MINUS its archival term), so a caller that selected one set can still tell an empty set from an empty company; `total` is the census of the mode that was asked for. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/worklet/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three; a `for_type` the company does not file answers 400 `bad_params`, not 404: the project is there and the argument is what to change |
-| `GET` | `/worklet/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, max 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
+| `GET` | `/worklet/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, capped at 1000: a larger one is answered a page of 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
 | `GET` | `/worklet/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and its content could not be read right now (see [below](#project-files)) |
 | `PUT` | `/worklet/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and an `Idempotency-Key` how an `unknown` answer is retried. **Takes `worklet`**, and the write is attributed to whoever the request resolved to (see [below](#project-files)) |
 | `DELETE` | `/worklet/files/{project}/{path...}` | Remove a file. `If-Match` and `Idempotency-Key` as the write. **Its project's lead, or `admin`**, either with `worklet`: taking a file out of a project is the project's, as removing a work item is |
@@ -976,7 +976,8 @@ half — on the `agent` and `live_call` questions, the `agents`, `snapshot` and
 `executors` — and the body goes only to an administrator, to whoever leads
 that seat (`audit.seat.read`), and, for an executor's parked question, to the
 person it is put to. The body is a call's `trigger`, `prompt`,
-`prompt_messages`, `response`, `tool_executions`, `round_narration`,
+`prompt_messages`, `response`, `tool_executions` with its `calls_elided` and
+`elided_calls`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
 `question_context`, `decision`, `held_call`, `held_arguments`, `reply`, `bridge_calls` and `bridge_elided_calls` (`held_call` also
@@ -4768,7 +4769,10 @@ renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `partial_round`,
 `total_tokens` — plus the envelope's `timestamp` and `failed`. It is the
-stored record, so it also carries the phase's price where its own harness
+stored record, its payloads held to their shares of one message, so a long
+phase's row may list some of its calls and say the rest (`calls_elided`,
+`elided_calls`, `rounds_elided`; see
+[what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)), so it also carries the phase's price where its own harness
 reported one (`cost_usd`), which the dashboard never reads
 ([rule 19](dashboard-design.md#rules-a-change-has-to-keep)). Each launch of an
 executor's run is a row of its own, an `executor_collected`, published when it
@@ -5713,8 +5717,8 @@ counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
-tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
-invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
+tool_executions, calls_elided, elided_calls, round_narration, partial_round,
+round_num, rounds_used, rounds, invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
 running_calls, steers,
 cache_read_tokens, cache_write_tokens, work_item, node, in_progress, versions }`
 while an LLM call is under
@@ -5732,7 +5736,7 @@ way. The fields are these:
 - `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a harness may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id, boundary}` — the round whose provider call first saw it, and the kind of step that read it (`round`, or `brief`, `tool_batch`, `finish` or `step` for a read by the phase's executor in its box, which is round 1). What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
-- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
+- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` with its `calls_elided` and `elided_calls` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
 Beside `live_call`, each seat carries `live_call_seq`: the node projection's
 own sequence — the one `versions` are taken from — read when the seat's call
@@ -5779,11 +5783,15 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   publish is refused outright and the live row simply stops); a tool result
   and the joined `response` are sent **tail-bounded** on a live frame, because
   they are what a reader is watching the end of. The durable
-  `agent_phase_completed` record keeps every one of them verbatim, which is
-  what a reader opens the finished card for.
+  `agent_phase_completed` record keeps every one of them whole within its
+  share of one message, which is what a reader opens the finished card for,
+  and says what it left out past it
+  ([what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)):
+  a failed phase's call is frozen with that record's list, and carries its
+  `calls_elided` and `elided_calls`, zero and empty on a running call.
 - **Out to a tab**, an `agents` push carries a call's HEAVY fields — `prompt`
-  and `prompt_messages`, `response`, `round_narration`, `tool_executions` and
-  `rounds` — only when their version (`versions`) moved since the last push for
+  and `prompt_messages`, `response`, `round_narration`, `tool_executions` with
+  its `calls_elided` and `elided_calls`, and `rounds` — only when their version (`versions`) moved since the last push for
   the same call, and leaves them out otherwise: the key is ABSENT, never empty,
   and the tab keeps the copy it holds. They move once a round or once a tool
   call; between those moments a push is the round being written
@@ -11148,8 +11156,9 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
 }
 ```
 
-`builtin` is the engine's own tools as an agent is offered them, group by group
-in the order the catalogue lists them, each tool a
+`builtin` is the engine's own tools as the company's agents are offered them
+(each agent all of them but those its `builtin_tools` below leaves out), group
+by group in the order the catalogue lists them, each tool a
 [catalogue row](#the-tool-catalogue) whose `gate` says who may call it (the
 words are in
 [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
@@ -11248,9 +11257,15 @@ block for it, the whole listing for each agent a per-agent server reaches, and
 `0` for a server turned off, which is granted to nobody, or one a limit turns
 off for the agent; and `state` is the server's own, its row's.
 `mcp_tools` counts each tool name once, so a name two of the agent's servers
-list counts once; `builtin_tools` is how many of the engine's own tools every
-agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
-above `tool_budget`. A server's tools count while it is down, since they come
+list counts once; `builtin_tools` is how many of the tools in `builtin` the
+agent is offered, which the budget does not count: every one but those the
+engine leaves off its surfaces — a tool whose `gate` is a grant the agent
+does not hold (`health_tools`, `ssh_read`, `ssh_operate` or
+`delegated_decisions`), and below `full_access` the code writes its
+`role.code.access` could never use
+([Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one))
+— so it differs from agent to agent; and `over_budget` is `mcp_tools` above
+`tool_budget`. A server's tools count while it is down, since they come
 back with it. `agents` is `null` while the answering node has not read the
 fleet's listings yet, a moment after it starts, which is not an agent holding
 no tools.

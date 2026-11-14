@@ -48,15 +48,15 @@ type DomainLog struct {
 	// See [Queue.ensureDurableConsumer].
 	q *Queue
 
-	// crossing is how long the reply to a leader's read of one of this
-	// log's records by its position is given beyond the read term to cross
-	// this node's connection to the stream's leader where nothing says how
-	// large the record is: nothing on a member's own connection, and across
-	// a link the crossing of the largest record the log stores, at the
-	// connection's pace ([Queue.recordCrossing]). A log read through its
-	// copies gives each record its own instead ([DomainLog.replyCrossing]).
+	// arrival is how long the reply to a leader's read of one of this
+	// log's records by its position is given beyond the read term and the
+	// lookup ceiling to reach this node whole, where nothing says how large
+	// the record is: the arrival of the largest record the log stores — its
+	// handling on every connection, and its crossing at the connection's
+	// pace across a link ([Queue.recordArrival]). A log read through its
+	// copies gives each record its own instead ([DomainLog.replyArrival]).
 	// Fixed at open.
-	crossing time.Duration
+	arrival time.Duration
 
 	// copies reads this log's records through consumers on the leader's
 	// own copy ([copyRead]), where a leaf's link stands between the
@@ -131,7 +131,7 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
-	l := &DomainLog{js: q.js, stream: s, name: stream, q: q, crossing: q.recordCrossing(s),
+	l := &DomainLog{js: q.js, stream: s, name: stream, q: q, arrival: q.recordArrival(s),
 		info: func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			// A HANDLE OF THIS REQUEST'S OWN — see [DomainLog.info].
 			fresh, err := q.js.Stream(ctx, stream)
@@ -171,40 +171,38 @@ func (l *DomainLog) noteMembers(info *jetstream.StreamInfo) {
 	}
 }
 
-// recordCrossing is how long the reply to a leader's read of one of s's
-// records by its position is given beyond the read term to cross this queue's
-// connection to the stream's leader, where nothing says how large the record
-// is — see [DomainLog.At]: nothing where the connection is to the node's own
-// member, in its own process, and where it crosses a link the crossing of the
-// largest message s stores ([jsapi.Crossing]) at the connection's pace
-// ([link.pace]) — the one decision of how slow this connection may be, which
-// its writes are paced by too, and the object store's floor, the pace
+// recordArrival is how long the reply to a leader's read of one of s's
+// records by its position is given beyond the read term and the lookup
+// ceiling to reach this queue's connection whole, where nothing says how
+// large the record is — see [DomainLog.At]: the arrival of the largest
+// message s stores ([jsapi.Arrival]) — its handling in the engine's own
+// processes on every connection, a member's own included, and where the
+// connection crosses a link its crossing at the connection's pace
+// ([link.pace]) besides: the one decision of how slow this connection may be,
+// which its writes are paced by too, and the object store's floor, the pace
 // internal/objstore/natsobj sizes its piece reads and its puts' window by on
 // this same connection. A log read through its copies ([DomainLog.copies])
 // asks the leader only for a record whose own reply crosses, given that
-// reply's crossing ([DomainLog.replyCrossing]). s is the handle just opened,
+// reply's arrival ([DomainLog.replyArrival]). s is the handle just opened,
 // whose info is its open's and is read by nothing that writes it.
-func (q *Queue) recordCrossing(s jetstream.Stream) time.Duration {
-	if q.link.pace == 0 {
-		return 0
-	}
-	return jsapi.Crossing(q.largestMessage(s), q.link.pace)
+func (q *Queue) recordArrival(s jetstream.Stream) time.Duration {
+	return jsapi.Arrival(q.largestMessage(s), q.link.pace)
 }
 
-// replyCrossing is how long the reply to a leader's read of a record of
+// replyArrival is how long the reply to a leader's read of a record of
 // recordBytes — header block and payload, as a probe of its headers counted
-// it ([copyRead.at]) — takes to cross this log's connection at its pace
-// ([jsapi.Crossing], [link.pace]): what [DomainLog.At] gives that read beyond
-// the read term, in place of the log's largest record's crossing
-// ([DomainLog.crossing]).
-func (l *DomainLog) replyCrossing(recordBytes int) time.Duration {
-	return jsapi.Crossing(recordBytes, l.q.link.pace)
+// it ([copyRead.at]) — takes to reach this log's connection whole at its pace
+// ([jsapi.Arrival], [link.pace]): what [DomainLog.At] gives that read beyond
+// the read term and the lookup ceiling, in place of the log's largest
+// record's arrival ([DomainLog.arrival]).
+func (l *DomainLog) replyArrival(recordBytes int) time.Duration {
+	return jsapi.Arrival(recordBytes, l.q.link.pace)
 }
 
 // largestMessage is the largest message s may store, its header block and
 // its payload: the largest it states, where it states one, and never more
 // than the transport carries. s is a handle just opened, as
-// [Queue.recordCrossing]'s is.
+// [Queue.recordArrival]'s is.
 func (q *Queue) largestMessage(s jetstream.Stream) int {
 	largest := q.nc.MaxPayload()
 	if info := s.CachedInfo(); info != nil && info.Config.MaxMsgSize > 0 {
@@ -497,55 +495,53 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 // log's records may be that large ([DomainLog.copies]), what the position
 // holds is found from its HEADERS first, through a consumer on the leader's
 // own copy ([copyRead.at]), and the record is then read with the leader's
-// read where its own reply crosses the link inside the ceiling, given that
-// reply's crossing ([DomainLog.replyCrossing]), and otherwise RAW through such
-// a consumer ([copyRead.message]), its read given the time the record takes
-// to cross at the link's pace: the leader's answer either way.
+// read where the leaf's server carries its own reply, given that reply's
+// arrival ([DomainLog.replyArrival]), and otherwise RAW through such a
+// consumer ([copyRead.message]), its read given the time the record takes to
+// cross at the link's pace: the leader's answer either way.
 //
-// # The leader's term covers the reply's crossing where the reply crosses a link
+// # The leader's term and its ceiling count the reply's arrival
 //
 // The leader's reply is heard only once its last byte is in. The hedge asks a
 // read nobody has answered again two seconds after it was sent and every two
-// seconds after that, every request still outstanding, so a reply still
-// crossing a link when a re-ask goes out is a second whole reply on that
-// link, queued ahead of everything else the node's connection carries, its
-// lease renewals among them. And the ceiling's thirty seconds end a read
-// whose reply needs longer than that to land.
+// seconds after that, every request still outstanding, so a reply still being
+// built, or still crossing a link, when a re-ask goes out is a second whole
+// reply: built beside the first, and queued on the link ahead of everything
+// else the node's connection carries, its lease renewals among them. And the
+// ceiling's thirty seconds ended a read whose reply needed longer than that to
+// land: across a link no leaf stands on, the largest record below about
+// 3 Mbit/s was never read back by position from the leader
+// (crewlet/crewlet#1149).
 //
-// On a member's own connection, in its own process, the leader's reply
-// crosses at most the fleet's cluster routes: read back on a member, the
-// largest record took 46 ms (BenchmarkADomainLogReadOfItsLargestRecord, 20
-// reads on four cores), inside the read term twentyfold, and a gigabit route
-// adds about 90 ms — so a member asks at the read term. A node whose
-// connection crosses a LINK to the stream — a client of an external cluster,
-// a leaf — reaches the leader over a link the engine allows to be as slow as
-// the object store's floor ([Queue.recordCrossing]), which is what
+// So a read is given the ARRIVAL of its reply ([jsapi.Arrival]) beyond the
+// read term and beyond the lookup ceiling
+// (jsprovision.Timing.Arriving) — the record's own, where its headers said
+// how large it is, and otherwise the log's largest: its handling in the
+// engine's own processes on every connection, and where the connection
+// crosses a LINK to the stream — a client of an external cluster, a leaf — its
+// crossing at the object store's floor ([Queue.recordArrival]), which is what
 // internal/objstore/natsobj gives its piece reads on the same connection
-// (internal/jsapi's Leader.Carrying); there a read is presumed lost only once
-// its reply could have crossed at that floor — the record's own, where its
-// headers said how large it is, and otherwise the log's largest. For a log
-// whose records may be megabytes that is longer than the ceiling, so across a link
-// such a read is ONE request, held to its caller's deadline or the ceiling: a
-// request a member dropped across an election costs its caller that wait
-// rather than two seconds, and a slow link never carries one record two and
-// three times ahead of the node's leases. The reads that ask this can afford
-// it — the retention's age floor and the intake rate a log is measured by, a
-// checkpoint's verification at the applier's start, whether the log still
-// holds a peer's checkpoint, a reanchor's walk back along the log, a standing
-// read, and an ambiguous append's read of its own record after its answer was
-// already lost — where [DomainLog.LastSeq], which every create and every
-// rejected append asks, keeps the read term (see there).
-//
-// The ceiling is the same thirty seconds across a link for the leader's read:
-// a record whose reply cannot land inside it is not read back by position
-// there from the leader — on a link no leaf stands on, the largest record
-// below about 3 Mbit/s. Across a leaf's link a record whose reply could not
-// land inside it at the link's floor is read raw instead, waited for its own
-// crossing ([copyRead.message]), so none is out of reach there.
+// (internal/jsapi's Leader.Carrying). On a member's own connection the largest
+// record took 46 ms to read back on four cores
+// (BenchmarkADomainLogReadOfItsLargestRecord), and 0.73 s under the race
+// detector, which a loaded runner stretched past the read term, so the read
+// was asked again while its first reply was still being built; its handling
+// gives it 10.7 seconds (internal/jsapi's HandlingPace says why). For a log
+// whose records may be megabytes such a read is therefore ONE request while
+// its reply can still be on its way, held to its caller's deadline or to the
+// ceiling and that arrival: a request a member dropped across an election
+// costs its caller that wait rather than two seconds, and no record is built
+// twice, nor carried twice ahead of the node's leases. The reads that ask
+// this can afford it — the retention's age floor and the intake rate a log is
+// measured by, a checkpoint's verification at the applier's start, whether
+// the log still holds a peer's checkpoint, a reanchor's walk back along the
+// log, a standing read, and an ambiguous append's read of its own record
+// after its answer was already lost — where [DomainLog.LastSeq], which every
+// create and every rejected append asks, keeps the read term (see there).
 func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	payload []byte, storedAt time.Time, ok bool, err error) {
 
-	crossing := l.crossing
+	arrival := l.arrival
 	if l.copies != nil {
 		at, atErr := l.copies.at(ctx, seq)
 		switch {
@@ -560,10 +556,9 @@ func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 			}
 			return msg.subject, msg.data, msg.time, held, nil
 		}
-		crossing = l.replyCrossing(at.bytes)
+		arrival = l.replyArrival(at.bytes)
 	}
-	timing := l.q.provisioning()
-	timing.ReadTerm += crossing
+	timing := l.q.provisioning().Arriving(arrival)
 	msg, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.RawStreamMsg, error) {
 			return l.stream.GetMsg(ctx, seq)

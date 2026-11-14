@@ -2382,7 +2382,13 @@ const (
 	// no sidebar, Open in new tab in the bar, in its More and in a listed
 	// artifact's menu) on kit 0.125.0 added 1,048 bytes, nearly all script,
 	// and took it to 5973.7 KiB (6,117,055 bytes): 5974 KiB.
-	treeBudget = 5<<20 + 854<<10
+	// What any phase's record does not list (the rounds past the most a
+	// record lists and the tool names past its lists' share on the phase
+	// card, the calls a host phase's record drops, which no one round's count
+	// claims, and a failed phase's call frozen with what its record left out)
+	// added 972 bytes, nearly all script, and took it to 5974.6 KiB
+	// (6,118,027 bytes): 5975 KiB.
+	treeBudget = 5<<20 + 855<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

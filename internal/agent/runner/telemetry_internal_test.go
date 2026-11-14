@@ -173,11 +173,11 @@ func TestAnUnencodableSchemaNamesTheToolItBelongsTo(t *testing.T) {
 // turn; one nothing failed in names nothing.
 func TestTheTallyNamesThePhaseThatFailed(t *testing.T) {
 	var s Spend
-	s.record(phaseRecord{Phase: phase.Execute})
+	s.record(phaseRecord{Phase: phase.Execute}, RecordCalls{})
 	if s.FailedIn != "" {
 		t.Fatalf("a phase that succeeded named %q as failed", s.FailedIn)
 	}
-	s.record(phaseRecord{Phase: phase.Review, Failed: true})
+	s.record(phaseRecord{Phase: phase.Review, Failed: true}, RecordCalls{})
 	if s.FailedIn != "review" {
 		t.Errorf("failed in %q, want review", s.FailedIn)
 	}
@@ -327,7 +327,8 @@ func TestATurnsMCPCallsAreCountedOncePerOutcome(t *testing.T) {
 	}
 	var s Spend
 	var mu sync.Mutex
-	s.record(phaseRecord{Phase: phase.Execute, Result: toolloop.Result{Executions: execute}})
+	first := phaseRecord{Phase: phase.Execute, Result: toolloop.Result{Executions: execute}}
+	s.record(first, first.kept().calls)
 	s.recordWorker(&mu, subagent.Result{Executions: []toolloop.Execution{
 		answered("github_search", "github", false, "", 50),
 	}})
@@ -336,7 +337,8 @@ func TestATurnsMCPCallsAreCountedOncePerOutcome(t *testing.T) {
 		Duration: 70 * time.Millisecond, Origin: mcp.Origin("github"), Server: "github",
 		Source: mcp.Origin("github"),
 	}}, nil, RunRecord{}, at, at.Add(2*time.Hour))
-	s.record(phaseRecord{Phase: phase.Execute, Result: bridged.Result})
+	second := phaseRecord{Phase: phase.Execute, Result: bridged.Result}
+	s.record(second, second.kept().calls)
 
 	want := []types.ToolTally{
 		{Server: "github", Tool: "github_close_issue", Calls: 1, Refused: 1},

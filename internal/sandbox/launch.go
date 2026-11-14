@@ -1165,7 +1165,7 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // as well as the box. Under a context of its own, for the reason every
 // reclaim takes one ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	provider, err := c.mgr().Provider(Placement(prior.Placement))
 	if err != nil {
@@ -1215,20 +1215,24 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
 // box running to its TTL with nobody to collect it, and a row nobody settles.
+// One for the kill, within a box call's grace, and one for the ending, each of
+// whose writes of the row is given the row's crossing too ([detachedEnding]).
 func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
-	defer cancel()
 	if sandboxID != "" {
+		killCtx, cancel := detached(ctx)
 		provider, err := m.Provider(req.Spec.Placement)
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_no_backend",
 				"sandbox_id", sandboxID, "placement", string(req.Spec.Placement),
 				"error", err.Error())
-		} else if err := provider.Kill(ctx, sandboxID); err != nil {
+		} else if err := provider.Kill(killCtx, sandboxID); err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
+		cancel()
 	}
+	ctx, done := detachedEnding(ctx)
+	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
 	// the one party that can name it. The launch's own is killed above,
@@ -1266,7 +1270,12 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 				"the ending, and the seat's next recovery pass reaps the row if the seat "+
 				"moves first")
 	case decided == nil:
-		c.syncSeat(ctx, req.Turn.AgentHandle)
+		// THE RECOUNT WITHIN A TEARDOWN'S GRACE, as the kill above is
+		// ([detached]): the ending's context bounds none of the steps it
+		// does not make itself.
+		recountCtx, cancel := detached(ctx)
+		c.syncSeat(recountCtx, req.Turn.AgentHandle)
+		cancel()
 	}
 }
 

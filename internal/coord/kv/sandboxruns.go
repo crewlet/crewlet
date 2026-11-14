@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -41,6 +42,22 @@ const runRecordKeys = "*"
 func runPartKey(turnID string, part coord.RunPart) string {
 	return coord.DocumentKey(turnID, string(part))
 }
+
+// longestRunKey is how long the longest key a write of a run's value is sent
+// under is, as the bucket spells it: a run's keys are its record's and its
+// parts' ([runPartKey]), each under its turn id, which the engine mints a
+// UUIDv7 of 36 bytes (internal/engine's newRunID) — so the key of its
+// longest part. What a write of a run's value is counted at beside the value
+// ([Reach.valueCrossing]), as the store counts every write's own key
+// ([settledBucket.budget]).
+var longestRunKey = func() int {
+	turnID := uuid.Nil.String()
+	longest := len(encodeKey(turnID))
+	for _, part := range coord.RunParts() {
+		longest = max(longest, len(runPartKey(turnID, part)))
+	}
+	return longest
+}()
 
 // partOf refuses a part [coord.RunParts] does not name, so a caller's typo
 // is an error rather than a key nothing removes.
@@ -208,6 +225,13 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 	}
 	return result, changed, nil
 }
+
+// ValueCrossing is how long a write of a run's value at what one key holds
+// takes to cross this node's connection to the buckets, for every send the
+// store gives it — see [coord.SandboxRuns.ValueCrossing]: the crossing at the
+// slowest pace a link is allowed where the node reaches the buckets across
+// one, and none in process ([Reach]).
+func (f *FleetStore) ValueCrossing() time.Duration { return f.reach.valueCrossing() }
 
 // WatchSandboxRun streams one run's record, its first state certified.
 //

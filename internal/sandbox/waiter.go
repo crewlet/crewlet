@@ -763,6 +763,40 @@ func (w *Waiter) taskDeadline(duty time.Time) time.Time {
 	return bound
 }
 
+// rowContext is the context a task's write of a run's row is made under: the
+// bound ctx carries — the task's own, [Waiter.taskDeadline]'s pollBound from
+// its start or the duty's end where that comes first, or the duty's for the
+// fleet's look for launch nodes gone ([Waiter.goneAfter]) — and the time a
+// row at its bound takes to cross this node's connection to the store
+// besides ([RowBudget]). Under the waiter's own lifetime, so its stop ends the
+// write at once as it ends every task ([Waiter.Start]); a waiter driven pass by
+// pass ([Waiter.Tick]) has none, and the write is bounded by its deadline
+// alone, under ctx's values.
+//
+// THE BOUND IS A BOX'S AND A DUTY'S, NEVER A ROW'S: pollBound is how long a
+// box's provider may take to answer at all, and the duty's window is how long
+// this node's claim keeps a peer's tasks off the same boxes. A row of
+// megabytes written within either alone was cut while its bytes were still
+// crossing a slow link, and sent again from its first byte by the next pass,
+// for ever: a parked box past its pause never reaped, a gone node's runs never
+// released (crewlet/crewlet#1076). Past the window, a peer's task can write the
+// same row beside this one, and each of these writes is a compare-and-set the
+// row's own state decides, so the second finds the first's and changes
+// nothing.
+func (w *Waiter) rowContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return context.WithCancel(ctx)
+	}
+	w.mu.Lock()
+	life := w.life
+	w.mu.Unlock()
+	if life == nil {
+		life = context.WithoutCancel(ctx)
+	}
+	return context.WithDeadline(life, deadline.Add(w.pending.RowCrossing()))
+}
+
 // pollBounded polls one box within its task's context and announces its
 // completion where the poll found one, reporting whether it did.
 //
@@ -1238,7 +1272,12 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	// CAS refused, so the reaper walked away silently and the answered run
 	// failed on a box that no longer existed. The CAS is the authority for
 	// the whole reap, not just for the status write.
-	won, err := w.pending.ExpirePause(ctx, run.TurnID)
+	//
+	// THE FLIP WRITES THE ROW WHOLE, a parked turn's state and all, so it is
+	// given the row's crossing beyond the task's bound ([Waiter.rowContext]).
+	flip, flipped := w.rowContext(ctx)
+	won, err := w.pending.ExpirePause(flip, run.TurnID)
+	flipped()
 	if err != nil || !won {
 		return false
 	}
@@ -1252,7 +1291,7 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	// task's deadline or a stop cancelled it would leave a paused snapshot
 	// billed with nobody left to reclaim it — a teardown takes a context of
 	// its own for exactly that.
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	// Kill by id: Connect would auto-resume the snapshot, booting the box
 	// back up purely to shut it down.

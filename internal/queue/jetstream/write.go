@@ -24,7 +24,7 @@ import (
 // whether a leaf's link is part of it.
 //
 // DECIDED ONCE, when the connection is made ([Queue.link]), and every crossing
-// on it reads that one decision — a read's reply ([Queue.recordCrossing], the
+// on it reads that one decision — a read's reply ([Queue.recordArrival], the
 // dead letters' frames), a read that crosses raw ([copyRead]) and a write's
 // request ([Queue.writing]) — so the two directions of one connection are
 // never paced apart by a change to one of them, and a read never decides on a

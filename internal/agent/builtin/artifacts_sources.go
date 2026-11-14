@@ -18,13 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/words"
-	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
@@ -33,15 +31,16 @@ import (
 // [artifacts.MaxInlineBytes] decoded across it, because anything larger cannot
 // have been typed by a model and belongs in one of the other two. An executor's
 // box (`from_sandbox`, `source.sandbox`) and a project's file
-// (`from_project_file`) are STREAMED: their digests are read first, the
-// publish pipeline reserves their bytes in an upload intent, and each file is
-// then put through the engine's own transfer leg, so the bytes a version names
-// were reserved before they moved and are read back verified before the
-// version is decided. A project file is copied rather than shared, because the
-// object store never shares one object between two rows (ADR-0026). A logo or a
-// face of the company's adopted brand (`from_brand`) is copied by the publish
-// pipeline itself from the adoption's snapshot, named by its slot and never by
-// a path or an object, so a copy reads only what an administrator adopted.
+// (`from_project_file`) are STREAMED: their digests are taken first — a box's
+// file by reading it, a project's from its row — the publish pipeline reserves
+// their bytes in an upload intent, and each file is then put through the
+// engine's own transfer leg, so the bytes a version names were reserved before
+// they moved and are read back verified before the version is decided. A
+// project file is copied rather than shared, because the object store never
+// shares one object between two rows (ADR-0026). A logo or a face of the
+// company's adopted brand (`from_brand`) is copied by the publish pipeline
+// itself from the adoption's snapshot, named by its slot and never by a path or
+// an object, so a copy reads only what an administrator adopted.
 //
 // # The box is walked by the engine, and never uploads
 //
@@ -50,6 +49,22 @@ import (
 // through the box itself, treats the listing as untrusted, holds every path to
 // the workspace and the published-path grammar again, and streams each file
 // out. One more file than a version holds is a refusal, never a truncation.
+//
+// # A project's file is read as read_project_file reads it
+//
+// Through the one copy read beside that tool ([WorkDeps.copyFrom]): decided by
+// its verb, its path held to the tracker's rule, and every refusal in its words
+// ([fileReadFailure], [fileContent], [fileContentFailure]), so a seat told why
+// a copy failed is told what the read would have told it. One thing differs,
+// the class of a project or a file that is not there: the caller's argument to
+// change, since a copy only NAMES its source, where the read is ABOUT the file
+// and answers not-found. Its bytes are read whole, at the transfer, and held
+// to the row's digest before any of them moves: a page read can be held only
+// to its length ([objstore.Store.ReadAt]), a whole read to the digest, so
+// content that is not the file's is refused as the damage it is before a byte
+// of it is stored. The publish pipeline's own check would catch it only after
+// storing it, and answer it as a file that changed while it was being
+// published: a conflict, which invites a retry that reads the same bytes.
 
 // artifactFile is one path of the next version and where its bytes come from:
 // exactly one of inline, stream, brand and remove.
@@ -62,13 +77,19 @@ type artifactFile struct {
 }
 
 // streamedFile is a file whose bytes are streamed into an upload: its digest
-// and size read first, and a way to open it again for the transfer.
+// and size taken first, and a way to open it again for the transfer.
 type streamedFile struct {
 	hash objstore.Hash
 	size int64
 	open func(ctx context.Context) (io.ReadCloser, error)
 	// from says where it was read, for a refusal that names it.
 	from string
+	// unread is how a failed open of it is told, by the read its source is:
+	// a box's by why the box failed ([boxFailure]), a project file's as
+	// read_project_file tells a file's content ([fileContentFailure]), and
+	// the call's own inline bytes by [nodeFailure], which no open of them
+	// reaches. Every constructor sets it.
+	unread func(ctx context.Context, err error) tools.Result
 }
 
 // fileSources is one call's files as it parses them, with the box it read
@@ -427,6 +448,9 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 func (s *fileSources) digest(ctx context.Context, from string,
 	open func(ctx context.Context) (io.ReadCloser, error)) (*streamedFile, *tools.Result) {
 
+	unread := func(ctx context.Context, err error) tools.Result {
+		return boxFailure(ctx, s.tool, err, "Could not read "+from)
+	}
 	rc, err := open(ctx)
 	if err != nil {
 		// A PATH THAT NAMES NO FILE is the caller's to change: a box streams
@@ -438,14 +462,14 @@ func (s *fileSources) digest(ctx context.Context, from string,
 				"Nothing was published.", s.tool, from))
 			return nil, &r
 		}
-		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
+		r := unread(ctx, err)
 		return nil, &r
 	}
 	defer func() { _ = rc.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, io.LimitReader(rc, artifacts.MaxTextFileBytes+1))
 	if err != nil {
-		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
+		r := unread(ctx, err)
 		return nil, &r
 	}
 	if n > artifacts.MaxTextFileBytes {
@@ -458,61 +482,54 @@ func (s *fileSources) digest(ctx context.Context, from string,
 		r := faulted(ctx, s.tool, err, s.tool+" could not name the digest of "+from+": "+faultSaid+".")
 		return nil, &r
 	}
-	return &streamedFile{hash: hash, size: n, open: open, from: from}, nil
+	return &streamedFile{hash: hash, size: n, open: open, from: from, unread: unread}, nil
 }
 
-// projectFile is a project's file, copied: its digest and size are the row's,
-// and its bytes are read back through the object store's verifying reader.
+// projectFile is a project's file, copied, decided and read as
+// read_project_file reads it ([WorkDeps.copyFrom]): its digest and size are
+// the row's, and its bytes are read whole and held to the row's digest when
+// the transfer opens them.
 func (s *fileSources) projectFile(ctx context.Context, published string,
 	ref map[string]any) (artifactFile, *tools.Result) {
 
-	project := worklet.ProjectKey(strings.TrimSpace(argString(ref, "project")))
+	project := strings.TrimSpace(argString(ref, "project"))
 	from := strings.TrimSpace(argString(ref, "path"))
 	if project == "" || from == "" {
 		r := failed(fmt.Sprintf("%s: `from_project_file` for %q takes `{project, path}`.",
 			s.tool, published))
 		return artifactFile{}, &r
 	}
-	work := s.deps.work
-	if work.Files == nil || work.Objects == nil {
-		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read project files: this "+
-			"company does not run Worklet.")
-		return artifactFile{}, &r
-	}
-	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
-	// gate asks it: a caller who may not read a project's files may not copy
-	// one into an artifact either.
-	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(worklet.ReadProjectFileTool),
-		authz.Object{}); refusal != nil {
+	src, refusal := s.deps.work.copyFrom(ctx, s.tool, project, from)
+	if refusal != nil {
 		return artifactFile{}, refusal
 	}
-	detail, err := work.Files.File(ctx, project, from, seatRead)
-	switch {
-	case errors.Is(err, worklet.ErrNoFile):
-		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: project %s has no "+
-			"file %q to copy into %q.", s.tool, project, clip(from), published))
-		return artifactFile{}, &r
-	case err != nil:
-		r := readFailure(ctx, s.tool, err)
-		return artifactFile{}, &r
-	}
-	obj := objstore.Object{Key: detail.File.Object, Hash: detail.File.Hash, Size: detail.File.Size}
-	if detail.File.Size > artifacts.MaxTextFileBytes {
+	obj := src.object
+	if obj.Size > artifacts.MaxTextFileBytes {
 		r := failed(fmt.Sprintf("%s: project file %s/%s is larger than the %d bytes an "+
-			"artifact's largest file may hold.", s.tool, project, from,
+			"artifact's largest file may hold.", s.tool, src.project, src.filePath,
 			artifacts.MaxTextFileBytes))
 		return artifactFile{}, &r
 	}
-	objects := work.Objects
+	objects := s.deps.work.Objects
 	open := func(ctx context.Context) (io.ReadCloser, error) {
 		data, err := objects.ReadAt(ctx, obj, 0, obj.Size)
 		if err != nil {
 			return nil, err
 		}
+		// THE WHOLE FILE IS READ, so it is held to the row's digest here,
+		// as a page read cannot be ([objstore.Store.ReadAt] checks a
+		// length): bytes that are not the file's never reach the upload.
+		if got := objstore.HashOf(data); got != obj.Hash {
+			return nil, fmt.Errorf("%w: %s hashes to %s, and its row says %s",
+				objstore.ErrCorrupt, obj.Key, got, obj.Hash)
+		}
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
 	return artifactFile{path: published, stream: &streamedFile{hash: obj.Hash, size: obj.Size,
-		open: open, from: "project file " + project + "/" + from}}, nil
+		open: open, from: "project file " + src.project + "/" + src.filePath,
+		unread: func(ctx context.Context, err error) tools.Result {
+			return fileContentFailure(ctx, s.tool, src.file, err)
+		}}}, nil
 }
 
 // stage reserves and transfers every streamed file of the call through the
@@ -592,7 +609,7 @@ func (s *fileSources) transfer(ctx context.Context, call artifactsdomain.Call, u
 
 	rc, err := f.stream.open(ctx)
 	if err != nil {
-		r := boxFailure(ctx, s.tool, err, "Could not read "+f.stream.from)
+		r := f.stream.unread(ctx, err)
 		return &r
 	}
 	defer func() { _ = rc.Close() }()
@@ -602,6 +619,9 @@ func (s *fileSources) transfer(ctx context.Context, call artifactsdomain.Call, u
 	case err == nil, errors.Is(err, artifactupload.ErrUploadConsumed):
 		return nil
 	case errors.As(err, &mismatch):
+		// A BOX'S FILE MOVED UNDER THE PUBLISH. A project file's bytes are
+		// held to its row's digest by its own open, and the call's own bytes
+		// cannot change, so no other source meets this arm.
 		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s changed while it "+
 			"was being published (%s). Nothing was published; publish again once the "+
 			"build has finished writing it.", s.tool, f.stream.from, mismatch.Reason))
@@ -622,15 +642,20 @@ func (s *fileSources) find(p string) (artifactFile, bool) {
 
 // streamedInline is an inline file as a stream of its own bytes, for the one
 // write that takes no inline content (an asset is always its own upload).
-func streamedInline(f artifactFile) artifactFile {
+func (s *fileSources) streamedInline(f artifactFile) artifactFile {
 	if f.inline == nil {
 		return f
 	}
-	data := f.inline
+	data, from := f.inline, "the inline content of "+f.path
 	f.stream = &streamedFile{hash: objstore.HashOf(data), size: int64(len(data)),
 		open: func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(data)), nil
-		}, from: "the inline content of " + f.path}
+		}, from: from,
+		// THE CALL'S OWN BYTES, in memory: an open of them never fails, and
+		// one that did would be this node's own.
+		unread: func(ctx context.Context, err error) tools.Result {
+			return nodeFailure(ctx, s.tool, err, "Could not read "+from, "Nothing was published.")
+		}}
 	f.inline = nil
 	return f
 }
@@ -639,8 +664,9 @@ func streamedInline(f artifactFile) artifactFile {
 // published, as a model is told it: by the class the sandbox backend marked the failure with
 // ([sandbox.WhyOf]) — the box's provider not answering, at a limit, refusing
 // the company's key, or a setup that cannot reach the box — and otherwise as
-// the condition or fault of this node it is ([nodeFailure]), which is every
-// read that is not of a box: a project's file reads the object store.
+// the condition or fault of this node it is ([nodeFailure]). A project file's
+// content is not read here: it is told as read_project_file tells it
+// ([fileContentFailure]).
 //
 // A PROVIDER'S OUTAGE IS NOT THIS NODE'S FAULT. Every such failure was told as
 // one, "not something trying again clears", so a publish whose box E2B was

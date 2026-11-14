@@ -692,7 +692,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 	// cancellation it is undoing — often the very one that failed the
 	// provision — but it should keep the caller's VALUES, so the warning
 	// below still names the turn that was provisioning this box.
-	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	closeCtx, cancel := detached(ctx)
 	defer cancel()
 	if err := box.Close(closeCtx); err != nil {
 		log.WarnContext(ctx, "sandbox_discard_failed", "sandbox_id", box.ID(), "error", err.Error())

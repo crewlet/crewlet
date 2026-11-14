@@ -1696,7 +1696,7 @@ the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too.
 
 Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
-plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
+plus 150 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
 The drain waits for the turns already running — and, on a pod that serves
 Gitlet, for the clones and pushes already running, which it
@@ -1705,16 +1705,21 @@ longest turn (or the longest clone or push the pod should finish) is the part
 of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
-spend, the reads of unit repositories and the day's usage, closing the store —
-takes milliseconds on a healthy
-fleet but up to about 46 s on a member that has lost both its event stream and
-its coordination store, and about 50 s on a node without `data`, each step
-waiting out its own bound (see
+spend, the reads of unit repositories and the day's usage, and, on a pod that
+runs seats, the sandbox coordinator's own end (a retry still running, all of
+whose teardowns are held to one grace from the stop, a session keep still
+uploading, and the stamp of each keep it cuts, thirty seconds each), closing
+the store — takes milliseconds on a healthy
+fleet but up to about 136 s on a member that runs seats and has lost both its
+event stream and its coordination store, about 140 s on a node without
+`data`, and about 46 s on a member that runs none, each step waiting out its
+own bound (see
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)). A grace of the longest turn
-alone kills such a member before its store closes; the extra 60 s covers that
+alone kills such a member before its store closes; the extra 150 s covers that
 with room for the process to exit. A deployment whose turns finish in seconds
-still needs 60 s, not Kubernetes' 30 s default — and an `ingress` pod with the
-`preStop` sleep described above needs 60 s plus that sleep.
+still needs 150 s, not Kubernetes' 30 s default — a pod that runs no seats
+60 s — and an `ingress` pod with the `preStop` sleep described above needs
+60 s plus that sleep.
 
 #### Sizing the startup probe
 

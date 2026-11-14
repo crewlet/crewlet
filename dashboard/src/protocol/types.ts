@@ -580,6 +580,14 @@ export interface LiveCall {
   total_tokens: number;
   tool_executions?: ToolExecution[] | null;
   /**
+   * How many of the phase's calls `tool_executions` does not list, and those
+   * calls by tool: what a failed phase's record left out of the list its call
+   * is frozen with, which a record holds to its share of one message. Zero and
+   * empty on a running phase's call.
+   */
+  calls_elided?: number;
+  elided_calls?: ElidedCall[] | null;
+  /**
    * Per-round model turns — `{round, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
    * interleave into one ledger. Absent on a phase this engine recorded

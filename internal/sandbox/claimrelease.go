@@ -179,9 +179,10 @@ func releaseFor(run PendingRun, failed failure, hold *Refusal) Release {
 // seat's release dropped, whose claim its next holder reaps.
 //
 // A CONTEXT OF ITS OWN, because the failure it hands back is often the
-// cancellation itself.
+// cancellation itself, as a teardown's write of a run's row takes
+// ([Coordinator.detachedRecord]): the teardown's grace and the row's crossing.
 func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	ctx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	turnID := cr.run.TurnID
 	// A RELEASE WHOSE ANSWER IS NEVER TAKEN, its store call panicking, is

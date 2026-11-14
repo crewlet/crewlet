@@ -24,7 +24,9 @@
 // ([ReadCredentials], [WriteCredentials]), because the harness backend's seats
 // and commands and a local box's teardown all write it, and one of them
 // replacing its files a rename at a time is a login half written whenever that
-// writer stops between two of them.
+// writer stops between two of them. A write names its steps ([CredentialStep])
+// to an observer its caller hands it, nil in every write the engine makes, so
+// the suites can kill a writer at every one.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
@@ -456,7 +458,19 @@ func ReplaceFile(dst string, content io.Reader) error {
 // briefly world-readable, and an exclusive create follows no link at all.
 // name's directory must exist.
 func ReplaceFileIn(root *os.Root, name string, content io.Reader) error {
-	tmpName := filepath.Join(filepath.Dir(name), ".crewlet-tmp-"+rand.Text())
+	return replaceStaged(root, name, filepath.Join(filepath.Dir(name), stagedPrefix+rand.Text()), content)
+}
+
+// stagedPrefix starts the name of every file [ReplaceFileIn] stages: a file
+// under it is a write that has not reached its rename, which no reader reads,
+// and one a killed write left behind is what a shared login's next hold of its
+// lock removes ([ReadCredentials]).
+const stagedPrefix = ".crewlet-tmp-"
+
+// replaceStaged is [ReplaceFileIn] through the staged file tmpName, beneath
+// root and in name's own directory, which it creates exclusively: it fails
+// rather than write through whatever stands there.
+func replaceStaged(root *os.Root, name, tmpName string, content io.Reader) error {
 	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, FileMode)
 	if err != nil {
 		return err
