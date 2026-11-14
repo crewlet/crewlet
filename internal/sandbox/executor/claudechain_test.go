@@ -434,13 +434,19 @@ func TestTheResumeStartsFromACheckpointTheLastRowDoesNotDescendFrom(t *testing.T
 // row descends through another of its records, below the checkpoint's call's
 // or above it; and so where the checkpoint names a hook's record of one call
 // of the reply, its toolUseID naming the call, where the reply made more than
-// one, and not where it made that one alone.
+// one, and not where it made that one alone. Nor where the results the
+// checkpoint hangs off answer none of the reply's calls, though another of
+// its results lies under the last row, or where the one under the last row
+// answers only the checkpoint's call again.
 //
 // Mutation: skip the descent through the batch, and the resume starts from
 // the checkpoint in the first; skip the reply's other record below or above
-// the checkpoint's call, and it does in the next two; or read the hook's reply
-// as one of more calls where it made one, and the last case keeps the last
-// row.
+// the checkpoint's call, and it does in the next two; read the hook's reply
+// as one of more calls where it made one, and the hook's case of one call
+// keeps the last row; read the checkpoint's results as answering a call of
+// the reply whatever their ids, and the case of none keeps it too; or take
+// the result under the last row for one of another call whatever it
+// answers, and so does the last case.
 func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) {
 	t.Parallel()
 	batch := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
@@ -478,6 +484,20 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 		3: cannot(whyTail), 4: yes(whyRecoveredResult), 5: no(whyOffConversation)},
 		rcOrder{[]int{1, 2, 4}, allVariants})
 	one.expectLeaf(t, "a hook's call, of a reply that made one", 2)
+
+	unshared := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
+		rcResults(2, 3, 2000, "x9"), rcAttach(3, 4, 2100, rcNote), rcResults(2, 5, 3000, "x2"),
+		rcReply(5, 6, "msg_b", 4000, rcSaid("done")), rcCheckpoint(4))
+	unshared.expect(t, "a checkpoint's results answering none of the reply's calls", map[int]rcAnswer{
+		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 5: yes(whyRecoveredResult),
+		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
+	unshared.expectLeaf(t, "a checkpoint's results answering none of the reply's calls", 3)
+	again := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
+		rcResults(2, 3, 2000, "x1"), rcAttach(3, 4, 2100, rcNote), rcResults(2, 5, 3000, "x1"),
+		rcReply(5, 6, "msg_b", 4000, rcSaid("done")), rcCheckpoint(4))
+	again.expect(t, "a checkpoint's results whose call the last row's result answers again", map[int]rcAnswer{
+		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 5: yes(whyRecoveredResult),
+		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
 }
 
 // A LEAF ONLY AN UNSEEN FLAG MOVES IS CANNOT TELL: where the checkpoint is a
@@ -718,10 +738,13 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 // another record (its sourceToolAssistantUUID's, or another reply that made
 // one of its calls) and recover with it, where that record is in the thread,
 // so the whole thread is cannot tell (whyResultByCall); and one with neither
-// is placed by its parent alone, definite.
+// is placed by its parent alone, definite. A result is held to its own
+// parent's calls alone, so one under a later reply, of a call an earlier
+// reply made and had answered, is cannot tell too.
 //
 // Mutation: read the flag as off, and a result it may hang elsewhere is
-// placed under its parent.
+// placed under its parent; or hold a result to the calls of every reply met
+// before its parent, and the one under the later reply reads as answered.
 func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 	t.Parallel()
 	sourced := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
@@ -731,6 +754,10 @@ func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 	owned := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcReply(2, 3, "msg_b", 1500, rcCalls("x2")), rcResults(3, 4, 2000, "x1"))
 	owned.expectCannotTell(t, "a result whose call another reply made", whyResultByCall)
+	answered := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+		rcResults(2, 3, 2000, "x1"), rcReply(3, 4, "msg_b", 3000, rcCalls("x2")), rcResults(4, 5, 4000, "x1"))
+	answered.expectCannotTell(t, "a result under a later reply, of a call an earlier one made and had answered",
+		whyResultByCall)
 	alone := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcResults(2, 3, 2000, "x9"))
 	alone.expect(t, "a result whose call nobody made", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),

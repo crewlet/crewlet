@@ -1411,6 +1411,11 @@ type chainWork struct {
 	// of a batch's reply; met is the walk's and the recovery's; replied the
 	// replies the recovery met.
 	a, b, run, met, replied chainMarks
+	// calls and taken are sets of call ids each step clears and fills: a
+	// reply's calls, and those y1t's descent took, so a list of ids is held
+	// to another an id at a time, never one list walked for each of the
+	// other's.
+	calls, taken chainMarks
 	// pos is each record's place on the walk, -1 off it, by handle - 1.
 	pos []int32
 	// sides are the walk's fallback's candidates, by isSidechain as written.
@@ -1453,7 +1458,15 @@ type chainSide struct {
 	prev []int32
 }
 
-// chainCheckEvery is how many steps End takes between two looks at its ctx.
+// chainCheckEvery is how many steps End takes between two looks at its ctx,
+// a power of two so the count is cheap to test. It bounds how long End runs
+// on once its caller gives it up: a step is a few reads of the chain's
+// arrays, so 4,096 of them take well under a millisecond. And it bounds what
+// the looks cost: each is a call through every context the caller wrapped,
+// and one in 4,096 steps is nothing End could measure. End's time at the
+// chain's bounds is what the facility's benchmark measures (`test(executor):
+// measure the chain facility at its bounds`), which restates this value
+// where it finds a step dearer than that.
 const chainCheckEvery = 1 << 12
 
 // tick counts a step, and answers ctx's error every chainCheckEvery steps.
@@ -1480,7 +1493,8 @@ func (w *chainWork) records(r chainReplyID) []chainHandle {
 func (c *threadChain) work() *chainWork {
 	n := len(c.recs)
 	w := &chainWork{pos: make([]int32, n), a: newChainMarks(n), b: newChainMarks(n), run: newChainMarks(n),
-		met: newChainMarks(n), replied: newChainMarks(len(c.replies))}
+		met: newChainMarks(n), replied: newChainMarks(len(c.replies)), calls: newChainMarks(len(c.callIDs)),
+		taken: newChainMarks(len(c.callIDs))}
 	for i := range c.recs {
 		if written := c.written[i]; written.named {
 			if p := c.index[written.uuid]; p != noChainRecord {
@@ -1550,7 +1564,10 @@ func (c *threadChain) decide(ctx context.Context) error {
 		return nil
 	}
 	w := c.work()
-	if c.resultByCall() {
+	switch byCall, err := c.resultByCall(ctx, w); {
+	case err != nil:
+		return err
+	case byCall:
 		c.cannotTell(whyResultByCall)
 		return nil
 	}
@@ -1621,18 +1638,19 @@ func whyAt(w chainWhy) uint8 { return uint8(slices.Index(chainWhys[:], w)) }
 // reply holding it where every reply holding it is of one id: any reply but
 // its parent, whatever its side or agent, so the chain refuses no less than
 // the resume hangs.
-func (c *threadChain) resultByCall() bool {
+//
+// ONE PASS, linear in the records and their call ids: a reply's calls are
+// marked once, as the pass meets the reply, and each result under it is held
+// to those marks an id at a time, never its ids walked for each of the
+// reply's (a reply of 2^16 calls and its result of as many would be 2^32
+// steps). It looks at ctx as it goes.
+func (c *threadChain) resultByCall(ctx context.Context, w *chainWork) (bool, error) {
 	var holders [][2]chainHandle
-	for i := range c.recs {
-		h := chainHandle(i + 1)
-		if !c.is(h, kindUser|kindResult) {
-			continue
-		}
-		parent, ids := c.recs[i].parent, c.callsOf(h)
-		if parent != noChainRecord && c.is(parent, kindAssistant) && everyIn(ids, c.callsOf(parent)) {
-			continue
-		}
-		if source, ok := c.sources[h]; ok {
+	// odd reports whether result r, whose ids are not all of calls its parent
+	// made, has a record foamy_spring may hang it under.
+	odd := func(r chainHandle) bool {
+		parent := c.recs[r-1].parent
+		if source, ok := c.sources[r]; ok {
 			if s := c.index[source]; s != noChainRecord && s != parent {
 				return true
 			}
@@ -1640,13 +1658,56 @@ func (c *threadChain) resultByCall() bool {
 		if holders == nil {
 			holders = c.holders()
 		}
-		for _, id := range ids {
+		for _, id := range c.callsOf(r) {
 			if hold := holders[id]; hold[0] != noChainRecord && (hold[0] != parent || hold[1] != noChainRecord) {
 				return true
 			}
 		}
+		return false
 	}
-	return false
+	for i := range c.recs {
+		if err := w.tick(ctx); err != nil {
+			return false, err
+		}
+		h := chainHandle(i + 1)
+		switch {
+		case c.is(h, kindUser|kindResult):
+			// A result whose parent is no reply answers no call of its
+			// parent's.
+			if p := c.recs[i].parent; (p == noChainRecord || !c.is(p, kindAssistant)) && odd(h) {
+				return true, nil
+			}
+		case c.is(h, kindAssistant):
+			marked := false
+			for _, x := range w.children(h) {
+				if !c.is(x, kindUser|kindResult) {
+					continue
+				}
+				if !marked {
+					w.calls.clear()
+					for _, id := range c.callsOf(h) {
+						if err := w.tick(ctx); err != nil {
+							return false, err
+						}
+						w.calls.set(int(id))
+					}
+					marked = true
+				}
+				for _, id := range c.callsOf(x) {
+					if err := w.tick(ctx); err != nil {
+						return false, err
+					}
+					if !w.calls.has(int(id)) {
+						if odd(x) {
+							return true, nil
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // holders is, by call id, the first two replies whose tool_use blocks carry
@@ -1668,16 +1729,6 @@ func (c *threadChain) holders() [][2]chainHandle {
 		}
 	}
 	return holders
-}
-
-// everyIn reports whether every id of ids is in of.
-func everyIn(ids, of []chainCallID) bool {
-	for _, id := range ids {
-		if !slices.Contains(of, id) {
-			return false
-		}
-	}
-	return true
 }
 
 // pick is the leaf the resume walks from, with q1t's variants off (leaf0)
@@ -1840,6 +1891,18 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle) bool {
 	if len(uses) > 0 {
 		id = c.recs[y-1].reply
 	}
+	// The batch's reply's calls and those the descent took, as sets: the walk
+	// up holds a results record to them an id at a time.
+	w.calls.clear()
+	for _, x := range uses {
+		w.calls.set(int(x))
+	}
+	w.taken.clear()
+	shared := false
+	for _, x := range taken {
+		w.taken.set(int(x))
+		shared = shared || w.calls.has(int(x))
+	}
 	w.run.clear()
 	if id != 0 {
 		for _, x := range c.x1t(w, y, id) {
@@ -1868,8 +1931,8 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle) bool {
 				sibling = false
 			}
 		}
-		if y != noChainRecord && cur == y && below != noChainRecord && anyIn(taken, uses) &&
-			c.answersAnother(below, uses, taken, byHook) {
+		if y != noChainRecord && cur == y && below != noChainRecord && shared &&
+			c.answersAnother(w, below, len(uses), byHook) {
 			return true
 		}
 		below = cur
@@ -1879,22 +1942,12 @@ func (c *threadChain) y1t(w *chainWork, last, cp chainHandle) bool {
 
 // answersAnother reports whether below, the record under the batch's reply
 // on the walk up, is one of its results answering a call of it other than
-// the checkpoint's (`aj(ne).some(...)`): any of its calls but those taken,
-// or, where the batch was found by its hook, any where the reply made more
-// than one.
-func (c *threadChain) answersAnother(below chainHandle, uses, taken []chainCallID, byHook bool) bool {
+// the checkpoint's (`aj(ne).some(...)`): any of its calls (w.calls) but those
+// taken (w.taken), or, where the batch was found by its hook, any where the
+// reply made more than one, uses being how many it made.
+func (c *threadChain) answersAnother(w *chainWork, below chainHandle, uses int, byHook bool) bool {
 	for _, x := range c.resultsOf(below) {
-		if slices.Contains(uses, x) && (byHook && len(uses) > 1 || !byHook && !slices.Contains(taken, x)) {
-			return true
-		}
-	}
-	return false
-}
-
-// anyIn reports whether any id of ids is in of.
-func anyIn(ids, of []chainCallID) bool {
-	for _, id := range ids {
-		if slices.Contains(of, id) {
+		if w.calls.has(int(x)) && (byHook && uses > 1 || !byHook && !w.taken.has(int(x))) {
 			return true
 		}
 	}
