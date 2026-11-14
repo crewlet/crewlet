@@ -3825,33 +3825,27 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 
 // merge folds each group's answers into the thread's: handedYes where every
 // group hands a record, handedNo where none does, each with the default
-// variant's reason; handedUnknown where a group cannot tell, with its reason,
-// or where the groups part, whyLeafFlag where q1t's leaf parts them and else
-// whyRelease. Each distinct order is kept once, with the variants that hand
-// it, the default variant's first: a group's warm_mochi variants hand its
-// order, the rest its order with the tails sorted after a walk by breadth.
+// variant's reason; and handedUnknown where the groups part, whyLeafFlag where
+// q1t's leaf parts them and else whyRelease. A group's answers are definite,
+// since judge answers handed or not handed alone, so a record's cannot tell
+// comes only from that parting. Each distinct order is kept once, with the
+// variants that hand it, the default variant's first: a group's warm_mochi
+// variants hand its order, the rest its order with the tails sorted after a
+// walk by breadth.
 func (c *threadChain) merge(groups []chainGroup) {
 	def := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants&variantDefault != 0 })
 	metcalfe := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants == variantsMetcalfe })
 	c.verdicts = make([]chainVerdict, len(c.recs))
 	for i := range c.verdicts {
 		var yes, no bool
-		unknown := -1
-		for gi, g := range groups {
-			switch g.verdicts[i].handed {
-			case verdictYes:
+		for _, g := range groups {
+			if g.verdicts[i].handed == verdictYes {
 				yes = true
-			case verdictNo:
+			} else {
 				no = true
-			default:
-				if unknown < 0 || gi == def {
-					unknown = gi
-				}
 			}
 		}
 		switch {
-		case unknown >= 0:
-			c.verdicts[i] = groups[unknown].verdicts[i]
 		case yes && no && metcalfe >= 0 && groups[metcalfe].verdicts[i].handed != groups[def].verdicts[i].handed:
 			c.verdicts[i] = chainVerdict{handed: verdictUnknown, why: whyAt(whyLeafFlag)}
 		case yes && no:
