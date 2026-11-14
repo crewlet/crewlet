@@ -92,6 +92,13 @@ func runFakeHarness() {
 		// because the calls of one case may overlap.
 		fakeRecordArgv(dir)
 	}
+	if dir := os.Getenv("FAKE_RECORD_ENV"); dir != "" {
+		// Not a mode either: what this invocation's environment held, with
+		// its argv to tell a completion from the version probe, for a case
+		// whose call takes a route that quotes nothing of what it answered
+		// (a smoke call on a profile with no mcp block).
+		fakeRecordEnv(dir)
+	}
 	switch {
 	case os.Getenv("FAKE_STORE") == "1":
 		// A harness that keeps its login, its sessions and their usage in a
@@ -360,6 +367,57 @@ func fakeRecordArgv(dir string) {
 		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
 		os.Exit(3)
 	}
+}
+
+// recordedCall is one invocation [fakeRecordEnv] recorded.
+type recordedCall struct {
+	Argv []string `json:"argv"`
+	Env  []string `json:"env"`
+}
+
+// fakeRecordEnv writes this invocation's argv and environment into dir, a file
+// per invocation, as [fakeRecordArgv] writes its argv.
+func fakeRecordEnv(dir string) {
+	f, err := os.CreateTemp(dir, "env-*.json")
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+	env := os.Environ()
+	slices.Sort(env)
+	err = json.NewEncoder(f).Encode(recordedCall{Argv: os.Args[1:], Env: env})
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+}
+
+// recordedEnv reads back every invocation [fakeRecordEnv] wrote into dir that
+// was a completion rather than the version probe, in no particular order.
+func recordedEnv(t *testing.T, dir string) []recordedCall {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []recordedCall
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var call recordedCall
+		if err := json.Unmarshal(raw, &call); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		if len(call.Argv) > 0 && call.Argv[0] == "-test.run=TestFakeHarness" {
+			out = append(out, call)
+		}
+	}
+	return out
 }
 
 // recordedArgv reads back every argv [fakeRecordArgv] wrote into dir, in no

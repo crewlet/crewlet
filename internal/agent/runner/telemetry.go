@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -201,8 +200,13 @@ type Spend struct {
 	// single-phase summary a dashboard shows before anyone expands it.
 	Response string
 
-	// ToolExecutions is every call the turn made, in order across phases.
+	// ToolExecutions is the turn's calls as its phases' records list them,
+	// in order across phases, and ElidedCalls the calls those records do not
+	// list, by tool: each phase's held to its share as its own record holds
+	// it ([keptExecutions]), so the turn holds no more of a phase's calls than
+	// its record does. [Spend.Calls] is the list the turn's record carries.
 	ToolExecutions []types.ToolExecution
+	ElidedCalls    []types.ElidedCalls
 
 	// ExecuteTools and AllTools are the tool NAMES, split the way the
 	// learning workers reason about them and accumulated differently on
@@ -316,6 +320,13 @@ type Spend struct {
 	FailedIn string
 }
 
+// Calls is the tool list a turn's record carries ([types.AgentTurnCompleted]):
+// every call its phases' records list, held to the one share a record has
+// (recordbytes.go), and what those records and this one do not list, by tool.
+func (s Spend) Calls() RecordCalls {
+	return keptExecutions(s.ToolExecutions, s.ElidedCalls)
+}
+
 // Total is the turn's own token count — what its PHASES spent, and what the
 // phase events sum to. It does not include what its workers or its extension
 // judgements cost; both are metered separately and reported in their own
@@ -366,7 +377,7 @@ func (r *Runner) Spend() Spend {
 }
 
 // record folds one completed phase into the turn's tally.
-func (s *Spend) record(rec phaseRecord) {
+func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 	switch rec.Phase {
 	case phase.Execute:
 		s.ExecuteModel = rec.Result.Model
@@ -397,7 +408,8 @@ func (s *Spend) record(rec phaseRecord) {
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}
-	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
+	s.ToolExecutions = append(s.ToolExecutions, calls.Rows...)
+	s.ElidedCalls = keptTally(append(s.ElidedCalls, calls.ByTool...))
 	s.Tools = types.SumToolTallies(s.Tools, toolTallies(rec.Result.Executions))
 	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
@@ -534,6 +546,9 @@ func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 	if !e.on() {
 		return
 	}
+	// HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part (keptPrompt): the
+	// frame is sent once, and the prompt the model was sent is not changed.
+	system, user = keptPrompt(system), keptPrompt(user)
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -859,6 +874,18 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 	if !e.on() {
 		return
 	}
+	// WHAT GROWS ON THE FRAME, EACH HELD TO ITS LIVE SHARE (recordbytes.go,
+	// "The live frame"): the frame is republished whole five times a second,
+	// so past a share it keeps the newest and says what it left out.
+	rounds := keptRounds(recordRounds{
+		Rounds:      phaseRounds(res.Rounds),
+		Invocations: phaseInvocations(res.Invocations),
+		Steers:      phaseSteers(res.Steers),
+		Narration:   roundNarration(res.Narration),
+		Calls:       liveExecutions(res.Executions),
+	})
+	calls := keptList(rounds.Calls, liveList, rounds.Dropped)
+	running, runningElided := keptRunning(runningCalls(res.Running))
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -887,21 +914,25 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		TotalTokens:      res.InputTokens + res.OutputTokens,
 		CacheReadTokens:  res.CacheRead,
 		CacheWriteTokens: res.CacheWrite,
-		Rounds:           phaseRounds(res.Rounds),
-		Steers:           phaseSteers(res.Steers),
+		Rounds:           rounds.Rounds,
+		Steers:           rounds.Steers,
+		RoundsElided:     rounds.Elided,
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
 		RunStartedAt:     utcOrZero(res.RunStartedAt),
-		RunningCalls:     runningCalls(res.Running),
-		Invocations:      phaseInvocations(res.Invocations),
+		RunningCalls:     running,
+		RunningElided:    runningElided,
+		Invocations:      rounds.Invocations,
 		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
-		ToolExecutions: liveExecutions(res.Executions),
-		RoundNarration: roundNarration(res.Narration),
+		ToolExecutions: calls.Rows,
+		CallsElided:    calls.Elided,
+		ElidedCalls:    calls.ByTool,
+		RoundNarration: keptNarration(rounds.Narration, liveNarrationBytes),
 		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
@@ -1040,7 +1071,7 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		// reason: it is what makes a rescue readable, and on the failure
 		// paths it is the only thing that names what went wrong.
 		Decision: verdict,
-		Notes:    d.Reason,
+		Notes:    keptText(d.Reason, notesBytes),
 		// HOW LONG THE JUDGEMENT COST. A judge runs in the middle of a
 		// phase that has already been running for minutes, so a slow cheap
 		// model here is a stall the phase's own duration absorbs without
@@ -1079,6 +1110,17 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	if !e.on() {
 		return
 	}
+	// HELD TO THEIR SHARES, as the turn's own phases' records are
+	// (recordbytes.go): a worker's loop answers its MCP tools whole, and runs
+	// as many rounds as its cap lets it.
+	rounds := keptRounds(recordRounds{
+		Rounds:    phaseRounds(res.RoundRecords),
+		Narration: roundNarration(res.Narration),
+		Calls:     toolExecutions(res.Executions),
+	})
+	calls := keptExecutions(rounds.Calls, rounds.Dropped)
+	system, user := keptPrompt(res.SystemPrompt), keptPrompt(res.UserPrompt)
+	available, availableElided := keptNames(res.ToolsAvailable)
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
@@ -1118,19 +1160,22 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Model:          res.Model,
 		ProviderKey:    res.ProviderKey,
 		Trigger:        e.turn.Trigger,
-		SystemPrompt:   res.SystemPrompt.Text,
-		UserPrompt:     res.UserPrompt.Text,
-		SystemSections: promptSections(ctx, phase.Subagent, res.SystemPrompt),
-		UserSections:   promptSections(ctx, phase.Subagent, res.UserPrompt),
-		Response:       res.Text,
-		ToolExecutions: toolExecutions(res.Executions),
+		SystemPrompt:   system.Text,
+		UserPrompt:     user.Text,
+		SystemSections: promptSections(ctx, phase.Subagent, system),
+		UserSections:   promptSections(ctx, phase.Subagent, user),
+		Response:       keptText(res.Text, responseBytes),
+		ToolExecutions: calls.Rows,
+		CallsElided:    calls.Elided,
+		ElidedCalls:    calls.ByTool,
 		// Published beside the executions, on the round number they share.
 		// A worker's card is the same round ledger as the turn's own phases
 		// and reads it the same way; without this half of the pair, every
 		// delegated worker rendered as bare tool rows with nothing that
 		// asked for them.
-		RoundNarration:   roundNarration(res.Narration),
-		Rounds:           phaseRounds(res.RoundRecords),
+		RoundNarration:   keptNarration(rounds.Narration, narrationBytes),
+		Rounds:           rounds.Rounds,
+		RoundsElided:     rounds.Elided,
 		InputTokens:      res.InputTokens,
 		OutputTokens:     res.OutputTokens,
 		TotalTokens:      res.Tokens(),
@@ -1147,12 +1192,13 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// worker was slow" is the question a delegate call raises and the
 		// only one its records could not answer — a nested phase publishes
 		// no start, so there was never a second instant to subtract.
-		DurationMS:     int(res.Elapsed / time.Millisecond),
-		ToolsAvailable: res.ToolsAvailable,
+		DurationMS:           int(res.Elapsed / time.Millisecond),
+		ToolsAvailable:       available,
+		ToolsAvailableElided: availableElided,
 		// The grant's refusals, which is what Notes is documented to
 		// carry for this phase. A child that asked for a tool it could
 		// not have is the first thing to look at when its answer is thin.
-		Notes: rejectedNote(res.Rejected),
+		Notes: keptText(rejectedNote(res.Rejected), notesBytes),
 		// The task's own status — ok / no_result / timed_out / skipped —
 		// which is the one field that says what became of it. It is a
 		// phase's structured verdict, so it rides the same field the
@@ -1183,11 +1229,17 @@ func rejectedNote(rejected []string) string {
 
 // completed closes a phase.
 func (e emitter) completed(ctx context.Context, rec phaseRecord) {
+	// WHAT GROWS ON THE RECORD, EACH HELD TO ITS SHARE OF THE ONE MESSAGE
+	// (recordbytes.go), with what it does not keep said beside it.
+	k := rec.kept()
 	// Tallied BEFORE the publisher check: see [emitter].
-	e.tally.record(rec)
+	e.tally.record(rec, k.calls)
 	if !e.on() {
 		return
 	}
+	system, user := keptPrompt(rec.System), keptPrompt(rec.User)
+	available, availableElided := keptNames(rec.Available)
+	catalogue, catalogueElided := keptNames(rec.Catalogue)
 	ev := types.AgentPhaseCompleted{
 		Agent:            e.turn.AgentID,
 		RoleName:         e.role,
@@ -1198,16 +1250,19 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Model:            rec.Result.Model,
 		ProviderKey:      rec.Result.ProviderKey,
 		Trigger:          e.turn.Trigger,
-		SystemPrompt:     rec.System.Text,
-		UserPrompt:       rec.User.Text,
-		SystemSections:   promptSections(ctx, rec.Phase, rec.System),
-		UserSections:     promptSections(ctx, rec.Phase, rec.User),
-		Response:         rec.Result.Text,
-		ToolExecutions:   toolExecutions(rec.Result.Executions),
-		RoundNarration:   roundNarration(rec.Result.Narration),
-		Rounds:           phaseRounds(rec.Result.Rounds),
-		Steers:           append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
-		Invocations:      phaseInvocations(rec.Result.Invocations),
+		SystemPrompt:     system.Text,
+		UserPrompt:       user.Text,
+		SystemSections:   promptSections(ctx, rec.Phase, system),
+		UserSections:     promptSections(ctx, rec.Phase, user),
+		Response:         keptText(rec.Result.Text, responseBytes),
+		ToolExecutions:   k.calls.Rows,
+		CallsElided:      k.calls.Elided,
+		ElidedCalls:      k.calls.ByTool,
+		RoundNarration:   keptNarration(k.rounds.Narration, narrationBytes),
+		Rounds:           k.rounds.Rounds,
+		Steers:           k.rounds.Steers,
+		Invocations:      k.rounds.Invocations,
+		RoundsElided:     k.rounds.Elided,
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
 		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -1226,14 +1281,16 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// Off the loop's own count rather than a re-derivation from the
 		// narration: a round that answered nothing records no narration
 		// at all, so there is nothing downstream to count it from.
-		EmptyAnswerRounds: rec.Result.EmptyAnswers,
-		Decision:          rec.Decision,
-		RescueFired:       rec.Rescued,
-		Notes:             rec.Notes,
-		ToolsAvailable:    rec.Available,
-		ToolCatalogue:     rec.Catalogue,
-		ConversationKey:   e.turn.ConversationKey,
-		Failed:            rec.Failed,
+		EmptyAnswerRounds:    rec.Result.EmptyAnswers,
+		Decision:             rec.Decision,
+		RescueFired:          rec.Rescued,
+		Notes:                keptText(rec.Notes, notesBytes),
+		ToolsAvailable:       available,
+		ToolsAvailableElided: availableElided,
+		ToolCatalogue:        catalogue,
+		ToolCatalogueElided:  catalogueElided,
+		ConversationKey:      e.turn.ConversationKey,
+		Failed:               rec.Failed,
 	}
 	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
 	// harness, the box, what it delivered and which launch it was. Nothing else
@@ -1248,10 +1305,6 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.PushedRefsElided = rec.Run.PushedElided
 		ev.PushedRefsUnread = rec.Run.PushedUnread
 		ev.LaunchID = rec.Run.LaunchID
-		// AND WHAT ITS RECORD DID NOT KEEP of its calls, by tool: the
-		// executions above are the kept ones, and this record outlives the
-		// run's own.
-		ev.CallsElided, ev.ElidedCalls = elidedByTool(rec.RunElided)
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the
@@ -1267,43 +1320,47 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
 
-// elidedByTool is a collected run's calls its record did not keep, as its phase
-// record states them ([types.AgentPhaseCompleted.ElidedCalls]): how many, and
-// by tool how many and how many of those failed, the tools in name order and
-// the calls whose tool was not kept last.
-func elidedByTool(elided []ledger.Elided) (int, []types.ElidedCalls) {
-	byName := map[string]*types.ElidedCalls{}
-	total := 0
-	for _, e := range elided {
-		if e.Calls <= 0 {
-			continue
-		}
-		total += e.Calls
-		tally, ok := byName[e.Name]
-		if !ok {
-			tally = &types.ElidedCalls{Name: e.Name}
-			byName[e.Name] = tally
-		}
-		tally.Calls += e.Calls
-		tally.Failed += min(e.Failed, e.Calls)
-	}
-	if total == 0 {
-		return 0, nil
-	}
-	out := make([]types.ElidedCalls, 0, len(byName))
-	for _, tally := range byName {
-		out = append(out, *tally)
-	}
-	unnamedLast := func(e types.ElidedCalls) int {
-		if e.Name == "" {
-			return 1
-		}
-		return 0
-	}
-	slices.SortFunc(out, func(a, b types.ElidedCalls) int {
-		return cmp.Or(cmp.Compare(unnamedLast(a), unnamedLast(b)), cmp.Compare(a.Name, b.Name))
+// keptPhase is what a phase's record keeps of what grows on it with its rounds
+// (recordbytes.go): its rounds within their window ([keptRounds]), and its
+// calls held to their share ([keptExecutions]).
+type keptPhase struct {
+	rounds recordRounds
+	calls  RecordCalls
+}
+
+// kept is what the phase's record keeps of its rounds and its calls: its
+// loop's calls, or its run's as the bridge recorded them, those of a round
+// past the window tallied with the ones the list drops and the ones a
+// collected run's own record dropped first ([phaseResult.RunElided]). Kept
+// once, for its record and the turn's, which lists what this one does.
+func (rec phaseRecord) kept() keptPhase {
+	rounds := keptRounds(recordRounds{
+		Rounds:      phaseRounds(rec.Result.Rounds),
+		Invocations: phaseInvocations(rec.Result.Invocations),
+		Steers:      append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
+		Narration:   roundNarration(rec.Result.Narration),
+		Calls:       toolExecutions(rec.Result.Executions),
 	})
-	return total, out
+	return keptPhase{rounds: rounds,
+		calls: keptExecutions(rounds.Calls, slices.Concat(runTally(rec.RunElided), rounds.Dropped))}
+}
+
+// runTally is a collected run's calls its record did not keep, as a phase's
+// record tallies them ([types.ElidedCalls]): by tool, how many and how many
+// failed, a call whose tool its record did not keep under no name. Folded
+// and held to its census where the record keeps it ([keptTally]). Nil for a
+// run that dropped none, and for every phase that is no run.
+func runTally(elided []ledger.Elided) []types.ElidedCalls {
+	if len(elided) == 0 {
+		return nil
+	}
+	out := make([]types.ElidedCalls, 0, len(elided))
+	for _, e := range elided {
+		if e.Calls > 0 {
+			out = append(out, types.ElidedCalls{Name: e.Name, Calls: e.Calls, Failed: min(e.Failed, e.Calls)})
+		}
+	}
+	return out
 }
 
 // StoppedKind is the error kind a phase and a turn a person stopped carry: not
@@ -1632,22 +1689,30 @@ func partialRound(p *toolloop.Partial) map[string]any {
 		"content": tail(p.Content),
 	}
 	if len(p.Abandoned) > 0 {
-		out["abandoned"] = roundNarration(p.Abandoned)
+		// THE NEWEST ATTEMPTS, EACH ITS END within its even part of their
+		// share (liveTail): a reader saw each one arrive and die, and the
+		// round's own text replaces them all once it completes.
+		attempts := slices.Clone(p.Abandoned[max(len(p.Abandoned)-liveAbandonedAttempts, 0):])
+		each := liveAbandonedBytes/len(attempts) - narrationRowRoom
+		for i := range attempts {
+			attempts[i].Content = liveTail(attempts[i].Content, each)
+		}
+		out["abandoned"] = roundNarration(attempts)
 	}
 	return out
 }
 
-// liveExecutions is the round's tool calls with their OUTPUT bounded.
+// liveExecutions is the round's tool calls with their OUTPUT held to its tail.
 //
-// Only on the live event: the durable record keeps every result verbatim, and
-// this is the copy that is republished five times a second for the length of
-// the phase. A tool result is routinely the largest thing on the frame — a
-// knowledge search, a file read — and it is already final: the reader opens it
-// on the completed record, where it is whole.
+// Only on the live event: this is the copy that is republished five times a
+// second for the length of the phase, and the phase's record keeps each
+// result's opening, whole within its share. A tool result is routinely the
+// largest thing on the frame — a knowledge search, a file read — and it is
+// already final: the reader opens it on the completed record.
 //
-// The arguments are NOT bounded. They are what a reader scans a running phase
-// for ("which file is it reading now?"), they are small, and cutting JSON in
-// the middle produces something no consumer can parse.
+// The arguments, the names and the list itself are held where the frame keeps
+// the list to its share ([liveList]): an argument's largest values left out
+// with the cut said, never JSON cut in the middle, which no consumer can parse.
 func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	out := toolExecutions(execs)
 	for _, row := range out {

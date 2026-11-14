@@ -60,11 +60,23 @@
 // of the call it followed. The take's context meter (measure.go) decides
 // nothing of what a session recorded and reads the main thread outside the
 // layer: one figure for the launch floor, best effort, which counts nothing
-// from a line it cannot read. The reading that tells a relaunch which of its
-// round's calls a kept session holds (claudeholdings.go) reads a kept
-// archive's main thread, and each depth-one subagent's thread and metadata,
-// through the layer, metering the archive at [threadPlainMax] with the scrub's
-// own meter and handing each member it reads what is left of that budget.
+// from a line it cannot read.
+//
+// What Claude Code's resume hands its model of such a thread, which of its
+// records and in what order, is modelled once, by [threadChain]
+// (claudechain.go), for every reader that judges a resumed session by it:
+// from the shipped code of the releases it was read from, a set and never a
+// range ([claudeResumeRead]), per variant of the release and the flags a
+// reading cannot see, with three answers, handed, not handed and cannot tell,
+// and the reason for each. Its type doc is the model, each rule beside the
+// offsets of the code it restates, and a thread holding a shape no model holds
+// is cannot tell whole.
+//
+// The reading that tells a relaunch which of its round's calls a kept session
+// holds (claudeholdings.go) reads a kept archive's main thread, and each
+// depth-one subagent's thread and metadata, through the layer, metering the
+// archive at [threadPlainMax] with the scrub's own meter and handing each
+// member it reads what is left of that budget.
 //
 // # A run's harness session, carried between boxes
 //

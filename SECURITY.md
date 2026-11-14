@@ -336,13 +336,20 @@ A few things worth knowing when deploying Crewlet:
   on to read it back (that host reads the box and pauses it, as the collection
   it is part of does), a box's tool call relayed to the node holding its
   session (that node runs it as whoever the call's token names, and its answer
-  goes back to the box as that node's), and a request about a person's
+  goes back to the box as that node's), a request about a person's
   Ask Crewlet turn running on another node (the running node hands the turn
-  over, or stops it, for the person the request names). Unsigned, each would
-  let anything the broker admitted write as anybody, change the broker's
-  quorum past every check the operator's route makes, put words in front of a
-  running agent under anybody's name, have a run's box read back and paused,
-  call a running seat's tools as that seat, or stop anybody's Ask Crewlet turn.
+  over, or stops it, for the person the request names), a code search of
+  several repositories (each Gitlet node reads its repositories as the asker
+  the request names, judged by that asker's grants), and a test of an MCP
+  server asked of the nodes it runs on (each launches the server's command, or
+  dials its address, as the company and with the credentials the server is
+  started with, a draft entry's included). Unsigned, each would let anything
+  the broker admitted write as anybody, change the broker's quorum past every
+  check the operator's route makes, put words in front of a running agent
+  under anybody's name, have a run's box read back and paused, call a running
+  seat's tools as that seat, stop anybody's Ask Crewlet turn, read any
+  repository as anybody, or have a node launch any command, or dial any
+  address, with the company's credentials.
   So is the live relay, which only reads but whose answers a data node whose
   own copy is out of service pushes to its dashboards as a sound peer's
   committed chat messages and datastore documents: unsigned, anything the

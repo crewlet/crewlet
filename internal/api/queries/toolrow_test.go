@@ -179,6 +179,10 @@ func catalogueBuiltins() []queries.ToolRow {
 	}
 }
 
+// catalogueOffer is catalogueBuiltins as a node's runtime offers them,
+// withholding nothing.
+func catalogueOffer() queries.BuiltinOffer { return queries.BuiltinOffer{Rows: catalogueBuiltins()} }
+
 // THE BUILT-INS ARE SHELVED IN THE CATALOGUE'S ORDER, AND ONLY WHAT A SEAT IS
 // OFFERED.
 //
@@ -226,7 +230,7 @@ func TestTheBuiltinsAreShelvedInTheCataloguesOrder(t *testing.T) {
 
 	// AND A NODE WITH NO REVISION SENDS AN EMPTY LIST, never a null.
 	s := mcpSources(t, mcpFleet(t))
-	s.Builtins = func() []queries.ToolRow { return nil }
+	s.Builtins = func() queries.BuiltinOffer { return queries.BuiltinOffer{} }
 	if body := asMap(t, askMCPStatus(t, s)); body["builtin"] == nil {
 		t.Error("builtin = null; a client reads that as a build that does not send it")
 	}

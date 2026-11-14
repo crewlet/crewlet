@@ -60,15 +60,26 @@
 // turn's prompts carry no account of the conversation's earlier turns rather
 // than a wrong one.
 //
+// A SPAN OF DROPPED ROUNDS IS NO BUMP EITHER ([ledger.Iteration.Through]). A
+// park past its share folds whole closed rounds into one entry, and a build
+// that reads no span reads it as its first round: a round with no prose whose
+// tallies hold every call the span counts. Each reader of a closed round then
+// reads what it would of the span — a delivery check every call by name and
+// outcome, a resumed call log every call to seed, the stall guard the hash of
+// the round before the next — and the prior-work ledger draws one round where
+// there were several, calling no less than they did: nothing a decision is
+// taken on is misread, so 4 carries it.
+//
 // AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
 // coordination store and so one broker message: [EncodeWithin] condenses the
 // closed rounds past it — their payloads first, then their intents past their
 // opening, then their tallies' digests, then their calls folded into those
 // tallies by identity and then by tool, the names of their read tools with
-// them, then their review prose — never a call's tool or outcome, and its
-// identity only past the last fold, an over-count of its tool; and it refuses
-// a state still past the share, saying whether the turn's own context or its
-// closed rounds are what will not fit ([TooLargeError]). See within.go.
+// them, then their review prose, then whole rounds from the middle into one
+// span and, past that, every round into one — never a call's tool or outcome,
+// and its identity only past the last fold, an over-count of its tool; and it
+// refuses only a state whose own context, beside one count per tool of its
+// rounds' calls, is past the share ([TooLargeError]). See within.go.
 package execstate
 
 import (

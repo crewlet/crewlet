@@ -1557,10 +1557,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is not redelivered into a conversation a retry must not
 			// re-enter.
 			//
-			// A resumed turn is the one most likely to qualify. Its run
-			// already acted through the bridge — posted, wrote, delegated
-			// — and a replay of the resume would judge, and send back,
-			// work whose effects are already out in the world.
+			// A RESUMED TURN QUALIFIES BY WHAT ITS OWN ATTEMPT DID, as any
+			// turn does: what its run did over the bridge before this
+			// segment collected it is an earlier attempt's
+			// ([turn.Work.Inherited]), and a retry collects the same run
+			// rather than make any of it again. It qualifies too when it
+			// panicked, and when it was refused for a reason every retry
+			// would meet again ([turn.ErrPermanent]: its round lost with
+			// its host past its limit) — a refusal only a resume meets,
+			// so it reaches [turn.Abandon] through this call alone.
 			//
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
@@ -2046,9 +2051,9 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
 // the turn's run has an outcome nobody knows — its entry still in flight as
 // the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
-// round's record holding one so read ([ledger.Call.Unfinished]): that call may
-// be the reply, so the end says its delivery is unknown, never that the turn
-// did not reply.
+// round's record holding one so read, listed ([ledger.Call.Unfinished]) or
+// counted ([ledger.Elided.Unfinished]): that call may be the reply, so the end
+// says its delivery is unknown, never that the turn did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
@@ -2070,13 +2075,16 @@ func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered c
 
 // unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
 // one the log it resumes from held in flight as it was read, or one a closed
-// round's record lists so ([ledger.Call.Unfinished]).
+// round's record lists so ([ledger.Call.Unfinished]) or counts so in the tally
+// of the calls it does not list ([ledger.Elided.Unfinished]) — where a park
+// past its share folded the round's calls (internal/agent/execstate).
 func unfinishedIn(in resumeInput) bool {
 	if len(in.Bridged.InFlight) > 0 {
 		return true
 	}
 	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
-		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished }) ||
+			slices.ContainsFunc(it.Elided, func(e ledger.Elided) bool { return e.Unfinished > 0 })
 	})
 }
 
@@ -2217,23 +2225,18 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
-	// closed rounds condensed where the state is past it, and a state still
-	// past it refused by name rather than by the broker, which would refuse
-	// this write and every write of the row after it — the name saying which
-	// of the two is past the share, the turn's own context or its closed rounds.
+	// closed rounds condensed where the state is past it — down to one count
+	// of calls per tool for the lot — and a state still past it refused by
+	// name rather than by the broker, which would refuse this write and every
+	// write of the row after it: only the turn's own context is ever past it.
 	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
-	switch tooLarge, ok := errors.AsType[*execstate.TooLargeError](err); {
-	case ok:
-		what := "its closed rounds, condensed as far as a park condenses them (every round's calls " +
-			"folded by tool, its text, its intent and its review cut to their openings), still take it " +
-			"past its share"
-		if tooLarge.OwnContext() {
-			what = "the turn's own context (its ask, its trigger's words, its turn-start context and how its " +
-				"conversation's earlier turns ended) is past its share by itself, which no condensing of its " +
-				"closed rounds could change"
-		}
+	switch {
+	case errors.Is(err, execstate.ErrTooLarge):
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
-			"the parked turn state is past its share of the run's row: "+what, err)
+			"the parked turn state is past its share of the run's row: the turn's own context (its ask, its "+
+				"trigger's words, its turn-start context and how its conversation's earlier turns ended) is "+
+				"past it with every closed round folded into one count of calls per tool, which is the least "+
+				"a park keeps of them", err)
 		return false, nil
 	case err != nil:
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -2241,12 +2244,13 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	case condensed.Any():
 		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
-			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
-			"texts_cut", condensed.Texts, "intents_cut", condensed.Intents,
-			"tallies_folded", condensed.Identities, "rounds_calls_folded", condensed.Calls,
-			"reviews_cut", condensed.Reviews, "bytes", len(blob),
+			"payloads_left_out", condensed.LeftOut, "texts_cut", condensed.Texts,
+			"intents_cut", condensed.Intents, "tallies_folded", condensed.Identities,
+			"rounds_calls_folded", condensed.Calls, "reviews_cut", condensed.Reviews,
+			"rounds_dropped", condensed.Rounds, "bytes", len(blob),
 			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
-				"row; every call keeps its tool, its identity or its tool's count, and its outcome")
+				"row; every call keeps its tool, its identity or its tool's count, and its outcome, and a "+
+				"dropped round its calls by tool")
 	}
 	// The iteration rides BESIDE the blob: the coordinator files each
 	// launch's own record under it and never decodes the state.
@@ -4079,23 +4083,28 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST PUBLISH, then forget the seat. The publish carries what the
-	// cycles have not, from the marks they left, before the successor
-	// hydrates: for [memoryFlushTimeout], one broker round trip a row, and
-	// what it does not reach is lost to the successor as a crash loses it.
-	// That is more than the last cycle's writes while the backlog an
-	// acquisition or a restart left is still being carried back
-	// (crewlet/crewlet#1039), when the seat's profiles and skills, sent
-	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
-	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
-	// than the broker takes, at which every publish of the seat fails
-	// (crewlet/crewlet#349); and what it does carry of those whole tables
-	// can still be replaced by an older copy published after it
-	// (crewlet/crewlet#511). Forgetting the watermarks
-	// makes the seat's next holding here carry again everything this node
-	// holds for it, as a restart does, which is what puts this node's rows
-	// back on a changelog an operator accepted after a recreation, or one
-	// restored while the node ran.
+	// A LAST TURN, then forget the seat. The flush carries what the cycles
+	// have not, from the marks they left, before the successor hydrates: what
+	// the seat wrote while held here first, then its profiles, skills and
+	// onboarding marker, sent whole, then, while the bound has time, the rows
+	// this node held for the seat when it took it, which the changelog mostly
+	// holds already ([flushSeatMemory]). It has [memoryFlushTimeout], one
+	// broker round trip a row, and what it does not reach of the first two is
+	// lost to the successor as a crash loses it. That is more than the last
+	// cycle's writes when the seat's profiles and skills, sent whole, outlast
+	// the bound (crewlet/crewlet#1040), behind a burst larger than the bound
+	// carries (crewlet/crewlet#1041), and behind a row larger than the broker
+	// takes, at which every pass of the seat that meets it fails
+	// (crewlet/crewlet#349); and what it does carry of those whole tables can
+	// still be replaced by an older copy published after it, and a release
+	// after a taking of the seat that failed flushes this node's own copies
+	// of the profiles, skills and marker, which can be older than the
+	// changelog's (crewlet/crewlet#511). Forgetting the marks and the
+	// boundary makes the seat's next holding here take a new boundary and
+	// carry back, after what it writes, everything this node holds for it,
+	// as a restart does, which is what puts this node's rows back on a
+	// changelog an operator accepted after a recreation, or one restored
+	// while the node ran.
 	//
 	// Best effort, and it must be: this runs on the release path, where the
 	// seat is already gone. A failure here costs the successor what the
@@ -4108,8 +4117,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 		// cost the drain a few seconds, not the whole shutdown.
 		flushCtx, stopFlush := context.WithTimeout(
 			context.WithoutCancel(ctx), memoryFlushTimeout)
-		if _, err := e.memory.Publish(flushCtx, handle); err != nil {
-			log.WarnContext(ctx, "seat_memory_not_flushed", "seat", handle, "error", err)
+		for _, line := range flushSeatMemory(flushCtx, e.memory, handle) {
+			log.Log(ctx, line.level, line.msg, line.args...)
 		}
 		stopFlush()
 		e.memory.Forget(handle)

@@ -14,13 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ---- model retries and device sign-ins ---------------------------------- //
+// ---- model retries, device sign-ins and model checks -------------------- //
 
-// Both are one record per model entry, filed in the positions register under
-// a class of their own and keyed by the entry's key: see internal/coord's
-// modelretry.go and devicesignin.go for why that bucket, which has no age.
-// They share every verb but their decoding, so the verbs are written once
-// here, over [entryClass], rather than twice beside the seat pauses' own.
+// Each is one record per model entry, filed in the positions register under
+// a class of its own and keyed by the entry's key: see internal/coord's
+// modelretry.go, devicesignin.go and modelcheck.go for why that bucket, which
+// has no age. They share every verb but their decoding, so the verbs are
+// written once here, over [entryClass], rather than once a class beside the
+// seat pauses' own.
 
 // entryClass is one record class keyed by a model entry: how its keys are
 // spelled and read back, and how its records are encoded.
@@ -59,6 +60,17 @@ var (
 			s.Entry, s.Version = entry, version
 			s.StartedAt, s.ExpiresAt = s.StartedAt.UTC(), s.ExpiresAt.UTC()
 			return s
+		},
+	}
+	modelCheckClass = entryClass[coord.ModelCheck]{
+		name:   "the model checks",
+		filter: coord.DocumentFilter(coord.ModelCheckClass),
+		key:    coord.ModelCheckKey,
+		entry:  coord.ModelCheckEntry,
+		stored: func(c coord.ModelCheck, entry string, version uint64) coord.ModelCheck {
+			c.Entry, c.Version = entry, version
+			c.StartedAt, c.Deadline, c.EndedAt = c.StartedAt.UTC(), c.Deadline.UTC(), c.EndedAt.UTC()
+			return c
 		},
 	}
 )
@@ -375,4 +387,35 @@ func (f *FleetStore) WatchDeviceSignIns(ctx context.Context) (<-chan coord.Devic
 		func(v *coord.DeviceSignIn, entry string, current bool) coord.DeviceSignInUpdate {
 			return coord.DeviceSignInUpdate{SignIn: v, Entry: entry, Current: current}
 		})
+}
+
+// ModelCheck reads one entry's check.
+func (f *FleetStore) ModelCheck(ctx context.Context, entry string) (coord.ModelCheck, bool, error) {
+	return modelCheckClass.read(ctx, f, entry)
+}
+
+// ListModelChecks returns every check, ordered by entry key.
+func (f *FleetStore) ListModelChecks(ctx context.Context) ([]coord.ModelCheck, error) {
+	return modelCheckClass.list(ctx, f)
+}
+
+// CreateModelCheck writes a check for an entry that has no record.
+func (f *FleetStore) CreateModelCheck(ctx context.Context, c coord.ModelCheck) (coord.ModelCheck, bool, error) {
+	if err := c.Validate(); err != nil {
+		return coord.ModelCheck{}, false, err
+	}
+	return modelCheckClass.create(ctx, f, c.Entry, c)
+}
+
+// UpdateModelCheck writes a check at the version it was read at.
+func (f *FleetStore) UpdateModelCheck(ctx context.Context, c coord.ModelCheck) (coord.ModelCheck, bool, error) {
+	if err := c.Validate(); err != nil {
+		return coord.ModelCheck{}, false, err
+	}
+	return modelCheckClass.update(ctx, f, c.Entry, c, c.Version)
+}
+
+// DeleteModelCheck removes an entry's check at a version.
+func (f *FleetStore) DeleteModelCheck(ctx context.Context, entry string, version uint64) (bool, error) {
+	return modelCheckClass.remove(ctx, f, entry, version)
 }

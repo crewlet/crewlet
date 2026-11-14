@@ -112,14 +112,22 @@ func said(t *testing.T, d Diagnosis) string {
 // carries the candidate.
 func TestACandidateValueReachesTheHarnessForThatDiagnosisAlone(t *testing.T) {
 	t.Parallel()
-	p := candidateEntry(t, map[string]string{"FAKE_DUMP_ENV": "1", "GATEWAY_TOKEN": "entry-gateway"})
+	rec := t.TempDir()
+	p := candidateEntry(t, map[string]string{"FAKE_DUMP_ENV": "1", "GATEWAY_TOKEN": "entry-gateway",
+		"FAKE_RECORD_ENV": rec})
 	p.auth.Token = "entry-token"
 	home := t.TempDir()
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true, Home: home, Values: map[string]string{
 		"FAKE_TOKEN":    "candidate-token",
 		"GATEWAY_TOKEN": "candidate-gateway",
 	}})
-	handed := said(t, d)
+	// The candidate's one call: what its harness was handed is what it
+	// recorded from inside the child.
+	calls := recordedEnv(t, rec)
+	if len(calls) != 1 {
+		t.Fatalf("the candidate's diagnosis recorded %d completions, want its one call", len(calls))
+	}
+	handed := strings.Join(calls[0].Env, "\n")
 	for _, want := range []string{
 		`FAKE_TOKEN=candidate-token`, `GATEWAY_TOKEN=candidate-gateway`, `HOME=` + home,
 	} {
@@ -236,6 +244,59 @@ func TestADiagnosisInAHomeOfItsOwnLeavesTheRealLoginAlone(t *testing.T) {
 			t.Error("in place, what the harness wrote never reached the login, so the case proves nothing")
 		}
 	})
+}
+
+// A CANDIDATE IS TESTED BY ITS ONE CALL. The credential route tests a value
+// before it stores it, and a value is proved by the one call that signs the
+// harness in with it: the shell and web probes read what the entry lets its
+// harness reach, which a credential changes nothing of, so run for a
+// candidate they were two or three more real calls on a credential nothing had
+// stored, and a probe that misread its answer refused a credential the vendor
+// had accepted. The same entry diagnosed as it stands still makes them, so the
+// one call is the candidate's.
+//
+// Mutation: drop the candidate's early break in diagnose, and its shell and
+// web probes run, recording four completions where one is wanted.
+func TestACandidateIsTestedByItsOneCall(t *testing.T) {
+	t.Parallel()
+	completions := func(t *testing.T, rec string) int {
+		t.Helper()
+		n := 0
+		for _, argv := range recordedArgv(t, rec) {
+			// The version probe runs the binary too, with argv of its own.
+			if len(argv) > 0 && argv[0] == "-test.run=TestFakeHarness" {
+				n++
+			}
+		}
+		return n
+	}
+	env := func(rec string) map[string]string {
+		return map[string]string{"FAKE_STDOUT": "ok", "FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply,
+			"FAKE_WEB_PROBE_STDOUT": noWebReply, "FAKE_RECORD_ARGV": rec}
+	}
+
+	rec := t.TempDir()
+	d := candidateEntry(t, env(rec)).Diagnose(t.Context(), DiagnoseOptions{Smoke: true,
+		Values: map[string]string{"FAKE_TOKEN": "candidate"}})
+	if got := completions(t, rec); got != 1 {
+		t.Errorf("a candidate's diagnosis made %d completions, want its one smoke call", got)
+	}
+	if smoke, _ := d.Check(CheckSmoke); strings.HasPrefix(smoke.Detail, "skipped") {
+		t.Errorf("a candidate's smoke call did not run: %q", smoke.Detail)
+	}
+	for _, name := range []CheckName{CheckShell, CheckWeb} {
+		check, _ := d.Check(name)
+		if !strings.HasSuffix(check.Detail, "; "+candidateProbeSkipped) || !check.OK {
+			t.Errorf("%s = %+v, want its probe skipped for the candidate", name, check)
+		}
+	}
+
+	control := t.TempDir()
+	candidateEntry(t, env(control)).Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if got := completions(t, control); got < 3 {
+		t.Errorf("the entry diagnosed as it stands made %d completions, so the case proves nothing "+
+			"of its probes", got)
+	}
 }
 
 // A DIAGNOSIS OF THE ENTRY AS IT STANDS IS RECORDED ON ITS SIGN-IN, AND ONE OF

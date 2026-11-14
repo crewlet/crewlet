@@ -71,6 +71,76 @@ func TestWhatARecordDidNotKeepIsSaid(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER SAID TO HAVE FAILED. A tally counts
+// such a call among its failures and apart from them (Elided.Unfinished), and
+// its line counts it apart and says what the call's own answer would — that it
+// may have taken effect, to be checked before it is made again — because a run
+// told it failed makes it again: the duplicate post the unknown outcome exists
+// to prevent. A tally holding none says nothing of it.
+//
+// Mutation: render the failures whole, and the call is said to have failed;
+// drop the sentence, and the next round is not told to check.
+func TestACallWhoseOutcomeIsUnknownIsNeverSaidToHaveFailed(t *testing.T) {
+	t.Parallel()
+	line := FormatElided([]Elided{
+		{Name: "post_message", Digest: "a", Calls: 2, Failed: 1, Unfinished: 1},
+		{Name: "post_message", Digest: "b", Calls: 1, Failed: 1},
+		{Name: "read_file", Calls: 4, Failed: 1},
+	}, nil)
+	for _, want := range []string{"post_message ×3 (1 failed, 1 whose outcome is unknown)", "read_file ×4 (1 failed)",
+		"may have taken effect: check whether it did before making it again"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line %q does not say %q", line, want)
+		}
+	}
+	if known := FormatElided([]Elided{{Name: "read_file", Calls: 4, Failed: 1}}, nil); strings.Contains(known,
+		"outcome") {
+		t.Errorf("a tally of known outcomes says %q", known)
+	}
+}
+
+// A SPAN OF DROPPED ROUNDS RENDERS ITS ROUNDS AND THEIR CALLS BY TOOL. An entry
+// that stands for rounds a park dropped (Iteration.Through) is drawn as those
+// rounds, saying that what they set out to do, produced and were told is not
+// kept — never as one round that said nothing, which a later round takes for
+// work never done — and counting their calls by tool with their outcomes, an
+// unknown one apart, which is what the next round must not repeat. Rounds that
+// called nothing say "(none)", and a span of one round says all of it of one.
+//
+// Mutation: draw a span as its first round, or a span of one as a round, and
+// the rounds it stands for are a round that set out to do nothing; draw
+// "(none)" whatever its tallies, and the calls they made are gone from the
+// next round's view.
+func TestASpanOfDroppedRoundsRendersItsRoundsAndTheirCallsByTool(t *testing.T) {
+	t.Parallel()
+	block := RenderIterations([]Iteration{
+		{Iteration: 1, Intent: "draft the reply", Calls: []Call{{Name: "read_file"}}},
+		{Iteration: 2, Through: 40, Elided: []Elided{
+			{Name: "post_message", Calls: 3, Failed: 1, Unfinished: 1},
+			{Name: "read_file", Calls: 10},
+			{Name: "activate_tool", Calls: 2},
+		}},
+		{Iteration: 41, Through: 42},
+		{Iteration: 43, Through: 43, Elided: []Elided{{Name: "read_file", Calls: 2, Failed: 2}}},
+	}, []string{"activate_tool"}, nil)
+	for _, want := range []string{
+		"### Iteration 1\nSet out to: draft the reply",
+		"### Iterations 2–40\n" + spanNotKept + "\nCalled:\n- (15 call(s) these rounds' runs made, which the " +
+			"turn's record counts by tool alone: post_message ×3 (1 whose outcome is unknown), read_file ×10; " +
+			unknownOutcome + ")",
+		"### Iterations 41–42\n" + spanNotKept + "\nCalled:\n" + noCalls,
+		"### Iteration 43\n" + roundNotKept + "\nCalled:\n- (2 call(s) its run made, which the turn's record " +
+			"counts by tool alone: read_file ×2 (2 failed))",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the ledger block does not say\n%s\n\nin\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "### Iteration 2\n") || strings.Contains(block, "activate_tool") {
+		t.Errorf("the ledger block draws a span as one round, or names a skipped tool:\n%s", block)
+	}
+}
+
 // A ROUND WHOSE CALLS ARE ALL TALLIED IS NOT SAID TO HAVE CALLED NOTHING. A
 // parked turn's closed round condensed past its calls keeps them as a tally
 // alone, and its ledger block says what the tally says, rather than "(none)" —

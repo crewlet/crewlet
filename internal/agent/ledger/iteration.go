@@ -272,6 +272,29 @@ func readsIn(calls []Call, opts FormatOptions) int {
 type Iteration struct {
 	Iteration int `json:"iteration"`
 
+	// Through is the last round this entry stands for where it stands for a
+	// SPAN of rounds — Iteration the first, and Through the same round for a
+	// span of one — and zero for a round as the loop closed it, which every
+	// entry the loop appends is.
+	//
+	// A SPAN IS ROUNDS A PARK DROPPED: a parked turn whose closed rounds still
+	// outgrow their share of the run's row once their payloads are condensed
+	// folds whole rounds into one entry (internal/agent/execstate), keeping of
+	// them what every reader of a closed round reads and none of their prose.
+	// Their calls, in the span's two tallies by tool, never a tool's name
+	// folded away: a resumed call log seeds them, and a delivery check reads
+	// them by name and outcome ([Called]), so a reply a dropped round posted is
+	// still the turn's. And the [Iteration.ArtifactHash] of its LAST round,
+	// which is the round before whatever follows the span, so the turn's stall
+	// guard still compares each round with the one before it. Not what the
+	// rounds set out to do, produced, or were told: [RenderIterations] says
+	// those are not kept rather than drawing a round that said nothing.
+	//
+	// An added field every reader defaults: a build that reads no span reads
+	// one as its first round, holding every call the span counts, which is the
+	// safe direction for each of those readers.
+	Through int `json:"through,omitempty"`
+
 	// Intent is what the round set out to do, in the executor's own words.
 	Intent string `json:"intent,omitempty"`
 
@@ -342,6 +365,10 @@ func RenderIterations(records []Iteration, skip []string, fitted Fitted) string 
 	}
 	blocks := make([]string, 0, len(records))
 	for _, rec := range records {
+		if rec.Through != 0 {
+			blocks = append(blocks, renderSpan(rec, skip))
+			continue
+		}
 		lines := []string{"### Iteration " + itoa(rec.Iteration)}
 		if rec.Intent != "" {
 			lines = append(lines, "Set out to: "+rec.Intent)
@@ -379,4 +406,44 @@ func RenderIterations(records []Iteration, skip []string, fitted Fitted) string 
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+// renderSpan is the block of an entry that stands for a span of rounds a park
+// dropped ([Iteration.Through]): which rounds, that what they set out to do,
+// produced and were told is not kept — said, so no reader takes the rounds for
+// ones that said nothing — and what they called, by tool, which is all the
+// span keeps of their calls; "(none)" only where they called nothing. A span
+// of one round says it of one.
+func renderSpan(rec Iteration, skip []string) string {
+	heading, notKept, calls := "### Iteration "+itoa(rec.Iteration), roundNotKept, roundCalls
+	if rec.Through > rec.Iteration {
+		heading, notKept, calls = "### Iterations "+itoa(rec.Iteration)+"–"+itoa(rec.Through), spanNotKept,
+			spanCalls
+	}
+	lines := []string{heading, notKept, "Called:"}
+	if called := tallyLine(rec.Elided, skip, calls); called != "" {
+		lines = append(lines, called)
+	} else {
+		lines = append(lines, noCalls)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// spanNotKept and roundNotKept are what a span's block says of its rounds'
+// prose, for a span of several rounds and of one.
+const (
+	spanNotKept = "(These rounds are not kept on the parked turn: what they set out to do, what they " +
+		"produced and what their reviewer said are gone; their calls are counted by tool below.)"
+	roundNotKept = "(This round is not kept on the parked turn: what it set out to do, what it produced " +
+		"and what its reviewer said are gone; its calls are counted by tool below.)"
+)
+
+// spanCalls and roundCalls open the line counting a span's calls
+// ([tallyLine]), for a span of several rounds and of one.
+func spanCalls(total int) string {
+	return "- (" + itoa(total) + " call(s) these rounds' runs made, which the turn's record counts by tool alone"
+}
+
+func roundCalls(total int) string {
+	return "- (" + itoa(total) + " call(s) its run made, which the turn's record counts by tool alone"
 }

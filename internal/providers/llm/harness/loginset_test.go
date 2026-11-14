@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/hostbox/hostboxtest"
 )
 
 // The cases here hold the SHARED LOGIN TO BEING ONE LOGIN. kimi-code,
@@ -173,7 +173,7 @@ func leaveWriteStanding(t *testing.T, ws *Workspace, before, after map[string]st
 		login[name] = []byte(body)
 	}
 	var unapplied *hostbox.UnappliedError
-	if err := hostbox.WriteCredentials(scratch, names, login); !errors.As(err, &unapplied) {
+	if err := hostbox.WriteCredentials(scratch, names, login, nil); !errors.As(err, &unapplied) {
 		t.Fatalf("the premise: a write stopped by its second file = %v", err)
 	}
 	for from, to := range map[string]string{
@@ -743,7 +743,7 @@ func TestASeedNeverReadsAWriteInProgress(t *testing.T) {
 				for name, body := range logins[i%2] {
 					login[name] = []byte(body)
 				}
-				err = hostbox.WriteCredentials(p.ws.CredentialsDir(), p.ws.loginNames(), login)
+				err = hostbox.WriteCredentials(p.ws.CredentialsDir(), p.ws.loginNames(), login, nil)
 				release()
 				if err != nil {
 					return err
@@ -780,95 +780,125 @@ const (
 	writerHomesEnv = "CREWLET_HARNESS_LOGIN_WRITER_HOMES"
 )
 
+// loginScripts are what each writer of the shared login writes after its
+// setup ([runLoginWriter]), as the kill matrix judges it: the login the setup
+// leaves, then the login each of its two writes commits.
+var loginScripts = map[string]hostboxtest.Script{
+	"import-logout": {Names: twoFiles, Logins: []map[string]string{
+		twoFileLogin("first"), {}, twoFileLogin("first"),
+	}},
+	"adopt": {Names: twoFiles, Logins: []map[string]string{
+		twoFileLogin("first"), twoFileLogin("second"), twoFileLogin("first"),
+	}},
+	"carry": {Names: twoFiles, Logins: []map[string]string{
+		twoFileLogin("second"), twoFileLogin("first"), twoFileLogin("second"),
+	}},
+}
+
 // runLoginWriter is a process of its own — a `crewlet llm` command, an engine
-// running seats — writing the shared login over and over by one of its
-// writers, for [TestNoWriterKilledPartWayLeavesHalfALogin] to kill at any
-// instant. It says "ready" once its first write has landed.
+// running seats — writing the shared login by one of its writers, with the
+// kill matrix's observer on every write its workspace makes
+// ([hostboxtest.Writer]), for [TestNoWriterKilledPartWayLeavesHalfALogin] to
+// kill at each step. After the setup, each writer makes two writes:
 //
-//   - import-logout: an import of one login, then a logout, in turn;
-//   - adopt: `-from-host` from each of two homes in turn;
-//   - carry: a seat seeded with one login whose harness rewrote it to the other,
-//     carried back by its release, in turn.
+//   - import-logout: the setup imports a login; then a logout, and the same
+//     import again;
+//   - adopt: the setup runs `-from-host` from the first of two homes; then from
+//     the second, and from the first again;
+//   - carry: the setup imports a login; then two calls of a seat, each seeded
+//     with the shared login, its home rewritten to the other login, and
+//     carried back by its release.
 func runLoginWriter(op string) {
 	fail := func(err error) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	script, ok := loginScripts[op]
+	if !ok {
+		fail(fmt.Errorf("no writer %q", op))
 	}
 	ctx := context.Background()
 	p, err := New(twoFileConfig(os.Getenv(writerStateEnv), nil))
 	if err != nil {
 		fail(err)
 	}
-	logins := []map[string]string{twoFileLogin("first"), twoFileLogin("second")}
-	var step func(i int) error
-	switch op {
-	case "import-logout":
-		blob, err := twoFileBundle(logins[0])
+	w := hostboxtest.NewWriter()
+	p.ws.credentialSteps = w.Steps()
+	importOf := func(login map[string]string) func() error {
+		blob, err := twoFileBundle(login)
 		if err != nil {
 			fail(err)
 		}
-		step = func(i int) error {
-			if i%2 == 0 {
-				return p.ImportBundle(ctx, blob)
-			}
-			return p.Logout(ctx, io.Discard, io.Discard)
+		return func() error { return p.ImportBundle(ctx, blob) }
+	}
+	var setup func() error
+	var writes []func() error
+	switch op {
+	case "import-logout":
+		setup = importOf(script.Logins[0])
+		writes = []func() error{
+			func() error { return p.Logout(ctx, io.Discard, io.Discard) },
+			importOf(script.Logins[2]),
 		}
 	case "adopt":
 		homes := filepath.SplitList(os.Getenv(writerHomesEnv))
-		step = func(i int) error {
-			_, err := p.AdoptHostLogin(ctx, homes[i%2])
-			return err
-		}
-	case "carry":
-		blob, err := twoFileBundle(logins[1])
-		if err != nil {
-			fail(err)
-		}
-		if err := p.ImportBundle(ctx, blob); err != nil {
-			fail(err)
-		}
-		step = func(i int) error {
-			co, err := p.ws.Acquire(ctx, "dev", fmt.Sprint(i), p)
-			if err != nil {
+		adopt := func(home string) func() error {
+			return func() error {
+				_, err := p.AdoptHostLogin(ctx, home)
 				return err
 			}
-			for name, body := range logins[i%2] {
-				if err := os.WriteFile(filepath.Join(co.Home, ".fake", name), []byte(body), 0o600); err != nil {
+		}
+		setup = adopt(homes[0])
+		writes = []func() error{adopt(homes[1]), adopt(homes[0])}
+	case "carry":
+		setup = importOf(script.Logins[0])
+		carry := func(call string, login map[string]string) func() error {
+			return func() error {
+				co, err := p.ws.Acquire(ctx, "dev", call, p)
+				if err != nil {
 					return err
 				}
+				for name, body := range login {
+					if err := os.WriteFile(filepath.Join(co.Home, ".fake", name), []byte(body), 0o600); err != nil {
+						return err
+					}
+				}
+				return co.Release(ctx)
 			}
-			return co.Release(ctx)
 		}
-	default:
-		fail(fmt.Errorf("no writer %q", op))
+		writes = []func() error{carry("1", script.Logins[1]), carry("2", script.Logins[2])}
 	}
-	for i := 0; ; i++ {
-		if err := step(i); err != nil {
+	if err := setup(); err != nil {
+		fail(err)
+	}
+	w.Ready()
+	for _, write := range writes {
+		if err := write(); err != nil {
 			fail(err)
 		}
-		if i == 0 {
-			fmt.Println("ready")
-		}
 	}
+	w.Done()
 }
 
-// NO WRITER KILLED PART WAY LEAVES HALF A LOGIN. Each writer of the shared
+// NO WRITER KILLED AT ANY STEP LEAVES HALF A LOGIN. Each writer of the shared
 // login — an import and a logout, `-from-host`, a seat's carry — runs in a
-// process of its own, writing over and over, and is killed at a random moment,
-// again and again; what the directory holds is then read as the next process
-// reads it: every time, one whole login. Written a file at a time, a kill
-// between two renames left one sign-in's token beside another's config.toml,
-// or one file of a login the logout was removing. Most kills land inside a
-// write, which is counted, so a run in which none did certifies nothing and
-// fails.
+// process of its own and is killed at every step of the writes its script
+// makes, one process per step, on the kill matrix ([hostboxtest]): what the
+// directory holds is judged exactly, then read as the next process reads it,
+// and every time it is the whole login the interrupted write committed. Written
+// a file at a time, a kill between two renames left one sign-in's token beside
+// another's config.toml, or one file of a login the logout was removing.
 //
 // Mutation: write the login a file at a time in any one writer — the restore,
-// the logout, `-from-host` or the carry — and its case finds half a login.
+// the logout, `-from-host` or the carry — and its script makes more writes than
+// it has logins; write the install record in a write of its own, and the
+// import's and `-from-host`'s do too; read the login's files without finishing
+// a write left standing, and a kill inside a write reads half of each; hand the
+// write no observer, and the run reaches no step.
 func TestNoWriterKilledPartWayLeavesHalfALogin(t *testing.T) {
 	t.Parallel()
-	first, second := twoFileLogin("first"), twoFileLogin("second")
 	homes := []string{t.TempDir(), t.TempDir()}
-	for i, login := range []map[string]string{first, second} {
+	for i, login := range []map[string]string{twoFileLogin("first"), twoFileLogin("second")} {
 		if err := os.MkdirAll(filepath.Join(homes[i], ".fake"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -878,65 +908,40 @@ func TestNoWriterKilledPartWayLeavesHalfALogin(t *testing.T) {
 			}
 		}
 	}
-	for op, whole := range map[string][]map[string]string{
-		"import-logout": {{}, first},
-		"adopt":         {first, second},
-		"carry":         {first, second},
-	} {
+	for op, script := range loginScripts {
 		t.Run(op, func(t *testing.T) {
 			t.Parallel()
-			const trials = 30
-			midWrite := 0
-			for trial := range trials {
+			hostboxtest.KillAtEveryStep(t, script, func(t *testing.T) hostboxtest.Run {
 				state := t.TempDir()
-				killWriterAtRandom(t, op, state, homes)
-				p, err := New(twoFileConfig(state, nil))
-				if err != nil {
-					t.Fatalf("New: %v", err)
-				}
-				if _, err := os.Stat(hostbox.CredentialJournal(p.ws.CredentialsDir())); err == nil {
-					midWrite++
-				}
-				got := readLogin(t, p.ws)
-				forgetWorkspace(state)
-				if !slices.ContainsFunc(whole, func(w map[string]string) bool { return maps.Equal(got, w) }) {
-					t.Fatalf("trial %d: %s killed part way left %v — not one whole login", trial, op, got)
-				}
-			}
-			t.Logf("%d of %d kills landed inside a write", midWrite, trials)
-			if midWrite == 0 {
-				t.Fatalf("none of %d kills landed inside a write, so the case certified nothing", trials)
-			}
+				cmd := exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // this test binary
+				cmd.Env = append(os.Environ(), loginWriterEnv+"="+op, writerStateEnv+"="+state,
+					writerHomesEnv+"="+strings.Join(homes, string(filepath.ListSeparator)))
+				return hostboxtest.Run{Cmd: cmd, Dir: credentialsDirOf(t, state), Read: func(t *testing.T) map[string]string {
+					t.Helper()
+					// The next process: a provider of its own over the state.
+					p, err := New(twoFileConfig(state, nil))
+					if err != nil {
+						t.Fatalf("New: %v", err)
+					}
+					defer forgetWorkspace(state)
+					return readLogin(t, p.ws)
+				}}
+			})
 		})
 	}
 }
 
-// killWriterAtRandom starts [runLoginWriter] over state, waits for its first
-// write, and kills it at a random moment of the writes that follow.
-func killWriterAtRandom(t *testing.T, op, state string, homes []string) {
+// credentialsDirOf is the shared credential directory a provider over state
+// writes, read off a provider made and forgotten for the purpose: New writes
+// nothing.
+func credentialsDirOf(t *testing.T, state string) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // this test binary
-	cmd.Env = append(os.Environ(), loginWriterEnv+"="+op, writerStateEnv+"="+state,
-		writerHomesEnv+"="+strings.Join(homes, string(filepath.ListSeparator)))
-	out, err := cmd.StdoutPipe()
+	p, err := New(twoFileConfig(state, nil))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("New: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("the %s writer did not start (%q, %v): %s", op, line, err, stderr.String())
-	}
-	time.Sleep(time.Duration(rand.IntN(30_000)) * time.Microsecond)
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	_ = cmd.Wait()
+	forgetWorkspace(state)
+	return p.ws.CredentialsDir()
 }
 
 // A LOGIN WRITE THAT COMMITTED IS WRITTEN, though the disk refused one of its

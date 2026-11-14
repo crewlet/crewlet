@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -110,10 +111,13 @@ func TestALostJobThatHadSubmittedIsCollected(t *testing.T) {
 // A ROUND LOST MORE OFTEN THAN IT IS CARRIED ON AFTER IS NOT STARTED AGAIN: a
 // run that keeps taking its host down would take it — and every other seat's
 // work on it — down again with each relaunch. The phase the round opened is
-// closed failed, saying why, and the turn ends with it.
+// closed failed, saying why, and the turn ends with it: the refusal is one
+// every retry would meet again, so the turn is given up whatever the round's
+// calls showed, rather than handed back to be refused once more.
 //
 // Mutation: drop the refusal, and a run that kills its host is relaunched for
-// ever.
+// ever; drop turn.ErrPermanent from it, and a round whose jobs wrote nothing
+// is handed back for a retry.
 func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -123,6 +127,10 @@ func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	if !errors.Is(err, runner.ErrRoundLost) {
 		t.Fatalf("Resume = %v; want the round refused as lost too often", err)
 	}
+	if reason, abandon := turn.Abandon(turn.Result{}, err); !abandon || reason != turn.AbandonedPermanent {
+		t.Errorf("Abandon = (%q, %v); want the turn given up as refused for good (%q), though "+
+			"its round's jobs wrote nothing", reason, abandon, turn.AbandonedPermanent)
+	}
 	if n := relauncher.launched(); n != 0 {
 		t.Fatalf("a round lost too often was launched again %d times", n)
 	}
@@ -130,6 +138,34 @@ func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	if !done.Failed || !strings.Contains(done.Error, "lost 3 times") {
 		t.Errorf("failed = %v error = %q; want the round's phase closed failed, saying why",
 			done.Failed, done.Error)
+	}
+}
+
+// A CARRIED-ON ROUND IS REFUSED A NO_ACTION ITS LOST JOB ACTED IN. The run
+// that carries a lost job's round on is the same round, so its submission is
+// judged against what the lost job did: a job that posted, and a run after it
+// that said nobody was asking, is refused while it can still report the post.
+//
+// Mutation: the relaunch's submission back to decodeWork, and the no_action is
+// accepted.
+func TestACarriedOnRoundIsRefusedANoActionItsLostJobActedIn(t *testing.T) {
+	t.Parallel()
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"starting on it"}`)}}
+	relauncher, _, err := lostRound(t, before,
+		runner.Lost{Why: "the engine it ran under restarted, which killed it", Losses: 1, Limit: 2},
+		buildOpts{reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	res, err := relauncher.last(t).Surface.Execute(context.Background(), llm.ToolCall{
+		Name: runner.SubmitWorkTool, Arguments: map[string]any{"outcome": "no_action", "summary": "not mine"},
+	})
+	if err != nil {
+		t.Fatalf("submit_work: %v", err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, `called "slack_post"`) {
+		t.Errorf("failed = %v, output = %q; want the no_action refused, naming the post the "+
+			"lost job made", res.Failed, res.Output)
 	}
 }
 

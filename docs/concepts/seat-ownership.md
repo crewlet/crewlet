@@ -208,7 +208,7 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 
 **The same fence carries a person's stop.** A pause that asked for the running turn to stop closes it the same way, at its next tool call, with `turn.ErrStoppedByPerson` — ownership is checked first, since a turn on a seat that moved is the successor's to stop or not. That turn is not deferred: the trigger is recorded in the completion ledger and acked, because the person stopped it so that it would not go on. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
-A turn the fence stops because the seat moved is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record proves it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
+A turn the fence stops because the seat moved is **deferred**, not failed: the delivery is healthy and the seat's new owner is entitled to it, so it goes back the way the three screening paths above send one — immediately, and with this attachment quiesced. That is what a deferral buys here; it is not cheaper. One handoff costs one delivery whether the turn never started or was a phase in — on every backend, the in-memory twin included — which is why the budget is sized for handoffs as well as failures (see [Event System](event-system.md#delivery-semantics)). The exceptions are a turn that panicked and a turn whose own record shows it already wrote outside the engine — each is acked and recorded instead, because a successor would reach the same defect or repeat the write.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
@@ -265,10 +265,11 @@ changelog holds is in the store before the first version is written. A version
 whose skill is still not in the store is left out rather than refusing the
 seat: nothing reads a version without its skill, and refused, the seat could be
 placed on no node whose store lacked the skill. Its skill is missing for one of
-two reasons. The changelog does not hold it at all: the skill was written after
-a publish read the seat's skills and refined before that publish read their
-versions, and its node stopped holding the seat, through a crash or a cut
-flush, before another publish carried the skill. Or the store skipped it,
+two reasons. The changelog does not hold it at all: a publish carries what the
+seat wrote before the skills it sends whole (below), so a skill its holder
+wrote and refined has its old body's version sent before the skill itself, and
+the publish was cut between the two, by a crash or a flush that ran out, before
+another publish of that node carried the skill. Or the store skipped it,
 because it already held another skill of the seat's under the same name: a
 skill deleted by hand and synthesized again under a new id leaves both on the
 changelog.
@@ -423,39 +424,86 @@ hold, and an older copy can win there (below).
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
-a note or an episode — is stamped from, and which only ever increases. A seat's
-mark in each of these tables is the stamp of the last row the changelog
-acknowledged, and it moves with each one: the rows above it are read a mebibyte
-at a time and published one by one, so a cycle that runs out keeps what it
-carried of these tables, and the seat's next cycle, or its release's flush,
-resumes at the first row the changelog did not acknowledge. The mark is not the
+a note or an episode — is stamped from, and which only ever increases. A
+hydration records where the counter stood as it completed: the seat's
+**boundary** on this node. Rows stamped above it are what the seat has written
+while held here, its own; rows at or below it are what the node held for it
+when it took it, the rows the hydration wrote and those it found already
+present, its backlog. A seat whose hydration here has not completed has no
+boundary, and every row of it counts as its own. A seat has a mark over each
+range in each of these tables: the stamp of the last row of the range the
+changelog acknowledged, which moves with each one. The rows of a range above
+its mark are read a mebibyte at a time and published one by one, so a cycle
+that runs out keeps what it carried of these tables, and the seat's next
+cycle, or its release's flush, resumes each range at the first row the
+changelog did not acknowledge. The mark is not the
 row's rowid, because these tables are keyed on text and a rowid is handed out
 again once the newest row is deleted: after the diary's expiry or its trim took
 the newest note, the next note took the same rowid, below what had already been
 published, and was never carried while the node held the seat.
 
-**Every seat a node holds is carried in its turn.** One cycle every thirty
-seconds carries every seat the node holds, one after another, under one
-thirty-second bound. A cycle that runs out keeps what it carried of the tables
-with a mark. The mutable tables (counterparty profiles, skills, onboarding
-markers) have none: every cycle sends them whole, and keeps nothing of them when
-it is cut. The cycle stops where its bound ran out, rather than calling the
-seats it did not reach on a bound already spent, and the next cycle starts at
-the seat it ran out at, unless that seat was the cycle's first and so had the
-whole cycle: then the next cycle starts at the seat after it. So a backlog
-longer than a cycle drains over as many cycles as it needs, and the seats it
-would hold back are carried meanwhile. With k seats a cycle runs out at,
-whether a seat needs more than a cycle or was reached with less of one left
-than it needs, no seat waits more than 2k cycles between two that reach it,
-and a seat with a backlog has a whole cycle at least once in every 2k. A
-holding starts with every row this node holds for the seat still to carry
-back: a release and a restart alike leave its marks at zero, so the seat's
-first cycles carry them all, oldest first, ahead of anything it writes next
-(below). A cycle that runs out says so in one line. A backlog draining is
-`memory_sync_ran_out`, at info. A seat that ran the cycle out with nothing
-acknowledged that stays carried, or that had the whole cycle and was cut
-inside one of the tables sent whole, is a warning, `seat_memory_not_carried`,
-and so is a seat whose publish failed while the cycle had time left.
+**Every seat's own rows go first.** One cycle every thirty seconds carries
+every seat the node holds, under one thirty-second bound, as one lap over a
+turn for each held seat and one turn more. A seat's turn carries what it has
+written while held here, then its profiles, skills and onboarding marker. The
+**backlogs' turn**, after the last seat's, carries with what the cycle has left
+the rows this node held for each seat when it took it, oldest first, the seats
+taking turns within it. A holding starts with every row this node holds for
+the seat still to carry back: a release and a restart alike leave its marks at
+zero. A cycle that runs out keeps what it carried of the tables with a mark.
+The mutable tables (counterparty profiles, skills, onboarding markers) have
+none: every seat's turn sends them whole, and keeps nothing of them when it is
+cut. The cycle stops where its bound ran out, rather than calling the turns it
+did not reach on a bound already spent, and the next cycle starts at the turn
+it ran out in, unless that turn was the cycle's first and so had the whole
+cycle: then the next cycle starts at the turn after it, the first seat's after
+the backlogs'. Within the backlogs' turn the seats take their turns by the same
+rule, from where its last turn ran out. With one exception: a backlogs' turn
+the bound cut after it moved a mark hands the next cycle to the first seat, so
+a backlog longer than a cycle drains over as many cycles as it needs without
+taking the start of any: the backlogs take a cycle's start only after a turn
+of theirs that moved nothing while it was not the cycle's first, or after a
+cycle that ran out just before their turn. So while the seats' turns leave the
+backlogs' turn the time to move a mark, every cycle starts at the first seat
+and carries every seat's own rows before any backlog. A backlogs' turn that
+came late and moved nothing starts the next cycle so that it has a whole one,
+and that whole cycle goes to the seat it was cut in, even when that seat was
+the turn's first, which the rule within the turn alone would pass for having
+had all the turn had: a backlog whose next row needs more than the seats'
+turns leave of a cycle then moves while another seat's drains, rather than
+handing every whole cycle its cuts earn to the seat after it. Under overload,
+when the
+seats' turns run cycles out (a burst a seat wrote, profiles and skills that
+outlast a cycle, seats still being taken, every row of each counting as its
+own until its hydration completes), the backlogs' turn still comes once in
+every lap of the seats, so the backlogs keep draining, as they would not if
+they went only after every seat's turn in each cycle. That is why the
+backlogs' turn is part of the rotation for good, and not only until the
+profiles and skills stop being sent whole
+([#1040](https://github.com/crewlet/crewlet/issues/1040)): it keeps the
+backlogs moving under any overload of the seats' turns. Its cost is that a
+cycle can then start part-way through the seats, and the backlogs' turn comes
+before the turns of the seats after it in that cycle, which had theirs in the
+cycle before. With k seats whose turn a cycle runs out in, whether a seat
+needs more than a cycle or was reached with less of one left than it needs, no
+seat waits more than 2k + 2 cycles between two that reach its turn: two for
+each of them, and two for the backlogs' turn, which a cycle can run out in
+too.
+
+A cycle that runs out says so in one line, naming the call it ran out in,
+`pass=own` or `pass=backlog`, where the next cycle starts (`next`, empty for
+the first seat) and the turns it did not reach (`not_reached`, the backlogs'
+turn written `(backlogs)`); one that ran out in the backlogs' turn also names
+where that turn starts next and the seats whose backlog it did not reach
+(`backlogs_next`, `backlogs_not_reached`). A backlog draining, or a seat's own
+rows that ran the cycle out after moving marks, is `memory_sync_ran_out`, at
+info, and so is a cycle that ran out between two calls, the one before it
+whole. A seat that ran the cycle out with nothing acknowledged that stays
+carried, or that had the whole cycle and was cut inside one of the tables sent
+whole, is a warning, `seat_memory_not_carried`. A seat's own pass and its
+backlog are each said on their own: a seat whose own pass failed while the
+cycle had time left warns, with `pass=own`, whatever its backlog then did, and
+so does a backlog that failed with time left, with `pass=backlog`.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
@@ -491,38 +539,55 @@ resurrect rows its predecessor had swept, and the next lifecycle pass drops
 them again by the same rules.
 
 **What a crash and a handoff lose.** A crash loses what of a seat's memory the
-changelog has not acknowledged. A graceful handoff flushes on release what the
-cycles have not carried, from the marks they left, for up to five seconds at
-one broker round trip a row (about fifty rows across a slow link, thousands on
-a local broker), and what that flush does not reach is lost as a crash loses
-it. Until the cycles after an acquisition or a restart have carried back every
-row this node holds for the seat (seconds on a local broker, minutes or more
-for a large memory or a slow link), everything the seat writes waits behind
-those rows, and a release or a crash in that window loses it
-([#1039](https://github.com/crewlet/crewlet/issues/1039)). A burst the seat
-writes holds back what it writes next the same way, such as a vector fill that
+changelog has not acknowledged. What the seat writes while held here goes
+first. Its hydration records where the node's change sequence stood as it
+completed. Each cycle carries each held seat's rows stamped above that, and its
+profiles, skills and onboarding marker, and then gives the seats' older rows
+one turn: the backlog their hydrations brought in or found, which the
+changelog mostly holds already. While the seats' turns leave the older rows'
+turn the time to move a mark, every cycle carries every seat's own rows before
+any older row. So a crash loses what the seat wrote since the last cycle that
+carried its own rows: about the last cycle's writes while that holds. A turn
+of the older rows that moves nothing, reached with too little of a cycle left
+or while the broker is not acknowledging, or a cycle that runs out just before
+it, gives them the next cycle's start, and that cycle can be theirs alone; and
+a seat whose turn cycles run out in holds the seats after it back. With k such
+seats a seat can wait 2k + 2 cycles between two that reach it (above), two of
+them for the older rows' turn even when no seat's turn runs a cycle out, so a
+crash loses up to 2k + 3 cycles' writes. While cycles run out, a cycle can
+start part-way through the seats, and the older rows' turn then comes before
+the own rows of the seats after it, which had theirs in the cycle before.
+Among the k are a seat whose own rows
+outlast a cycle, one whose profiles and skills do, and one still being taken,
+every row of which counts as its own until its hydration completes; the last
+is what a restart's cycles meet first, once per seat taken. A graceful handoff
+flushes on release what the cycles have not carried, from the marks they left,
+in the same order: the seat's own rows, then its profiles, skills and marker,
+then its backlog, for up to five seconds at one broker round trip a row (about
+fifty rows across a slow link, thousands on a local broker), and what that
+flush does not reach is lost as a crash loses it. A burst the seat writes
+holds back what it writes after it, and its changes to its profiles, skills
+and marker, which a pass sends after its rows, such as a vector fill that
 stamps hundreds of notes again after a change of embedding model: a crash
 before the cycles have carried the burst loses what the seat wrote after it,
 and so does a release once the burst is larger than five seconds of round
-trips carry ([#1041](https://github.com/crewlet/crewlet/issues/1041)). Outside
-such a backlog, a crash loses what the seat wrote since its last publish that
-got through: about the last cycle's writes, or up to 2k + 1 cycles' while
-cycles run out at k of the node's seats, since a seat can wait 2k cycles
-between two that reach it (above). Every publish sends a seat's counterparty
-profiles and skills whole: when they alone outlast the five seconds, the flush
-is cut inside them and reaches neither the rest of them nor the skill versions
-and the onboarding marker after them, and when they outlast a whole
-thirty-second cycle, the skill versions and the marker are never carried at
-all ([#1040](https://github.com/crewlet/crewlet/issues/1040)). A row larger
-than the broker takes, eight mebibytes on the embedded one, is refused every
-time it is published, so every cycle and the flush stop at it, and nothing the
-seat wrote after it in its table, or in the tables after that one, is carried
+trips carry ([#1041](https://github.com/crewlet/crewlet/issues/1041)). Every
+turn of a seat sends its counterparty profiles and skills whole: when they alone
+outlast the five seconds, the flush is cut inside them and reaches neither the
+rest of them nor the onboarding marker and the seat's backlog after them, and
+when they outlast a whole thirty-second cycle, the marker is never carried at
+all, while the seats' older rows still take one turn in every lap of the seats
+([#1040](https://github.com/crewlet/crewlet/issues/1040)). A row larger than
+the broker takes, eight mebibytes on the embedded one, is refused every time it
+is published, so every pass that meets it stops at it, and nothing after it in
+that pass, in its table or in the tables the pass carries after it, is carried
 while this node holds the seat
 ([#349](https://github.com/crewlet/crewlet/issues/349)). And while a seat
 moves, an older copy of its profiles, skills or onboarding marker can land
 after the newer one and replace it: published by the releasing node's own
-sync, from a cycle it began before the release, or by the next holder while it
-is still taking the seat ([#511](https://github.com/crewlet/crewlet/issues/511)).
+sync, from a cycle it began before the release, by the next holder while it
+is still taking the seat, or by a node whose taking of the seat failed, in the
+flush that gives it back ([#511](https://github.com/crewlet/crewlet/issues/511)).
 A publish of the seat landing in that window while the next holder hydrates it
 can also move a row the hydration has not read yet past its barrier, and slip
 by the count its replay ends on, which the broker moves for the replaced row
@@ -530,12 +595,15 @@ at once and for its replacement a moment later: the hydration then carries
 neither copy of the row, which stays on the changelog for the seat's next
 hydration. The same race can leave that count one row high, and the
 hydration then waits out its fifteen seconds and refuses the seat until the
-next sweep. A release whose flush runs out or fails says so,
-`seat_memory_not_flushed`, at warning. A row lost so stays in its node's store alone, which a node without
-`data` deletes at its next boot: a diary note, an episode or a skill version
-reaches the changelog only if that node holds the seat again, and a change to
-a profile, a skill or the onboarding marker is overwritten with the
-changelog's older copy when it does.
+next sweep. A release whose flush could not carry the seat's own rows and its
+tables sent whole says so, `seat_memory_not_flushed`, at warning, with
+`pass=own`, and so does one whose backlog failed with time left, with
+`pass=backlog`; one that carried them and ran out in its backlog says
+`memory_flush_ran_out`, at info. A row lost so stays in its node's store
+alone, which a node without `data` deletes at its next boot: a diary note, an
+episode or a skill version reaches the changelog only if that node holds the
+seat again, and a change to a profile, a skill or the onboarding marker is
+overwritten with the changelog's older copy when it does.
 
 **What the seat learns is learned where it is held.** Post-turn
 [reflection](agent-learning.md#7-reflector-the-orchestrator) is the largest
@@ -600,25 +668,35 @@ its box is keyed on nothing at all. So one deterministic mid-turn failure replay
 external effects across the broker's whole delivery budget — **25 attempts a
 second apart**, each one a real comment on a real issue.
 
-A broken turn is now two cases, and the engine tells them apart from its own
-record rather than from `err != nil`:
+A broken turn is now one of the cases below, and the engine tells them apart
+from its own record and from what broke, rather than from `err != nil`:
 
-| what the turn's record proves | what happens |
+| what the turn's record shows | what happens |
 |---|---|
-| nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
+| nothing reached outside the engine | **redelivered** where a retry may succeed, exactly as before — a provider that never answered, a runner that could not be built — and **deferred** where a redelivery would only be refused again: a refused budget, whose seat is [parked](agent-runtime.md#the-budget-park) until the window turns over; a chain every model of which is at its usage limit, whose seat is [parked](llm-backends.md#falling-back-between-entries) until the first is tried again; and a failure a retry cannot cure, the second time in a row, which [pauses its seat](agent-runtime.md#pausing-a-seat) until its settings change or a person resumes it. A seat handed to another node mid-call is deferred too, to its new owner. None of them wrote anything, so none is given up. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
-| a resumed turn broke before writing anything new | **retried**, whatever was written before it. The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
-| the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
+| a resumed turn broke before writing anything new | **retried**, whatever was written before it, unless it panicked, was refused for good, or its relaunch failed and ended its run with it (below). The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the executor's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
+| the turn panicked | **recorded and acked**, whatever the record shows. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
+| its executor's round was lost with its host past its [limit](code-sandbox.md#durability-completion-and-observability) | **recorded and acked**, whatever the record shows: a retry carries the same losses and is refused the same way, so the turn ends on the resume that refused to carry the round on, saying how often the round was lost. That refusal used to be handed back unless the round's jobs had written outside, refused again on every announcement of the run's completion, and given up only once the resume had failed for half an hour, the seat held behind it throughout. |
 
-The proof is deliberately narrow, because a true answer *spends* a trigger.
-A call counts only when it is MCP-backed and not positively annotated
-read-only — the same rule the [delivery gate](turn-engine.md) has always used —
-or when the tool's own annotations say it is open-world, which is how
-`a2a_ask` counts despite being first-party. A tool nobody
-classified proves nothing. In particular the executor's own `submit_work`, the
-discovery pair and the sub-agent spawner carry no annotations at all, so they
-cannot trip it; a predicate written as "not proven read-only" would fire on
-every turn that closed a single round.
+The rule is deliberately narrow, because a true answer *spends* a trigger.
+A call counts only when it delivers — an MCP-served tool not positively
+annotated read-only, or a first-party tool the engine registered as one that
+reaches somebody: the rule the
+[delivery check](turn-engine.md#three-checks-in-increasing-cost) uses, which
+fails closed, so an MCP tool that no hint marks as a read or as a write, from
+its server or from a `tool_annotations` override, counts though nothing says it
+wrote — or when the tool's own annotations say it is open-world and do not say
+it is read-only, which is how `a2a_ask` counts despite being first-party. A read
+of the world is not a write: `ssh_read`, or a web search annotated `read_only`
+and `open_world`, reaches outside the process and leaves nothing a redelivery
+would repeat. A first-party tool nobody classified proves nothing, nor does the
+turn's own machinery: the discovery pair is annotated read-only and
+closed-world, the sub-agent spawner closed-world, and the executor's own
+`submit_work` carries no annotations at all, so they cannot trip it; a predicate
+written as "not proven read-only" would fire on every turn that closed a single
+round. The same rule decides whether a `no_action` may end a turn as skipped
+([the engine check](turn-engine.md#three-checks-in-increasing-cost)).
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
@@ -633,12 +711,17 @@ turn collects the executor's run from its parked state and runs the engine
 check and the reviewer, possibly relaunching the run, so a retried resume
 repeats every call the resumed segment made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting, or that panicked, therefore keeps its claim, which is what stops a retry
-winning the flip, and its run is settled like one that finished: the box is
-reclaimed and the seat is free for its next turn. Every other resume failure
-still un-claims and comes back, because the run's collected work is the
-expensive thing there and a resume that proved nothing has lost nothing by
-trying again.
+acting, that panicked, or that was refused for a reason every retry meets again
+(`turn.ErrPermanent`: its executor's round lost with its host past its limit)
+therefore keeps its claim, which is what stops a retry winning the flip, and
+its run is settled like one that finished: the box is reclaimed and the seat is
+free for its next turn. So is a resumed turn a person stopped, and one whose
+relaunch failed and ended its run with it, which leaves a retry nothing to
+collect; and a run no build will resume is settled before its turn begins
+([When a run does not start](code-sandbox.md#when-a-run-does-not-start)).
+Every other resume failure still un-claims and comes back, because the run's
+collected work is the expensive thing there and a resume whose record shows no
+act, and that a retry may get past, has lost nothing by trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

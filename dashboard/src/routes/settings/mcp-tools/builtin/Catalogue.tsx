@@ -5,10 +5,11 @@
  * capability chips over the rows, and the groups the engine files them in as
  * a rail beside them, so sixty tools read as eight short lists.
  *
- * READ ONLY, and nothing on it pretends otherwise: every agent holds these,
- * the engine runs them itself and decides each call by who is calling, so
- * there is no level or grant to set. A row opens the tool, its description
- * and arguments, in the dashboard's drawer.
+ * READ ONLY, and nothing on it pretends otherwise: the engine offers each
+ * agent the ones its gates admit (Agent access counts them per agent), runs
+ * them itself and decides each call by who is calling, so there is no level
+ * or grant to set here. A row opens the tool, its description and arguments,
+ * in the dashboard's drawer.
  *
  * THE ENGINE FILES AND READS EVERY TOOL: its group and its words, who may call
  * it (`gate`) and what it can do (`risk`) are on each row.

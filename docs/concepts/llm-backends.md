@@ -976,6 +976,7 @@ its own place to run:
     ├── credentials/                  # the login — ONE per state_dir and harness
     ├── credentials.lock              # taken by every writer and reader of it
     ├── credentials.pending           # a write of the login, while one is in progress
+    ├── credentials.pending.tmp       # that write's journal, before it lands
     ├── seats/                        # where a call signed in with the login runs
     │   ├── sarah-chen/
     │   │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
@@ -3541,6 +3542,14 @@ each file in place, then removes the journal. Every reader — a seat's seed,
 local box's seed — takes the same lock (`credentials.lock`) and finishes a
 journal it finds standing before it reads.
 
+Each file, the journal included, is written as a staged copy and then renamed
+into place. A writer stopped between the two — killed, out of memory, the power
+lost — leaves the staged copy: inside the credential directory under a name
+starting `.crewlet-tmp-`, or beside it as `credentials.pending.tmp`. The next
+reader or writer of the login removes both before it touches the login, so a
+token is never left on disk past the login it was part of, a logout's
+included.
+
 So a writer killed between two files, or refused by the disk part way, leaves
 the login it was replacing or the one it was writing, never half of each: the
 next reader puts the new one in place. A write whose journal landed is the
@@ -4017,7 +4026,8 @@ account a login names and the vendor's own sentence.
 
 **A credential is tested before it is stored.** Rotating a token or a key types
 the new value once: the engine hands it to the model's own harness, in a home of
-its own, for one one-turn call, and seals it only if the vendor signed it in (a
+its own, for one one-turn call and nothing else (the shell and web probes read the
+entry, which a credential does not change), and seals it only if the vendor signed it in (a
 `429` counts: it proves the credential authenticated). A refused value is never
 stored, so the model goes on signing in with the credential it had. Once
 sealed, the revision that reads it is re-activated in the same request, so every

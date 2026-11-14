@@ -231,6 +231,43 @@ func TestNoActionAfterActingIsCorrected(t *testing.T) {
 	}
 }
 
+// A NO_ACTION AFTER A COLLEAGUE ASK IS CORRECTED WITHOUT A REVIEW. Nothing was
+// delivered — an ask answers nobody waiting on the turn — but a colleague was
+// woken, so the round is sent back by the engine itself, without a review call,
+// told what it called, and the next round reports what the turn did and is
+// reviewed then.
+//
+// Mutation: read Delivered for Check's `acted` again, and the turn ends
+// skipped in its first round.
+func TestANoActionAfterAColleagueAskIsCorrectedWithoutAReview(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{
+			{Outcome: turn.OutcomeNoAction, Summary: "nothing to do",
+				Calls: []ledger.Call{{Name: "a2a_ask"}}},
+			{Outcome: turn.OutcomeDelivered, Summary: "asked the lead to own the follow-up"},
+		},
+		surfaces: []turn.Surface{worldSurface()},
+		reviews:  []turn.Review{{}, {Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
+		turn.Input{RunID: "t1", Reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done {
+		t.Errorf("decision = %s, want done: a turn that asked a colleague is reported, not skipped",
+			res.Decision)
+	}
+	if !slices.Equal(f.reviewedRounds, []int{2}) {
+		t.Errorf("the reviewer ran on rounds %v, want round 2 alone: the engine corrects "+
+			"round 1 itself", f.reviewedRounds)
+	}
+	if len(f.notesSeen) != 2 || !strings.Contains(f.notesSeen[1], `called "a2a_ask"`) {
+		t.Errorf("notes = %q, want round 2 told why round 1 came back, naming the ask", f.notesSeen)
+	}
+}
+
 // WRITING ABOUT AN ACTION DOES NOT PERFORM IT. The claim is checked against
 // the engine's own record before any model judges it.
 func TestADeliveryClaimWithNoCallIsCorrectedWithoutAReview(t *testing.T) {
@@ -530,6 +567,56 @@ func TestAStallSpansTheTurnsSegments(t *testing.T) {
 	}
 }
 
+// THE STALL GUARD COMPARES A ROUND WITH THE ONE BEFORE IT ACROSS A SPAN A PARK
+// DROPPED. A parked turn past its share folds whole closed rounds into one
+// entry that keeps its last round's artifact hash (ledger.Iteration.Through),
+// and the round after the span follows that round: the same artifact again is
+// a stall, though the rounds before it went; and an artifact equal only to a
+// round BEFORE the span is no stall, since the rounds between them changed it.
+//
+// Mutation: skip a span in the seed, and the repeat of the span's last round
+// runs on while the echo of a round before it is taken for a stall.
+func TestTheStallGuardComparesARoundWithTheOneBeforeItAcrossADroppedSpan(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		history []ledger.Iteration
+		stall   bool
+	}{
+		"the span's last round repeated": {
+			history: []ledger.Iteration{{Iteration: 1, Through: 3, ArtifactHash: turn.ArtifactHash("same")}},
+			stall:   true,
+		},
+		"a round before the span echoed": {
+			history: []ledger.Iteration{
+				{Iteration: 1, ArtifactHash: turn.ArtifactHash("same")},
+				{Iteration: 2, Through: 3, ArtifactHash: turn.ArtifactHash("moved")},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:    []turn.Work{delivered("same"), {Suspended: true}},
+				surfaces: []turn.Surface{slackSurface()},
+				reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+			}
+			res, err := turn.Run(context.Background(), f, settings(), turn.Input{
+				RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 4, History: tc.history,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if stalled := res.Breach != nil && res.Breach.Kind == types.GuardStall; stalled != tc.stall {
+				t.Errorf("the resumed round ended %+v (breach %+v): a stall %v, want %v", res.Decision,
+					res.Breach, stalled, tc.stall)
+			}
+			if !tc.stall && !res.Suspended {
+				t.Errorf("the round after the echo = %+v, want the next round launched", res)
+			}
+		})
+	}
+}
+
 func TestProgressIsNotAStall(t *testing.T) {
 	t.Parallel()
 	f := &fake{
@@ -627,6 +714,41 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 	// And the next round is handed the ledger, or it re-fires what landed.
 	if len(f.historySeen) < 2 || len(f.historySeen[1]) != 1 {
 		t.Errorf("the next round saw %v", f.historySeen)
+	}
+}
+
+// A CLOSED ROUND KEEPS NO SUCCESSFUL CALL'S OUTPUT, and a failed call keeps its
+// error: nothing reads a successful output once its round has closed — the
+// prior-work ledger shows a failed call's error alone — and a parked turn
+// carries every round it closed on its run's row. The round's own call list is
+// left as it came.
+//
+// Mutation: close the round with its calls as they came, and the successful
+// call's output is still on the record.
+func TestAClosedRoundKeepsNoSuccessfulOutput(t *testing.T) {
+	t.Parallel()
+	first := delivered("first")
+	first.Calls = []ledger.Call{
+		{Name: "slack_post", Result: "posted at 12:00"},
+		{Name: "slack_history", Result: "rate limited", Failed: true},
+	}
+	f := &fake{
+		works:    []turn.Work{first, delivered("second")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
+	}
+	res, _ := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("")})
+	if len(res.Iterations) != 1 {
+		t.Fatalf("ledger = %d entries, want the one closed round", len(res.Iterations))
+	}
+	want := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history", Result: "rate limited", Failed: true}}
+	if got := res.Iterations[0].Calls; len(got) != len(want) || got[0].Name != want[0].Name ||
+		got[0].Result != want[0].Result || got[1].Result != want[1].Result || !got[1].Failed {
+		t.Errorf("the closed round keeps %+v, want %+v", got, want)
+	}
+	if first.Calls[0].Result != "posted at 12:00" {
+		t.Errorf("closing the round changed the round's own call list: %+v", first.Calls)
 	}
 }
 
@@ -1323,6 +1445,51 @@ func TestARoundThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
 	if res.Acted {
 		t.Error("a phase that never called anything claimed to have acted, " +
 			"which would discard a trigger worth retrying")
+	}
+}
+
+// A ROUND THAT ONLY READ THE WORLD COMES BACK. A web search and an SSH read
+// both reach outside the process, and neither changes anything a redelivery
+// would repeat, so a round that made only those and broke keeps its retry —
+// while the same round that also asked a colleague is given up, since a
+// redelivery would ask again.
+//
+// Mutation: drop the read-only clause from Acted, and the reading round is
+// given up as one that wrote.
+func TestABrokenRoundThatOnlyReadTheWorldComesBack(t *testing.T) {
+	t.Parallel()
+	surface := turn.Surface{
+		Catalogue:      []string{"web_search", "ssh_read", "a2a_ask"},
+		KnownReads:     []string{"web_search", "ssh_read"},
+		KnownOpenWorld: []string{"web_search", "ssh_read", "a2a_ask"},
+	}
+	read := []ledger.Call{{Name: "web_search"}, {Name: "ssh_read"}}
+	for name, tc := range map[string]struct {
+		calls   []ledger.Call
+		abandon bool
+	}{
+		"it only read":         {calls: read},
+		"it asked a colleague": {calls: append(slices.Clone(read), ledger.Call{Name: "a2a_ask"}), abandon: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:    []turn.Work{{Calls: tc.calls}},
+				surfaces: []turn.Surface{surface},
+				workErr:  errors.New("the provider went away mid-loop"),
+			}
+			res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3},
+				turn.Input{RunID: "t1", Reply: turn.NoReply()})
+			if err == nil {
+				t.Fatal("Run returned no error for a broken phase")
+			}
+			if res.Acted != tc.abandon {
+				t.Errorf("Acted = %v, want %v", res.Acted, tc.abandon)
+			}
+			if _, abandon := turn.Abandon(res, err); abandon != tc.abandon {
+				t.Errorf("Abandon = %v, want %v", abandon, tc.abandon)
+			}
+		})
 	}
 }
 
