@@ -509,6 +509,14 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 	// the closed rounds, in order, the detector sees the sequence one
 	// uninterrupted run of the loop would have — a closed round is exactly
 	// one the loop observed on its way to closing it.
+	//
+	// A SPAN OF ROUNDS A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
+	// ([ledger.Iteration.Through]), which is all it keeps of them: the
+	// detector compares each round it observes with the one before it, and the
+	// round before whatever follows a span is the span's last. Skipping a span
+	// would compare the round after it with the round before it — rounds
+	// apart, a stall nobody repeated — and miss the one the dropped round and
+	// the next really make.
 	stall := StallDetector{}
 	for _, closed := range in.History {
 		if closed.ArtifactHash != "" {

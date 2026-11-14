@@ -102,6 +102,18 @@ func Count(elided []Elided) int {
 // skip are the names that never render ([FormatOptions.Skip]); they are still
 // counted in the total, since the run did make them.
 func FormatElided(elided []Elided, skip []string) string {
+	return tallyLine(elided, skip, furtherCalls)
+}
+
+// furtherCalls opens [FormatElided]'s line.
+func furtherCalls(total int) string {
+	return "- (+" + itoa(total) + " further call(s) the run made, which its record did not keep"
+}
+
+// tallyLine is the line counting the calls of a tally, or "" for none: opening
+// says what they are, handed their total, and the rest is [FormatElided]'s —
+// by tool, the failures and the unknown outcomes apart.
+func tallyLine(elided []Elided, skip []string, opening func(total int) string) string {
 	type tally struct{ calls, failed, unfinished int }
 	byName := map[string]*tally{}
 	var names []string
@@ -152,7 +164,7 @@ func FormatElided(elided []Elided, skip []string) string {
 	if unnamed > 0 {
 		parts = append(parts, itoa(unnamed)+" to tools the record did not keep either")
 	}
-	line := "- (+" + itoa(total) + " further call(s) the run made, which its record did not keep"
+	line := opening(total)
 	if len(parts) > 0 {
 		line += ": " + strings.Join(parts, ", ")
 	}
