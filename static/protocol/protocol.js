@@ -1855,6 +1855,23 @@ async function request(method, path, options = {}) {
 		return counted(method, path, options);
 	}
 }
+/**
+* A header value as `fetch` has to be handed text: its UTF-8 bytes, one
+* character per byte.
+*
+* A HEADER VALUE IS BYTES. `fetch` takes it as a string of byte-sized
+* characters, refusing a character past U+00FF and sending U+0080 to U+00FF
+* as one byte each, while the engine reads what arrives as UTF-8 text (a Go
+* string). The header a person writes is a revision's summary (`X-Summary`,
+* the one channel a reload and a revert have): "Zurück" arrived with a byte
+* for its "ü" that no UTF-8 reader reads back, and an emoji threw before the
+* request was made. ASCII, which every other header is, is its own bytes and
+* passes unchanged.
+*/
+function headerBytes(value) {
+	if (/^[\x00-\x7f]*$/.test(value)) return value;
+	return Array.from(new TextEncoder().encode(value), (b) => String.fromCharCode(b)).join("");
+}
 /** One attempt, counted in flight for [whenRequestsSettle]. */
 async function counted(method, path, options) {
 	inFlight++;
@@ -1887,7 +1904,7 @@ async function attempt(method, path, options) {
 		credentials: "same-origin",
 		headers: {
 			...contentType ? { "Content-Type": contentType } : {},
-			...headers,
+			...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, headerBytes(v)])),
 			...forReader ? readerHeaders() : {}
 		},
 		...encoded === void 0 ? {} : { body: encoded }
@@ -4133,6 +4150,17 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	run_schedule: {
+		args: [
+			"scope_type",
+			"scope",
+			"name"
+		],
+		domain: null,
+		apps: [],
+		refreshes: ["schedules", "schedule_runs"],
+		scope: "person"
+	},
 	steer_turn: {
 		args: ["turn_id", "note"],
 		domain: null,
@@ -4160,7 +4188,10 @@ var ACTIONS = {
 			"base_version",
 			"body",
 			"message",
-			"watch"
+			"watch",
+			"status",
+			"labels",
+			"parent"
 		],
 		domain: "pages",
 		apps: ["doclet"],
@@ -4311,7 +4342,8 @@ var ACTIONS = {
 			"topic",
 			"purpose",
 			"template",
-			"auto_join"
+			"auto_join",
+			"archived"
 		],
 		domain: "chat",
 		apps: ["chatlet"],
@@ -4398,6 +4430,114 @@ var ACTIONS = {
 			"visibility",
 			"default_branch",
 			"mirror"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_create_repo: {
+		args: [
+			"name",
+			"owner",
+			"description",
+			"default_branch",
+			"visibility"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_repo: {
+		args: ["repo", "reason"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_restore_repo: {
+		args: ["repo"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_protect_branch: {
+		args: [
+			"repo",
+			"pattern",
+			"direct_push",
+			"allow_force",
+			"allow_delete",
+			"remove",
+			"merge_by",
+			"approvals",
+			"checks",
+			"owners_approve",
+			"delete_source",
+			"remove_gate"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_create_branch: {
+		args: [
+			"repo",
+			"branch",
+			"at"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_branch: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_commit_files: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"message",
+			"files"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_revert: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"commit",
+			"message"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_cherry_pick: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"commit",
+			"message"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4521,6 +4661,48 @@ var ACTIONS = {
 			"repo",
 			"change",
 			"all_failed"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_rebase_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_head"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_dequeue_change: {
+		args: ["repo", "change"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_revert_change: {
+		args: [
+			"repo",
+			"change",
+			"merge"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_resolve_finding: {
+		args: [
+			"repo",
+			"change",
+			"findings",
+			"resolution",
+			"note"
 		],
 		domain: "code",
 		apps: ["gitlet"],

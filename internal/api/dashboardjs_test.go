@@ -1438,7 +1438,13 @@ const (
 	// card counting its titles) with the frame's own first-dial chip in the
 	// page bar and the sidebar's landing rule took it to 408.7 KiB: 409 KiB,
 	// 2.23 seconds.
-	initialBudget = 410 << 10
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, took it to 411.4 KiB (421,258 bytes),
+	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
+	// and the frame's first-dial chip and landing rule, as they measured
+	// alone. So it moved to 412 KiB, 2.25 seconds.
+	initialBudget = 412 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2480,7 +2486,11 @@ const (
 	// Kit 0.126.3, its grid's named action column, a menu's panel and the
 	// palette's and modal's scrollers, added 5,634 bytes and took it to
 	// 6026.3 KiB (6,170,921 bytes): 6027 KiB.
-	treeBudget = 5<<20 + 891<<10
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
+	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
+	treeBudget = 5<<20 + 1013<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

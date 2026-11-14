@@ -223,7 +223,9 @@ describe("the overlays the frame opens", () => {
     mountAs(Promise.resolve(person));
     fireEvent.click(await screen.findByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
-    expect(menu.parentElement).toBe(document.body);
+    // THE PANEL IS WHAT IS PORTALLED: the kit draws the menu's items inside
+    // its panel, with the menu's header beside them.
+    expect(menu.closest(".crewlet-menu")?.parentElement).toBe(document.body);
     expect(menu.closest(".crewlet-layer-host")).toBeNull();
     fireEvent.keyDown(menu, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
