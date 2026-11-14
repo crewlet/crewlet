@@ -3884,11 +3884,11 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // coordinator keeps for its condition is in this node's memory alone, which a
 // restart or a seat let go of forgets. So the coordinator marks every delivery
 // it hands back meanwhile [sandbox.ErrUnannounced], and a refusal so marked is
-// NAKED, whatever condition clears it, never acked: the coordinator still keeps
-// it for the signalled re-fire, and renews the delivery before its last, so a
-// restart, a release or a clearing nothing signals loses nothing, and the two
-// arriving together resume the run once. A drain's and a seat let go of still
-// DEFER it, which hands it on rather than acknowledging it.
+// NAKED, as the node's (below), whatever condition clears it, never acked: the
+// coordinator still keeps it for the signalled re-fire, and renews the delivery
+// before its last, so a restart, a release or a clearing nothing signals loses
+// nothing, and the two arriving together resume the run once. A drain's and a
+// seat let go of still DEFER it, which hands it on rather than acknowledging it.
 //
 // # Everything else NAKs
 //
@@ -3898,6 +3898,20 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // back on the broker's backoff: to this node once its store recovers, or to
 // the seat's next owner. Acked, it would wait for the waiter's next
 // announcement instead, up to five minutes away.
+//
+// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
+// handed back because the coordination store did not answer a step
+// ([sandbox.ErrStoreSilent]: a collection's, or the claim itself, or a claim
+// refused while the store has yet to take the release of the last one), and
+// every delivery handed back while no waiter can announce the job
+// ([sandbox.ErrUnannounced], above: a renewal's NAK and a refusal's among
+// them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on the same backoff
+// and spending the same budget, so the spacing and the budget the dead-letter
+// inequality below holds are unchanged, but a delivery whose budget it spends
+// is kept with the group's unhandled deliveries, never with its poison, the
+// subject an operator reads as messages that failed as themselves. A failure
+// the completion itself caused (a resume that failed, a refusal that names
+// nothing to wait on) stays the message's.
 //
 // THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
 // dead-letters while it lasts loses nothing: the waiter's schedule never stops
@@ -3929,18 +3943,18 @@ func controlOutcome(err error) queue.Result {
 		return queue.Ack()
 	}
 	var refused *sandbox.TurnRefused
-	if !errors.As(err, &refused) || refused.Condition == "" {
-		return queue.Nak(err)
-	}
+	waits := errors.As(err, &refused) && refused.Condition != ""
 	switch {
-	case refused.Condition == waitDrain:
+	case waits && refused.Condition == waitDrain:
 		return queue.Defer(queue.DeferDraining, err.Error())
-	case refused.Condition == sandbox.SeatLost:
+	case waits && refused.Condition == sandbox.SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
-	case errors.Is(err, sandbox.ErrUnannounced):
-		return queue.Nak(err)
+	case errors.Is(err, sandbox.ErrStoreSilent), errors.Is(err, sandbox.ErrUnannounced):
+		return queue.NakNode(err)
+	case waits:
+		return queue.Ack()
 	}
-	return queue.Ack()
+	return queue.Nak(err)
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox

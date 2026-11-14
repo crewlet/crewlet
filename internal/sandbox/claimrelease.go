@@ -84,8 +84,10 @@ import (
 // as this node held the seat.
 //   - A COMPLETION'S CLAIM is refused ([Coordinator.claimCompletion],
 //     [errReleaseOwed]): the completion comes back on the queue's backoff, as
-//     one whose claim the store does not take does, and the waiter announces
-//     the job again once the release has put the run back in running.
+//     one whose claim the store does not take does, both as the store's
+//     silence ([ErrStoreSilent]), and the waiter announces the job again once
+//     the release has put the run back in running, or, where it cannot, the
+//     completion is renewed (renew.go).
 //   - AN ANSWER'S CLAIM is left to the series that owes the release
 //     ([Coordinator.leaveToRelease]), which makes the release again before
 //     anything else and goes on to the answer only once it is no longer out
@@ -341,6 +343,12 @@ func (c *Coordinator) claimDoneLocked(turnID string) {
 // the release of the job's last claim: refused then, with [errReleaseOwed],
 // and the completion comes back for its retry. See the top of this file.
 //
+// EITHER FAILURE IS THE STORE'S SILENCE ([ErrStoreSilent]), as every step a
+// collection cannot go on without is: a claim the store did not answer, and a
+// claim refused while the store has yet to take the release of the last one,
+// say nothing of the completion, so its delivery is handed back as this node's
+// failure and never as the message's (internal/engine's controlOutcome).
+//
 // THE REFUSAL AND THE COUNT OF CLAIMS ON THEIR WAY ARE ONE STEP, so a claim
 // either finds the release recorded, or is counted before the release can be
 // made again ([Coordinator.retryOwed]). A claim that WINS while the release is
@@ -356,7 +364,7 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 			"turn_id", turnID, "agent", ev.AgentHandle, "launch_id", launch,
 			"detail", "this node is still giving back the job's last claim, or owes its release, which the "+
 				"coordination store did not answer; the job is claimed again once that release lands")
-		return PendingRun{}, false, errReleaseOwed
+		return PendingRun{}, false, storeSilent(ctx, errReleaseOwed)
 	}
 	c.claiming[turnID]++
 	c.mu.Unlock()
@@ -399,5 +407,5 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 	if owed {
 		c.settleOwed(ctx, ev.AgentHandle, turnID)
 	}
-	return run, won, err
+	return run, won, storeSilent(ctx, err)
 }

@@ -431,7 +431,8 @@ func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 // NakNode negatively acknowledges a delivery that failed for a reason of THIS
 // NODE's, never of the message: a broker it could not reach
 // ([ErrUnavailable]), a queue that is not live ([ErrNotLive]), a stop that
-// ended its handler. Returned exactly as a [Nak] is — spaced, behind the mail
+// ended its handler, a coordination store that did not answer a step the
+// handler cannot go on without. Returned exactly as a [Nak] is — spaced, behind the mail
 // that was waiting, the attachment taking mail on — because the condition may
 // clear in a moment, here or on a peer; but never counted as the message's own
 // failure ([Result.FailsMessage]), so a message whose budget it spends is kept

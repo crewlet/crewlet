@@ -175,15 +175,20 @@ func newRenewRig(t *testing.T) *renewRig {
 
 // controlResult is what the engine's control handler leaves a delivery with,
 // for what these cases meet (internal/engine's controlOutcome): nil is
-// acknowledged, and so is a refusal on a condition that clears by waiting,
-// unless the coordinator marks it as a completion no waiter announces again
-// ([ErrUnannounced]); every other error is NAK'd.
+// acknowledged; a store's silence and every delivery the coordinator marks as
+// one no waiter announces again ([ErrStoreSilent], [ErrUnannounced]) are NAK'd
+// as the node's own, a refusal so marked included; any other refusal on a
+// condition that clears by waiting is acknowledged; every other error is
+// NAK'd.
 func controlResult(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
 	}
 	var refused *TurnRefused
-	if errors.As(err, &refused) && refused.Condition != "" && !errors.Is(err, ErrUnannounced) {
+	switch {
+	case errors.Is(err, ErrStoreSilent), errors.Is(err, ErrUnannounced):
+		return queue.NakNode(err)
+	case errors.As(err, &refused) && refused.Condition != "":
 		return queue.Ack()
 	}
 	return queue.Nak(err)
