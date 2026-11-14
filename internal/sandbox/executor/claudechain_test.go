@@ -2101,7 +2101,9 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 // names it; an attachment whose parent it deleted takes the fallback past
 // that parent, to the summary 400 ms before it, and never to the deleted reply
 // stamped later still; and a reply it deletes that shares a kept reply's id,
-// or a result it deletes of a kept reply's call, is not recovered beside it.
+// or a result it deletes of a kept reply's call, is not recovered beside it;
+// and a reply it deletes is no record foamy_spring may hang a result under,
+// though the result names it as its source and answers its call.
 //
 // Mutation: hang none of the anchor's other children, and the kept records lie
 // on no walk; chain none of the kept records, and the walk stops at the head
@@ -2116,7 +2118,9 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 // terminal, and the deleted reply joins the set, which the last row, the
 // summary, then narrows to itself; read a deleted parent as a root, and the
 // attachment past it takes no fallback; take a deleted record among the
-// fallback's candidates, and the walk takes the deleted reply; or walk up from
+// fallback's candidates, and the walk takes the deleted reply; take a deleted
+// reply as a result's source, or as one that made its call, and the result
+// whose deleted parent the relink re-hung is cannot tell; or walk up from
 // the anchor past a record it met, and that walk never ends where the anchor's
 // ancestry loops: End, which counts the walk's steps, gives up on the thread.
 func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
@@ -2202,6 +2206,10 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 			rcBoundary(4, 2000, rcKeeping(5, 1, 2)), rcSummary(4, 5, 2100), rcPrompt(5, 6, 3000),
 			rcReply(6, 7, "msg_b", 4000, rcSaid("b"))},
 			rcHanding(whyChain, []int{4, 5, 1, 2, 6, 7}, rcAll(no(whyRelinkDeleted), 3)), []int{4, 5, 1, 2, 6, 7}, 7},
+		"a result whose call's reply the relink deleted, re-hung": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_x", 1000, rcCalls("x1")), rcBoundary(3, 2000, rcKeeping(4, 1)),
+			rcSummary(3, 4, 2100), rcResults(2, 5, 3000, "x1"), rcReply(5, 6, "msg_b", 4000, rcSaid("b"))},
+			rcHanding(whyChain, []int{3, 4, 1, 5, 6}, rcAll(no(whyRelinkDeleted), 2)), []int{3, 4, 1, 5, 6}, 6},
 		"a boundary keeping records the thread does not hold": {[]string{rcBoundary(1, 0, rcKeeping(3, 98, 99)),
 			rcSummary(1, 2, 100), rcReply(2, 3, "msg_x", 200, rcCalls("x1")), rcResults(3, 4, 300, "x1"),
 			rcReply(4, 5, "msg_after", 400, rcSaid("after"))},
