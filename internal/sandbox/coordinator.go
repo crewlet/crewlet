@@ -3093,10 +3093,23 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// AND IN THE STEP THAT ENDS THE WRITE'S COUNTING AS THE CLAIM: made after
 	// it, a recount that read the parked row in between counted the question
 	// already, and the move counted it a second time.
+	//
+	// A WRITE THAT DID NOT LAND HAS ITS CLAIM'S HAND-BACK RECORDED IN THIS
+	// STEP TOO, out on the run before the park's write leaves it: the
+	// question may be on the row though its answer was lost, and recorded in
+	// a step of its own, the release left a moment with no write out on the
+	// run, in which a recount counted the run off its row, the question,
+	// while the release then recorded counted it as the claim (countwrite.go).
 	c.mu.Lock()
 	moved := c.wroteCountLocked(write, err == nil)
+	var handBack *claimRelease
+	movedBack := func() {}
+	if err != nil {
+		handBack, movedBack = c.handingBackLocked(run, parkUnrecordedDetail, failure{}, nil)
+	}
 	c.mu.Unlock()
 	moved()
+	movedBack()
 	if err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -3110,7 +3123,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			"detail", "the question could not be recorded, so the run is not parked; its "+
 				"claim is given back for the completion to be retried, or the run is "+
 				"ended where it cannot be")
-		if unclaimErr := c.unclaim(ctx, run, parkUnrecordedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaimOwing(ctx, handBack); unclaimErr != nil {
 			//nolint:nilerr // Deliberate: the claim was not handed back,
 			// so the run has been SETTLED and there is nothing left for
 			// a redelivered completion to claim. Sending it back would
@@ -4683,9 +4696,11 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 //
 // THE SEAT'S COUNT MOVES WITH THE RELEASE, and with nothing before it: every
 // caller hands back a claim whose run the seat counts as the claim it is (a
-// collection that failed, a park that did not land, a resume that failed or
-// was held), and a release that lands moves that count to the set it returns
-// the run to, once, in the step that takes its answer ([Coordinator.unclaimOwing]),
+// collection that failed, a park whose question could not be announced, a
+// resume that failed or was held; a park whose question could not be recorded
+// records its hand-back in the step that takes that write's answer instead,
+// [Coordinator.park]), and a release that lands moves that count to the set it
+// returns the run to, once, in the step that takes its answer ([Coordinator.unclaimOwing]),
 // which a recount reads past while the release is out ([Coordinator.syncSeat]). A
 // release the store did not answer keeps the claim, which still holds the seat
 // on the store's row.
@@ -4719,33 +4734,49 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 // board with where the store refuses the release; and hold, where set, holds
 // the run's resume back ([Release.Hold]).
 //
-// EVERY HAND-BACK IS MADE HERE, and a release the store did not answer is kept
+// EVERY HAND-BACK IS RECORDED BY [Coordinator.handingBackLocked] and made by
+// [Coordinator.unclaimOwing], and a release the store did not answer is kept
 // owed rather than ended (claimrelease.go): RECORDED AS OUT FIRST, so no claim
 // of the job starts on this node while the release is on its way
 // ([Coordinator.claimCompletion]).
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail string, failed failure,
 	hold *Refusal,
 ) error {
-	cr := &claimRelease{run: run, release: releaseFor(run, failed, hold), detail: detail}
-	// AND ITS WRITE IN THE RUN'S ENTRY, in the same step (claimrelease.go):
-	// a recount counts the run as the claim it still is for as long as the
-	// release is out, and a write recorded behind it moves after it.
-	//
-	// THE RELEASE IT TAKES THE PLACE OF IS ANSWERED FIRST, as one that did
-	// not land: an earlier job's, still owed, which can no longer land (see
-	// "A later job's release takes an earlier one's place" in
-	// claimrelease.go). Left out in the entry, it held every later move on
-	// the run behind it for as long as this node held the seat.
-	moved := func() {}
 	c.mu.Lock()
+	cr, moved := c.handingBackLocked(run, detail, failed, hold)
+	c.mu.Unlock()
+	moved()
+	return c.unclaimOwing(ctx, cr)
+}
+
+// handingBackLocked records the release that hands run's claim back, as
+// [Coordinator.unclaimAt] takes its arguments, among the releases out, and
+// returns it for [Coordinator.unclaimOwing] to make. Under mu; the caller runs
+// what it returns once it has let go of the lock, which makes the moves the
+// release it takes the place of lets go.
+//
+// AND ITS WRITE IN THE RUN'S ENTRY, in the same step (claimrelease.go): a
+// recount counts the run as the claim it still is for as long as the release
+// is out, and a write recorded behind it moves after it. A caller whose own
+// write on the run has just had its answer taken records the release in the
+// step that took it ([Coordinator.park]), so no recount finds the run with no
+// write out between the two (countwrite.go).
+//
+// THE RELEASE IT TAKES THE PLACE OF IS ANSWERED FIRST, as one that did not
+// land: an earlier job's, still owed, which can no longer land (see "A later
+// job's release takes an earlier one's place" in claimrelease.go). Left out in
+// the entry, it held every later move on the run behind it for as long as this
+// node held the seat.
+func (c *Coordinator) handingBackLocked(run PendingRun, detail string, failed failure, hold *Refusal,
+) (*claimRelease, func()) {
+	cr := &claimRelease{run: run, release: releaseFor(run, failed, hold), detail: detail}
+	moved := func() {}
 	if earlier := c.releases[run.TurnID]; earlier != nil {
 		moved = c.wroteCountLocked(earlier.write, false)
 	}
 	cr.write = c.writingCountLocked(run, StatusResumed, cr.release.To)
 	c.releases[run.TurnID] = cr
-	c.mu.Unlock()
-	moved()
-	return c.unclaimOwing(ctx, cr)
+	return cr, moved
 }
 
 // releaseAnswered acts on the store's answer to cr's release, released and err,

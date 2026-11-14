@@ -54,7 +54,10 @@ import (
 // THE RELEASE IS ONE MORE WRITE IN ITS RUN'S ENTRY (countwrite.go), recorded
 // with the release, before it is sent, from the claim to the status it returns
 // the run to ([claimRelease.write]), and out for as long as the release is out
-// or owed. So a recount counts the run where the moves made so far leave it,
+// or owed: a park's release where the park's write did not land is recorded in
+// the step that takes that write's answer ([Coordinator.handingBackLocked]),
+// so no moment falls between the two with no write out on the run. So a
+// recount counts the run where the moves made so far leave it,
 // the claim, whatever the store's row says by then ([Coordinator.syncSeat]):
 // one that listed the row after the release landed and was written before its
 // answer was taken counted the run where the release put it, and the answer's

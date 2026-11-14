@@ -39,7 +39,15 @@ import "context"
 // ([Coordinator.RecoverSeat], answered once the recovery is done with the run).
 // A claim's release is one more such write, from the claim to the status it
 // returns the run to, out for as long as the release is out or owed
-// (claimrelease.go).
+// (claimrelease.go). A park whose own write did not land records its claim's
+// release in the step that takes that write's answer
+// ([Coordinator.handingBackLocked]), so the run has a write out at every
+// instant between the two: recorded in a step of its own, the release left a
+// moment with none, in which a recount counted the run off its row, the
+// question that can land though its answer is lost, while the release then
+// recorded counted it as the claim. The seat counted that question open and
+// the claim's hold off, and a write recorded behind the release later moved by
+// the difference from the claim.
 //
 // Each double count cost the seat something. Counted out of the question set
 // twice, a seat holding a second question read as having none open, and that

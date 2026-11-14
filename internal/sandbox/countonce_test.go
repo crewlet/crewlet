@@ -1,13 +1,17 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // recountOnLanding is a run store that, once a claim's release or a park's
@@ -957,6 +961,85 @@ func TestARecordMadeWhileAReleaseIsOwedMovesItsRunAfterTheRelease(t *testing.T) 
 	rig.fireRetries()
 	wantSeatCounts(t, rig, "once the release, made again, found t1 moved on to its answer,",
 		"t3's question alone, t1's answer resumed and its run over", 0, 1)
+}
+
+// stepOnLogLine is a log destination that runs step once, on the goroutine
+// that logs it, when the first line carrying the message msg is written: a
+// case's way to act between two steps of the coordinator's that log between
+// them and call out to nothing a fake could stand in. The process's handler
+// holds its lock while it writes, so step logs nothing at the level the case
+// installs, and waits on nothing that would.
+type stepOnLogLine struct {
+	msg  []byte
+	once sync.Once
+	step func()
+}
+
+func (w *stepOnLogLine) Write(p []byte) (int, error) {
+	if bytes.Contains(p, w.msg) {
+		w.once.Do(w.step)
+	}
+	return len(p), nil
+}
+
+// onLogLine has step run once, where the coordinator writes its first line
+// with the message msg ([stepOnLogLine]), with the process's logging at level
+// until the case ends. A case that calls it is not parallel: the logger is the
+// process's.
+func onLogLine(t *testing.T, level slog.Level, msg string, step func()) {
+	t.Helper()
+	logging.Configure(level, logging.FormatText, &stepOnLogLine{msg: []byte(" msg=" + msg + " "), step: step})
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+}
+
+// A PARK'S HAND-BACK IS RECORDED IN THE STEP THAT TAKES THE PARK'S ANSWER
+// (countwrite.go), where the park's write did not land. A park's question can
+// land with its answer lost: the park moves no count, and the run is the claim
+// it still is, its write in the run's entry answered and gone. Recorded in a
+// second step after it, the hand-back's release left a moment with no write
+// out on the run, and a recount in that moment counted the run off its row,
+// the question it found there, while the release then recorded counted it as
+// the claim: the seat counted a question nobody had answered as open beside
+// the claim's hold it no longer counted, and a write recorded behind the
+// release later moved by the difference from the claim. Here the recount is
+// made where the park logs that its write did not land, which today's code
+// does between the two.
+//
+// Mutation: take the park's answer and record its hand-back in two steps of
+// the lock; the recount between them counts t1's question.
+//
+// Not parallel: it hooks the process's logger ([onLogLine]).
+func TestAParksHandBackIsRecordedInTheStepThatTakesItsAnswer(t *testing.T) {
+	rig := newCoordRig(t)
+	parkElsewhere(t, rig, "t3")
+	rig.launch("t2")
+	rig.launch("t1")
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "before t1 parks,", "t1 and t2 working and t3's question", 2, 1)
+	store := &parkLandsUnanswered{PendingStore: rig.coordinator.pending, silent: true}
+	rig.coordinator.pending = store
+	recounts := 0
+	onLogLine(t, slog.LevelError, "sandbox_park_write_failed", func() {
+		recounts++
+		rig.coordinator.syncSeat(t.Context(), "swe")
+	})
+	rig.ask("t1", whichBranch())
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion("t1")
+	_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	parked := rig.get("t1")
+	if parked.Status != StatusAwaiting || !rig.coordinator.releasing("t1", parked.LaunchID) || recounts != 1 {
+		t.Fatalf("the premise: t1 is %s, its release out %v, recounts %d; want its question on the row, the "+
+			"claim's release owed, and one recount where the park's write failed", parked.Status,
+			rig.coordinator.releasing("t1", parked.LaunchID), recounts)
+	}
+	wantSeatCounts(t, rig, "with the park's release owed and the seat recounted as the park handed back,",
+		"t1 as the claim it still is, t2 working and t3's question", 2, 1)
+
+	store.answer()
+	rig.fireRetries()
+	wantSeatCounts(t, rig, "once the release, made again, found t1 moved on to its question,",
+		"t2 working, and t1's and t3's questions", 1, 2)
 }
 
 // A RELEASE A LATER JOB'S TAKES THE PLACE OF LEAVES NOTHING OUT ON ITS RUN
