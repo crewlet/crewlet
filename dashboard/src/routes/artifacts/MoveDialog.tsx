@@ -16,10 +16,16 @@
  *
  * # Making a place to move to
  *
- * A phrase that names no folder offers "Create “Launch” in Marketing" at the
- * end of the list: in the folder the reader is browsing, or in the folder a
- * path names ("Marketing › Launch"). A new top-level folder asks who sees it
- * first, in the same dialog, since the top level is where that is decided.
+ * New folder stands in the dialog's foot whatever the list holds, so a
+ * reader with no folder yet is shown how the first one is made: it opens the
+ * new folder's form in the same dialog, for a folder in the place the list
+ * has chosen (the top level while none is), and the folder it makes is the
+ * place chosen when the form closes. A new top-level folder asks who sees it
+ * there, since the top level is where that is decided.
+ *
+ * Typing is the short way to the same create: a phrase that names no folder
+ * offers "Create “Launch” in Marketing" at the end of the list, in the folder
+ * the reader is browsing or in the folder a path names ("Marketing › Launch").
  *
  * # Moving never changes who can open anything
  *
@@ -131,6 +137,17 @@ export function makingOf(phrase: string, index: FolderIndex, within: string): Ma
   return { parent, name };
 }
 
+/**
+ * Where the foot's New folder makes one: in the place the list has chosen,
+ * or at the top level while none is. Null stands for the top level.
+ */
+export function newFolderParent(
+  chosen: MoveTarget | null,
+  index: FolderIndex,
+): ArtifactFolderItem | null {
+  return chosen?.id ? (index.get(chosen.id) ?? null) : null;
+}
+
 /** One row of the list: the place's glyph, the folders above it quietly, then its name. */
 function placeLabel(d: Destination): ReactNode {
   const glyph =
@@ -207,9 +224,12 @@ export function MoveDialog({
   const [step, setStep] = useState<"choose" | "create" | "widen">("choose");
   const artifacts = useMoveArtifacts();
   const folderGesture = useKeyedGesture();
-  // A NEW TOP-LEVEL FOLDER is the form's (it asks who sees it); a subfolder
-  // made straight from the list is the same create without the form.
-  const creating = useNewFolderForm(null, index);
+  // THE FORM MAKES A FOLDER WHERE THE READER SAID: at the top level (where
+  // it asks who sees it) or in the place the list had chosen when New folder
+  // was pressed. A subfolder made straight from the list by a typed name is
+  // the same create without the form.
+  const [makeIn, setMakeIn] = useState<ArtifactFolderItem | null>(null);
+  const creating = useNewFolderForm(makeIn, index);
   const subfolder = useCreateFolder();
   const busy = artifacts.busy || folderGesture.busy || creating.busy || subfolder.busy;
 
@@ -268,6 +288,7 @@ export function MoveDialog({
       if (!make.parent) {
         // THE TOP LEVEL ASKS WHO SEES IT, so a new top-level folder is made
         // in a step of its own rather than straight from the list.
+        setMakeIn(null);
         creating.setName(make.name);
         setStep("create");
         return;
@@ -284,6 +305,14 @@ export function MoveDialog({
     const id = option.value === TOP ? "" : option.value;
     const d = all.find((x) => x.id === id);
     if (d) choose({ id: d.id, name: d.name }, d.path);
+  };
+
+  // THE FOOT'S NEW FOLDER: the form, for a folder in the chosen place. A name
+  // the reader had begun typing is carried into it.
+  const newFolder = () => {
+    setMakeIn(newFolderParent(chosen, index));
+    creating.setName(make?.name ?? "");
+    setStep("create");
   };
 
   const move = async (confirmWiden = false) => {
@@ -351,13 +380,16 @@ export function MoveDialog({
       const folder = await creating.submit();
       if (!folder) return;
       setStep("choose");
-      choose({ id: folder.id, name: folder.name }, folder.name);
+      choose(
+        { id: folder.id, name: folder.name },
+        makeIn ? `${index.label(makeIn.id)}${PATH_SEPARATOR}${folder.name}` : folder.name,
+      );
     };
     return (
       <Modal
         open
         onClose={onClose}
-        title="New folder"
+        title={makeIn ? `New folder in “${makeIn.name}”` : "New folder"}
         placement="top"
         phoneSheet
         onBack={back}
@@ -379,7 +411,7 @@ export function MoveDialog({
           </>
         }
       >
-        <NewFolderFields form={creating} parent={null} onSubmit={() => void createTop()} />
+        <NewFolderFields form={creating} parent={makeIn} onSubmit={() => void createTop()} />
       </Modal>
     );
   }
@@ -429,6 +461,17 @@ export function MoveDialog({
       title={title}
       placement="top"
       phoneSheet
+      footerStart={
+        <Button
+          size="small"
+          variant="ghost"
+          leadingIcon={<FolderPlusGlyph size="sm" />}
+          disabled={busy}
+          onClick={newFolder}
+        >
+          New folder
+        </Button>
+      }
       footer={
         <>
           <Button size="small" variant="ghost" onClick={onClose}>
@@ -487,6 +530,11 @@ export function MoveDialog({
                 ? "Moving never changes who can open them."
                 : "Moving never changes who can open it."}
         </p>
+        {!tree.loading && index.folders.length === 0 && (
+          <p className="artifacts-folder-note">
+            There are no folders yet. New folder makes the first one.
+          </p>
+        )}
         {refusal && <p className="artifact-refusal">{refusal}</p>}
       </form>
     </Modal>

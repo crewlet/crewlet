@@ -583,6 +583,93 @@ describe("Move to…", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // NEW FOLDER IS ON SCREEN WITH NOTHING TYPED: a company with no folder yet
+  // saw only "Top level" and no way to make one. Mutation: drop the foot's
+  // button and the first folder can be made only by a reader who guesses
+  // that typing a name offers it.
+  test("with no folders and nothing typed, New folder makes the first one, and it is where the move goes", async () => {
+    tree = [];
+    const NEW = "55555555-5555-4555-8555-555555555555";
+    answer = (req) =>
+      req.path === "/artifact-folders"
+        ? {
+            kind: "done",
+            pending: false,
+            body: { folders: [folder({ id: NEW, name: "Launch" })] },
+          }
+        : { kind: "done", pending: false, body: {} };
+    const onMoved = vi.fn();
+    mount(
+      <MoveDialog
+        subject={{ kind: "artifacts", items: [{ id: "a1", title: "Pricing FAQ" }] }}
+        onClose={vi.fn()}
+        onMoved={onMoved}
+      />,
+      "#/artifacts",
+    );
+    const dialog = screen.getByRole("dialog", { name: "Move “Pricing FAQ”" });
+    expect(
+      within(dialog)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Top levelCurrent"]);
+    expect(dialog.textContent).toContain(
+      "There are no folders yet. New folder makes the first one.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "New folder" }));
+    const form = await screen.findByRole("dialog", { name: "New folder" });
+    fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), {
+      target: { value: "Launch" },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Create folder" }));
+    // BACK ON THE LIST with the new folder chosen, so Move here files into it.
+    const back = await screen.findByRole("dialog", { name: "Move “Pricing FAQ”" });
+    expect(sent[0]).toMatchObject({
+      method: "POST",
+      path: "/artifact-folders",
+      body: { name: "Launch", visibility: "company" },
+    });
+    fireEvent.click(within(back).getByRole("button", { name: "Move here" }));
+    await waitFor(() => expect(onMoved).toHaveBeenCalled());
+    expect(sent[1]).toMatchObject({
+      method: "PUT",
+      path: "/artifacts/a1/folder",
+      body: { folder: NEW },
+    });
+  });
+
+  test("with a place chosen, New folder makes one inside it and says who will see it", async () => {
+    const NEW = "66666666-6666-4666-8666-666666666666";
+    answer = () => ({
+      kind: "done",
+      pending: false,
+      body: { folders: [folder({ id: NEW, name: "Drafts", parent: MARKETING, depth: 2 })] },
+    });
+    mount(
+      <MoveDialog
+        subject={{ kind: "artifacts", items: [{ id: "a1", title: "Pricing FAQ", folder: Q4 }] }}
+        onClose={vi.fn()}
+        onMoved={vi.fn()}
+      />,
+      "#/artifacts",
+    );
+    const dialog = screen.getByRole("dialog", { name: "Move “Pricing FAQ”" });
+    fireEvent.click(within(dialog).getByRole("option", { name: "Marketing" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "New folder" }));
+    const form = await screen.findByRole("dialog", { name: "New folder in “Marketing”" });
+    expect(form.textContent).toContain("the same as “Marketing”");
+    fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), {
+      target: { value: "Drafts" },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Create folder" }));
+    await screen.findByRole("dialog", { name: "Move “Pricing FAQ”" });
+    expect(sent[0]).toMatchObject({
+      method: "POST",
+      path: "/artifact-folders",
+      body: { name: "Drafts", parent: MARKETING },
+    });
+  });
+
   test("a folder is never offered a place inside itself, and a move that widens asks first", async () => {
     answer = (req) =>
       (req.body as { confirm_widen?: boolean }).confirm_widen
