@@ -22,9 +22,14 @@
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
 # broker per test. The suite's git is the same posture's: every target that
-# runs Go tests runs the git the engine image builds, which `make git` builds
+# runs the suite runs the git the engine image builds, which `make git` builds
 # once a machine, and a machine without a C compiler or libcurl's headers is
-# told so by name rather than handed its own git (`##@ The pinned gits`).
+# told so by name rather than handed its own git (`##@ The pinned gits`). So
+# are its Chromiums: every target that runs the whole suite names the two
+# Chrome for Testing builds scripts/chromium-pin.env pins, which `make
+# chromium` fetches once a machine, and a machine without curl, unzip or a
+# SHA-256 tool is told so by name rather than handed its own Chrome (`##@ The
+# pinned Chromiums`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -248,8 +253,8 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc \
+        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc chromium \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -413,7 +418,8 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # beside the old). Gitlet runs real git, and what a case asserts about it
 # is the git's behaviour as much as the engine's, so the suite runs the git a
 # Gitlet node runs rather than whichever one the machine has: every target that
-# runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
+# runs the suite — `test`, `test-solo`, `test-norace`, `test-gitproc` and
+# `bench` — depends on `git` and runs under GIT_ENV, and so do CI's two test
 # jobs and its `git recipe (macOS)` job, which call those targets.
 #
 # EVERY PIN IS BUILT, the floors' as well as the node's, so a pin whose version
@@ -430,19 +436,20 @@ git: ## build the pinned gits the suite and the image run (scripts/git-pin.env; 
 # them (gittest.NodeFloor and gittest.ClientFloor read CREWLET_TEST_GIT_NODE_FLOOR
 # and CREWLET_TEST_GIT_CLIENT_FLOOR: every pool of host's
 # TestTheGitFloorsPassTheSuite on the node floor, gitproc.NodeMinVersion, and
-# every person's git on the client floor, gitproc.ClientMinVersion) —
-# REQUIRED there (CREWLET_REQUIRE_GIT_FLOOR=1), so a run whose floors are
-# missing fails naming them rather than skipping the arm, which only a bare
-# `go test` outside make does. STATEMENTS rather than a prefix of assignments:
-# a prefix `PATH="$(scripts/git.sh node):$PATH" go test …` whose command
-# failed runs the suite on the machine's own git with nothing said, which is
-# the one outcome this group exists to rule out. A recipe line starts with it,
-# and what follows it runs with the pin on PATH and the floors named.
+# every person's git on the client floor, gitproc.ClientMinVersion). Every
+# target that runs it also runs REQUIRED (below, beside the test targets), so a
+# run whose floors are missing fails naming them rather than skipping the arm,
+# which only a bare `go test` outside make does. STATEMENTS rather than a
+# prefix of assignments: a prefix `PATH="$(scripts/git.sh node):$PATH" go test
+# …` whose command failed runs the suite on the machine's own git with nothing
+# said, which is the one outcome this group exists to rule out. A recipe line
+# starts with it, and what follows it runs with the pin on PATH and the floors
+# named.
 GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 	node_floor="$$(scripts/git.sh node-floor)" || exit 1; \
 	client_floor="$$(scripts/git.sh client-floor)" || exit 1; \
 	export PATH="$$node_git:$$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$$node_floor/git" \
-	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git" CREWLET_REQUIRE_GIT_FLOOR=1;
+	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git";
 
 # gitproc's own suite on the pinned gits, alone: what ci.yml's `git recipe
 # (macOS)` job runs, so the recipe's macOS branch (shasum, sysctl's core count,
@@ -451,9 +458,63 @@ GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 # `make test` runs these packages with the rest, so `check` does not depend on
 # it.
 test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
-	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
+	$(REQUIRED) $(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
+
+##@ The pinned Chromiums
+
+# THE CHROMIUMS THE SUITE DRIVES, fetched from the Chrome for Testing builds
+# scripts/chromium-pin.env pins by version and per-platform SHA-256, by
+# scripts/chromium.sh, once a machine, into a per-user cache
+# (CREWLET_CHROMIUM_CACHE, by default ~/.cache/crewlet/chromium; a pin bump,
+# or a change to how the recipe lays a build out, is a new build beside the
+# old). Two of them: the newest, Chrome for Testing's Stable, and the floor,
+# the newest patch of the oldest major the engine's CDP client drives
+# (internal/browser/cdp.MinMajor), so what a protocol case asserts is held at
+# both ends of what the engine promises to drive, never on whichever Chrome
+# the machine has.
+#
+# BOTH ARE FETCHED, so a pin whose version or digest is wrong fails here — at
+# the download its SHA-256 refuses — rather than in whichever later run first
+# needs it. About 200 MB a zip and 430 MB unpacked each, once; after that
+# chromium.sh finds each build and answers at once.
+CHROMIUM_PINS := newest floor
+
+chromium: ## fetch the pinned Chromiums the suite drives (scripts/chromium-pin.env; needs curl and unzip)
+	@for pin in $(CHROMIUM_PINS); do scripts/chromium.sh $$pin >/dev/null || exit 1; done
+
+# THE CHROMIUMS EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES: the newest and the
+# floor's builds, in CREWLET_TEST_CHROMIUM and CREWLET_TEST_CHROMIUM_FLOOR,
+# which internal/browser/chromiumtest reads — a case that drives Chromium
+# drives both, but for one whose doc says why the floor adds nothing to its
+# claim, and a build that is not named fails the case under REQUIRED (below).
+# Each from scripts/chromium.sh, which a target's `chromium` prerequisite has
+# already fetched, so here it only prints the path. STATEMENTS, as GIT_ENV's
+# are and for its reason: a prefix whose command failed would name an empty
+# path, and the cases would report it as unset rather than say the recipe
+# failed. A recipe line starts with it, and what follows it runs with both
+# named.
+CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
+	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
+	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
 
 ##@ Gates — `make check` is all of them
+
+# REQUIRED makes every prerequisite of the suite a requirement: a case whose
+# program is missing FAILS rather than skips (internal/prereqtest, the one
+# rule, and the only reader of CREWLET_REQUIRE_PREREQUISITES). Every target that
+# runs the suite starts its recipe with it (the five the next paragraph names),
+# so a gate never passes having skipped what a machine lacked, and only a bare
+# `go test` outside make skips such a case, which is the loop and not a gate. A
+# statement, as GIT_ENV's are, so what follows it on the recipe line runs with
+# it exported.
+#
+# SUITE_ENV is what the whole suite runs under: the requirement, the pinned
+# gits and the pinned Chromiums. `test`, `test-solo` and `test-norace` start
+# with it, and depend on `git` and `chromium` to have built and fetched what it
+# names; `test-gitproc` and `bench`, which run gitproc's own suite and the
+# benchmarks, start with REQUIRED and GIT_ENV.
+REQUIRED = export CREWLET_REQUIRE_PREREQUISITES=1;
+SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
 
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
 # else stays a prerequisite — which is about correctness rather than tidiness.
@@ -502,7 +563,7 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -563,7 +624,7 @@ signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 	@scripts/check-signoff_test.sh
 
 # The OWN SUITE of the git recipe (scripts/git.sh) and of the weekly pin check
-# (scripts/git-pin-check.sh, which .github/workflows/git-pin.yml runs). Both are
+# (scripts/git-pin-check.sh, which .github/workflows/pins.yml runs). Both are
 # shell no Go test reaches, and each fails silently in the direction that
 # matters: a recipe that installs over a git another checkout's suite is
 # running, a check that calls every pin current because it read nothing, or
@@ -577,6 +638,21 @@ signoff-test: ## run the sign-off gate's own suite (ci: sign-off)
 # curl, sha256sum (or shasum) and GnuPG.
 git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/git-pin_test.sh
+
+# The OWN SUITE of the Chromium recipe (scripts/chromium.sh) and of the weekly
+# pin check (scripts/chromium-pin-check.sh), for git-test's reasons: shell no
+# Go test reaches, each failing silently where it matters — a recipe that
+# unpacks over a Chromium another checkout's suite is running, or prints
+# something above the path a make target exports as the suite's browser; a
+# check that calls every pin current because it read nothing, or carries a
+# listing's words into the issue it reports to. It runs the real scripts
+# against a stand-in Chrome for Testing tree and release listing under
+# file://, each zip holding a stand-in `chrome`, so it fetches no Chromium and
+# reads no network, then runs itself once more, by a relative path, under a
+# developer's most hostile environment: about ten seconds, half of them that
+# second run. It needs curl, zip, unzip and sha256sum (or shasum).
+chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/chromium-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
@@ -636,9 +712,8 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # embeds — the notes plugin (opencode_steer_test.go), run under node against a
 # stand-in of the bridge's notes route and a real bridge's, and the skill-load
 # plugin (opencode_skills_test.go), against a stand-in of its skill route. Without
-# node that case fails where CI is set and skips elsewhere — a skip
-# internal/skipgate declares nowhere, so this target would fail on it after the
-# whole run — and the prerequisite says so before anything runs. ci.yml's
+# node those cases fail under REQUIRED (internal/prereqtest's one rule), once
+# the whole half has run; the prerequisite says it before anything runs. ci.yml's
 # `test (race)` installs node for the same reason. (internal/e2e's dashboard
 # replay is node's other consumer, in the solo half below.)
 #
@@ -658,10 +733,10 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # prebuilt at the default -p first, as the solo half is (PREBUILD, below).
 PARALLEL_HALF_PACKAGES := 4
 
-test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
+test: require-node git chromium ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
-	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
+	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -705,10 +780,10 @@ test: require-node git ## the suite, minus the packages that run alone (ci: test
 # share action IDs — and $(2) the packages.
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git chromium ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
-	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
@@ -735,8 +810,8 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # runs them: `override` beats a TEST_SHARD from the command line or the
 # environment.
 test-norace: override TEST_SHARD =
-test-norace: require-node git ## the full suite without -race (faster; not a gate)
-	@$(GIT_ENV) status=0; \
+test-norace: require-node git chromium ## the full suite without -race (faster; not a gate)
+	@$(SUITE_ENV) status=0; \
 	echo "==> parallel partition"; \
 	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \
 	echo "==> solo partition"; \
@@ -764,11 +839,10 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 	done; \
 	exit $$status
 
-# internal/e2e replays a real company's socket frames through the dashboard's
-# own protocol module under plain `node`, and it SKIPS without one — so a green
-# run with no node has left the client's half of the wire protocol unchecked.
-# ci.yml installs node rather than tolerating that; here, saying so is the best
-# we can do.
+# Every dashboard target builds or tests the dashboard with npm, so each fails
+# here, naming what to install, rather than part way through. node alone is
+# require-node's, below: internal/e2e's client replay and the OpenCode plugin
+# probes run under plain `node` and need no npm.
 require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
 	@command -v npm >/dev/null 2>&1 || { \
 	  echo "npm is not on PATH, and the dashboard is built with it."; \
@@ -784,9 +858,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced, and"; \
 	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds. Each SKIPS without node, a skip internal/skipgate"; \
-	  echo "  declares nowhere: test and test-solo would fail on it only after"; \
-	  echo "  the whole suite, and test-norace would pass having checked neither."; \
+	  echo "  engine embeds. Each FAILS without node under the targets that run"; \
+	  echo "  the suite (CREWLET_REQUIRE_PREREQUISITES=1), but only after the"; \
+	  echo "  whole suite has run, so this says so first."; \
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2
@@ -917,7 +991,7 @@ BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
 bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, Gitlet's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
-	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
+	$(REQUIRED) $(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
 	  -p 1 -v $(BENCH_PKGS)
 

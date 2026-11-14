@@ -851,22 +851,36 @@ describe("a live tail's announcements", () => {
  * collected executor's record keeps its run's head and tail and counts the
  * middle it dropped, all of it the record's one round; a call's detail says how
  * many calls its round asked for, as the round's own Model detail counts them.
+ * A host phase's record counts what it drops by tool alone, across its rounds,
+ * so no one round's figure claims them: its card says them.
  *
  * Mutation: count the listed calls alone, and one call of a round of sixty-three
- * reads as the round's only call.
+ * reads as the round's only call; count a host phase's drops in every round,
+ * and each of its rounds claims calls another made.
  */
 describe("a call's detail", () => {
-  test("counts the calls its round made that no record lists", () => {
-    const record = phaseRecord({
+  const record = (harness: string) =>
+    phaseRecord({
       key: "turn-1|execute|1",
       startedAt: iso(0),
       durationMs: 50_000,
       narration: [{ round: 1, content: "Reading the code.", declined: false }],
-      tools: [toolCall({ name: "read_file", round: 1, startedAt: iso(2_000), durationMs: 10 })],
+      tools: [
+        toolCall({ name: "read_file", round: 1, startedAt: iso(2_000), durationMs: 10 }),
+        toolCall({ name: "read_file", round: 1, startedAt: iso(3_000), durationMs: 10 }),
+      ],
       callsElided: 62,
+      harness,
     });
-    mount([], RUNNING, { phases: [record], selected: "turn-1|execute|1.r1.t0" });
-    expect(screen.getByText(/this round asked for 63 calls/)).toBeTruthy();
+
+  test("counts the calls its round made that no record lists", () => {
+    mount([], RUNNING, { phases: [record("claude-code")], selected: "turn-1|execute|1.r1.t0" });
+    expect(screen.getByText(/this round asked for 64 calls/)).toBeTruthy();
+  });
+
+  test("lays none of a host phase's dropped calls on one round", () => {
+    mount([], RUNNING, { phases: [record("")], selected: "turn-1|execute|1.r1.t0" });
+    expect(screen.getByText(/this round asked for 2 calls/)).toBeTruthy();
   });
 });
 

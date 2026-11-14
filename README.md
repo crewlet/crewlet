@@ -389,9 +389,10 @@ dev setup, conventions, and the checks CI runs:
 
 ```bash
 make build    # go build ./...
-make check    # every gate CI runs: gofmt, go mod tidy -diff, the DCO
-              #   sign-off, vet, golangci-lint, build, the race suite,
-              #   and a cross-compile of every release target
+make check    # every gate CI runs on a pull request, which CONTRIBUTING.md
+              #   lists under "Running tests and lint"; its first run on a
+              #   machine builds the pinned gits from source and fetches the
+              #   two pinned Chromiums (about 0.8 GB on disk)
 make help     # everything else
 ```
 

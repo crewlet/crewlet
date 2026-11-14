@@ -20,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -140,7 +141,7 @@ func TestErrTooOldNamesItsFloor(t *testing.T) {
 // Mutation: raise NodeMinVersion to 2.57.0, and the node pin is below it.
 func TestThePinsMeetTheFloors(t *testing.T) {
 	t.Parallel()
-	pins := readPins(t, filepath.Join(sourcetree.Root(t), "scripts", "git-pin.env"))
+	pins := prereqtest.ReadPins(t, filepath.Join(sourcetree.Root(t), "scripts", "git-pin.env"))
 	names := []string{"GIT_NODE_VERSION", "GIT_NODE_SHA256", "GIT_NODE_FLOOR_VERSION", "GIT_NODE_FLOOR_SHA256",
 		"GIT_CLIENT_FLOOR_VERSION", "GIT_CLIENT_FLOOR_SHA256"}
 	if got := slices.Sorted(maps.Keys(pins)); !slices.Equal(got, slices.Sorted(slices.Values(names))) {
@@ -176,32 +177,6 @@ func TestThePinsMeetTheFloors(t *testing.T) {
 	if floor := version("GIT_CLIENT_FLOOR_VERSION"); !inSeries(floor, gitproc.ClientMinVersion) {
 		t.Errorf("the client-floor pin, %s, is not of the client floor's series at or above %s", floor, gitproc.ClientMinVersion)
 	}
-}
-
-// readPins is the NAME=value lines of a pin file, its comments and blank
-// lines skipped; a line that is neither, or a name set twice, fails t.
-func readPins(t *testing.T, path string) map[string]string {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pins := map[string]string{}
-	for line := range strings.Lines(string(body)) {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, value, ok := strings.Cut(line, "=")
-		if !ok {
-			t.Fatalf("%s: %q is neither a comment nor NAME=value", path, line)
-		}
-		if _, dup := pins[name]; dup {
-			t.Fatalf("%s sets %s twice", path, name)
-		}
-		pins[name] = value
-	}
-	return pins
 }
 
 // THE NODE FLOOR WRITES A LAYER OVER A NAMED BASE — the floor's stated reason,
@@ -273,8 +248,8 @@ func TestTheNodeFloorWritesALayerOverANamedBase(t *testing.T) {
 // node floor's own build (in gitproc.NodeMinVersion's series), so those arms
 // cannot quietly shrink to the one git a make target puts on PATH, which is
 // how the floor's expectations were wrong in three arms and nothing ran them.
-// Where the floor's build is named (every make target names it), its arm must
-// have run.
+// Where the floor's build is named (every make target that runs this package
+// names it), its arm must have run.
 //
 // Mutation: run onNodeGits's body on the pin alone, and this is red.
 func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {

@@ -31,6 +31,7 @@ func (c *LiveCall) clone() *LiveCall {
 	}
 	dup.PromptMessages = append([]any(nil), c.PromptMessages...)
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
+	dup.ElidedCalls = append([]any(nil), c.ElidedCalls...)
 	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
 	dup.Rounds = append([]any(nil), c.Rounds...)
 	dup.Invocations = append([]any(nil), c.Invocations...)
@@ -103,6 +104,7 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		Trigger:        mapping(payload, "trigger"),
 		PromptMessages: []any{},
 		ToolExecutions: []any{},
+		ElidedCalls:    []any{},
 		RoundNarration: []any{},
 		Rounds:         []any{},
 		Invocations:    []any{},
@@ -256,6 +258,10 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		OutputTokens:   num(payload, "output_tokens"),
 		TotalTokens:    num(payload, "total_tokens"),
 		ToolExecutions: list(payload, "tool_executions"),
+		// WITH WHAT THE FRAME'S LIST LEFT OUT, which a frame past its share
+		// counts rather than lists.
+		CallsElided:    num(payload, "calls_elided"),
+		ElidedCalls:    append([]any{}, list(payload, "elided_calls")...),
 		RoundNarration: list(payload, "round_narration"),
 		PartialRound:   mapping(payload, "partial_round"),
 		RoundNum:       roundNum,
@@ -266,12 +272,14 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		// previous one would leave a finished tool call on screen as
 		// running.
 		Rounds:         list(payload, "rounds"),
+		RoundsElided:   num(payload, "rounds_elided"),
 		Invocations:    list(payload, "invocations"),
 		MaxRounds:      num(payload, "max_rounds"),
 		RoundCeiling:   num(payload, "round_ceiling"),
 		RoundStartedAt: str(payload, "round_started_at"),
 		RunStartedAt:   str(payload, "run_started_at"),
 		RunningCalls:   runningCalls(payload),
+		RunningElided:  num(payload, "running_calls_elided"),
 		// NOT carried, for Rounds' reason: every frame states the phase's
 		// whole list.
 		Steers:           list(payload, "steers"),
@@ -328,6 +336,11 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	}
 	if tools := list(payload, "tool_executions"); len(tools) > 0 {
 		call.ToolExecutions = tools
+		// WITH WHAT THE RECORD'S LIST LEFT OUT, which a record past its share
+		// of one message counts rather than lists: frozen without it, the
+		// failed row would draw the kept calls as all the phase made.
+		call.CallsElided = num(payload, "calls_elided")
+		call.ElidedCalls = append([]any{}, list(payload, "elided_calls")...)
 	}
 	// Frozen with the rest: a phase that died mid-round is exactly when the
 	// model's last words matter, and dropping them here would leave the

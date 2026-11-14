@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Whether a turn actually delivered, judged from the engine's own record.
@@ -183,13 +184,21 @@ const (
 	// deliver it, the tool ran.
 	OutcomeDelivered Outcome = "delivered"
 
-	// OutcomeNoAction — nobody was asking this seat to do anything. The
-	// turn ends and nothing is posted.
+	// OutcomeNoAction — nobody was asking this seat to do anything, and it
+	// changed nothing outside the engine. The turn ends and nothing is
+	// posted.
 	//
 	// Deliberately NOT the way to decline. A seat that was mentioned,
 	// assigned or asked and is saying no must say so where it was asked,
 	// so the requester learns the message landed rather than waiting in
 	// silence for an answer that is never coming.
+	//
+	// Nor the way to end a turn that ACTED outside the engine ([Acted]),
+	// though nobody asked: one that asked a colleague, reacted or published
+	// reports what it did as delivered. The runner's live submission refuses
+	// its no_action, and [Check] sends back any that reaches it. Ended as
+	// one that changed nothing, it would leave no episode and nothing
+	// reviewed, and the conversation's next turn would not know.
 	OutcomeNoAction Outcome = "no_action"
 
 	// OutcomeBlocked — the work cannot proceed and the executor says why.
@@ -242,6 +251,25 @@ func Deliverable(name string, s Surface) bool {
 func Delivered(calls []ledger.Call, s Surface) bool {
 	for _, c := range calls {
 		if !c.Failed && Deliverable(c.Name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownDelivered reports whether this record shows a delivery the engine
+// KNOWS of: a successful call that delivers ([Deliverable]) other than by
+// presumption alone ([Surface.PresumedWrites]).
+//
+// FOR SAYING WHERE A TURN WROTE, NEVER FOR JUDGING WHETHER IT DELIVERED. The
+// delivery check counts a presumed write, and must; but a correction that
+// tells a turn it filed its work somewhere else, or reached somebody, says so
+// only of a write it knows of. Told so after it only searched through a tool
+// that no hint marks as a read or as a write, a model goes looking for a
+// write it never made and argues with the correction.
+func KnownDelivered(calls []ledger.Call, s Surface) bool {
+	for _, c := range calls {
+		if !c.Failed && Deliverable(c.Name, s) && !slices.Contains(s.PresumedWrites, c.Name) {
 			return true
 		}
 	}
@@ -448,39 +476,163 @@ func DeliverersFor(s Surface, reply Reply) []string {
 	return out
 }
 
-// Acted reports whether this round's record PROVES the turn already reached
-// outside the engine — that re-running it would repeat something it cannot
-// take back.
+// Acted reports whether this record shows the turn already reached outside
+// the engine: that re-running it would repeat something it cannot take back,
+// and that ending it as though nobody was asking would leave something that
+// happened unreported.
+//
+// ONE RULE, THREE READERS. [Abandon] spends a trigger on a true answer — a
+// redelivery that would have re-run the turn is given up instead — and [Check]
+// will not end as skipped a `no_action` this answers true for, nor will the
+// runner's live submission accept one ([ActedAccount] says what it did).
+// Check read [Delivered] instead, the other question below, so a turn nobody
+// asked for that asked a colleague, reacted or published and then said nobody
+// was asking ended skipped, with no episode and nothing reviewed.
 //
 // A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
 // Delivered asks whether an answer could have reached somebody, so it counts
 // only the tools that can carry one: an MCP write, or a first-party tool the
 // engine registered as reaching a surface — a work-item comment does, a diary
 // write never does however much it writes. This asks whether anything
-// irreversible happened at all, so a builtin that wakes a colleague or starts
-// a billed box counts exactly as much as a Jira comment does.
+// irreversible happened at all, so a builtin that wakes a colleague counts
+// exactly as much as a Jira comment does.
 //
-// PROOF, NOT SUSPICION, and that asymmetry is the whole design. Its caller
-// spends a trigger on a true answer — a redelivery that would have re-run this
-// turn is given up instead — so a false positive discards work that never left
-// the process, while a false negative merely leaves today's behaviour in place.
-// Both halves are therefore positive: an MCP-backed call not proven read-only
-// (the rule [Deliverable] has survived two incidents on), or a tool whose own
-// annotations say open-world. A tool nobody classified proves nothing and is
-// not counted.
+// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. A false positive costs [Abandon]
+// work that never left the process — a trigger given up that a redelivery
+// would have run cleanly — and costs Check a round sent back, or the live
+// submission a call refused, to report what the turn did, and a review; a
+// false negative merely leaves today's behaviour in place. So the half this
+// rule adds counts PROOF alone: a call whose own annotations say open-world
+// and do not say read-only, and a first-party tool nobody classified proves
+// nothing and is not counted. The other half is the delivery check's
+// ([Deliverable]): a first-party tool registered as reaching somebody, or an
+// MCP-served tool not proven read-only, which FAILS CLOSED, the rule that has
+// survived two incidents, so an MCP tool that no hint marks as a read or as a
+// write, from its server or from an operator's override, counts though nothing
+// says it wrote: [ActedAccount] names such a call apart, as one the engine
+// cannot tell from a write ([Surface.PresumedWrites]).
+//
+// A READ OF THE WORLD IS NOT AN ACT. A web search or `ssh_read` is open-world
+// — it reaches outside the process — and read-only: it changes nothing anybody
+// sees, so a retry repeats nothing and there is nothing to report. Were it
+// counted, a triage turn that searched and found nothing to do could not end
+// quietly, and one that broke after a search would be given up as one that had
+// written. The exclusion is on the open-world half alone: a delivery is always
+// an act, so nothing [Delivered] counts can read as no act here.
 //
 // SUCCESSFUL calls only, like Delivered: a post that failed did not post.
 func Acted(calls []ledger.Call, s Surface) bool {
-	for _, c := range calls {
-		if c.Failed {
-			continue
-		}
-		if Deliverable(c.Name, s) || slices.Contains(s.KnownOpenWorld, c.Name) {
-			return true
+	return slices.ContainsFunc(calls, func(c ledger.Call) bool { return actsOutside(c, s) })
+}
+
+// actsOutside is [Acted]'s rule for one call, which [ActedWith] names by.
+func actsOutside(c ledger.Call, s Surface) bool {
+	switch {
+	case c.Failed:
+		return false
+	case Deliverable(c.Name, s):
+		return true
+	default:
+		return slices.Contains(s.KnownOpenWorld, c.Name) && !slices.Contains(s.KnownReads, c.Name)
+	}
+}
+
+// ActedWith says which tools this record acted with — the calls [Acted]
+// counts — as every correction that turns on an act names them: each tool
+// once, in name order, the first [actedNamed] by name and then how many more
+// ([words.AndMore]). Empty exactly where Acted is false.
+//
+// TWO KINDS OF CORRECTION TURN ON AN ACT: the `no_action` correction, for any
+// act, a delivery included, which says what the turn did through
+// [ActedAccount]; and each correction that finds the turn acted but delivered
+// nothing the engine knows of ([KnownDelivered]), which names the tools
+// through this. Those say only that the turn called them, which is as true of
+// a call the engine only presumes wrote ([Surface.PresumedWrites]) as of an
+// ask.
+//
+// A SENTENCE THAT SAYS NOTHING WAS DONE MUST BE TRUE. "No tool that acts
+// outside the engine was called", said to a turn that asked a colleague, reads
+// as false to the model looking at its own successful call, and a correction a
+// model does not believe is one it argues with rather than acts on — the
+// reason [OverrideDone] already says so by name where a turn wrote elsewhere.
+func ActedWith(calls []ledger.Call, s Surface) string {
+	names := actedNames(calls, s)
+	if len(names) == 0 {
+		return ""
+	}
+	return words.AndMore(names, actedNamed)
+}
+
+// ActedAccount says what this record did outside the engine, as a `no_action`
+// it bars is told: the tools [ActedWith] names, with those that no hint marks
+// as a read or as a write, from their servers or from an operator's override
+// ([Surface.PresumedWrites]), named apart, as calls the engine cannot tell
+// from a write; one marked as a write, `read_only: false` or `destructive:
+// true`, is named as an act. Empty exactly where [Acted] is false.
+//
+// A PRESUMED WRITE IS NOT CALLED AN ACT. The delivery check counts a call to
+// such a tool, and must: read as a read, it would exempt most of a fresh
+// server from the fence. But a turn that only searched through one, told it
+// "already acted outside the engine", reads that as false against its own
+// call and argues with the correction, so it is told why the call counts.
+func ActedAccount(calls []ledger.Call, s Surface) string {
+	var proven, presumed []string
+	for _, name := range actedNames(calls, s) {
+		if slices.Contains(s.PresumedWrites, name) {
+			presumed = append(presumed, name)
+		} else {
+			proven = append(proven, name)
 		}
 	}
-	return false
+	account := ""
+	if len(proven) > 0 {
+		account = "this turn already acted outside the engine — it called " +
+			words.AndMore(proven, actedNamed)
+	}
+	if len(presumed) == 0 {
+		return account
+	}
+	unmarked := "which its server does not mark read-only, so the engine cannot tell it from a write"
+	if len(presumed) > 1 {
+		unmarked = "which their servers do not mark read-only, so the engine cannot tell them from writes"
+	}
+	called := words.AndMore(presumed, actedNamed) + ", " + unmarked
+	if account == "" {
+		return "this turn called " + called
+	}
+	return account + " — and it called " + called
 }
+
+// actedNames is each tool this record acted with ([actsOutside]), once, in
+// name order.
+func actedNames(calls []ledger.Call, s Surface) []string {
+	var names []string
+	for _, c := range calls {
+		if actsOutside(c, s) && !slices.Contains(names, c.Name) {
+			names = append(names, c.Name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// actedNamed is how many tools [ActedWith] names before it says how many more,
+// and [ActedAccount] in each of its two lists.
+//
+// THE NAMES POINT, THEY DO NOT RECORD. A correction is handed to the next round
+// verbatim and carried as its review notes into every later round's brief, so
+// its length must not grow with how broad a run was. And every call the names
+// stand for is already in front of the model: in its own run's transcript when
+// its submission is refused, and in the prior-work ledger, which lists the
+// round's calls, on every round after a correction. Five keep the clause to a
+// line at a tool name's usual length, and a turn that acted through more is
+// told how many, which is all it needs to find them in its own record; the
+// no_action correction's two lists come to two lines at most.
+//
+// CAPPED, UNLIKE [Remedy]'s list: Remedy's names are an instruction to pick
+// from, where a cap could hide the one tool that delivers; these remind the
+// model of calls it already holds.
+const actedNamed = 5
 
 // Verdict is what the engine concludes about a round before the reviewer sees
 // it.
@@ -516,7 +668,12 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 	// and fail the second — it files a ticket while a founder waits in chat
 	// — and collapsing them lets that turn pass one check under the other's
 	// name.
-	acted := Delivered(record, s)
+	//
+	// `acted` is [Acted], the rule a broken turn's redelivery is decided by.
+	// It was [Delivered] once, which collapsed the first question into the
+	// second: a turn nobody asked for that asked a colleague or reacted, and
+	// then said nobody was asking, ended skipped.
+	acted := Acted(record, s)
 	delivered := DeliveredTo(record, s, reply)
 
 	// A rescue never takes any fast path. The engine wrote the outcome,
@@ -543,13 +700,16 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 				"so where you were asked — a brief reply is a delivery. If you are not, " +
 				"do the work and report what you did."}
 		case acted:
-			// Something already reached the outside world. Ending the turn
-			// as "nobody was asking" would file a side effect nobody
+			// Something already reached the outside world, or may have
+			// through a call the engine cannot tell from a write. Ending the
+			// turn as "nobody was asking" would file a side effect nobody
 			// reviewed, and leave the next turn on this thread with no
-			// record that it happened.
-			return Verdict{Correction: "You reported no_action, but this turn already " +
-				"called a tool that acts outside the engine. Report what you actually " +
-				"did instead."}
+			// record that it happened — and NAMED, as every correction that
+			// turns on an act names what the turn acted with: here any act,
+			// a delivery included, and a presumed write named as one
+			// ([ActedAccount]).
+			return Verdict{Correction: "You reported no_action, but " + ActedAccount(record, s) +
+				". Report what you actually did instead."}
 		default:
 			return Verdict{Skip: true}
 		}
@@ -566,16 +726,39 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 	// An A2A ask is answered by the engine itself, so there is no call to
 	// look for.
 	if w.Outcome == OutcomeDelivered && reply.Kind == ReplyTool && !delivered {
-		// NAMED WHERE IT IS KNOWN, exactly as [OverrideDone] and the
-		// submission check do. A turn that DID write somewhere is told "no
-		// tool was called", reads that as false against its own record, and
-		// argues with the correction instead of acting on it.
-		if on := reply.Surface; on != "" && s.Reaches(on) && acted {
+		on := reply.Surface
+		named := on != "" && s.Reaches(on)
+		switch {
+		case named && KnownDelivered(record, s):
+			// NAMED WHERE IT IS KNOWN, exactly as [OverrideDone] and the
+			// submission check do. A turn that DID write somewhere is told
+			// "no tool was called", reads that as false against its own
+			// record, and argues with the correction instead of acting on
+			// it. Keyed on a delivery elsewhere the engine KNOWS of, never
+			// on an act or a presumed write: "filing the work somewhere
+			// else" said to a turn that only asked a colleague, or only
+			// searched through a tool that no hint marks as a read or as a
+			// write, is false too.
 			return Verdict{Correction: "You reported the work as delivered, and you " +
 				"did act — but nothing was delivered on `" + on + "`, which is where " +
 				"this was asked. Filing the work somewhere else does not tell the " +
 				"person waiting. " + Remedy(s, reply) + " If you cannot, report " +
 				"honestly what is blocking you."}
+		case acted:
+			// ACTED, AND DELIVERED NOTHING THE ENGINE KNOWS OF: an ask, a
+			// reaction, a publish, or a call it only presumes wrote,
+			// elsewhere. Told "no tool that acts outside the engine was
+			// called", the model reads that as false against its own record;
+			// told it "did act" after only a search, it does the same. So it
+			// is told what it called, which is true of both.
+			where := ""
+			if named {
+				where = " on `" + on + "`, which is where this was asked"
+			}
+			return Verdict{Correction: "You reported the work as delivered, and you called " +
+				ActedWith(record, s) + ", but none of it delivered anything to the person waiting" +
+				where + ". " + Remedy(s, reply) + " If you cannot, report honestly what is " +
+				"blocking you."}
 		}
 		return Verdict{Correction: "You reported the work as delivered, but no tool " +
 			"that acts outside the engine was called in this turn: writing about an " +
@@ -600,7 +783,9 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 //
 // Judged on the TURN's record — earlier is the rounds already closed — for
 // the reason [Check] is: an answer the first round gave is still an answer
-// when the reviewer approves the third.
+// when the reviewer approves the third. Where the turn called something that
+// acts without delivering, the correction names it ([ActedWith]), and it says
+// the turn reached somebody only of a delivery it knows of ([KnownDelivered]).
 func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 ) (override bool, correction string) {
 	record := w.Record(earlier)
@@ -612,8 +797,9 @@ func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 	}
 	on := reply.Surface
 	named := on != "" && s.Reaches(on)
+	acted := ActedWith(record, s)
 	switch {
-	case named && Delivered(record, s):
+	case named && KnownDelivered(record, s):
 		// NAMED, because this is the case the flat check used to pass. The
 		// turn DID reach somebody — just not the person waiting — so a
 		// correction saying "no tool was called" would read as false to a
@@ -622,6 +808,14 @@ func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 		return true, "This turn reached somebody, but not the person waiting for it: " +
 			"nothing was delivered on `" + on + "`, which is where this was asked. " +
 			Remedy(s, reply)
+	case named && acted != "":
+		// NAMED WHAT IT DID CALL: an ask, a reaction or a publish reached
+		// somebody, just nobody waiting there — or a call the engine only
+		// presumes wrote did, if it wrote at all, which is why this says
+		// only that the turn called it.
+		return true, "Nothing in this turn reached the person waiting for it: it called " + acted +
+			", but nothing was delivered on `" + on + "`, which is where this was asked. " +
+			Remedy(s, reply)
 	case named:
 		// AND ONLY THEN. Saying "this turn reached somebody" to a turn that
 		// reached nobody is the same false statement pointed the other way,
@@ -629,6 +823,9 @@ func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 		return true, "Nothing in this turn reached the person waiting for it: " +
 			"nothing was delivered on `" + on + "`, which is where this was asked. " +
 			Remedy(s, reply)
+	case acted != "":
+		return true, "This turn produced an answer as text, and it called " + acted + ", but " +
+			"none of that delivers an answer: the requester will never see it. " + Remedy(s, reply)
 	default:
 		return true, "This turn produced an answer as text, but no tool that acts " +
 			"outside the engine was called: the requester will never see it. " +

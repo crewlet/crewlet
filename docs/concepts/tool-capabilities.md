@@ -173,7 +173,7 @@ flowchart TD
     OVR --> WRAP["mcp.Tool.Annotations"]
     BUILTIN["a first-party builtin"] -->|RegisterWith| ENTRY
     WRAP -->|RegisterMCP| ENTRY["tools.Entry.Annotations"]
-    ENTRY --> Q["engine capability questions<br/>(mcp.WritesToSharedSurface, the delivery check)"]
+    ENTRY --> Q["engine capability questions<br/>(mcp.WritesToSharedSurface, the delivery check, turn.Acted)"]
     ENTRY --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
 ```
 
@@ -195,8 +195,10 @@ same reason as the inbound rule above.
 
 ## The classifiers
 
-The engine asks annotations two questions, and they deliberately fail in
-opposite directions.
+The engine asks annotations three questions: may a worker call this, did this
+answer reach anybody, and did this turn act outside the engine. The first two
+deliberately fail in opposite directions; the third counts everything the
+second does, and beyond that reads only the hints a tool POSITIVELY gives.
 
 ### `mcp.WritesToSharedSurface`: may a worker call this?
 
@@ -233,7 +235,13 @@ counts, and so does commenting on a Worklet item, while a diary write
 does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
 beside `mcp.WritesToSharedSurface` precisely because the two questions fail
 in opposite directions: reusing the worker guard's answer here would read
-every under-annotated write tool as having reached nobody.
+every under-annotated write tool as having reached nobody. It counts a call
+to an MCP tool that no hint marks as a read or as a write, from its server
+or from a `tool_annotations` override, without knowing that it wrote,
+though, so no correction tells a turn that its work landed somewhere else
+on such a call alone; a call to a tool marked `read_only: false` or
+`destructive: true`, by its server or by an override, is a write the engine
+knows of.
 
 ### `open_world` is a tri-state, and unset is not `false`
 
@@ -266,6 +274,37 @@ The same applies to `tool_annotations`: a server tool that genuinely stays
 inside your network needs the key written out, because omitting it is a claim
 in the other direction.
 
+### Did this turn act outside the engine?
+
+*Did this turn do anything outside the engine that it cannot take back?*
+`turn.Acted` answers it, and two things turn on the answer: whether a turn
+nobody asked for may end as `no_action`, which one that acted may not
+([the engine check](turn-engine.md#three-checks-in-increasing-cost)), and
+whether a broken turn's trigger is given up rather than redelivered, since a
+redelivery would do it again
+([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)).
+It counts every tool the delivery check counts, and beyond those only what a
+tool's own hints POSITIVELY say: that half fails open where the delivery check
+fails closed, because a true answer gives a trigger up, while the first fails
+closed with it — an MCP tool with no hints at all counts here as it counts
+there. A `no_action` sent back for a call to an MCP tool that no hint marks as
+a read or as a write, from its server or from a `tool_annotations` override,
+names it as a call the engine cannot tell from a write rather than as an act:
+a turn that only searched through one would read "acted" as false. A tool
+marked `read_only: false` or `destructive: true`, by its server or by an
+override, is named as an act; `destructive: false` alone marks neither, since
+it says only that whatever the tool changes it does not destroy, and a tool
+that only reads may carry it.
+
+- a tool the delivery check counts → **yes**;
+- `open_world` is `Yes` and `read_only` is not `Yes` → **yes**: `a2a_ask`, a
+  reaction, publishing an artifact, `ssh_operate`;
+- everything else → **no**: a first-party tool nobody classified (the
+  executor's own `submit_work`), and **a read of the world** — `read_only:
+  true` beside `open_world: true` — which reaches outside the process and
+  changes nothing a retry would repeat or anybody needs telling about: a web
+  search, or `ssh_read`.
+
 ---
 
 ## Operator overrides for under-annotating servers
@@ -277,7 +316,9 @@ operator can supply them in config — without touching engine code — via
 name**. `tavily-mcp` 0.2.22 is such a server: its five tools search and
 read the web and advertise no hints at all, so without these keys each
 counts as a possible delivery, and a turn that only searched can pass the
-delivery check as one that reached somebody:
+delivery check as one that reached somebody. With them each is a read of the
+world, which neither delivers nor counts as having
+[acted](#did-this-turn-act-outside-the-engine):
 
 ```yaml
 mcp_servers:
@@ -354,8 +395,12 @@ changes.
 
 If a server under-annotates and no override is supplied, the worker
 guard cannot auto-deny that server's write tools (the parent's explicit
-allowlist remains the curation), and the delivery check counts every one
-of its tools, reads included, as a possible delivery.
+allowlist remains the curation), the delivery check counts every one of
+its tools, reads included, as a possible delivery, and every successful
+call to one counts as an [act](#did-this-turn-act-outside-the-engine),
+so a turn nobody asked for that only read through them cannot end as
+`no_action`, and one that broke after only such reads is given up rather
+than redelivered.
 
 ---
 

@@ -100,8 +100,8 @@ export const LIVE_CALL_DETAIL = {
   prompt: ["prompt", "prompt_messages"],
   response: ["response"],
   narration: ["round_narration"],
-  executions: ["tool_executions"],
-  rounds: ["rounds"],
+  executions: ["tool_executions", "calls_elided", "elided_calls"],
+  rounds: ["rounds", "rounds_elided"],
   invocations: ["invocations"],
 } as const;
 

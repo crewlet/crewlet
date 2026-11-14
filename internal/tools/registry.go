@@ -555,6 +555,25 @@ func deliverySurface(e Entry) string {
 	return e.Surface
 }
 
+// presumedWrite reports whether e delivers by [deliverySurface]'s fail-closed
+// default alone: an MCP-served tool that no hint marks as a read or as a
+// write, its server's or an operator's, so the fence counts its call a write
+// though nothing says it is one.
+//
+// A HINT MARKS A WRITE when it is `read_only: false`, or `destructive: true`:
+// a tool that may destroy what it changes changes something. `destructive:
+// false` alone marks neither, and [mcp.WritesToSharedSurface] reads no write
+// in it either: it says only that whatever the tool changes it does not
+// destroy, and a tool that only reads may carry it. [mcp.RiskOf] reads it as a
+// write that only adds, as the specification's default for an absent
+// `read_only` would, because it asks how much a call may change and errs
+// toward more; this asks whether a turn may be told it wrote, and one that
+// only searched, told so, argues with the correction.
+func presumedWrite(e Entry) bool {
+	_, fromMCP := e.FromMCP()
+	return fromMCP && e.Annotations.ReadOnly == mcp.Unknown && e.Annotations.Destructive != mcp.Yes
+}
+
 // KnownReads returns the names POSITIVELY annotated read-only.
 //
 // Positively is the operative word and the reason this is not a filter over
@@ -802,6 +821,21 @@ func (s Snapshot) KnownOpenWorld() []string {
 	var out []string
 	for _, e := range s.entries {
 		if e.Annotations.OpenWorld == mcp.Yes {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// PresumedWrites returns the snapshot's names that deliver by
+// [deliverySurface]'s fail-closed default alone ([presumedWrite]): MCP-served
+// tools that no hint marks as a read or as a write. A turn told what it did
+// hears such a call named as one the engine cannot tell from a write, never as
+// a write.
+func (s Snapshot) PresumedWrites() []string {
+	var out []string
+	for _, e := range s.entries {
+		if presumedWrite(e) {
 			out = append(out, e.Name())
 		}
 	}

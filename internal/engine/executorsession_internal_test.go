@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -527,6 +529,34 @@ func TestTheCallAPersonApprovedIsADeliveryOfItsTurn(t *testing.T) {
 	}
 	if !turn.Answered(calls, deliverySurface(e.seatRegistry(company, "swe")), turn.ParseReply(reply)) {
 		t.Fatalf("the collection's check reads %+v as no reply, want the approved call its delivery", calls)
+	}
+}
+
+// THE ENGINE'S VIEW OF A SEAT'S TOOLS SAYS WHICH WRITES IT PRESUMES, as the
+// runner's does: an account of a turn's calls read off this surface would
+// otherwise name as an act a search through a tool that no hint marks as a
+// read or as a write.
+//
+// Mutation: leave PresumedWrites out of deliverySurface, and the search is
+// named as an act.
+func TestTheEnginesViewOfASeatsToolsSaysWhichWritesItPresumes(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for name, ann := range map[string]tools.Annotations{
+		"jira_search_issues": {},
+		"jira_get_issue":     {ReadOnly: mcp.Yes},
+	} {
+		if err := reg.RegisterWith(namedTool(name), tools.Origin("jira"), ann); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := deliverySurface(reg)
+	if !slices.Equal(s.PresumedWrites, []string{"jira_search_issues"}) {
+		t.Errorf("PresumedWrites = %v, want only the tool its server leaves unmarked", s.PresumedWrites)
+	}
+	if account := turn.ActedAccount([]ledger.Call{{Name: "jira_search_issues"}}, s); !strings.Contains(account,
+		"cannot tell it from a write") {
+		t.Errorf("account = %q, want the search named as a call the engine cannot tell from a write", account)
 	}
 }
 
