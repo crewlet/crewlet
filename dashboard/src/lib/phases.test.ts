@@ -864,6 +864,30 @@ describe("what a launch's record left out", () => {
   });
 });
 
+// WHAT A RUNNING PHASE'S FRAME LEFT OUT IS READ OFF ITS LIVE CALL: the calls
+// its list does not carry, by tool, the rounds past its window and the calls in
+// flight past their share — a frame holds each to its live share.
+//
+// Mutation: read a live call's lists without their counts, and a long running
+// phase reads as the newest calls its frame happened to carry.
+describe("what a running phase's frame left out", () => {
+  test("is read off its live call", () => {
+    const record = fromLiveCall(
+      liveCall({
+        calls_elided: 120,
+        elided_calls: [{ name: "read_file", calls: 120 }],
+        rounds_elided: 9,
+        running_calls_elided: 4,
+      }),
+      "PM",
+    );
+    expect(record.callsElided).toBe(120);
+    expect(record.elidedCalls).toEqual([{ name: "read_file", calls: 120, failed: 0 }]);
+    expect(record.roundsElided).toBe(9);
+    expect(record.runningElided).toBe(4);
+  });
+});
+
 // WHAT A COLLECTED RUN'S RECORD DID NOT KEEP IS READ OFF ITS PHASE RECORD. The
 // executor's record lists the calls its run's record kept, a long run's head
 // and tail, and says how many more the run made and by tool; a reader that
@@ -894,10 +918,26 @@ describe("what a collected run's record did not keep", () => {
     ]);
   });
 
+  test("a host phase's record says the rounds and tool names it did not list", () => {
+    const record = fromPhaseEvent(
+      phaseEvent({
+        rounds_elided: 12,
+        tools_available_elided: 41,
+        tool_catalogue_elided: 7,
+        calls_elided: 30,
+      }),
+    )!;
+    expect(record.roundsElided).toBe(12);
+    expect(record.toolsAvailableElided).toBe(41);
+    expect(record.toolCatalogueElided).toBe(7);
+    expect(record.callsElided).toBe(30);
+  });
+
   test("a record that kept every call says none", () => {
     const record = fromPhaseEvent(phaseEvent({ sandbox_id: "box-1" }))!;
     expect(record.callsElided).toBe(0);
     expect(record.elidedCalls).toEqual([]);
+    expect(record.roundsElided).toBe(0);
   });
 });
 

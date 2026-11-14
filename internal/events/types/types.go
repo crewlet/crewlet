@@ -67,6 +67,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // failureEventTypes are the events that ARE a failure by their very type,
@@ -159,8 +160,10 @@ type IntegrationTrigger interface {
 // It marshals to {}, which the dashboard renders as "no source"; the
 // empty-object form is the wire contract, not null.
 type Trigger struct {
-	ID        string
-	Type      string
+	ID   string
+	Type string
+	// Summary is the waking event's one line ([events.Event.Summary]), held
+	// to [MaxTriggerSummaryBytes] where the descriptor is built.
 	Summary   string
 	Actor     string
 	Timestamp time.Time
@@ -243,6 +246,14 @@ type Gathered interface {
 	TriggerOrigins() []TriggerOrigin
 }
 
+// MaxTriggerSummaryBytes bounds a trigger's summary ([Trigger.Summary]). A
+// summary is one line — who wrote, and the subject they wrote under — and it
+// rides every record of the turn it woke, each one event of one message: an
+// event's subject is the integration's, which bounds none, and a mail's or a
+// page's title can be any length. ONE KIB is a subject of a couple of hundred
+// characters in any script, cut on a character with the cut marked.
+const MaxTriggerSummaryBytes = 1 << 10
+
 // DescribeTrigger builds the descriptor for the event that woke an agent.
 // A nil event yields the zero Trigger.
 func DescribeTrigger(e *events.Event) Trigger {
@@ -252,7 +263,7 @@ func DescribeTrigger(e *events.Event) Trigger {
 	t := Trigger{
 		ID:        e.ID.String(),
 		Type:      e.Type,
-		Summary:   e.Summary(),
+		Summary:   textcut.Within(e.Summary(), MaxTriggerSummaryBytes),
 		Actor:     e.Actor(),
 		Timestamp: e.Timestamp,
 	}

@@ -161,6 +161,18 @@ type LiveCall struct {
 	TotalTokens  int `json:"total_tokens"`
 
 	ToolExecutions []any `json:"tool_executions"`
+	// CallsElided is how many of the phase's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, as the phase's record says
+	// them (types.AgentPhaseCompleted): a record holds its calls to its share
+	// of one message, and a failed phase's call is frozen with the record's
+	// list, so it says what that list left out. Versioned with
+	// ToolExecutions, which they describe.
+	//
+	// ON THE WIRE WHEN ZERO, as ToolExecutions is when empty: a tab takes a
+	// version's fields only from a push that carries every one of them, so
+	// a count left out would read as a push that missed the list's change.
+	CallsElided int   `json:"calls_elided"`
+	ElidedCalls []any `json:"elided_calls"`
 	// RoundNarration is what the model said in each round, so the live view
 	// can put a round's thinking beside the calls it asked for instead of
 	// re-splitting the joined Response and getting it wrong.
@@ -189,6 +201,11 @@ type LiveCall struct {
 	// and for the whole of an executor, whose rounds run inside its coding
 	// harness's run.
 	Rounds []any `json:"rounds"`
+	// RoundsElided is how many of the phase's rounds Rounds, and the lists
+	// beside it, do not carry: past the most rounds a record lists, a frame
+	// and a record keep the first half and the newest half. Versioned with
+	// Rounds, and on the wire when zero, as CallsElided is with its list.
+	RoundsElided int `json:"rounds_elided"`
 
 	// Invocations is the phase's harness runs that have ENDED — when each was
 	// launched and how long it lived, who served it, how it ended, the
@@ -226,6 +243,10 @@ type LiveCall struct {
 	// one that returned nothing — and `id` is what the answered row's
 	// `call_id` carries, so a reader can tell which one did.
 	RunningCalls []any `json:"running_calls,omitempty"`
+	// RunningElided is how many more calls were in flight than RunningCalls
+	// lists, which a frame holds to its share; carried as the frame states
+	// it, as RunningCalls is.
+	RunningElided int `json:"running_calls_elided,omitempty"`
 
 	// Steers is every person's note the phase has read so far —
 	// `{round, note_id}`, the round whose provider call first saw it — as

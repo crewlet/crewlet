@@ -46,8 +46,12 @@ var LIVE_CALL_DETAIL = {
 	prompt: ["prompt", "prompt_messages"],
 	response: ["response"],
 	narration: ["round_narration"],
-	executions: ["tool_executions"],
-	rounds: ["rounds"],
+	executions: [
+		"tool_executions",
+		"calls_elided",
+		"elided_calls"
+	],
+	rounds: ["rounds", "rounds_elided"],
 	invocations: ["invocations"]
 };
 /**
@@ -350,7 +354,10 @@ var NOTHING_HELD = {
 	response: "",
 	round_narration: null,
 	tool_executions: null,
+	calls_elided: 0,
+	elided_calls: null,
 	rounds: null,
+	rounds_elided: 0,
 	invocations: null
 };
 /**

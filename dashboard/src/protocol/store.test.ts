@@ -661,6 +661,7 @@ describe("a live call's heavy fields", () => {
         { rounds, invocations: rounds },
         {
           rounds: Array.from({ length: rounds }, () => ({})),
+          rounds_elided: 0,
           invocations: Array.from({ length: rounds }, () => ({})),
         },
         {
@@ -763,7 +764,10 @@ describe("a live_call answer the socket delivers late", () => {
     prompt_messages: [],
     response: "",
     tool_executions: [],
+    calls_elided: 0,
+    elided_calls: [],
     rounds: [],
+    rounds_elided: 0,
     invocations: [],
     round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),
   });

@@ -168,6 +168,8 @@ type Review struct {
 }
 ```
 
+Its words are held where they are made: `submit_review` refuses a `final_artifact` past 256 KiB (what a run's own report may weigh, since it is returned in that report's place) and `notes` or `completed_work` past 32 KiB each (what an executor's whole submission may weigh), naming the field, its size and its bound, so the reviewer shortens them. The artifact is the turn's answer on every record and reply that carries it, and the notes are every later round's brief, so a cut at each reader would hand each a different opening of one text.
+
 - `done` → return `FinalArtifact` (fallback: the executor's text), unless the post-review override overturns it.
 - `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
 - `failed` → the reviewer's own judgement that another round would not change the answer. No guard fired, so none is reported.
@@ -229,7 +231,7 @@ Whether a value is past its budget is judged in **characters**, so an identifier
 
 A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block — `Work.Text` is every assistant message of that round's tool loop concatenated, and the block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
 
-The full text of every payload is on the phase event the ledger line summarises.
+The text of every payload is on the phase event the ledger line summarises, whole wherever that record has room for it: a phase's record holds each of its payloads to a share of one message, and keeps the opening of one past it, saying how much it left out ([event system](event-system.md#what-an-agent-record-keeps)).
 
 **The ledger survives the park.** Every executor launch parks the turn and its run's collection resumes it, often in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`, the turn's parked state, which carries no conversation) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before its latest launch would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version, and a version the reading build does not know is refused loudly and the row left for a node that understands it, because a parked run can outlive the build that parked it and nothing rewrites a parked row; a reshape takes a new version, and a reader for an older one is kept only once a tag has shipped it. It is also carried EXACTLY: the sandbox layer holds it as bytes it never decodes, and the reader keeps every number as the digits it was written in — read as a double, a nineteen-digit id a model passed as a tool argument resumed as a different id.
 
