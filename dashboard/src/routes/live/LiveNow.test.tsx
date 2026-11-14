@@ -637,6 +637,11 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             placement: "remote",
             harness: "claude",
             box_exists: true,
+            // PUT TO THE READER, as the engine states it.
+            put_to: ["jane"],
+            put_to_you: true,
+            may_answer: true,
+            needs_you: true,
           },
         ],
       },
@@ -644,11 +649,53 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
   });
   const card = cardOf("Waiting on a person");
   await within(card).findByText(/parked on a question/);
+  expect(card.textContent).toContain("Needs you");
   expect(card.textContent).toContain("asks Jane Founder");
   expect(card.textContent).toMatch(/held for 1h \d+m more/);
   expect(within(card).getByRole("button", { name: /Answer/ })).toBeTruthy();
   // AND IT IS NOT DRAWN AGAIN AS A BOX: one run, one row.
   expect(cardOf("In a box").textContent).toContain("Nothing is running in a box");
+});
+
+// A RUN PUT TO SOMEBODY ELSE IS NOT THE READER'S, whatever board it is on: it
+// says whom it waits on, and offers the answer only where the engine says the
+// reader may give it. The board drew every parked run as "Needs you" with an
+// Answer, beside a Home that rightly listed none of them.
+test("a parked run put to somebody else says whom it waits on, and answers only for who may", async () => {
+  const parked = {
+    turn_id: "t-theirs",
+    agent_handle: "eng-search",
+    role: "Engineer",
+    status: "awaiting_clarification",
+    question: "Drop the polling fallback?",
+    question_context: "",
+    audience: "jane",
+    audience_handles: ["jane"],
+    started_at: ago(3_000_000),
+    updated_at: ago(2_000_000),
+    paused_at: ago(2_280_000),
+    pause_ttl_seconds: 7_200,
+    placement: "remote",
+    harness: "claude",
+    box_exists: true,
+    put_to: ["jane"],
+    put_to_you: false,
+    needs_you: false,
+  };
+  mount({ answers: { executors: { runs: [{ ...parked, may_answer: false }] } } });
+  let card = cardOf("Waiting on a person");
+  await within(card).findByText(/parked on a question/);
+  expect(card.textContent).not.toContain("Needs you");
+  expect(card.textContent).toContain("Waiting on Jane Founder");
+  expect(within(card).queryByRole("button", { name: /Answer/ })).toBeNull();
+  cleanup();
+
+  mount({ answers: { executors: { runs: [{ ...parked, may_answer: true }] } } });
+  card = cardOf("Waiting on a person");
+  await within(card).findByText(/parked on a question/);
+  expect(card.textContent).toContain("Waiting on Jane Founder");
+  expect(card.textContent).toContain("you can answer");
+  expect(within(card).getByRole("button", { name: /Answer/ })).toBeTruthy();
 });
 
 // THE STRIP IS THE ENGINE'S COUNT, summed into its cells exactly: a cell's

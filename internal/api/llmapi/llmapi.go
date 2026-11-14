@@ -13,13 +13,23 @@
 //     proof, never the assistant: the value travels in the body), and asks
 //     `config.write` on top before anything is tested or sealed when the
 //     write will re-activate the company;
-//   - `POST .../check` and `POST .../host-login/check` are `models.check`,
-//     and `POST .../retry` is `models.retry` (admin at any recency, the
-//     assistant on approval): runtime state, no config or credential. A
-//     check, or a credential test, of a DRAFT entry asks `config.write` and
-//     `secrets.write` on top ([mayRunDraft]): a draft runs what a write would;
+//   - `POST .../check`, `GET .../check` and `POST .../host-login/check` are
+//     `models.check`, and `POST .../retry` is `models.retry` (admin at any
+//     recency, the assistant on approval): runtime state, no config or
+//     credential. A check, or a credential test, of a DRAFT entry asks
+//     `config.write` and `secrets.write` on top ([mayRunDraft]): a draft runs
+//     what a write would;
 //   - `POST .../device-sign-in` and `DELETE /llm/device-sign-ins/{id}` are
 //     `secrets.write`: a sign-in mints a login.
+//
+// # A check runs on the node's own time
+//
+// A check with its smoke calls outlasts the two minutes of silence a proxy in
+// front of the API is told to allow ([CheckBudget]), so `POST .../check`
+// starts it on the node that takes the request and answers `202` with it
+// running — `200` where it ended within the engine's short hold — and the
+// page reads how it ended at `GET .../check`, which any node answers from the
+// coordination store's record of it ([coord.ModelCheck]).
 //
 // # A credential is tested before it is stored
 //
@@ -99,6 +109,35 @@ type Engine interface {
 
 	// RunningRunsOn counts the executor runs running now on any of keys.
 	RunningRunsOn(ctx context.Context, keys []string) (int, error)
+
+	// StartModelCheck runs run, a check of ask's entry, on this node's own
+	// time and answers its record: ended where it ended within the engine's
+	// short hold, running otherwise. run is handed the check's own context,
+	// under ask's budget, and answers what the check found as the route
+	// renders it. Refused with a [*ModelCheckInProgressError] naming a
+	// running check this ask would not make, and [ErrModelChecksStopped] on
+	// a node that is stopping.
+	StartModelCheck(ctx context.Context, ask ModelCheckAsk,
+		run func(context.Context) (json.RawMessage, error)) (coord.ModelCheck, error)
+}
+
+// ModelCheckAsk is what a check asks for: which entry, whether of a draft of
+// it, whether with the smoke calls, who asks, and the budget past which the
+// node running it gives it up.
+type ModelCheckAsk struct {
+	Entry  string
+	Draft  bool
+	Smoke  bool
+	By     iam.Actor
+	Budget time.Duration
+}
+
+// ModelCheckInProgressError is a check asked while another check of the entry
+// runs that is not the one asked for.
+type ModelCheckInProgressError struct{ Running coord.ModelCheck }
+
+func (e *ModelCheckInProgressError) Error() string {
+	return "a check of " + e.Running.Entry + " is running on node " + e.Running.Node
 }
 
 // Check is what an entry's checks found on the node that ran them.
@@ -148,7 +187,15 @@ var (
 	// ErrNoSuchSignIn is a device sign-in id no record holds, or one whose
 	// record lapsed.
 	ErrNoSuchSignIn = errors.New("llmapi: no such device sign-in")
+	// ErrModelChecksStopped is a check asked of a node that has begun to stop.
+	ErrModelChecksStopped = errors.New("llmapi: this node is not running model checks")
 )
+
+// StoppingRetryAfter is what a check asked of a stopping node is told to wait:
+// the drain's wait (api.DrainRetryAfter), what takes a stopping node out of a
+// balancer's rotation, held equal by the API's
+// TestAStoppedModelCheckRetryIsTheDrainRetry, since this package imports no api.
+const StoppingRetryAfter = 30 * time.Second
 
 // SignInInProgressError is a device sign-in started while another for the
 // same entry runs.

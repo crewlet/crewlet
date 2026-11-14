@@ -37,10 +37,11 @@ import type {
 } from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
+import { useAct } from "~/lib/useAct.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
 import { LABEL_MAX, WAITING, WriteDialog } from "./AddEntry.tsx";
 import { ClaimList } from "./Decisions.tsx";
 import { EntryPicker, OwnerField, PageField, type OwnerChoice } from "./pickers.tsx";
@@ -60,15 +61,16 @@ export type Names = ReadonlyMap<string, string>;
 export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; names: Names }) {
   const { entry } = answer;
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const confirm = useAct("atlas_confirm");
-  const restore = useAct("atlas_restore");
-  const correct = useWriteAccess("atlas_correct");
-  const owner = useWriteAccess("atlas_set_owner");
-  const relate = useWriteAccess("atlas_relate");
-  const unrelate = useWriteAccess("atlas_unrelate");
-  const merge = useWriteAccess("atlas_merge");
-  const split = useWriteAccess("atlas_split");
-  const retire = useWriteAccess("atlas_retire");
+  const confirm = useSeated(useAct("atlas_confirm"));
+  const restore = useSeated(useAct("atlas_restore"));
+  const correct = useSeatedAccess(useWriteAccess("atlas_correct"));
+  const owner = useSeatedAccess(useWriteAccess("atlas_set_owner"));
+  const relate = useSeatedAccess(useWriteAccess("atlas_relate"));
+  const unrelate = useSeatedAccess(useWriteAccess("atlas_unrelate"));
+  const merge = useSeatedAccess(useWriteAccess("atlas_merge"));
+  const split = useSeatedAccess(useWriteAccess("atlas_split"));
+  const retire = useSeatedAccess(useWriteAccess("atlas_retire"));
+  const purge = useSeatedAccess(useWriteAccess("atlas_purge"));
   const admin = (useHeldGrants() ?? []).includes("admin");
   const subject = entryArg(entry.ref);
   const retired = entry.state === "retired";
@@ -120,7 +122,10 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
       label: "Purge",
       danger: true,
       onSelect: () => setDialog("purge"),
-      ...(admin ? {} : { disabled: true, description: PURGE_HELD }),
+      // ADMIN'S FIRST, then the write's own hold: an administrator the
+      // engine would refuse (offline, a sign-in with no seat) is not offered
+      // an enabled Purge that can only be refused.
+      ...(admin ? menuHold(purge) : { disabled: true, description: PURGE_HELD }),
     },
   ];
   return (
@@ -155,6 +160,7 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
         </Button>
         <Menu label={`More to do with ${entry.name}`} trigger="More" align="end" items={items} />
       </div>
+      <SeatlessNote access={correct} />
       <RefusalNote write={confirm} />
       <RefusalNote write={restore} />
       {dialog === "correct" && <CorrectDialog entry={entry} onClose={close} />}
@@ -191,7 +197,7 @@ function wordOf(fact: AtlasFact, text: string): string {
  * in Review.
  */
 function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_correct");
+  const write = useSeated(useAct("atlas_correct"));
   const now = useNow();
   const seatBadge = useSeatBadgeOf();
   const seatName = (handle: string) => seatBadge(handle).name;
@@ -352,7 +358,7 @@ function CorrectDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => v
 }
 
 function OwnerDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_set_owner");
+  const write = useSeated(useAct("atlas_set_owner"));
   const held = entry.relations.find(
     (edge) => edge.relation === "owned_by" && !edge.suggested && edge.name,
   );
@@ -391,7 +397,7 @@ function OwnerDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
 }
 
 function RelateDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_relate");
+  const write = useSeated(useAct("atlas_relate"));
   const offered = useMemo(() => relationsFrom(entry.ref.kind), [entry.ref.kind]);
   const [relation, setRelation] = useState<AtlasRelation>(offered[0]!.relation);
   const [to, setTo] = useState<{ id: string; name: string }>({ id: "", name: "" });
@@ -451,7 +457,7 @@ function UnrelateDialog({
   names: Names;
   onClose: () => void;
 }) {
-  const write = useAct("atlas_unrelate");
+  const write = useSeated(useAct("atlas_unrelate"));
   const [picked, setPicked] = useState("");
   // A PICK IS THE RELATION ITSELF, never its place in a list a refresh reorders.
   const keyOf = (edge: (typeof drawn)[number]) =>
@@ -502,7 +508,7 @@ function UnrelateDialog({
 }
 
 function PageDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_relate");
+  const write = useSeated(useAct("atlas_relate"));
   const [page, setPage] = useState<{ id: string; title: string } | null>(null);
   return (
     <WriteDialog
@@ -563,7 +569,7 @@ function differing(one: AtlasEntry, other: AtlasEntry) {
  */
 function MergeDialog({ answer, onClose }: { answer: AtlasEntryAnswer; onClose: () => void }) {
   const { entry } = answer;
-  const write = useAct("atlas_merge");
+  const write = useSeated(useAct("atlas_merge"));
   const [other, setOther] = useState<AtlasSummary | null>(null);
   const asked = useMemo(() => ({ id: other?.id ?? "" }), [other]);
   const read = useQuery("atlas_entry", asked, { enabled: other !== null });
@@ -644,7 +650,7 @@ function MergeDialog({ answer, onClose }: { answer: AtlasEntryAnswer; onClose: (
  * must never be merged with.
  */
 function SplitDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_split");
+  const write = useSeated(useAct("atlas_split"));
   const merged = entry.members.length > 1;
   const [one, setOne] = useState(entryArg(entry.members[0] ?? entry.ref));
   const [two, setTwo] = useState(merged ? entryArg(entry.members[1]!) : "");
@@ -730,7 +736,7 @@ function SplitDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
 }
 
 function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_retire");
+  const write = useSeated(useAct("atlas_retire"));
   return (
     <ConfirmModal
       open
@@ -768,7 +774,7 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
  * sign-in check.
  */
 function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
-  const write = useAct("atlas_purge");
+  const write = useSeated(useAct("atlas_purge"));
   const [what, setWhat] = useState<"entry" | "value">("entry");
   const [value, setValue] = useState("");
   const [typed, setTyped] = useState("");

@@ -10,14 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// THE MODELS SCREEN WAITS AS LONG AS THE ENGINE WORKS. A test, a credential's
-// test and a retry each run a harness, and the engine bounds each by its own
-// budget, well past the dashboard's ordinary request deadline: the route's
-// for a check and a credential's test, and the engine's own probe budget for
-// a retry, the one bound a retry is held to. The page waits
-// on each by the engine's number: one below it abandons a test the engine is
-// still running and reports a failure that is not one, and one far above it
-// leaves a person waiting on an engine that already gave up.
+// THE MODELS SCREEN WAITS AS LONG AS THE ENGINE WORKS. A credential's test and
+// a retry each run a harness inside the request, and the engine bounds each by
+// its own budget, well past the dashboard's ordinary request deadline: the
+// route's for a credential's test, and the engine's own probe budget for a
+// retry, the one bound a retry is held to. The page waits on each by the
+// engine's number: one below it abandons a test the engine is still running
+// and reports a failure that is not one, and one far above it leaves a person
+// waiting on an engine that already gave up. A model's test is not among them:
+// it runs on its node's own time, and the page polls it.
 func TestTheModelsScreenWaitsAsLongAsTheEngineWorks(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -25,7 +26,6 @@ func TestTheModelsScreenWaitsAsLongAsTheEngineWorks(t *testing.T) {
 		name string
 		want time.Duration
 	}{
-		{"MODEL_CHECK_BUDGET_SECONDS", llmapi.CheckBudget},
 		{"MODEL_CREDENTIAL_BUDGET_SECONDS", llmapi.CredentialBudget},
 		{"MODEL_RETRY_BUDGET_SECONDS", engine.ModelRetryProbeBudget},
 	} {

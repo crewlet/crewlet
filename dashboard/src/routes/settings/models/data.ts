@@ -24,7 +24,7 @@ import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { usesOf, type Uses } from "~/lib/modelUses.ts";
-import type { AgentRow, CompanyDocument } from "~/protocol/types.ts";
+import type { AgentRow, CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/types.ts";
 import type {
   MemberModelEntry,
   ModelAlarm,
@@ -85,6 +85,16 @@ export interface ModelsData {
   assistant: { enabled: boolean; key: string | null };
   loading: boolean;
   error: string | null;
+  /**
+   * The read that failed, whole, for the page's shared failed-read state
+   * (`QueryState`): its code, its refusal and the engine's own sentence,
+   * never the bare code drawn as words.
+   */
+  failed: {
+    error: string;
+    refusal: QueryRefusal | LogRefusal | null;
+    detail?: string;
+  } | null;
   /** Ask everything again now, after a write this page made. */
   reload: () => void;
 }
@@ -201,6 +211,19 @@ export function useModelsData(): ModelsData {
       ? (entries.detail ?? entries.error)
       : config.error
         ? (config.detail ?? config.error)
+        : null,
+    failed: entries.error
+      ? {
+          error: entries.error,
+          refusal: entries.refusal,
+          ...(entries.detail ? { detail: entries.detail } : {}),
+        }
+      : config.error
+        ? {
+            error: config.error,
+            refusal: config.refusal,
+            ...(config.detail ? { detail: config.detail } : {}),
+          }
         : null,
     reload,
   };

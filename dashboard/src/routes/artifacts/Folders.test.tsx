@@ -288,7 +288,7 @@ describe("the list shape's columns", () => {
     localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
     mount(<ArtifactFolders />, "#/artifacts/folders");
     const { table, headers } = grid();
-    expect(headers).toEqual(["Name", "Access", "Owner", "Your role", "Edited", ""]);
+    expect(headers).toEqual(["Name", "Access", "Owner", "Your role", "Edited", "Actions"]);
     const bands = within(table)
       .getAllByRole("rowheader")
       .map((b) => b.textContent ?? "");
@@ -316,7 +316,7 @@ describe("the list shape's columns", () => {
       `#/artifacts/folders/${MARKETING}?scope=mine&q=press`,
     );
     const { table, headers } = grid();
-    expect(headers).toEqual(["Name", "Access", "Folder", "Edited", ""]);
+    expect(headers).toEqual(["Name", "Access", "Folder", "Edited", "Actions"]);
     // A folder found beneath this one names the folder it is in.
     const press = within(table)
       .getByText("Press kit")

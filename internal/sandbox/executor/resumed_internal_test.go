@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,79 +20,82 @@ import (
 // 2.1.322 write them, abridged to the keys the count and the restart rule read,
 // every user and assistant record carrying its parentUuid (null for a root, a
 // uuid otherwise), so no case turns on how a reader takes an absent one.
+// Prefixed cnt to keep them apart from the rc fixtures of the model of what a
+// resume hands its model (claudechain_test.go), which build such records by
+// number, each with a time of its own.
 
-// rcParent is a parentUuid as written: null for "", else the quoted uuid.
-func rcParent(parent string) string {
+// cntParent is a parentUuid as written: null for "", else the quoted uuid.
+func cntParent(parent string) string {
 	if parent == "" {
 		return "null"
 	}
 	return `"` + parent + `"`
 }
 
-// rcUser is a user record chained to parent, its message's content content (a
+// cntUser is a user record chained to parent, its message's content content (a
 // JSON value).
-func rcUser(parent, uuid, content string) string {
-	return `{"parentUuid":` + rcParent(parent) + `,"isSidechain":false,"type":"user","message":{"role":"user",` +
+func cntUser(parent, uuid, content string) string {
+	return `{"parentUuid":` + cntParent(parent) + `,"isSidechain":false,"type":"user","message":{"role":"user",` +
 		`"content":` + content + `},"uuid":"` + uuid + `"}`
 }
 
-// rcReply is a model's reply record of message id, chained to parent, whose
+// cntReply is a model's reply record of message id, chained to parent, whose
 // usage is usage (a JSON object, "" for none) and whose content is content.
-func rcReply(parent, uuid, id, model, usage, content string) string {
+func cntReply(parent, uuid, id, model, usage, content string) string {
 	u := ""
 	if usage != "" {
 		u = `,"usage":` + usage
 	}
-	return `{"parentUuid":` + rcParent(parent) + `,"isSidechain":false,"type":"assistant","message":{"id":"` + id +
+	return `{"parentUuid":` + cntParent(parent) + `,"isSidechain":false,"type":"assistant","message":{"id":"` + id +
 		`","model":"` + model + `","role":"assistant","content":` + content + u + `},"uuid":"` + uuid + `"}`
 }
 
-// rcUsage is a usage of the four counts.
-func rcUsage(in, cacheWrite, cacheRead, out int64) string {
+// cntUsage is a usage of the four counts.
+func cntUsage(in, cacheWrite, cacheRead, out int64) string {
 	return fmt.Sprintf(`{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,`+
 		`"output_tokens":%d}`, in, cacheWrite, cacheRead, out)
 }
 
-// rcText is a content of one text block.
-const rcText = `[{"type":"text","text":"working"}]`
+// cntText is a content of one text block.
+const cntText = `[{"type":"text","text":"working"}]`
 
-// rcImage is a content of one image block, which the harness counts at a flat
+// cntImage is a content of one image block, which the harness counts at a flat
 // 2,000 tokens.
-const rcImage = `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}]`
+const cntImage = `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}]`
 
-// rcAnchor is a counted reply of id, chained to parent, its usage in, cache
+// cntAnchor is a counted reply of id, chained to parent, its usage in, cache
 // writes, cache reads and out.
-func rcAnchor(parent, uuid, id string, in, cacheWrite, cacheRead, out int64) string {
-	return rcReply(parent, uuid, id, "claude-sonnet-4-5", rcUsage(in, cacheWrite, cacheRead, out), rcText)
+func cntAnchor(parent, uuid, id string, in, cacheWrite, cacheRead, out int64) string {
+	return cntReply(parent, uuid, id, "claude-sonnet-4-5", cntUsage(in, cacheWrite, cacheRead, out), cntText)
 }
 
-// rcBoundary is a main compact boundary, which roots its chain.
-func rcBoundary(uuid string) string {
+// cntBoundary is a main compact boundary, which roots its chain.
+func cntBoundary(uuid string) string {
 	return `{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary",` +
 		`"content":"Conversation compacted","uuid":"` + uuid + `"}`
 }
 
-// rcAttachment is an attachment record chained to parent, holding attachment.
-func rcAttachment(parent, uuid, attachment string) string {
-	return `{"parentUuid":` + rcParent(parent) + `,"isSidechain":false,"type":"attachment","attachment":` +
+// cntAttachment is an attachment record chained to parent, holding attachment.
+func cntAttachment(parent, uuid, attachment string) string {
+	return `{"parentUuid":` + cntParent(parent) + `,"isSidechain":false,"type":"attachment","attachment":` +
 		attachment + `,"uuid":"` + uuid + `"}`
 }
 
-// rcBookkeeping is a record outside the chain.
-const rcBookkeeping = `{"type":"queue-operation","operation":"enqueue","sessionId":"` + ctSession + `"}`
+// cntBookkeeping is a record outside the chain.
+const cntBookkeeping = `{"type":"queue-operation","operation":"enqueue","sessionId":"` + ctSession + `"}`
 
-// rcThread is lines as a thread's body, each with its break.
-func rcThread(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+// cntThread is lines as a thread's body, each with its break.
+func cntThread(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
 
-// rcCount is what the count reads of lines.
-func rcCount(lines ...string) *sandbox.ResumedCount {
+// cntCount is what the count reads of lines.
+func cntCount(lines ...string) *sandbox.ResumedCount {
 	var r resumedReading
-	walkThread(context.Background(), strings.NewReader(rcThread(lines...)), threadPlainMax, &r)
+	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &r)
 	return r.count(0)
 }
 
-// rcCharge is what the count charges line, its break included.
-func rcCharge(line string) int64 { return int64(len(line)+1+1) / 2 }
+// cntCharge is what the count charges line, its break included.
+func cntCharge(line string) int64 { return int64(len(line)+1+1) / 2 }
 
 // wantBound fails t unless got is a bound of want.
 func wantBound(t *testing.T, got *sandbox.ResumedCount, want int64) {
@@ -124,10 +128,10 @@ func wantMark(t *testing.T, got *sandbox.ResumedCount, want sandbox.CountMark) {
 // Mutation: leave the anchor's output out, and this goes red.
 func TestTheCountIsTheAnchorWithItsOutputAndEverythingAfterIt(t *testing.T) {
 	t.Parallel()
-	result := rcUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
-	note := rcAttachment("u3", "u4", `{"type":"total_tokens_reminder","text":"tokens left"}`)
-	got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 10, 1000, 50), result, note)
-	wantBound(t, got, 100+10+1000+50+rcCharge(result)+rcCharge(note))
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	note := cntAttachment("u3", "u4", `{"type":"total_tokens_reminder","text":"tokens left"}`)
+	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 10, 1000, 50), result, note)
+	wantBound(t, got, 100+10+1000+50+cntCharge(result)+cntCharge(note))
 }
 
 // THE ANCHOR SITS AT THE FIRST RECORD OF ITS MESSAGE: a reply written a record a
@@ -139,12 +143,12 @@ func TestTheCountIsTheAnchorWithItsOutputAndEverythingAfterIt(t *testing.T) {
 // red.
 func TestTheAnchorSitsAtTheFirstRecordOfItsMessage(t *testing.T) {
 	t.Parallel()
-	call := rcReply("u1", "u2", "m1", "claude-sonnet-4-5", rcUsage(100, 0, 0, 50),
+	call := cntReply("u1", "u2", "m1", "claude-sonnet-4-5", cntUsage(100, 0, 0, 50),
 		`[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]`)
-	result := rcUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
-	text := rcAnchor("u3", "u4", "m1", 100, 0, 0, 50)
-	got := rcCount(rcUser("", "u1", `"the brief"`), call, result, text)
-	wantBound(t, got, 150+rcCharge(result)+rcCharge(text))
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	text := cntAnchor("u3", "u4", "m1", 100, 0, 0, 50)
+	got := cntCount(cntUser("", "u1", `"the brief"`), call, result, text)
+	wantBound(t, got, 150+cntCharge(result)+cntCharge(text))
 }
 
 // A RUN STARTS AT THE FIRST RECORD OF ITS ID, WITH OR WITHOUT USAGE: the harness
@@ -154,12 +158,12 @@ func TestTheAnchorSitsAtTheFirstRecordOfItsMessage(t *testing.T) {
 // Mutation: start a run only at a record that carries a usage, and this goes red.
 func TestARunStartsAtTheFirstRecordOfItsIdWithOrWithoutUsage(t *testing.T) {
 	t.Parallel()
-	first := rcReply("u1", "u2", "m1", "claude-sonnet-4-5", "",
+	first := cntReply("u1", "u2", "m1", "claude-sonnet-4-5", "",
 		`[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]`)
-	result := rcUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
-	counted := rcAnchor("u3", "u4", "m1", 100, 0, 0, 50)
-	got := rcCount(rcUser("", "u1", `"the brief"`), first, result, counted)
-	wantBound(t, got, 150+rcCharge(result)+rcCharge(counted))
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	counted := cntAnchor("u3", "u4", "m1", 100, 0, 0, 50)
+	got := cntCount(cntUser("", "u1", `"the brief"`), first, result, counted)
+	wantBound(t, got, 150+cntCharge(result)+cntCharge(counted))
 }
 
 // A COMPACT BOUNDARY RESTARTS THE COUNT: nothing before a main compact boundary
@@ -169,9 +173,9 @@ func TestARunStartsAtTheFirstRecordOfItsIdWithOrWithoutUsage(t *testing.T) {
 // Mutation: ignore the boundary, and this goes red.
 func TestACompactBoundaryRestartsTheCount(t *testing.T) {
 	t.Parallel()
-	summary := rcUser("b1", "u4", `"the summary"`)
-	got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 900_000, 0, 0, 50),
-		rcBoundary("b1"), summary, rcAnchor("u4", "u5", "m1", 1000, 0, 0, 40))
+	summary := cntUser("b1", "u4", `"the summary"`)
+	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 900_000, 0, 0, 50),
+		cntBoundary("b1"), summary, cntAnchor("u4", "u5", "m1", 1000, 0, 0, 40))
 	wantBound(t, got, 1040)
 }
 
@@ -185,12 +189,12 @@ func TestACompactBoundaryRestartsTheCount(t *testing.T) {
 // and a case goes red.
 func TestABoundaryWithNoCountedReplyAfterItMarksTheCount(t *testing.T) {
 	t.Parallel()
-	before := []string{rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`)}
-	wantMark(t, rcCount(before...), sandbox.CountCompacted)
-	apiError := rcReply("u4", "u5", "m-synthetic", claudeSynthetic, rcUsage(7, 0, 0, 0), rcText)
-	wantMark(t, rcCount(append(before, apiError)...), sandbox.CountCompacted)
-	wantBound(t, rcCount(append(before, rcAnchor("u4", "u5", "m2", 1000, 0, 0, 40))...), 1040)
+	before := []string{cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`)}
+	wantMark(t, cntCount(before...), sandbox.CountCompacted)
+	apiError := cntReply("u4", "u5", "m-synthetic", claudeSynthetic, cntUsage(7, 0, 0, 0), cntText)
+	wantMark(t, cntCount(append(before, apiError)...), sandbox.CountCompacted)
+	wantBound(t, cntCount(append(before, cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40))...), 1040)
 }
 
 // ONLY A MAIN SYSTEM BOUNDARY RESTARTS THE COUNT, as the harness's own test of a
@@ -206,9 +210,9 @@ func TestOnlyAMainSystemBoundaryRestartsTheCount(t *testing.T) {
 		"a user record of the subtype": `{"parentUuid":"u2","isSidechain":false,"type":"user",` +
 			`"subtype":"compact_boundary","message":{"role":"user","content":"x"},"uuid":"u3"}`,
 	} {
-		got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), line)
-		if bound, ok := got.Bound(); !ok || bound != 1050+rcCharge(line) {
-			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, 1050+rcCharge(line))
+		got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), line)
+		if bound, ok := got.Bound(); !ok || bound != 1050+cntCharge(line) {
+			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, 1050+cntCharge(line))
 		}
 	}
 }
@@ -222,12 +226,12 @@ func TestOnlyAMainSystemBoundaryRestartsTheCount(t *testing.T) {
 func TestASyntheticOrUncountedReplyIsNoAnchor(t *testing.T) {
 	t.Parallel()
 	for name, reply := range map[string]string{
-		"a synthetic reply":   rcReply("u2", "u3", "m-synthetic", claudeSynthetic, rcUsage(7, 0, 0, 3), rcText),
-		"a reply of no input": rcReply("u2", "u3", "m2", "claude-sonnet-4-5", rcUsage(0, 0, 0, 3), rcText),
+		"a synthetic reply":   cntReply("u2", "u3", "m-synthetic", claudeSynthetic, cntUsage(7, 0, 0, 3), cntText),
+		"a reply of no input": cntReply("u2", "u3", "m2", "claude-sonnet-4-5", cntUsage(0, 0, 0, 3), cntText),
 	} {
-		got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), reply)
-		if bound, ok := got.Bound(); !ok || bound != 1050+rcCharge(reply) {
-			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, 1050+rcCharge(reply))
+		got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), reply)
+		if bound, ok := got.Bound(); !ok || bound != 1050+cntCharge(reply) {
+			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, 1050+cntCharge(reply))
 		}
 	}
 }
@@ -238,9 +242,9 @@ func TestASyntheticOrUncountedReplyIsNoAnchor(t *testing.T) {
 // Mutation: leave the key unread, and this goes red.
 func TestAnUnmeteredReplyIsNoAnchor(t *testing.T) {
 	t.Parallel()
-	provisional := strings.Replace(rcAnchor("u2", "u3", "m2", 7, 0, 0, 3), `"uuid":`, `"isUnmetered":true,"uuid":`, 1)
-	got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), provisional)
-	wantBound(t, got, 1050+rcCharge(provisional))
+	provisional := strings.Replace(cntAnchor("u2", "u3", "m2", 7, 0, 0, 3), `"uuid":`, `"isUnmetered":true,"uuid":`, 1)
+	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), provisional)
+	wantBound(t, got, 1050+cntCharge(provisional))
 }
 
 // THE TAIL IS CHARGED AT THE HARNESS'S LOWEST RATE: a JSON-titled text document
@@ -251,11 +255,11 @@ func TestAnUnmeteredReplyIsNoAnchor(t *testing.T) {
 // Mutation: charge at three bytes a token, or four, and this goes red.
 func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 	t.Parallel()
-	document := rcUser("u2", "u3", `[{"type":"document","title":"x.json","source":{"type":"text",`+
+	document := cntUser("u2", "u3", `[{"type":"document","title":"x.json","source":{"type":"text",`+
 		`"media_type":"text/plain","data":"`+strings.Repeat("a", 3000)+`"}}]`)
 	var r resumedReading
-	walkThread(t.Context(), strings.NewReader(rcThread(rcUser("", "u1", `"the brief"`),
-		rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, &r)
+	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
+		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, &r)
 	if want := int64(len(document)+2) / 2; r.tail != want || r.tail < 1500 {
 		t.Errorf("the document's line is charged %d tokens, want %d, at least 1,500", r.tail, want)
 	}
@@ -268,12 +272,12 @@ func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 // Mutation: pass attachments over, or charge bookkeeping, and this goes red.
 func TestEveryChainedLineAfterTheAnchorIsCharged(t *testing.T) {
 	t.Parallel()
-	note := rcAttachment("u2", "u3", `{"type":"total_tokens_reminder","text":"tokens left"}`)
+	note := cntAttachment("u2", "u3", `{"type":"total_tokens_reminder","text":"tokens left"}`)
 	system := `{"parentUuid":"u3","isSidechain":false,"type":"system","subtype":"turn_duration","uuid":"u4"}`
-	snapshot := rcAttachment("u4", "u5", `{"type":"prompt_snapshot","text":"the system prompt"}`)
-	got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), note,
-		rcBookkeeping, system, snapshot)
-	wantBound(t, got, 1050+rcCharge(note)+rcCharge(system)+rcCharge(snapshot))
+	snapshot := cntAttachment("u4", "u5", `{"type":"prompt_snapshot","text":"the system prompt"}`)
+	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), note,
+		cntBookkeeping, system, snapshot)
+	wantBound(t, got, 1050+cntCharge(note)+cntCharge(system)+cntCharge(snapshot))
 }
 
 // AN IMAGE OR A DOCUMENT AFTER THE ANCHOR MARKS THE COUNT: the harness counts each
@@ -284,11 +288,11 @@ func TestEveryChainedLineAfterTheAnchorIsCharged(t *testing.T) {
 // red.
 func TestAnImageOrDocumentAfterTheAnchorMarksTheCount(t *testing.T) {
 	t.Parallel()
-	image := rcUser("u2", "u3", `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}]`)
-	wantMark(t, rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), image),
+	image := cntUser("u2", "u3", `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBO"}}]`)
+	wantMark(t, cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), image),
 		sandbox.CountMedia)
 	before := strings.Replace(image, `"parentUuid":"u2"`, `"parentUuid":"u1"`, 1)
-	wantBound(t, rcCount(rcUser("", "u1", `"the brief"`), before, rcAnchor("u3", "u4", "m1", 1000, 0, 0, 50)),
+	wantBound(t, cntCount(cntUser("", "u1", `"the brief"`), before, cntAnchor("u3", "u4", "m1", 1000, 0, 0, 50)),
 		1050)
 }
 
@@ -298,10 +302,10 @@ func TestAnImageOrDocumentAfterTheAnchorMarksTheCount(t *testing.T) {
 // Mutation: match a bare "image", and this goes red.
 func TestAMediaMarkNeedsABlocksType(t *testing.T) {
 	t.Parallel()
-	call := rcReply("u2", "u3", "m2", "claude-sonnet-4-5", "",
+	call := cntReply("u2", "u3", "m2", "claude-sonnet-4-5", "",
 		`[{"type":"tool_use","id":"toolu_1","name":"run","input":{"image":"golang:1.27"}}]`)
-	got := rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), call)
-	wantBound(t, got, 1050+rcCharge(call))
+	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), call)
+	wantBound(t, got, 1050+cntCharge(call))
 }
 
 // A PDF READ AFTER THE ANCHOR MARKS THE COUNT: the harness counts one at 3,000
@@ -310,8 +314,8 @@ func TestAMediaMarkNeedsABlocksType(t *testing.T) {
 // Mutation: leave the attachment's type unscanned, and this goes red.
 func TestAPDFReadAfterTheAnchorMarksTheCount(t *testing.T) {
 	t.Parallel()
-	pdf := rcAttachment("u2", "u3", `{"type":"message_pdf_reads","pages":12}`)
-	wantMark(t, rcCount(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), pdf),
+	pdf := cntAttachment("u2", "u3", `{"type":"message_pdf_reads","pages":12}`)
+	wantMark(t, cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), pdf),
 		sandbox.CountPDF)
 }
 
@@ -326,7 +330,7 @@ func TestAPDFReadAfterTheAnchorMarksTheCount(t *testing.T) {
 func TestAClearingSinceTheLastBoundaryMarksTheCount(t *testing.T) {
 	t.Parallel()
 	cleared := func(report string) string {
-		return strings.Replace(rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), `"role":"assistant",`,
+		return strings.Replace(cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), `"role":"assistant",`,
 			`"role":"assistant","context_management":`+report+`,`, 1)
 	}
 	for name, reply := range map[string]string{
@@ -336,13 +340,13 @@ func TestAClearingSinceTheLastBoundaryMarksTheCount(t *testing.T) {
 		"an edit of no uses": cleared(`{"applied_edits":[{"type":"clear_tool_uses_20250919","cleared_tool_uses":0,` +
 			`"cleared_input_tokens":9000}]}`),
 	} {
-		if got := rcCount(rcUser("", "u1", `"the brief"`), reply); got.Mark != sandbox.CountCleared {
+		if got := cntCount(cntUser("", "u1", `"the brief"`), reply); got.Mark != sandbox.CountCleared {
 			t.Errorf("%s: the count is %+v, want the mark cleared", name, got)
 		}
 	}
 	before := cleared(`{"applied_edits":[{"type":"clear_tool_uses_20250919","cleared_tool_uses":3}]}`)
-	wantBound(t, rcCount(rcUser("", "u1", `"the brief"`), before, rcBoundary("b1"),
-		rcUser("b1", "u4", `"the summary"`), rcAnchor("u4", "u5", "m2", 1000, 0, 0, 40)), 1040)
+	wantBound(t, cntCount(cntUser("", "u1", `"the brief"`), before, cntBoundary("b1"),
+		cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40)), 1040)
 }
 
 // A USAGE THAT DOES NOT READ MARKS THE COUNT: a null usage, a negative count, a
@@ -359,8 +363,8 @@ func TestAUsageThatDoesNotReadMarksTheCount(t *testing.T) {
 		"fractional": `{"input_tokens":1.5,"output_tokens":3}`,
 		"a string":   `{"input_tokens":"100","output_tokens":3}`,
 	} {
-		reply := rcReply("u1", "u2", "m1", "claude-sonnet-4-5", usage, rcText)
-		if got := rcCount(rcUser("", "u1", `"the brief"`), reply); got.Mark != sandbox.CountUsage {
+		reply := cntReply("u1", "u2", "m1", "claude-sonnet-4-5", usage, cntText)
+		if got := cntCount(cntUser("", "u1", `"the brief"`), reply); got.Mark != sandbox.CountUsage {
 			t.Errorf("%s: the count is %+v, want the mark usage", name, got)
 		}
 	}
@@ -379,9 +383,9 @@ func TestALineThatIsNoRecordLeavesNoCount(t *testing.T) {
 		count  resumedReading
 		figure contextReading
 	)
-	walkThread(t.Context(), strings.NewReader(rcThread(rcUser("", "u1", `"the brief"`),
-		rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50), rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`),
-		`not a record`, rcAnchor("u4", "u5", "m2", 2000, 0, 0, 50))),
+	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
+		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`),
+		`not a record`, cntAnchor("u4", "u5", "m2", 2000, 0, 0, 50))),
 		threadPlainMax, &count, &figure)
 	wantMark(t, count.count(0), sandbox.CountUnread)
 	if got := figure.context(); got != 2000 {
@@ -399,8 +403,8 @@ func TestATornLastPieceIsNoLine(t *testing.T) {
 		count  resumedReading
 		figure contextReading
 	)
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50)) +
-		rcAnchor("u2", "u3", "m2", 2000, 0, 0, 50)
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50)) +
+		cntAnchor("u2", "u3", "m2", 2000, 0, 0, 50)
 	walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &count, &figure)
 	wantBound(t, count.count(0), 1050)
 	if got := figure.context(); got != 1000 {
@@ -416,8 +420,8 @@ func TestATornLastPieceIsNoLine(t *testing.T) {
 // bound, and this goes red.
 func TestAThreadPastItsBoundLeavesNoCount(t *testing.T) {
 	t.Parallel()
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`), rcAnchor("u4", "u5", "m2", 700, 0, 0, 30))
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 700, 0, 0, 30))
 	var r resumedReading
 	walkThread(t.Context(), strings.NewReader(body), int64(len(body)-1), &r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
@@ -467,7 +471,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // Mutation: hand a line to the first reading alone, and this goes red.
 func TestOneWalkHandsEveryReadingEveryLine(t *testing.T) {
 	t.Parallel()
-	body := rcThread(rcUser("", "u1", `"the brief"`), `not a record`, rcAnchor("u1", "u2", "m1", 1, 0, 0, 1))
+	body := cntThread(cntUser("", "u1", `"the brief"`), `not a record`, cntAnchor("u1", "u2", "m1", 1, 0, 0, 1))
 	source := &countingReader{r: strings.NewReader(body)}
 	var a, b readings
 	walkThread(t.Context(), source, threadPlainMax, &a, &b)
@@ -480,8 +484,8 @@ func TestOneWalkHandsEveryReadingEveryLine(t *testing.T) {
 	}
 }
 
-// rcArchive is a session's archive holding its main thread body, beside members.
-func rcArchive(t *testing.T, body string, members ...tarMember) []byte {
+// cntArchive is a session's archive holding its main thread body, beside members.
+func cntArchive(t *testing.T, body string, members ...tarMember) []byte {
 	t.Helper()
 	thread, _ := claudeMainThread(ctSession)
 	return tarOfMembers(t, append([]tarMember{{h: tar.Header{Name: thread, Mode: 0o600,
@@ -496,9 +500,9 @@ func rcArchive(t *testing.T, body string, members ...tarMember) []byte {
 // Mutation: take the floor's figure from the count's anchor, and this goes red.
 func TestTheMetersFloorFigureKeepsItsRule(t *testing.T) {
 	t.Parallel()
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 20, 1000, 50),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`))
-	figure, count, err := meterArchive(t.Context(), bytes.NewReader(rcArchive(t, body)), ctSession,
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 20, 1000, 50),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`))
+	figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
 		"2.1.310")
 	if err != nil {
 		t.Fatalf("meterArchive: %v", err)
@@ -515,13 +519,13 @@ func TestTheMetersFloorFigureKeepsItsRule(t *testing.T) {
 // Mutation: hand the take no count, and this goes red.
 func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 	t.Parallel()
-	result := rcUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
-	archive := rcArchive(t, rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 0, 0, 50),
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50),
 		result))
 	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322")
 	_, _ = meter.Write(archive)
 	meter.finish(nil)
-	wantBound(t, meter.count(), 150+rcCharge(result))
+	wantBound(t, meter.count(), 150+cntCharge(result))
 }
 
 // A PRECOMPACT MEMBER MARKS THE CAPTURE'S COUNT: a session holding a saved
@@ -533,7 +537,7 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	t.Parallel()
 	saved, _ := claudePrecompact(ctSession)
 	for _, name := range saved {
-		archive := rcArchive(t, rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
+		archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
 			tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})
 		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
 		if err != nil {
@@ -556,13 +560,13 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	thread, _ := claudeMainThread(ctSession)
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1, 0, 0, 1))
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1))
 	for name, extra := range map[string]string{
 		"a member named absolutely": "/" + thread,
 		"a member with a ..":        "projects/crewlet/x/../other.jsonl",
 		"the main thread twice":     thread,
 	} {
-		archive := rcArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
+		archive := cntArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
 			body: body})
 		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
 		if err != nil {
@@ -583,8 +587,8 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 // rules not read, and a case goes red.
 func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	t.Parallel()
-	archive := rcArchive(t, rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1, 0, 0, 1),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`), rcAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
+	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
 	for _, release := range []string{"2.1.300", ""} {
 		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release)
 		if err != nil {
@@ -607,8 +611,8 @@ func TestTheCountIsReadOnlyWhereThePinIsInForce(t *testing.T) {
 	}
 }
 
-// rcBox is a box whose main thread of ctSession is body, beside files.
-func rcBox(body string, files map[string]string) (*sandbox.FakeSandbox, Paths) {
+// cntBox is a box whose main thread of ctSession is body, beside files.
+func cntBox(body string, files map[string]string) (*sandbox.FakeSandbox, Paths) {
 	box := sandbox.NewFakeSandbox("box-count")
 	paths := PathsFor(box)
 	thread, _ := claudeMainThread(ctSession)
@@ -625,8 +629,8 @@ func rcBox(body string, files map[string]string) (*sandbox.FakeSandbox, Paths) {
 // Mutation: open the thread a second time, and this goes red.
 func TestTheMainThreadIsReadOnceThroughTheBox(t *testing.T) {
 	t.Parallel()
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 0, 0, 50))
-	box, paths := rcBox(body, nil)
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50))
+	box, paths := cntBox(body, nil)
 	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 		Release: "2.1.322", Count: true})
 	wantBound(t, got.Count, 150)
@@ -647,7 +651,7 @@ func TestTheMainThreadIsReadOnceThroughTheBox(t *testing.T) {
 // restart of the thread the read never opened, and a case goes red.
 func TestAPrecompactInTheBoxMarksTheCount(t *testing.T) {
 	t.Parallel()
-	body := rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 0, 0, 50))
+	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50))
 	saved, _ := claudePrecompact(ctSession)
 	for name, tc := range map[string]struct {
 		files map[string]string
@@ -658,7 +662,7 @@ func TestAPrecompactInTheBoxMarksTheCount(t *testing.T) {
 		"an empty file":   {files: map[string]string{saved[0]: ""}},
 		"none":            {},
 	} {
-		box, paths := rcBox(body, tc.files)
+		box, paths := cntBox(body, tc.files)
 		got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 			Release: "2.1.322", Count: true})
 		if got.Count == nil || got.Count.Mark != tc.mark {
@@ -684,7 +688,7 @@ func TestAPrecompactInTheBoxMarksTheCount(t *testing.T) {
 // Mutation: check the release after the walk, and the thread is read.
 func TestAReleaseBelowTheFloorIsMarkedBeforeAnythingIsRead(t *testing.T) {
 	t.Parallel()
-	box, paths := rcBox(rcThread(rcUser("", "u1", `"the brief"`)), nil)
+	box, paths := cntBox(cntThread(cntUser("", "u1", `"the brief"`)), nil)
 	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 		Release: "2.1.300", Count: true})
 	wantMark(t, got.Count, sandbox.CountRelease)
@@ -718,8 +722,8 @@ func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var r resumedReading
-	walkThread(ctx, twoLines{body: strings.NewReader(rcThread(rcBoundary("b1"),
-		rcAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, cancelling{cancel: cancel}, &r)
+	walkThread(ctx, twoLines{body: strings.NewReader(cntThread(cntBoundary("b1"),
+		cntAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, cancelling{cancel: cancel}, &r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
@@ -734,7 +738,7 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
 		"an empty thread":   "",
-		"bookkeeping alone": rcThread(rcBookkeeping),
+		"bookkeeping alone": cntThread(cntBookkeeping),
 	} {
 		var r resumedReading
 		walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &r)
@@ -750,7 +754,7 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 // Mutation: read every harness's thread, and this goes red.
 func TestOnlyClaudeCodeReadsAMainThread(t *testing.T) {
 	t.Parallel()
-	box, _ := rcBox(rcThread(rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
+	box, _ := cntBox(cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
 	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.1.322", Count: true}
 	if got := New(OpenCode{}).ReadMainThread(t.Context(), box, ask); got.Count != nil {
 		t.Errorf("an OpenCode runner counts %+v, want no reading", got.Count)
@@ -799,11 +803,19 @@ func TestTheReportedWindowIsTheLeastItsRunReported(t *testing.T) {
 // boundary restarts the identity alone, never the count, which restarts at a main
 // compact boundary alone.
 //
+// A canonical uuid, the one every chained record Claude Code writes carries, is
+// exactly [sandbox.RestartIDMaxBytes] long, and is named.
+//
 // Mutation: read the identity off compact boundaries alone, keep the first
-// restart, or restart the count at every restart, and a case goes red.
+// restart, restart the count at every restart, or hold a uuid of exactly
+// [sandbox.RestartIDMaxBytes] to be no identity, and a case goes red.
 func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 	t.Parallel()
-	brief, reply := rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 100, 0, 0, 50)
+	brief, reply := cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)
+	const canonical = "0b9e8f1c-2d3a-4b5c-8d7e-6f5a4b3c2d1e"
+	if len(canonical) != sandbox.RestartIDMaxBytes {
+		t.Fatalf("the canonical uuid is %d bytes, want %d", len(canonical), sandbox.RestartIDMaxBytes)
+	}
 	micro := `{"parentUuid":"u2","isSidechain":false,"type":"system","subtype":"microcompact_boundary",` +
 		`"uuid":"mc-1"}`
 	span := `{"parentUuid":"u2","isSidechain":false,"type":"user","replacesSpan":true,` +
@@ -814,14 +826,16 @@ func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 		bound   int64
 	}{
 		"none":                         {lines: []string{brief, reply}, restart: "", bound: 150},
-		"a compaction":                 {lines: []string{brief, reply, rcBoundary("b1"), rcUser("b1", "u4", `"s"`), rcAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: "b1", bound: 100},
-		"a microcompaction's boundary": {lines: []string{brief, reply, micro}, restart: "mc-1", bound: 150 + rcCharge(micro)},
-		"a span replaced":              {lines: []string{brief, reply, span}, restart: "span-1", bound: 150 + rcCharge(span)},
-		"a later root":                 {lines: []string{brief, reply, rcUser("", "root-2", `"again"`)}, restart: "root-2", bound: 150 + rcCharge(rcUser("", "root-2", `"again"`))},
-		"a trim that kept the newest": {lines: []string{rcUser("gone", "u3", `"kept"`), rcBoundary("b1"),
-			rcUser("b1", "u4", `"s"`), rcAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: "b1", bound: 100},
+		"a compaction":                 {lines: []string{brief, reply, cntBoundary("b1"), cntUser("b1", "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: "b1", bound: 100},
+		"a microcompaction's boundary": {lines: []string{brief, reply, micro}, restart: "mc-1", bound: 150 + cntCharge(micro)},
+		"a span replaced":              {lines: []string{brief, reply, span}, restart: "span-1", bound: 150 + cntCharge(span)},
+		"a later root":                 {lines: []string{brief, reply, cntUser("", "root-2", `"again"`)}, restart: "root-2", bound: 150 + cntCharge(cntUser("", "root-2", `"again"`))},
+		"a canonical uuid": {lines: []string{brief, reply, cntBoundary(canonical), cntUser(canonical, "u4", `"s"`),
+			cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: canonical, bound: 100},
+		"a trim that kept the newest": {lines: []string{cntUser("gone", "u3", `"kept"`), cntBoundary("b1"),
+			cntUser("b1", "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: "b1", bound: 100},
 	} {
-		got := rcCount(tc.lines...)
+		got := cntCount(tc.lines...)
 		if newest, read := got.Restarted(); !read || newest != tc.restart {
 			t.Errorf("%s: the count names the restart %q (read %v), want %q", name, newest, read, tc.restart)
 		}
@@ -834,18 +848,92 @@ func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 // A NEWEST RESTART WHOSE UUID DOES NOT READ LEAVES NO COUNT: one with no uuid, an
 // empty one, or one past a uuid's thirty-six bytes is no identity, and a count
 // that cannot name its newest restart is unread, the side a relaunch tells more
-// on.
+// on. That holds after an older restart whose uuid does read too: the newer one
+// replaces what the older left, so the count never names the older as its newest,
+// which would read a job launched on the older restart as not restarted, and its
+// count as a bound.
 //
-// Mutation: read such a restart as none, and a case goes red.
+// Mutation: read such a restart as none, or keep what an older restart left
+// where a newer one does not read, and a case goes red.
 func TestANewestRestartWhoseUUIDDoesNotReadLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	for name, uuid := range map[string]string{"absent": ``, "empty": `,"uuid":""`,
-		"too long": `,"uuid":"` + strings.Repeat("a", 37) + `"`} {
+		"too long": `,"uuid":"` + strings.Repeat("a", sandbox.RestartIDMaxBytes+1) + `"`} {
 		boundary := `{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary"` + uuid + `}`
-		got := rcCount(rcUser("", "u1", `"the brief"`), boundary, rcUser("b1", "u4", `"s"`),
-			rcAnchor("u4", "u5", "m2", 70, 0, 0, 30))
-		if got.Mark != sandbox.CountUnread || got.Restart != nil {
-			t.Errorf("%s: the count is %+v, want unread and no restart", name, got)
+		for after, lines := range map[string][]string{
+			"alone": {cntUser("", "u1", `"the brief"`), boundary, cntUser("b1", "u4", `"s"`),
+				cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)},
+			"after a restart that reads": {cntUser("", "u1", `"the brief"`),
+				cntAnchor("u1", "u2", "m1", 100, 0, 0, 50), cntBoundary("b1"), cntUser("b1", "u4", `"s"`),
+				cntAnchor("u4", "u5", "m2", 70, 0, 0, 30), boundary, cntUser("b2", "u7", `"s2"`),
+				cntAnchor("u7", "u8", "m3", 60, 0, 0, 20)},
+		} {
+			if got := cntCount(lines...); got.Mark != sandbox.CountUnread || got.Restart != nil {
+				t.Errorf("%s, %s: the count is %+v (restart %s), want unread and no restart", name, after, got,
+					cntRestartOf(got))
+			}
+		}
+	}
+}
+
+// cntRestartOf says what a count names as its restart, for a failure's message.
+func cntRestartOf(c *sandbox.ResumedCount) string {
+	if c.Restart == nil {
+		return "none"
+	}
+	return strconv.Quote(*c.Restart)
+}
+
+// THE COUNT KEEPS NO RESTART'S UUID PAST AN IDENTITY'S BYTES: a uuid longer than
+// [sandbox.RestartIDMaxBytes] is no identity, so the reading keeps none of it
+// from line to line, whatever its length, and still answers the count unread.
+// Kept, a box's restart whose uuid fills a line held up to three times the line,
+// decoded (a byte no UTF-8 holds reads as U+FFFD), beside everything the one
+// walk of the thread holds after it.
+//
+// Mutation: keep the uuid whatever its length, reading it as no identity, and
+// this goes red.
+func TestTheCountKeepsNoRestartsUUIDPastAnIdentitysBytes(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("u", 1<<12)
+	boundary := `{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary","uuid":"` +
+		long + `"}`
+	var r resumedReading
+	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`), boundary,
+		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, &r)
+	if len(r.newest) > sandbox.RestartIDMaxBytes || !r.flagged {
+		t.Errorf("the count keeps a restart of %d bytes (flagged %v), want at most %d", len(r.newest), r.flagged,
+			sandbox.RestartIDMaxBytes)
+	}
+	if got := r.count(0); got.Mark != sandbox.CountUnread || got.Restart != nil {
+		t.Errorf("the count is %+v, want unread and no restart", got)
+	}
+}
+
+// A RUN'S ID IS READ WHOLE, HOWEVER LONG: the count keeps a digest of its run's
+// message id rather than the id, and the digest tells two ids apart as the ids
+// do, so a counted reply whose id differs from the run's only in its last byte
+// starts a run of its own, and one of the same id, however long, continues it.
+//
+// Mutation: digest a prefix of the id, or read every id as a new run, and a case
+// goes red.
+func TestARunsIDIsReadWholeHoweverLong(t *testing.T) {
+	t.Parallel()
+	id := strings.Repeat("m", 1<<12)
+	first := cntReply("u1", "u2", id+"1", "claude-sonnet-4-5", "",
+		`[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]`)
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	for name, tc := range map[string]struct {
+		counted string
+		bound   int64
+	}{
+		"the same id": {counted: cntAnchor("u3", "u4", id+"1", 100, 0, 0, 50),
+			bound: 150 + cntCharge(result) + cntCharge(cntAnchor("u3", "u4", id+"1", 100, 0, 0, 50))},
+		"an id differing in its last byte": {counted: cntAnchor("u3", "u4", id+"2", 100, 0, 0, 50), bound: 150},
+	} {
+		got := cntCount(cntUser("", "u1", `"the brief"`), first, result, tc.counted)
+		if bound, ok := got.Bound(); !ok || bound != tc.bound {
+			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, tc.bound)
 		}
 	}
 }
@@ -864,13 +952,13 @@ func TestANewestRestartWhoseUUIDDoesNotReadLeavesNoCount(t *testing.T) {
 func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 	t.Parallel()
 	// restarted is a thread that restarted at b1, and was counted since.
-	restarted := []string{rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`), rcAnchor("u4", "u5", "m2", 1000, 0, 0, 40)}
-	cleared := strings.Replace(rcAnchor("u5", "u6", "m3", 1000, 0, 0, 50), `"role":"assistant",`,
+	restarted := []string{cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40)}
+	cleared := strings.Replace(cntAnchor("u5", "u6", "m3", 1000, 0, 0, 50), `"role":"assistant",`,
 		`"role":"assistant","context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919",`+
 			`"cleared_tool_uses":3,"cleared_input_tokens":9000}]},`, 1)
 	saved, _ := claudePrecompact(ctSession)
-	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(rcArchive(t, rcThread(restarted...),
+	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
 		tarMember{h: tar.Header{Name: saved[0], Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})), ctSession,
 		"2.1.322")
 	if err != nil {
@@ -880,13 +968,13 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 		count *sandbox.ResumedCount
 		mark  sandbox.CountMark
 	}{
-		"compacted": {count: rcCount(restarted[:4]...), mark: sandbox.CountCompacted},
-		"usage": {count: rcCount(slices.Concat(restarted,
-			[]string{rcReply("u5", "u6", "m3", "claude-sonnet-4-5", `null`, rcText)})...), mark: sandbox.CountUsage},
-		"cleared": {count: rcCount(slices.Concat(restarted, []string{cleared})...), mark: sandbox.CountCleared},
-		"pdf": {count: rcCount(slices.Concat(restarted,
-			[]string{rcAttachment("u5", "u6", `{"type":"message_pdf_reads","pages":12}`)})...), mark: sandbox.CountPDF},
-		"media": {count: rcCount(slices.Concat(restarted, []string{rcUser("u5", "u6", rcImage)})...),
+		"compacted": {count: cntCount(restarted[:4]...), mark: sandbox.CountCompacted},
+		"usage": {count: cntCount(slices.Concat(restarted,
+			[]string{cntReply("u5", "u6", "m3", "claude-sonnet-4-5", `null`, cntText)})...), mark: sandbox.CountUsage},
+		"cleared": {count: cntCount(slices.Concat(restarted, []string{cleared})...), mark: sandbox.CountCleared},
+		"pdf": {count: cntCount(slices.Concat(restarted,
+			[]string{cntAttachment("u5", "u6", `{"type":"message_pdf_reads","pages":12}`)})...), mark: sandbox.CountPDF},
+		"media": {count: cntCount(slices.Concat(restarted, []string{cntUser("u5", "u6", cntImage)})...),
 			mark: sandbox.CountMedia},
 		"the take's precompact": {count: precompacted, mark: sandbox.CountPrecompact},
 	} {
@@ -918,18 +1006,18 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	// handed is the session the capture's job took up, which restarted at b1;
 	// work is that job's own, an image after its anchor; restarting is the same
 	// work restarting the session at b2.
-	handed := []string{rcUser("", "u1", `"the brief"`), rcAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
-		rcBoundary("b1"), rcUser("b1", "u4", `"the summary"`), rcAnchor("u4", "u5", "m2", 1000, 0, 0, 40)}
-	work := []string{rcUser("u5", "u6", `"the job's brief"`), rcAnchor("u6", "u7", "m3", 1200, 0, 0, 40),
-		rcUser("u7", "u8", rcImage)}
-	restarting := []string{rcUser("u5", "u6", `"the job's brief"`), rcAnchor("u6", "u7", "m3", 1200, 0, 0, 40),
-		rcBoundary("b2"), rcUser("b2", "u9", `"the summary"`), rcAnchor("u9", "u10", "m4", 900, 0, 0, 40),
-		rcUser("u10", "u11", rcImage)}
+	handed := []string{cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
+		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40)}
+	work := []string{cntUser("u5", "u6", `"the job's brief"`), cntAnchor("u6", "u7", "m3", 1200, 0, 0, 40),
+		cntUser("u7", "u8", cntImage)}
+	restarting := []string{cntUser("u5", "u6", `"the job's brief"`), cntAnchor("u6", "u7", "m3", 1200, 0, 0, 40),
+		cntBoundary("b2"), cntUser("b2", "u9", `"the summary"`), cntAnchor("u9", "u10", "m4", 900, 0, 0, 40),
+		cntUser("u10", "u11", cntImage)}
 	// captured is what the take's meter counts a kept archive of lines at;
 	// collected what the read that collects a job counts its box's copy at.
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(rcArchive(t, rcThread(lines...))), ctSession,
+		_, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
 			"2.1.322")
 		if err != nil || count == nil || count.Mark != sandbox.CountMedia {
 			t.Fatalf("the capture counts %+v (%v), want the mark media", count, err)
@@ -938,7 +1026,7 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	}
 	collected := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
-		box, paths := rcBox(rcThread(lines...), nil)
+		box, paths := cntBox(cntThread(lines...), nil)
 		return ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
 			Release: "2.1.322", Count: true}).Count
 	}
@@ -950,8 +1038,8 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	if newest, read := kept.Restarted(); read {
 		basis = &newest
 	}
-	next := slices.Concat(handed, work, []string{rcUser("u8", "n1", `"the next brief"`),
-		rcAnchor("n1", "n2", "m5", 1500, 0, 0, 40)})
+	next := slices.Concat(handed, work, []string{cntUser("u8", "n1", `"the next brief"`),
+		cntAnchor("n1", "n2", "m5", 1500, 0, 0, 40)})
 	for name, tc := range map[string]struct {
 		basis     *string
 		count     *sandbox.ResumedCount
@@ -963,8 +1051,8 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 		"the job continuing it, its newest restart unchanged at its collection": {basis: basis,
 			count: collected(next...)},
 		"the job continuing it, a restart of its own at its collection": {basis: basis,
-			count: collected(slices.Concat(next, []string{rcBoundary("b3"), rcUser("b3", "n4", `"the summary"`),
-				rcAnchor("n4", "n5", "m6", 800, 0, 0, 40)})...), restarted: true},
+			count: collected(slices.Concat(next, []string{cntBoundary("b3"), cntUser("b3", "n4", `"the summary"`),
+				cntAnchor("n4", "n5", "m6", 800, 0, 0, 40)})...), restarted: true},
 	} {
 		if got := sandbox.RestartedSince(tc.basis, tc.count); got != tc.restarted {
 			newest, read := tc.count.Restarted()
@@ -983,7 +1071,7 @@ func benchLines(plain int) []byte {
 		"or have an they which one you were all we her she there would their will when who him been has more " +
 		"if no out so said what up its about than into them can only other new some could time these two may")
 	var b bytes.Buffer
-	b.WriteString(rcUser("", "u0", `"the brief"`) + "\n")
+	b.WriteString(cntUser("", "u0", `"the brief"`) + "\n")
 	seed, n := uint64(1), 0
 	for b.Len() < plain {
 		var text strings.Builder
@@ -992,9 +1080,9 @@ func benchLines(plain int) []byte {
 			text.WriteString(words[seed>>58%uint64(len(words))] + " ")
 		}
 		parent := fmt.Sprintf("u%d", n)
-		b.WriteString(rcReply(parent, fmt.Sprintf("u%d", n+1), fmt.Sprintf("m%d", n), "claude-sonnet-4-5",
-			rcUsage(100, 10, 50_000, 300), `[{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}]`) + "\n")
-		b.WriteString(rcUser(fmt.Sprintf("u%d", n+1), fmt.Sprintf("u%d", n+2),
+		b.WriteString(cntReply(parent, fmt.Sprintf("u%d", n+1), fmt.Sprintf("m%d", n), "claude-sonnet-4-5",
+			cntUsage(100, 10, 50_000, 300), `[{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}]`) + "\n")
+		b.WriteString(cntUser(fmt.Sprintf("u%d", n+1), fmt.Sprintf("u%d", n+2),
 			`[{"type":"tool_result","tool_use_id":"toolu_1","content":"`+text.String()+`"}]`) + "\n")
 		n += 2
 	}

@@ -4042,6 +4042,20 @@ var ACTIONS = {
 		],
 		scope: "person"
 	},
+	remove_work_item: {
+		args: ["item", "subtree"],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	move_work_item: {
+		args: ["item", "project"],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: ["work_search"],
+		scope: "person"
+	},
 	restore_work_item: {
 		args: ["item"],
 		domain: "tracker",
@@ -4179,6 +4193,7 @@ var ACTIONS = {
 	},
 	save_work_view: {
 		args: [
+			"id",
 			"container",
 			"name",
 			"type",

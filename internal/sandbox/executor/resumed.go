@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"crypto/sha256"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -66,6 +67,16 @@ import (
 // restart the rule flags, since a resume hands its model nothing before any of
 // them, and is named beside every mark but where the thread was not read
 // whole, or not by the rules of its release ([resumedReading.count]).
+//
+// WHAT IT KEEPS FROM LINE TO LINE IS FIXED, whatever a line holds: its counts
+// and marks, the digest of its run's message id, and its newest restart's uuid
+// only where that uuid is an identity ([sandbox.RestartIDMaxBytes]). Never a
+// string the thread chose the length of: a reply's id and a record's uuid are
+// whatever their line holds, up to [threadLineMax], and a string the decode
+// reads as U+FFFD a byte grows threefold, so the count kept 48 MiB of two such
+// lines across the whole walk beside every reading the one walk holds
+// ([threadChain], THE COLLECTION'S PASS), past the most a read of one thread
+// holds.
 
 // claudeCountFloor is the oldest Claude Code release whose thread a count is
 // read off: 2.1.310, the older of the two releases (2.1.310 and 2.1.322) whose
@@ -139,11 +150,16 @@ func lineMarksOf(raw []byte) countMarks {
 // lies after its place, and answers the bound or the mark ([resumedReading.count]).
 type resumedReading struct {
 	// tokens is the anchor's four counts; run the charge since the first
-	// record of the newest run of one message id (runID), outside that
-	// record's own; tail the charge of everything after the anchor's place.
-	// runMarks and tailMarks are the line marks carried as run and tail are.
-	tokens, run, tail   int64
-	runID               string
+	// record of the newest run of one message id (runID, that id's digest),
+	// outside that record's own; tail the charge of everything after the
+	// anchor's place. runMarks and tailMarks are the line marks carried as run
+	// and tail are.
+	tokens, run, tail int64
+	// runID is the digest of the newest run's message id, never the id: it
+	// tells two ids apart as the ids do, as the chain's interning of reply ids
+	// does ([threadChain]), and keeps 32 bytes of an id of any length. No id
+	// is empty here, and no id's digest is the zero a reading starts with.
+	runID               [sha256.Size]byte
 	runMarks, tailMarks countMarks
 	// thread is the thread marks since the last boundary (a usage that does
 	// not read, a clearing); compacted is a boundary with no anchoring reply
@@ -155,13 +171,15 @@ type resumedReading struct {
 	// that ended on an error.
 	unread bool
 
-	// restarts follows the thread's restarts by the layer's rule, and newest
-	// is the uuid of the newest line it flagged, and what reading it met;
-	// flagged whether any was.
-	restarts threadRestarts
-	newest   string
-	newestOf error
-	flagged  bool
+	// restarts follows the thread's restarts by the layer's rule; flagged is
+	// whether it flagged any line, and newest the uuid of the newest it
+	// flagged where newestReads says that uuid is an identity
+	// ([resumedReading.restart]), "" where it is not: a uuid past
+	// [sandbox.RestartIDMaxBytes] is never kept.
+	restarts    threadRestarts
+	newest      string
+	newestReads bool
+	flagged     bool
 }
 
 var _ threadReading = (*resumedReading)(nil)
@@ -172,8 +190,11 @@ func (r *resumedReading) line(l threadLine) {
 		return
 	}
 	if r.restarts.See(l.Head) {
-		r.newest, r.newestOf = l.UUID()
 		r.flagged = true
+		r.newest, r.newestReads = "", false
+		if uuid, err := l.UUID(); err == nil && uuid != "" && len(uuid) <= sandbox.RestartIDMaxBytes {
+			r.newest, r.newestReads = uuid, true
+		}
 	}
 	if !l.Head.Chained() {
 		return
@@ -184,7 +205,7 @@ func (r *resumedReading) line(l threadLine) {
 		// and nothing before it counts. Its preserved segment sits before it
 		// in the file, so until a counted reply follows, the count is a mark.
 		*r = resumedReading{chained: true, compacted: true, restarts: r.restarts, newest: r.newest,
-			newestOf: r.newestOf, flagged: r.flagged}
+			newestReads: r.newestReads, flagged: r.flagged}
 		return
 	}
 	charge, marks := sandbox.ClaudeCharge(len(l.Raw)+1), lineMarksOf(l.Raw)
@@ -214,8 +235,8 @@ func (r *resumedReading) line(l threadLine) {
 		r.after(charge, marks)
 		return
 	}
-	if id != r.runID {
-		r.runID, r.run, r.runMarks = id, 0, 0
+	if digest := sha256.Sum256([]byte(id)); digest != r.runID {
+		r.runID, r.run, r.runMarks = digest, 0, 0
 	} else {
 		r.run += charge
 		r.runMarks |= marks
@@ -287,12 +308,13 @@ func (r *resumedReading) count(callers countMarks) *sandbox.ResumedCount {
 
 // restart is the uuid of the newest line the restart rule flagged, "" where it
 // flagged none, and nil where that uuid does not read: an error, empty, or
-// longer than [sandbox.RestartIDMaxBytes], which is no identity.
+// longer than [sandbox.RestartIDMaxBytes], which is no identity
+// ([resumedReading.line] keeps none of it).
 func (r *resumedReading) restart() *string {
 	switch {
 	case !r.flagged:
 		return new("")
-	case r.newestOf != nil || r.newest == "" || len(r.newest) > sandbox.RestartIDMaxBytes:
+	case !r.newestReads:
 		return nil
 	}
 	return new(r.newest)

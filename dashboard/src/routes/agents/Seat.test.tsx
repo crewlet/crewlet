@@ -1668,10 +1668,20 @@ const inboxPage = (n: number, more: boolean) => ({
   ...(more ? { next_cursor: "c1" } : {}),
 });
 
-// THE INBOX'S OWN COUNT, NEVER THE RECORD'S `unread`. That list holds the
-// EXCEPTIONS below the read mark — notices marked unread again — so a person
-// with fifty waiting read "Unread 0" beside a sidebar badge saying 50+.
-test("your own day's Unread is the sidebar badge's count, and the day is yours", async () => {
+/** A `decisions` answer of n things waiting on the person, capped or not. */
+const waitingOn = (handle: string, n: number, capped = false) => ({
+  handle,
+  items: [],
+  total: n,
+  answerable: 0,
+  capped,
+});
+
+// WHAT WAITS ON THEM, THE BADGE'S OWN COUNT: never the record's `unread`, which
+// holds the EXCEPTIONS below the read mark (a person with fifty waiting read
+// "Unread 0" beside a badge saying 50+), and never their unread updates, which
+// ask nothing of them (fifty mentions read as fifty things to do).
+test("your own day's Waiting is the sidebar badge's count, and the day is yours", async () => {
   mount("#/company/org/seats/jane", {
     shell: true,
     answers: {
@@ -1684,16 +1694,18 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
         acts: [],
       },
       inbox: inboxPage(50, true),
+      decisions: waitingOn("jane", 50, true),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("50+"));
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("50+"));
   // THE SIDEBAR'S INBOX ROW, which carries the same figure as its badge.
   const nav = document.querySelector(".crewlet-sidebar-nav") as HTMLElement;
   const row = within(nav).getByRole("link", { name: /Inbox/ });
   expect(row.textContent).toContain("50+");
-  // ONE READING: the frame's, never a second read of the same inbox.
-  expect(askedFor("inbox")).toHaveLength(1);
+  // ONE READING: the frame's, never a second read of what waits.
+  expect(askedFor("decisions").filter((a) => !a.params.handle)).toHaveLength(1);
+  expect(askedFor("decisions").filter((a) => a.params.handle)).toHaveLength(0);
   expect(screen.getByText("Your day")).toBeTruthy();
   const day = screen.getByText("Your day").closest(".prof-day-head") as HTMLElement;
   expect(within(day).getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("#/inbox");
@@ -1728,7 +1740,7 @@ test("your own seat points to your Account, and a colleague's does not", async (
   expect(screen.queryByRole("heading", { name: "Your account" })).toBeNull();
 });
 
-test("an operator reading a colleague's day asks that colleague's inbox", async () => {
+test("an operator reading a colleague's day asks what waits on that colleague", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
       viewer: {
@@ -1739,14 +1751,16 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
         acts: [],
       },
       inbox: (p: Record<string, unknown>) =>
-        p.handle === "jane" ? inboxPage(7, false) : inboxPage(0, false),
+        p.handle === "jane" ? inboxPage(30, true) : inboxPage(0, false),
+      decisions: (p: Record<string, unknown>) =>
+        p.handle === "jane" ? waitingOn("jane", 7) : waitingOn("cto", 0),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("7"));
-  expect(askedFor("inbox").map((a) => a.params.handle)).toContain("jane");
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("7"));
+  expect(askedFor("decisions").map((a) => a.params.handle)).toContain("jane");
   expect(screen.getByText("Their day")).toBeTruthy();
-  expect(tile("Unread").textContent).toContain("waiting on them");
+  expect(tile("Waiting").textContent).toContain("waiting on them");
 });
 
 /** The chart with SWE's charter replaced. */
@@ -3471,6 +3485,11 @@ test("a parked run is answered from its seat with its context and options", asyn
               recommended: "three",
               role: "contributor",
             },
+            // PUT TO THE READER, as the engine states it.
+            put_to: ["jane"],
+            put_to_you: true,
+            may_answer: true,
+            needs_you: true,
           },
         ],
       },

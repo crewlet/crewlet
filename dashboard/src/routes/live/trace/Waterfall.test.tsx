@@ -239,10 +239,7 @@ describe("an executor's live output from its box", () => {
         }),
         "The coding sandbox isn’t set up for this. An administrator needs to fix its setup.",
       ],
-      [
-        new QueryError("query_failed"),
-        "The engine failed to answer. You can check logs for the details.",
-      ],
+      [new QueryError("query_failed"), "This didn’t load: the engine failed to answer."],
     ] as const) {
       mount(PARKED, failure, { selected: "run:L1" });
       expect(await screen.findByText(words)).toBeTruthy();

@@ -29,10 +29,12 @@ describe("the spend window and split", () => {
     expect(parseUrlPatch({ window: custom }, keys).ok).toBe(true);
   });
 
-  test("write the screen's own fallback as a clear, as its controls do", () => {
+  test("write the split's fallback as a clear, and the window's in full", () => {
+    // THE WINDOW IS KEPT FOR ITS READER: an address without one opens their
+    // last choice, so the fallback is said like any other window.
     expect(parseUrlPatch({ window: "30d", group: "phase" }, keys)).toEqual({
       ok: true,
-      value: { window: null, group: null },
+      value: { window: "30d", group: null },
     });
   });
 

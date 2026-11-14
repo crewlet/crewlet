@@ -1262,3 +1262,68 @@ func TestTwoFieldAxesDrawASwimlaneBoard(t *testing.T) {
 			"and ui", lanes)
 	}
 }
+
+// A PARENT COLUMN IS HEADED BY ITS PARENT, never by the id it is keyed on.
+//
+// The column's key is the parent's id, a uuid nobody reads, and a board or a
+// list grouped by parent headed every column with one — so nothing on screen
+// said whose subtasks a column held. The heading is the parent's key and title,
+// read off the parent's own row: the parent itself is a root, and a filter
+// that admits only subtasks still names it.
+func TestAParentColumnIsHeadedByItsParent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i, spec := range []struct{ id, key, title string }{
+		{"epic", "ENG-1", "Rotate the build keys"},
+		{"sub-a", "ENG-2", "Revoke the old key"},
+		{"sub-b", "ENG-3", "Mint the new key"},
+		{"lone", "ENG-4", "Retry PXE boot"},
+	} {
+		task := newTask(spec.id)
+		task.Key, task.Title = spec.key, spec.title
+		if _, err := r.writer.CreateTask(t.Context(), "op-create-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", spec.id, err)
+		}
+		r.drain()
+	}
+	epic := "epic"
+	for _, id := range []string{"sub-a", "sub-b"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-adopt-"+id, id, "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Parent: &epic},
+			worklet.ChangeReparented, nil); err != nil {
+			t.Fatalf("adopt %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "parent", "subtasks": "separate",
+		// ONLY THE SUBTASKS: the parent's own row is not in the answer, and
+		// its column is headed from that row all the same.
+		"has_parent": "true",
+	})
+	column := groupOf(t, answer, "epic")
+	if column.Label != "ENG-1 · Rotate the build keys" {
+		t.Fatalf("the epic's column is headed %q, want its key and title",
+			column.Label)
+	}
+	if column.Count != 2 {
+		t.Fatalf("the epic's column counts %d, want its 2 subtasks", column.Count)
+	}
+
+	// AND AS THE SECOND AXIS: a band of a band is headed the same way.
+	answer = r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status", "group_by2": "parent",
+		"subtasks": "separate",
+	})
+	todo := groupOf(t, answer, string(worklet.StatusTodo))
+	var headed bool
+	for _, lane := range todo.Subgroups {
+		if lane.Key == "epic" {
+			headed = lane.Label == "ENG-1 · Rotate the build keys"
+		}
+	}
+	if !headed {
+		t.Fatalf("the epic's lane is not headed by its key and title: %+v", todo.Subgroups)
+	}
+}

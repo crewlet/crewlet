@@ -91,14 +91,17 @@ for its answer; a proxy set below fifty cuts those answers off with a 504.
 Nothing is lost when it does — the node finishes the gesture whatever happens
 to the connection, and both clients read an answer the engine did not write
 as one that never arrived, keeping the operation id to finish it with — but
-the operator then has to finish it to see what it did. The one route whose
-work grows with what it reads — a check of a Gitlet node's copy of a repository
-(`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte — needs no
-longer timeout: it runs on the node's own time and answers within a quarter
-of a second — `200` with a small copy's report, `202` for a check still
-running — and a running check's outcome is read with
-`GET /gitlet/repos/{name}/verify/{id}` until it ends
-([API reference](../reference/api-endpoints.md#post-gitletreposnameverify)).
+the operator then has to finish it to see what it did. The two routes whose
+work outlasts that — a check of a Gitlet node's copy of a repository
+(`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte, and a
+model's test (`POST /llm/providers/{key}/check`), up to three minutes of
+harness runs — need no longer timeout: each runs on the node's own time and
+answers within seconds — `200` with what a quick one found, `202` for one still
+running — and a running one's outcome is read with
+`GET /gitlet/repos/{name}/verify/{id}` or `GET /llm/providers/{key}/check`
+until it ends
+([API reference](../reference/api-endpoints.md#post-gitletreposnameverify),
+[and for a model](../reference/api-endpoints.md#post-llmproviderskeycheck)).
 
 ### Every machine's clock
 
@@ -1331,7 +1334,7 @@ crewlet run -config crewlet.yaml    # engine + embedded API on :80
 
 (`-api-port 8000` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:8000/webhooks/gitlab`). **Port 80 buys exactly one thing**: a webhook URL with no `:port` suffix, which matters when the address is pasted into a vendor's UI by hand or has to survive a proxy that rewrites ports. It costs a privileged bind — as a non-root process on Linux that needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or `CAP_NET_BIND_SERVICE`.
 
-The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-code.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
+A company with no inbound webhook at all — chat on Mattermost or the engine's own, and no code host or tracker of a vendor's — gets nothing for the privileged bind: the bundled example, `examples/nimbus.config.yaml`, runs every surface on the engine itself and takes `api.port: 8000`. A company that registers a vendor's webhooks, whose address gets pasted into that vendor's UI, is the one port 80 pays for. Either way the seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and fails its boot at once, naming the address, before it has recovered anything.
 

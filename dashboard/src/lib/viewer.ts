@@ -51,7 +51,7 @@ import {
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, CHATLET, DOCLET, GITLET, WORKLET, holds } from "./access.ts";
-import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
@@ -142,6 +142,15 @@ export interface ViewerState {
    */
   asking: boolean;
   /**
+   * Why the viewer read failed, where it did and nothing answered before: a
+   * screen that needs to know who the reader is says the read failed, with its
+   * Try again, rather than drawing a day that belongs to nobody. Null once
+   * anything has answered, and while the first read is out.
+   */
+  failed: QueryErrorCode | null;
+  /** Why that read was refused, beside `failed`: what `QueryState` names. */
+  failedRefusal: QueryRefusal | LogRefusal | null;
+  /**
    * Whether this caller may change the company DOCUMENT — the engine's own
    * answer, false for every credential a managed document does not list
    * as a writer (ADR-0030). Read by `lib/useWriteAccess.ts`.
@@ -202,14 +211,16 @@ export function rereadViewer(): void {
  * than a push, and a reconnect re-asks it.
  */
 function useViewerRead(): ViewerState {
-  const { data, loading, error, refetch } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  const { data, loading, error, refusal, refetch } = useQuery("viewer", undefined, {
+    pollMs: 300_000,
+  });
   useEffect(() => {
     rereads.add(refetch);
     return () => {
       rereads.delete(refetch);
     };
   }, [refetch]);
-  return useMemo(() => viewerState(data, loading, error), [data, loading, error]);
+  return useMemo(() => viewerState(data, loading, error, refusal), [data, loading, error, refusal]);
 }
 
 /**
@@ -222,6 +233,7 @@ function viewerState(
   data: Viewer | null,
   loading: boolean,
   error: QueryErrorCode | null,
+  refusal: QueryRefusal | LogRefusal | null = null,
 ): ViewerState {
   const login = data?.login ?? "";
   const handle = data?.handle ?? "";
@@ -253,6 +265,8 @@ function viewerState(
     anonymous: !unknown && login === "",
     loading: unknown,
     asking: loading && data === null && error === null,
+    failed: data === null && error !== null ? error : null,
+    failedRefusal: data === null && error !== null ? refusal : null,
     configWriter: data?.config_writer ?? false,
     configManagedBy: data?.config_managed_by ?? [],
     assistant: assistantUnavailable(data?.assistant),

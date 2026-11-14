@@ -26,8 +26,8 @@
  * every screen carry the arithmetic of "which of these three wins".
  */
 
-import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useCallback, useMemo } from "react";
+import { useKeptRange } from "~/lib/keptRange.ts";
 import { fmtMinute, parseUTC } from "~/lib/format.ts";
 import { dateTimeFormat, knownZone, type DateShape } from "~/lib/formatters.ts";
 
@@ -92,6 +92,12 @@ export function spanOf(w: Window): number {
 
 /** What a screen will accept from the URL, and offer in its control. */
 export interface Offer {
+  /**
+   * Whose choice this is: the name the reader's last chosen window is kept
+   * under (`lib/keptRange.ts`), so the screen opens on it when the address
+   * names none. Screens asking one question share a name and so a choice.
+   */
+  screen: string;
   /** Which of the named durations this screen has. */
   ranges: readonly Range[];
   /** Whether a reader may name two instants of their own. */
@@ -431,14 +437,21 @@ function shiftDay(label: string, n: number): string {
  * the clock so its newest row is the newest row.
  */
 export function useTimeRange(now: number, offer: Offer, align = true): TimeRange {
-  const [raw, setRaw] = useParam("window", offer.fallback, "section");
-  const { ranges, custom, fallback, buckets, today, zone, customDays } = offer;
+  const { screen, ranges, custom, fallback, buckets, today, zone, customDays } = offer;
+  // WHAT IS KEPT IS A NAMED WINDOW THIS SCREEN HAS, and never an interval:
+  // see `lib/keptRange.ts`.
+  const named = useCallback(
+    (word: string) =>
+      (ranges as readonly string[]).includes(word) || (today === true && word === TODAY),
+    [ranges, today],
+  );
+  const [raw, setRaw] = useKeptRange("window", screen, fallback, named, "section");
   // Rebuilt from the fields rather than held by identity: every caller writes
   // its offer inline, so a new object arrives on every render and an offer in
   // the dependency list would rebuild the window on every one of them.
   const settled = useMemo(
-    () => ({ ranges, custom, fallback, buckets, today, zone, customDays }),
-    [ranges, custom, fallback, buckets, today, zone, customDays],
+    () => ({ screen, ranges, custom, fallback, buckets, today, zone, customDays }),
+    [screen, ranges, custom, fallback, buckets, today, zone, customDays],
   );
   const window = parseWindow(raw, settled, now);
   const bucket = bucketFor(window, buckets);
@@ -460,7 +473,7 @@ export function useTimeRange(now: number, offer: Offer, align = true): TimeRange
       ...windowEdges(w, anchor, step, customDays ? { zone } : undefined),
       bucket,
       offer: settled,
-      set: (next: Window) => setRaw(windowParam(next)),
+      set: (next: Window) => setRaw(windowParam(next), isRange(next) || next.today === true),
     };
   }, [key, settled, anchor, step, bucket, setRaw, customDays, zone]);
 }

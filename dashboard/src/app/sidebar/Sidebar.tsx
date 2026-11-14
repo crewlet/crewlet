@@ -60,11 +60,11 @@
  * not locked as a whole: Settings draws its locks per section, in its column,
  * and is open to every reader through Spend's readings.
  *
- * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
- * work's count and the pinned views are Worklet's answers, so a reader without
- * Worklet asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
- * [PinnedSection]): a figure beside a lock would be a refusal drawn as a
- * number.
+ * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: My work's count and the
+ * pinned views are Worklet's answers, so a reader without Worklet asks none of
+ * them (`lib/useQueueCount.ts`, [PinnedSection]): a figure beside a lock would
+ * be a refusal drawn as a number. The Inbox's badge is everybody's: what waits
+ * on the reader (`lib/useInboxCounts.ts`).
  *
  * # Two shapes from one list
  *
@@ -115,8 +115,7 @@ import {
   workspaceOf,
   type WorkspaceRow,
 } from "~/app/nav.ts";
-import { useCompanyName, useServicesKnown, useServicesRun } from "~/lib/services.ts";
-import { useNeedsYouCount } from "~/lib/decisions.ts";
+import { useCompanyName, useServicesRun } from "~/lib/services.ts";
 import { groupLock, lockReason } from "~/lib/access.ts";
 import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -194,8 +193,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const inbox = useInboxCounts();
   const chat = useChatAttention();
   const runs = useServicesRun(turnedAway);
-  const known = useServicesKnown();
-  const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
   const shown = (place: WorkspaceRow["place"]) =>
     WORKSPACES.filter((ws) => ws.place === place && workspaceShown(ws, runs));
   const here = workspaceOf(route.path);
@@ -224,15 +221,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavItemProps, "badge" | "count">>> = {
-    // WHERE THE COMPANY RUNS NO WORKLET no notice reaches the Inbox,
-    // and its badge counts what still does: what waits on the reader's
-    // decision ([useNeedsYouCount]).
-    inbox: runs.tracker
-      ? inbox.waiting !== null && inbox.waiting > 0
-        ? { badge: { value: inboxFigure(inbox), label: "unread, waiting on you" } }
-        : {}
-      : needsYou !== null && needsYou > 0
-        ? { badge: { value: String(needsYou), label: "waiting on your decision" } }
+    // WHAT WAITS ON THE READER AND NOTHING ELSE, whatever the company runs
+    // (`lib/useInboxCounts.ts`): the asks and runs put to them, the stopped
+    // seats and the conditions they resolve. A mention or an update that only
+    // informs is listed in the Inbox and counted here by nothing.
+    inbox:
+      inbox.waiting !== null && inbox.waiting > 0
+        ? { badge: { value: inboxFigure(inbox), label: "waiting on you" } }
         : {},
     // WHAT WAITS ON THE READER IN CHATLET: the unread messages that name
     // them, and every unread direct message, in the rooms they have not muted

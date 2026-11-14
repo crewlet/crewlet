@@ -244,7 +244,6 @@ func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	// WHAT THE MENU LEAVES OUT, each on the record.
 	unlisted := map[string]string{
 		"routing_unit": "a routing move is the exception the item's own rail names; a board of it is a board of exceptions",
-		"parent":       "a tree is what the subtasks panel draws, not a set of columns",
 		"due:day":      "a day is the calendar's axis, and that shape is where a due date is read",
 		"due:week":     "a week is the timeline's axis",
 		"start:week":   "likewise the timeline's",

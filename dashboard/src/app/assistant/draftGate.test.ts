@@ -238,6 +238,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: an agent's robot token pasted in its sheet, a credential and never a draft",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",
   "routes/worklet/NewTask.tsx": "modal: the one sheet every New task opens",
+  "routes/worklet/taskMenu.tsx":
+    "modal: a permanent delete's reason and typed key, a person's own confirmation and never a draft, and a move's project, in their dialogs",
   "routes/settings/SecretDialog.tsx":
     "modal: a sealed secret's value, a credential and never a draft",
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",

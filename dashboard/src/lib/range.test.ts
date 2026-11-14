@@ -30,7 +30,7 @@ import {
 import type { Offer } from "./range.ts";
 
 /** A screen that offers everything, so a case can isolate one rule. */
-const ANY: Offer = { ranges: RANGES, custom: true, fallback: "7d" };
+const ANY: Offer = { screen: "test", ranges: RANGES, custom: true, fallback: "7d" };
 
 describe("the window a URL asked for", () => {
   it("takes the values the control offers", () => {
@@ -51,7 +51,12 @@ describe("the window a URL asked for", () => {
     // screen has, and a client-buffered strip is not one of them. Answering
     // it would put a heading the control cannot show over the rows, and the
     // reader could never get back to it.
-    const strip: Offer = { ranges: ["15m", "1h", "6h"], custom: false, fallback: "1h" };
+    const strip: Offer = {
+      screen: "test",
+      ranges: ["15m", "1h", "6h"],
+      custom: false,
+      fallback: "1h",
+    };
     expect(parseWindow("90d", strip)).toBe("1h");
     expect(parseWindow("6h", strip)).toBe("6h");
   });
@@ -433,7 +438,13 @@ describe("bars over a window this client holds", () => {
  * count a turn the engine charged to yesterday.
  */
 describe("today", () => {
-  const TODAY_OFFER: Offer = { ranges: ["7d", "30d"], custom: false, fallback: "7d", today: true };
+  const TODAY_OFFER: Offer = {
+    screen: "test",
+    ranges: ["7d", "30d"],
+    custom: false,
+    fallback: "7d",
+    today: true,
+  };
 
   it("cuts at midnight on the company's clock, not the browser's", () => {
     // 2026-09-22 20:00 UTC is already the 23rd in Tokyo.

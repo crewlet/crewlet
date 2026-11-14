@@ -15,11 +15,14 @@ import { Card, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { plural } from "~/lib/format.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { runningShortList } from "~/lib/turns.ts";
 import { LiveDot, LiveRoom, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { WidgetQuery } from "./board/kit.tsx";
+
+/** How many working seats with no named turn the card names before it counts the rest. */
+const NAMED_SEATS = 3;
 
 export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: number }) {
   const org = useOrg();
@@ -66,9 +69,11 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
             }}
           />
         ) : shown.length === 0 ? (
-          // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: an executor is
-          // out in its box for a seat whose turn record has not reached the projection. An
-          // empty list under a count of them would read as a list that failed.
+          // WORKING, AND ON NO TURN THE ENGINE HAS NAMED: the seats are said by
+          // name, each a way to its own page, which says what it is doing.
+          // It promised the turns would appear here "once they are" named,
+          // which a seat whose turn ended without its record reaching the
+          // projection never is, so the promise stood for hours.
           <WidgetQuery
             error={null}
             loading={false}
@@ -76,7 +81,33 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
             empty={{
               headingLevel: "none",
               title: `${plural(working.length, "seat")} working`,
-              hint: "Their turns are not named yet. They appear here once they are.",
+              hint: (
+                <>
+                  {"The engine reports no turn for "}
+                  {working.slice(0, NAMED_SEATS).map((row, i) => {
+                    const name = index.byHandle.get(row.handle ?? "")?.name ?? row.role;
+                    return (
+                      <span key={row.id}>
+                        {i > 0
+                          ? i === Math.min(working.length, NAMED_SEATS) - 1
+                            ? " and "
+                            : ", "
+                          : ""}
+                        <a
+                          className="t-link"
+                          href={href(seatPath({ handle: row.handle ?? "", name }))}
+                        >
+                          {name}
+                        </a>
+                      </span>
+                    );
+                  })}
+                  {working.length > NAMED_SEATS ? ` and ${working.length - NAMED_SEATS} more` : ""}
+                  {working.length === 1
+                    ? ". Its page says what it is doing."
+                    : ". Each one's page says what it is doing."}
+                </>
+              ),
             }}
           />
         ) : (

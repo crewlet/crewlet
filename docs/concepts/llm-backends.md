@@ -4045,7 +4045,14 @@ again at once, and one still limited parks again with the vendor's fresh word.
 
 **Test** runs `crewlet llm doctor`'s checks on the answering node, line by line,
 with or without the real completions; a test of an existing model is a real call
-on its sign-in and is remembered as any call is.
+on its sign-in and is remembered as any call is. With its real completions a
+test takes up to three minutes, longer than a proxy in front of the API should
+hold a request open, so it runs on that node's own time: the request is answered
+with the test running, and the page reads how it ended from whichever node its
+next request reaches, through the test's record in the coordination store. One
+test of a model runs at a time across the fleet; a person who asks while one
+runs is shown that one. A test whose node stops before it ends says so, and the
+person tests again.
 
 **Host logins are read, never made.** A model that signs in with a harness login
 shows that login's state on each node (`signed_in`, `signed_out` or `unknown`,

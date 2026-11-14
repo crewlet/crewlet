@@ -91,7 +91,14 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href, useOpenHere } from "~/app/router.tsx";
-import { alarmKindTitle, alarmsLink, namedAlarms } from "~/lib/alarms.ts";
+import {
+  alarmKindTitle,
+  alarmPlace,
+  alarmPlaceWords,
+  alarmsLink,
+  namedAlarms,
+} from "~/lib/alarms.ts";
+import { useAlarmPlaces } from "~/lib/useInboxCounts.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtElapsed, fmtUptime, relTime, tsKey } from "~/lib/format.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -454,12 +461,27 @@ function AlarmNames({
     refetch();
   }, [count, refetch]);
   const named = report.data ? namedAlarms(report.data.alarms ?? [], worst) : [];
+  // AND WHERE EACH IS FOR THIS READER: the count above is this node's table as
+  // it fires now, and the Inbox's Needs you lists an alarm once it has stood
+  // the grace (`lib/alarms.ts`' alarmPlace), so each says which it is.
+  const places = useAlarmPlaces();
   if (named.length > 0) {
     return (
       <Stack as="ul" gap={1}>
-        {named.map((alarm) => (
-          <li key={alarm.key}>{alarm.title}</li>
-        ))}
+        {named.map((alarm) => {
+          const where = alarmPlaceWords(alarmPlace(alarm.key, places));
+          return (
+            <li key={alarm.key}>
+              {alarm.title}
+              {where ? (
+                <>
+                  <br />
+                  <Text variant="caption">{where}</Text>
+                </>
+              ) : null}
+            </li>
+          );
+        })}
       </Stack>
     );
   }

@@ -173,7 +173,7 @@ var log = logging.Get("api.auth")
 // any future route merely starting with those letters — a /health-admin, a
 // /readyz-reset — on the day it was added.
 var unguardedExact = map[string]struct{}{
-	"/": {}, PathDashboard: {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
+	"/": {}, PathDashboard: {}, PathDashboardSlash: {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthLogout: {},
 }
 
@@ -264,6 +264,11 @@ const (
 	// Exempt for the shell's reason above, and named here because the
 	// exemption, the mount and every link to it must be one spelling.
 	PathDashboard = "/dashboard"
+	// PathDashboardSlash is the shell's address as people type it and tools
+	// append to it. It serves nothing of its own: it redirects to
+	// [PathDashboard], and is exempt as that is, since a redirect to a page
+	// that asks for a credential cannot itself require one.
+	PathDashboardSlash = PathDashboard + "/"
 
 	// PathAuthPrefix is the whole sign-in surface.
 	//

@@ -60,7 +60,6 @@ import {
   useToast,
   type BreadcrumbCrumb,
   type MenuEntry,
-  useMediaMatch,
 } from "@crewlethq/ui";
 import { EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
@@ -96,7 +95,6 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
-import { PHONE_BREAKPOINT } from "../layout.ts";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -111,6 +109,11 @@ export interface PageMenuEntry {
   description?: string;
   /** The glyph the inline control wears, so the menu reads the same. */
   icon?: ReactNode;
+  /**
+   * One answer of a choice the bar draws as a switch (a segmented control
+   * folded on a phone): the current one is checked, as the switch marks it.
+   */
+  checked?: boolean;
 }
 
 export function PageHeader({
@@ -431,23 +434,17 @@ export function SectionColumn({
     if (last && last.name === name) last.sections.push(s);
     else groups.push({ name, sections: [s] });
   }
-  // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION (the kit's
+  // ON A NARROW SCREEN THE COLUMN IS A PICKER NAMING THE SECTION (the kit's
   // `SectionFrame.Nav`, folded where the Shell says the frame is). Stacked
   // whole above the section it took about 520px, so on Nodes and Secrets the
   // section's own content began below the fold on every visit.
   //
-  // FOLDED WHERE THE READER CHOSE A SECTION, OPEN WHERE THEY HAVE NOT. A deep
-  // link (`#/settings/people`) arrives folded, which is the reason the picker
-  // folds at all: the section the link named starts right under it. But the
-  // workspace's own address names no section anybody picked (it is where the
-  // sidebar's Settings row lands), so arriving there on a phone opens the
-  // list: folded, a phone reader saw one row naming the first section and
-  // never the groups under it. The kit folds it again on every pick.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  // THE LANDING IS A SECTION'S OWN ADDRESS (Settings lands on Models), so only
-  // the bare landing opens the list: one asking for a flow or a view is a deep link.
-  const atRoot =
-    samePath(path, row.path) && [...query.keys()].every((key) => row.keep?.includes(key));
+  // FOLDED ON EVERY ARRIVAL, the workspace's own address included. That
+  // address is a section's (Settings lands on Models) and the one the
+  // sidebar's Settings row opens, so opening the list there put the page the
+  // reader asked for under twenty rows of other pages: Models began 1,340px
+  // down a phone. The folded control says what it is ("Section · Models" and
+  // a chevron), and the kit folds it again on every pick.
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
   // groups of rows, one of which is where the reader is, raised with a
@@ -462,7 +459,6 @@ export function SectionColumn({
           : undefined
       }
       location={href(path, kept)}
-      openOnArrival={phone && atRoot}
     >
       {groups.map((g) => {
         // BY THE ONE RULE every lock the navigation draws is decided by
@@ -726,6 +722,7 @@ export function PageMore({
     onSelect: e.onSelect,
     disabled: e.disabled,
     description: e.description,
+    ...(e.checked !== undefined ? { checked: e.checked } : {}),
   }));
   // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
   // whose own entries carry it, or for a tab that has not learned who reads

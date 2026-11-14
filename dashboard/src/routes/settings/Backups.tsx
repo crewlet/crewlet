@@ -23,7 +23,7 @@
 
 import { useState } from "react";
 import { uiletTone } from "~/ui/primitives.tsx";
-import { href } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import {
   Button,
   Card,
@@ -77,9 +77,22 @@ import { TakeBackupDialog } from "./TakeBackupDialog.tsx";
  *  and a copy this page took re-reads the answer the moment it lands. */
 const BACKUPS_POLL_MS = 60_000;
 
+/** The value of `take` that opens the Take a backup dialog on arrival: what a
+ *  notice that a backup is missing links to (`lib/attention.ts`). */
+export const TAKE_BACKUP = "backup";
+
 export function Backups({ domain }: { domain?: string }) {
   const health = useEngineHealth();
-  const [taking, setTaking] = useState(false);
+  // A LINK THAT ASKS FOR A BACKUP opens the dialog that takes one, so the
+  // notice's "Take a backup" is that gesture rather than a page to look for it
+  // on; closing it drops the ask from the address.
+  const [take, setTake] = useParam("take", "");
+  const [opened, setOpened] = useState(false);
+  const taking = opened || take === TAKE_BACKUP;
+  const setTaking = (open: boolean) => {
+    setOpened(open);
+    if (!open && take !== "") setTake("");
+  };
   const viewer = useViewer();
   // THE ENGINE DECIDES WHO READS THIS, and the refusal it answers is drawn
   // with the grant that would have admitted the reader: a page that guessed
@@ -132,7 +145,7 @@ export function Backups({ domain }: { domain?: string }) {
         )}
       </QueryState>
       <RetentionPanels thisNode={node} retention={retention} />
-      {taking && (
+      {taking && !refused && (
         <TakeBackupDialog
           node={node}
           suggested={suggestDir(

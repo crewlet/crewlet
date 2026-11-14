@@ -9,6 +9,7 @@
  */
 
 import { useMemo } from "react";
+import { splitPutOff, usePutOff } from "./putOff.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
 import type { AdvisorFinding, AdvisorNotice } from "~/protocol/advisor.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
@@ -66,6 +67,15 @@ function useReadsMcpAlarms(): boolean {
 }
 
 /**
+ * Whether this reader is told the platform notices (the advisor's, asked with
+ * the MCP alarms): an administrator's, so an alarm reaches only their Needs
+ * you. Where an alarm is for a reader the engine panel says by this.
+ */
+export function useReadsNotices(): boolean {
+  return useReadsMcpAlarms();
+}
+
+/**
  * The subjects the attention queue does not watch for this reader, for the
  * quiet band that says what it watched (`watchedIn`): the MCP servers, for a
  * reader who is not asked their alarms.
@@ -79,7 +89,27 @@ export function useUnwatched(): readonly Subject[] {
   ];
 }
 
+/**
+ * What needs a person, less the platform notices this reader put off on this
+ * browser (`lib/putOff.ts`): what every count and list of what waits reads.
+ */
 export function useAttention(): Attention[] {
+  return useAttentionSplit().shown;
+}
+
+/**
+ * The queue split into what is shown and the platform notices this reader put
+ * off, which the Inbox still lists, under "Put off", with the way back. A mark
+ * stops holding by itself once its time passes or the condition worsens.
+ */
+export function useAttentionSplit(): { shown: Attention[]; putOff: Attention[] } {
+  const queue = useAttentionQueue();
+  const { marks } = usePutOff();
+  const now = useNow();
+  return useMemo(() => splitPutOff(queue, marks, now), [queue, marks, now]);
+}
+
+function useAttentionQueue(): Attention[] {
   const now = useNow();
   const agents = useAgents();
   const budget = useOrgBudget();
