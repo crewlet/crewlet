@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -50,14 +49,13 @@ func readRepoFile(t *testing.T, parts ...string) []byte {
 // accepts, so this suite is what holds them to the models.
 // shippedCompanies is EVERY company example in the tree.
 //
-// A list rather than one filename, because a second example is exactly the
-// thing that rots: the one the docs open with gets read on every change and
-// the other one does not. Both are a promise someone copies and runs.
+// A list although it names one file, because it is what every case certifying
+// a shipped company ranges over — this file's, the schema's and the tool
+// servers' — so an example added to examples/ is held to all of them by one
+// line here rather than by each case remembering it.
 var shippedCompanies = []string{
-	// The reference: the full stack, on a metered key.
+	// The reference: the full stack, on Claude Code on a subscription.
 	"nimbus.company.yaml",
-	// The short path: Mattermost alone, on a harness subscription.
-	"nimbus-claude-code.company.yaml",
 }
 
 func TestShippedCompanyExamplesLoad(t *testing.T) {
@@ -114,38 +112,6 @@ func TestShippedCompanyExamplesLoad(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// THE TWO EXAMPLES ARE THE SAME COMPANY, and that is the whole point of
-// shipping two: a reader comparing them should see the stack change and
-// nothing else. If the org charts drift apart, the smaller one stops being
-// "the same company with less wired up" and becomes a second thing to
-// maintain — which is how the one nobody opens goes stale.
-func TestBothShippedExamplesModelTheSameCompany(t *testing.T) {
-	t.Parallel()
-	seats := func(name string) []string {
-		t.Helper()
-		data := readRepoFile(t, "examples", name)
-		cfg, err := ParseCompany(data)
-		if err != nil {
-			t.Fatalf("examples/%s no longer loads:\n%v", name, err)
-		}
-		o, err := cfg.Organization()
-		if err != nil {
-			t.Fatalf("examples/%s does not build an org:\n%v", name, err)
-		}
-		var out []string
-		for r := range o.AllRoles() {
-			out = append(out, r.Handle())
-		}
-		slices.Sort(out)
-		return out
-	}
-	full, subscription := seats("nimbus.company.yaml"), seats("nimbus-claude-code.company.yaml")
-	if !slices.Equal(full, subscription) {
-		t.Errorf("the two examples no longer model the same seats:\n  full: %v\n  subscription: %v",
-			full, subscription)
 	}
 }
 
@@ -338,17 +304,7 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 // and nothing else notices when it stops working.
 func TestBootstrapExampleLoads(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"nimbus.config.yaml", "nimbus-claude-code.config.yaml"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			bootstrapExampleLoads(t, name)
-		})
-	}
-}
-
-func bootstrapExampleLoads(t *testing.T, name string) {
-	t.Helper()
-	data := readRepoFile(t, "examples", name)
+	data := readRepoFile(t, "examples", "nimbus.config.yaml")
 	cfg, err := ParseBootstrap(data, NewResolver(exampleAnswers(t, data)))
 	if err != nil {
 		t.Fatalf("the shipped Tier A example does not load: %v", err)
@@ -412,31 +368,23 @@ func exampleAnswers(t *testing.T, data []byte) MapSource {
 	return answers
 }
 
-// THE SHIPPED PAIRS SAY NOTHING ACROSS THE TIERS: a founder copies both files
-// of a pair, so each loads, and the consequences only the two together have
-// ([TierWarnings]) are none — the reference company hosts code on one solo
-// member, where the files bucket is the one disk either way.
-func TestTheShippedPairsRaiseNoCrossTierWarning(t *testing.T) {
+// THE SHIPPED PAIR SAYS NOTHING ACROSS THE TIERS: a founder copies both files,
+// so each loads, and the consequences only the two together have
+// ([TierWarnings]) are none — the company hosts code on one solo member, where
+// the files bucket is the one disk either way.
+func TestTheShippedPairRaisesNoCrossTierWarning(t *testing.T) {
 	t.Parallel()
-	for boot, company := range map[string]string{
-		"nimbus.config.yaml":             "nimbus.company.yaml",
-		"nimbus-claude-code.config.yaml": "nimbus-claude-code.company.yaml",
-	} {
-		t.Run(boot, func(t *testing.T) {
-			t.Parallel()
-			data := readRepoFile(t, "examples", boot)
-			b, err := ParseBootstrap(data, NewResolver(exampleAnswers(t, data)))
-			if err != nil {
-				t.Fatalf("examples/%s does not load: %v", boot, err)
-			}
-			c, err := ParseCompany(readRepoFile(t, "examples", company))
-			if err != nil {
-				t.Fatalf("examples/%s does not load: %v", company, err)
-			}
-			if got := TierWarnings(b, c); len(got) != 0 {
-				t.Fatalf("the pair warns across the tiers: %+v", got)
-			}
-		})
+	data := readRepoFile(t, "examples", "nimbus.config.yaml")
+	b, err := ParseBootstrap(data, NewResolver(exampleAnswers(t, data)))
+	if err != nil {
+		t.Fatalf("examples/nimbus.config.yaml does not load: %v", err)
+	}
+	c, err := ParseCompany(readRepoFile(t, "examples", "nimbus.company.yaml"))
+	if err != nil {
+		t.Fatalf("examples/nimbus.company.yaml does not load: %v", err)
+	}
+	if got := TierWarnings(b, c); len(got) != 0 {
+		t.Fatalf("the pair warns across the tiers: %+v", got)
 	}
 }
 

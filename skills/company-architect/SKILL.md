@@ -285,12 +285,11 @@ reinvent them:
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
   a complete seven-seat company with GitLab + Mattermost + sandbox on
-  Worklet and Doclet, its model open models through
-  OpenCode on an OpenRouter key.
-- [`examples/nimbus-claude-code.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-code.company.yaml) —
-  the SAME seven seats with everything but chat removed: Mattermost alone, on
-  Claude Code with the founder's Claude plan rather than a metered key. The one
-  to copy when a founder has no tracker, wiki or code host yet.
+  Worklet and Doclet, its model Claude Code on the founder's Claude plan
+  rather than a metered key. For a founder with no code host yet, keep its
+  Mattermost, Worklet and Doclet halves and drop `integrations.gitlab` and
+  everything that names GitLab: the `gitlab` MCP server, the seats'
+  `mcp_env` and `GITLAB_TOKEN` entries, and the git-auth setup step.
 
 ## Invariants
 

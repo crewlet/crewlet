@@ -37,8 +37,8 @@ func TestTheDerivedHierarchyMatchesItsGoldenFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A glob that matched nothing would pass every case it did not find.
-	if len(inputs) < 5 || len(examples) < 2 {
-		t.Fatalf("found %d cases and %d examples, want at least 5 and 2", len(inputs), len(examples))
+	if len(inputs) < 5 || len(examples) < 1 {
+		t.Fatalf("found %d cases and %d examples, want at least 5 and 1", len(inputs), len(examples))
 	}
 	for _, input := range append(inputs, examples...) {
 		golden := filepath.Join("testdata", "derived",

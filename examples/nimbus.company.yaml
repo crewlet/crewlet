@@ -44,12 +44,17 @@ timezone: "Europe/Berlin"
 # runs Berlin midnight to midnight, ``week`` is the ISO week from Monday,
 # ``month`` the calendar month, and each opens again on its own when it
 # turns over.  0 is refused rather than read as "unlimited" — leave the key
-# out instead.  Here the month is the bill (roughly four weeks of the
-# schedules below plus ordinary chat traffic for seven seats) and the day
-# is the fuse: a runaway loop burns at most one day's allowance before the
-# company stops, rather than the month's.  No per-agent ``token_budget`` is
-# set below, so these two are the only ceilings in force and the whole
-# company shares them.
+# out instead.  Here the month is the company's allowance (roughly four
+# weeks of the schedules below plus ordinary chat traffic for seven seats)
+# and the day is the fuse: a runaway loop burns at most one day's allowance
+# before the company stops, rather than the month's.  No per-agent
+# ``token_budget`` is set below, so these two are the only ceilings in
+# force and the whole company shares them.
+#
+# THEY STILL APPLY ON A SUBSCRIPTION.  A plan is not metered per token by
+# its vendor, but the harness reports its usage and the engine counts it —
+# so the day ceiling is what stops a scheduling loop burning a whole plan
+# window overnight.
 #
 # Usage is durable — the counter lives in the fleet's coordination store,
 # so it survives engine restarts and is one number for the whole company
@@ -77,40 +82,133 @@ token_budget:
 
 providers:
   llm:
+    # ── The one model: Claude Code on YOUR subscription ─────────────
+    #
     # Every model is reached through a harness the engine drives — the
     # vendor's own harness, not an HTTP client of Crewlet's.  This company
-    # runs on OpenCode, which reaches any model on any provider it speaks
-    # to: open models through OpenRouter here, set LLM_MODEL to
-    # <provider>/<model> as OpenCode spells it (`opencode models` lists
-    # them), and the provider's key under ITS OWN variable in `env`.
+    # runs on Claude Code, headless, on the flat-rate plan you already pay
+    # for, so no model key is metered per token.  Crewlet never sees a
+    # password: the harness holds the vendor's own OAuth login and
+    # `crewlet llm login` only decides WHERE that credential lands.
     #
-    # Prefer Anthropic's models on an API key?  Swap the default for:
-    #   default:
-    #     harness: claude-code
-    #     model: sonnet
-    #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
-    # Every seat's executor is its harness's own run, which only claude-code and
-    # opencode have.  OpenAI's models (`harness: codex`, `model: gpt-5`, the
-    # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
-    # and side passes, through llm_review / llm_subagent / llm_auxiliary.
+    # On an Anthropic API key instead, the same entry takes
+    # `auth: { mode: api-key }` (it reads ANTHROPIC_API_KEY) in place of the
+    # plan.  `harness: opencode` is the other harness that runs a seat's
+    # executor, and reads `model` in its own grammar, <provider>/<model>
+    # (anthropic/claude-sonnet-5).  OpenAI's models (`harness: codex`) and
+    # the rest serve only a seat's reviewer, workers and side passes,
+    # through llm_review / llm_subagent / llm_auxiliary.
     #
-    # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
-    # package) on the machine running `crewlet run`.  Check the whole entry
-    # end to end before the first turn with the command below, once the
-    # variables examples/nimbus.config.yaml's header exports are set (the
-    # doctor loads that file):
+    # PREREQUISITE: the `claude` binary on the machine running
+    # `crewlet run`, and one of these, once, with the keyring and founder
+    # token examples/nimbus.config.yaml's header exports set (the command
+    # loads that file):
+    #
+    #   crewlet llm login default -from-host  -company examples/nimbus.company.yaml \
+    #                                         -config  examples/nimbus.config.yaml
+    #
+    # `-from-host` COPIES the login this machine already has into Crewlet's
+    # own directory; your own ~/.claude is never read at runtime, because
+    # each seat's child process gets its own HOME.  Plain
+    # `crewlet llm login default` instead brokers `claude auth login`
+    # attached to your terminal, for a machine with no login yet.  It
+    # returns you to your shell once you have signed in — if a login
+    # command ever leaves you sitting in an interactive session, it did
+    # not run the vendor's auth subcommand.
+    #
+    # `-capture-token` is the better route where you can take it — it mints
+    # a headless CLAUDE_CODE_OAUTH_TOKEN, so there is no credential file to
+    # sync and no refresh token shared with your personal login — but it
+    # writes into the ENCRYPTED SECRET STORE, sealed under the Tier A
+    # keyring examples/nimbus.config.yaml declares (`crewlet secrets keygen
+    # -key-id 2026-01` prints the key to export).
+    #
+    # Then, before the first turn:
+    #
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
-    # With the engine stopped the doctor reaches the fleet's secret store
-    # itself, through this node's own broker.  Once the engine runs, it
-    # reads the store through it: run the doctor with CREWLET_API_TOKEN set
-    # to $CREWLET_API_TOKEN_FOUNDER.
+    #
+    # With the engine stopped both commands reach the fleet's secret store
+    # themselves, through this node's own broker.  Once the engine runs,
+    # they go through it: run them with CREWLET_API_TOKEN set to
+    # $CREWLET_API_TOKEN_FOUNDER.
+    #
+    # `doctor` is the command that matters here.  An entry can be
+    # configured perfectly and still not work — a missing binary, a
+    # profile whose flags drifted from the installed version, an expired
+    # login, or the one nothing else catches: a harness that never reaches
+    # the seat's tools — the `crewlet` MCP server it is handed — and
+    # answers in prose with nothing called, which ends the phase without
+    # its submission.  Only a real run calling a real tool proves that, so
+    # `doctor` runs one.
+    #
     # See docs/concepts/llm-backends.md.
     default:
-      harness: opencode
-      model: "${LLM_MODEL}"
-      env:
-        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      harness: claude-code          # the default, written out
+      model: sonnet                 # whatever `claude --model` accepts:
+                                    #   haiku | sonnet | opus, or a full
+                                    #   model id.  Sonnet, because this
+                                    #   company's seats write and review
+                                    #   code across its projects; haiku
+                                    #   is cheaper against a plan window
+                                    #   and faster to launch, but the
+                                    #   weakest at calling the seat's tools
+                                    #   when it should, which is what
+                                    #   `crewlet llm doctor` exercises.
+      run_in: direct                # where a seat's executor runs on this
+                                    #   entry: a cell of providers.sandbox
+                                    #   below.  On the ENTRY rather than the
+                                    #   seat, because it is a property of
+                                    #   this runtime: the subscription login
+                                    #   lives on the engine host, so a local
+                                    #   cell reaches it directly and a remote
+                                    #   one would need a headless token.
+      # ONE LOGIN, NAMED.  state_dir defaults to a directory derived PER
+      # PROVIDER KEY (~/.crewlet/llm-harness/default here), so a second entry
+      # on this same login — a per-phase model on the same plan, say —
+      # names this same path to share it.  That is deliberately explicit:
+      # two unrelated providers must never silently collide and prune each
+      # other's state.  The login is shared per harness: each keeps its
+      # files in a subdirectory named for it (here .../claude/claude-code),
+      # so an entry on this path that drove another harness would share
+      # nothing.
+      #
+      # A LITERAL PATH — unlike every credential field here it is not
+      # ${VAR}-expanded, because it names where the engine keeps files
+      # rather than a secret (the same reason the store path is a Tier A
+      # field).  So it lives under ./nimbus-data with everything else
+      # this example writes, which does mean `rm -rf nimbus-data` logs
+      # the harness out; `crewlet llm login default -from-host` puts it back
+      # with no browser round-trip.  Point it at a persistent volume
+      # when the engine runs in an ephemeral container.
+      state_dir: "./nimbus-data/llm-harness/claude"
+      max_concurrent: 4             # harness processes on this host at once (the
+                                    #   reviewer, workers, side passes),
+                                    #   ACROSS the whole company; executor
+                                    #   runs are not counted — each seat
+                                    #   runs one at a time.  Written out rather than
+                                    #   left to the identical default,
+                                    #   because on this backend it is the
+                                    #   knob that shapes the deployment:
+                                    #   each process is a full Node runtime
+                                    #   at ~200-400 MB resident (4 keeps peak
+                                    #   near 1.5 GB), and a subscription plan
+                                    #   throttles concurrency far below what
+                                    #   an API key allows — so a higher
+                                    #   number mostly buys rate-limit errors.
+                                    #   Note it is a SEPARATE ceiling from
+                                    #   Tier A's node.max_concurrent (32
+                                    #   turn segments): a reviewer, worker
+                                    #   or side pass past this queues for a
+                                    #   harness slot, and the learning passes
+                                    #   below queue for the same four.
+      auth:
+        mode: subscription          # subscription (default) | api-key | inherit-env | env.
+                                    #   Deliberately not inherit-env: a
+                                    #   backend that silently picked up a
+                                    #   stray ANTHROPIC_API_KEY would bill
+                                    #   the metered account while you
+                                    #   believed you were on a flat rate.
     # Ask Crewlet's own entry, for the assistant block below.
     # Its own slots keep a person in the drawer from queueing behind a
     # seat's long call, its timeout is sized for one interactive round, and
@@ -131,9 +229,9 @@ providers:
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
   # Code sandbox — where every agent seat's executor runs.  A seat's
-  # executor is its harness's own run (OpenCode, the default entry's
-  # harness, with that SAME model and OPENROUTER_API_KEY), in a box from this
-  # catalogue; an engineering seat's run implements the work and opens a
+  # executor is its harness's own run (Claude Code, the default entry's
+  # harness, with that SAME model and that same plan login), in a box from
+  # this catalogue; an engineering seat's run implements the work and opens a
   # merge request under the agent's OWN GitLab identity (the token the
   # engine mints and seals for the seat as GITLAB_TOKEN_<HANDLE>, which the
   # seat names as GITLAB_TOKEN in role.sandbox.env below and which the
@@ -142,6 +240,18 @@ providers:
   # run's state apart but does not isolate the host: see the catalogue
   # below.  See docs/concepts/code-sandbox.md and
   # docs/integrations/gitlab.md.
+  #
+  # NO EXTRA CREDENTIAL.  The harness those boxes run is the `default`
+  # entry's `claude-code`, and on a LOCAL cell the backend seeds that
+  # provider's credential files into the box and writes the refreshed one
+  # back afterwards — so the run uses the subscription `crewlet llm login`
+  # already established.  (That seeding is exactly why a remote `e2b` cell
+  # would NOT work on this login as it stands: the credential files carry a
+  # refresh token whose rotation is fleet state and deliberately never
+  # leave the engine host, so a remote box needs a headless token —
+  # `crewlet llm login default -capture-token` — instead.  The engine
+  # refuses such a run up front rather than provisioning a box that cannot
+  # authenticate.)
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
     # providers.llm entry places its runs in one with its `run_in`.
@@ -161,8 +271,10 @@ providers:
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and give the entry those seats run on
-    # `run_in: e2b`.
-    # A `template` there must carry the harness (opencode here) as well
+    # `run_in: e2b` — signed in with `-capture-token`, above, since the
+    # plan's credential files never leave this host — or keep them local
+    # in `container`, which the plan login still seeds.
+    # A `template` there must carry the harness (Claude Code here) as well
     # as the toolchains those seats' setup steps check for (Go, Node with
     # corepack, uv): naming one replaces E2B's prebuilt per-agent template
     # for every e2b box in the company, and a step only checks for its tool,
@@ -172,9 +284,9 @@ providers:
     #
     # PREREQUISITE for the local backend: the harness the entries drive
     # must be installed on that machine, since `direct` runs it as a child
-    # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
-    # 1.x install is refused by name — and `claude-code` is the other
-    # supported one.  So must each engineering seat's toolchain (Go; Node
+    # process: the `claude` binary here, Claude Code's own CLI, and
+    # `opencode` (OpenCode 2, the @opencode/cli package) for an entry on
+    # the other harness that runs an executor.  So must each engineering seat's toolchain (Go; Node
     # with corepack; uv): a `direct` box's setup commands run on that
     # machine as the engine's user, so the seats' steps below CHECK for
     # their tools and name what is missing, rather than install anything
@@ -1122,7 +1234,7 @@ units:
             mcp_env:
               gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run,
+            # Executor box: this seat's executor is Claude Code's own run,
             # which implements the work item in nimbuscore / nimbusk0s and
             # opens an MR as Agent SWE's own GitLab identity (the
             # ${GITLAB_TOKEN_AGENT_SWE} token the engine seals for it).  The merge-request
@@ -1137,8 +1249,10 @@ units:
               # `container` needs providers.sandbox.local.image, an image
               # carrying the harness AND this seat's toolchain (the go
               # step below checks for Go inside it), and `e2b` needs an
-              # `e2b:` block with its api_key and a `template` carrying the
-              # same — Go 1.21 or later here: the engine installs nothing
+              # `e2b:` block with its api_key, a headless token for the
+              # entry (`crewlet llm login default -capture-token`: the plan's
+              # credential files never leave this host) and a `template`
+              # carrying the same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
               # for the harness rather than for this seat's repos.
               # No `mcp:` scope, deliberately: every box gets the seat's
@@ -1237,7 +1351,7 @@ units:
             mcp_env:
               gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run,
+            # Executor box: this seat's executor is Claude Code's own run,
             # which implements the UI story in console / website and opens
             # an MR as Agent Frontend SWE's own GitLab identity
             # (${GITLAB_TOKEN_AGENT_FRONTEND_SWE}).
@@ -1325,9 +1439,10 @@ units:
             mcp_env:
               gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Executor box: this seat's executor is OpenCode's own run —
-            # the harness the default entry drives, so a Python framework change
-            # needs no extra harness secret — which implements the
+            # Executor box: this seat's executor is Claude Code's own run —
+            # the harness the default entry drives, on its plan login, so a
+            # Python framework change needs no extra harness secret — which
+            # implements the
             # framework story in the Phase-2 repo and opens an MR as Agent
             # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
             sandbox:

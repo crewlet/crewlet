@@ -200,22 +200,17 @@ opens on **Home**: how the company is, and the decisions waiting on you. The ful
 [Quickstart](docs/getting-started/quickstart.md) walks through watching an agent's
 first turn with no integrations at all, then wiring in the real ones.
 
-> **Want a whole company to run?** Two complete seven-seat reference orgs ship
-> in `examples/`, the same company at both ends of the stack.
-> `nimbus.company.yaml` is the full one — GitLab, Mattermost, open models
-> through OpenCode on an OpenRouter key, and Worklet and Doclet, the engine's
-> own work tracker and knowledge base.
-> `nimbus-claude-code.company.yaml` is the short path: chat on Mattermost, its
-> model Claude Code on the Claude plan you already pay for, and every seat running
-> that same harness as its own agentic run in a box on the engine host, on
-> that same login — no API key, and no service beyond the chat server in this
-> repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
-> and Doclet, and [Jira](docs/integrations/jira.md) /
+> **Want a whole company to run?** A complete seven-seat reference org ships
+> in `examples/`: `nimbus.company.yaml` with its Tier A file
+> `nimbus.config.yaml` — GitLab, Mattermost, and Worklet and Doclet, the
+> engine's own work tracker and knowledge base, with its model Claude Code on
+> the Claude plan you already pay for and every seat running that same harness
+> as its own agentic run in a box on the engine host, on that same login. It
+> needs no tracker or wiki account: [Jira](docs/integrations/jira.md) /
 > [Confluence](docs/integrations/confluence.md) are the blocks that move those
-> halves to Atlassian. Both talk on Mattermost; a company that declares no chat
+> halves to Atlassian. It talks on Mattermost; a company that declares no chat
 > surface gets the engine's own [chat](docs/concepts/chatlet.md) instead, with its
-> rooms in the dashboard. Every setting in both carries its reasoning in a
-> comment.
+> rooms in the dashboard. Every setting carries its reasoning in a comment.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see

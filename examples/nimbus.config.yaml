@@ -4,14 +4,29 @@
 # Pairs with examples/nimbus.company.yaml (Tier B).  Run the pair
 # end-to-end with:
 #
-#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-#     export LLM_MODEL="openrouter/<model-id>"     # <provider>/<model>, as OpenCode spells it
-#     export OPENROUTER_API_KEY="<your-openrouter-key>"
-#     export OPENAI_API_KEY="<for-embeddings>"
-#     # The keyring every node needs — see `secrets:` below.
-#     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
+#     # 0. What this file reads from the environment, which every command
+#     #    given -config below needs: the keyring every node needs — see
+#     #    `secrets:` below; `crewlet secrets keygen -key-id 2026-01`
+#     #    prints the export line + snippet — and this node's own API token.
 #     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
+#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 #
+#     # 1. The model: authenticate the `claude` harness inside Crewlet's
+#     #    own directory (-capture-token in place of -from-host mints a
+#     #    headless token instead), then prove it end to end BEFORE the
+#     #    first turn.  With the engine stopped both reach the fleet's
+#     #    secret store themselves, through the node's own broker on
+#     #    ./nimbus-data/stream; once the engine runs, they go through it,
+#     #    with CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER".
+#     crewlet llm login  default -from-host -company examples/nimbus.company.yaml \
+#                                           -config  examples/nimbus.config.yaml
+#     crewlet llm doctor default            -company examples/nimbus.company.yaml \
+#                                           -config  examples/nimbus.config.yaml
+#
+#     # 2. Go, with the embeddings key the company file reads — and the
+#     #    variables of its integrations, each on its own page
+#     #    (docs/integrations/mattermost.md, docs/integrations/gitlab.md).
+#     export OPENAI_API_KEY="<for-embeddings>"
 #     crewlet run -config examples/nimbus.config.yaml \
 #                 -company examples/nimbus.company.yaml
 #
@@ -157,10 +172,14 @@ node:
                                        #   Per node, so a fleet's ceiling is
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
-                                       #   single-node company.  Not the same
-                                       #   knob as a providers.llm entry's own
-                                       #   max_concurrent, which caps that
-                                       #   entry's harness processes on this host.
+                                       #   single-node company.  NOT the same
+                                       #   knob as the providers.llm entry's own
+                                       #   max_concurrent in the company YAML
+                                       #   (4), which caps that entry's harness
+                                       #   processes on this host: a reviewer,
+                                       #   worker or side pass past it waits
+                                       #   in this process for a harness slot,
+                                       #   while executor runs are not counted.
 
 api:
   host: "0.0.0.0"
@@ -176,6 +195,17 @@ api:
   # host's port 80 must be free.  In a SPLIT deployment the ingress node serves this and
   # the others set port 0 so only one process binds it (see
   # docs/guides/deployment.md).
+  #
+  # IT ALSO SERVES THE MCP TOOL BRIDGE every agent seat needs: each seat's
+  # executor runs as its harness's own agentic loop in a box, and the
+  # seat's tools reach that box back over /mcp/{token} here.  A `direct`
+  # box on this machine dials this port on loopback, which the node
+  # derives from the socket it binds — nothing to set, and `port: 0`
+  # would leave every executor launch refused.  A `container` or `e2b`
+  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box can dial.  In a
+  # fleet the URL is the fleet's, the same on every node: any node
+  # serving the API, a load balancer in front of several included,
+  # relays each call to the node holding the seat.
   port: 80
 
   # REQUIRED once a port is set.  Where a PERSON reaches this deployment —

@@ -539,52 +539,46 @@ network.
 
 ## Putting it together
 
-Two bundled **Nimbus examples** model the same seven-seat company at opposite
-ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
-is the **reference**: a pick from every row — GitLab, Mattermost, open models
-through OpenCode on an OpenRouter key, a sandbox its engineers push merge
-requests from, Worklet and Doclet rather than a vendor's, and two repositories
-on Gitlet beside GitLab's. Read it to
-see what a full stack looks like written out, and
-[Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
-for the blocks that move those two halves to Atlassian.
-
-`examples/nimbus-claude-code.company.yaml` + `examples/nimbus-claude-code.config.yaml`
-is the **short path**: every pick that costs nothing extra to stand up — chat
-on **Mattermost**, the model **Claude Code on your own Claude plan**, the
-tracker and knowledge base the **engine's own**, and the code sandbox on the
-**engine host** (`run_in: direct`), which reuses that same plan login
-rather than needing an account of its own — a first run on your own machine
-while its seats take work from you alone. Every seat runs that harness's
+The bundled **Nimbus example** models a seven-seat company that makes a pick
+from every row of this page. `examples/nimbus.company.yaml` +
+`examples/nimbus.config.yaml` is that **reference**: GitLab, Mattermost, the
+model **Claude Code on your own Claude plan**, a sandbox on the **engine host**
+(`run_in: direct`) that reuses that same plan login and that its engineers push
+merge requests from, Worklet and Doclet rather than a vendor's, and two
+repositories on Gitlet beside GitLab's. Every seat runs that harness's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
-its executor, so the executor *is* the harness's own agentic loop with a real shell. The rows that need
-somebody else's service are deliberately empty, which is what lets the whole
-thing run from one compose profile and one `crewlet llm login`:
+its executor, so the executor *is* the harness's own agentic loop with a real
+shell — a first run on your own machine while its seats take work from you
+alone. Read it to see what a full stack looks like written out, and
+[Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
+for the blocks that move those two halves to Atlassian. Its chat half alone
+comes up from one compose profile and one `crewlet llm login`
+([First run, end to end](../integrations/mattermost.md#first-run-end-to-end)
+says what the GitLab half does while its variables are unset):
 
 ```bash
 docker compose --profile mattermost up -d --wait
-COMPANY=examples/nimbus-claude-code.company.yaml scripts/mattermost-dev-bootstrap.sh
+scripts/mattermost-dev-bootstrap.sh
 crewlet llm login default -from-host \
-    -company examples/nimbus-claude-code.company.yaml \
-    -config examples/nimbus-claude-code.config.yaml
-crewlet run -config examples/nimbus-claude-code.config.yaml \
-            -company examples/nimbus-claude-code.company.yaml
+    -company examples/nimbus.company.yaml \
+    -config examples/nimbus.config.yaml
+set -a; . ./.env; set +a          # MATTERMOST_URL + the admin token the bootstrap wrote
+crewlet run -config examples/nimbus.config.yaml \
+            -company examples/nimbus.company.yaml
 ```
 
-**Both examples run chat on a vendor, and that is now the deliberate part
-rather than the free one.** Chatlet costs less to stand up than either —
-nothing at all — so an example that used it would demonstrate no chat
-configuration whatsoever. These two keep Mattermost because the vendor path is
-the one with blocks to show: a bot token per seat, a provisioning command, the
-working-indicator settings and the thread routing. To run either example on
-the engine's own chat instead, delete its `integrations.mattermost` block,
-each seat's own `integrations.mattermost` block, and the `mattermost` MCP
-server with each seat's `mcp_env` for it, and drop `--profile mattermost` and
-the bootstrap script from the commands above: `chat.backend` then derives
-`chatlet` on its own. The short path's units already name a `channel`, which
-opens each unit's room; the reference example's units name none, so give
-them one (`channel: product`, `channel: engineering`) or no team has a room
-until somebody opens one.
+**The example runs chat on a vendor, and that is the deliberate part rather
+than the free one.** Chatlet costs less to stand up — nothing at all — so an
+example that used it would demonstrate no chat configuration whatsoever. It
+keeps Mattermost because the vendor path is the one with blocks to show: a bot
+token per seat, a provisioning command, the working-indicator settings and the
+thread routing. To run it on the engine's own chat instead, delete its
+`integrations.mattermost` block, each seat's own `integrations.mattermost`
+block, and the `mattermost` MCP server with each seat's `mcp_env` for it, and
+drop `--profile mattermost` and the bootstrap script from the commands above:
+`chat.backend` then derives `chatlet` on its own. Its units name no `channel`,
+so give them one (`channel: product`, `channel: engineering`) or no team has a
+room until somebody opens one.
 
 Reading it top to bottom is the fastest way to see the choices on this page
 made concretely — each block carries the rationale in comments, including the

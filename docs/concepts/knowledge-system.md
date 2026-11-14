@@ -1017,8 +1017,8 @@ Knowledge docs follow a **directory-based convention** — the files are pure pr
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
 `examples/nimbus-docs/` is a worked set of these: the pages the Nimbus
-example company publishes. Both bundled examples run **Doclet**, so
-neither is an argument to this CLI: they publish
+example company publishes. The bundled example runs **Doclet**, so
+it is no argument to this CLI: its pages publish
 through the assistant path above. A company that moves to Confluence adds
 the `confluence:` block per [Confluence](../integrations/confluence.md),
 and its company YAML is then the positional argument the importer reads
