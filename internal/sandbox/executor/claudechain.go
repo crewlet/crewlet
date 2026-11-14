@@ -715,10 +715,13 @@ const chainPrefixBytes = 10
 // THE LEAF is the member of the set of the latest Date.parse of its
 // timestamp, the first in the file on a tie (2.1.322's cj @293745290 in Yya
 // @293835409, 2.1.310's p0 @247129929 in m_i @247207161, `y>s`), a record of
-// no time no member; where the set is empty, the record of the latest time of
-// every one the relink left, of any kind, the first in the file on a tie
-// (2.1.322's Ozt @293848378, 2.1.310's p0 in m_i); and where no such record
-// has a time, the resume finds no conversation (whyNoConversation).
+// no time never taken; where the set holds members but none of them has a
+// time, the resume finds no conversation (whyNoConversation), since only an
+// empty set falls back (`??(Tn.size===0&&...?Ozt(s):void 0)` @293835512,
+// `??(jn.size===0&&...` @247207264); where the set is empty, the record of the
+// latest time of every one the relink left, of any kind, the first in the
+// file on a tie (2.1.322's Ozt @293848378, 2.1.310's p0 in m_i); and where no
+// such record has a time, the resume finds no conversation as well.
 //
 // THE WALK (2.1.322's A7t @293745408 with vjt @293589456, 2.1.310's w$t
 // @247130047 with Epo @247132981): from the leaf to the record its parent
@@ -2896,11 +2899,12 @@ func (c *threadChain) leafSet(ctx context.Context, w *chainWork) ([]chainHandle,
 // leafOf is the leaf the resume walks from of set, its single path's turn
 // record or its leaf set, in the file's order: the member of the latest
 // Date.parse of its timestamp, the first in the file on a tie (2.1.322's cj
-// @293745290, 2.1.310's p0 @247129929, `y>s` from -Infinity), no record of no
-// time a member; where set is empty, the record of the latest time of every
-// one the relink left, of any kind, the first on a tie (2.1.322's Ozt
-// @293848378, 2.1.310's p0 in m_i); and none, where the resume finds no
-// conversation, where no record it reads has a time.
+// @293745290, 2.1.310's p0 @247129929, `y>s` from -Infinity), a record of no
+// time never taken; where set is empty, and only there, the record of the
+// latest time of every one the relink left, of any kind, the first on a tie
+// (2.1.322's Ozt @293848378, 2.1.310's p0 in m_i); and none, where the resume
+// finds no conversation: where set holds members but none has a time, or set
+// is empty and no record the relink left has one.
 func (c *threadChain) leafOf(set []chainHandle) chainHandle {
 	leaf := noChainRecord
 	later := func(h chainHandle) {
