@@ -472,8 +472,10 @@ Every agent seat's executor is its harness's own run — Claude Code or
 OpenCode — fully permissioned, with a shell, a filesystem and a git checkout,
 in a box from this catalogue, which a company with an agent seat and a model
 must configure. `direct` is the engine host itself; `container` and `e2b` keep
-the run off it. See the [Code Sandbox](../concepts/code-sandbox.md) concept
-page.
+the run off it. A `direct` or `container` box runs the harness as the engine's
+own user, and Claude Code refuses its executor's mode for root, so the engine
+must not run as root there ([the engine's user](../guides/deployment.md#the-engines-user-and-claude-code)).
+See the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 
 | Option | How | Notes |
 |---|---|---|
