@@ -5543,6 +5543,18 @@ classifies through too.
 A screen that renders a blank where data would go is a screen that cannot be
 trusted when it IS blank. Four distinctions the product makes everywhere:
 
+- **Still being read** vs **nothing there.** A read in flight is a skeleton,
+  and an empty state is drawn only once an answer says so. `QueryState` draws
+  nothing while a read is in flight and hides its children, so the screen
+  draws its skeleton BESIDE it, never inside it (My work's stood inside and
+  was never drawn) and never by leaving the wait to it: an agent's diary,
+  Agent skills, Settings › Advisor, the sections of My work and the Event
+  log's When chart were a blank page or an empty box for as long as the engine
+  took. And a wait is "no answer and no refusal yet", not one question's own
+  loading flag, where a list is asked only after another read answers: a
+  question not yet asked reports neither loading nor data, which is how
+  Expensive tasks said no task had spent tokens while the window was still
+  being read, and Learned skills that a seat had learned none.
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" from a query the engine refused are the same empty
   list and completely different problems. `QueryState` renders the engine's own

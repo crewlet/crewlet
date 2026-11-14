@@ -538,3 +538,21 @@ test("a log missing a node names it", async () => {
   expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
 });
+
+// THE COUNT IN FLIGHT IS THE CHART'S OWN BOX: the When card was a title over
+// an empty frame, which reads as a window nothing was published in.
+test("the When chart in flight is a skeleton, not an empty card", () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  const card = screen.getByText("When").closest(".crewlet-card") as HTMLElement;
+  expect(card.querySelector(".crewlet-skeleton")).not.toBeNull();
+  expect(screen.queryByText("Nothing was published in this window")).toBeNull();
+});

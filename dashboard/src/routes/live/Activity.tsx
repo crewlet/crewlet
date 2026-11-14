@@ -374,10 +374,16 @@ export function Activity() {
         >
           <Card.Title>When</Card.Title>
         </Card.Header>
+        {/* THE COUNT IN FLIGHT IS THE CHART'S OWN BOX, as tall as the bars it
+            stands for: `QueryState` draws nothing while it waits, and the card
+            was a title over an empty frame. */}
+        {series.loading && !series.data && (
+          <Skeleton variant="box" height={96} label="Counting events" />
+        )}
         <QueryState
           error={series.error}
           refusal={series.refusal}
-          loading={series.loading}
+          loading={series.loading && !series.data}
           empty={
             series.data && series.data.total === 0
               ? {

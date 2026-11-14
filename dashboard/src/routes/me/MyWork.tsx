@@ -495,9 +495,15 @@ export function MyWork({ section }: { section: MeSection }) {
       )}
       {whose && reviews && !loginDay && <DayReviews whose={whose} they={they} />}
 
+      {/* THE DAY IN FLIGHT IS A SKELETON, beside `QueryState` and not inside
+          it: it hides its children while a read is in flight, so the skeleton
+          that stood among them was never drawn, and every section of the day
+          (Watching, Waiting on me, Recently done) was a blank page. */}
+      {whose && !reviews && state.loading && !mine && (
+        <Skeleton variant="text" rows={6} label="Loading the day" />
+      )}
       {whose && !reviews && (
-        <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
-          {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
+        <QueryState error={state.error} refusal={state.refusal} loading={state.loading && !mine}>
           {mine && (
             // EVERY CHANGE ON SOMEBODY ELSE'S DAY IS HELD, with the sentence
             // that says whose it is — see the file head. `null` on your own.

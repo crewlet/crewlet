@@ -1719,3 +1719,15 @@ test("an unbound reader's own Reviews asks Gitlet nothing, and says why", async 
   await settled(() => asked.length);
   expect(asked.filter((u) => u.pathname.startsWith("/query/code_"))).toEqual([]);
 });
+
+// THE DAY IN FLIGHT IS A SKELETON. It stood INSIDE `QueryState`, which hides
+// its children while a read is in flight, so it was never drawn and every
+// section of the day was a blank page.
+test("a day still in flight is a skeleton, whichever section is open", async () => {
+  for (const section of ["watching", "queue"] as const) {
+    serving({ viewer: ada, work_my_work: () => new Promise(() => {}), work_items: noWork });
+    const view = mount(section);
+    await waitFor(() => expect(document.querySelector(".crewlet-skeleton")).not.toBeNull());
+    view.unmount();
+  }
+});
