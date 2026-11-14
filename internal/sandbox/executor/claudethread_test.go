@@ -2,17 +2,22 @@ package executor
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"math"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"unsafe"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
@@ -654,42 +659,63 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 // and a user record's `replacesSpan` a boolean, as the brief's here) is a
 // *threadLineError naming its line, whatever keywords it holds, and the reader
 // reads on to the next line; and a whole record's head is what it says. None
-// of these lines holds a key a reader of hooks or calls looks for.
+// of these lines holds a key a reader of hooks or calls looks for. Each such
+// error says how Claude Code's load reads its line, the kind of record a
+// refused head's type names where it names one the load reads, and how many
+// bytes the line takes, its break included.
 //
 // Mutation: decode only the lines that name a hook or a call, and every
 // broken line here reads as a record, and the records' heads as nothing; read
 // replacesSpan by its text alone, and one that is a string or null reads as a
-// record.
+// record; read every refused line as one that yields the load nothing, and
+// the lines cut short, followed by more or led by a NUL read so; or hold a
+// refused head's type off the seven kinds the load reads, and a type that is
+// a number names one.
 func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
 	summary := ctSummary(ctUUID(1), ctUUID(2))
 	prompt := ctSubagentPrompt(ctUUID(3))
-	broken := map[string]string{
-		"two values":                             ctDequeue + ctDequeue,
-		"two values a carriage return parts":     ctDequeue + "\r" + ctDequeue,
-		"a value cut short":                      brief[:len(brief)/2],
-		"a numeric type":                         strings.Replace(ctDequeue, `"type":"queue-operation"`, `"type":7`, 1),
-		"a null type":                            strings.Replace(ctDequeue, `"type":"queue-operation"`, `"type":null`, 1),
-		"a string isSidechain":                   strings.Replace(brief, `"isSidechain":false`, `"isSidechain":"false"`, 1),
-		"a null isSidechain":                     strings.Replace(brief, `"isSidechain":false`, `"isSidechain":null`, 1),
-		"a string replacesSpan":                  strings.Replace(brief, `"isSidechain":false`, `"isSidechain":false,"replacesSpan":"true"`, 1),
-		"a null replacesSpan":                    strings.Replace(brief, `"isSidechain":false`, `"isSidechain":false,"replacesSpan":null`, 1),
-		"a numeric parentUuid":                   strings.Replace(brief, `"parentUuid":null`, `"parentUuid":7`, 1),
-		"a parentUuid that is an object":         strings.Replace(brief, `"parentUuid":null`, `"parentUuid":{}`, 1),
-		"a boolean subtype":                      strings.Replace(summary, `"subtype":"stop_hook_summary"`, `"subtype":true`, 1),
-		"a numeric agentId":                      strings.Replace(prompt, `"agentId":"`+ctAgent+`"`, `"agentId":7`, 1),
-		"null":                                   "null",
-		"a list holding a record":                "[" + ctDequeue + "]",
-		"a string":                               `"queue-operation"`,
-		"nothing at all":                         "",
-		"NULs before a break":                    "\x00\x00\x00",
-		"a record behind a byte that is no JSON": "\x00" + ctDequeue,
+	type refusal struct {
+		line  string
+		fault lineFault
+		kind  recordKind
+	}
+	broken := map[string]refusal{
+		"two values":                         {ctDequeue + ctDequeue, faultTrailing, ""},
+		"two values a carriage return parts": {ctDequeue + "\r" + ctDequeue, faultTrailing, ""},
+		"a value cut short":                  {brief[:len(brief)/2], faultPrefix, ""},
+		"a numeric type": {strings.Replace(ctDequeue, `"type":"queue-operation"`, `"type":7`, 1), faultHead,
+			""},
+		"a null type": {strings.Replace(ctDequeue, `"type":"queue-operation"`, `"type":null`, 1), faultHead,
+			""},
+		"a string isSidechain": {strings.Replace(brief, `"isSidechain":false`, `"isSidechain":"false"`, 1),
+			faultHead, recordUser},
+		"a null isSidechain": {strings.Replace(brief, `"isSidechain":false`, `"isSidechain":null`, 1), faultHead,
+			recordUser},
+		"a string replacesSpan": {strings.Replace(brief, `"isSidechain":false`,
+			`"isSidechain":false,"replacesSpan":"true"`, 1), faultHead, recordUser},
+		"a null replacesSpan": {strings.Replace(brief, `"isSidechain":false`,
+			`"isSidechain":false,"replacesSpan":null`, 1), faultHead, recordUser},
+		"a numeric parentUuid": {strings.Replace(brief, `"parentUuid":null`, `"parentUuid":7`, 1), faultHead,
+			recordUser},
+		"a parentUuid that is an object": {strings.Replace(brief, `"parentUuid":null`, `"parentUuid":{}`, 1),
+			faultHead, recordUser},
+		"a boolean subtype": {strings.Replace(summary, `"subtype":"stop_hook_summary"`, `"subtype":true`, 1),
+			faultHead, recordSystem},
+		"a numeric agentId": {strings.Replace(prompt, `"agentId":"`+ctAgent+`"`, `"agentId":7`, 1), faultHead,
+			recordUser},
+		"null":                                   {"null", faultNotObject, ""},
+		"a list holding a record":                {"[" + ctDequeue + "]", faultNotObject, ""},
+		"a string":                               {`"queue-operation"`, faultNotObject, ""},
+		"nothing at all":                         {"", faultSyntax, ""},
+		"NULs before a break":                    {"\x00\x00\x00", faultLead, ""},
+		"a record behind a byte that is no JSON": {"\x00" + ctDequeue, faultLead, ""},
 	}
 	names := slices.Sorted(maps.Keys(broken))
 	lines := make([]string, 0, 2*len(names)+3)
 	for _, name := range names {
-		lines = append(lines, ctDequeue, broken[name])
+		lines = append(lines, ctDequeue, broken[name].line)
 	}
 	lines = append(lines, brief, summary, prompt)
 	got := ctRead(ctThread(lines...), threadPlainMax)
@@ -701,6 +727,11 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		if got.broken[i].N != 2*(i+1) || got.broken[i].Unwrap() == nil {
 			t.Errorf("%s: line %d is no record, and the error names line %d (%v)", name, 2*(i+1), got.broken[i].N,
 				got.broken[i])
+		}
+		if want := broken[name]; got.broken[i].Fault != want.fault || got.broken[i].Type != want.kind ||
+			got.broken[i].Size != len(want.line)+1 {
+			t.Errorf("%s: the load reads it as %q, a record of the kind %q, of %d bytes; want %q, %q and %d", name,
+				got.broken[i].Fault, got.broken[i].Type, got.broken[i].Size, want.fault, want.kind, len(want.line)+1)
 		}
 	}
 	if len(got.lines) != len(names)+3 {
@@ -727,6 +758,119 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		got.lines[len(names)+2].Head.Main()}; !slices.Equal(main, []bool{false, true, true, false}) {
 		t.Errorf("the bookkeeping, the brief, the summary and the subagent's prompt read as the main thread's %v, "+
 			"want false, true, true and false", main)
+	}
+}
+
+// fewestAllocations is how many heap objects read allocates, the fewest of
+// many calls after one that warms it up, GOMAXPROCS one while it measures, as
+// [allocationsOf]'s is: many, since a decode takes its decoder from a pool,
+// which under the race detector drops a quarter of what is put back, so a
+// call can pay for a decoder afresh; the fewest of twenty does not.
+func fewestAllocations(read func()) uint64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	read()
+	fewest := uint64(math.MaxUint64)
+	var before, after runtime.MemStats
+	for range 20 {
+		runtime.ReadMemStats(&before)
+		read()
+		runtime.ReadMemStats(&after)
+		fewest = min(fewest, after.Mallocs-before.Mallocs)
+	}
+	return fewest
+}
+
+// A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
+// before any whole value (a record a later write tore into, a line of white
+// space alone) yields Claude Code's load nothing, faultSyntax; one whole value
+// that is no object is passed over by its test of a record, faultNotObject;
+// one object whose head key is of the wrong type is faultHead, naming the
+// kind of record it is where its type is one of the seven the load reads
+// (user, assistant, attachment, system, last-prompt, progress,
+// fork-context-ref) and none where it is another type or no string; a value
+// cut at the line's break, which the load reads on past, is faultPrefix; a
+// whole value followed by more, which the load keeps, faultTrailing; a line
+// led by a NUL or a byte order mark, faultLead; and a value nested past the
+// decoder's 10,000 levels, which the load may read whole, faultDepth, where
+// one nested 10,000 deep reads as a record. Each says the bytes it takes, its
+// break included, a carriage return before it among them. NO LINE'S
+// ACCEPTANCE CHANGES: a line the decode takes is decoded once, at the cost
+// of that one decode and its head, the classifier never run on it.
+//
+// Not parallel: the allocation count is the process's.
+//
+// Mutation: read every refused line as one that yields the load nothing, and
+// the lines cut short, followed by more, led by a NUL or a byte order mark,
+// or nested too deep read so; check the lead after the decode, and a line
+// led by a NUL reads as a syntax error; drop the depth check, and a value
+// nested too deep reads as yielding nothing; hold a refused head's type as
+// written, and a summary's names a kind; count a line's size without its
+// break; or classify every line, refused or not, and a line the decode takes
+// costs the classifier's decoder too.
+func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
+	brief := ctBrief(ctUUID(1))
+	deep := func(levels int) string {
+		return `{"type":"user","x":` + strings.Repeat("[", levels-1) + strings.Repeat("]", levels-1) + `}`
+	}
+	for name, tc := range map[string]struct {
+		line  string
+		fault lineFault
+		kind  recordKind
+	}{
+		"a record a later write tore into":       {brief[:60] + ctDequeue, faultSyntax, ""},
+		"white space alone":                      {" \t ", faultSyntax, ""},
+		"a list of numbers":                      {"[1,2]", faultNotObject, ""},
+		"a list ended by a carriage return":      {"[1,2]\r", faultNotObject, ""},
+		"a queue operation of a numeric agentId": {`{"type":"queue-operation","agentId":5}`, faultHead, ""},
+		"a summary of a string isSidechain": {`{"type":"summary","isSidechain":"no","leafUuid":"` + ctUUID(5) + `"}`,
+			faultHead, ""},
+		"a checkpoint of a numeric agentId": {ctReplace(t, ctLastPrompt, `"type":"last-prompt"`,
+			`"type":"last-prompt","agentId":5`), faultHead, recordLastPrompt},
+		"a progress record of a null isSidechain": {`{"type":"progress","isSidechain":null,"uuid":"` + ctUUID(6) +
+			`"}`, faultHead, recordProgress},
+		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
+			recordForkContextRef},
+		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
+		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":3`), faultHead, recordAttachment},
+		"a value cut at the break":           {brief[:len(brief)-9], faultPrefix, ""},
+		"a record followed by a number":      {ctDequeue + " 7", faultTrailing, ""},
+		"a record followed by a record":      {ctDequeue + ctDequeue, faultTrailing, ""},
+		"a record led by a NUL":              {"\x00" + ctDequeue, faultLead, ""},
+		"a record led by a byte order mark":  {"\xef\xbb\xbf" + ctDequeue, faultLead, ""},
+		"a record nested 10,001 levels deep": {deep(10001), faultDepth, ""},
+	} {
+		got := ctRead(ctThread(tc.line), threadPlainMax)
+		if len(got.lines) != 0 || len(got.broken) != 1 {
+			t.Errorf("%s reads as %d records and %d lines that are none; want one that is none", name,
+				len(got.lines), len(got.broken))
+			continue
+		}
+		if e := got.broken[0]; e.Fault != tc.fault || e.Type != tc.kind || e.Size != len(tc.line)+1 ||
+			!e.Fault.Valid() || (e.Type != "") != e.Type.Valid() {
+			t.Errorf("%s: the load reads it as %q, a record of the kind %q, of %d bytes; want %q, %q and %d", name,
+				e.Fault, e.Type, e.Size, tc.fault, tc.kind, len(tc.line)+1)
+		}
+	}
+	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
+		t.Errorf("a record nested 10,000 levels deep reads as %d records and %d lines that are none; want one record",
+			len(got.lines), len(got.broken))
+	}
+	if lineFault("").Valid() || recordKind("").Valid() || recordKind("queue-operation").Valid() {
+		t.Error("the zero fault, the zero kind or a kind the load keeps no record of reads as valid")
+	}
+
+	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
+	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
+	decode := fewestAllocations(func() {
+		var w threadWire
+		_ = wireDecode(good, &w)
+		_, _ = w.head()
+	})
+	if read > decode {
+		t.Errorf("a line the decode takes costs %d allocations, and its one decode and its head %d: the line is "+
+			"read again", read, decode)
 	}
 }
 
@@ -788,7 +932,10 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // ReplacedResults alone. A mark no plain record carries that is no boolean (a
 // virtual record's, a shutdown's, a compaction's summary's), or a batch's
 // list of the wrong shape, leaves its record's head, message and usage whole
-// and is refused by its own accessor alone. A record's own uuid that
+// and is refused by its own accessor alone, and so does a timestamp of no
+// form the harness writes, Timestamp's, and a meta mark that is no boolean,
+// IsMeta's. A result's source that is no uuid names no reply, and leaves the
+// result whole. A record's own uuid that
 // is no string
 // (null, a number, an object, a boolean), on the harness's bookkeeping, on a
 // model's call or on a hook's record, leaves everything else the record hands
@@ -877,6 +1024,40 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	}
 	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
 	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, stamp := range map[string]string{"a number": `1767323045000`, "null": `null`,
+		"an offset in place of the Z": `"2026-01-02T03:04:05.000+00:00"`} {
+		for kind, record := range map[string]string{"a reply": reply, "a result": result} {
+			line := ctLine(t, ctReplace(t, record, `"timestamp":"`+ctStamp+`"`, `"timestamp":`+stamp))
+			if ms, present, err := line.Timestamp(); err == nil {
+				t.Errorf("%s whose timestamp is %s was written at %d (%t), want an error", kind, name, ms, present)
+			}
+			if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || !line.Head.Main() {
+				t.Errorf("%s whose timestamp is %s reads with the head %+v and the calls %+v, %v", kind, name,
+					line.Head, m.Calls(), err)
+			}
+		}
+	}
+	for name, mark := range map[string]string{"a string": `"true"`, "a number": `1`, "null": `null`} {
+		line := ctLine(t, ctMarked(t, result, "isMeta", mark))
+		if meta, err := line.IsMeta(); err == nil {
+			t.Errorf("a result whose isMeta is %s reads as meta %t, want an error", name, meta)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || !line.Head.Main() {
+			t.Errorf("a result whose isMeta is %s reads with the head %+v and the calls %+v, %v", name, line.Head,
+				m.Calls(), err)
+		}
+	}
+	for name, source := range map[string]string{"a number": `7`, "null": `null`, "an object": `{}`} {
+		line := ctLine(t, ctReplace(t, result, `"sourceToolAssistantUUID":"`+ctUUID(4)+`"`,
+			`"sourceToolAssistantUUID":`+source))
+		if got, ok := line.SourceToolAssistantUUID(); ok {
+			t.Errorf("a result whose source is %s names %x", name, got)
+		}
+		if m, err := line.Message(); err != nil || len(m.Calls()) != 1 || !line.Head.Main() {
+			t.Errorf("a result whose source is %s reads with the head %+v and the calls %+v, %v", name, line.Head,
+				m.Calls(), err)
+		}
+	}
 	for name, tc := range map[string]struct {
 		record, key string
 		read        func(threadLine) error
@@ -1179,8 +1360,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // one at all, its attachment's type, the records it says its harness took
 // back, the results it says its harness replaced, and whether it is virtual,
 // interrupted by a shutdown, a compaction's summary, a task's delivery or a
-// batch's reply, the calls that batch was split into among it, each beside
-// the error it answered. A
+// batch's reply, the calls that batch was split into among it, when it was
+// written, whether it is meta, the reply it names as its results' source, the
+// key of the call its attachment followed, and whether its message says
+// anything, each beside the error it answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1259,6 +1442,16 @@ func ctAllButUUID(l threadLine) string {
 	var batch []string
 	batched, err := l.BatchToolUses(func(id string) { batch = append(batch, id) })
 	fmt.Fprintf(&b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
+	ms, stamped, err := l.Timestamp()
+	fmt.Fprintf(&b, "written %t at %d; %v\n", stamped, ms, err)
+	meta, err := l.IsMeta()
+	fmt.Fprintf(&b, "meta: %t; %v\n", meta, err)
+	source, sourced := l.SourceToolAssistantUUID()
+	fmt.Fprintf(&b, "source %t: %x\n", sourced, source)
+	call, isCall := l.AttachmentToolUseID()
+	fmt.Fprintf(&b, "followed %t: %x\n", isCall, call)
+	saysText, saysAny := m.Says()
+	fmt.Fprintf(&b, "says text %t, anything %t\n", saysText, saysAny)
 	return b.String()
 }
 
@@ -1281,8 +1474,8 @@ func ctRaw(v json.RawMessage) string {
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
 // its marks, a compaction's metadata, the uuids a record retracts, a record's
-// replacements, the marks of a record no plain one, a batch's list), a hook's
-// attachment, an origin, a
+// replacements, the marks of a record no plain one, a batch's list, its time,
+// its meta mark, a result's source), a hook's attachment, an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
@@ -1424,6 +1617,20 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `{"id":"` + ctCall + `","Id":"` + other + `","name":"Bash"}`},
 		"a virtual mark written twice": {record: call, from: `"type":"assistant"`,
 			to: `"isVirtual":true,"isVirtual":false,"type":"assistant"`},
+		"a timestamp, then Timestamp": {record: call, from: `"timestamp":"` + ctStamp + `"`,
+			to: `"timestamp":"` + ctStamp + `","Timestamp":"2028-02-29T00:00:00.000Z"`},
+		"TIMESTAMP alone": {record: ctReplace(t, call, `"timestamp":"`+ctStamp+`",`, ""), from: `"type":"assistant"`,
+			to: `"TIMESTAMP":"` + ctStamp + `","type":"assistant"`},
+		"a timestamp written twice": {record: call, from: `"timestamp":"` + ctStamp + `"`,
+			to: `"timestamp":"2028-02-29T00:00:00.000Z","timestamp":"` + ctStamp + `"`},
+		"an isMeta, then IsMeta": {record: ctCoordinator(ctUUID(1), ctUUID(4)), from: `"isMeta":true`,
+			to: `"isMeta":true,"IsMeta":false`},
+		"IsMeta alone": {record: result, from: `"type":"user"`, to: `"IsMeta":true,"type":"user"`},
+		"a sourceToolAssistantUUID, then SourceToolAssistantUuid": {record: result,
+			from: `"sourceToolAssistantUUID":"` + ctUUID(4) + `"`,
+			to:   `"sourceToolAssistantUUID":"` + ctUUID(4) + `","SourceToolAssistantUuid":"` + ctUUID(9) + `"`},
+		"a text block's text, then Text": {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":" "}]`),
+			from: `"text":" "`, to: `"text":" ","Text":"batch 1."`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -2913,6 +3120,249 @@ func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
 		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
 			got, kept[0])
+	}
+}
+
+// A RECORD SAYS WHEN IT WAS WRITTEN: Timestamp reads a record's timestamp in
+// the form Claude Code writes it, YYYY-MM-DDTHH:MM:SS.sssZ, of a real time, as
+// the milliseconds since the Unix epoch Date.parse reads it as, a leap day of
+// a leap year and the first year among them; absent where the record carries
+// none; and an error for any other form or value: a leap day of a year that
+// has none, an offset in place of the Z, no milliseconds, more of them, an
+// hour of 24, a second of 60, a lowercase z, a space for the T, a year
+// written with a sign, an hour of one digit, which package time parses
+// though the form never writes one, a number, null.
+//
+// Mutation: read any time package time parses as RFC 3339, and an offset
+// reads; skip the check that the time formats back to the text it was
+// parsed from, and an hour of one digit reads; or read null as absent, and
+// it is no error.
+func TestARecordSaysWhenItWasWritten(t *testing.T) {
+	t.Parallel()
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	stamped := func(stamp string) string {
+		return ctReplace(t, reply, `"timestamp":"`+ctStamp+`"`, `"timestamp":`+stamp)
+	}
+	for name, tc := range map[string]struct {
+		record  string
+		ms      int64
+		present bool
+	}{
+		"a reply, as measured":                {reply, 1767323045000, true},
+		"the last millisecond of a leap day":  {stamped(`"2028-02-29T23:59:59.999Z"`), 1835481599999, true},
+		"the first year":                      {stamped(`"0001-01-01T00:00:00.000Z"`), -62135596800000, true},
+		"the harness's bookkeeping, with one": {ctDequeue, 1767323045000, true},
+		"a record that carries none":          {ctAtisLatch, 0, false},
+	} {
+		if ms, present, err := ctLine(t, tc.record).Timestamp(); ms != tc.ms || present != tc.present || err != nil {
+			t.Errorf("%s was written at %d (%t), %v; want %d (%t)", name, ms, present, err, tc.ms, tc.present)
+		}
+	}
+	for name, stamp := range map[string]string{
+		"a leap day of a year with none": `"2026-02-29T00:00:00.000Z"`,
+		"an offset in place of the Z":    `"2026-01-02T03:04:05.000+00:00"`,
+		"no milliseconds":                `"2026-01-02T03:04:05Z"`,
+		"microseconds":                   `"2026-01-02T03:04:05.000000Z"`,
+		"an hour of 24":                  `"2026-01-02T24:00:00.000Z"`,
+		"a second of 60":                 `"2026-12-31T23:59:60.000Z"`,
+		"a lowercase z":                  `"2026-01-02T03:04:05.000z"`,
+		"a space for the T":              `"2026-01-02 03:04:05.000Z"`,
+		"a year written with a sign":     `"+026-01-02T03:04:05.000Z"`,
+		"an hour of one digit":           `"2026-01-02T3:04:05.000Z"`,
+		"the empty string":               `""`,
+		"a number":                       `1767323045000`,
+		"null":                           `null`,
+	} {
+		if ms, present, err := ctLine(t, stamped(stamp)).Timestamp(); err == nil {
+			t.Errorf("a reply whose timestamp is %s was written at %d (%t), want an error", name, ms, present)
+		}
+	}
+}
+
+// A RECORD SAYS WHETHER IT IS META: IsMeta reads a user record's own isMeta as
+// written, true where it is the JSON true (a coordinator's message, a skill's
+// text), false where it is false or absent; nothing on a record that is no
+// user's, whatever it carries (a compaction's boundary writes false, a reply
+// or an attachment may carry true); and an error where the mark is no
+// boolean, the string "true" and the number 1 among it, which its readers
+// each read their own way: Claude Code's resume as no mark, the reading that
+// tells a relaunch which of its calls a kept session holds as the mark.
+//
+// Mutation: read the mark off every record, and a reply carrying it is meta;
+// read it as JavaScript's truth, and the string "true" or the number 1 reads
+// as meta with no error; or read null as no mark, and it is no error.
+func TestARecordSaysWhetherItIsMeta(t *testing.T) {
+	t.Parallel()
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record string
+		meta   bool
+	}{
+		"a coordinator's message":        {ctCoordinator(ctUUID(1), ctUUID(4)), true},
+		"a skill's text":                 {ctSkillText(ctUUID(4), ctUUID(5)), true},
+		"a result marked false":          {ctMarked(t, result, "isMeta", "false"), false},
+		"a brief, with none":             {ctBrief(ctUUID(1)), false},
+		"a compaction's boundary, false": {ctBoundary(ctUUID(5), ctUUID(6), ctUUID(3)), false},
+		"a reply carrying the mark": {ctMarked(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), "isMeta",
+			"true"), false},
+		"an attachment carrying the mark": {ctAttachment(ctUUID(1), ctUUID(2), ctTokens, `"isMeta":true,`), false},
+	} {
+		if meta, err := ctLine(t, tc.record).IsMeta(); meta != tc.meta || err != nil {
+			t.Errorf("%s reads as meta %t, %v; want %t", name, meta, err, tc.meta)
+		}
+	}
+	for name, mark := range map[string]string{"the string true": `"true"`, "the number 1": `1`, "null": `null`,
+		"an object": `{}`} {
+		if meta, err := ctLine(t, ctMarked(t, result, "isMeta", mark)).IsMeta(); err == nil {
+			t.Errorf("a result whose isMeta is %s reads as meta %t, want an error", name, meta)
+		}
+	}
+}
+
+// A RESULT SAYS THE REPLY IT NAMES AS ITS SOURCE: SourceToolAssistantUUID
+// reads a user record's own sourceToolAssistantUUID as the 16 bytes of the
+// lowercase canonical uuid it holds, whatever its version; and nothing where
+// the key is absent, holds a uuid of another form (an uppercase one, one in
+// braces, one without its hyphens, one a hyphen out of place, one of a
+// character that is no hex digit), or no string, or the record is no user's.
+//
+// Mutation: take an uppercase uuid for its bytes, and one names a reply;
+// read the key off every record, and a reply carrying it names one; or skip
+// the check of the hyphens' places, and a uuid whose hyphens are digits names
+// one.
+func TestAResultSaysTheReplyItNamesAsItsSource(t *testing.T) {
+	t.Parallel()
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	sourced := func(source string) string {
+		return ctReplace(t, result, `"sourceToolAssistantUUID":"`+ctUUID(4)+`"`, `"sourceToolAssistantUUID":`+source)
+	}
+	other := "f81d4fae-7dec-11d0-a765-00a0c91e6bf6"
+	for name, tc := range map[string]struct {
+		record string
+		want   string
+	}{
+		"a result, as measured":              {result, ctUUID(4)},
+		"a uuid of another version":          {sourced(`"` + other + `"`), other},
+		"an uppercase uuid":                  {sourced(`"` + strings.ToUpper(other) + `"`), ""},
+		"a uuid in braces":                   {sourced(`"{` + other + `}"`), ""},
+		"a uuid without its hyphens":         {sourced(`"` + strings.ReplaceAll(other, "-", "") + `"`), ""},
+		"a uuid a hyphen out of place":       {sourced(`"f81d4fa-e7dec-11d0-a765-00a0c91e6bf6"`), ""},
+		"a uuid whose hyphens are digits":    {sourced(`"f81d4fae07dec011d00a765000a0c91e6bf6"`), ""},
+		"a uuid of a character no hex digit": {sourced(`"g81d4fae-7dec-11d0-a765-00a0c91e6bf6"`), ""},
+		"a source that is a number":          {sourced(`7`), ""},
+		"a result with none":                 {ctReplace(t, result, `"sourceToolAssistantUUID":"`+ctUUID(4)+`",`, ""), ""},
+		"a reply carrying one": {ctMarked(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			"sourceToolAssistantUUID", `"`+ctUUID(2)+`"`), ""},
+	} {
+		got, ok := ctLine(t, tc.record).SourceToolAssistantUUID()
+		if tc.want == "" {
+			if ok || got != ([16]byte{}) {
+				t.Errorf("%s names the reply %x (%t); want none", name, got, ok)
+			}
+			continue
+		}
+		if want := uuid.MustParse(tc.want); !ok || got != [16]byte(want) {
+			t.Errorf("%s names the reply %x (%t); want %x", name, got, ok, want)
+		}
+	}
+}
+
+// AN ATTACHMENT HANDS THE CALL IT FOLLOWED ONLY AS A KEY: AttachmentToolUseID
+// reads an attachment record's attachment's toolUseID where it is a string,
+// as the SHA-256 of that string, which is the key of the same string made
+// the same way, so a skill's PostToolUse hook, whose firing is the id of the
+// call it followed, keys alike with that call's id; and nothing where the
+// attachment holds no toolUseID, or one that is no string, or is no object
+// (a list among them), or on a record that is no attachment, a Stop's
+// summary carrying its firing at the top among them. No id leaves the layer
+// through it: it hands a key, never a string.
+//
+// Mutation: read a summary's firing at the top, and it keys a call; key a
+// toolUseID of any type by its bytes, and a number keys one; or read the key
+// off a list's elements, and an attachment that is a list keys one.
+func TestAnAttachmentHandsTheCallItFollowedOnlyAsAKey(t *testing.T) {
+	t.Parallel()
+	skill, err := ctLine(t, ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"`+ctSkillCall+
+		`","name":"Skill","input":{}}]`)).Message()
+	if err != nil || len(skill.Calls()) != 1 {
+		t.Fatalf("a skill's call reads as %+v, %v", skill.Calls(), err)
+	}
+	for name, tc := range map[string]struct {
+		record string
+		id     string
+		keyed  bool
+	}{
+		"a batch's hook record":                       {ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), ctBatchFire, true},
+		"a skill's PostToolUse hook, keying its call": {ctSkillHook(ctUUID(4), ctUUID(5)), skill.Calls()[0].ID, true},
+		"an attachment that names no call":            {ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered), "", false},
+		"an attachment whose toolUseID is a number": {ctAttachment(ctUUID(1), ctUUID(2),
+			`{"type":"hook_success","toolUseID":7}`, ""), "", false},
+		"an attachment that is a list": {ctAttachment(ctUUID(1), ctUUID(2), `[{"toolUseID":"`+ctCall+`"}]`, ""),
+			"", false},
+		"a Stop's summary, its firing at the top": {ctSummary(ctUUID(15), ctUUID(16)), "", false},
+		"a reply carrying an attachment": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"type":"assistant"`, `"attachment":{"toolUseID":"`+ctCall+`"},"type":"assistant"`), "", false},
+	} {
+		key, keyed := ctLine(t, tc.record).AttachmentToolUseID()
+		want := [32]byte{}
+		if tc.keyed {
+			want = sha256.Sum256([]byte(tc.id))
+		}
+		if keyed != tc.keyed || key != want {
+			t.Errorf("%s keys the call %x (%t); want %x (%t)", name, key, keyed, want, tc.keyed)
+		}
+	}
+}
+
+// A MESSAGE SAYS WHETHER IT SAID ANYTHING, as Claude Code reads its text with
+// JavaScript's trim(): Says's text holds where a block of the type "text"
+// holds a string text trim() leaves something of, and its any where the
+// content is one such string or any block of whatever type holds one. A text
+// of U+FEFF alone, which trim() takes and strings.TrimSpace leaves, says
+// nothing; one of U+0085 alone, which trim() leaves and strings.TrimSpace
+// takes, says something; and so do a lone surrogate, read as U+FFFD, and a
+// text after a blank one. A blank text, a thinking block, a call, a text that
+// is no string and an empty list say nothing, and neither does the zero
+// message of a record that holds none.
+//
+// Mutation: trim with strings.TrimSpace, and U+FEFF alone says something and
+// U+0085 alone nothing; read only blocks of the type "text" for any, and
+// another block's text says nothing; take any block's text for text, and
+// another block's says text; or stop at the first block, and a text after a
+// blank one says nothing.
+func TestAMessageSaysWhetherItSaidAnything(t *testing.T) {
+	t.Parallel()
+	said := func(content string) string { return ctAssistant(ctUUID(2), ctUUID(3), content) }
+	text := func(s string) string { return said(`[{"type":"text","text":` + s + `}]`) }
+	for name, tc := range map[string]struct {
+		record    string
+		text, any bool
+	}{
+		"a brief, one string":                 {ctBrief(ctUUID(1)), false, true},
+		"a string of white space alone":       {ctReplace(t, ctBrief(ctUUID(1)), `"content":"the brief\n"`, `"content":" \n\t"`), false, false},
+		"a text":                              {text(`"batch 1."`), true, true},
+		"a text of white space and breaks":    {text(`" \t\n\r\u000b\u000c"`), false, false},
+		"a text of U+00A0, U+2028 and U+3000": {text(`"\u00a0\u2028\u3000"`), false, false},
+		"a text of U+FEFF alone":              {text(`"\ufeff"`), false, false},
+		"a text of U+0085 alone":              {text(`"\u0085"`), true, true},
+		"a text of a lone surrogate":          {text(`"\ud800"`), true, true},
+		"a thinking block":                    {said(`[{"type":"thinking","thinking":"the batch","signature":"c2ln"}]`), false, false},
+		"a call":                              {said(ctUseContent), false, false},
+		"another block's text":                {said(`[{"type":"x","text":"hello"}]`), false, true},
+		"a text that is no string":            {said(`[{"type":"text","text":7}]`), false, false},
+		"a blank text, then a text":           {said(`[{"type":"text","text":" "},{"type":"text","text":"done."}]`), true, true},
+		"another block's text, then a text":   {said(`[{"type":"x","text":"hello"},{"type":"text","text":"done."}]`), true, true},
+		"an empty list":                       {said(`[]`), false, false},
+		"a hook's record, which holds none":   {ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), false, false},
+	} {
+		m, err := ctLine(t, tc.record).Message()
+		if err != nil {
+			t.Errorf("%s reads no message: %v", name, err)
+			continue
+		}
+		if saysText, saysAny := m.Says(); saysText != tc.text || saysAny != tc.any {
+			t.Errorf("%s says text %t and anything %t; want %t and %t", name, saysText, saysAny, tc.text, tc.any)
+		}
 	}
 }
 
