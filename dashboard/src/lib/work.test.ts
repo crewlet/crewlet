@@ -480,7 +480,7 @@ test("a body edit says so, and bookkeeping is never said", () => {
       }),
       {},
     ),
-  ).toBe("Changed their own bookkeeping");
+  ).toBe("Changed their pins or inbox");
   expect(changeClauses({ body: { from: "9 bytes", to: "11 bytes" } }, {})).toEqual([
     "edited the description",
   ]);

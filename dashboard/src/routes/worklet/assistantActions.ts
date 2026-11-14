@@ -113,7 +113,7 @@ export function workKeys(
       case "group_by":
       case "group_by2":
         keys[name] = {
-          label: name === "group_by" ? "Group by" : "Then group by",
+          label: name === "group_by" ? "Group by" : "Subgroup by",
           history: "filter",
           check: axisCheck(workspace),
           words: (v) => (v === "none" ? "No grouping" : axisName(v) || v),

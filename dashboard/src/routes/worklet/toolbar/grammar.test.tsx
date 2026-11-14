@@ -295,7 +295,7 @@ const ARRANGEMENT: Record<
     at: "#/worklet?group_by=status",
     press: async () => {
       await openDisplay();
-      pick(await screen.findByRole("combobox", { name: "Then by" }), "Priority");
+      pick(await screen.findByRole("combobox", { name: "Subgroup by" }), "Priority");
     },
     writes: "group_by2=priority",
   },

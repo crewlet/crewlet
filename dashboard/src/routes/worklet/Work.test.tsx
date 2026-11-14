@@ -903,7 +903,7 @@ test("a view's own arrangement is what the display controls show", async () => {
     expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee"),
   );
   await openDisplay();
-  expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
+  expect(screen.getByRole("combobox", { name: "Subgroup by" }).textContent).toContain("Priority");
   expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain("Due soonest");
 });
 

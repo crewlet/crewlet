@@ -7,7 +7,7 @@
  * The SORT on every shape but the calendar (whose order is its dates): a list
  * and a table are also ordered at their column heads, and a board and a
  * timeline have no heads, so this picker is the one place every order the
- * engine takes is offered. Then the SECOND axis a list nests inside the first,
+ * engine takes is offered. Before it, the SECOND axis a list nests inside the first,
  * the grid's COLUMNS, what a board's CARDS show and the board LANES somebody
  * put away, plus the way back to a saved view's own shape. On a phone, which
  * work is shown and Group by open from here too, where the row has no room.
@@ -21,7 +21,7 @@
  * # What each shape does not offer, it does not draw
  *
  * A board's second axis is a swimlane grid rather than a band in a band, so it
- * has no Then by; a board, a calendar and a timeline have no columns; and only
+ * has no subgrouping; a board, a calendar and a timeline have no columns; and only
  * a board has cards whose facts can be chosen and lanes to hide. A control that wrote a key its shape drops is a
  * control whose effect the reader cannot see.
  */
@@ -168,6 +168,24 @@ function DisplayPanel({
   return (
     <div className="work-menu work-display">
       {arrange && <div className="work-display-arrange">{arrange}</div>}
+      {/* THE SECOND GROUPING, WITH THE GROUPING and before the order: a
+          band inside each band. Worded "Then by" and drawn under Sort, it read
+          as a second sort key over a list of groupings. */}
+      {nested && groupBy !== "" && (
+        <label className="work-display-row">
+          <span>Subgroup by</span>
+          <Select
+            width="auto"
+            value={groupBy2}
+            onChange={(value) => onGroupBy2(String(value))}
+            ariaLabel="Subgroup by"
+            active={groupBy2 !== ""}
+            // NEVER THE AXIS ALREADY CHOSEN: the engine refuses that pair,
+            // because every row would be alone in its own band.
+            options={secondAxisOptions(groupBy, workspace)}
+          />
+        </label>
+      )}
       {ordered && (
         <label
           className="work-display-row"
@@ -180,21 +198,6 @@ function DisplayPanel({
             trash={trash}
             sort={sort}
             onSort={onSort}
-          />
-        </label>
-      )}
-      {nested && groupBy !== "" && (
-        <label className="work-display-row">
-          <span>Then by</span>
-          <Select
-            width="auto"
-            value={groupBy2}
-            onChange={(value) => onGroupBy2(String(value))}
-            ariaLabel="Then by"
-            active={groupBy2 !== ""}
-            // NEVER THE AXIS ALREADY CHOSEN: the engine refuses that pair,
-            // because every row would be alone in its own band.
-            options={secondAxisOptions(groupBy, workspace)}
           />
         </label>
       )}

@@ -4192,6 +4192,7 @@ var ACTIONS = {
 	},
 	save_work_view: {
 		args: [
+			"id",
 			"container",
 			"name",
 			"type",

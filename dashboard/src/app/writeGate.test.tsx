@@ -386,6 +386,20 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     notServed: ANSWER_SEAT_HELD,
     seatRule: true,
   },
+  EditViewButton: {
+    props: {
+      view: {
+        id: "v1",
+        name: "Triage",
+        container: "project:ENG",
+        type: "board",
+        params: { priority: "high,urgent" },
+        personal: false,
+      },
+    },
+    name: /^Edit view$/,
+    tool: "save_work_view",
+  },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
     name: /^View$/,

@@ -31,7 +31,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { MyWork } from "./MyWork.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
-import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
+import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
@@ -109,6 +109,15 @@ afterEach(() => {
 type Answer = unknown | ((params: Record<string, unknown>) => unknown);
 
 /** One socket answering each question with a fixture. */
+/**
+ * A read of the Watching or Collaborating list, which asks with `assignee=!…`
+ * to leave out the person's own work: not a read of what they hold.
+ */
+function following(params: unknown): boolean {
+  const p = (params ?? {}) as Record<string, unknown>;
+  return Boolean(p.watcher || p.collaborator);
+}
+
 function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = flatOrg) {
   const query = vi.fn(async (what: string, params?: Record<string, unknown>) => {
     const answer = answers[what as QueryName];
@@ -413,7 +422,10 @@ test("every claim is a section, and its count is published unopened", async () =
     viewer: ada,
     // THE TWO LIST SECTIONS ARE THE TRACKER'S OWN COUNTS, each its own
     // question: the work held, and the work a question is waiting on.
-    work_items: (p: Record<string, unknown>) => ({ ...noWork, total_hint: p.asked_by ? 3 : 7 }),
+    work_items: (p: Record<string, unknown>) => ({
+      ...noWork,
+      total_hint: p.asked_by ? 3 : p.watcher ? 2 : p.collaborator ? 0 : 7,
+    }),
     work_my_work: {
       ...emptyDay,
       asked_of_me: [
@@ -461,27 +473,56 @@ test("a claim's count is the engine's total, not the length of its page", async 
     work_items: { ...noWork, total_hint: 0 },
     work_my_work: {
       ...emptyDay,
-      collaborating: Array.from({ length: 20 }, (_, i) => task({ key: `ENG-${i}` })),
-      totals: { ...emptyDay.totals, collaborating: { total: 130 } },
+      unblocked_recent: Array.from({ length: 20 }, (_, i) => task({ key: `ENG-${i}` })),
+      totals: { ...emptyDay.totals, unblocked_recent: { total: 130 } },
     },
   });
   mount();
-  expect((await counts()).collaborating).toBe("130");
+  expect((await counts()).unblocked).toBe("130");
 });
 
 // AND A `+` ONLY WHERE THE ENGINE'S OWN COUNT STOPPED: a capped total is a
-// floor, and drawn bare it reads as exactly the ceiling.
+// floor, and drawn bare it reads as exactly the ceiling. Watching is the
+// tracker's own count of the list it draws, read the same way.
 test("a capped claim total says it is a floor", async () => {
   serving({
     viewer: ada,
-    work_items: { ...noWork, total_hint: 0 },
-    work_my_work: {
-      ...emptyDay,
-      totals: { ...emptyDay.totals, watching_recent: { total: 10000, capped: true } },
-    },
+    work_items: (p: Record<string, unknown>) =>
+      p.watcher
+        ? { ...noWork, total_hint: 10000, total_capped: true }
+        : { ...noWork, total_hint: 0 },
+    work_my_work: emptyDay,
   });
   mount();
-  expect((await counts()).watching).toBe(`${(10000).toLocaleString()}+`);
+  await waitFor(async () => expect((await counts()).watching).toBe(`${(10000).toLocaleString()}+`));
+});
+
+// WATCHING AND COLLABORATING ARE THE WORK LIST, narrowed to what the person
+// follows or was brought onto and does not hold — with the same toolbar as the
+// Queue. Drawn as a bare block, a forty-row Watching could not be searched,
+// filtered, grouped or paged past its first twenty.
+test("watching is the work list of what the person follows and does not hold", async () => {
+  location.hash = "#/me/watching";
+  const query = serving({
+    viewer: ada,
+    work_items: (p: Record<string, unknown>) =>
+      p.watcher ? { ...noWork, items: [task({ key: "ENG-3" })], total_hint: 1 } : noWork,
+    work_my_work: emptyDay,
+  });
+  mount("watching");
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const asked = query.mock.calls
+    .filter(([what, params]) => what === "work_items" && (params as { watcher?: string })?.watcher)
+    .map(([, params]) => params as Record<string, unknown>);
+  expect(asked.length).toBeGreaterThan(0);
+  for (const params of asked) {
+    expect(params.watcher).toBe("ada");
+    expect(params.assignee).toBe("!ada");
+  }
+  // THE SAME TOOLBAR AS EVERY OTHER WORK LIST.
+  expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Display" })).toBeTruthy();
+  expect(screen.getByRole("searchbox")).toBeTruthy();
 });
 
 // AND ASSIGNED ESCAPES IT, by asking the tracker's own question: `total_hint`
@@ -525,7 +566,8 @@ test("on your own day the Queue's count is the sidebar's reading, not a second o
     (c) =>
       c[0] === "work_items" &&
       (c[1] as Record<string, unknown>)?.limit === 1 &&
-      (c[1] as Record<string, unknown>)?.assignee,
+      (c[1] as Record<string, unknown>)?.assignee &&
+      !following(c[1]),
   );
   expect(counted.map((c) => (c[1] as Record<string, unknown>).assignee)).toEqual(["ada"]);
 });
@@ -547,11 +589,31 @@ test("on somebody else's day the Queue counts their work, with its own read", as
       (c) =>
         c[0] === "work_items" &&
         (c[1] as Record<string, unknown>)?.limit === 1 &&
-        (c[1] as Record<string, unknown>)?.assignee,
+        (c[1] as Record<string, unknown>)?.assignee &&
+        !following(c[1]),
     )
     .map((c) => (c[1] as Record<string, unknown>).assignee);
   // THE FRAME'S READ IS THE VIEWER'S, whatever day is on screen.
   expect(new Set(assignees)).toEqual(new Set(["ada", "rui"]));
+});
+
+// AT PHONE WIDTH THE BAR HOLDS THE WHOSE-DAY PICKER AND "MORE". The Queue's
+// order switch ran past a 390px bar beside it, its second word cut under the
+// overflow button, so it folds with the links and its two answers are in the
+// menu, the current one checked.
+test("the queue's order folds into the page menu on a phone, its answer checked", async () => {
+  location.hash = "#/me?order=priorities";
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
+  mount();
+  const order = await screen.findByRole("radiogroup", { name: "Order the queue by" });
+  expect(order.closest(".page-action-folds")).toBeTruthy();
+  const entries = vi.mocked(usePageMenu).mock.calls.at(-1)![0];
+  expect(entries.map((e) => [e.key, e.checked])).toEqual([
+    ["order-due", false],
+    ["order-priorities", true],
+    ["inbox", undefined],
+    ["all-work", undefined],
+  ]);
 });
 
 // NOTHING IS CLAIMED WHILE THE READ IS IN FLIGHT. A zero on the section a
@@ -579,8 +641,11 @@ test("the queue claims no count until the tracker answers", async () => {
   // ABSENT, not an empty string the header has to know to skip: the other
   // sections answered, and the queue is simply not among them.
   const figures = await counts();
-  expect(figures.watching).toBe("0");
+  expect(figures.unblocked).toBe("0");
   expect(figures).not.toHaveProperty("queue");
+  // AND THE TWO FOLLOWING LISTS ARE THE TRACKER'S COUNTS TOO, held back alike.
+  expect(figures).not.toHaveProperty("watching");
+  expect(figures).not.toHaveProperty("collaborating");
 });
 
 // ---------------------------------------------------------------------------
@@ -645,7 +710,7 @@ test("the assigned count asks the list's own subtask mode", async () => {
   mount();
   const calls = await waitFor(() => {
     const found = query.mock.calls
-      .filter((c) => c[0] === "work_items")
+      .filter((c) => c[0] === "work_items" && !following(c[1]))
       .map((c) => c[1] as Record<string, unknown>);
     if (!found.some((p) => !p.group_by && p.assignee) || !found.some((p) => p.group_by)) {
       throw new Error("the strip and the list have not both asked yet");
@@ -680,6 +745,7 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
     (c) =>
       c[0] === "work_items" &&
       !(c[1] as Record<string, unknown>).asked_by &&
+      !following(c[1]) &&
       JSON.stringify(c[1]) !== frames,
   );
   expect(items.length).toBeGreaterThan(0);
@@ -1358,8 +1424,9 @@ test("a claim that is a set rather than a sequence draws no places", async () =>
   location.hash = "#/me/watching";
   serving({
     viewer: ada,
-    work_items: noWork,
-    work_my_work: { ...emptyDay, watching_recent: [task({ key: "ENG-3" })] },
+    work_items: (p: Record<string, unknown>) =>
+      p.watcher ? { ...noWork, items: [task({ key: "ENG-3" })], total_hint: 1 } : noWork,
+    work_my_work: emptyDay,
   });
   const { container } = mount("watching");
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());

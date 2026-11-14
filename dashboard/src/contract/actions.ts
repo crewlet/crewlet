@@ -330,7 +330,10 @@ export const ACTIONS = {
     // shared, or kept to the person who saved it with `personal` — whose
     // record it is the engine decides from the caller, never from a name a
     // screen sends.
-    args: ["container", "name", "type", "params", "personal"],
+    //
+    // AND A VIEW'S OWN PAGE'S "EDIT VIEW": its name and who sees it, the same
+    // write naming the view it replaces (`id`).
+    args: ["id", "container", "name", "type", "params", "personal"],
     domain: "tracker",
     apps: ["worklet"],
     refreshes: [],

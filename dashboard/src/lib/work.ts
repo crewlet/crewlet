@@ -630,7 +630,7 @@ export function secondAxisOptions(
   workspace: boolean,
 ): { value: string; label: string }[] {
   return [
-    { value: "", label: "No second grouping" },
+    { value: "", label: "No subgroups" },
     ...groupAxisOptions("board", workspace).filter((a) => a.value !== first),
   ];
 }
@@ -1936,7 +1936,8 @@ export function clearFiltersPatch(fieldKeys: Iterable<string>): Record<string, n
  * the two, never both and never neither, which is what the union says: a lock
  * naming nobody would be the screen that is not a host, spelled a second way.
  */
-export type ItemsLock = { assignee: string } | { asked_by: string };
+export type ItemsLock =
+  { assignee: string } | { asked_by: string } | { watcher: string } | { collaborator: string };
 
 export function buildItemsParams(args: {
   container: string;
@@ -1978,6 +1979,19 @@ export function buildItemsParams(args: {
   const lock = args.lock;
   if (lock && "assignee" in lock) params.assignee = lock.assignee;
   if (lock && "asked_by" in lock) Object.assign(params, askedByParams(lock.asked_by));
+  // WHAT A PERSON FOLLOWS, OR WAS BROUGHT ONTO, AND DOES NOT HOLD: the
+  // question the engine's own My work blocks ask, since what they hold is
+  // their Queue already. The leaving-out is ADDED to an assignee the reader
+  // picked rather than written over it, so "followed, and held by Ben" is
+  // still a question this list answers.
+  const follows = lock && "watcher" in lock ? lock.watcher : "";
+  const brought = lock && "collaborator" in lock ? lock.collaborator : "";
+  const person = follows || brought;
+  if (person) {
+    if (follows) params.watcher = follows;
+    if (brought) params.collaborator = brought;
+    params.assignee = [params.assignee, `!${person}`].filter(Boolean).join(",");
+  }
   return params;
 }
 

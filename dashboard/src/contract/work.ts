@@ -150,7 +150,9 @@ export const CHANGES = [
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow-up", phrase: "reordered somebody's priorities" },
-  { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
+  // A PERSON'S OWN PINS, INBOX MARKS AND SNOOZES: left out of the company's
+  // History, and drawn only where somebody asks for this kind.
+  { kind: "person_updated", mark: "inbox", phrase: "changed their pins or inbox" },
   { kind: "file_written", mark: "file-text", phrase: "wrote a file" },
   { kind: "file_removed", mark: "minus", phrase: "removed a file" },
   {
