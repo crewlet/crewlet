@@ -380,7 +380,8 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // completion is announced afresh at once, whatever the hand-back (renew.go),
 // and a renewal the broker does not take is said here, as what it leaves: no
 // delivery to make it again on, so this node makes it again on its own timer
-// until one lands, the run settles or the seat is let go ([refirePublish]).
+// until one lands or this node settles the run, whoever holds the seat by then
+// ([refirePublish]).
 // WHERE THE CLOCK RAN BEFORE IT, NOTHING IS ANNOUNCED: the delivery
 // refused while the clock ran was handed back, never acknowledged, and is in
 // flight still, renewed on its own budget, so an announcement made here beside
@@ -433,5 +434,5 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 		"detail", "the completion re-fired when its condition cleared was handed back, and its "+
 			"box's host cannot read the coordination store, so no waiter announces it; it could not "+
 			"be announced afresh either, and this node announces it again on its timer until one "+
-			"lands, the run settles or the seat is let go")
+			"lands or it settles the run, to whoever holds the seat")
 }

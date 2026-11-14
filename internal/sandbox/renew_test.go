@@ -930,16 +930,22 @@ func brokerTakes(rig *coordRig) {
 // back on: left so, the completion of a job whose box's host cannot read the
 // store waited for that store, its host's waiter announcing nothing. So this
 // node publishes it again on its own timer, on the hand-back's spacing (a
-// second, doubling to thirty), until one lands; and drops it once the run
-// settles or the seat is let go, when announcing the job is no longer this
-// node's to do, or once a later re-fire's own announcement afresh lands, which
-// carries the completion in its place, one announcement in flight.
+// second, doubling to thirty), until one lands, and KEEPS IT PAST THE SEAT'S
+// RELEASE AND A LEASE IT LOST: the publish goes to the seat's control topic,
+// which needs no lease and which whoever holds the seat next reads, and
+// nothing else carries the completion there, the delivery it was kept from
+// acknowledged and the host's waiter silent. It drops it once this node
+// settles the run, when announcing the job is no longer anybody's to do, or
+// once a later re-fire's own announcement afresh lands, which carries the
+// completion in its place, one announcement in flight.
 //
 // Mutation: leave a refused re-fire's announcement unmade, and nothing carries
-// the completion; arm it again at a fixed spacing; keep it past the seat's
-// release, or past the run's settle, and this node announces a completion that
-// is no longer its own to announce; keep it past a later re-fire's
-// announcement that landed, and the completion has two in flight.
+// the completion; arm it again at a fixed spacing; drop it at the seat's
+// release, or at a lease this node lost, and the seat's next holder is never
+// told of a job no waiter announces; keep it past the run's settle, and this
+// node announces a completion that is no longer anybody's to announce; keep it
+// past a later re-fire's announcement that landed, and the completion has two
+// in flight.
 func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 	t.Parallel()
 
@@ -971,15 +977,19 @@ func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 		})
 	})
 
-	t.Run("dropped when the seat is let go", func(t *testing.T) {
+	t.Run("kept past the seat's release, for its next holder", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			rig, _ := refusedRefire(t)
-			brokerTakes(rig)
 			rig.coordinator.ReleaseSeat("swe")
-			rig.fireRetries()
-			if renewed := renewedOn(rig); len(renewed) != 0 {
-				t.Fatalf("a seat let go of still had its completion announced %d times", len(renewed))
-			}
+			announcedOnceItLands(t, rig)
+		})
+	})
+
+	t.Run("kept past a lease this node lost", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			rig, _ := refusedRefire(t)
+			rig.coordinator.lease = notLeased
+			announcedOnceItLands(t, rig)
 		})
 	})
 
@@ -1050,6 +1060,33 @@ func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 			}
 		})
 	})
+}
+
+// announcedOnceItLands holds rig's refused re-fire announcement, the seat now
+// not this node's, to one still owed: refused once more, armed again, and
+// announced once the broker takes it, with nothing armed after that.
+func announcedOnceItLands(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if fired := rig.fireRetries(); fired != 1 {
+		t.Fatalf("%d attempts were armed for the refused announcement once the seat was not this node's; "+
+			"want it still owed", fired)
+	}
+	if renewed := renewedOn(rig); len(renewed) != 0 {
+		t.Fatalf("the broker took %d announcements it was to refuse", len(renewed))
+	}
+	brokerTakes(rig)
+	rig.fireRetries()
+	renewed := renewedOn(rig)
+	if len(renewed) != 1 {
+		t.Fatalf("the completion was announced %d times once the broker took it; want once, to the seat's "+
+			"control topic, which whoever holds the seat reads", len(renewed))
+	}
+	if got, ok := renewed[0].Data.(*types.ExecutorFinished); !ok || got.TurnID != "t1" {
+		t.Fatalf("published %+v; want t1's completion", renewed[0].Data)
+	}
+	if fired := rig.fireRetries(); fired != 0 {
+		t.Fatalf("%d attempts were still armed once the announcement landed", fired)
+	}
 }
 
 // linesSaying is every line of logs whose message is msg.

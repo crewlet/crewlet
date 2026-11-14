@@ -1099,8 +1099,9 @@ type Coordinator struct {
 	// id, kept until the job's run settles ([hostUnsettled]). Under mu.
 	unsettled map[string]hostUnsettled
 	// republish is each re-fire's announcement afresh the broker did not
-	// take, by turn id, made again on this node's timer until one lands, the
-	// run settles or its seat is let go ([refirePublish]). Under mu.
+	// take, by turn id, made again on this node's timer until one lands or
+	// this node settles the run, its seat let go or not ([refirePublish]).
+	// Under mu.
 	republish map[string]*refirePublish
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
@@ -6985,15 +6986,14 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 		}
 	}
 	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
-	// successor's collections start one of their own. And any re-fire's
-	// announcement it still owed: the run's completion is the successor's
-	// to announce now, and its waiter's, or the delivery handed back for it.
+	// successor's collections start one of their own.
+	//
+	// NOT A RE-FIRE'S ANNOUNCEMENT IT STILL OWES ([refirePublish]): that
+	// publish needs no lease and reaches the successor on the seat's control
+	// topic, and nothing else tells it of the job, since the delivery the
+	// re-fire was kept from was acknowledged and the host's waiter announces
+	// nothing while its store is silent. It is made until one lands.
 	maps.DeleteFunc(c.unsettled, func(_ string, u hostUnsettled) bool { return u.handle == handle })
-	for turnID, p := range c.republish {
-		if p.ev.AgentHandle == handle {
-			c.dropRepublishLocked(turnID)
-		}
-	}
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail
