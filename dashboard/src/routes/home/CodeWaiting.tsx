@@ -45,6 +45,7 @@ import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/gitlet/ChangeList.tsx";
 import { changeObject, changesHref } from "~/routes/gitlet/paths.ts";
 import { WidgetQuery } from "./board/kit.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How many changes each half lists: THREE, the count "Needs your decision"

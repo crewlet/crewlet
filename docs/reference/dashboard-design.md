@@ -1389,7 +1389,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/gitlet` | **Gitlet › Changes**, Gitlet's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, open findings and when it last moved — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(the whole of Gitlet needs Gitlet access; hidden where the company hosts no code; see [The Gitlet workspace](#the-gitlet-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer, a need or a window) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `window=24h\|7d\|30d` · `peek=change:{repo}!{n}` |
 | `#/gitlet/repos` | **Gitlet › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
-| `#/gitlet/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|checks\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
+| `#/gitlet/repos/{name}` | **A repository**, laid out as a code host lays one out: its header (its name under its owner's, its marks — its state where it is not active, scratch, a pull mirror, read by its unit — and its description) and tabs **Code**, where it lands (the files at a revision: at a directory the latest commit that touched it across the head of a card of its entries, each with its glyph, and at the root its README in a card of its own and the **About** rail beside them — its counts and its properties; at a file one card of its numbered lines, the lines picked ruled, switched to its **Blame**, with its **History** and a **Permalink** at the commit the revision resolved to; the branches and tags beside the revision picker at the root, and **Clone**, its address with its copy), **Changes** (the changes proposed to it, in the grid every listing of changes draws, by state), **Commits** (the history at a revision, of a path or of every path, banded by the day each commit was authored, each with who wrote it, who pushed it and the work item a seat's push was charged to, and its id with its copy), **Branches** (its live branches by name, each opening its code, and its tags under them), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, a card each, shown and never edited here where the repository is declared: those lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=code\|changes\|commits\|branches\|pushes\|checks\|settings` (`code` is never spelled: it is the landing) · on Code and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Code, `lens=blame` and `lines=` (`12`, or `12-20`) · on Changes, `state=` |
 | `#/gitlet/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; on a live change, the merge controls above the tabs — where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; and **Re-run checks** — each refusal said by Gitlet's own word; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Provenance** (who opened it, from which turn and executor, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|checks\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
@@ -5523,7 +5523,7 @@ a tool arrives in it with the control that sends it. The controls
 | Delete repository · Restore repository | A repository's Settings tab; a deleted repository's page | `code_delete_repo{repo, reason?}`, asked once its name is typed · `code_restore_repo{repo}` |
 | Protect a branch · Edit · Remove (a rule) | A repository's Settings tab, and Protect on the row of a branch no rule names | `code_protect_branch{repo, pattern, …}`: only the fields moved; `remove` after a confirmation |
 | New branch · Delete (a branch) | A repository's Branches tab | `code_create_branch{repo, branch, at}` · `code_delete_branch{repo, branch, expected_head}` after a confirmation, at the head the row shows |
-| Edit · Delete file · New file · Add a file | A repository's Files tab, on a branch; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
+| Edit · Delete file · New file · Add a file | A repository's Code tab, on a branch: a file's card and a directory's bar; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
 | Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
 | Answer finding | A standing finding on a change's Files tab | `code_resolve_finding{change, findings, resolution, note?}` |
@@ -8501,7 +8501,14 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   sentence, for one holding no human seat; the dialog's Import is held until
   the form is one the engine takes. The new repository reads `importing`
   until its home Gitlet node has landed the source.
-- **A repository's page**, `#/gitlet/repos/{name}`, is its row (`code_repo`,
+- **A repository's page**, `#/gitlet/repos/{name}`, is laid out as a code
+  host lays one out: its header names it under its owner's name off the chart
+  (the kit's `ObjectHeader`, the owner its eyebrow's `within`), with its marks
+  — its state where it is not active, Scratch, a pull mirror, a repository
+  only its unit's seats read, each outlined and uncoloured — and its
+  description, and its tabs are **Code**, where it lands, **Changes**,
+  **Commits**, **Branches**, **Pushes**, **Checks** and **Settings**, each with
+  its glyph. It is its row (`code_repo`,
   read at the tab's floor and again every minute, the row alone: its path
   owners and its rules' merge gates are its Settings tab's own ask,
   `path_owners=true` and `gates=true`, read as the tab opens) and its CONTENT, which its
@@ -8510,7 +8517,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   path names one, so a path is one read), a file's lines (`code_blob`, a page
   at a time, the pages concatenating to the file's bytes), its blame
   (`code_blame`), its history (`code_log`) and its branches (`code_refs`). The
-  address is the place: `ref=` the revision (none is the default branch; a
+  address is the place: the Code tab is never spelled, so a file's address is
+  the repository's and its path; `ref=` the revision (none is the default branch; a
   branch by its name, a tag by its whole ref, which no branch of the same
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
@@ -8535,27 +8543,62 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   not have, which the engine refuses as a `start_line`, reads the file again
   from line 1 and is said so beside its size.
   The revision picker lists the first page of the branches and of the tags
-  (`code_refs`), read ONCE by the page while its Files or Commits tab is open
+  (`code_refs`), read ONCE by the page while its Code or Commits tab is open
   and handed to every picker it draws — a comparison's two pickers share one
   read too — so a move between the root and a path, or between the two tabs,
-  asks neither listing again.
+  asks neither listing again. At the root the bar beside it counts the
+  branches and the tags the row holds, each a link to the Branches tab, where
+  the path back up to the root stands under a path: the repository's name,
+  then each directory, a link.
   Opening a directory or a file is a new place in the history; picking lines,
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's
   whole id: an address that says the same thing tomorrow, which the engine
-  answers immutably. **Overview** is what the repository holds, a rail of how
-  code search reads it and where it stands with other hosts — its search mode,
-  its import's progress (the chunks landed so far, or how it ended), the pull
+  answers immutably. **Code** is the files at the revision. A directory is
+  ONE CARD: the latest commit that touched it across its head — one commit of
+  the path's history (`code_log`, `limit` 1) read at the commit the listing
+  resolved, so the bar and the entries under it are one revision — its
+  author's face, its subject linking the commit's page, its id with its copy
+  (the kit's `Copyable`, the commit's whole id copied), when, and the path's
+  **History**; then the entries, flush on the grid every list is drawn with,
+  each its glyph (a folder, a submodule's package, a link, an executable, prose
+  or code — told apart by drawing, never by hue) and its name, its kind said
+  to a screen reader beside it, a file its size, git's order until the whole
+  directory is here and then directories first by name, a head away. At the
+  root, the README follows in a card of its own, read at the commit the
+  listing resolved and rendered by the dashboard's own Markdown renderer,
+  which builds every element itself, and beside the files stands the
+  **About** rail: its pushes, its protection rules, its size and its last
+  push, each a link where a tab lists them, then its properties — who owns
+  it, which seats read it, its kind, what manages it, when it was declared,
+  the reader's access, its last activity, how code search reads it, its
+  import's progress (the chunks landed so far, or how it ended), the pull
   mirror it follows and its last sync, the push mirror it pushes to and as
-  which seat, each from the repository's own row (`remotes`) — and the README
-  at its default branch's root, read at the commit that root was listed at
-  and rendered by the dashboard's own Markdown renderer, which builds every
-  element itself. While an import runs, the header's state pill says
-  `importing`, its title how far it went. **Commits** is the history at a revision, of the path the
-  address names or of every path, with who pushed each commit where the
-  answering node's index holds the push — who pushed, which the commit's own
-  author line is not. **Pushes** is the repository's push history, as Gitlet ›
-  Pushes draws it. **Branches** lists the live branches and writes them:
+  which seat, each from the repository's own row (`remotes`). Under a path the
+  files take the page's width. A file is ONE CARD: its name, its lines and
+  size across its head (and a line its address picks that it does not have),
+  the switch between its **Code** and its **Blame** (`lens=blame`, each run of
+  lines headed by its commit — when, its author's face, its subject linking
+  the commit), its **History**, its **Permalink** and its writes; then its
+  lines, a tab four columns wide. **Clone**, at the root, opens the address a
+  person clones from — the API's own origin, which serves the dashboard, and
+  `/git/{name}.git` — with its copy, and what git asks for: the reader's own
+  token, minted by `crewlet iam token -login`, which `crewlet gitlet
+  credential` hands git. While an import runs, the header's state mark says
+  `importing`, its title how far it went. **Changes** is Gitlet › Changes
+  narrowed to the repository, in the grid every listing of changes draws
+  (`ChangeList`, `repo=`), the open ones until the bar picks another state
+  (`state=`, every state among them, since the repository narrows the walk),
+  with the way to Gitlet › Changes narrowed alike. **Commits** is the history at a revision, of the path the
+  address names or of every path, BANDED BY THE READER'S DAY each commit was
+  authored — a run of consecutive commits on one day a band, so git's order
+  is never re-sorted to fit — each commit its subject, its author's face and
+  name and when, who pushed it where the answering node's index holds the
+  push and that is somebody else (who pushed, which the commit's own author
+  line is not), the work item a seat's push was charged to, and its id with
+  its copy. **Pushes** is the repository's push history, as Gitlet ›
+  Pushes draws it. **Branches** lists the live branches, each its glyph,
+  its name and its marks, and writes them:
   **New branch** (`code_create_branch`, a name and where it starts, the
   default branch when left empty), and on each row **Protect**, which opens
   the protection form on that branch's ref (a branch a rule names already is
@@ -8565,22 +8608,29 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   row shows as `expected_head`, so a branch pushed to since is refused
   rather than deleted unseen; the confirmation says its commits stay in the
   history, that a change proposing it loses its source, and names the
-  default branch as one. A new branch takes write and a delete maintain, and
+  default branch as one. Its **Tags** follow under it, the same listing under
+  `refs/tags/`, each opening its code at its whole ref. A new branch takes
+  write and a delete maintain, and
   a repository that is archived, deleted, importing or a pull mirror takes
-  neither, each held with that sentence. **Files** commits from the browser
+  neither, each held with that sentence. **Code** commits from the browser
   (`code_commit_files`) on the branch the page's read resolved (never the
   address's spelling of it, which may name a branch bare, a tag, or nothing
-  for the default branch), at the commit it stood at (`expected_head`):
+  for the default branch), at the commit it stood at (`expected_head`), from
+  the file's card and the directory's bar:
   **Edit** opens the file's
   every page read at that commit, joined, in an editor with the commit's
   message (a text file of at most 256 KiB; a larger or a binary one is held,
   saying to commit it from a clone), **Delete file** confirms with its
   message, and a directory's **New file** takes a path and its text. Each is
   one commit of one file; at a tag or a commit they are held, saying to
-  choose a branch. An empty repository's Files tab says nobody has pushed a
-  branch yet and offers **Add a file**: its first commit, a root commit that
-  makes its default branch, sent with no `expected_head` since nothing was
-  read, so a repository made with New repository is filled without a clone. **Settings** shows the repository's settings, its
+  choose a branch. An empty repository's Code tab is one card saying nobody
+  has pushed a branch yet, offering **Add a file** — its first commit, a root
+  commit that makes its default branch, sent with no `expected_head` since
+  nothing was read, so a repository made with New repository is filled
+  without a clone — its clone address with its copy, and the two commands
+  that push a repository the reader already has into it. **Settings** is a
+  card a section, as a code host's settings page is, each titled with what it
+  governs and a line saying so, and shows the repository's settings, its
   protection rules with their merge gates — a gate that requires a check
   with how its queue lands a change (each change tested merged on the branch
   before it lands) —
@@ -8697,7 +8747,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   no floor: it answers at the commit each repository was searched at (`tips`). The
   lines are grouped by repository and then by file in the engine's order —
   repository, path, line — never re-sorted; each line's number opens its file
-  on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
+  on the repository's Code tab AT THAT COMMIT, by its whole id, with the line
   picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
   search said today; a path that is not UTF-8 is drawn with no link, since no
   address names it. **What was not searched is a Callout above the lines on

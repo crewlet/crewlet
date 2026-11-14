@@ -25,6 +25,7 @@ import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /** A `line=` as the address spells it: a line number, or 0 for none. */
 function lineOf(param: string): number {
@@ -291,10 +292,7 @@ function FilePatch({
       {outside && (
         <p className="muted">
           {`Line ${line} is outside what this diff changes. `}
-          <a
-            className="t-link"
-            href={repoHref(repo, { tab: "files", ref: head, path, lines: String(line) })}
-          >
+          <a className="t-link" href={repoHref(repo, { ref: head, path, lines: String(line) })}>
             {`Open ${path} at line ${line}`}
           </a>
         </p>

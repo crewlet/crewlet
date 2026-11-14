@@ -67,6 +67,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { repoHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
+import "~/styles/gitlet.css";
 
 /** Each mode, as the bar offers it. */
 const MODE_WORDS: Readonly<

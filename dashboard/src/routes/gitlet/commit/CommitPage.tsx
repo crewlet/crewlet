@@ -51,6 +51,7 @@ import { subjectOf } from "../repo/History.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
+import "~/styles/gitlet.css";
 
 /** Every way a push's commits came to be, in words (`gitlet.PushVias`). */
 const VIA_WORDS: Readonly<Record<string, string>> = {

@@ -208,7 +208,8 @@ test("a failure of an attempt with no base opens the file at its commit on its l
     "http://x",
   );
   expect(at.hash).toContain("/gitlet/repos/web?");
-  expect(at.hash).toContain("tab=files");
+  // THE CODE TAB IS THE REPOSITORY'S LANDING, so the address names no tab.
+  expect(at.hash).not.toContain("tab=");
   expect(at.hash).toContain(`ref=${OID}`);
   expect(at.hash).toContain("path=app%2Fretry.go");
   expect(at.hash).toContain("lines=12");

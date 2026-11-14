@@ -126,12 +126,14 @@ could, so owning `deploy/**` lets no seat push there that could not before
 A project the document does not declare is made in the dashboard too: **New
 repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
 the unit that owns it and, where you say them, a description, a default
-branch and which seats read it, and opens its page. Its **Files** tab adds its
-first file with **Add a file**, the root commit that makes its default branch,
-so it needs no clone to start. From then on the repository's page writes it
-from the browser, each write one commit or one ref moved, as you:
+branch and which seats read it, and opens its page. Its **Code** tab, where
+the page lands, adds its first file with **Add a file**, the root commit that
+makes its default branch, so it needs no clone to start; beside it, the
+address to clone it from and the two commands that push a repository you
+already have into it. From then on the repository's page writes it from the
+browser, each write one commit or one ref moved, as you:
 
-- **Files**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
   file**, or **New file** in a directory (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
@@ -223,7 +225,8 @@ and a service account is created with it (`crewlet iam create -kind machine
 
 ## Clone, fetch and push
 
-The address is the API's own, on `api.port` — never the public listener:
+The address is the API's own, on `api.port` — never the public listener —
+and a repository's page offers it under **Clone**, beside its files:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -1485,8 +1488,8 @@ exists already when it is made a pull mirror — its `code.repos` entry's
 `importing` until the source has landed, every branch and tag it holds but a
 seat's own made the source's and one the source does not have deleted. Your own assistant does the
 same with `code_import_repo`, and so does **Import a repository** on the
-dashboard's Gitlet › Repositories, where the repository's Overview then says
-how far the import went; no seat is offered it. Every flag is in
+dashboard's Gitlet › Repositories, where the About rail beside the
+repository's code then says how far the import went; no seat is offered it. Every flag is in
 [`crewlet gitlet import`](../reference/cli.md#crewlet-gitlet-import).
 
 #### Your machine pushes it

@@ -99,6 +99,7 @@ import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How often the listing's first page is read again while it is open: a

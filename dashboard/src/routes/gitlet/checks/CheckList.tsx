@@ -55,6 +55,7 @@ import type {
   CodeChecksAnswer,
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
+import "~/styles/gitlet.css";
 
 /**
  * How often a listing's newest page is read again: HALF A MINUTE. A check ends minutes after it starts, and the code log
@@ -396,7 +397,7 @@ export function failureHref(repo: string, d: CodeCheckRow, f: CodeCheckFailure):
   if (!f.path) return commitHref(repo, d.oid);
   if (!d.base) {
     return f.line
-      ? repoHref(repo, { tab: "files", ref: d.oid, path: f.path, lines: String(f.line) })
+      ? repoHref(repo, { ref: d.oid, path: f.path, lines: String(f.line) })
       : commitHref(repo, d.oid);
   }
   return compareHref(repo, { base: d.base, head: d.oid, file: f.path, line: f.line });

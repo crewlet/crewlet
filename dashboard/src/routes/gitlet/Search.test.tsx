@@ -70,7 +70,6 @@ test("asks the address's search over REST, at no floor, and links each line at i
   const target = new URLSearchParams(line.getAttribute("href")!.split("?")[1]);
   expect(line.getAttribute("href")).toMatch(/^#\/gitlet\/repos\/web\?/);
   expect(Object.fromEntries(target)).toEqual({
-    tab: "files",
     ref: TIP,
     path: "src/app.ts",
     lines: "7",
