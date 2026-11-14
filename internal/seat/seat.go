@@ -69,7 +69,7 @@
 // claimed the seats anyway. Go's (value, error) is that distinction; see the
 // coord package doc.
 //
-// Three more properties, each of which replaced something that looked
+// Four more properties, each of which replaced something that looked
 // reasonable and was not:
 //
 //   - Admission is FRESHNESS, not membership. [Host.MayStart] answers
@@ -85,6 +85,12 @@
 //     and keeps renewing it rather than handing the seat on. A lease held a
 //     little too long costs latency; a lease released too early costs
 //     correctness.
+//   - A seat still being taken is CUT, never waited for. Its acquire hook has
+//     no total and runs under the seat's own lock, so a lease lost and a drain
+//     end the hook's context rather than taking that lock, and the seat is
+//     never established once cut. Waiting froze the heartbeat until the
+//     [Watchdog] ended the process, and held a drain for every acquisition in
+//     flight.
 //
 // # The node that neither works nor dies
 //
@@ -369,6 +375,14 @@ type Hooks interface {
 	// (ReasonAcquireFailed) and backs this node off it for one TTL, because
 	// a takeover that failed would otherwise read as owned to the whole
 	// fleet while nothing runs it.
+	//
+	// ctx is CUT — ended — when the seat's lease is lost or this node begins
+	// its drain while the hook runs, so a hook that has no total of its own
+	// should stop on it. Nothing waits for one that does not, and whatever it
+	// returns after a cut, the seat is given back as never established
+	// (ReasonAcquireFailed), backed off after a lost lease and not after a
+	// drain. ctx also ends once the hook has returned: what outlives the
+	// hook detaches from it.
 	OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// OnEstablished reports that a seat OnAcquire returned for is

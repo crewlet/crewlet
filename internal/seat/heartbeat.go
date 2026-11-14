@@ -238,6 +238,18 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 			continue
 		}
 
+		// A SEAT STILL BEING TAKEN IS CUT, never dropped here: dropping
+		// takes the seat's lock, and the claim running its acquire hook
+		// holds that lock for as long as the hook runs, which has no total.
+		// Waiting on it froze this loop's beat — the watchdog ended the
+		// process past a TTL, and on the boot's first pass, before the
+		// watchdog is armed, every seat that pass had already attached went
+		// unrenewed. The claim gives the cut seat back once its hook
+		// returns ([Host.tryClaim]).
+		if h.cutLostEstablishing(ctx, t) {
+			lost = append(lost, t.handle)
+			continue
+		}
 		if h.dropLostSeat(ctx, t) {
 			lost = append(lost, t.handle)
 		}
@@ -266,12 +278,18 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 // heartbeatTargets snapshots what to renew: the living and the undead, in a
 // stable order. The undead are renewed alongside the living because their
 // teardown was never proven, so a peer must not be able to claim them.
+//
+// A seat cut while it was being taken is not renewed: its lease is lost, or
+// the claim that took it is giving it back ([heldSeat.cut]).
 func (h *Host) heartbeatTargets() []heartbeatTarget {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := make([]heartbeatTarget, 0, len(h.held)+len(h.undead))
 	for _, handle := range slices.Sorted(maps.Keys(h.held)) {
 		e := h.held[handle]
+		if e.isCut() {
+			continue
+		}
 		out = append(out, heartbeatTarget{seat: e.seat, handle: handle, entry: e, lease: e.lease, renewedAt: e.renewedAt})
 	}
 	for _, handle := range slices.Sorted(maps.Keys(h.undead)) {
@@ -297,6 +315,34 @@ func (h *Host) recordRenew(t heartbeatTarget, now time.Time) {
 	if current == t.entry {
 		current.renewedAt = now
 	}
+}
+
+// cutLostEstablishing cuts a seat whose lease is definitively gone while it is
+// still being taken, reporting whether it was one: the seat this target names
+// is still the one in the held set, and its acquire hook is still running.
+//
+// It never takes the seat's lock, which the claim holds for the whole hook:
+// it ends the hook's context instead ([heldSeat.cut]), and the claim gives the
+// seat back as never established and backs off it once the hook returns. A
+// seat a drain cut already keeps that cause and is reported lost all the same,
+// since its lease is.
+func (h *Host) cutLostEstablishing(ctx context.Context, t heartbeatTarget) bool {
+	h.mu.Lock()
+	current := h.held[t.handle]
+	if current != t.entry || !current.establishing {
+		h.mu.Unlock()
+		return false
+	}
+	cut := current.cutLocked(cutLeaseLost)
+	h.mu.Unlock()
+	if cut != nil {
+		cut()
+	}
+	log.WarnContext(ctx, "seat_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
+		"establishing", true,
+		"hint", "a peer may already own this seat; its acquire hook is cut, and the claim "+
+			"that was taking it gives it back and stands back for one backoff")
+	return true
 }
 
 // dropLostSeat gives up a seat whose lease is definitively gone, reporting
