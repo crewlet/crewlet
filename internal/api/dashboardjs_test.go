@@ -2392,7 +2392,16 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// The settings that change the company document from the screens that
+	// show it (a limit's editor, the delegated-decision rules' switch, sheet
+	// and removal, a revision's Revert with its diff, Reload, and the whole
+	// document's editor with its check, problems and import), an artifact's
+	// Files panel, Move to's New folder and the new HTML page's question on
+	// leaving took it to 6016.0 KiB; a schedule's create, edit, pause,
+	// delete and run controls with the clock its times are drawn on added
+	// 20.1 KiB more, nearly all script, and took it to 6036.1 KiB
+	// (6,180,959 bytes, 62,516 over the last): 6037 KiB.
+	treeBudget = 5<<20 + 917<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
