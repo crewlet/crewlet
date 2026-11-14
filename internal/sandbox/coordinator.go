@@ -1077,7 +1077,8 @@ type Coordinator struct {
 	claiming map[string]int
 	// unsettled is the clock on each job's host that answered this node's
 	// collections that its own coordination store did not answer, by turn
-	// id ([hostUnsettled]). Under mu.
+	// id, kept until the job's collection settles ([hostUnsettled]). Under
+	// mu.
 	unsettled map[string]hostUnsettled
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
@@ -5360,10 +5361,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
 			// first: either way there is nothing left of it to do. A delete
-			// of this call's moves the seat for a recount already reading.
+			// of this call's moves the seat for a recount already reading,
+			// and no collection of its job is made again, so a clock on the
+			// store of its box's host goes too ([hostUnsettled]).
 			if deleted {
 				c.moved(run.AgentHandle)
 			}
+			c.forgetUnsettled(run.TurnID)
 			return nil
 		case errors.Is(err, ErrHandBackOwed), errors.Is(err, ErrAnswerOwed), errors.Is(err, ErrEndOwed):
 			run = settled

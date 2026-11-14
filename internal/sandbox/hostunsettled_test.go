@@ -372,3 +372,109 @@ func TestASeatLetGoOfForgetsTheClockOnItsHostsStore(t *testing.T) {
 		t.Fatal("the clock on the host's store outlived the seat's release")
 	}
 }
+
+// A CLOCK ON A HOST'S STORE GOES WITH THE COLLECTION IT TIMED, whatever that
+// comes to. It is this node's, kept in memory per job to bound a collection the
+// box's host keeps handing back unread, and it means nothing once the job's
+// collection is over: the turn launched its next job, or the run's record is
+// gone, at its turn's end or its deadline. Kept until the seat was let go, it
+// outlived every such run, a lost job's round carried on without its read
+// among them, on a seat a node may hold for weeks. But a lost job's round whose
+// resume failed is collected again, and its clock is kept for that: the next
+// collection finds the bound passed at once, rather than a box timeout later.
+//
+// Mutation: keep the clock through the turn's next launch, or through the
+// run's record deleted; or drop it as the round is carried on, before its
+// resume has landed.
+func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
+	t.Parallel()
+	timeout := DefaultBoxTimeout
+
+	// lostOnASilentHost has t1's job lost with its engine on node-a's host
+	// while node-a's store does not answer node-a's reads of the row, and its
+	// first carry handed back for that, the clock started, and the box timeout
+	// passed since.
+	lostOnASilentHost := func(t *testing.T) *coordRig {
+		t.Helper()
+		rig := newCoordRig(t)
+		_, run := unsettledHost(t, rig)
+		if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID,
+			JobLoss{Cause: LossEngineRestarted, Node: "node-a", At: rig.now}); err != nil || !marked {
+			t.Fatalf("MarkLost = %v, %v", marked, err)
+		}
+		rig.runner.Lose(Result{Text: "half way through"})
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		if !clocked(rig) {
+			t.Fatal("the premise: no clock was started on the host whose store did not answer")
+		}
+		rig.now = rig.now.Add(timeout)
+		return rig
+	}
+
+	t.Run("a round carried on whose turn launches its next job", func(t *testing.T) {
+		t.Parallel()
+		rig := lostOnASilentHost(t)
+		rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+			if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t1")); err != nil {
+				t.Errorf("the turn's relaunch: %v", err)
+			}
+		}
+		if err := collectAgain(t, rig); err != nil {
+			t.Fatalf("the carry past the box timeout = %v", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || resumed[0].Lost == nil {
+			t.Fatalf("the turn resumed %d times; want the lost round carried on once", len(resumed))
+		}
+		if clocked(rig) {
+			t.Fatal("the clock on the last job's host outlived the turn's launch of its next job")
+		}
+	})
+
+	t.Run("a round carried on whose turn ends", func(t *testing.T) {
+		t.Parallel()
+		rig := lostOnASilentHost(t)
+		if err := collectAgain(t, rig); err != nil {
+			t.Fatalf("the carry past the box timeout = %v", err)
+		}
+		rig.finished("t1")
+		if clocked(rig) {
+			t.Fatal("the clock on the job's host outlived the run's record")
+		}
+	})
+
+	t.Run("a run ended at its turn's deadline", func(t *testing.T) {
+		t.Parallel()
+		rig := lostOnASilentHost(t)
+		payload, _ := rig.completion("t1")
+		if err := rig.coordinator.completeAtDeadline(t.Context(), payload, rigLease,
+			"the seat's model is at its usage limit"); err != nil {
+			t.Fatalf("the ending at the deadline = %v", err)
+		}
+		rig.finished("t1")
+		if clocked(rig) {
+			t.Fatal("the clock on the job's host outlived the run ended at its deadline")
+		}
+	})
+
+	t.Run("a round carried on whose resume failed", func(t *testing.T) {
+		t.Parallel()
+		rig := lostOnASilentHost(t)
+		rig.resumer.failWith(errors.New("the model provider did not answer"))
+		if err := collectAgain(t, rig); err == nil {
+			t.Fatal("the carry whose resume failed was not handed back for a retry")
+		}
+		if !clocked(rig) {
+			t.Fatal("the clock went with a round its resume handed back to be collected again")
+		}
+		// THE NEXT COLLECTION finds the bound passed at once, a minute on.
+		rig.resumer.failWith(nil)
+		rig.now = rig.now.Add(time.Minute)
+		if err := collectAgain(t, rig); err != nil {
+			t.Fatalf("the collection after the failed resume = %v; want the round carried on at once", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || resumed[0].Lost == nil {
+			t.Fatalf("the turn resumed %d times; want the round carried on at once by the collection after "+
+				"the resume that failed", len(resumed))
+		}
+	})
+}

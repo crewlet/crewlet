@@ -439,6 +439,19 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // or the seat's next holder starts it again, which can only make the verdict
 // later. A silence this node's own store shares gives nothing up: no claim of
 // the job lands while it lasts, so no collection is made to judge it.
+//
+// IT GOES WHEN THE JOB'S COLLECTION SETTLES, whatever that comes to: the host
+// answering a read its store answered ([Coordinator.noteHostStore]), the
+// collection given up or its job recorded lost with the host
+// ([Coordinator.collectFailed], [Coordinator.loseWithHost]), the turn launching
+// its next job here ([Coordinator.Launch]), the run's record deleted
+// ([Coordinator.finishEnding]), or the seat let go ([Coordinator.ReleaseSeat]).
+// It is KEPT through a hand-back that has the job collected again, a failed
+// resume of a lost job's round carried on without its read included, whose
+// next collection then finds the bound passed at once. Kept until the seat was
+// let go, as it was, a clock outlived every run that ended, or went on to its
+// next job, with no remote collection after it: a stop's, a deadline's, a lost
+// job's round carried on without its read.
 type hostUnsettled struct {
 	handle, launch string
 	since          time.Time
