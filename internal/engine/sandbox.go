@@ -3894,6 +3894,17 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // dead-letter, and no dead letter the silence leaves is the completion's last
 // copy (internal/sandbox's collectFailedAt, held by its
 // TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter).
+//
+// THE SILENCE OF THE BOX'S HOST'S STORE ALONE IS RENEWED BY THE COORDINATOR,
+// and reaches this as nil. A box on another node's host is driven by that
+// node's waiter alone, which reads the run's row through the silent store and
+// announces nothing, so the broker's redelivery is all that asks again, and
+// its budget is shorter than the box timeout that bounds the wait. So before
+// the delivery in hand is its last, the coordinator announces the completion
+// afresh and answers nil, and the delivery is ACKED: the fresh announcement
+// carries the completion on, one in flight. A renewal the broker does not take
+// answers the hand-back's error, and the delivery is NAK'd to try again on
+// ([sandbox.Coordinator.OnEvent], internal/sandbox's renew.go).
 func controlOutcome(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()

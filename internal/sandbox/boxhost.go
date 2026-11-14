@@ -111,7 +111,8 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 //
 // NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
 // is up: a collection handed it gives its claim back UNCOUNTED and has its
-// completion retried ([Coordinator.collectFailed]), a lost job's round is not
+// completion retried ([Coordinator.collectFailed]), and renewed where the
+// silence is its box's host's alone (renew.go), a lost job's round is not
 // carried on without its read for it ([Coordinator.collectGivenUp]), and a
 // stop's read of it is asked again. Each lasts for as long as a silent host is
 // waited for where the silence is the host's alone, a collection's by the
@@ -437,6 +438,10 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // up after that same bound, measured here ([Coordinator.collectGivenUp]), as
 // that waiter gives a gone node's jobs up: recorded lost with the host, and their
 // rounds carried on ([Coordinator.loseWithHost], [LossLaunchNodeStoreSilent]).
+// And the bound is REACHED: no waiter announces such a job again, since the
+// host's own reads the run's row through its silent store, so the collecting
+// node renews the completion before the broker's budget for its delivery runs
+// out, which is shorter than the box timeout (renew.go).
 //
 // IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
 // or the seat's next holder starts it again, which can only make the verdict
@@ -499,6 +504,17 @@ func (c *Coordinator) hostUnsettledFor(run PendingRun, cause error, now time.Tim
 		return 0, false
 	}
 	return now.Sub(kept.since), true
+}
+
+// hostClocked reports whether this node keeps a clock on the store of the host
+// of run's box for run's job ([hostUnsettled]): the host last answered a
+// collection of it that its store did not answer, and has answered nothing
+// else since.
+func (c *Coordinator) hostClocked(run PendingRun) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept, ok := c.unsettled[run.TurnID]
+	return ok && kept.launch == run.LaunchID
 }
 
 // forgetUnsettled drops the clock on the host of turnID's box, for a

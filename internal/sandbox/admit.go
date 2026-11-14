@@ -356,16 +356,34 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // refire offers a kept completion to [Coordinator.OnCompleted] again, under
 // the coordinator's own lifetime, as the waiter's next announcement would. A
 // refusal keeps it again; any other failure is left to that announcement.
+//
+// BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
+// re-fire has no delivery in hand for the broker to bring back: the delivery
+// that carried the completion was acknowledged when it was kept. So a claim the
+// re-fire hands back for that silence is announced afresh at once (renew.go).
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
 		return
 	}
-	if err := c.OnCompleted(ctx, kept.ev, kept.trigger); err != nil {
-		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+	err := c.OnCompleted(ctx, kept.ev, kept.trigger)
+	var unsettled *hostUnsettledHandBack
+	if !errors.As(err, &unsettled) {
+		if err != nil {
+			log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+				"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+				"error", err.Error(),
+				"detail", "the completion re-fired when its condition cleared was not settled; "+
+					"the waiter announces it again on its schedule")
+		}
+		return
+	}
+	if err = c.renew(ctx, kept.ev, kept.trigger, err); err != nil {
+		log.WarnContext(ctx, "sandbox_completion_refire_unsettled",
 			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
 			"error", err.Error(),
-			"detail", "the completion re-fired when its condition cleared was not settled; "+
-				"the waiter announces it again on its schedule")
+			"detail", "the completion re-fired when its condition cleared was handed back, and its "+
+				"box's host cannot read the coordination store, so no waiter announces it; it could not "+
+				"be announced afresh either, and waits for that host's store to answer")
 	}
 }
