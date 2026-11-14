@@ -733,6 +733,31 @@ func TestDescribeTriggerNamesTheIntegration(t *testing.T) {
 	}
 }
 
+// A TRIGGER'S SUMMARY IS ONE LINE WITHIN ITS BOUND. It rides every record of
+// the turn it woke, each one event of one message, and an integration's
+// subject is any length: a subject past MaxTriggerSummaryBytes keeps its
+// opening, the sender before it, cut on a character with the cut marked, and
+// a subject within it is kept as it is.
+//
+// Mutation: take the event's summary whole, and a mail with a megabyte of
+// subject puts a megabyte on every record of its turn.
+func TestATriggersSummaryIsOneLineWithinItsBound(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("ü", MaxTriggerSummaryBytes)
+	summary := DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+		Subject: long}, events.TraceContext{})).Summary
+	if len(summary) > MaxTriggerSummaryBytes || !strings.HasPrefix(summary, "Message from alice: ü") ||
+		!strings.HasSuffix(summary, "…") || !utf8.ValidString(summary) {
+		t.Errorf("a subject of %d bytes is summarised in %d bytes as %.40q…, want the opening within %d, cut on "+
+			"a character and marked", len(long), len(summary), summary, MaxTriggerSummaryBytes)
+	}
+	short := DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+		Subject: "Need a hand"}, events.TraceContext{})).Summary
+	if short != "Message from alice: Need a hand" {
+		t.Errorf("a short subject is summarised as %q, want it whole", short)
+	}
+}
+
 // An integration that named itself but no human must not invent one: the sender
 // and source-event-type keys stay absent rather than arriving blank.
 func TestDescribeTriggerOmitsUnnamedSender(t *testing.T) {
