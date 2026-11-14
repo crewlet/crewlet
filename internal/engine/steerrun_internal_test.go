@@ -1711,6 +1711,51 @@ func TestAConfirmationItsJobsRecordNoLongerTakesSaysSo(t *testing.T) {
 	}
 }
 
+// A CONFIRMATION IS JUDGED BY THE RECORD READ AFTER ITS TAKE, NEVER ONE READ
+// BEFORE IT. OpenCode's plugin names every note it owes in one confirmation, so
+// the one it makes again after an answer it lost names a note its job read
+// already beside one OpenCode delivered since. The inbox's view then shows the
+// second alone waiting, and the read asks the record before its take, which
+// still holds the second waiting though the take that follows records it.
+// Judged by that record, what the take left would be a note its job's record no
+// longer takes, and the confirmation turned away: the plugin asked again for
+// nothing, every time it confirmed a note again beside a new one.
+//
+// Mutation: judge what the take left off the record read before the take,
+// where the read asked it one, and the confirmation is turned away.
+func TestAConfirmationIsJudgedByTheRecordReadAfterItsTake(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and keep the flag off", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 2)
+	if notes, _ := inbox.Wait(ctx, 0); len(notes) != 2 {
+		t.Fatalf("the poll was answered %+v, want n-1 and n-2", notes)
+	}
+	// N-1 CONFIRMED, the answer lost on its way back to the plugin.
+	if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("the confirmation of n-1 answered %v", err)
+	}
+	viewHolds(t, inbox, 1)
+
+	// MADE AGAIN WITH N-2, which OpenCode delivered since: the view shows n-2
+	// alone waiting, so the record is read before the take.
+	if err := inbox.Read(ctx, []string{"n-1", "n-2"}); err != nil {
+		t.Errorf("a confirmation whose take recorded every note of it still waiting answered %v, "+
+			"want it done", err)
+	}
+	for _, id := range []string{"n-1", "n-2"} {
+		if read := readOn(ctx, store, "run-1", id); read == nil || read.Launch != launch ||
+			read.Boundary != string(types.SteerBoundaryStep) {
+			t.Errorf("%s is read %+v, want it read at job %s's step", id, read, launch)
+		}
+	}
+}
+
 // frozenWatch is a run store whose watch of a run's notes hands its follower
 // the record as it stands when the watch opens, and nothing after: a view that
 // stays behind the record.
