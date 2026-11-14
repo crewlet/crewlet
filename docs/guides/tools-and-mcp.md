@@ -1689,8 +1689,12 @@ agent's MCP tools (`agents`) and flags every agent holding more than
   to nobody. The agent's own limits count as they hold it
   ([Narrowing a server for a team](#narrowing-a-server-for-a-team)): a tool a
   limit blocks for it does not count, and a server a limit turns off for it
-  counts nothing. The engine's own tools are not counted (`builtin_tools` says how
-  many every agent holds).
+  counts nothing. The engine's own tools are not counted: `builtin_tools` says
+  how many of them the agent is offered, every one but those the engine leaves
+  off its surfaces, such as the health tools for an agent whose role carries no
+  `health_tools` and, below `full_access`, the code writes
+  ([Groups, and who may call each one](#groups-and-who-may-call-each-one),
+  [The company's code](#the-companys-code)).
 - **Each name counts once.** Two of an agent's servers listing a tool under
   the same name hand it one tool, so its total (`mcp_tools`) can be less than
   its servers' counts added up.

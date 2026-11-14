@@ -166,7 +166,7 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 	}})
 	surface, _ := configSurface(t, memberCompany)
 	s := queries.Sources{Coord: backend, Company: companySource(t, cfg), Config: surface,
-		Builtins: func() []queries.ToolRow { return catalogueBuiltins() },
+		Builtins: catalogueOffer,
 		MCPListings: fakeListings{listings: []coord.MCPListing{{Server: "github", Node: "node-a",
 			Epoch: epochs(t, backend)["node-a"], At: down, Instances: 1,
 			Info:         &coord.MCPServerInfo{Name: "github-mcp", Version: "1.4.0"},
