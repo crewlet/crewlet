@@ -370,7 +370,11 @@ type claimOnItsWay struct {
 	holding bool
 	// held is closed once the held claim has stopped before the store, goOn
 	// lets it go on, and claimed is closed once the store has answered it.
-	held, goOn, claimed chan struct{}
+	// read is closed by the case once that claim, having won, has read the
+	// job's box, which its collection does only after this node has taken the
+	// claim's answer ([Coordinator.claimCompletion]); once claimed is closed,
+	// the node may not have taken it yet.
+	held, goOn, claimed, read chan struct{}
 	// before and after, set, run once each around the next release: before it
 	// reaches the store, and once it has landed or failed, before its caller
 	// hears.
@@ -381,6 +385,7 @@ func newClaimOnItsWay(rig *coordRig) *claimOnItsWay {
 	return &claimOnItsWay{
 		unansweredRelease: &unansweredRelease{silentStore: &silentStore{PendingStore: rig.pending}, landed: true},
 		held:              make(chan struct{}), goOn: make(chan struct{}), claimed: make(chan struct{}),
+		read: make(chan struct{}),
 	}
 }
 
@@ -470,7 +475,11 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 			after: func(_ *coordRig, _ *claimOnItsWay, letGo func()) { letGo() }},
 		{name: "it lands while the release is out",
 			before: func(s *claimOnItsWay, letGo func()) {
-				s.around(nil, func() { s.answer(); letGo(); <-s.claimed })
+				// TAKEN BEFORE THE RELEASE'S ANSWER IS: the claim's read of the
+				// box, not the store's answer to it, is what says this node
+				// has taken the claim's answer, so the release's lost answer
+				// finds it taken over whichever goroutine runs first.
+				s.around(nil, func() { s.answer(); letGo(); <-s.read })
 			}},
 		{name: "it lands while the owed release is made again", owed: true,
 			after: func(rig *coordRig, s *claimOnItsWay, letGo func()) {
@@ -500,9 +509,12 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 				handed   = make(chan struct{})
 				mu       sync.Mutex
 				statuses []string
+				readOnce sync.Once
 			)
 			rig.runner.CollectFunc = func(ctx context.Context) error {
 				if reads.Add(1) != 1 {
+					// THE CLAIM ON ITS WAY, having won, reads the box.
+					readOnce.Do(func() { close(store.read) })
 					return nil
 				}
 				store.hold()
