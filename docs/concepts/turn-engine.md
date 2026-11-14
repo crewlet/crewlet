@@ -168,6 +168,8 @@ type Review struct {
 }
 ```
 
+Its words are held where they are made: `submit_review` refuses a `final_artifact` past 256 KiB (what a run's own report may weigh, since it is returned in that report's place) and `notes` or `completed_work` past 32 KiB each (what an executor's whole submission may weigh), naming the field, its size and its bound, so the reviewer shortens them. The artifact is the turn's answer on every record and reply that carries it, and the notes are every later round's brief, so a cut at each reader would hand each a different opening of one text.
+
 - `done` → return `FinalArtifact` (fallback: the executor's text), unless the post-review override overturns it.
 - `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
 - `failed` → the reviewer's own judgement that another round would not change the answer. No guard fired, so none is reported.
