@@ -785,9 +785,10 @@ func fewestAllocations(read func()) uint64 {
 // space alone) yields Claude Code's load nothing, faultSyntax; one whole value
 // that is no object is passed over by its test of a record, faultNotObject;
 // one object whose head key is of the wrong type is faultHead, naming the
-// kind of record it is where its type is one of the seven the load reads
+// kind of record it is where its type is one of the eight the load reads
 // (user, assistant, attachment, system, last-prompt, progress,
-// fork-context-ref) and none where it is another type or no string; a value
+// fork-context-ref, content-replacement) and none where it is another type or
+// no string; a value
 // cut at the line's break, which the load reads on past, is faultPrefix; a
 // whole value followed by more, which the load keeps, faultTrailing; a line
 // led by a NUL or a byte order mark, faultLead; and a value nested past the
@@ -830,6 +831,8 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 			`"}`, faultHead, recordProgress},
 		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
 			recordForkContextRef},
+		"a content replacement of a numeric agentId": {ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)),
+			`"agentId":"`+ctAgent+`"`, `"agentId":5`), faultHead, recordContentReplacement},
 		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
 			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
 		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
@@ -929,7 +932,8 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // alone, as a retraction list of the wrong shape leaves its retry's head and
 // message whole and is refused by Retracted alone, and a replacements list of
 // the wrong shape leaves its record's head whole and is refused by
-// ReplacedResults alone. A mark no plain record carries that is no boolean (a
+// ReplacedResults and ReplacementCount alone. A mark no plain record carries
+// that is no boolean (a
 // virtual record's, a shutdown's, a compaction's summary's), or a batch's
 // list of the wrong shape, leaves its record's head, message and usage whole
 // and is refused by its own accessor alone, and so does a timestamp of no
@@ -1017,6 +1021,9 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			ctReplaced(ctCall)+`]`, `"replacements":`+list))
 		if err := line.ReplacedResults(func(string) {}); err == nil {
 			t.Errorf("a record whose replacements are %s replaces results with no error; want one", name)
+		}
+		if n, err := line.ReplacementCount(); err == nil {
+			t.Errorf("a record whose replacements are %s lists %d with no error; want one", name, n)
 		}
 		if h := line.Head; h.Type != recordContentReplacement || h.AgentID != ctAgent || h.Chained() {
 			t.Errorf("a record whose replacements are %s reads with the head %+v", name, h)
@@ -1433,6 +1440,8 @@ func ctAllButUUID(l threadLine) string {
 	var replaced []string
 	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
 	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
+	replacements, err := l.ReplacementCount()
+	fmt.Fprintf(&b, "replacements listed: %d; %v\n", replacements, err)
 	virtual, err := l.IsVirtual()
 	fmt.Fprintf(&b, "virtual: %t; %v\n", virtual, err)
 	shutdown, err := l.InterruptedByShutdown()
@@ -2919,6 +2928,46 @@ func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
 	} {
 		if err := ctLine(t, record).ReplacedResults(func(string) {}); err == nil {
 			t.Errorf("a record of %s replaces results with no error; want one", name)
+		}
+	}
+}
+
+// A CONTENT-REPLACEMENT RECORD SAYS HOW MANY ENTRIES ITS LOAD SPREADS:
+// ReplacementCount counts every entry of a content-replacement record's
+// replacements, whatever its kind or shape, since 2.1.310's load spreads them
+// all into one call's arguments; reads nothing off a record of another type,
+// though it lists replacements; and is an error where the record lists them
+// in no list, which 2.1.310's load fails at: absent, null, a string, a number,
+// an object.
+//
+// Mutation: count only the entries that replace a tool's result, and a list
+// holding another kind or an entry of no shape reads short; or read an absent
+// list as none, and a record its load fails at reads with no error.
+func TestAContentReplacementRecordSaysHowManyEntriesItsLoadSpreads(t *testing.T) {
+	t.Parallel()
+	listed := ctReplacement("", ctReplaced(ctCall))
+	for name, tc := range map[string]struct {
+		record string
+		n      int
+	}{
+		"the main thread's": {ctReplacement("", ctReplaced(ctCall), ctReplaced(ctMCPCall)), 2},
+		"a subagent's":      {ctReplacement(ctAgent, ctReplaced(ctCall)), 1},
+		"one of another kind and of no shape": {ctReplacement("", `{"kind":"image","replacement":"x"}`, `"x"`, `7`,
+			ctReplaced(ctMCPCall)), 4},
+		"one of no entries": {ctReplacement(""), 0},
+		"a result listing replacements": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"replacements":[`+ctReplaced(ctCall)+`],"type":"user"`), 0},
+	} {
+		if n, err := ctLine(t, tc.record).ReplacementCount(); n != tc.n || err != nil {
+			t.Errorf("%s lists %d entries, %v; want %d", name, n, err, tc.n)
+		}
+	}
+	for name, list := range map[string]string{"absent": "", "null": `,"replacements":null`,
+		"a string": `,"replacements":"` + ctCall + `"`, "a number": `,"replacements":7`,
+		"an object": `,"replacements":{"x":[]}`} {
+		record := ctReplace(t, listed, `,"replacements":[`+ctReplaced(ctCall)+`]`, list)
+		if n, err := ctLine(t, record).ReplacementCount(); err == nil {
+			t.Errorf("a record whose replacements are %s lists %d with no error; want one", name, n)
 		}
 	}
 }

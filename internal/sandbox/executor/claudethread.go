@@ -485,20 +485,23 @@ func (f lineFault) Valid() bool {
 	return false
 }
 
-// recordKind is the type of a record Claude Code's load reads, one of seven:
+// recordKind is the type of a record Claude Code's load reads, one of eight:
 // the four its resume keeps in the map it walks (user, assistant, attachment
 // and system), the checkpoint of the leaf it starts from (last-prompt), the
-// progress record it bridges past (progress) and a subagent's reference to
-// the thread it forked from (fork-context-ref). Its zero value is none of
-// them: a line of another type, or one whose type is no string, which the
-// load passes over or files where no reader of a thread looks.
+// progress record it bridges past (progress), a subagent's reference to the
+// thread it forked from (fork-context-ref), and the record of the tool
+// results it hands replaced (content-replacement), whose list 2.1.310's load
+// spreads into the session's, failing the resume where that is no list
+// ([threadLine.ReplacementCount]). Its zero value is none of them: a line of
+// another type, or one whose type is no string, which the load passes over or
+// files where no reader of a thread looks.
 type recordKind string
 
-// recordKinds is the seven kinds, as the layer's own strings ([kindOf]).
+// recordKinds is the eight kinds, as the layer's own strings ([kindOf]).
 var recordKinds = [...]recordKind{recordUser, recordAssistant, recordAttachment, recordSystem, recordLastPrompt,
-	recordProgress, recordForkContextRef}
+	recordProgress, recordForkContextRef, recordContentReplacement}
 
-// Valid reports whether k is one of the seven kinds.
+// Valid reports whether k is one of the eight kinds.
 func (k recordKind) Valid() bool { return slices.Contains(recordKinds[:], k) }
 
 // Error says which line is no record, and why.
@@ -851,7 +854,8 @@ func wireDecode(raw []byte, v any) error {
 // ([threadLine.Message]), a reply's applied context edits
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
 // ([threadLine.Usage]), the results a content-replacement record replaces
-// ([threadLine.ReplacedResults]), the calls a batch's reply was split into
+// ([threadLine.ReplacedResults]) and how many entries it lists
+// ([threadLine.ReplacementCount]), the calls a batch's reply was split into
 // ([threadLine.BatchToolUses]), the records a compaction's boundary says it
 // kept ([threadLine.Preserved]) and those a refused or malformed reply's
 // retry takes back ([threadLine.Retracted]), the lists a run's event stream
@@ -2401,6 +2405,45 @@ func (l threadLine) ReplacedResults(each func(id string)) error {
 		each(id)
 		return nil
 	})
+}
+
+// ReplacementCount is how many entries a content-replacement record's
+// `replacements` lists, of every kind and shape. 0, and no error, on every
+// record of another type.
+//
+// WHAT THE LOAD DOES WITH THEM, as 2.1.310 and 2.1.322 read the record (the
+// content-replacement branch of 2.1.310's load, GMt, and of 2.1.322's, Szt).
+// Each passes the list into one call's arguments whole, to add it to the
+// session's (2.1.310's `push(...replacements)`; 2.1.322's the same of the
+// entries that are objects, once it has found a list), and a call takes no
+// more arguments than its engine allows: past that, the spread throws, and
+// with it the load, and the resume fails. And 2.1.310 spreads whatever the
+// key holds, which throws where it is no list (absent, null, a number, a
+// boolean, an object), where 2.1.322 passes such a record over. No thread the
+// probes kept holds such a record.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which reads no thread whose load may fail at one.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// list that is there, walked an element at a time ([eachElement]), each
+// element counted whatever it is. Anything else, a string among it, is this
+// accessor's error, never the line's.
+//
+// Read off the line's one decode, its raw `replacements`, never a second read
+// of the line.
+func (l threadLine) ReplacementCount() (int, error) {
+	if l.Head.Type != recordContentReplacement {
+		return 0, nil
+	}
+	n := 0
+	if err := eachElement(l.replacements, func(json.RawMessage, int) error {
+		n++
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("replacements: %w", err)
+	}
+	return n, nil
 }
 
 // Retracted hands each, in order and as written, every entry of a record's
