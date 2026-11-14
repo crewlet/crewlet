@@ -56,15 +56,15 @@
  * control nested in a control, which neither a keyboard nor a screen reader
  * can reach as itself. So it is the chart's card, then this link.
  *
- * # Message is a task that asks, and a direct message is chat's
+ * # Message writes to the seat, as on its page
  *
- * Message opens the one New task sheet with the seat as assignee and `ask`
- * set, so the question is filed as work the seat owes an answer on, and the
- * answer lands in the asker's Inbox. Where the company runs the engine's own
- * chat and the reader holds it, Direct message beside it opens a conversation
- * with the seat instead — a remark that obliges nothing, in the room the two
- * of them share. On the reader's own seat each is held, by the button itself,
- * exactly as on the seat's page.
+ * Where the company runs the engine's own chat and the reader holds it,
+ * Message opens a direct conversation with the seat, in the room the two of
+ * them share, and the footer's More offers "Ask as a task" for a question the
+ * seat owes an answer on. Elsewhere Message is that ask: the one New task
+ * sheet with the seat as assignee and `ask` set, whose answer lands in the
+ * asker's Inbox (`lib/seatMessage.ts`). On the reader's own seat each is
+ * held, by the control itself, exactly as on the seat's page.
  *
  * # Your own seat points at your Account
  *
@@ -75,7 +75,7 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   Callout,
@@ -91,9 +91,10 @@ import {
 import { EllipsisGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { useSeatMessage } from "~/lib/seatMessage.ts";
 import { SeatControlButtons, SeatRemedy, useSeatControls } from "~/components/seatControls.tsx";
 import { PAUSE_NOTE_WORDS, useLiveOrg, withWord } from "~/lib/seatLive.ts";
-import { useDirectMessageEntry } from "./DirectMessage.tsx";
+import { useAskTaskEntry } from "./AskTask.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -104,10 +105,9 @@ import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
-  SeatGestureDialog,
+  useSeatGesture,
   seatGestures,
   useHumanSeats,
-  type SeatGesture,
 } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import {
@@ -293,12 +293,14 @@ function SeatPeekBody({
   const directory = useHumanSeats(readsDirectory);
   const holding = directory.data?.find((row) => row.handle === seat.handle);
   const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
-  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
-  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED, and held by the peek
+  // itself so the dialog outlives what the write does to the listing.
+  const seatGesture = useSeatGesture(viewer.grants);
   // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
-  const directEntry = useDirectMessageEntry(seat.handle);
+  const askEntry = useAskTaskEntry(seat.handle);
+  const message = useSeatMessage(seat.handle);
 
   return (
     <div className="seat-peek">
@@ -557,9 +559,10 @@ function SeatPeekBody({
         </section>
       )}
 
-      {/* NO EMPTY FOOT: on a company running no Worklet, Message and Assign
-          task are not drawn, and a seat with nothing else to offer has none. */}
-      {(runs.tracker || directEntry.length > 0 || (holding && gestures.length > 0)) && (
+      {/* NO EMPTY FOOT: Message is not drawn where there is neither a
+          conversation to open nor Worklet to file an ask in, nor Assign task
+          without Worklet, and a seat with nothing else to offer has none. */}
+      {(runs.tracker || message !== null || (holding && gestures.length > 0)) && (
         <footer className="seat-peek-foot">
           {/* THE SEAT'S OWN ACTIONS, Message first. The rail's bar above
               the panel already opens the profile (its Open, to the same
@@ -574,35 +577,29 @@ function SeatPeekBody({
                 size="small"
                 variant="secondary"
                 leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
-                onClick={() => setOpening({ gesture, row: holding })}
+                onClick={() => seatGesture.open(gesture, holding)}
               >
                 {SEAT_GESTURE_WORDS[gesture].button}
               </Button>
             ))}
-          {/* DIRECT MESSAGE IN ITS "MORE", as on the seat page: a third
-              button pushed Assign task onto a row of its own. */}
-          {directEntry.length > 0 && (
+          {/* ASK AS A TASK IN ITS "MORE", where Message is the direct
+              conversation, as on the seat page: a third button pushed
+              Assign task onto a row of its own. */}
+          {askEntry.length > 0 && (
             <span className="seat-peek-more">
               <Menu
                 label={`More on ${seat.name}`}
                 icon={<EllipsisGlyph size="sm" />}
                 triggerVariant="ghost"
                 align="end"
-                items={directEntry}
+                items={askEntry}
               />
             </span>
           )}
         </footer>
       )}
       {controls.dialog}
-      {opening && (
-        <SeatGestureDialog
-          gesture={opening.gesture}
-          seat={opening.row}
-          held={viewer.grants}
-          onClose={() => setOpening(null)}
-        />
-      )}
+      {seatGesture.dialog}
     </div>
   );
 }

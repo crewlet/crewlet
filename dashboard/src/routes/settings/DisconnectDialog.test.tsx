@@ -120,6 +120,38 @@ test("a disconnect stuck at the app offers the way out immediately", async () =>
   expect(sent[0]!.body).toEqual({ remove_seats: false, force: true });
 });
 
+// A DISCONNECT THE COMPANY'S SETTINGS HOLD IS NOT THE VENDOR'S. The loop says
+// which (`teardown_held_by: settings`), and the dialog names the setting, says
+// where it is changed and offers no force: forcing writes the same revision,
+// and the settings refuse it again. It used to read "Jira hasn't let the
+// disconnect finish" over a list of setting paths. Mutation: ignore stuckOn
+// and the vendor sentence and its force come back.
+test("a disconnect the settings hold names the setting and offers no force", async () => {
+  const sent: Sent[] = [];
+  stubFetch(sent);
+  render(
+    <DisconnectDialog
+      name="Mattermost"
+      kinds={["mattermost"]}
+      stuck="engine: remove the mattermost block: roles[0].integrations.mattermost.channels: conflicting settings"
+      stuckOn="settings"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText("The company’s settings refused it")).toBeTruthy();
+  expect(screen.getByText("roles[0].integrations.mattermost.channels")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Configuration" }).getAttribute("href")).toBe(
+    "#/settings/config",
+  );
+  expect(screen.queryByText(/hasn’t let the disconnect finish/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /anyway/i })).toBeNull();
+  // DISCONNECT AGAIN is the ordinary ask, never a force.
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+  await waitFor(() => expect(sent.length).toBe(1));
+  expect(sent[0]!.body).toEqual({ remove_seats: false, force: false });
+});
+
 // AND A DISCONNECT THAT IS MERELY RUNNING DOES NOT. Offering the way out of a
 // teardown that is working invites somebody to abandon it a second after
 // asking for it.

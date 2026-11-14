@@ -2739,7 +2739,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state. SSH's also carries `ssh`: the authority's public line (`ca_public_key`, and `next_ca_public_key` during a rotation), the lines rotations retired (`retired_ca_public_keys`, newest last, which each server drops when its setup runs again), the `setup_version` this engine renders, the closed set of commands the engine runs on a server that lets the atlas read it (`inventory_commands`: `{"command", "containers"}`, `containers` marking the one run only where a server's container reads are on), and each server with its key fingerprints, users, whether the atlas reads it (`inventory`), the agents naming it and its latest Test connection with the current authority, as the server is now (a test from before its fields changed is not shown) |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `POST` | `/setup/integrations/{kind}/verify` | Check one typed credential at its vendor with a read-only call, before anything stores it. Writes nothing: no secret, no config, no revision and no reconcile state. See [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored) |
-| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block, turning off the agents that were on there in the same revision |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
@@ -3942,6 +3942,24 @@ account with nothing left to authenticate a second attempt. Until the teardown
 succeeds the surface reports phase `disconnecting`, labelled **Disconnecting**,
 and a failure holds it there and retries rather than letting it drift back to
 looking connected.
+
+**The block and the agents on through it leave in one revision.** The company
+document refuses an agent turned on at an integration the company has not
+connected (Mattermost, Jira, Confluence, SSH), so the revision that removes the
+block also turns off every seat that was on there: `enabled` becomes `false`
+and the rest of the seat's block (its roles, channels, projects, servers) is
+kept, so connecting again and turning the agent on restores what it was given.
+A seat already off, or with no block, is left as it is. The block alone used to
+be the whole revision, which those rules refused: the teardown retried it for
+ever and `force` answered `400`, until somebody turned every agent off by hand.
+A forced disconnect answers the handles it turned off as `seats_off`.
+
+A failed teardown pass is recorded on the surface's reconcile row with
+`teardown_held_by`: `vendor` where the third-party app's half failed, and
+`settings` where that half finished and the company's settings refused the
+revision that removes the block (some other rule the removal breaks, which
+`last_error` names by path). Forcing writes the same revision, so a disconnect
+the settings hold is moved by changing the setting, then disconnecting again.
 
 ```json
 { "remove_seats": false, "force": false }
@@ -6001,7 +6019,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `diagnostics_insights` | `{}` | `GET /diagnostics/insights`: Settings › Diagnostics. **Takes `admin`**. A store that cannot be read raises rather than answering an empty list |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each, and each agent's MCP tools against the tool budget. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
-| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
+| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off, settable}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. `settable` says whether `key` is a setting of the company document, which a `PATCH /config` of that path changes: true for every row but `schedules.timeout_seconds`, a constant of the engine's that each schedule overrides for itself. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `executors` | `{audience?}` | `GET /executors`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `executor_tail` is asked by |
@@ -6634,6 +6652,17 @@ product: which vendors a `vendor` company talks on is told to a holder of
 `chatlet` as the [`viewer`](#queries) answer's `chat_vendors`. Absent only from
 `{}`, so a reader never mistakes "no company yet" for `none`.
 
+**`services.restart` is which of the four THE ANSWERING NODE serves only once it
+restarts**, each by its key (`tracker`, `knowledge`, `chat`, `code`): one of
+Crewlet's own services the company turned on while this node's runtime was
+already running without it ([A native backend changes at a
+restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)).
+Until the node restarts, every question about such a service is refused there
+`unavailable` under `native_backend_needs_restart` with no `Retry-After`, so a
+client treats it as a service it cannot reach on this node rather than one the
+company does not run. Absent where the node serves everything the company
+runs.
+
 **`token_budget` is the ceilings as written**, on the company and on each seat
 that names its own: one number per calendar window it caps (`day`, `week`,
 `month`, on the company clock), and nothing for a window it leaves open — so
@@ -6893,13 +6922,14 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-eight no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
 [`answer_executor`](#answering-a-parked-executor),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
+[`run_schedule`](#running-a-schedule-now),
 [`steer_turn`](#steering-a-running-turn),
 [`answer_knowledge`](#answering-a-question-from-the-companys-knowledge),
 [`atlas_refresh`](#asking-for-a-read-of-an-atlas-source), and
@@ -6927,9 +6957,11 @@ seat moves work between lanes with `update_work_item`. And an executor's questio
 that could answer its own executor would be guessing on its own behalf. Whether a
 seat works at all is a person's decision about it too: a seat that could pause
 a colleague, or resume itself, would be overruling the people who run the
-company. And a note to a running turn is a person redirecting the work: a seat
-that could steer a colleague's turn would be directing it past the person who
-asked for the work. And who read a unit's code is an audit of the people who
+company. And when a seat's scheduled work runs is a person's decision too: a
+seat that could run a schedule would be starting its colleagues' turns, or its
+own, outside the times the people who run the company set. And a note to a
+running turn is a person redirecting the work: a seat that could steer a
+colleague's turn would be directing it past the person who asked for the work. And who read a unit's code is an audit of the people who
 read it — an admin's, which no other person is answered either: a seat that
 could ask would be a model watching the people it works for.
 
@@ -6967,6 +6999,12 @@ new `version`, what it recorded (`change`, and the fact, relation, value or
 owner) and the `outcome` and `position` every write carries, or `unchanged`
 where what it asked for already held and nothing was recorded. Over MCP each
 also takes back the `op_id` its answer carried, as the tracker's writes do.
+
+A write is refused `unavailable` (`503`, with a `Retry-After`) only while a
+source that could state a fact of an entry it touches did not answer in full,
+and the `detail` names that source in a person's words; a source that
+describes none of its entries, or that only reports health and use, never
+holds it ([how a write is decided](../concepts/atlas.md)).
 
 | Tool | Arguments |
 |---|---|
@@ -7148,6 +7186,44 @@ They refuse `not_found` for a handle that names no agent seat (a person's seat
 takes no work a pause could hold), `invalid` for a reason past its bound,
 and `conflict` after losing four compare-and-sets in a row to other changes to
 the same pause.
+
+### Running a schedule now
+
+`run_schedule` runs one schedule now, off its cron: its task goes to every seat
+the schedule wakes, as one more fire of the schedule's own conversation, and
+its next scheduled fire is unchanged. See
+[Scheduling § Running a schedule now](../concepts/scheduling.md#running-a-schedule-now).
+
+| Tool | Arguments |
+|---|---|
+| `run_schedule` | `scope_type`: `role` or `unit`; `scope`: the seat's handle for a role schedule, the unit's key for a unit one (a `scope_id` from [`GET /schedules`](#get-schedules) is taken too); `name`: the schedule's name |
+
+**Who may**: whoever may pause every seat the schedule wakes (each seat's
+holder, whoever leads it, or `admin`), asked about each of them, so a team's
+standup is its lead's to run and not any one member's. Never an agent. A
+caller who may not is refused `forbidden` whether or not the schedule exists;
+only one who may is told `not_found`.
+
+It answers `{"name", "scope_type", "scope_id", "outcome", "changed", "runs"}`,
+`runs` holding `{"handle", "status", "trace_id"}` for each seat: `fired` (sent
+now), `already_fired` (the same request again: the run it already made),
+`paused` (a person paused the seat, so it was not woken), `not_ready` (the
+seat's inbox could not be readied, nothing was claimed, and asking again is
+safe) or `unknown` (the claim could not be read, or the publish after it failed:
+the schedule's runs say whether it arrived). `applied` means at least one seat
+was sent the run; `changed` is false when this request sent nothing new. The
+operation is the request's `Idempotency-Key`, so the same request sent again
+sends nothing twice. Each run is recorded in the schedule's history as
+`fired_manually`.
+
+It refuses `conflict` for a schedule switched off (`enabled: false`), a
+company with `scheduling.enabled: false` or with no model, a schedule nothing
+can run (a `lead` schedule on a unit no agent leads, an `each` one on a unit
+with no agent member) and a run every one of whose seats is paused, each in a
+sentence that says so; and `unavailable` on a node that publishes nothing (a
+[maintenance mode](../guides/retention.md#the-three-modes)) or where every
+seat's inbox could not be readied. It writes no state log, so its answer
+carries no `position`.
 
 ### Steering a running turn
 
@@ -7928,7 +8004,7 @@ route.
 | `PUT` | `/worklet/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `worklet` |
 | `PUT` | `/worklet/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `admin`, with `worklet`; never a seat reordering a colleague |
 | `POST` | `/doclet/pages` | `write_page` | `doclet`, and only in a space the company declares ([Who may write where](../concepts/knowledge-system.md#who-may-write-where)) |
-| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved` | `doclet`; a `title` in the body is a rename, and asks what a rename asks |
+| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved`. A `status` of `published` publishes a draft and `draft` takes a published page back to one; a page in the trash is refused (`422`), since a restore brings it back | `doclet`; a `title` in the body is a rename, and asks what a rename asks; a `status` other than the page's own is a publish (`pages.publish`): the page's **creator**, the lead of its container, or `admin` |
 | `POST` | `/doclet/pages/{id}/rename` | Move the page to a new title (its address): `{"title": …, "quiet": false}` | the page's **creator**, the lead of the page's container, or `admin`, with `doclet` |
 | `POST` | `/doclet/pages/{id}/comments` | `comment_on_page` | `doclet` |
 | `PATCH` | `/doclet/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `doclet`, for the work comment's reason |
@@ -8218,6 +8294,12 @@ that moves the company onto Jira or Confluence (or turns on a half it was built
 without) activates normally, logs `native_backend_needs_restart`, and changes
 what these questions answer only at the node's next restart (see
 [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)).
+Until then a question about a half the revision turned ON is refused
+`unavailable` (`503`) under `native_backend_needs_restart` with no
+`Retry-After`, its detail naming the half ("this node was already running when
+the company turned Chatlet on, and it starts Chatlet when it restarts: restart
+this node, or ask another one"), never as a half the company does not run
+(`unknown_query`); the org answer names it in [`services.restart`](#get-org).
 
 **A copy that has not caught up refuses.** Every one of these answers
 `unavailable` (`503`, with a `Retry-After`) where the copy that answers is
@@ -13714,13 +13796,15 @@ own fires are [`schedule_runs`](#queries).
 }
 ```
 
-A run's `outcome` is `fired`, `skipped_catchup` (a missed tick outside the
+A run's `outcome` is `fired`, `fired_manually` (a person
+[ran it now](#running-a-schedule-now), off its cron; its `fire_label` is the
+ask's own, never a minute), `skipped_catchup` (a missed tick outside the
 catchup window), `skipped_paused` (the runner seat was
 [paused](../concepts/agent-runtime.md#pausing-a-seat) when the fire came due),
-or `skipped_superseded`: the fire waited in its seat's inbox while the seat
-could not work, and a later fire of the same schedule
+or `skipped_superseded`: the fire, by the cron or by hand, waited in its seat's
+inbox while the seat could not work, and a later fire of the same schedule
 [ran in its place](../concepts/scheduling.md#fires-that-wait-in-a-seats-inbox).
-The first three are what the scheduler recorded; the last is recorded by the
+The first four are what the scheduler recorded; the last is recorded by the
 seat's node, usually a different node and often a later day, and joined to
 the fire by `trace_id`, so a fire reads the same on every node. `scheduled_at`
 and `fire_label` are the tick the fire stands for (the label is the schedule's

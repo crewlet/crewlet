@@ -36,6 +36,7 @@ vi.mock("~/lib/viewer.ts", async () => {
     useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
     // THE GRANTS A GATED LINK WOULD ASK WITH, the same reader's.
     useHeldReading: () => ({ login: "token:review", grants: viewerAdmin ? ["admin"] : [] }),
+    useHeldGrants: () => (viewerAdmin ? ["admin"] : []),
   };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
@@ -396,12 +397,15 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
 });
 
 // NEW IS A MENU OF THE KINDS, in the Make row's order, each row opening that
-// kind's page: there is no generic page that asks for the type first.
+// kind's page: there is no generic page that asks for the type first. A
+// folder comes first, set apart, as on a folder's page: the gallery is where
+// a reader with no folder yet looks for the first one.
 test("New opens a menu of every kind, each going to its own create page", () => {
   mount("all");
   fireEvent.click(screen.getByRole("button", { name: "New artifact" }));
   const rows = screen.getAllByRole("menuitem");
   expect(rows.map((r) => r.textContent)).toEqual([
+    "Folder",
     "Doc",
     "Slides",
     "Design",
@@ -411,6 +415,18 @@ test("New opens a menu of every kind, each going to its own create page", () => 
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Slides" }));
   expect(location.hash).toBe("#/artifacts/new/slides");
+});
+
+// Mutation: drop `onNewFolder` from the gallery's New and the menu holds the
+// kinds alone, so a folder can be made only from the Folders section or by
+// typing a name into Move to….
+test("New's Folder opens New folder at the top level, asking who sees it", () => {
+  mount("all");
+  fireEvent.click(screen.getByRole("button", { name: "New artifact" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Folder" }));
+  const dialog = screen.getByRole("dialog", { name: "New folder" });
+  expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeTruthy();
+  expect(within(dialog).getByRole("radiogroup", { name: "Who can see this folder" })).toBeTruthy();
 });
 
 test("the Make row steps aside on Shared with you, in the trash and for a search", () => {
@@ -553,8 +569,41 @@ test("a reader who cannot make an artifact is not told to start one above", () =
   items = [];
   mount("all");
   expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
-  expect(screen.getByText("Artifacts shared with you appear here.")).toBeTruthy();
+  expect(
+    screen.getByText("Artifacts shared with you, your team or the company appear here."),
+  ).toBeTruthy();
   expect(screen.queryByText(/Start one above/)).toBeNull();
+});
+
+// AN EMPTY ALL SAYS WHAT IT COVERS, never that nothing exists: the listing is
+// what the reader owns or is shared with, so it is empty for an administrator
+// who acts as no seat while the company holds artifacts. Mutation: say
+// "Nothing here yet" again and the first case goes red; drop the
+// administrator's way on and the second does.
+test("an empty All names what the list covers", () => {
+  items = [];
+  mount("all");
+  expect(screen.getByText("Nothing is yours or shared with you yet")).toBeTruthy();
+  expect(screen.queryByText("Nothing here yet")).toBeNull();
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
+});
+
+test("an empty All sends an administrator on to every artifact's history", () => {
+  viewerAdmin = true;
+  items = [];
+  mount("all");
+  expect(screen.getByText("Nothing is yours or shared with you yet")).toBeTruthy();
+  expect(screen.getByText(/the engine records each one you open/)).toBeTruthy();
+  const link = screen.getByRole("link", { name: "See every artifact in the audit log" });
+  expect(link.getAttribute("href")).toBe("#/settings/audit?kind=artifacts");
+  cleanup();
+  // ONLY ALL, and only while it is empty: Yours is about what the reader made.
+  mount("yours", "#/artifacts/yours");
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
+  cleanup();
+  items = [row({})];
+  mount("all");
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
 });
 
 // THE GALLERY ENDS ON ITS ARTIFACTS: the company's storage quotas are

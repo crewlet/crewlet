@@ -189,7 +189,7 @@ func (h *roundHold) wait(t *testing.T) {
 	t.Helper()
 	select {
 	case <-h.reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("no round reached the hold within %v", hangDetector)
 	}
 }
@@ -823,7 +823,7 @@ func TestAnObserverNeverWaitsForARound(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Error("the observer waited for the round holding the repository")
 	}
 	if !cache.WriteLockHeld(r.c, r.repo) {

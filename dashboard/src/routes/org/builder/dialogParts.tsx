@@ -118,6 +118,8 @@ export const SCREENS = {
   secrets: ["settings", "secrets"],
   config: ["settings", "config"],
   nodes: ["settings", "nodes"],
+  /** The model entries, where each chooses the cell its executors run in. */
+  models: ["settings", "models"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 /** A screen the builder can send a reader to. */
@@ -627,6 +629,7 @@ export const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
   integrations: "Open Integrations",
   schedules: "Open Schedules",
   principles: "Open Principles",
+  models: "Open Models",
 };
 
 /**

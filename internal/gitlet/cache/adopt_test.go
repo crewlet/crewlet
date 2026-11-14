@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,7 +383,7 @@ func TestARoundInstallsWhatAnAdoptionHandedIt(t *testing.T) {
 		if err != nil {
 			t.Errorf("Adopt beside a running round = %v, want nil", err)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("Adopt waited for the running round")
 	}
 	if statOK(t, filepath.Join(w.dir(t, c, repo), "objects", "pack", "pack-"+cs+".idx")) {
@@ -553,6 +554,21 @@ func TestAPackWhoseDownloadHadBegunIsInstalledOnce(t *testing.T) {
 // every push session on the node that took them adopts at the same moment,
 // each linking files of its own. Held inside the directory together, every
 // one links its own pack — none is handed to another or left to a download.
+//
+// Each adoption, inside the directory, waits there for all n to be inside at
+// once. One that excludes the others waits for adoptions that cannot come in
+// behind it, so only the hang detector ends its wait, and its end is the
+// failure: an adoption alone in the directory. Then every wait still to come
+// ends at once, so the case fails once, not n times over. That claim is read
+// only inside the directory, so the case also counts the adoptions that came
+// in: one that never reached it — sent down another path, or the knob gone
+// from Adopt's — held nothing, and a case where none did would pass having
+// checked nothing.
+//
+// Mutation: hold one package-wide mutex in adopt from just after Adopt takes
+// its share of the repository's write lock, across the adopting knob and
+// placeStagings — the first adoption waits out the hang detector alone, and
+// the case fails.
 func TestAdoptionsOfOneRepositoryNeverExcludeOneAnother(t *testing.T) {
 	t.Parallel()
 	const n = 8
@@ -566,12 +582,20 @@ func TestAdoptionsOfOneRepositoryNeverExcludeOneAnother(t *testing.T) {
 		in.Wait()
 		close(together)
 	}()
+	alone := make(chan struct{})
+	var once sync.Once
+	var reached atomic.Int32
 	c := w.open(t, func(o *cache.Options) {
 		cache.WhileAdopting(o, func(string) {
+			reached.Add(1)
 			in.Done()
 			select {
 			case <-together:
-			case <-time.After(hangDetector):
+			case <-alone:
+			case <-time.After(hangDetector): //fixedwait:liveness
+				once.Do(func() { close(alone) })
+				t.Errorf("an adoption waited %v in the directory and the other %d never came in beside it",
+					hangDetector, n-1)
 			}
 		})
 	})
@@ -591,10 +615,9 @@ func TestAdoptionsOfOneRepositoryNeverExcludeOneAnother(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	select {
-	case <-together:
-	default:
-		t.Errorf("not every adoption held the directory at once")
+	if got := reached.Load(); got != n {
+		t.Errorf("%d of the %d adoptions came into the directory, want every one: the case held nothing of "+
+			"the rest", got, n)
 	}
 	dir := w.dir(t, c, repo)
 	for i, a := range received {

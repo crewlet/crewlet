@@ -142,6 +142,27 @@ describe("a company page", () => {
     expect(el.querySelector("h3")?.textContent).toBe("What changed");
   });
 
+  // A PAGE OPENS ITS OUTLINE ONE UNDER ITS TITLE, whatever `#` it was written
+  // with: a body whose first heading is `##` opened on an h3 straight under
+  // the screen's h1. Mutation: drop `headingsFrom` from the render and the
+  // first expectation goes red.
+  it("steps a page's headings from h2 when asked, whatever level it starts at", () => {
+    const page = (md: string) =>
+      render(<div>{renderMarkdown(md, { headingsFrom: 2 })}</div>).container;
+    const levels = (el: HTMLElement) =>
+      [...el.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((h) => h.tagName);
+    expect(levels(page("## Overview\n\ntext\n\n### Detail\n\n## Next"))).toEqual([
+      "H2",
+      "H3",
+      "H2",
+    ]);
+    expect(levels(page("# Title\n\n## Part"))).toEqual(["H2", "H3"]);
+    // A fence's `#` is not a heading, so it moves nothing.
+    expect(levels(page("```sh\n# comment\n```\n\n### Only"))).toEqual(["H2"]);
+    // AND UNSET, a heading keeps its own depth: the body inside a section.
+    expect(levels(draw("## Notes"))).toEqual(["H3"]);
+  });
+
   it("renders emphasis, code and both kinds of list", () => {
     const el = draw(source);
     expect(el.querySelector("strong")?.textContent).toBe("one NATS cluster");

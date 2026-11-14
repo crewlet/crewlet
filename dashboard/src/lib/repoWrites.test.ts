@@ -16,9 +16,16 @@ import { expect, test } from "vitest";
 import type { CodeRepoDetail, Viewer } from "~/protocol/index.ts";
 import {
   DECLARED,
+  DECLARED_LIFE,
   PERSON_ONLY,
   PURGE_KEEPERS,
   UNBOUND,
+  branchDeleteHeld,
+  branchFormHeld,
+  branchWriteHeld,
+  commitFormHeld,
+  createFormHeld,
+  createHeld,
   credentialName,
   credentialRef,
   importFormHeld,
@@ -26,12 +33,17 @@ import {
   importStanding,
   mirrorFormHeld,
   mirrorsHeld,
+  protectFormHeld,
+  protectHeld,
+  protectionPattern,
   pullMirrorHeld,
   pullMirrorStanding,
   purgeHeld,
   purgeKeepers,
   purgeMessage,
+  restoreHeld,
   searchModeHeld,
+  deleteHeld,
 } from "./repoWrites.ts";
 
 const PERSON = {
@@ -201,4 +213,76 @@ test("an import form is sent only with a project's name, an https URL, a variabl
   );
   expect(importFormHeld("web", url, "ghp_secret", "engineering")).toMatch(/never the token/);
   expect(importFormHeld("web", url, "", "")).toMatch(/owns it/);
+});
+
+// A REPOSITORY'S LIFE IS HELD WHERE THE ENGINE REFUSES IT: a declared one is
+// the company document's (`config_managed`), a deleted one is restored and
+// never deleted again, a live one is deleted and never restored, and a
+// credential bound to nobody writes nothing to Gitlet. Mutation: drop a branch
+// of any hold and the matching line goes red.
+test("a repository is deleted and restored only where the engine would take it", () => {
+  expect(deleteHeld(repo(), PERSON)).toBeUndefined();
+  expect(deleteHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED_LIFE);
+  expect(deleteHeld(repo({ status: "deleted" }), PERSON)).toMatch(/deleted already/);
+  expect(deleteHeld(repo({ status: "importing" }), PERSON)).toMatch(/being imported/);
+  expect(deleteHeld(repo({ access: "write" }), AGENT)).toMatch(/takes maintain/);
+  expect(deleteHeld(repo(), MACHINE)).toBe(UNBOUND);
+
+  const gone = repo({ status: "deleted" });
+  expect(restoreHeld(gone, PERSON)).toBeUndefined();
+  expect(restoreHeld(repo(), PERSON)).toMatch(/is not deleted/);
+  expect(restoreHeld(repo({ status: "purging" }), PERSON)).toMatch(/comes back no more/);
+  expect(restoreHeld({ ...gone, managed_by: "config" }, PERSON)).toBe(DECLARED_LIFE);
+  expect(restoreHeld(gone, MACHINE)).toBe(UNBOUND);
+});
+
+test("a new project is named in the engine's grammar, owned by a unit, by whoever a seat binds", () => {
+  expect(createHeld(PERSON)).toBeUndefined();
+  expect(createHeld(AGENT)).toBeUndefined();
+  expect(createHeld(MACHINE)).toBe(UNBOUND);
+  expect(createFormHeld("web", "engineering")).toBeUndefined();
+  expect(createFormHeld("Web", "engineering")).toMatch(/Name the project/);
+  // A DOTTED NAME IS A SEAT'S SCRATCH REPOSITORY, which only that seat makes.
+  expect(createFormHeld("cto.notes", "engineering")).toMatch(/Name the project/);
+  expect(createFormHeld("web", "")).toMatch(/owns it/);
+});
+
+test("a protection rule names refs and is set only on a repository a tool made", () => {
+  expect(protectionPattern("main")).toBe("refs/heads/main");
+  expect(protectionPattern(" refs/tags/v* ")).toBe("refs/tags/v*");
+  expect(protectionPattern("")).toBe("");
+  expect(protectFormHeld("release/*")).toBeUndefined();
+  expect(protectFormHeld("refs/tags/v*")).toBeUndefined();
+  expect(protectFormHeld("")).toMatch(/Name the branches or tags/);
+  expect(protectFormHeld("refs/notes/x")).toMatch(/Name the branches or tags/);
+  expect(protectHeld(repo(), PERSON)).toBeUndefined();
+  expect(protectHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED_LIFE);
+  expect(protectHeld(repo({ status: "deleted" }), PERSON)).toMatch(/restore it first/);
+});
+
+// A BRANCH TAKES NO WRITE WHERE NO PUSH WOULD LAND: a deleted, importing,
+// archived or pull-mirrored repository moves by nothing a person commits, a
+// commit takes write and a branch's delete maintain (`gitlet` access table).
+test("a branch is written where a push would land, and deleted by a maintainer", () => {
+  expect(branchWriteHeld(repo(), PERSON)).toBeUndefined();
+  expect(branchWriteHeld(repo({ status: "archived" }), PERSON)).toMatch(/archived/);
+  expect(branchWriteHeld(repo({ status: "deleted" }), PERSON)).toMatch(/restore it first/);
+  expect(branchWriteHeld(repo({ mirrored: true }), PERSON)).toMatch(/pull mirror/);
+  expect(branchWriteHeld(repo({ access: "read" }), AGENT)).toMatch(/takes write/);
+  expect(branchWriteHeld(repo({ access: "write" }), AGENT)).toBeUndefined();
+  expect(branchWriteHeld(repo(), MACHINE)).toBe(UNBOUND);
+  expect(branchDeleteHeld(repo({ access: "write" }), AGENT)).toMatch(/takes maintain/);
+  expect(branchDeleteHeld(repo(), PERSON)).toBeUndefined();
+  expect(branchFormHeld("fix/login")).toBeUndefined();
+  expect(branchFormHeld("fix login")).toMatch(/no spaces/);
+  expect(branchFormHeld(" ")).toMatch(/Name the branch/);
+});
+
+test("a commit from the browser names a file from the root, a change and a message", () => {
+  expect(commitFormHeld("Fix a typo", "docs/a.md", true)).toBeUndefined();
+  expect(commitFormHeld("Fix a typo", "", true)).toMatch(/by its path/);
+  expect(commitFormHeld("Fix a typo", "/docs/a.md", true)).toMatch(/by its path/);
+  expect(commitFormHeld("Fix a typo", "docs/", true)).toMatch(/by its path/);
+  expect(commitFormHeld("Fix a typo", "docs/a.md", false)).toMatch(/Nothing is changed/);
+  expect(commitFormHeld(" ", "docs/a.md", true)).toMatch(/Say what the commit changes/);
 });

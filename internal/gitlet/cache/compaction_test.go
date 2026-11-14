@@ -245,11 +245,12 @@ func TestACompactionsChargeFollowsItsMergeNotItsRepository(t *testing.T) {
 			adm.Release()
 			return
 		}
+		//fixedwait:measure the poll's own deadline, whose firing only fails the case
 		if !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
 			t.Fatalf("a merge of %d object of a repository of %d on a budget of exactly its own charge, %d — "+
 				"short of the %d bytes a clone of the repository holds — = %v, want it admitted", inputs, objects,
 				charge, objects*gitproc.TransferBytesPerObject, err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }

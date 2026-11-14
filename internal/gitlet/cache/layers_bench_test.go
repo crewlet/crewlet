@@ -102,6 +102,7 @@ func (s *steps) try(b *testing.B, pool *gitproc.Pool, cmd gitproc.Cmd) (gitproc.
 	peak, ok := gittest.PeakAnon(func() {
 		began := time.Now()
 		res, err = pool.Run(b.Context(), cmd)
+		//fixedwait:measure a step's wall clock, reported; root-write's mean also caps the stacked arm (cap-s), whose crossing is reported as pathological and fails nothing
 		took = time.Since(began)
 	})
 	s.n++
@@ -1366,6 +1367,7 @@ func installed(b *testing.B, w *syncWorld, repo string, fetch int, chain ...gitl
 			Deadline: time.Hour, Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"}})
 		began := time.Now()
 		packOut(b, pool, c, s.Dir, "refs/heads/main")
+		//fixedwait:measure the clone's wall clock, the benchmark's reported figure, held to no bound
 		clone.n, clone.took = clone.n+1, clone.took+time.Since(began)
 		s.Release()
 		drop()

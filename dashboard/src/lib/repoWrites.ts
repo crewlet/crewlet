@@ -1,7 +1,9 @@
 /**
  * What a person may change of a repository from the Gitlet workspace, and why
- * not: its search mode, its mirrors, a purge of its unreachable history, and
- * an import of a new one from another host.
+ * not: its search mode, its mirrors, a purge of its unreachable history, an
+ * import of a new one from another host, a new project, a delete and a
+ * restore, its protection rules, and the writes to its branches (a branch
+ * made or deleted, a file committed, a commit reverted or picked).
  *
  * # Every control is drawn, held with its reason
  *
@@ -289,5 +291,151 @@ export function importFormHeld(
     return "The credential is a variable's NAME in upper case, never the token itself.";
   }
   if (owner === "") return "Choose the unit that owns it.";
+  return undefined;
+}
+
+/** Why a declared repository is not deleted, restored or protected here. */
+export const DECLARED_LIFE =
+  "The company document declares this repository: it is deleted, restored and protected in Settings › Configuration, which every activation settles.";
+
+/**
+ * Why a new-project form cannot be sent yet, or undefined: a project's name
+ * in the engine's grammar (a dotted name is a seat's scratch repository, which
+ * only that seat creates) and the unit that owns it.
+ */
+export function createFormHeld(name: string, owner: string): string | undefined {
+  if (!isRepoName(name.trim()) || name.includes(".")) {
+    return "Name the project: lowercase letters, digits and hyphens.";
+  }
+  if (owner === "") return "Choose the unit that owns it.";
+  return undefined;
+}
+
+/** Why the reader cannot create a repository, or undefined. */
+export function createHeld(viewer: Reader): string | undefined {
+  return isBound(viewer) ? undefined : UNBOUND;
+}
+
+/**
+ * Why the repository cannot be deleted, or undefined: a declared one is the
+ * document's, one deleted already is restored first, and deleting takes
+ * maintain.
+ */
+export function deleteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  if (repo.managed_by === "config") return DECLARED_LIFE;
+  if (repo.status === "deleted") return `${repo.name} is deleted already.`;
+  if (repo.status === "purging") return `${repo.name} is being purged.`;
+  const held = lifeHeld(repo);
+  if (held) return held;
+  if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/** Why the repository cannot be restored, or undefined: only a deleted one is. */
+export function restoreHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  if (repo.managed_by === "config") return DECLARED_LIFE;
+  if (repo.status === "purging") return `${repo.name} is being purged, and comes back no more.`;
+  if (repo.status !== "deleted") return `${repo.name} is not deleted.`;
+  if (repo.access && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; restoring it takes maintain.`;
+  }
+  if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/** Why the repository's protection rules cannot be changed here, or undefined. */
+export function protectHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  if (repo.managed_by === "config") return DECLARED_LIFE;
+  const held = lifeHeld(repo);
+  if (held) return held;
+  if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/**
+ * A pattern as a protection rule names refs: a branch's or a tag's whole ref,
+ * or a glob of them. A bare name is a branch's.
+ */
+export function protectionPattern(typed: string): string {
+  const t = typed.trim();
+  if (t === "" || t.startsWith("refs/")) return t;
+  return `refs/heads/${t}`;
+}
+
+/** Why a protection form cannot be sent yet, or undefined. */
+export function protectFormHeld(pattern: string): string | undefined {
+  const p = protectionPattern(pattern);
+  if (!/^refs\/(heads|tags)\/\S+$/.test(p)) {
+    return "Name the branches or tags it protects: a branch's name, or refs/heads/<glob> or refs/tags/<glob>.";
+  }
+  return undefined;
+}
+
+/**
+ * What holds every write to a repository's branches, or undefined: a
+ * repository that is deleted, importing, archived or a pull mirror takes no
+ * push, and a write takes at least write access.
+ */
+function pushHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  switch (repo.status) {
+    case "deleted":
+    case "purging":
+      return `${repo.name} is deleted: restore it first.`;
+    case "importing":
+      return `${repo.name} is being imported from another host, and takes no change until its import is done.`;
+    case "archived":
+      return `${repo.name} is archived and read-only.`;
+  }
+  if (repo.mirrored) {
+    return `${repo.name} is a pull mirror: it moves only by syncs from its source.`;
+  }
+  if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/**
+ * Why the reader cannot commit to, create or move a branch of the repository,
+ * or undefined: what holds every push, and a grant below write.
+ */
+export function branchWriteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "write" && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; writing to a branch takes write.`;
+  }
+  return undefined;
+}
+
+/** Why the reader cannot delete a branch of the repository, or undefined: it takes maintain. */
+export function branchDeleteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; deleting a branch takes maintain.`;
+  }
+  return undefined;
+}
+
+/** Why a new-branch form cannot be sent yet, or undefined. */
+export function branchFormHeld(name: string): string | undefined {
+  const n = name.trim();
+  if (n === "" || /\s/.test(n)) return "Name the branch, with no spaces.";
+  return undefined;
+}
+
+/**
+ * Why a commit form cannot be sent yet, or undefined: a message, a path for
+ * a new file, and something changed.
+ */
+export function commitFormHeld(
+  message: string,
+  path: string,
+  changed: boolean,
+): string | undefined {
+  if (path.trim() === "" || path.startsWith("/") || path.endsWith("/")) {
+    return "Name the file by its path from the repository's root.";
+  }
+  if (!changed) return "Nothing is changed yet.";
+  if (message.trim() === "") return "Say what the commit changes.";
   return undefined;
 }

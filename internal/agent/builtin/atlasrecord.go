@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -337,6 +338,11 @@ func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	o := &observing{atlasNow: n, seat: seat.Handle(), turn: turn.RunID}
 	subject, refusal := o.plan(t.dispute, args)
+	// BEFORE THE PLAN'S OWN ANSWER, as a person's write is held
+	// ([atlasNow.unread]).
+	if unread := o.unread(); unread != nil {
+		return *unread, nil
+	}
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -370,9 +376,11 @@ func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // readAtlasNow reads what a write to the atlas is decided on: the atlas as the
-// caller reads it at the instant at, every source this node serves read in
-// full, since a source that answered in part may hold the very fact the write
-// would claim beside.
+// caller reads it at the instant at, and how each source's read went. What
+// people recorded is read in full or nothing is decided: every plan reads it,
+// whichever entries it is about. Each other source is held to having answered
+// only once the plan has said which entries it is decided on
+// ([atlasNow.unread]).
 func readAtlasNow(ctx context.Context, read atlasReader, turn *turnctx.Turn, tool string,
 	at time.Time) (*atlasNow, *tools.Result) {
 
@@ -382,10 +390,13 @@ func readAtlasNow(ctx context.Context, read atlasReader, turn *turnctx.Turn, too
 		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: %s", tool, why))
 		return nil, &r
 	}
-	if refusal := wholeRead(tool, answer.Coverage, gitletRead); refusal != nil {
-		return nil, refusal
+	for _, c := range answer.Coverage {
+		if c.Source == gather.SourceLog && !c.Complete && c.Reason != gather.ErrNoSource.Error() {
+			return nil, unreadSource(tool, c.Source)
+		}
 	}
 	n.view, n.recorded, n.recordedAt, n.gitlet = answer.View, answer.Recorded, answer.RecordedAt, gitletRead
+	n.coverage = answer.Coverage
 	return n, nil
 }
 

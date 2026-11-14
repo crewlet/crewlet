@@ -35,6 +35,15 @@ const (
 	// rather than dropped for the same reason as a catchup skip — "why did
 	// the standup not run on Tuesday" has an answer.
 	OutcomeSkippedPaused Outcome = "skipped_paused"
+
+	// OutcomeFiredManually is a run a person asked for now, off the
+	// schedule's cron ([Manual]), dispatched to a runner. Its own word
+	// rather than `fired`, so the schedule's history tells a run somebody
+	// asked for from one its cron made: "why did the standup run at 14:12"
+	// has an answer. It is claimed under the ask's own label
+	// ([ManualFireLabel]), never a minute's, so it holds no minute the
+	// catchup pass asks about.
+	OutcomeFiredManually Outcome = "fired_manually"
 )
 
 // FireMinute is one schedule's fire at one local minute, whoever it was
@@ -99,9 +108,10 @@ type Run struct {
 	// is for tests that need a deterministic ordering to assert against.
 	FiredAt time.Time
 
-	// Outcome is [OutcomeFired], [OutcomeSkippedCatchup] or
-	// [OutcomeSkippedPaused]. A fired run its seat later did not run, because
-	// a later fire of the schedule ran in its place, stays fired here: the
+	// Outcome is [OutcomeFired], [OutcomeFiredManually],
+	// [OutcomeSkippedCatchup] or [OutcomeSkippedPaused]. A sent run its seat
+	// later did not run, because a later fire of the schedule ran in its
+	// place, stays as it was sent here: the
 	// seat's node records that on the event log, and the schedule's history
 	// reads it as types.ScheduleOutcomeSuperseded. The zero value
 	// is empty rather than "fired": a caller that forgot to say what it

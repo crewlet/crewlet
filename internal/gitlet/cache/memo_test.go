@@ -840,7 +840,7 @@ func TestNothingReadOverAGoneHistoryIsMemoizedAfterItsDrop(t *testing.T) {
 				}()
 				select {
 				case <-reached:
-				case <-time.After(hangDetector):
+				case <-time.After(hangDetector): //fixedwait:liveness
 					t.Fatal("the round never reached the swap's rename")
 				}
 				if b := c.Memo(s); b != nil {

@@ -994,10 +994,69 @@ func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 					}
 					want := api.OrgServices{Tracker: tc.tracker, Knowledge: tc.knowledge, Chat: tc.chat,
 						Code: tc.code}
-					if got.Services == nil || *got.Services != want {
+					if got.Services == nil || !reflect.DeepEqual(*got.Services, want) {
 						t.Errorf("%s's %s names services %+v, want %+v",
 							reader.name, surface, got.Services, want)
 					}
+				}
+			}
+		})
+	}
+}
+
+// A SERVICE THIS NODE SERVES ONLY ONCE RESTARTED IS NAMED BESIDE THE BACKENDS,
+// to every reader, on the snapshot and on `GET /org`: the company runs
+// Chatlet, and this node, built before it was turned on, has nothing to serve
+// it with. Unsaid, a reader was drawn a workspace whose every question this
+// node refused. A node that serves everything names nothing, and the key is
+// absent rather than empty.
+//
+// Mutation: drop `Restart` from [api.OrgServices], or stop handing the
+// projection the node's reading, and the first case fails; marshal an empty
+// list, and the second does.
+func TestTheOrgProjectionNamesTheServicesAwaitingARestart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		awaiting []string
+		want     string
+	}{
+		{"a node built before Chatlet was turned on", []string{"chat"}, `["chat"]`},
+		{"a node serving everything", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := config.DefaultBootstrap()
+			authorize(&b, config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{}})
+			company := &config.Company{Name: "Acme"}
+			a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{
+				Company: companySource(t, company),
+				AwaitingRestart: func(c *config.Company) []string {
+					if c != company {
+						t.Errorf("asked about a company other than the one projected")
+					}
+					return tc.awaiting
+				},
+			}})
+			snapshot, err := json.Marshal(a.Stream().Snapshot(overviewReader)["org"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for surface, body := range map[string][]byte{
+				"snapshot": snapshot, "GET /org": orgBody(t, a, orgReaderToken),
+			} {
+				var got struct {
+					Services map[string]json.RawMessage `json:"services"`
+				}
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatalf("%s is not JSON: %v", surface, err)
+				}
+				if string(got.Services["chat"]) != `"chatlet"` {
+					t.Errorf("%s names chat %s, want the company's own", surface, got.Services["chat"])
+				}
+				if restart := string(got.Services["restart"]); restart != tc.want {
+					t.Errorf("%s names the services awaiting a restart %q, want %q",
+						surface, restart, tc.want)
 				}
 			}
 		})

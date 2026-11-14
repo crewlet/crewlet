@@ -763,6 +763,15 @@ rest of it. Listing the rooms, reading one, posting as yourself and searching
 are the rest of `crewlet chatlet`, and all of it is in the
 [CLI reference](../reference/cli.md#crewlet-chatlet).
 
+In the dashboard an administrator finds the same three on a room they can open:
+the room's horizon and **Delete older messages** in its details (About), and
+**Erase for good** in a message's More. Each asks in the page before it is
+sent, the horizon and the prune with what they destroy typed back and the erase
+with its reason, and the request carries the confirmation the route checks.
+Archiving a room, or opening it again, sits beside them for the room's creator,
+its team's lead and an administrator, and is held with that sentence for
+anybody else.
+
 ## Who may do what
 
 One table decides every chat gesture, for a seat's own tools, the dashboard

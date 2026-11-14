@@ -9,7 +9,12 @@
  * (`edit`), and a board handed none is read-only.
  */
 
-import { AsideLayout, HeadingLevelProvider, type HeadingLevel } from "@crewlethq/ui";
+import {
+  AsideLayout,
+  HeadingLevelProvider,
+  useHeadingLevel,
+  type HeadingLevel,
+} from "@crewlethq/ui";
 import type { BrandDocument } from "~/protocol/index.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 import {
@@ -28,7 +33,7 @@ export function BrandBoard({
   assets,
   drawn,
   edit,
-  level = 3,
+  level: given,
 }: {
   document: BrandDocument;
   assets: BrandAssets;
@@ -36,9 +41,16 @@ export function BrandBoard({
   drawn: BrandPreviewDrawn;
   /** How each card is changed, where the reader may change it. */
   edit?: (card: BrandCardKey) => BrandCardEdit | undefined;
-  /** The cards' heading level, one under the title of the page they stand on. */
+  /**
+   * The cards' heading level. Unset, the level the surface around declares
+   * (the kit's `useHeadingLevel`: an h2 under a page's title, one deeper
+   * under a section's heading). It was a fixed h3, which on an open brand kit
+   * stood straight under the page's h1.
+   */
   level?: HeadingLevel;
 }) {
+  const surface = useHeadingLevel();
+  const level = given ?? surface;
   return (
     <AsideLayout
       asideLabel="Preview"

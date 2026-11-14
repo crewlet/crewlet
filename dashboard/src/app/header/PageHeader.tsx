@@ -86,6 +86,7 @@ import { preload } from "../lazyScreen.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, lensLabel } from "../frame/PageActions.tsx";
 import { AssistantTrigger } from "../assistant/AssistantTrigger.tsx";
+import { FirstDialChip, type Degradation } from "../frame/StateBar.tsx";
 import { ScopeSwitcher, useScopeFigures } from "./ProjectSwitcher.tsx";
 import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
@@ -128,6 +129,7 @@ export function PageHeader({
   runs,
   grants,
   children,
+  connecting = null,
 }: {
   crumbs: Crumb[];
   /** The workspace the reader is in, or undefined on a route nothing owns. */
@@ -149,6 +151,11 @@ export function PageHeader({
   grants: readonly string[] | null;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
+  /**
+   * The first dial, while it is out: said in the bar ([FirstDialChip]) rather
+   * than over the page under it.
+   */
+  connecting?: Degradation | null;
 }) {
   const route = useRoute();
   const actions = useRef<HTMLDivElement>(null);
@@ -178,6 +185,7 @@ export function PageHeader({
               only when the frame already knows there are controls could never
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
+          {connecting && <FirstDialChip degraded={connecting} />}
           {working && <WorkingNow />}
           {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one

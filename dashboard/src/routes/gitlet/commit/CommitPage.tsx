@@ -15,6 +15,11 @@
  * heads. A commit's author line is what its writer said about it; who pushed
  * it is what the engine recorded, and the page says both.
  *
+ * # Reverted, or picked onto a branch
+ *
+ * Under the header, Revert and Cherry-pick (`CommitWrites.tsx`): each one new
+ * commit on a branch the person chooses, never a rewrite of this one.
+ *
  * # Its diff is against its first parent
  *
  * As git shows a commit: a merge's change is what it brought into the branch
@@ -44,6 +49,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
+import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 
 /** Every way a push's commits came to be, in words (`gitlet.PushVias`). */
@@ -97,6 +103,7 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
   return (
     <Stack gap={4}>
       <CommitHeader repo={repo} answer={answer} />
+      <CommitWrites repo={repo} sha={c.oid} subject={subjectOf(c)} />
       <Pushed answer={answer} />
       <BelongsTo answer={answer} />
       <section aria-label="What it changed">

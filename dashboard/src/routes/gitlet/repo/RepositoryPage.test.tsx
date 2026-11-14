@@ -27,7 +27,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
-import { DECLARED, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
+import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 afterEach(() => {
@@ -100,6 +100,9 @@ const json = (payload: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
+/** A revision as the engine resolves it: a whole ref as it is, a bare name as a branch. */
+const wholeRef = (rev: string) => (rev.startsWith("refs/") ? rev : `refs/heads/${rev}`);
+
 /** A read of content by a ref, as the engine answers one: bare, with the ref it resolved. */
 const byRef = (url: URL, part: Record<string, unknown>) => ({
   repo: "web",
@@ -108,7 +111,7 @@ const byRef = (url: URL, part: Record<string, unknown>) => ({
     ? {}
     : {
         resolved: {
-          ref: { ref: `refs/heads/${url.searchParams.get("ref") ?? "main"}`, oid: HEAD },
+          ref: { ref: wholeRef(url.searchParams.get("ref") ?? "main"), oid: HEAD },
         },
         position: POSITION,
       }),
@@ -881,4 +884,187 @@ test("the overview's rail says how far an import went and where the mirrors stan
   expect(
     screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
   ).toBeTruthy();
+});
+
+/** A person the engine serves every repository and branch write for. */
+const MAINTAINER = {
+  ...ADMIN_VIEWER,
+  acts: [
+    "code_delete_repo",
+    "code_restore_repo",
+    "code_protect_branch",
+    "code_create_branch",
+    "code_delete_branch",
+    "code_commit_files",
+  ],
+};
+
+// A DELETE IS ASKED ONLY ONCE ITS NAME IS TYPED, and sends one
+// code_delete_repo naming the repository. Mutation: let the press through
+// before the name matches, or send on the first press, and this fails.
+test("a repository is deleted only once its name is typed back", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete repository" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  const dialog = await screen.findByRole("dialog", { name: "Delete web?" });
+  const confirm = within(dialog).getByRole("button", { name: "Delete repository" });
+  fireEvent.click(confirm);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(within(dialog).getByLabelText(/to confirm/), { target: { value: "web" } });
+  fireEvent.click(confirm);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_delete_repo", args: { repo: "web" } });
+});
+
+// A DECLARED REPOSITORY'S LIFE IS THE COMPANY DOCUMENT'S: its delete and its
+// protection are drawn and held with where they are changed. Mutation: hide
+// them, or let a declared repository through, and this fails.
+test("a declared repository's delete and protection are held with where they are changed", async () => {
+  stubEngine(detail(), []);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete repository" });
+  await waitFor(() => expect(del.getAttribute("title")).toBe(DECLARED_LIFE));
+  expect(screen.getByRole("button", { name: "Protect a branch" }).getAttribute("title")).toBe(
+    DECLARED_LIFE,
+  );
+});
+
+// A DELETED REPOSITORY SAYS SO ABOVE ITS TABS and offers its restore, one
+// code_restore_repo naming it. Mutation: drop the notice or its press and this
+// fails.
+test("a deleted repository says so and is restored by one request", async () => {
+  const acted: Acted[] = [];
+  stubEngine(
+    detail({ managed_by: "tools", status: "deleted", deleted_at: "2026-10-30T10:00:00Z" }),
+    acted,
+  );
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+
+  const restore = await screen.findByRole("button", { name: "Restore repository" });
+  await waitFor(() => expect(restore.getAttribute("title")).toBeNull());
+  expect(screen.getByText(/web is deleted/)).toBeTruthy();
+  fireEvent.click(restore);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_restore_repo", args: { repo: "web" } });
+});
+
+// A BRANCH IS DELETED AT THE HEAD ITS ROW SHOWS, confirmed in the page first:
+// a push made since is refused rather than lost. Mutation: send no
+// expected_head, or send on the row's press, and this fails.
+test("a branch is deleted at the head its row showed, after a confirmation", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete feature" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog.textContent).toContain(OTHER.slice(0, 7));
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete branch" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_delete_branch",
+    args: { repo: "web", branch: "feature", expected_head: OTHER },
+  });
+});
+
+// A BRANCH A RULE NAMES ALREADY IS EDITED WHERE ITS RULE IS DRAWN WHOLE: its
+// row says it is protected and leads to Settings, while a branch no rule
+// names opens a new rule on itself. Mutation: draw Protect on every row, and
+// main's new-rule form would start from the engine's defaults; this fails.
+test("a protected branch leads to its rule, and another opens a new one", async () => {
+  stubEngine(detail({ managed_by: "tools" }), []);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const grid = await screen.findByRole("table", { name: "Branches of web" });
+  const link = await within(grid).findByRole("link", { name: "Protection →" });
+  expect(link.getAttribute("href")).toContain("tab=settings");
+  expect(within(grid).getAllByRole("link", { name: "Protection →" })).toHaveLength(1);
+  expect(within(grid).getAllByRole("button", { name: "Protect" })).toHaveLength(1);
+  expect(within(grid).getByText("protected")).toBeTruthy();
+});
+
+// A FILE EDITED IN THE BROWSER IS ONE COMMIT ON THE BRANCH ON SCREEN, at the
+// commit the page's read resolved, carrying the whole file. Mutation: commit
+// at the address's spelling rather than the resolution, or drop the head, and
+// this fails.
+test("a file edited here is one commit on the branch read, at the commit it resolved", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=files&path=src%2Fapp.go", "web", MAINTAINER);
+
+  const edit = await screen.findByRole("button", { name: "Edit" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "Edit src/app.go" });
+  const text = (await within(dialog).findByLabelText("File contents")) as HTMLTextAreaElement;
+  expect(text.value).toBe("package app\n\nfunc Run() {}\n");
+  fireEvent.change(text, { target: { value: "package app\n\nfunc Run() { start() }\n" } });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Start on run" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_commit_files",
+    args: {
+      repo: "web",
+      branch: "main",
+      expected_head: HEAD,
+      message: "Start on run",
+      files: [
+        { op: "put", path: "src/app.go", content: "package app\n\nfunc Run() { start() }\n" },
+      ],
+    },
+  });
+});
+
+// AN EMPTY REPOSITORY IS FILLED HERE: its first file is a root commit that
+// makes its default branch, sent with no head, since nothing was read.
+// Mutation: hide the control on an empty repository, or send an empty
+// expected_head, which the engine refuses, and this fails.
+test("an empty repository's first file is a root commit on its default branch", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools", head: undefined, branches: 0, refs: 0 }), acted);
+  mount("#/gitlet/repos/web?tab=files", "web", MAINTAINER);
+
+  const add = await screen.findByRole("button", { name: "Add a file" });
+  await waitFor(() => expect(add.getAttribute("title")).toBeNull());
+  fireEvent.click(add);
+  const dialog = await screen.findByRole("dialog", { name: "New file in web" });
+  expect(dialog.textContent).toMatch(/first commit of web/);
+  fireEvent.change(within(dialog).getByLabelText("Path"), { target: { value: "README.md" } });
+  fireEvent.change(within(dialog).getByLabelText("File contents"), {
+    target: { value: "# web\n" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Add a README" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_commit_files",
+    args: {
+      repo: "web",
+      branch: "main",
+      message: "Add a README",
+      files: [{ op: "put", path: "README.md", content: "# web\n" }],
+    },
+  });
+});
+
+// A TAG TAKES NO COMMIT: the controls are drawn and held, saying so.
+test("a file read at a tag is held from a commit, with the reason", async () => {
+  stubEngine(detail({ managed_by: "tools" }), []);
+  mount("#/gitlet/repos/web?tab=files&ref=refs%2Ftags%2Fv1&path=src%2Fapp.go", "web", MAINTAINER);
+
+  const edit = await screen.findByRole("button", { name: "Edit" });
+  await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
 });
