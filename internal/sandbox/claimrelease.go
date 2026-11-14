@@ -65,13 +65,19 @@ import (
 //     [errReleaseOwed]): the completion comes back on the queue's backoff, as
 //     one whose claim the store does not take does, and the waiter announces
 //     the job again once the release has put the run back in running.
-//   - AN ANSWER'S CLAIM is made only by the answer's own series on this node,
-//     the inline attempt included, one attempt at a time
-//     ([Coordinator.attemptOwed]), and the release its failed resume owes is on
-//     that very series, which makes it again before anything else and goes on
-//     to the answer only once it is no longer out ([Coordinator.retryOwed]).
-//     Settled there instead, as a release a completion owes is, the answer was
-//     left answered on its run with nothing on this node to resume it.
+//   - AN ANSWER'S CLAIM is left to the series that owes the release
+//     ([Coordinator.leaveToRelease]), which makes the release again before
+//     anything else and goes on to the answer only once it is no longer out
+//     ([Coordinator.retryOwed]). The release is the answer's own where its
+//     resume failed, and a park's where the store recorded the question though
+//     it did not answer the write: a reply then answers the question while the
+//     park's release is still owed, and the attempt the reply makes where it
+//     is recorded ([Coordinator.attemptOwed]) used to claim the answer at once.
+//     That claim was the one the release names, so the release made again gave
+//     it back to running under the turn it had resumed, the answer with it.
+//     And settled once its release landed, as the series of a completion's
+//     release still is, the series left the answer on its run with nothing on
+//     this node to resume it.
 //
 // A CLAIM ALREADY ON ITS WAY when the release went out is not refused, and
 // cannot be. The node's admission orders two claims of a job only where both
@@ -195,6 +201,44 @@ func (c *Coordinator) releasing(turnID, launch string) bool {
 func (c *Coordinator) releasingLocked(turnID, launch string) bool {
 	cr := c.releases[turnID]
 	return cr != nil && cr.run.LaunchID == launch
+}
+
+// leaveToRelease reports whether an answer's attempt at run must leave its claim
+// to the series that owes the release of the job's last claim, because this
+// node is still giving that release back or owes it; and keeps that series armed
+// where it is, so it makes the release first and then comes back to the answer.
+// See the top of this file.
+//
+// ARMED ON THE HAND-BACK'S SPACING, and only where nothing arms it yet: an owed
+// release's series is armed already ([Coordinator.oweRelease]), and one still on
+// its way is armed again once it is owed. One that lands or is refused instead
+// is followed by this series' read of the row, which finds what became of the
+// answer. Armed at once, a series that came back here while the release was
+// still on its way would have read the row and come back again, as fast as the
+// store answered.
+func (c *Coordinator) leaveToRelease(ctx context.Context, run PendingRun) bool {
+	c.mu.Lock()
+	if !c.releasingLocked(run.TurnID, run.LaunchID) {
+		c.mu.Unlock()
+		return false
+	}
+	r := c.retries[run.TurnID]
+	if r == nil {
+		r = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID, first: c.now(),
+			window: answerWindow(run)}
+		c.retries[run.TurnID] = r
+	}
+	if r.stop == nil {
+		c.scheduleOwedLocked(run.TurnID, answerRetryCeiling)
+	}
+	c.mu.Unlock()
+	log.InfoContext(ctx, "sandbox_answer_release_owed",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+		"detail", "the answer is recorded on a run whose last claim this node is still giving back, or owes "+
+			"the release of; the series that makes that release claims the answer once the release is no "+
+			"longer out")
+	c.owe(ctx, run.AgentHandle, run.TurnID)
+	return true
 }
 
 // claimCompletion claims ev's job for this node's collection of it, as

@@ -335,3 +335,150 @@ func TestAnAnswersHandBackTheStoreDoesNotAnswerIsMadeAgainThenResumed(t *testing
 		})
 	}
 }
+
+// recordedPark is [unansweredRelease] whose coordination store records a park's
+// question and then loses its answer while "MarkAwaiting" is named silent, as a
+// write sent and unanswered may: the run waits on its question, though the park
+// was told the store did not answer. With a gate, a claim's release waits there
+// until the gate is opened, reached saying it has arrived: a release still on
+// its way to the store.
+type recordedPark struct {
+	*unansweredRelease
+	gate, reached chan struct{}
+}
+
+func (s *recordedPark) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if !s.isSilent("MarkAwaiting") {
+		return s.unansweredRelease.MarkAwaiting(ctx, turnID, q)
+	}
+	if err := s.silentStore.PendingStore.MarkAwaiting(ctx, turnID, q); err != nil {
+		return err
+	}
+	return errStoreUnavailable("write the sandbox run", turnID)
+}
+
+func (s *recordedPark) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if s.gate != nil {
+		select {
+		case s.reached <- struct{}{}:
+		default:
+		}
+		<-s.gate
+	}
+	return s.unansweredRelease.ReleaseClaim(ctx, turnID, release)
+}
+
+// AN ANSWER IS NEVER CLAIMED OVER A RELEASE OF ITS JOB STILL OUT. A park whose
+// question the store recorded, though it did not answer the write, hands its
+// claim back while the run already waits on its question, and a reply recorded
+// on it is the answer to the very job the release names. A release names its
+// claim by the job, the status and the lease, and the answer's claim carries
+// all three, so the release, made again or reaching the store late, gave that
+// claim back to running under the turn it had resumed, the person's answer with
+// it. The reply's own attempt, made where it is recorded rather than by the
+// series that owes the release, used to claim the answer at once. It is left to
+// that series, which makes the release first and resumes the answer once the
+// release is no longer out: owed, the series is armed already; still on its
+// way, the series is armed by the attempt it refused, and reads the row once the
+// release has landed.
+//
+// Mutation: let an answer's attempt claim while a release of its job is out,
+// and the release gives the answer's claim back to running under its turn; or
+// arm nothing where the release was still on its way, and the answer is never
+// resumed.
+func TestAnAnswerIsNeverClaimedOverAReleaseOfItsJobStillOut(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// onItsWay holds the park's release at the store's gate, out and not
+		// yet owed, rather than leaving it unanswered there.
+		onItsWay bool
+	}{
+		{name: "a release the store did not answer, owed"},
+		{name: "a release still on its way to the store", onItsWay: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			holds := rig.withHold()
+			store := &recordedPark{unansweredRelease: &unansweredRelease{
+				silentStore: &silentStore{PendingStore: rig.pending}}}
+			rig.coordinator.pending = store
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.ask("t1", whichBranch())
+			rig.runner.Finish(Result{})
+			store.silence("MarkAwaiting")
+
+			// THE RELEASE IS MADE as its owner makes it while the answer's turn
+			// runs: the owed one again by the series' own clock, the one on its
+			// way reaching the store.
+			release := func() { rig.fireRetries() }
+			var during []string
+			rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+				release()
+				during = append(during, rig.getIn(ctx, "t1").Status)
+			}
+			if tc.onItsWay {
+				store.gate, store.reached = make(chan struct{}), make(chan struct{}, 1)
+				payload, ev := rig.completion("t1")
+				parked := make(chan struct{})
+				go func() {
+					defer close(parked)
+					_ = rig.coordinator.OnCompleted(t.Context(), payload, ev) // the park's own answer
+				}()
+				<-store.reached
+				release = sync.OnceFunc(func() {
+					close(store.gate)
+					<-parked
+				})
+			} else {
+				store.silence("ReleaseClaim")
+				_ = collectAgain(t, rig) // the park's own answer to its delivery
+			}
+			run := rig.get("t1")
+			if out := rig.coordinator.releasing("t1", run.LaunchID); run.Status != StatusAwaiting || !out {
+				t.Fatalf("the premise: the park left the run %s, its release out %v; want its question "+
+					"recorded and its release out", run.Status, out)
+			}
+
+			store.answer()
+			reply := chatReply(answerOnTheDM, "use main", replyAt("use main", run.AskedAt.Add(time.Minute)))
+			if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil ||
+				d != AnswerConsumed {
+				t.Fatalf("the reply = %q, %v; want it recorded as the answer", d, err)
+			}
+			if len(during) != 0 {
+				t.Fatalf("the reply's own attempt claimed the answer while the park's release was out, and "+
+					"the release left the run %v under the answer's turn", during)
+			}
+			if got := rig.get("t1"); got.Status != StatusAnswered {
+				t.Fatalf("the reply left the run %s; want it answered, its resume left to the series that "+
+					"owes the release", got.Status)
+			}
+
+			if tc.onItsWay {
+				// THE RELEASE REACHES THE STORE, which finds the run answered
+				// and gives nothing back.
+				release()
+			}
+			if fired := rig.fireRetries(); fired != 1 {
+				t.Fatalf("%d retries fired; want the series' one attempt, the release made first", fired)
+			}
+			if !slices.Equal(during, []string{StatusResumed}) {
+				t.Fatalf("while the answer's turn ran the run was %v; want it the answer's claim", during)
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
+				t.Fatalf("the run was resumed %d times (%+v); want once, with its answer", len(calls), calls)
+			}
+			if failed, asked := rig.failures(), rig.questions(); len(failed) != 0 || len(asked) != 1 {
+				t.Fatalf("announced %+v and asked %d times; want nothing ended and the question asked once",
+					failed, len(asked))
+			}
+			if holds.holding("swe") {
+				t.Fatalf("the seat's inbox is held after the answer's turn ended: %v", holds.log)
+			}
+		})
+	}
+}

@@ -1097,6 +1097,14 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (kept boo
 		c.dropOwed(ctx, run.AgentHandle, run.TurnID)
 		return false
 	}
+	// NO CLAIM WHILE A RELEASE OF THE JOB IS OUT on this node, a park's whose
+	// question the store recorded though it did not answer the write included:
+	// that release names the very claim this would take, and made again over
+	// it, gave it back to running under the turn it resumed. The series that
+	// owes the release makes it first and comes back here (claimrelease.go).
+	if c.leaveToRelease(ctx, run) {
+		return false
+	}
 	// OPENED BEFORE THE CLAIM, and only what the seal carries goes on: the
 	// words the turn is handed and the answerer it and the announcement
 	// name. An answer that does not open is claimed for nothing — it waits
