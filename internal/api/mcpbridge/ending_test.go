@@ -1062,56 +1062,81 @@ func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testin
 // that refuses every call made on it, where a box told to make a call again
 // makes it on that same session.
 //
+// IN A BUBBLE, on its clock: the end waits out its bound for that answer, five
+// seconds a real clock spent on every run.
+//
 // Mutation: let a request that opens a session through without holding it for
 // the end (`false &&` before the hold), and the end's close waits out the
 // request instead, whose answer is then never written.
 func TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t)
-	url := f.open(t)
-	entered, release := make(chan struct{}), make(chan struct{})
-	enter := sync.OnceFunc(func() { close(entered) })
-	// THE REQUEST'S ANSWER IS STILL BEING MADE as the end comes: its
-	// initialize is held on the opening's own server, after the SDK opened its
-	// session.
-	mcpbridge.OpeningServers(f.session)[0].AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
-		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			if method == "initialize" {
-				enter()
-				<-release
+	synctest.Test(t, func(t *testing.T) {
+		b := openBubbled(t, &ledger{})
+		mux := http.NewServeMux()
+		mux.Handle(mcpbridge.PathPrefix+"{token}", b.bridge.Handler())
+		entered, release := make(chan struct{}), make(chan struct{})
+		enter := sync.OnceFunc(func() { close(entered) })
+		letGo := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(letGo)
+		// THE REQUEST'S ANSWER IS STILL BEING MADE as the end comes: its
+		// initialize is held on the opening's own server, after the SDK opened
+		// its session.
+		mcpbridge.OpeningServers(b.session)[0].AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "initialize" {
+					enter()
+					<-release
+				}
+				return next(ctx, method, req)
 			}
-			return next(ctx, method, req)
+		})
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, b.url, strings.NewReader(initializeRequest))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		answer := httptest.NewRecorder()
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			mux.ServeHTTP(answer, req)
+		}()
+		<-entered
+
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			b.bridge.Close("run-1")
+		}()
+		synctest.Wait()
+		// THE END WAITS FOR THAT ANSWER, read before the clock moves.
+		if closedNow(ended) {
+			t.Fatal("the end returned at once, the session it let open still being answered")
+		}
+		// AND RETURNS AT ITS BOUND, its close of the box's sessions left behind
+		// it, the request still being answered.
+		time.Sleep(mcpbridge.EndAnswerWait)
+		synctest.Wait()
+		if !closedNow(ended) {
+			letGo()
+			<-ended
+			t.Fatal("the end did not return at its bound: its close waited out the request's answer")
+		}
+		if closedNow(served) {
+			t.Fatal("the request that opened a session was cut at the end's bound, its answer still being made")
+		}
+
+		// THE ANSWER IS MADE and reaches the box, and the session is closed
+		// behind the end.
+		letGo()
+		<-served
+		if answer.Code != http.StatusOK || !strings.Contains(answer.Body.String(), `"protocolVersion"`) {
+			t.Fatalf("the request that opened a session before the end was answered %d %q, want its "+
+				"initialize's answer", answer.Code, strings.TrimSpace(answer.Body.String()))
+		}
+		mcpbridge.AwaitClosing(b.bridge)
+		if n := b.session.Connections(); n != 0 {
+			t.Errorf("%d MCP sessions survive the end, the one the request opened among them", n)
 		}
 	})
-	answered := make(chan openedSession, 1)
-	go func() { answered <- openSession(t.Context(), t, f.server.Client(), url) }()
-	<-entered
-
-	// THE END RETURNS once it has waited its bound for that answer, and leaves
-	// its close of the box's sessions behind it.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	ended := make(chan struct{})
-	go func() {
-		defer close(ended)
-		f.bridge.Close("run-1")
-	}()
-	select {
-	case <-ended:
-	case <-ctx.Done():
-		close(release)
-		t.Fatal("the end never returned: its close waited out the request's answer")
-	}
-	close(release)
-	got := <-answered
-	if got.status() != http.StatusOK || !strings.Contains(got.body, `"protocolVersion"`) {
-		t.Fatalf("the request that opened a session before the end was answered %d %q, want its "+
-			"initialize's answer", got.status(), strings.TrimSpace(got.body))
-	}
-	mcpbridge.AwaitClosing(f.bridge)
-	if n := f.session.Connections(); n != 0 {
-		t.Errorf("%d MCP sessions survive the end, the one the request opened among them", n)
-	}
 }
 
 // AN OPENING'S END IS HELD NO LONGER THAN ITS BOUND BY A SESSION ITS BOX GAVE UP
