@@ -5,6 +5,7 @@ import (
 
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -68,6 +69,10 @@ func (v *countingValve) Allow(context.Context, string, int, time.Time) (bool, er
 	v.calls++
 	return v.allow, v.err
 }
+
+// Reopens implements notify.Valve: at once, since this valve's answer is the
+// case's and no window of time decides it.
+func (v *countingValve) Reopens(now time.Time) time.Time { return now }
 
 func (v *countingValve) seen() int {
 	v.mu.Lock()
@@ -388,23 +393,29 @@ func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
 	}
 }
 
-// AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND NOBODY ELSE'S
-// DOES (ADR-0109): the turn the write wakes works for them, never for the
-// writing seat. A person, a credential and the engine write for nobody but
-// themselves, so a carrier handed for one of them rides nothing. The carrier
-// is the writer's own copy, with a credential's apps held to the apps this
-// build knows, once each, in iam.Apps order, as a credential writer's own are.
+// AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND SO DOES THE
+// ENGINE'S (ADR-0109): the turn the write wakes works for them, never for the
+// writing seat; and the engine's record about an agent's earlier act made for
+// somebody — Gitlet's merge queue's ejection and a close it could not make,
+// the amendment's one exception to the engine writing for nobody but itself —
+// carries that act's carrier, so the turn it wakes works for them too. A
+// person and a credential write for nobody but themselves, so a carrier
+// handed for one of them rides nothing. The carrier is the writer's own copy,
+// with a credential's apps held to the apps this build knows, once each, in
+// iam.Apps order, as a credential writer's own are.
 //
 // Mutation: keep the carrier for every kind, and the person's writer works
 // its turn for ada; drop it for the agent, and the agent's write wakes its
-// seat for the agent.
+// seat for the agent; drop it for the engine, and the queue's ejection wakes
+// its seats for themselves.
 func TestAnAgentsWriterCarriesWhomItWroteFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 	for _, kind := range []iam.ActorKind{iam.ActorAgent, iam.ActorHuman, iam.ActorOperator, iam.ActorSystem} {
 		w := notify.FirstPartyWriter(kind, "cto", nil, ada)
-		if want := kind == iam.ActorAgent; (w.WorkingFor != nil) != want {
-			t.Errorf("a %s's writer carries %+v; want a carrier only on an agent's", kind, w.WorkingFor)
+		if want := kind == iam.ActorAgent || kind == iam.ActorSystem; (w.WorkingFor != nil) != want {
+			t.Errorf("a %s's writer carries %+v; want a carrier only on an agent's and the engine's", kind,
+				w.WorkingFor)
 		}
 	}
 	token := &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci", Apps: []iam.Grant{
@@ -667,6 +678,65 @@ func TestAnUnparsedSourceIsRecorded(t *testing.T) {
 	}
 }
 
+// firstPartyDelivery is a delivery the engine's own producer made under
+// source, marked first-party as every one is.
+func firstPartyDelivery(source string) *events.Event {
+	ev := events.New(types.RawWebhook{
+		Body: map[string]any{"record": "r-1"}, Headers: map[string]string{}, FirstParty: true,
+	}, events.NewTrace())
+	ev.Source = source
+	return ev
+}
+
+// A FIRST-PARTY DELIVERY FROM A SOURCE THIS BUILD DOES NOT DECLARE IS PASSED
+// FOR A PEER; A VENDOR'S, AND ONE FROM A DECLARED SOURCE NOBODY RUNS, ARE
+// ACKNOWLEDGED.
+//
+// Every node takes inbound mail from one group, so a delivery acked here is
+// gone for every node. A first-party source this build neither parses nor
+// declares is one a newer build's producer added — a domain given a wake feed
+// during a roll — and a peer on that build parses it: acked as a source
+// nothing parses, its wake was lost for the whole fleet. It is passed, as a
+// newer record is, with no skip recorded. A vendor's webhook nothing parses
+// is an integration wired at the edge alone, and a declared first-party source
+// this company does not run is one nobody here will ever parse: both are
+// acknowledged and recorded, as before.
+//
+// Mutation: read no first-party mark, and the newer source is acknowledged
+// away; pass every unparsed delivery, and the vendor's and the unrun source's
+// circle for ten minutes and wait in the dead letters for nobody.
+func TestAFirstPartyDeliveryFromASourceThisBuildDoesNotDeclareIsPassed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ev   *events.Event
+		pass bool
+	}{
+		"a first-party source a newer build added":       {firstPartyDelivery("artifacts"), true},
+		"a vendor's source nothing parses":               {delivery("mystery"), false},
+		"a first-party source this company does not run": {firstPartyDelivery("chat"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newService(t, func(o *notify.Options, _ *harness) {
+				o.FirstParty = []string{"tracker", "chat"}
+			})
+			got := h.svc.Handle(t.Context(), tc.ev)
+			if !tc.pass {
+				if got.Outcome != queue.OutcomeAck {
+					t.Fatalf("Handle = %+v, want an ack", got)
+				}
+				if skips := h.skips(t); len(skips) != 1 ||
+					notify.SkipReason(skips[0].Reason) != notify.ReasonUnparsed {
+					t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonUnparsed)
+				}
+				return
+			}
+			if got.Outcome != queue.OutcomePass || got.Reason != string(notify.DeferNewerSource) {
+				t.Fatalf("Handle = %+v, want a pass for %q", got, notify.DeferNewerSource)
+			}
+			h.quiet(t, skipTopic)
+		})
+	}
+}
+
 // A delivery from a surface this company DISCONNECTED is a webhook still
 // registered at the third-party app, and its record says so rather than
 // reading as an integration nothing ever parsed — the two send an operator to
@@ -894,9 +964,10 @@ func TestAnUnreachableValveStillDelivers(t *testing.T) {
 	}
 }
 
-// A shedding node DEFERS: leaves the delivery unacked and stops consuming.
-// A NAK dead-letters a healthy delivery after a few one-second redeliveries
-// while a shed can last minutes.
+// A shedding node DEFERS: hands the delivery back at once for a peer that
+// admits work, and stops consuming. A NAK would withhold it from every node for
+// the failure's backoff while this node went on taking, and failing, every
+// delivery the shed lasted.
 func TestAsheddingNodeDefersRatherThanNaks(t *testing.T) {
 	h := newService(t, nil)
 	h.admits = false
@@ -950,6 +1021,37 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 	}
 }
 
+// A RECORD A NEWER BUILD WROTE IS PASSED TO A PEER THAT READS IT, never acked
+// as a parse failure.
+//
+// Every node takes inbound mail from ONE fleet-wide group, so a delivery this
+// node acks is one no peer ever sees: a wake an older node met during a roll
+// was recorded as a parse failure and acked, gone fleet-wide (crewlet#993). A
+// parser's deferral — here wrapped, as a parser may return it — is handed back
+// for a peer instead, as a pass: neither a failure, which a NAK would log it
+// as, nor a deferral, which would stop this node taking its other mail. And no
+// skip is recorded, because the delivery was not skipped: a peer takes it.
+// TestAParseFailureIsRecordedAndNotRetried is the other half: an error that
+// carries no deferral is still a parse failure, recorded and acked.
+//
+// Mutation: ack a parser's deferral, and the delivery is gone; record the
+// parse-failed skip for it, and the event log says it reached nobody.
+func TestARecordANewerBuildWroteIsPassedToAPeer(t *testing.T) {
+	h := newService(t, nil)
+	newer := errors.New("worklet: the record on task.t-1 is version 9 and this build reads 8")
+	h.parser.err = fmt.Errorf("tracker: %w", notify.Defer(notify.DeferNewerRecord, newer))
+
+	got := h.svc.Handle(t.Context(), delivery("tracker"))
+	if got.Outcome != queue.OutcomePass || got.Reason != string(notify.DeferNewerRecord) {
+		t.Fatalf("Handle = %+v, want a pass for %q so a peer on the newer build reads "+
+			"the record", got, notify.DeferNewerRecord)
+	}
+	if !errors.Is(got.Err, newer) {
+		t.Errorf("the pass carries %v, want what the parser met", got.Err)
+	}
+	h.quiet(t, skipTopic)
+}
+
 // The registry is read through a function, so an epoch swap is picked up: a
 // service holding the old one would resolve against a company that is no
 // longer running.
@@ -984,6 +1086,92 @@ func (p failingPublisher) Publish(ctx context.Context, topic string, ev *events.
 		return p.boom
 	}
 	return p.Queue.Publish(ctx, topic, ev)
+}
+
+// A WAKE WHOSE PARSER DERIVED NO ID TAKES ONE DERIVED FROM ITS DELIVERY.
+//
+// A vendor's parser derives no wake id — its payload holds nothing stable to
+// derive one from — and the delivery is still handled more than once: the
+// group redelivers one whose wakes partly failed, and a replay handles a kept
+// copy again. Each handling minted a fresh random id, so the seat's inbox and
+// the fleet's completion ledger saw two wakes and the seat worked two turns
+// for one delivery. Derived from the delivery's own id and the recipient, under
+// the delivery's own instant, every handling's wake is the same wake.
+//
+// Mutation: leave a parser's nil id to events.New's random one, and the two
+// handlings' wakes differ.
+func TestAWakeWhoseParserDerivedNoIDTakesOneFromItsDelivery(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	d := delivery("tracker")
+
+	for range 2 {
+		if got := h.svc.Handle(t.Context(), d); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+	woken := h.settledN(t, inbox("engineering-lead"), 2)
+	want := notify.DeliveryWakeID(d.ID, "engineering-lead")
+	for i, w := range woken {
+		if w.ID != want {
+			t.Errorf("handling %d woke the seat under %s, want %s, derived from the delivery",
+				i+1, w.ID, want)
+		}
+		if !w.Timestamp.Equal(d.Timestamp) {
+			t.Errorf("handling %d's wake is stamped %v, want the delivery's own %v", i+1,
+				w.Timestamp, d.Timestamp)
+		}
+	}
+	if notify.DeliveryWakeID(d.ID, "backend-engineer") == want {
+		t.Error("two recipients of one delivery share a wake id: the second would be deduplicated away")
+	}
+}
+
+// A WAKE THIS NODE COULD NOT PUBLISH IS THE NODE'S FAILURE, NOT THE
+// DELIVERY'S.
+//
+// A broker the node could not reach, a queue no longer live, a stop that ended
+// the handler: the delivery is returned as any failure is, but never counted
+// against it (queue.NakNode), so one whose budget such a failure spends — a
+// newer record's wake whose last delivery reached a newer node that could not
+// publish it — is kept with the group's unhandled deliveries, which a replay
+// delivers, and not with its poison, which nothing replays. A wake that failed
+// for a reason no node's retry changes is the delivery's own.
+//
+// Mutation: answer every failed wake with a plain Nak, and the node's own
+// rows count against the delivery; treat any error as the node's, and the
+// too-large row does not.
+func TestAWakeThisNodeCouldNotPublishIsTheNodesFailure(t *testing.T) {
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	for name, tc := range map[string]struct {
+		ctx      context.Context
+		boom     error
+		delivery bool
+	}{
+		"a broker that did not answer": {t.Context(),
+			fmt.Errorf("publish: %w", queue.ErrUnavailable), false},
+		"a queue no longer live":        {t.Context(), fmt.Errorf("publish: %w", queue.ErrNotLive), false},
+		"a stop that ended the handler": {stopped, context.Canceled, false},
+		"a wake too large to publish": {t.Context(),
+			fmt.Errorf("publish: %w", queue.ErrTooLarge), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newService(t, func(o *notify.Options, hh *harness) {
+				o.Queue = failingPublisher{Queue: hh.q, boom: tc.boom}
+			})
+			h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "hi")}
+
+			got := h.svc.Handle(tc.ctx, delivery("tracker"))
+			if got.Outcome != queue.OutcomeNak || !errors.Is(got.Err, tc.boom) {
+				t.Fatalf("Handle = %+v, want a failure carrying %v", got, tc.boom)
+			}
+			if got.FailsMessage() != tc.delivery {
+				t.Errorf("the failure counts against the delivery: %v, want %v", got.FailsMessage(),
+					tc.delivery)
+			}
+		})
+	}
 }
 
 // A publish failure means the wake never happened. The API's delivery ledger

@@ -527,6 +527,16 @@ type RevisionOrigin struct {
 	CreatedAt time.Time
 }
 
+// UTC is the origin with its instant in UTC, as every other time the store
+// keeps; a zero instant stays zero, so an origin that named none still encodes
+// without one.
+func (o RevisionOrigin) UTC() RevisionOrigin {
+	if !o.CreatedAt.IsZero() {
+		o.CreatedAt = o.CreatedAt.UTC()
+	}
+	return o
+}
+
 // ErrIncompleteOrigin reports an activation whose origin leaves out what a
 // peer adopting the revision records: the author's kind, the source or the
 // creation instant. The author's NAME may be empty — its kind still says what
@@ -826,6 +836,111 @@ func CanonicalPayload(payload json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("%w: %w", ErrPayloadNotDocument, err)
 	}
 	return out.Bytes(), nil
+}
+
+// ActivationRecord is the activation pointer's stored form: what a backend
+// keeps under the pointer's key ([ActivationValue]). The EPOCH IS NOT IN IT:
+// the key's revision is the epoch, so storing one too would give two answers
+// that could disagree.
+//
+// The ORIGIN fields travel beside the revision so a peer adopting it records
+// who wrote it. The record evolves additively: a later build must keep every
+// key here with the meaning it has here, because this build reads its pointer
+// during a rolling upgrade. See [RevisionOrigin].
+//
+// IN THE CONTRACT rather than in the KV backend that stores it, because the
+// pointer is a value like any other, held to [MaxValueBytes]: the twin holds
+// an activation to the bound by the bytes the KV writes for it, so a document
+// one backend takes is one the other takes, and a caller holds a document to
+// the bound before it stores the revision (internal/api/configapi).
+type ActivationRecord struct {
+	RevisionID string    `json:"revision_id"`
+	At         time.Time `json:"at"`
+	Summary    string    `json:"summary,omitempty"`
+
+	// The revision's ORIGIN — see [RevisionOrigin] — plus the credential it
+	// was written through. The kind is read as the value it is: an unknown
+	// spelling stays unknown ([iam.ActorKind.Valid]).
+	Author     string        `json:"author,omitempty"`
+	AuthorKind iam.ActorKind `json:"author_kind,omitempty"`
+	OperatorID string        `json:"operator_id,omitempty"`
+	Source     string        `json:"source,omitempty"`
+	CreatedAt  time.Time     `json:"created_at,omitzero"`
+
+	// Payload is the revision's sealed body, IN the pointer so the two are
+	// one write (see [Plane.Activate] for the race two writes lost), and as
+	// the JSON object it is rather than as bytes, which the record would
+	// encode as base64 over an envelope whose ciphertext is base64 already.
+	// Every pointer carries one: an activation is refused without a body
+	// ([CanonicalPayload]).
+	Payload json.RawMessage `json:"payload,omitempty"`
+
+	// Restored is [Activation.Restored]. Absent on a choice, which is every
+	// pointer but a boot's restore.
+	Restored bool `json:"restored,omitempty"`
+}
+
+// Origin is the record's revision origin.
+func (r ActivationRecord) Origin() RevisionOrigin {
+	return RevisionOrigin{
+		Author: r.Author, AuthorKind: r.AuthorKind, OperatorID: r.OperatorID,
+		Source: r.Source, CreatedAt: r.CreatedAt,
+	}
+}
+
+// ActivationValue is the pointer's stored form for req — its origin, in UTC,
+// and its body payload with it — at the instant at, which is decided against
+// the pointer the write replaces ([ActivationAt]) and so is known only inside
+// the write: the one encoding every backend stores, and holds to
+// [MaxValueBytes].
+//
+// THE PAYLOAD IS EMBEDDED VERBATIM: encoding/json HTML-escapes what it embeds
+// unless told not to, and a body that came back with `<` spelled `\u003c`
+// would be a different body from the one [CanonicalPayload] promised.
+func ActivationValue(req ActivationRequest, payload json.RawMessage, at time.Time) ([]byte, error) {
+	origin := req.Origin.UTC()
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(ActivationRecord{
+		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
+		Author: origin.Author, AuthorKind: origin.AuthorKind, OperatorID: origin.OperatorID,
+		Source: origin.Source, CreatedAt: origin.CreatedAt,
+		Payload: payload, Restored: req.Restore,
+	}); err != nil {
+		return nil, fmt.Errorf("encode the activation: %w", err)
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
+}
+
+// ActivationBytes is how large the pointer's value for req, its body payload,
+// is at its widest: [ActivationValue] with both its instants, the pointer's
+// and its origin's, written with every fractional digit an instant encodes. A
+// store moves the pointer's instant forward past the pointer it replaces
+// ([ActivationAt]), and a later instant can encode longer — a millisecond on,
+// ".1Z" is ".101Z" — while a config write's dry run sizes the pointer its
+// write would make at an instant before that write's own, the origin's
+// included. So a request this sizes within [MaxValueBytes] is one the store
+// takes at whatever instants it is written at. For a caller holding a write to
+// the bound before it commits to anything (internal/api/configapi), which has
+// no instant but its own.
+func ActivationBytes(req ActivationRequest, payload json.RawMessage) (int, error) {
+	if !req.Origin.CreatedAt.IsZero() {
+		// A ZERO ORIGIN INSTANT STAYS ZERO: an origin that names none
+		// encodes none ([RevisionOrigin.UTC]).
+		req.Origin.CreatedAt = widestIn(req.Origin.CreatedAt)
+	}
+	value, err := ActivationValue(req, payload, widestIn(req.At))
+	if err != nil {
+		return 0, err
+	}
+	return len(value), nil
+}
+
+// widestIn is the last instant of t's second, in UTC: the instant in it that
+// encodes with every fractional digit an instant has.
+func widestIn(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Second).Add(time.Second - time.Nanosecond)
 }
 
 // ErrActivationRaced reports an activation whose Expect no longer matches.
@@ -1437,6 +1552,27 @@ type SandboxRuns interface {
 	// replaces.
 	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
+
+	// ValueCrossing is how long a change of a run's value at what one key
+	// holds ([MaxValueBytes]) takes to cross this store's connection — the
+	// read its decision is taken on, and the write, for every time the store
+	// may send it: [MaxValueCrossing] where the connection crosses a link — a
+	// node without `data`, every node of an external cluster — and NONE in
+	// the store's own process, where nothing crosses.
+	//
+	// WHAT A CALLER'S OWN BUDGET ADDS TO ITS REASON. Every change of a run's
+	// record or of a part beside it reads the value whole and writes it whole,
+	// and the store gives a read the time its reply takes to arrive, and a
+	// write whose caller set no deadline the crossing of what it carries; a
+	// caller's own deadline it keeps as it is. So a caller that bounds a
+	// change for a reason of its own — a store's slow moment, an election
+	// outlasted — bounds it by that reason and this, never by the reason
+	// alone, which cut a value of megabytes while its bytes were still
+	// crossing and read it as a store that did not answer
+	// (crewlet/crewlet#1076, crewlet/crewlet#1149). Sized at the bound rather
+	// than at the value being changed, which the caller cannot know: the
+	// store decides what it writes after the caller's deadline is set.
+	ValueCrossing() time.Duration
 }
 
 // RunPart names one part kept beside a sandbox run's record — see
@@ -1694,6 +1830,86 @@ type AtlasSources interface {
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
 }
 
+// AtlasCodeScans is where the atlas's scan of each repository's deploy and
+// dependency files keeps its standing (internal/atlas/codescan): the default
+// branch's tip it last read whole, how many files it listed and read, and
+// what it refused. A Gitlet repository's is keyed by its id; a forge's own
+// standing and each of its repositories' are keyed under `forge/`
+// (codescan.ForgeStore), which no repository's id starts with.
+//
+// # Why the fleet holds it
+//
+// A repository's home moves between Gitlet nodes, and the node taking it over
+// must know which tip was read so it reads nothing again for a branch that
+// has not moved. The whole company needs the current value only: what the
+// files declared is on the atlas log.
+//
+// # A bucket of its own
+//
+// Not the atlas sources' bucket: its reader forgets every key that is no
+// source of its build, which is what a repository's id is to it.
+//
+// # The value is OPAQUE, and no retention, for the atlas sources' reasons
+//
+// There is one key per scanned repository, dropped when the repository is no
+// longer scanned, so nothing grows past the repositories the company has.
+type AtlasCodeScans interface {
+	// AtlasCodeScans returns every recorded standing, keyed by the
+	// repository's id. RAISES rather than answering empty on an unreachable
+	// store: "never scanned" would read every repository again.
+	AtlasCodeScans(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasCodeScan records one repository's standing, replacing any
+	// prior one. LAST WRITE WINS: a repository's home is its one writer, and
+	// two nodes that each take themselves for home write the same reading
+	// of the same commit.
+	PutAtlasCodeScan(ctx context.Context, repo string, value []byte) error
+
+	// DeleteAtlasCodeScan drops a repository's standing once it is no longer
+	// scanned. One that is not there is the outcome asked for.
+	DeleteAtlasCodeScan(ctx context.Context, repo string) error
+}
+
+// AtlasSourceRefreshes is where a person's ask that an atlas source be read
+// now waits for the collect duty (internal/atlas/collect): who asked, and
+// when.
+//
+// # Why the fleet holds it
+//
+// The node a person asks on is rarely the node holding the duty, so the ask
+// is a record the whole company reads: the duty to honour it, every screen to
+// say that it waits. Current value only: the read it asked for is the
+// source's standing once it is made.
+//
+// # A bucket of its own
+//
+// Not the atlas sources' bucket: the duty is that bucket's one writer and
+// replaces a standing whole, so an ask written beside a visit in flight
+// would be lost to the visit's own save.
+//
+// # The value is OPAQUE, and no retention
+//
+// There is at most one key per source, dropped by the duty once the source
+// is read or the company no longer connects it, so nothing grows. An age
+// would drop an ask the duty had not reached yet without telling whoever
+// made it.
+type AtlasSourceRefreshes interface {
+	// AtlasSourceRefreshes returns every waiting ask, keyed by the source
+	// it names. RAISES rather than answering empty on an unreachable store:
+	// "nobody asked" and "the store cannot be read" are different answers
+	// to a person who just asked.
+	AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasSourceRefresh records an ask for one source, replacing any
+	// prior one. LAST WRITE WINS: two people asking at once ask for the
+	// same read.
+	PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error
+
+	// DeleteAtlasSourceRefresh drops a source's ask once it is honoured or
+	// its source is gone. One that is not there is the outcome asked for.
+	DeleteAtlasSourceRefresh(ctx context.Context, kind string) error
+}
+
 // MailboxRecord is the fleet's record of one agent seat's durable mailbox.
 //
 // # Why the fleet has to remember a mailbox at all
@@ -1875,8 +2091,11 @@ type Fleet interface {
 	Secrets
 	Integrations
 	AtlasSources
+	AtlasSourceRefreshes
+	AtlasCodeScans
 	SeatAccess
 	AccessReviews
+	AtlasWakes
 	ConversationHolds
 	BoxReadings
 	Mailboxes

@@ -309,6 +309,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	second := rig.get("t1")
+	//fixedwait:stated the rig's stepped clock stamped the second question an hour past the first, and R1 is the first plus a minute
 	if second.Status != StatusAwaiting || !second.AskedAt.After(r1.Timestamp) {
 		t.Fatalf("run = %q asked at %v, want it parked on a question asked after R1",
 			second.Status, second.AskedAt)

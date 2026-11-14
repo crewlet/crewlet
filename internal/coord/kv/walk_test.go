@@ -109,20 +109,22 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 // TestFleetContract gives for its own numbers.
 func openFleetForTest(t *testing.T, nc *nats.Conn, prefix string) *FleetStore {
 	t.Helper()
-	return openFleetVia(t, jsOf(nc), prefix)
+	return openFleetVia(t, jsOf(nc), InProcess, prefix)
 }
 
 // openFleetVia is [openFleetForTest] over a client in any API — a leaf's,
-// which addresses the embedded fleet's domain.
+// which addresses the embedded fleet's domain — which reaches the buckets as
+// reach says.
 //
 // The retentions are the suite's, not production's: every case reasons about
 // a window or a claim it names both sides of, and a bucket sized for the
 // production ledger's seven days would make a "this has lapsed" case wait
 // seven days. Every one is above the broker's 100 ms floor and far longer
 // than a case takes, so nothing lapses under a case that did not ask it to.
-func openFleetVia(t testing.TB, client jetstream.JetStream, prefix string) *FleetStore {
+func openFleetVia(t testing.TB, client jetstream.JetStream, reach Reach, prefix string) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), client, FleetConfig{
+		Reach:            reach,
 		BucketPrefix:     prefix,
 		MaxRateWindow:    time.Minute,
 		MaxClaimTTL:      10 * time.Minute,
@@ -825,7 +827,7 @@ func TestAListingNeverMissesALeaseBeingRenewed(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("r%d", bucketSeq.Add(1))
 	open := func() *Store {
-		s, err := Open(ctx, jsOf(nc), Config{TTL: time.Minute, BucketPrefix: prefix})
+		s, err := Open(ctx, jsOf(nc), Config{TTL: time.Minute, BucketPrefix: prefix, Reach: InProcess})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -1061,7 +1063,7 @@ func embeddedNATSServing(t *testing.T, domain string) *nats.Conn {
 		JetStreamDomain:   domain,
 		Port:              -1,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
@@ -1103,6 +1105,7 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		t.Fatalf("client: %v", err)
 	}
 	store, err := OpenFleet(ctx, js, FleetConfig{
+		Reach:         InProcess,
 		BucketPrefix:  fmt.Sprintf("d%d", bucketSeq.Add(1)),
 		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,

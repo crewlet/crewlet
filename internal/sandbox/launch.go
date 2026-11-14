@@ -373,6 +373,12 @@ type LaunchRequest struct {
 	// ([PendingRun.CodeCeiling]); "" for none. Set only where Spec.Repos is.
 	CodeCeiling string
 
+	// CodeWorkingFor is whom the launching turn works for, as the checkout
+	// that gave it Spec.Repos composed it ([PendingRun.CodeWorkingFor]): what
+	// the box pushes, and the change its collection opens, carry it. Nil for
+	// a turn that works for its own seat. Set only where Spec.Repos is.
+	CodeWorkingFor *types.WorkingFor
+
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
 	// that is minted for the job itself, such as its access to
 	// Gitlet (ADR-0093). Asked ONCE, AFTER the store has minted the
@@ -686,7 +692,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// is admitted against the row, and it can come before this
 		// launch returns.
 		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
-		CreatedAt: now(),
+		CodeWorkingFor: req.CodeWorkingFor,
+		CreatedAt:      now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -1039,8 +1046,8 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 // ([RunRepo.ValidateFor] [CloneCoding]), one named twice — by its name or by
 // its id, since either would give one repository two grants and one checkout
 // directory two clones — or a floor that does not go with them, set exactly
-// when repositories are; or a colleague's ceiling on a run given none, which
-// would bound nothing.
+// when repositories are; or a colleague's ceiling, or whom its pushes are
+// made for, on a run given none, which would bound and carry nothing.
 func checkRepos(req LaunchRequest) (err error) {
 	defer origin.Stamp(&err)
 	repos := req.Spec.Repos
@@ -1066,6 +1073,8 @@ func checkRepos(req LaunchRequest) (err error) {
 		return fmt.Errorf("sandbox: a run given no repositories has no code floor")
 	case len(repos) == 0 && req.CodeCeiling != "":
 		return fmt.Errorf("sandbox: a run given no repositories has no colleague's ceiling on them")
+	case len(repos) == 0 && req.CodeWorkingFor != nil:
+		return fmt.Errorf("sandbox: a run given no repositories has nobody its pushes are made for")
 	}
 	return nil
 }
@@ -1124,7 +1133,7 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // as well as the box. Under a context of its own, for the reason every
 // reclaim takes one ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	provider, err := c.mgr().Provider(Placement(prior.Placement))
 	if err != nil {
@@ -1174,20 +1183,24 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
 // box running to its TTL with nobody to collect it, and a row nobody settles.
+// One for the kill, within a box call's grace, and one for the ending, each of
+// whose writes of the row is given the row's crossing too ([detachedEnding]).
 func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
-	defer cancel()
 	if sandboxID != "" {
+		killCtx, cancel := detached(ctx)
 		provider, err := m.Provider(req.Spec.Placement)
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_no_backend",
 				"sandbox_id", sandboxID, "placement", string(req.Spec.Placement),
 				"error", err.Error())
-		} else if err := provider.Kill(ctx, sandboxID); err != nil {
+		} else if err := provider.Kill(killCtx, sandboxID); err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
+		cancel()
 	}
+	ctx, done := detachedEnding(ctx)
+	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
 	// the one party that can name it. The launch's own is killed above,

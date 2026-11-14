@@ -102,7 +102,7 @@ func TestTheBlockCarriesThePublicHalfAlone(t *testing.T) {
 func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText)
+	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,10 +132,10 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 		t.Errorf("the provisioner trusts %q, want the client's principal %q", got,
 			googlecloud.Principal(testProvider, testCompany))
 	}
-	if _, err := googlecloud.CloudShellBlock(testCompany, "ops@acme.example", pemText); err == nil {
+	if _, err := googlecloud.CloudShellBlock(testCompany, "ops@acme.example", pemText, false); err == nil {
 		t.Error("a block was drawn for a provisioner that is no service account")
 	}
-	if _, err := googlecloud.CloudShellBlock(testCompany, provisioner, "not a key"); err == nil {
+	if _, err := googlecloud.CloudShellBlock(testCompany, provisioner, "not a key", false); err == nil {
 		t.Error("a block was drawn for a key the engine never minted")
 	}
 }
@@ -148,7 +148,7 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 func TestTheBlockIsSafeToPasteAgainAndPrintsTheProvider(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText)
+	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false)
 	if err != nil {
 		t.Fatal(err)
 	}

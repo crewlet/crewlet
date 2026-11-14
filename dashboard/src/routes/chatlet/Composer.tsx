@@ -104,6 +104,7 @@ import {
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { storeWrite } from "~/app/assistant/draft.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
@@ -275,8 +276,8 @@ export function Composer({
   const drafts = useChatDrafts();
   const key = draftKey(channelID, threadRoot);
   const value = drafts.get(key);
-  const setValue = useCallback(
-    (next: string) => drafts.set(key, next, channelID, threadRoot),
+  const setValue = useMemo(
+    () => storeWrite(drafts, (next: string) => drafts.set(key, next, channelID, threadRoot)),
     [drafts, key, channelID, threadRoot],
   );
   const field = useRef<HTMLTextAreaElement | null>(null);

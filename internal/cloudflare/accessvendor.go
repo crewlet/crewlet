@@ -202,7 +202,7 @@ func (s *accessSession) levelGaps(ctx context.Context) ([]seataccess.LevelGap, e
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare: read the provisioner token: %w", reject(err))
 	}
-	unheld, err := readUnheld(ctx, s.client, cat, status.ID)
+	unheld, _, err := readUnheld(ctx, s.client, cat, status.ID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare: read the provisioner token's own permissions: %w", reject(err))
 	}

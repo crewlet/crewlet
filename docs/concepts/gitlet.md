@@ -419,7 +419,7 @@ each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 `code_merge_change` merges one only as it allows, a change into a branch
 whose gate requires a check queued rather than merged ([The merge
 queue](#the-merge-queue)), and so does an approved `ask_to_merge`, which merges
-as the agent that asked ([Delegated
+as the agent that asked, for whom its run works ([Delegated
 Decisions](../guides/delegated-decisions.md#asking-to-merge-and-to-deploy)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 where it asks for them (`GET /gitlet/repos/{name}?gates=true`'s `gates`, and
@@ -4464,6 +4464,20 @@ or a person without the Gitlet permission woke is given no repository at all:
 a launch naming one is refused, saying why, before any box exists ([Reads made
 for somebody else](#reads-made-for-somebody-else)).
 
+**A box working for a credential does only its seat's own work.** A run
+launched in a turn a credential acting as no seat woke — a pipeline's token
+holding the Gitlet permission — names that credential on its row, and the box
+is held to the credential's own grant as well as its seat's. Such a credential
+reads every repository and pushes to none itself, so the box fetches what its
+run was given, and pushes nothing outside its seat's own work — its own
+namespace and the repositories it owns — as the seat's own code tools write
+for the credential ([Writes made for somebody else](#writes-made-for-somebody-else)).
+Whoever the turn works for, the box's pushes and the change its run opens carry
+them, as every write of that turn does. A box whose run names whom it works for
+by a kind this node's build does not know — a run a newer build launched — is
+told that a node of a newer build judges its request, and that the harness's
+push, or fetch, again reaches one.
+
 **The admission**, in this order, each refusal in the one line git prints:
 
 | Step | Refused | Answer |
@@ -4478,7 +4492,8 @@ for somebody else](#reads-made-for-somebody-else)).
 | The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read, while the run's [re-syncs](#a-boxs-re-syncs-and-requests-in-flight) last; past them, on its run's floor, a not-found saying so. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
 | | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — a new launch resolves the name again |
 | The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
-| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of | `403 not_permitted`, naming whose grant reads nothing |
+| | the run works for somebody of a kind this node's build does not know — a run a newer build launched | `503 carrier_unknown`, saying a node of a newer build judges it and the harness's push (or fetch) again reaches one: this node judges the box by no bound it could only guess at |
+| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of; and any request of a run whose row names a stranger, for whom nothing is read or pushed (no checkout is made for one), or names whom its turn works for in a shape no checkout writes — no kind at all, or a credential naming no app | `403 not_permitted`, naming whose grant reads nothing, the stranger, or what the row's carrier breaks |
 | The run's hold, for a push (below) | the run store could not be written | `503 holds_unwritten` with `Retry-After` — the push is never received unheld |
 | | the run already holds the most repositories and branches one run may (1 024) | `403 holds_full` |
 | A push's commands, each | a command the seat's grant refuses, or — for a run working for a colleague — one outside the seat's own work (its own namespace and the repositories it owns) the colleague's grant refuses | `not_permitted` on that ref, saying what the seat or the colleague holds and what the command needs |
@@ -4947,7 +4962,8 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 |---|---|
 | nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository, so they bound nothing |
-| a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a colleague seat working for nobody but itself | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a colleague seat's ask, the answer to the seat's own ask, or what that colleague wrote on Worklet, Doclet, Chatlet or Gitlet, from a turn it worked for somebody | what this table allows for that somebody, carried through every ask, answer and write |
 | a person of the company or a credential acting as no seat without the Gitlet permission, or a person on a human seat no person in the directory holds | nothing: they could read no repository themselves, so every code tool is refused for them before anything is read, and the seat is told an administrator can give them Gitlet |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
 | a credential acting as no seat that holds the Gitlet permission, such as an automation's change on a work item or a page | what its own grant allows: such a credential reads every repository itself |
@@ -4957,17 +4973,27 @@ A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
 record about a repository's change names who made it in the routing its
-writer stamped, a person by the human seat they hold, and its home's own
-records name nobody — but a revision's facts, which its home records and
+writer stamped, a person by the human seat they hold, and, beside an agent
+seat that made it in a turn it worked for somebody, whom it was made for, so
+the turn it wakes works for them ([How a seat is woken](#how-a-seat-is-woken));
+its home's own records name nobody — but a revision's facts, which its home records and
 which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
-colleague's revision reads for both grants — and a change it found landed:
-the push after which the target held the change's head merged it, which the
-home finds by walking the target's moves back from the tip, since a push on
-top of the merge may have moved the target since; the landing names whoever
-made that push, and the change's other authors told it merged read for that
-pusher's grant too. A
+colleague's revision reads for both grants or, where the colleague pushed it
+in a turn it worked for somebody, for that somebody, by the table above — and
+a change it found landed: the push after which the target held the change's
+head merged it, which the home finds by walking the target's moves back from
+the tip, since a push on top of the merge may have moved the target since; the
+landing names whoever made that push, and the change's other authors told it
+merged read for that pusher's grant too or, where the pusher made it for
+somebody, for that somebody. So with the merge queue's records: its landing
+names whoever queued the change, so a seat it wakes reads for the enqueuer's
+grant too or, where the enqueuer queued it for somebody, for that somebody;
+its removal of a change from the queue and a close of the landed change's
+work item it could not make name nobody, so a seat they wake reads for its own
+grant, but where the enqueuer queued the change for somebody each carries
+them, and the seat reads for that somebody. A
 credential acting as no seat is the requester by its own login: it reads every
 repository itself and pushes to none, so the turn its change wakes reads as the
 seat may and writes only the seat's own work
@@ -5001,7 +5027,11 @@ colleague's is given none that colleague could not read; the run's
 row names the colleague, and its box is held to the colleague's grant on every
 request it makes — every fetch, and every push outside the seat's own work —
 its own namespace and the repositories it owns. A launch asking to `write` a
-branch the colleague could not push is refused before any box exists.
+branch the colleague could not push is refused before any box exists. A
+credential's run's row names the credential, and its box pushes the seat's own
+work alone, which the credential's own grant — every repository read, none
+pushed — holds it to; a launch asking to `write` a branch outside it is refused
+the same way.
 
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never
@@ -5038,16 +5068,32 @@ a revocation since the ask applies and a credential is narrowed again, never
 widened. The answer wakes the asking seat in a turn worked for them too, and a
 chain of asks carries them end to end
 ([ADR-0109](https://github.com/crewlet/crewlet/blob/main/adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
-**So does what a seat writes on Worklet, Doclet and Chatlet**: a work item it
-files or assigns, a comment, a page or a comment on one, and a Chatlet message
+**So does what a seat writes on Worklet, Doclet, Chatlet and Gitlet**: a work
+item it files or assigns, a comment, a page or a comment on one, a Chatlet
+message, and a change it opens, edits, closes or reopens, an ask for a review,
+a review, a comment on a change, an answer to a finding, a push, a merge or an
+enqueue — what its executor pushes, and the change its run opens, included —
 each wake their seat in a turn worked for whoever the writing turn worked for
 ([An agent uses only the apps of the person it works
-for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
-**What Gitlet records does not carry them yet**: a change, a review, a comment
-on a change and the merge queue's close of a landed change's work item each
-wake their seat in a turn worked for the seat that wrote them, until
-crewlet#798's piece 4c carries the requester on code's records; nor does what
-a seat writes on a vendor's surface. Nor does the ceiling reach what a seat
+for](identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)):
+a code record carries them on each routing that may wake a seat, beside the
+seat that made the write ([How a seat is woken](#how-a-seat-is-woken)).
+**So does what the engine records about a seat's earlier push**: a revision's
+facts, a failed check of a change's head and a landing its home found each read
+whom that push was made for back from the rows that keep it, and wake their
+seat in a turn worked for them, as the push's own wake would have.
+**So does what the merge queue records about a seat's enqueue**: its landing,
+its removal of a change from the queue and a close of the landed change's work
+item it could not make each read whom the enqueue was made for back from the
+entry's row, and wake their seats in turns worked for them — the two that name
+nobody as well, since a seat they wake for itself would queue the change again,
+or close the item its requester could not, with every app the seat holds. And
+the queue's [close of a landed change's work item](#what-the-home-does-with-a-queue) is written
+for them and decided within the apps they use, as the seat's own merge would
+be in their turn. The
+home's own records that name no earlier write — a conflict, a change ready to
+merge — stay nobody's, as the table above says; nor does what a seat writes on
+a vendor's surface carry anybody. Nor does the ceiling reach what a seat
 already holds: its memory, or what it read in a turn nobody woke. What a seat
 was refused for somebody can therefore still reach them through such a write
 or the seat's own memory: the ceiling decides what a turn reads for somebody,
@@ -5067,8 +5113,9 @@ or its protections — exactly as they would be decided asking it themselves.
 |---|---|
 | nobody, or the outcome of its own act | what its own grant allows |
 | a person of the company holding the Gitlet permission | what its own grant allows: such a person maintains every repository |
-| a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
-| a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else |
+| a colleague seat working for nobody but itself | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
+| a colleague seat's ask, the answer to the seat's own ask, or what that colleague wrote on Worklet, Doclet, Chatlet or Gitlet, from a turn it worked for somebody | what this table allows for that somebody, carried through every ask, answer and write |
+| a credential acting as no seat that holds the Gitlet permission, such as a pipeline's token (which pushes to no repository itself) | its own work, and nothing else — what its executor pushes, and the change its run opens, included |
 | a person without the Gitlet permission or on a human seat no person in the directory holds, a person who may not act in the company now, a credential without the Gitlet permission, or somebody the company does not know | **nothing**, its own work included |
 
 **No write is made for somebody who uses no Gitlet.** A stranger, a person who
@@ -6629,10 +6676,27 @@ grant on the repository: `queue`, the live entries of one repository's queues
 queue order with their places, beside the trains testing a named
 repository's branches; `landings`, one protected branch's landings above its
 green row; and `green`, each protected branch's newest commit whose required
-checks passed. The repository's home reads a fourth, `queue_due` — the active
-repositories holding a live entry or a given-up train's unfinished check, and
-one repository's queue work a branch a page, its first page with those
-checks — which no person or seat may read.
+checks passed. The repository's home reads its **queue work** through a read
+of its own, `code.queue_due`, which no person or seat may read: the active
+repositories holding a live entry, a given-up train's unfinished check or a
+landed change's work item still owing its close, and one repository's queue
+work a branch a page, its first page with those checks and those closes. It
+is read **whole or not at all**, because the home lands, ejects, closes and
+settles each entry as it read it: a page a data node of a newer build answers
+with a field the home's build does not know fails the home's turn, and its
+queue waits rather than step on the rest. During a rolling upgrade a home
+reads its queue only from a data node of its own build: a data node of the
+newer build refuses an older home's read, which that build asks in its old
+form, and a data node of an older build answers a newer home's as a read it
+does not know, so the next data node is asked. So a home of the newer build
+closes each landed change's work item for whom its enqueue was made, and a
+home of the older build, which reads no requester off its queue, closes it for
+its enqueuer alone, as before, until the roll completes. Where no data node of a
+home's build is left, its queue waits, losing nothing: a newer home's until a
+data node of its build serves it, which only a roll that upgrades the homes
+before the data nodes meets, and an older home's until the home is upgraded,
+which upgrading the data nodes first, as crewlet-operator does, leaves for the
+rest of the roll.
 
 #### What the home does with a queue
 
@@ -6717,7 +6781,14 @@ holds.
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
-  landing's, so a close asked again is the same write. The close is
+  landing's, so a close asked again is the same write. A seat's enqueue made
+  in a turn it worked for somebody is that turn's write, and so is the close,
+  made late: it is written **for them** and decided **within the apps they
+  use**, composed again on the closing node — a person by the grants they hold
+  now, a credential narrowed by what that node gives it — as the seat's own
+  merge in their turn would be ([Reads made for somebody
+  else](#reads-made-for-somebody-else)), so a person without Worklet who has a
+  seat merge into a queue does not have the item closed for them. The close is
   **owed on the entry's row** from the landing's apply until its home
   settles it: the landing records the close's operation on each entry it
   lands that asked it (`code_queue.close_op`), and every home's queue work
@@ -6735,12 +6806,18 @@ holds.
   `not_closed`, for a close no asking again changes — the item is on a
   vendor's tracker, which is closed there by whoever closes it; the
   enqueuer is bound to no seat, has left the chart or may no longer update
-  it; or Worklet refuses the close for good, the item gone or its content
-  or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
+  it; whom the enqueue was made for has left the organisation, may not act
+  in the company now or does not use Worklet; or Worklet refuses the close
+  for good, the item gone or its content or its state (the trash, say)
+  refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
   under `merged`, why the item was left open (`Change … was merged through
-  its queue, and its work item was not closed: …`). A close no home could
-  make for `gitlet.QueueHistory` is given up with its row, which the queue's
-  history removes.
+  its queue, and its work item was not closed: …`), in turns worked for whom
+  a seat's enqueue was made for where it was made for somebody, and for their
+  own seats otherwise. A close whose requester the closing home's build
+  cannot read — named by a kind only a newer build writes, during a rolling
+  upgrade — is decided not at all and stays owed for a home of that build. A
+  close no home could make for `gitlet.QueueHistory` is given up with its
+  row, which the queue's history removes.
 
 #### How fast a queue lands
 
@@ -7164,13 +7241,24 @@ stops after its record committed loses no wake.
   branch its landing broke are all work on the item the change implements. A
   change carries no spend of its own — what a turn spent is on the turn and
   its item, never summed on the change.
-- **Who wrote it bounds what the seat reads**: a review a colleague seat
-  asked for is that colleague's errand, and a code read in the turn is
-  decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
+- **Who wrote it, and for whom, bounds what the seat reads**: a review a
+  colleague seat asked for is that colleague's errand, and a code read in the
+  turn is decided for both grants — unless the colleague asked it in a turn it
+  worked for somebody, whom the record's routing carries beside it: then it is
+  that somebody's errand, and the turn works for them
+  ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
-  a revision's facts are whoever pushed the revision, and a change it found
-  landed whoever made the push that brought the change's head into its
-  target.
+  a revision's facts and a failed check of its head are whoever pushed the
+  revision, and a change it found landed whoever made the push that brought
+  the change's head into its target, each the pusher's errand or, where the
+  pusher made that push in a turn it worked for somebody, that somebody's,
+  which the routing carries beside the pusher as it does beside a writer; a
+  queue's landing is whoever queued the change, the enqueuer's errand or,
+  where the enqueuer queued it in a turn it worked for somebody, that
+  somebody's, which the routing carries beside the enqueuer; and its removal
+  of a change from the queue and a close it could not make are the engine's,
+  nobody's errand unless the change was queued in a turn worked for somebody,
+  then that somebody's, which the routing carries beside nobody.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a
@@ -8407,7 +8495,7 @@ revised is one click from the terminal that pushed it.
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`, with its `path`: by Gitlet's admission, or, under the component `api`, by a node serving none of Gitlet now, which tells a box why only past this challenge. Debug, because the route is public and anybody who reaches it can produce one. |
-| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
+| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `carrier_unknown`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
 | `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat, or `check:<repository id>` for a check's box) and `principal` (`run <launch id>`, or the check's attempt: its commit, target, name and number), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
 | `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. Or a box's fetch took a barrier for a want its floor lacked, and its floor could not be raised to it: the fetch was served all the same, and the box's next fetch of those objects on another node may take a barrier again. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: an executor's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |

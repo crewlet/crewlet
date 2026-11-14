@@ -236,7 +236,7 @@ A refusal names the step that failed, Scaleway's own reason, what to do about it
 
 ### Disconnecting
 
-Disconnecting deletes every application this engine made, with its policy and keys, and clears their sealed values. The provisioner application and its key are yours, so they stay at Scaleway and in the secret store until you delete them.
+Disconnecting deletes every application this engine made, with its policy and keys, and clears their sealed values. That includes the [Atlas application](#see-more-in-atlas), where you turned it on. The provisioner application and its key are yours, so they stay at Scaleway and in the secret store until you delete them.
 
 ## Configuration
 
@@ -248,6 +248,7 @@ integrations:
       organization_id: 11111111-2222-4333-8444-555555555555
       access_key: SCWXXXXXXXXXXXXXXXXX
       secret_key: "${SCALEWAY_SECRET_KEY}"   # the provisioner key's secret
+    atlas: true                              # optional: see more in Atlas
 ```
 
 | Field | Required | Meaning |
@@ -257,6 +258,61 @@ integrations:
 | `provisioning.organization_id` | yes | The Organization the agents' applications are created in: a UUID, or a `${VAR}`. |
 | `provisioning.access_key` | yes | The provisioner key's access key, `SCW` followed by 17 capital letters or digits, or a `${VAR}`. It names the key and grants nothing alone. |
 | `provisioning.secret_key` | yes | The [provisioner key's](#creating-the-provisioner-key) secret. Keep it a `${VAR}` reference into the secret store; the dashboard seals it as `SCALEWAY_SECRET_KEY`. |
+| `atlas` | no | [See more in Atlas](#see-more-in-atlas): the engine makes a read-only IAM application named for Atlas and reads what the projects hold under it. Off by default; off deletes the application, its policy and its key. |
+
+## What the atlas reads
+
+The engine reads the Organization's projects for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads under the provisioner key, with the `ProjectReadOnly` permission set its policy already holds. Nothing at Scaleway is changed.
+
+| Part | Calls | Permission set | What the atlas gains |
+|---|---|---|---|
+| Projects | `GET /account/v3/projects`, 100 a page | `ProjectReadOnly` on the Organization | the Organization, and each project as an account, with its id and its name |
+
+**The default project is the Organization.** Scaleway gives the default project the Organization's own id, so the atlas shows the two as the one account the settings already name.
+
+**Nothing inside a project is read under the provisioner key.** Its policy holds project read and IAM management and no product's permission set. No description, no creator and no key is read from a project either. What a project holds is read only where you turn on [See more in Atlas](#see-more-in-atlas).
+
+**A refusal is a finding, never a failed read.** Where Scaleway refuses the listing with a `403` (the provisioner's policy lost `ProjectReadOnly`), the source's standing on the atlas says what to grant, and the projects an earlier read recorded stay as they were. A key Scaleway does not know fails the read as a rejected credential.
+
+**Cost and limits.** A read costs one call per hundred projects. A `429` is waited out as every call of this integration does; a longer wait, or a listing that fails part way, stops the read, which records nothing and is made again five minutes later. A project that two complete reads at least a day apart both miss is retired from the atlas.
+
+### See more in Atlas
+
+The atlas can also show what your projects hold: servers, Kubernetes clusters, databases, load balancers, buckets, DNS zones, and Serverless Containers and Functions. It is optional, and nothing else waits on it.
+
+**To turn it on**, open Company › Integrations › Scaleway, switch on **See more in Atlas** and save. That is the whole step: there is nothing to create at Scaleway, because the provisioner key you already gave Crewlet makes what is needed. In the company document the same switch is `integrations.scaleway.atlas: true`.
+
+Within one check of the connection (ten minutes by default) the engine makes, in your Organization:
+
+- one IAM application named `crewlet-atlas-<company>`, described as Crewlet Atlas, so it shows as Atlas, never as an agent, in your IAM pages and your audit trail;
+- one policy on it, with one rule granting the nine read-only permission sets in the table below on every project of the Organization, and nothing else;
+- one API key for it, expiring after 90 days and replaced by the engine once fewer than 30 remain. The key is sealed as `SCALEWAY_ATLAS_SECRET_KEY`, beside `SCALEWAY_ATLAS_ACCESS_KEY` and `SCALEWAY_ATLAS_APPLICATION_ID`. The engine hands it to no agent, and the company document has no field for it.
+
+**To undo it**, switch **See more in Atlas** off and save. The next check deletes the key, the policy and the application, and clears the three sealed values. What the atlas recorded from them is retired after two complete reads a day apart, like anything else it stops seeing. You can also revoke it at Scaleway alone: delete the `crewlet-atlas-<company>` application on your [IAM applications page](https://console.scaleway.com/iam/applications). The engine does not make it again until you switch the setting off and on, and the Scaleway card says so. [Disconnecting](#disconnecting) Scaleway deletes it too.
+
+Each product is one part of the read, behind its own permission set, and every call is a `GET`:
+
+| Part | Calls | Permission set | What the atlas gains |
+|---|---|---|---|
+| Servers | `GET /instance/v1/zones/{zone}/servers`, per zone | `InstancesReadOnly` | each Instance as a host: its name, its zone and its public and private addresses |
+| Kubernetes clusters | `GET /k8s/v1/regions/{region}/clusters`, per region | `KubernetesReadOnly` | each cluster as a host: its name and its region |
+| Load balancers | `GET /lb/v1/zones/{zone}/lbs`, per zone | `LoadBalancersReadOnly` | each Load Balancer as a host: its name, its zone and its addresses |
+| Databases | `GET /rdb/v1/regions/{region}/instances`, per region | `RelationalDatabasesReadOnly` | each Managed Database as a datastore: its name, its region, its engine and its version |
+| Redis clusters | `GET /redis/v1/zones/{zone}/clusters`, per zone | `RedisReadOnly` | each cluster as a datastore: its name, its zone and its version |
+| Buckets | Object Storage's `ListBuckets`, per project and region | `ObjectStorageBucketsRead` | each bucket, by its name and its region |
+| DNS zones | `GET /domain/v2beta1/dns-zones`, then each zone's `/records` | `DomainsDNSReadOnly` | each zone as a domain, and each name an A, AAAA or CNAME record gives, with what it points at |
+| Serverless Containers | `GET /containers/v1beta1/regions/{region}/namespaces` and `/containers`, per region | `ContainersReadOnly` | each container, by its name |
+| Serverless Functions | `GET /functions/v1beta1/regions/{region}/namespaces` and `/functions`, per region | `FunctionsReadOnly` | each function, by its name |
+
+Each entry belongs to its project's account, and each project is said to use what was found in it (compute, a database, object storage, DNS). A name whose record points at the address of a server or a load balancer the same read holds resolves to that entry.
+
+**What is never read.** The engine asks for no server's user data, no cluster's kubeconfig, no database's users, backups or logs, and no object or bucket policy. From the listings it does make, it never decodes a container's, a function's or a namespace's environment variables or secret environment variables, a server's encrypted administrator password, a database's or a cache's endpoints, users and settings, a TXT, MX or any other record that is not A, AAAA or CNAME, or any tag, description or comment. Every value it does keep is held to the atlas's grammars, which refuse anything shaped like a credential.
+
+**What the application could reach, so you can judge it.** Scaleway grants by permission set, and each read-only set covers every read of its product, more than the listings above. The key the engine holds could therefore also read a server's user data (`InstancesReadOnly`), the plain environment variables of a container or a function (`ContainersReadOnly`, `FunctionsReadOnly`; Scaleway returns secret ones only as hashes), and, through each cluster's own API server, the objects the cluster's `scaleway:cluster-read` role allows, which by default includes config maps and pod logs and excludes Secrets (`KubernetesReadOnly`). The engine calls none of those. If that reach is more than you want one sealed key to hold, leave the switch off: the atlas then shows your projects and nothing inside them.
+
+**A refusal is a finding, never a failed read.** A product Scaleway refuses the Atlas application's key (somebody changed its policy, or the Organization cannot use the product) is left unread: the source's standing on the atlas names the part and the permission set, what an earlier read of that part recorded stays, and every other product is still read. A permission set Scaleway does not list for your Organization is left out of the policy, and the card says which. A key Scaleway no longer accepts leaves every product unread until the next check replaces it; the projects are still read under the provisioner key.
+
+**Cost and limits.** A read costs about 40 calls, plus three per project for the buckets and one per DNS zone, once an hour. The Atlas application counts as one application, one policy and one API key against the Organization's IAM quotas. A locality where Scaleway does not serve a product answers `404`, which is read as nothing there.
 
 ## Scaleway's limits worth knowing
 
@@ -285,10 +341,11 @@ The card's findings, and what clears each:
 | `credential_rejected` | Scaleway refused the provisioner key, or it is a user's key or another Organization's | Create a new key for the provisioner application and replace it with **Replace key** |
 | `credential_expiring` | The provisioner key expires within 14 days | Create a new key for the provisioner application and replace it before the date the finding names |
 | `grant_short` | The provisioner application's policies do not grant IAMApplicationManager, IAMPolicyManager or ProjectReadOnly on the Organization, or the rule granting IAMApplicationManager carries a condition on the resource, which refuses the agents' keys | Add the set the finding names to a rule at Organization scope, or remove the condition. A condition on `request.ip` alone is the IP pin, and is fine |
-| `grant_excess` | A note, not a fault: the provisioner holds a set beyond the three it needs, an agent's application carries a policy Crewlet did not write, or a key besides its sealed one | Remove what nobody needs at Scaleway. Crewlet never deletes a policy or a key it did not make while the agent is on |
+| `grant_excess` | A note, not a fault: the provisioner holds a set beyond the three it needs, or an agent's application or the Atlas application carries a policy Crewlet did not write, or a key besides its sealed one | Remove what nobody needs at Scaleway. Crewlet never deletes a policy or a key it did not make while the agent is on |
 | `unknown_tier` | A permission set the level an agent is on names is not offered to the Organization (subject `scaleway level read`, `scaleway level operate` or `scaleway level administer`) | Check the Organization can use that product, or move the agents at that level to another one |
 | `level_unavailable` | A note, not a fault: a level no agent is on names a set the Organization does not offer. The Agents tab offers that level disabled with this reason | Nothing, unless you want the level |
-| `registration_orphaned` | Scaleway holds applications named like this company's agents (`crewlet-<company>-...`) that the engine has no record of | Delete the ones nobody uses at Scaleway. Crewlet never deletes an application it did not make |
+| `coverage_partial` | A note, not a fault, about [See more in Atlas](#see-more-in-atlas) (subject `integrations.scaleway.atlas`): the Atlas application is not made yet, was deleted at Scaleway, has no key because the Organization caps a key's lifetime below 90 days, lacks a permission set Scaleway does not list, or could not be brought up to date on this check | Usually nothing: the next check finishes it. For a deleted application, switch **See more in Atlas** off and on. For a capped lifetime, raise the cap in the Organization's security settings |
+| `registration_orphaned` | Scaleway holds applications named like this company's agents (`crewlet-<company>-...`), or under the Atlas application's name (`crewlet-atlas-<company>`), that the engine has no record of | Delete the ones nobody uses at Scaleway. Crewlet never deletes an application it did not make |
 | `identity_failed` | An agent's application, policy or key could not be made, changed or rotated; a project it names is not in the Organization; somebody deleted its policy at Scaleway; or Scaleway would not read it back. Scaleway's reason is in the detail | Fix what the detail names, then **Retry** on the agent's row. For a policy deleted at Scaleway, choose **Turn back on** or **Keep off** |
 | `identity_missing` | For up to about a minute after you first connect, "access migration has not finished": the one-time step every per-agent integration passes through | Nothing; it clears by itself |
 

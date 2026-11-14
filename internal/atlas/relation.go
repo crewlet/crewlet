@@ -51,6 +51,39 @@ func (r Relation) Structural() bool {
 	return false
 }
 
+// Family is what a relation says of the two entries it joins, as the map
+// draws it: three kinds of line, so a reader tells a request's path from what
+// a thing stands on and from everything around it.
+type Family string
+
+// The families, the request's path first.
+const (
+	// FamilyCalls is a relation a request travels along.
+	FamilyCalls Family = "calls"
+	// FamilyRunsOn is a relation to what an entry stands on.
+	FamilyRunsOn Family = "runs_on"
+	// FamilyAround is every other relation: where an entry sits, what builds,
+	// watches and secures it, and who answers for it.
+	FamilyAround Family = "around"
+)
+
+// Families is every family.
+var Families = []Family{FamilyCalls, FamilyRunsOn, FamilyAround}
+
+// Valid reports whether f is a member of the closed set.
+func (f Family) Valid() bool { return slices.Contains(Families, f) }
+
+// Family is the family r is drawn in.
+func (r Relation) Family() Family {
+	switch r {
+	case RelationDependsOn, RelationExposes, RelationServedBy, RelationFrontedBy:
+		return FamilyCalls
+	case RelationRunsOn, RelationResolvesTo:
+		return FamilyRunsOn
+	}
+	return FamilyAround
+}
+
 // External is a target outside the atlas a relation may name. Each is an
 // identity the engine already never changes in place: a seat's handle, a
 // unit's key, a page's id.
@@ -88,7 +121,7 @@ type pair struct {
 var pairs = sync.OnceValue(func() map[Relation]pair {
 	return map[Relation]pair{
 		RelationRunsOn: {
-			from: []Kind{KindService, KindDatastore, KindQueue},
+			from: []Kind{KindService, KindWorkload, KindDatastore, KindQueue},
 			to:   []Kind{KindHost, KindAccount},
 		},
 		RelationDependsOn: {
@@ -106,8 +139,10 @@ var pairs = sync.OnceValue(func() map[Relation]pair {
 			from: []Kind{KindHostname, KindEndpoint, KindService},
 			to:   []Kind{KindAccount},
 		},
-		RelationBuiltFrom:  {from: []Kind{KindService, KindPipeline}, to: []Kind{KindRepository}},
-		RelationDeployedBy: {from: []Kind{KindService}, to: []Kind{KindPipeline}},
+		RelationBuiltFrom: {from: []Kind{KindService, KindPipeline}, to: []Kind{KindRepository}},
+		// What a pipeline deploys is the service, or the address or the name
+		// a deployment says it put its code behind.
+		RelationDeployedBy: {from: []Kind{KindService, KindEndpoint, KindHostname}, to: []Kind{KindPipeline}},
 		RelationMonitoredBy: {
 			from: []Kind{KindService, KindEndpoint, KindHostname, KindHost, KindDatastore, KindQueue},
 			to:   []Kind{KindMonitor, KindAccount},

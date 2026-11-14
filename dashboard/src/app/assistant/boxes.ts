@@ -23,7 +23,9 @@
  * them. Instead each box puts itself into the page's [DraftBoxes] as it
  * renders ([useDraftBox]), with its text, its own setter and the words it
  * refuses a value in, and a small child of the page reads the boxes
- * ([useOpenBoxes]) and declares the draft ([boxesDraft]).
+ * ([useOpenBoxes]) and declares the draft ([boxesDraft]). The setter is the
+ * branded one of the state the box holds its text in ([useDraftState]), so
+ * the page's draft is held where the draft gate can follow it.
  *
  * # A field is its box's
  *
@@ -34,7 +36,14 @@
  */
 
 import { createContext, useContext, useLayoutEffect, useSyncExternalStore } from "react";
-import { refuse, type AssistantDraftSpec } from "./draft.ts";
+import {
+  latestWrite,
+  refuse,
+  writeParts,
+  type AssistantDraftSpec,
+  type DraftSetter,
+  type DraftWrite,
+} from "./draft.ts";
 
 /** One box open on a page. */
 export interface DraftBox {
@@ -48,8 +57,11 @@ export interface DraftBox {
   rank: number;
   /** What the box holds now. */
   value: string;
-  /** The box's own setter. */
-  set: (next: string) => void;
+  /**
+   * How the box's text is set: the branded setter of the state it is held
+   * in, or a write made from the branded state of the page that holds it.
+   */
+  set: DraftSetter<string> | DraftWrite<string>;
   /** Why the box would not take `next` now, in the box's own words, or null. */
   refuses: (next: string) => string | null;
 }
@@ -124,7 +136,7 @@ export class DraftBoxes {
     const { path } = box;
     return {
       ...box,
-      set: (next) => this.open.get(path)?.set(next),
+      set: latestWrite(() => this.open.get(path)?.set),
       refuses: (next) => this.open.get(path)?.refuses(next) ?? null,
     };
   }
@@ -175,6 +187,7 @@ export function boxesDraft(
   },
 ): AssistantDraftSpec<Readonly<Record<string, string>>> | null {
   if (open.boxes.length === 0) return null;
+  const value = Object.fromEntries(open.boxes.map((box) => [box.path, box.value]));
   return {
     kind: "client",
     id: page.id ?? null,
@@ -182,7 +195,7 @@ export function boxesDraft(
     step: open.last,
     scope: page.scope,
     help: page.help,
-    value: Object.fromEntries(open.boxes.map((box) => [box.path, box.value])),
+    value,
     fields: open.boxes.map((box) => ({
       path: box.path,
       label: box.label,
@@ -194,12 +207,8 @@ export function boxesDraft(
         return why === null ? { ...draft, [box.path]: next } : refuse(why);
       },
     })),
-    apply: (next) => {
-      for (const box of open.boxes) {
-        const text = next[box.path];
-        if (text !== undefined && text !== box.value) box.set(text);
-      }
-    },
+    // EACH BOX THROUGH ITS OWN SETTER, where the change moved its text.
+    write: writeParts(value, Object.fromEntries(open.boxes.map((box) => [box.path, box.set]))),
     ...(page.blocked ? { blocked: page.blocked } : {}),
   };
 }

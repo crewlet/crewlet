@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -56,7 +57,7 @@ func TestTheRetentionDutyExpiresAnIdleSeatBranchNoRunHolds(t *testing.T) {
 		push := gitlet.Proposal{PushID: uuid.Must(uuid.NewV7()).String(), RepoID: web.ID,
 			Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "swe",
 				Run: gitlet.RunProvenance{TurnID: "turn-1"}},
-			Via: gitlet.ViaEngine, Node: e.id, ReceivedAt: time.Now().UTC(),
+			WrittenFor: types.ForNobody(), Via: gitlet.ViaEngine, Node: e.id, ReceivedAt: time.Now().UTC(),
 			Commands: []gitlet.Command{{Ref: ref, Old: gitlet.ZeroOID, New: oidAt(i)}}}
 		res, err := e.router.Code().Propose(t.Context(), push)
 		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Answer.Commands[0].Result != gitlet.ResultOK {

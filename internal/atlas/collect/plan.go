@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // RetireAfter is how long after a first complete miss a second complete miss
@@ -59,6 +61,20 @@ type Status struct {
 	// by any attempt that does not.
 	LastError string `json:"last_error,omitempty"`
 
+	// Unread is every part of the vendor the last complete read was refused,
+	// with what to grant: the entries of such a part are as an earlier read
+	// left them.
+	// UnreadOverflow is how many more parts were refused than [MaxUnread]
+	// findings name.
+	Unread         []Finding `json:"unread,omitempty"`
+	UnreadOverflow int       `json:"unread_overflow,omitempty"`
+
+	// Scopes is every part of the world the last complete read visited that
+	// keeps a standing of its own, as each server of the SSH source does:
+	// when it was last read whole, and how many of its parts the last
+	// complete read was refused.
+	Scopes []Scope `json:"scopes,omitempty"`
+
 	// Missing is every entry the voice holds that complete reads have
 	// stopped seeing, grouped by the instant of the first read that missed
 	// it; MissingOverflow how many more a deletion past [MaxMissing] holds
@@ -66,6 +82,39 @@ type Status struct {
 	Missing         []Missing `json:"missing,omitempty"`
 	MissingOverflow int       `json:"missing_overflow,omitempty"`
 }
+
+// Finding is one part of a vendor a source may not read, and what to grant.
+// Scope names the scope the part belongs to ([Scope]), where it has one.
+type Finding struct {
+	Part   string `json:"part"`
+	Scope  string `json:"scope,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// Scope is one part of a source's world with a standing of its own: one
+// server of the SSH source.
+type Scope struct {
+	ID string `json:"id"`
+
+	// LastReadAt is the last complete read that read every part of the
+	// scope, zero where none has yet; Unread how many of its parts the last
+	// complete read was refused.
+	LastReadAt time.Time `json:"last_read_at,omitzero"`
+	Unread     int       `json:"unread,omitempty"`
+}
+
+// MaxScopes bounds the scopes a standing carries. A standing is one
+// coordination record: 2,048 scopes with a 64-byte id each encode to about
+// 250 KiB, and a company declares its servers by hand, far below that.
+const MaxScopes = 2048
+
+// MaxUnread bounds the findings a standing carries, and MaxFindingLength the
+// text of each: a source reads a handful of listings, and the standing is one
+// coordination record.
+const (
+	MaxUnread        = 16
+	MaxFindingLength = 512
+)
 
 // Missing is a group of entries first missed by one complete read.
 type Missing struct {
@@ -79,19 +128,65 @@ type Missing struct {
 // smallest cadence a company may choose.
 const RetryAfter = 5 * time.Minute
 
-// Due reports whether the source is due a read at now, given the company's
-// refresh interval: never read, read a whole interval ago, or read less than
-// whole [RetryAfter] ago. Judged against the interval in force rather than
-// one recorded, so a shortened interval applies at once.
-func (s Status) Due(now time.Time, interval time.Duration) bool {
+// RefreshFloor is the least time between two reads of one source a person
+// can ask for: the floor of the refresh interval, so "Refresh now" reads a
+// vendor no more often than the smallest cadence a company may set.
+const RefreshFloor = config.MinAtlasRefreshInterval
+
+// Request is a person's ask that a source be read now, waiting for the duty.
+type Request struct {
+	RequestedAt time.Time `json:"requested_at"`
+	// By is the handle or login of whoever asked.
+	By string `json:"by,omitempty"`
+}
+
+// MaxRequestByLength bounds who a request names: one handle or login.
+const MaxRequestByLength = 128
+
+// Waits reports whether the request asks for a read the standing has not
+// made yet: one made at or after the ask has answered it.
+func (r Request) Waits(s Status) bool {
+	return !r.RequestedAt.IsZero() && r.RequestedAt.After(s.LastAttemptAt)
+}
+
+// RefreshableAt is the first instant a person's ask for a read is honoured:
+// [RefreshFloor] after the last attempt, and at once for a source never read.
+func (s Status) RefreshableAt() time.Time {
 	if s.LastAttemptAt.IsZero() {
-		return true
+		return time.Time{}
+	}
+	return s.LastAttemptAt.Add(RefreshFloor)
+}
+
+// NextReadAt is when the source is next read on its own, given the company's
+// refresh interval; zero for a source never read, which is due now.
+func (s Status) NextReadAt(interval time.Duration) time.Time {
+	if s.LastAttemptAt.IsZero() {
+		return time.Time{}
 	}
 	wait := interval
 	if !s.Completed {
 		wait = min(interval, RetryAfter)
 	}
-	return !now.Before(s.LastAttemptAt.Add(wait))
+	return s.LastAttemptAt.Add(wait)
+}
+
+// Due reports whether the source is due a read at now, given the company's
+// refresh interval: never read, read a whole interval ago, or read less than
+// whole [RetryAfter] ago. Judged against the interval in force rather than
+// one recorded, so a shortened interval applies at once.
+func (s Status) Due(now time.Time, interval time.Duration) bool {
+	return !now.Before(s.NextReadAt(interval))
+}
+
+// DueFor reports whether the source is due a read at now: on its own
+// cadence ([Status.Due]), or because a person asked ([Request]) and
+// [RefreshFloor] has passed since the last attempt.
+func (s Status) DueFor(now time.Time, interval time.Duration, asked Request) bool {
+	if s.Due(now, interval) {
+		return true
+	}
+	return asked.Waits(s) && !now.Before(s.RefreshableAt())
 }
 
 // missedSince is each missed entry's first-missed instant.
@@ -135,11 +230,84 @@ type Plan struct {
 // at least [RetireAfter] after the first miss misses it too; one the read
 // lists again is no longer missed. An entry already retired by this voice is
 // neither re-retired nor missed.
+//
+// A claim from a part the read was refused ([Read.Unread]) is carried as the
+// log holds it: it is neither withdrawn nor missed, and a miss it already had
+// is kept, never advanced. An entry the voice never said exists is released
+// rather than retired: its slots are withdrawn, and nothing is denied.
 func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	now = now.UTC()
-	voice := status.Kind
 	held := group(live)
 	seen := group(read.Claims)
+	carried := carry(held, seen, read.Unread)
+	records := moved(held, seen)
+	since := status.missedSince()
+	var missing []missed
+	retired := 0
+	for _, entry := range sortedRefs(held) {
+		have := held[entry]
+		id := entry.ID().String()
+		first, ok := since[id]
+		if _, listed := seen[entry]; listed {
+			// A MISS IS KEPT, never advanced, for an entry only a refused
+			// part holds: the refusal is no read of it either way.
+			if carried[entry] && ok && !alreadyRetired(have) {
+				missing = append(missing, missed{id: id, since: first})
+			}
+			continue
+		}
+		if alreadyRetired(have) {
+			continue
+		}
+		if !ok {
+			missing = append(missing, missed{id: id, since: now})
+			continue
+		}
+		if now.Sub(first) < RetireAfter {
+			missing = append(missing, missed{id: id, since: first})
+			continue
+		}
+		rec := EntryRead{Entry: entry}
+		for _, slot := range sortedSlots(have) {
+			prior := have[slot]
+			if prior.Facet.Kind == atlas.FacetExists {
+				gone := prior
+				gone.Denied, gone.ObservedAt, gone.Position = true, now, 0
+				rec.Claims = append(rec.Claims, gone)
+				rec.Retires = true
+				continue
+			}
+			rec.Withdrawn = append(rec.Withdrawn, slot)
+		}
+		// A VOICE THAT NEVER SAID THE ENTRY EXISTS denies nothing: what it
+		// said about the entry is withdrawn, and whoever holds the entry
+		// still does. A denial here would retire another source's entry.
+		records = append(records, rec)
+		if rec.Retires {
+			retired++
+		}
+	}
+	slices.SortFunc(missing, func(a, b missed) int {
+		return cmp.Or(a.since.Compare(b.since), cmp.Compare(a.id, b.id))
+	})
+	overflow := 0
+	if len(missing) > MaxMissing {
+		overflow = len(missing) - MaxMissing
+		missing = missing[:MaxMissing]
+	}
+	status.Missing, status.MissingOverflow = groupMissed(missing), overflow
+	status.Entries, status.Calls, status.Withheld = len(seen), read.Calls, len(read.Withheld)
+	status.Digest = digest(read.Claims)
+	status.Unread, status.UnreadOverflow = findings(refused(read.Unread, held))
+	status.Scopes = scopes(status.Scopes, read, now)
+	status.Recorded, status.Retired = len(records), retired
+	return Plan{Records: records, Status: status}
+}
+
+// moved is one record per entry of seen whose claims differ from the ones
+// held on it: the claims that are new or changed, and the held slots seen no
+// longer holds. An entry seen does not list is not its concern.
+func moved(held, seen map[atlas.Ref]map[string]atlas.Claim) []EntryRead {
 	var records []EntryRead
 	for _, entry := range sortedRefs(seen) {
 		want, have := seen[entry], held[entry]
@@ -160,62 +328,135 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 			records = append(records, rec)
 		}
 	}
-	since := status.missedSince()
-	var missing []missed
-	retired := 0
+	return records
+}
+
+// Replace is the records that make a voice's live claims exactly want, AT
+// ONCE: what is new or changed is claimed, and every other slot the voice
+// holds is withdrawn, an entry want no longer lists released whole. For a
+// voice whose reading is exact at the instant it is made, as a repository's
+// files at one commit are: a vendor's listing is not, and takes [Decide],
+// whose retirement waits for two complete misses. Nothing is denied: the
+// voice stops saying it, and whoever else holds the entry still does. PURE.
+func Replace(live, want []atlas.Claim) []EntryRead {
+	held, seen := group(live), group(want)
+	records := moved(held, seen)
 	for _, entry := range sortedRefs(held) {
 		if _, listed := seen[entry]; listed {
 			continue
 		}
-		have := held[entry]
-		if alreadyRetired(have) {
-			continue
-		}
-		id := entry.ID().String()
-		first, ok := since[id]
-		if !ok {
-			missing = append(missing, missed{id: id, since: now})
-			continue
-		}
-		if now.Sub(first) < RetireAfter {
-			missing = append(missing, missed{id: id, since: first})
-			continue
-		}
-		rec := EntryRead{Entry: entry, Retires: true}
-		for _, slot := range sortedSlots(have) {
-			prior := have[slot]
-			if prior.Facet.Kind == atlas.FacetExists {
-				gone := prior
-				gone.Denied, gone.ObservedAt, gone.Position = true, now, 0
-				rec.Claims = append(rec.Claims, gone)
+		records = append(records, EntryRead{Entry: entry, Withdrawn: sortedSlots(held[entry])})
+	}
+	return records
+}
+
+// carry adds to seen every claim the voice holds that a refused part covers,
+// as the log holds it, and answers the entries only such claims list.
+func carry(held, seen map[atlas.Ref]map[string]atlas.Claim, unread []Unread) map[atlas.Ref]bool {
+	carried := map[atlas.Ref]bool{}
+	for entry, slots := range held {
+		for slot, c := range slots {
+			if !slices.ContainsFunc(unread, func(u Unread) bool { return u.Holds != nil && u.Holds(c) }) {
 				continue
 			}
-			rec.Withdrawn = append(rec.Withdrawn, slot)
-		}
-		if len(rec.Claims) == 0 {
-			// A voice holding facts on an entry it never said exists: its
-			// retirement is still a denial of the entry, built fresh.
-			if gone, err := atlas.Exists(entry, atlas.IntegrationSource(string(voice)), now); err == nil {
-				gone.Denied = true
-				rec.Claims = append(rec.Claims, gone)
+			if seen[entry] == nil {
+				seen[entry] = map[string]atlas.Claim{}
+				carried[entry] = true
+			}
+			if _, ok := seen[entry][slot]; !ok {
+				seen[entry][slot] = c
 			}
 		}
-		records = append(records, rec)
-		retired++
 	}
-	slices.SortFunc(missing, func(a, b missed) int {
-		return cmp.Or(a.since.Compare(b.since), cmp.Compare(a.id, b.id))
-	})
-	overflow := 0
-	if len(missing) > MaxMissing {
-		overflow = len(missing) - MaxMissing
-		missing = missing[:MaxMissing]
+	return carried
+}
+
+// refused is the unread parts a standing names: every part the credential
+// was expected to read, and an optional one ([Unread.Optional]) only where
+// the voice holds an entry the part said exists. An optional part no entry
+// was ever read from is a permission the company never gave, which is no
+// refusal.
+func refused(unread []Unread, held map[atlas.Ref]map[string]atlas.Claim) []Unread {
+	var out []Unread
+	for _, u := range unread {
+		if !u.Optional || holdsEntry(u, held) {
+			out = append(out, u)
+		}
 	}
-	status.Missing, status.MissingOverflow = groupMissed(missing), overflow
-	status.Entries, status.Calls, status.Withheld = len(seen), read.Calls, len(read.Withheld)
-	status.Digest = digest(read.Claims)
-	status.Recorded, status.Retired = len(records), retired
-	return Plan{Records: records, Status: status}
+	return out
+}
+
+// holdsEntry reports whether the voice holds a live exists claim from the
+// part. ONLY AN ENTRY COUNTS: a fact the part shares with another part (what
+// an account is used for) would name a part nothing was ever read from.
+func holdsEntry(u Unread, held map[atlas.Ref]map[string]atlas.Claim) bool {
+	if u.Holds == nil {
+		return false
+	}
+	for _, slots := range held {
+		for _, c := range slots {
+			if c.Facet.Kind == atlas.FacetExists && !c.Denied && u.Holds(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// findings is the refused parts as a standing keeps them: bounded, in a fixed
+// order, each part once, and how many more there were than it keeps.
+func findings(unread []Unread) ([]Finding, int) {
+	var out []Finding
+	for _, u := range unread {
+		if slices.ContainsFunc(out, func(f Finding) bool { return f.Part == u.Part }) {
+			continue
+		}
+		out = append(out, Finding{Part: textcut.Within(u.Part, MaxFindingLength),
+			Scope:  textcut.Within(u.Scope, MaxFindingLength),
+			Detail: textcut.Within(u.Detail, MaxFindingLength)})
+	}
+	slices.SortFunc(out, func(a, b Finding) int { return cmp.Compare(a.Part, b.Part) })
+	if len(out) > MaxUnread {
+		return out[:MaxUnread], len(out) - MaxUnread
+	}
+	return out, 0
+}
+
+// scopes is each scope the read visited, in the order of their ids: read
+// whole at now where the read was refused none of its parts, and otherwise
+// as last read whole, with how many parts were refused. A scope the read no
+// longer visits has no standing. Counted from the read rather than from the
+// findings, which are bounded.
+func scopes(prior []Scope, read Read, now time.Time) []Scope {
+	last := map[string]time.Time{}
+	for _, s := range prior {
+		last[s.ID] = s.LastReadAt
+	}
+	refused := map[string]map[string]bool{}
+	for _, u := range read.Unread {
+		if u.Scope == "" {
+			continue
+		}
+		if refused[u.Scope] == nil {
+			refused[u.Scope] = map[string]bool{}
+		}
+		refused[u.Scope][u.Part] = true
+	}
+	ids := slices.Clone(read.Scopes)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	if len(ids) > MaxScopes {
+		ids = ids[:MaxScopes]
+	}
+	var out []Scope
+	for _, id := range ids {
+		s := Scope{ID: id, LastReadAt: last[id], Unread: len(refused[id])}
+		if s.Unread == 0 {
+			s.LastReadAt = now
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // missed is one entry a read missed, since when.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -64,18 +65,20 @@ func changeRepo(t testing.TB, n *node, name string) string {
 }
 
 // opening is an open of source into target on repo, asked by asker under an
-// operation id of its own.
+// operation id of its own, made for nobody but the asker.
 func opening(repo, source, target string, asker gitlet.Principal) gitlet.ChangeProposal {
 	opID := statelog.NewOpID(time.Now(), "code_open_change")
-	return gitlet.ChangeProposal{OpID: opID, Asker: asker, Open: &gitlet.ChangeOpen{RepoID: repo,
-		ChangeID: gitlet.OpenChangeID(opID), SourceRef: source, TargetRef: target, Title: "Retry the upload"}}
+	return gitlet.ChangeProposal{OpID: opID, Asker: asker, WrittenFor: types.ForNobody(),
+		Open: &gitlet.ChangeOpen{RepoID: repo, ChangeID: gitlet.OpenChangeID(opID), SourceRef: source,
+			TargetRef: target, Title: "Retry the upload"}}
 }
 
 // writing is a write of a change's lifecycle by asker at version, under an
-// operation id of its own: set fills in the one record it carries.
+// operation id of its own, made for nobody but the asker: set fills in the one
+// record it carries.
 func writing(asker gitlet.Principal, version int64, set func(p *gitlet.ChangeProposal)) gitlet.ChangeProposal {
 	p := gitlet.ChangeProposal{OpID: statelog.NewOpID(time.Now(), "code_update_change"), Asker: asker,
-		ExpectedVersion: version}
+		WrittenFor: types.ForNobody(), ExpectedVersion: version}
 	set(&p)
 	return p
 }
@@ -745,7 +748,11 @@ func TestAChangeProposalThatIsNoneIsRefusedBeforeItIsQueued(t *testing.T) {
 
 // EVERY ANSWER IS COUNTED UNDER ITS OP AND WHAT BECAME OF IT
 // (crewlet.code.change.proposals), and a write the committer met busy under
-// the busy count's `change` kind.
+// the busy count's `change` kind. A write whose carrier names an app this
+// build does not know is `handed_on`: this node decided nothing of it, and the
+// estate asks a node of the build that knows the app — never `failed`.
+//
+// Mutation: count such a write by its error alone — `failed`, red.
 func TestEveryChangeAnswerIsCounted(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -760,6 +767,14 @@ func TestEveryChangeAnswerIsCounted(t *testing.T) {
 	if _, err := c.ProposeChange(ctx, retitled(repo, opened.ChangeID, dev, 1, "Retry the upload")); err != nil {
 		t.Fatal(err)
 	}
+	later := retitled(repo, opened.ChangeID, dev, 1, "Retitled for a later build's credential")
+	later.Ceiling = &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody}
+	later.WrittenFor = types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+		Apps: []iam.Grant{iam.GrantGitlet, "ledger"}})
+	if _, err := c.ProposeChange(ctx, later); !gitlet.IsUnknownToThisBuild(err) {
+		t.Fatalf("a write made for a credential naming an app this build does not know answered %v, want it "+
+			"refused as a value this build does not know", err)
+	}
 	counted := map[[2]string]uint64{}
 	for _, s := range rec.Read() {
 		if s.Name == metrics.CodeChangeProposals {
@@ -768,6 +783,7 @@ func TestEveryChangeAnswerIsCounted(t *testing.T) {
 	}
 	want := map[[2]string]uint64{
 		{"change_open", "applied"}: 1, {"change_open", "change_exists"}: 1, {"change_edit", "unchanged"}: 1,
+		{"change_edit", "handed_on"}: 1,
 	}
 	for key, times := range want {
 		if counted[key] != times {

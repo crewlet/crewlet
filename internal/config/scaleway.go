@@ -15,13 +15,19 @@ import (
 // and kept by the engine through the company's provisioner key.
 //
 // It ingests nothing: the block is provisioning alone, so [Scaleway.validate]
-// requires it whenever the block is enabled.
+// requires it whenever the block is enabled. Atlas is the one thing beside it:
+// a read-only application of the engine's own, off unless a company asks.
 type Scaleway struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 
 	// Provisioning is the organization the agents' applications are made in
 	// and the provisioner key they are made with.
 	Provisioning *ScalewayProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The Scaleway Organization and the provisioner key the engine makes each agent's IAM application, policy and API key with. Required when enabled."`
+
+	// Atlas has the engine make one more IAM application, named for the
+	// atlas, holding read-only permission sets on every project and nothing
+	// else, and read the company's products under it (ADR-0144).
+	Atlas bool `yaml:"atlas,omitempty" json:"atlas,omitempty" desc:"See more in Atlas: the engine makes a read-only IAM application named for Atlas, with its own policy and API key, and reads the Organization's servers, clusters, databases, load balancers, bucket names, DNS zones, containers and functions under it. Off deletes the application, its policy and its key."`
 }
 
 // ScalewayProvisioning is what the engine needs to make, narrow, rotate and

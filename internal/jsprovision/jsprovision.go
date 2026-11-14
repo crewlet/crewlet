@@ -361,6 +361,46 @@ func (t Timing) unset() error {
 		span{"ReadTerm", t.ReadTerm}, span{"PlacementRetry", t.PlacementRetry})
 }
 
+// Arriving is t for a read whose answer takes arrival to reach its reader
+// whole once the broker has taken the request: a stream leader's reply that
+// carries a message of megabytes, which the leader builds, a link may carry
+// slowly, and the reader decodes, none of it heard until its last byte is in
+// (internal/jsapi's Arrival). Each request is presumed lost only once that
+// arrival has passed beyond the read term, and the read is asked for no
+// longer than the longest silence the broker keeps AND that arrival — the
+// one rule for such a read, whoever makes it (internal/jsapi's Leader, a
+// state log's read of a record by its position).
+//
+// # A reply still arriving is not silence
+//
+// [LookupBudget] bounds how long the broker may say NOTHING: past it, a group
+// in any state answers a read. A reply on its way is the broker having
+// answered, and held to the ceiling alone, a read whose reply takes longer
+// than the ceiling to arrive failed at every ask — a run's record of six
+// megabytes, read across a link at the slowest pace the engine allows one to
+// be, takes four minutes to arrive, so it could not be read at all, nor
+// written by the read-decide-write every change of it is
+// (crewlet/crewlet#1149).
+//
+// # And a reply still being built is not lost
+//
+// Presumed lost at the bare read term and asked again, a read whose reply
+// takes longer than the term to build and decode made the leader build
+// another whole reply beside the first, each one more work queued behind the
+// work that made the first one late — a member's own read of a dead letter at
+// the transport's ceiling, under load, ran out its bound with none of its
+// three replies answered (crewlet/crewlet#1153), and across a link each
+// re-ask put another whole reply on the link the first was still crossing.
+// Given its arrival, a read asks once while its reply can still be on its
+// way, and a request a member dropped across an election costs it that
+// arrival before it is asked again, rather than two seconds: the price of
+// never building, nor carrying, one reply twice.
+func (t Timing) Arriving(arrival time.Duration) Timing {
+	t.ReadTerm += arrival
+	t.Lookup += arrival
+	return t
+}
+
 // refuseUnset names the first of spans that is not a positive duration.
 func refuseUnset(spans ...span) error {
 	for _, s := range spans {
@@ -1209,6 +1249,18 @@ func Refused(err error) bool {
 		return true
 	}
 	return false
+}
+
+// InvalidConfig reports a create the broker refused as an INVALID
+// CONFIGURATION: checkStreamCfg's answer (see the constants above), one of
+// [Refused]'s, asked on its own by a caller that can say what in the
+// configuration it sent a server may refuse. ONE CODE FOR EVERY SUCH
+// REFUSAL — a window above the server's limit, an age below the window, a bad
+// subject — so it says the configuration was refused and never which part of
+// it; the broker's words say which, and are no contract to match.
+func InvalidConfig(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == errCodeInvalidConfig
 }
 
 // apiError unwraps the broker's own answer out of whatever a caller wrapped it

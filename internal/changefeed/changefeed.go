@@ -94,17 +94,33 @@
 // dead-letter stream ([DeadLetters]) — its sealed frame the entry's body, and
 // what the feed recorded of it the entry's header ([DeadLetter]), which every
 // listing reads without the frame — and only then acked, so it stops holding
-// a slot of the consumer's pending set without anybody's wake being lost. An
-// entry is kept for the event stream's retention and then expires; the first
-// node whose feed starts able to read it replays it ([Feed.replay]) through
-// the same claim a delivery passes — the one reader of its frame — and drops
-// it; and an operator who has decided its wake can be lost discards it (the
-// engine's operator surface, `crewlet feeds discard`). ADR-0012's amendment
-// records the decision.
+// a slot of the consumer's pending set without anybody's wake being lost.
+// The entry is kept under the record's IDENTITY, the message the broker stored
+// for it — its log, its position there and the broker's instant for it, which
+// every node reads off the delivery whether or not it can open the record
+// ([keepID]) — which makes a second keep of the record harmless: a keep waits
+// as long as the frame takes to cross the node's link, which can outlast the
+// delivery's thirty-second acknowledgement window, and the record is then
+// handed to another node, which keeps it too. Whichever of the two keeps
+// lands first is stored — the slow first keeper's as often as the peer's —
+// and the queue answers the other that the entry was already kept, so both
+// nodes ack one entry. The record's dead-lettering is COUNTED ONCE, by
+// whichever node takes its dead-letter claim ([Feed.deadLetter]), never by
+// which keep was answered stored: a keep can store its entry and still answer
+// an error, its answer lost on the way back. Nothing the keeping node sends
+// while its keep crosses could stop the hand-back: it crosses the same link
+// behind the keep's own bytes. An entry is kept for the event stream's retention and then expires;
+// the first node whose feed starts able to read it replays it ([Feed.replay])
+// through the same claim a delivery passes — the one reader of its frame — and
+// drops it; and an operator who has decided its wake can be lost discards it
+// (the engine's operator surface, `crewlet feeds discard`). ADR-0012's
+// amendment records the decision.
 package changefeed
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -343,7 +359,7 @@ type Publisher interface {
 // different: kept there, an entry outlives the node that kept it and is
 // replayed by whichever node first starts able to read it.
 type DeadLetters interface {
-	KeepDeadLetter(ctx context.Context, subject string, header, frame []byte) error
+	KeepDeadLetter(ctx context.Context, subject, id string, header, frame []byte) (bool, error)
 	DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept, error)
 	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
 	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
@@ -735,7 +751,7 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		f.deferRecord(ctx, msg, msg.Deferred)
 		return
 	}
-	switch out, deferral, err := f.derive(ctx, msg.Record); out {
+	switch out, deferral, err := f.derive(ctx, msg.Record, false); out {
 	case outcomeDeferred:
 		f.deferRecord(ctx, msg, deferral)
 	case outcomeUntranslatable:
@@ -797,7 +813,14 @@ const (
 // ONE PATH FOR A DELIVERY ([Feed.handle]) AND A DEAD LETTER'S REPLAY
 // ([Feed.replay]), so a replayed wake passes the dedupe a delivered one does:
 // two nodes starting together and replaying the same entry publish it once.
-func (f *Feed) derive(ctx context.Context, rec Record) (outcome, *Deferral, error) {
+//
+// replayed says which, and the wake says it too (types.RawWebhook.Replayed):
+// a replay publishes the wakes a roll piled up one after another, a burst the
+// live path would have spread over the roll, so the notification service paces
+// each by the seat's rate valve rather than skip one the valve refuses — the
+// replay drops an entry once its wake is published, so a skipped wake was lost
+// with its entry.
+func (f *Feed) derive(ctx context.Context, rec Record, replayed bool) (outcome, *Deferral, error) {
 	body, wake, err := f.translator.Translate(ctx, rec)
 	if d, ok := deferralOf(err); ok {
 		return outcomeDeferred, d, nil
@@ -816,7 +839,8 @@ func (f *Feed) derive(ctx context.Context, rec Record) (outcome, *Deferral, erro
 		return outcomeClaimed, nil, nil
 	}
 	ev := events.New(types.RawWebhook{
-		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec),
+		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(rec), FirstParty: true,
+		Replayed: replayed,
 	}, events.NewTrace())
 	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
@@ -900,44 +924,141 @@ var errNoDeadLetters = errors.New("changefeed: this feed keeps no dead letters "
 // deadLetter keeps msg — a record handed back for [DeadLetterAge] — in its
 // feed's dead-letter subject ([DeadLetterSubject]) as a self-contained entry,
 // and only THEN acks it: an ack before the entry is durable is a wake lost
-// between the two. A keep that fails hands the record back again with the
-// backoff, to be kept by the next delivery that gets there.
+// between the two.
+//
+// A KEEP ANSWERED WITH AN ERROR hands the record back with the backoff, and
+// claims and counts nothing. The error says the keep was refused or its answer
+// lost, never that nothing was stored ([queue.ErrUnavailable]): its entry may
+// be stored even so, and the record's next keep is then answered already kept.
+//
+// A KEEP ANSWERED STORED OR ALREADY KEPT settles the record: either way an
+// entry of it was stored under the record's identity ([keepID]) — by this
+// keep, a peer's, or this node's own earlier one — and is still held, or has
+// been dropped since: an operator discarded it, or a feed start's replay
+// derived its wake. The record's dead-lettering is COUNTED ONCE, by whichever
+// node takes its dead-letter claim ([Feed.countsDeadLetter]): that node counts
+// `crewlet.tracker.feed.dead_lettered` and logs the record's line, which says
+// the entry is held only where this keep stored it, and every other keep of
+// the record says it was counted already and counts nothing. Never by the answer: of two keeps of one record whichever
+// lands first is stored — the slow first keeper's as often as a peer's — and
+// the keep that stored the entry may be the one whose answer was lost, which
+// counted nothing.
+//
+// THE ORDER IS COUNT, THEN ACK: the ack is what lets the record go fleet-wide,
+// so it comes after everything this node owes the record, and a delivery
+// handed back because its ack was lost finds the identity already kept and the
+// claim held, and counts nothing again.
 func (f *Feed) deadLetter(ctx context.Context, msg *Message, d *Deferral, age time.Duration) {
 	src := f.translator.Source()
 	subject := DeadLetterSubject(src)
 	err := errNoDeadLetters
+	already := false
 	if f.deadLetters != nil {
-		err = f.keep(ctx, src, subject, msg, d)
+		already, err = f.keep(ctx, src, subject, msg, d)
 	}
 	if err != nil {
 		log.WarnContext(ctx, "changefeed_dead_letter_failed", "source", src.Name,
 			"reason", string(d.Reason), "key", msg.Key, "position", msg.Position,
 			"stream", msg.Stream, "age", age.String(), "error", err.Error(),
-			"detail", "handed back again rather than acknowledged: an entry that was "+
-				"not kept is a wake no node could ever replay, so the record goes on "+
-				"circling until a keep lands")
+			"detail", "handed back again rather than acknowledged: the keep was refused or "+
+				"its answer lost, so its entry may be stored or may not, and an ack with "+
+				"none stored is a wake no node could ever replay; the record goes on "+
+				"circling until a keep is answered, which is answered already kept if this "+
+				"one's entry was stored")
 		f.nakAfter(ctx, msg, DeferDelay(msg.Delivered))
+		return
+	}
+	if !f.countsDeadLetter(ctx, src, msg.Record) {
+		log.InfoContext(ctx, "changefeed_dead_letter_already_kept", "source", src.Name,
+			"reason", string(d.Reason), "key", msg.Key, "position", msg.Position,
+			"stream", msg.Stream, "age", age.String(), "delivered", msg.Delivered,
+			"subject", subject, "stored", !already,
+			"detail", "another keep of the record took its dead-letter claim and counted "+
+				"and logged it — this node's own earlier keep, or a peer's, whichever "+
+				"took the claim first — so this one counts nothing, and the record is "+
+				"acknowledged")
+		f.ack(ctx, msg)
 		return
 	}
 	f.countReason(metrics.TrackerFeedDeadLettered, d.Reason)
 	log.WarnContext(ctx, "changefeed_record_dead_lettered", "source", src.Name,
 		"reason", string(d.Reason), "key", msg.Key, "position", msg.Position,
 		"stream", msg.Stream, "age", age.String(), "delivered", msg.Delivered,
-		"subject", subject, "error", errText(d.Err),
-		"detail", "no node read it in the hour it was handed back, so it is kept in "+
-			"CREWLET_DLQ, frame and all, for stream.event_retention_hours and then "+
-			"expires; the first node whose feed starts able to read it derives its "+
-			"wake, and `feed_dead_lettered` is raised until then")
+		"subject", subject, "stored", !already, "error", errText(d.Err),
+		"detail", deadLetteredDetail(already))
 	f.ack(ctx, msg)
 }
 
-// keep writes msg's dead letter: the header the feed records of it, and its
-// frame as the entry's body.
+// deadLetteredDetail is the detail of a record's dead-lettered line: what the
+// counting node knows of the record's entry. A keep answered stored knows the
+// entry is held. One answered already kept knows only that an earlier keep
+// stored it — a peer's, or this node's own whose answer was lost — and an
+// operator may have discarded it since, or a feed start's replay derived its
+// wake and dropped it, so its line promises no entry that may be gone.
+func deadLetteredDetail(already bool) string {
+	if already {
+		return "no node read it in the hour it was handed back, and an earlier keep " +
+			"stored its entry in CREWLET_DLQ, frame and all: held, it expires after " +
+			"stream.event_retention_hours and raises `feed_dead_lettered`, and the " +
+			"first node whose feed starts able to read it derives its wake; it may " +
+			"be gone already, its wake derived by a feed start's replay or the entry " +
+			"discarded by an operator"
+	}
+	return "no node read it in the hour it was handed back, so it is kept in " +
+		"CREWLET_DLQ, frame and all, for stream.event_retention_hours and then " +
+		"expires; the first node whose feed starts able to read it derives its " +
+		"wake, and `feed_dead_lettered` is raised until then"
+}
+
+// countsDeadLetter takes the record's DEAD-LETTER CLAIM and reports whether
+// this node is the one that counts the record's dead-lettering: the claim keyed
+// on the identity the record's dead letter is kept under
+// ([deadLetterClaimKey]), held for the queue's window ([queue.DeadLetterWindow])
+// — the span in which another keep of the record is answered already kept
+// rather than storing an entry of its own, which is counted again.
+//
+// IT FAILS OPEN, counting wherever the claim cannot be decided — a store that
+// cannot be reached or answers an error, and a feed given no claims at all —
+// and says so: a rare double count beats a dead letter nobody counted, which
+// no reading of the count could ever notice.
+func (f *Feed) countsDeadLetter(ctx context.Context, src Source, rec Record) bool {
+	if f.claims == nil {
+		return true
+	}
+	won, err := f.claims.Claim(ctx, deadLetterClaimKey(keepID(src, rec)), queue.DeadLetterWindow, f.now())
+	if err != nil {
+		log.WarnContext(ctx, "changefeed_dead_letter_claim_unavailable", "source", src.Name,
+			"key", rec.Key, "position", rec.Position, "stream", rec.Stream,
+			"error", err.Error(),
+			"detail", "counted here anyway: a dead letter two nodes count reads one too "+
+				"many; one nobody counted is never read at all")
+		return true
+	}
+	return won
+}
+
+// deadLetterClaimKey is the claim a record's dead-lettering is counted under
+// ([Feed.countsDeadLetter]), for the identity id its dead letter is kept under
+// ([keepID]).
+//
+// IN A NAMESPACE OF ITS OWN: every wake's claim key ([ClaimKey]) holds the
+// separator `|` between its source and its id, and this one — a word, a colon
+// and a hex digest — holds none, so a record's count and a wake's claim can
+// never take each other's key. DIGESTED, so the key is one length whatever
+// names the identity quotes.
+func deadLetterClaimKey(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return "changefeed-dead-letter:" + hex.EncodeToString(sum[:])
+}
+
+// keep writes msg's dead letter under the record's identity ([keepID]): the
+// header the feed records of it, and its frame as the entry's body. It answers
+// whether the queue had kept the record's entry already.
 func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Message,
-	d *Deferral) error {
+	d *Deferral) (bool, error) {
 
 	if len(msg.Frame) == 0 {
-		return errors.New("changefeed: the delivery carries no frame, so an entry " +
+		return false, errors.New("changefeed: the delivery carries no frame, so an entry " +
 			"could not be replayed")
 	}
 	header, err := EncodeDeadLetter(DeadLetter{
@@ -947,9 +1068,36 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 		StoredAt: msg.StoredAt, Delivered: msg.Delivered, DeadLetteredAt: f.now(),
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return f.deadLetters.KeepDeadLetter(ctx, subject, header, msg.Frame)
+	return f.deadLetters.KeepDeadLetter(ctx, subject, keepID(src, msg.Record), header, msg.Frame)
+}
+
+// keepID is the identity a record's dead letter is kept under
+// ([queue.EventQueue.KeepDeadLetter]): the record's STORED MESSAGE — the feed's
+// source, the log it was delivered from, its position there, and the broker's
+// own instant for it ([Record.StoredAt]), in nanoseconds since the epoch.
+//
+// WHAT IS KEPT, NEVER THE DELIVERY, AND NOTHING READ OUT OF THE FRAME: every
+// node handed the record reads all four off the delivery itself, whether or
+// not it can open the envelope — whichever delivery of it reached them and
+// however many times it was delivered before — so a second keep of it, a
+// peer's handed the record while a keep of it was still crossing a link, or
+// this node's own after an answer that was lost, is answered already kept
+// rather than kept twice. The instant is what tells one incarnation of a log
+// from the next: a reanchored or rebuilt log numbers its records again, and
+// the record at a reused position was stored at another instant. The log's
+// generation is no substitute: a stream deleted and remade, or restored from
+// an older copy and written past, keeps its generation, which only a reanchor
+// moves. It is LEFT OUT besides, because only a node that read the envelope
+// knows it: a node that could not would key the same record apart from one
+// that could, and both entries would be kept.
+//
+// NEVER ZERO HERE: the broker stamps every message it stores, and a record its
+// estate dates nothing for is never dead-lettered ([Feed.ageOf]). Quoted, so no
+// source or stream name can run into another's.
+func keepID(src Source, rec Record) string {
+	return fmt.Sprintf("%q %q %d %d", src.Name, rec.Stream, rec.Position, rec.StoredAt.UnixNano())
 }
 
 // replay re-derives every dead letter this feed's group holds, once a process,
@@ -983,7 +1131,8 @@ func (f *Feed) keep(ctx context.Context, src Source, subject string, msg *Messag
 // somebody is published through the same claim a delivery passes
 // ([Feed.derive]), and its entry is DROPPED once the wake is published, or once
 // the translator decided it wakes nobody — and so is every other entry of the
-// same record, which two nodes can each have kept. One whose claim a peer holds
+// same record, kept further apart than the window its broker holds the
+// record's identity for ([keepID]). One whose claim a peer holds
 // is LEFT for that peer, which drops it once its publish lands: dropped on the
 // claim's word, it would be a wake nobody has the moment the peer's publish
 // failed. One this node still cannot read (any deferral, a record it cannot
@@ -1033,11 +1182,20 @@ const (
 	entryGone
 )
 
-// recordPlace names one record of a log: the stream it was delivered from and
-// its sequence there, which every entry kept of it carries.
+// recordPlace names one record of a log as its dead letters name it: the
+// stream it was delivered from, its sequence there and the broker's instant
+// for it, which every entry kept of it carries ([keepID]) and the record a
+// rebuilt log stored at a reused sequence does not share.
+//
+// THE INSTANT IN NANOSECONDS, NEVER A time.Time: a map compares a time.Time's
+// location beside its instant, and the instant a header decodes to carries
+// another location than the one a delivery handed over. Its header carries
+// it as RFC 3339 with nanoseconds ([DeadLetter.StoredAt]), so the nanoseconds
+// read back exactly.
 type recordPlace struct {
 	stream string
 	seq    uint64
+	stored int64
 }
 
 // replayOne re-derives one dead letter and answers what became of its entry.
@@ -1054,14 +1212,18 @@ func (f *Feed) replayOne(ctx context.Context, src Source, subject string, record
 			"subject", subject, "seq", entry.Seq, "error", err.Error())
 		return entryLeft
 	}
-	place := recordPlace{stream: letter.Stream, seq: letter.Seq}
+	place := recordPlace{stream: letter.Stream, seq: letter.Seq, stored: letter.StoredAt.UnixNano()}
 	if settled[place] {
-		// THE SAME RECORD KEPT TWICE — one node's ack lost, and the record
-		// redelivered to another past its hour — whose wake this replay has
-		// settled already: dropped with nothing derived again, and its frame
-		// never read. Asked of the claim instead, it would answer held — by
-		// this very replay — and the entry would be left as though a peer
-		// held it.
+		// THE SAME RECORD KEPT TWICE, under its one identity ([keepID]),
+		// by keeps further apart than the window its broker holds the
+		// identity for (a restart never leaves two: it rebuilds the window
+		// from the entries it still holds, so it forgets only a dropped
+		// entry's identity), whose wake this replay has settled already:
+		// dropped with nothing derived again, and its frame never read.
+		// Asked of the claim instead, it would answer held — by this very
+		// replay — and the entry would be left as though a peer held it. A
+		// rebuilt log's record at the same sequence was stored at another
+		// instant, so it is another place, and derived on its own.
 		return f.drop(ctx, src, subject, entry)
 	}
 	frame, held, err := f.deadLetters.DeadLetterFrame(ctx, subject, entry.Seq)
@@ -1101,7 +1263,7 @@ func (f *Feed) replayOne(ctx context.Context, src Source, subject string, record
 			"detail", "this node cannot read it either; it is left for a node that can")
 		return entryLeft
 	}
-	switch out, deferral, err := f.derive(ctx, msg.Record); out {
+	switch out, deferral, err := f.derive(ctx, msg.Record, true); out {
 	case outcomeHandled:
 		settled[place] = true
 		return f.drop(ctx, src, subject, entry)

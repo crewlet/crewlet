@@ -1,18 +1,19 @@
 /**
- * An entry's page: what it is and what is wrong with it (Overview), what it
- * depends on and what depends on it (Relations), and what each source says
- * about it (Sources), where a disagreement between sources is shown with
- * both values and never settled on the reader's behalf.
+ * An entry's page: what it is, what is wrong with it, the entry among its
+ * neighbours, its facts and its recent changes (Overview), what it depends on
+ * and what depends on it (Relations), the tasks that name it (Work), and what
+ * each source says about it (Sources), where a disagreement between sources
+ * is shown with both values and never settled on the reader's behalf.
  */
 
 import { useId, useMemo } from "react";
-import { Card, Link, Section, Skeleton, Stack, Tabs, Tag } from "@crewlethq/ui";
-import { ObjectHeader, SetByLine, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { Card, Link, Section, Skeleton, Stack, Tabs } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
+import { countLabel } from "~/routes/worklet/taskRows.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
@@ -25,46 +26,64 @@ import type {
   AtlasFactView,
   AtlasSource,
   AtlasStanding,
-  AtlasTraceAnswer,
 } from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { ATLAS_POLL_MS } from "./filters.ts";
+import { Changes } from "./Changes.tsx";
+import { ClaimList, DecisionButtons, type ShownClaim } from "./Decisions.tsx";
+import { EntryActions, type Names } from "./EntryActions.tsx";
 import {
+  OWNER_DECIDED_BY,
+  factDecisions,
+  relationDecisions,
+  settledElsewhere,
+  type Decision,
+} from "./writes.ts";
+import { ATLAS_POLL_MS, SELECT_KEY, TRACE_KEY } from "./filters.ts";
+import {
+  EntryHead,
   Facts,
   RelatedList,
   Signals,
+  Touches,
   dependsOn,
   entryPath,
+  namesOf,
+  selfOf,
   useEntryReads,
   usedBy,
+  type EntryReads,
 } from "./entry.tsx";
-import { FactValue, HealthTag, VendorLead, sourceName, sourceSetBy } from "./parts.tsx";
+import { FactValue, sourceName } from "./parts.tsx";
 import {
-  FACTS,
-  KINDS,
-  LANES,
-  RELATIONS,
-  SOURCE_KINDS,
-  STATES,
-  USES,
-  VENDORS,
-  WORDS,
-  entries,
-} from "./words.ts";
+  EntryWork,
+  WORK_LABEL,
+  WORK_TAB,
+  WorkLabel,
+  openTotal,
+  openWords,
+  useEntryWork,
+} from "./Work.tsx";
+import { factLabel, KINDS, RELATIONS, SOURCE_KINDS, USES, WORDS, entries } from "./words.ts";
 
-const TABS = ["overview", "relations", "sources"] as const;
+const TABS = ["overview", "relations", WORK_TAB, "sources", "history"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Readonly<Record<Tab, string>> = {
   overview: "Overview",
   relations: "Relations",
+  [WORK_TAB]: WORK_LABEL,
   sources: "Sources",
+  history: "History",
 };
 
+/** At most this many changes the Overview lists before pointing at History. */
+const OVERVIEW_CHANGES = 8;
+
 export function EntryPage({ id }: { id: string }) {
-  const { entry, next } = useEntryReads(id);
+  const reads = useEntryReads(id);
+  const { entry } = reads;
   const answer = entry.data;
   usePageLabels(answer ? { [id]: answer.entry.name } : {});
   if (entry.loading && !answer)
@@ -76,7 +95,7 @@ export function EntryPage({ id }: { id: string }) {
       </QueryState>
     );
   }
-  return <EntryReading answer={answer} next={next.data} />;
+  return <EntryReading answer={answer} reads={reads} />;
 }
 
 /** The facts and relations the sources disagree on. */
@@ -87,56 +106,21 @@ function disagreements(entry: AtlasEntry): { facts: AtlasFactView[]; relations: 
   };
 }
 
-function EntryReading({
-  answer,
-  next,
-}: {
-  answer: AtlasEntryAnswer;
-  next: AtlasTraceAnswer | null;
-}) {
+function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryReads }) {
   const now = useNow();
   const panelId = useId();
   const [tab, setTab] = useTab<Tab>("tab", TABS);
   const { entry } = answer;
-  const below = dependsOn(entry, next);
+  const below = dependsOn(entry, reads.next.data);
   const above = usedBy(answer);
   const disputed = disagreements(entry);
   const conflicts = disputed.facts.length + disputed.relations.length;
-  const facts: Fact[] = [
-    ...(answer.vendor
-      ? [
-          {
-            label: "Vendor",
-            value: (
-              <span className="atlas-vendor">
-                <VendorLead vendor={answer.vendor} />
-                {VENDORS[answer.vendor].name}
-              </span>
-            ),
-          },
-        ]
-      : []),
-    { label: "Lane", value: LANES[entry.lane].label },
-    { label: "Confidence", value: WORDS[entry.word] },
-    { label: "Last seen", value: relTime(entry.last_seen, now) },
-  ];
+  const work = useEntryWork(entry.id);
+  const open = openTotal(work);
   return (
     <div className="atlas-entry">
-      <ObjectHeader
-        kind={KINDS[entry.ref.kind].word}
-        icon={KINDS[entry.ref.kind].glyph}
-        identifier={entry.ref.key}
-        title={entry.name}
-        status={
-          <>
-            <HealthTag health={answer.health} />
-            {(entry.state === "stale" || entry.state === "retired") && (
-              <span className="muted">{STATES[entry.state]}</span>
-            )}
-          </>
-        }
-        facts={facts}
-      />
+      <EntryHead answer={answer} self={selfOf(reads)} size="page" now={now} />
+      <EntryActions answer={answer} names={namesOf(reads)} />
       <div className="tab-detail">
         <Tabs
           variant="underline"
@@ -149,6 +133,16 @@ function EntryReading({
             value,
             label: TAB_LABELS[value],
             ...(value === "relations" ? { count: below.length + above.length || null } : {}),
+            // A PLACE CLOSED TO THE READER IS LOCKED, NEVER HIDDEN: the tab
+            // stays, with the key and the access to ask for.
+            ...(value === WORK_TAB
+              ? {
+                  label: <WorkLabel reading={work} />,
+                  menuLabel: WORK_LABEL,
+                  count: open && open.total > 0 ? countLabel(open.total, open.capped) : null,
+                  live: openWords(open),
+                }
+              : {}),
             ...(value === "sources"
               ? {
                   count: entry.sources.length,
@@ -165,19 +159,31 @@ function EntryReading({
           }))}
         />
         <div className="tabpanel" role="tabpanel" id={panelId} tabIndex={0}>
-          {tab === "overview" && <Overview entry={entry} now={now} />}
+          {tab === "overview" && <Overview entry={entry} reads={reads} now={now} />}
           {tab === "relations" && <Relations answer={answer} below={below} above={above} />}
-          {tab === "sources" && <Sources entry={entry} now={now} />}
+          {tab === WORK_TAB && <EntryWork reading={work} />}
+          {tab === "sources" && <Sources entry={entry} names={namesOf(reads)} now={now} />}
+          {tab === "history" && (
+            <Section spacing="tight" headingLevel={2} title="Every change, newest first">
+              <p className="muted">
+                What people, integrations and agents recorded about this entry, kept for the
+                company&rsquo;s history period. What the engine reads from the settings and its own
+                records at every read is not recorded, so it leaves no line.
+              </p>
+              <Changes id={entry.id} />
+            </Section>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function Overview({ entry, now }: { entry: AtlasEntry; now: number }) {
+function Overview({ entry, reads, now }: { entry: AtlasEntry; reads: EntryReads; now: number }) {
   return (
     <Stack gap={5}>
       <Signals entry={entry} now={now} />
+      <Touches self={selfOf(reads)} reads={reads} stacked={false} headingLevel={2} />
       <Section spacing="tight" headingLevel={2} title="Facts">
         <Facts entry={entry} now={now} />
       </Section>
@@ -198,6 +204,9 @@ function Overview({ entry, now }: { entry: AtlasEntry; now: number }) {
           </ul>
         </Section>
       )}
+      <Section spacing="tight" headingLevel={2} title="Recent changes">
+        <Changes id={entry.id} limit={OVERVIEW_CHANGES} />
+      </Section>
     </Stack>
   );
 }
@@ -362,7 +371,7 @@ function Upstream({ id, name }: { id: string; name: string }) {
               ? ", and the trace stopped at its bound before walking every hop"
               : ""}
             .{" "}
-            <Link href={href(["company", "atlas"], { peek: `atlas:${id}`, trace: "up" })}>
+            <Link href={href(["company", "atlas"], { [SELECT_KEY]: id, [TRACE_KEY]: "up" })}>
               Show it on the map
             </Link>
           </p>
@@ -403,15 +412,15 @@ function sameSource(a: AtlasSource, b: AtlasSource): boolean {
   return a.kind === b.kind && a.name === b.name && a.turn === b.turn && a.revision === b.revision;
 }
 
-function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
+function Sources({ entry, names, now }: { entry: AtlasEntry; names: Names; now: number }) {
   const seatBadge = useSeatBadgeOf();
   const seatName = (handle: string) => seatBadge(handle).name;
   const disputed = disagreements(entry);
   const says = (source: AtlasSource) =>
     entry.facts.flatMap((fact) => {
-      if (sameSource(fact.source, source)) return [{ fact: fact.fact, value: fact.value }];
+      if (sameSource(fact.source, source)) return [{ label: factLabel(fact), value: fact.value }];
       const other = fact.others?.find((claim) => sameSource(claim.source, source));
-      return other?.value ? [{ fact: fact.fact, value: other.value }] : [];
+      return other?.value ? [{ label: factLabel(fact), value: other.value }] : [];
     });
   return (
     <Stack gap={5}>
@@ -420,8 +429,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
           <Stack gap={3}>
             {disputed.facts.map((fact) => (
               <Disagreement
-                key={fact.fact}
-                label={FACTS[fact.fact]}
+                key={factLabel(fact)}
+                label={factLabel(fact)}
                 standing={fact.standing}
                 shown={{
                   value: fact.value,
@@ -430,6 +439,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                   observed_at: fact.observed_at,
                 }}
                 others={fact.others ?? []}
+                decisions={factDecisions(entry, fact)}
+                held={settledElsewhere(fact, fact.others)}
                 seatName={seatName}
                 now={now}
               />
@@ -441,6 +452,15 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                 standing={edge.standing}
                 shown={{ source: edge.source, word: edge.word, observed_at: edge.observed_at }}
                 others={edge.others ?? []}
+                decisions={relationDecisions(
+                  entry,
+                  edge,
+                  edge.to ? (names.get(edge.to) ?? "it") : "it",
+                )}
+                held={
+                  settledElsewhere(edge, edge.others) ??
+                  (edge.relation === "owned_by" ? OWNER_DECIDED_BY : null)
+                }
                 seatName={seatName}
                 now={now}
               />
@@ -456,7 +476,8 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
         <Stack gap={3}>
           {entry.sources.map((source) => {
             const values = says(source);
-            const named = source.kind === "settings" || source.kind === "records";
+            const named =
+              source.kind === "settings" || source.kind === "records" || source.kind === "code";
             const name = sourceName(source, seatName);
             return (
               <Card
@@ -482,7 +503,7 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
                       groups={[
                         {
                           properties: values.map((one) => ({
-                            label: FACTS[one.fact],
+                            label: one.label,
                             value: <FactValue value={one.value} />,
                           })),
                         },
@@ -503,21 +524,24 @@ function Sources({ entry, now }: { entry: AtlasEntry; now: number }) {
   );
 }
 
-/** One fact or relation the sources disagree on: the value shown, every other beside it. */
+/** One fact or relation the sources disagree on: the value shown, every other beside it, and the decisions. */
 function Disagreement({
   label,
   standing,
   shown,
   others,
+  decisions,
+  held,
   seatName,
   now,
 }: {
   label: string;
   standing: AtlasStanding;
-  shown: Pick<AtlasFactView, "source" | "word" | "observed_at"> & {
-    value?: AtlasFactView["value"];
-  };
+  shown: ShownClaim;
   others: readonly AtlasClaimed[];
+  decisions: readonly Decision[];
+  /** Why no decision is offered here, where none is. */
+  held: string | null;
   seatName: (handle: string) => string;
   now: number;
 }) {
@@ -530,31 +554,9 @@ function Disagreement({
         <Card.Title as="h3">{label}</Card.Title>
       </Card.Header>
       <Card.Body>
-        <ul className="atlas-claims">
-          <li>
-            <span className="atlas-claims__value">
-              {shown.value ? <FactValue value={shown.value} /> : "Holds"}
-              <Tag variant="neutral" size="sm">
-                Shown
-              </Tag>
-            </span>
-            <SetByLine setBy={sourceSetBy(shown, seatName, now)} className="t-caption muted" />
-          </li>
-          {others.map((claim) => (
-            <li key={`${claim.source.kind}:${claim.source.name ?? ""}:${claim.observed_at}`}>
-              <span className="atlas-claims__value">
-                {claim.denied ? (
-                  "Says it does not hold"
-                ) : claim.value ? (
-                  <FactValue value={claim.value} />
-                ) : (
-                  "Holds"
-                )}
-              </span>
-              <SetByLine setBy={sourceSetBy(claim, seatName, now)} className="t-caption muted" />
-            </li>
-          ))}
-        </ul>
+        <ClaimList shown={shown} others={others} seatName={seatName} now={now} />
+        {held && <p className="muted">{held}</p>}
+        <DecisionButtons decisions={decisions} />
       </Card.Body>
     </Card>
   );

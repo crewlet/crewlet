@@ -435,6 +435,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// name something else by the time it resumes, and one lookup a
 			// segment is the whole cost (see [turnctx.Lookups]).
 			Lookups: turnctx.NewLookups(),
+			// AND WHAT ITS CALLS ANSWERED, empty for every segment too: a
+			// record in the atlas cites a call this segment made itself.
+			Seen: turnctx.NewSeen(),
 			// The turn's deadline, for the runs it launches to carry.
 			Deadline: t.deadline,
 			// The seat and the ORG both come off the pinned epoch, so a
@@ -1295,8 +1298,11 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 // ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
 // a colleague's ask carries whoever the asking turn worked for, and the
 // answer to this seat's own ask carries whoever the answering turn worked
-// for, which is who this seat worked for when it asked; and an agent's write
-// on Worklet, Doclet or Chatlet carries whoever the writing turn worked for.
+// for, which is who this seat worked for when it asked; an agent's write
+// on Worklet, Doclet, Chatlet or Gitlet carries whoever the writing turn worked
+// for; and the engine's record on Gitlet about an agent's earlier enqueue —
+// the merge queue's ejection, a close it could not make — whoever that enqueue
+// was made for ([writtenForIn]).
 // Nil for any other wake, and for one that carried nobody.
 func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {
@@ -1326,16 +1332,24 @@ func workingForIn(evs []*events.Event) *types.WorkingFor {
 // for ([types.NotificationWriter.WorkingFor]): its FIRST constituent's, since
 // the partition splits on it (notify.KeyOf) and every constituent of one turn
 // carries the same, or the notification's own where nothing was coalesced.
-// Nil for a vendor's notification, which states no writer, and for any writer
-// that is no agent: a person, a credential and the engine write for nobody
-// but themselves, and a carrier read off one of them would have the turn work
-// for somebody that writer never spoke for.
+// And the engine's, whose record about an agent's earlier act made for
+// somebody carries that act's carrier (ADR-0109's amendment: Gitlet's merge
+// queue's ejection and a close it could not make, notify.FirstPartyWriter),
+// so the turn it wakes works for them too. Nil for a vendor's notification,
+// which states no writer, and for a person's or a credential's writer: they
+// write for nobody but themselves, and a carrier read off one of them would
+// have the turn work for somebody that writer never spoke for.
+//
+// THE ONE READING, for every reader of whom a delivery was written for: the
+// turn it wakes ([workingForIn]), a parked run's reply ([replyWorkingFor]) and
+// a chat edit's worked-through key, so none of them drifts from the partition
+// that grouped the delivery (notify.KeyOf keys the engine's carrier too).
 func writtenForIn(n *types.ExternalNotification) *types.WorkingFor {
 	w := n.Writer
 	if len(n.Messages) > 0 {
 		w = n.Messages[0].Writer
 	}
-	if w == nil || w.Kind != iam.ActorAgent {
+	if w == nil || (w.Kind != iam.ActorAgent && w.Kind != iam.ActorSystem) {
 		return nil
 	}
 	return w.WorkingFor.Clone()

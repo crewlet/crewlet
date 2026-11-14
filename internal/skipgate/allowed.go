@@ -248,6 +248,22 @@ var allowed = []Allowance{
 	},
 	{
 		Package: "internal/ssh",
+		Test:    "TestAnInventoryCertificateRunsOnlyTheCommandItNames",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
+		Test:    "TestAServerSetUpWithoutTheInventoryRefusesIt",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +
+			"Nothing else proves what the server enforces; the certificate and render cases beside it " +
+			"check only what the engine sends.",
+	},
+	{
+		Package: "internal/ssh",
 		Test:    "TestTheSetupChangesNothingForOtherUsers",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to run a real sshd set up by the rendered setup. " +

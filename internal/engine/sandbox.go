@@ -1233,6 +1233,11 @@ type resumeInput struct {
 	// run ended refused on a sign-in replaced while it ran, so the turn
 	// carries its round on once with the new one ([Engine.signInReplaced]).
 	Rotated *runner.Rotated
+
+	// Refused is set by the resume itself too: the run's provider refused
+	// the request it made in a session it continued, so the turn carries its
+	// round on once in a fresh session ([Engine.requestRefused]).
+	Refused *runner.Refused
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1349,6 +1354,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
 	in.Rotated = e.signInReplaced(ctx, company, in)
+	in.Refused = requestRefused(ctx, in)
 	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
 	// its box asleep, and before anything of its turn runs: a limit its
 	// review's chain already knows refuses it, which the coordinator holds on
@@ -1818,6 +1824,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
 		// [Engine.signInReplaced].
 		Rotated: in.Rotated,
+		// A CONTINUED SESSION ITS PROVIDER REFUSED CARRIES THE ROUND ON, once,
+		// in a fresh one; a refusal past that is the round's ending. See
+		// [requestRefused].
+		Refused:        in.Refused,
+		RequestRefused: refusedSaid(in),
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
@@ -2035,9 +2046,9 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
 // the turn's run has an outcome nobody knows — its entry still in flight as
 // the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
-// round's record holding one so read ([ledger.Call.Unfinished]): that call may
-// be the reply, so the end says its delivery is unknown, never that the turn
-// did not reply.
+// round's record holding one so read, listed ([ledger.Call.Unfinished]) or
+// counted ([ledger.Elided.Unfinished]): that call may be the reply, so the end
+// says its delivery is unknown, never that the turn did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
@@ -2059,13 +2070,16 @@ func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered c
 
 // unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
 // one the log it resumes from held in flight as it was read, or one a closed
-// round's record lists so ([ledger.Call.Unfinished]).
+// round's record lists so ([ledger.Call.Unfinished]) or counts so in the tally
+// of the calls it does not list ([ledger.Elided.Unfinished]) — where a park
+// past its share folded the round's calls (internal/agent/execstate).
 func unfinishedIn(in resumeInput) bool {
 	if len(in.Bridged.InFlight) > 0 {
 		return true
 	}
 	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
-		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished }) ||
+			slices.ContainsFunc(it.Elided, func(e ledger.Elided) bool { return e.Unfinished > 0 })
 	})
 }
 
@@ -2206,23 +2220,18 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
-	// closed rounds condensed where the state is past it, and a state still
-	// past it refused by name rather than by the broker, which would refuse
-	// this write and every write of the row after it — the name saying which
-	// of the two is past the share, the turn's own context or its closed rounds.
+	// closed rounds condensed where the state is past it — down to one count
+	// of calls per tool for the lot — and a state still past it refused by
+	// name rather than by the broker, which would refuse this write and every
+	// write of the row after it: only the turn's own context is ever past it.
 	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
-	switch tooLarge, ok := errors.AsType[*execstate.TooLargeError](err); {
-	case ok:
-		what := "its closed rounds, condensed as far as a park condenses them (every round's calls " +
-			"folded by tool, its text, its intent and its review cut to their openings), still take it " +
-			"past its share"
-		if tooLarge.OwnContext() {
-			what = "the turn's own context (its ask, its trigger's words, its turn-start context and how its " +
-				"conversation's earlier turns ended) is past its share by itself, which no condensing of its " +
-				"closed rounds could change"
-		}
+	switch {
+	case errors.Is(err, execstate.ErrTooLarge):
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
-			"the parked turn state is past its share of the run's row: "+what, err)
+			"the parked turn state is past its share of the run's row: the turn's own context (its ask, its "+
+				"trigger's words, its turn-start context and how its conversation's earlier turns ended) is "+
+				"past it with every closed round folded into one count of calls per tool, which is the least "+
+				"a park keeps of them", err)
 		return false, nil
 	case err != nil:
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -2230,12 +2239,13 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	case condensed.Any():
 		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
-			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
-			"texts_cut", condensed.Texts, "intents_cut", condensed.Intents,
-			"tallies_folded", condensed.Identities, "rounds_calls_folded", condensed.Calls,
-			"reviews_cut", condensed.Reviews, "bytes", len(blob),
+			"payloads_left_out", condensed.LeftOut, "texts_cut", condensed.Texts,
+			"intents_cut", condensed.Intents, "tallies_folded", condensed.Identities,
+			"rounds_calls_folded", condensed.Calls, "reviews_cut", condensed.Reviews,
+			"rounds_dropped", condensed.Rounds, "bytes", len(blob),
 			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
-				"row; every call keeps its tool, its identity or its tool's count, and its outcome")
+				"row; every call keeps its tool, its identity or its tool's count, and its outcome, and a "+
+				"dropped round its calls by tool")
 	}
 	// The iteration rides BESIDE the blob: the coordinator files each
 	// launch's own record under it and never decodes the state.
@@ -4651,6 +4661,52 @@ func underlay(env, defaults map[string]string) map[string]string {
 		}
 	}
 	return env
+}
+
+// requestRefused decides whether a collected run is carried on because its
+// provider refused the request it made (sandbox.RunEnding.Refused) IN A SESSION
+// IT CONTINUED: that session is retired at the collection, so the round is
+// relaunched once in a session of its own, which holds nothing of what was
+// refused.
+//
+// ALL OF IT MUST HOLD: a completion; a refused ending; a job that is not itself
+// such a relaunch (once per round); and a session its box said it continued. A
+// job refused in a session it started has nothing a fresh one would leave
+// behind, and is collected ([refusedSaid]).
+func requestRefused(ctx context.Context, in resumeInput) *runner.Refused {
+	run := in.Run
+	if in.Asked != nil || in.Lost != nil || !in.Ended.Refused ||
+		run.Launch.FollowUp == sandbox.FollowUpRequestRefused ||
+		run.Launch.SessionStart != sandbox.SessionStartContinued {
+		return nil
+	}
+	log.InfoContext(ctx, "run_relaunched_fresh_session", "turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID, "session", run.SessionRan(),
+		"detail", "the provider refused the request the run made in a session it continued; the "+
+			"session is retired and the round is carried on once in a fresh one")
+	return &runner.Refused{Said: refusedMessage(in.Ended), BoxKept: run.SandboxID != ""}
+}
+
+// refusedSaid is the provider's message where the collected run ended refused
+// and its round is NOT carried on ([requestRefused]): what ends the turn.
+func refusedSaid(in resumeInput) string {
+	if in.Asked != nil || in.Lost != nil || !in.Ended.Refused || in.Refused != nil {
+		return ""
+	}
+	return refusedMessage(in.Ended)
+}
+
+// refusedMessage is what the provider said of a refused request, redacted: the
+// run's error, else its text, else that it said nothing.
+func refusedMessage(ended sandbox.RunEnding) string {
+	said := strings.TrimSpace(ended.Error)
+	if said == "" {
+		said = strings.TrimSpace(ended.Text)
+	}
+	if said == "" {
+		return "the provider gave no message"
+	}
+	return events.ClipDiagnostic(redact.Secrets(said))
 }
 
 // signInReplaced decides whether a collected run is carried on because a

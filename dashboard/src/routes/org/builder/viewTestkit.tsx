@@ -21,9 +21,10 @@
 import { act, render } from "@testing-library/react";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
-import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import { guardedDispatch, useDraftReducer } from "~/app/assistant/draft.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
@@ -114,17 +115,19 @@ export function BuilderHarness({
   selected?: NodeKey | null;
   children: ReactNode;
 }) {
-  const [state, rawDispatch] = useReducer(builderReducer, initial);
+  // THE BUILDER'S OWN BRANDED REDUCER, so a surface reads the dispatch it is handed in the application.
+  const [state, rawDispatch] = useDraftReducer(builderReducer, initial);
   const [selected, setSelected] = useState<NodeKey | null>(initialSelection);
   // One source for the harness's life, as the Builder has one.
   const [keys] = useState(() => countingKeys("test"));
   const view = useRef<BuilderViewHandle | null>(null);
-  const dispatch = useCallback(
-    (action: BuilderAction) => {
-      spies.dispatched.push(action);
-      rawDispatch(action);
-    },
-    [spies],
+  const dispatch = useMemo(
+    () =>
+      guardedDispatch(rawDispatch, (action: BuilderAction, pass) => {
+        spies.dispatched.push(action);
+        pass(action);
+      }),
+    [rawDispatch, spies],
   );
   const registerView = useCallback(
     (handle: BuilderViewHandle) => {

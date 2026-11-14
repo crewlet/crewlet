@@ -88,7 +88,10 @@ import (
 //     init, 189 KB in the plain build, for 1.60 MB there and 1.64 in CI's
 //     race job. Without it the module came to 1.41 MB in the plain build,
 //     and internal/logging's TestNoPackageLevelLoggerIsBoundToTheBootDefault
-//     refuses another.
+//     refuses another. The tree's growth since took CI's race job to 1.574 MB,
+//     a kilobyte past the bound on a change that added nothing at init, with
+//     Confluence's eight storage-format patterns still compiled there: 53 KB,
+//     built at first use since.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19

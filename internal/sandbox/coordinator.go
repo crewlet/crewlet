@@ -350,6 +350,10 @@ type RunEnding struct {
 	// Event is the harness's own terminal event — see [Result.Event].
 	Event   string
 	Success bool
+	// Refused says the run's provider refused the request its harness made
+	// as built ([requestRefused]): the resume carries its round on once in a
+	// fresh session, or ends the turn on the provider's message.
+	Refused bool
 	// At is when the run's ending was first read back from its box
 	// ([LaunchRecord.CollectedAt]), a waiter's poll at most after the run
 	// ended: what a reset the vendor names as a time of day ("resets
@@ -1105,10 +1109,20 @@ type Coordinator struct {
 	// life is the coordinator's own lifetime, which a scheduled retry runs
 	// under — it outlives every delivery — and ends with [Coordinator.Stop],
 	// which waits for inflight: every scheduled attempt not yet cancelled.
+	// Its end also holds every call of the store on a run's row still to
+	// come, or in flight, to its reason alone ([Coordinator.rowContext]).
 	life     context.Context
 	end      context.CancelFunc
 	inflight sync.WaitGroup
 	closed   bool
+
+	// lastCalls ends one teardown's grace after the stop ends life, cutting
+	// endLastCalls: life CARRIES it ([stopBoundKey]), so every call the work
+	// on life makes once the coordinator has stopped — a teardown's write, a
+	// stamp, a box call, each on a context of its own that keeps none of
+	// life's cancellation — ends by then, whenever it began ([detach]).
+	lastCalls    context.Context
+	endLastCalls context.CancelCauseFunc
 }
 
 // seatRuns is this node's count of one seat's detached runs, by the question
@@ -1242,7 +1256,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if c.after == nil {
 		c.after = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 	}
-	c.life, c.end = context.WithCancel(context.Background())
+	c.lastCalls, c.endLastCalls = context.WithCancelCause(context.Background())
+	c.life, c.end = context.WithCancel(context.WithValue(context.Background(), stopBoundKey{}, c.lastCalls))
 	c.keepLife, c.endKeeps = context.WithCancel(context.Background())
 	// THE TAKER LEASE LAST, once nothing can refuse the coordinator: it is
 	// held from here until [Coordinator.Stop] has seen the last keep end.
@@ -1255,6 +1270,19 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 // Stop ends every retry this coordinator has scheduled and waits for any that
 // is running. An answer whose resume is still owed stays recorded on its run,
 // and whichever node holds the seat next drives it ([Coordinator.RecoverSeat]).
+//
+// WHAT IS RUNNING IS GIVEN ONE TEARDOWN'S GRACE FROM THE STOP, ALL OF IT
+// ([discardGrace]): every call it makes from then on — of the store on a run's
+// row, of a box, the reclaim's kill among them — ends by then, however many it
+// makes one after another, since each is made on a context of its own that
+// keeps the stop's one deadline ([detach]). Each held to its own grace from its
+// own start, a retry that was taking a lost run's session as the stop came
+// reserved the capture's place for its grace, stamped the place refused for
+// another and killed the run's box for a third, holding the stop ninety
+// seconds where its share of a pod's grace is thirty. Work on the
+// coordinator's own lifetime that ends sooner — every step a retry makes on
+// that lifetime rather than on a context of its own — ends as the stop
+// begins.
 //
 // A KEEP UNDER WAY is given [sessionKeepDrain] to finish — the upload of an
 // ordinary session takes seconds — and ended after it, stamped refused saying
@@ -1281,7 +1309,12 @@ func (c *Coordinator) Stop() {
 	}
 	c.mu.Unlock()
 	c.end()
+	grace := time.AfterFunc(discardGrace, func() { c.endLastCalls(errStopGrace) })
 	c.inflight.Wait()
+	// THE GRACE ENDS ONCE NOTHING IS LEFT TO WAIT FOR: whatever the stopped
+	// work left running, it holds no call past the stop's own waits.
+	grace.Stop()
+	c.endLastCalls(errStopGrace)
 	kept := make(chan struct{})
 	go func() {
 		c.keeping.Wait()
@@ -1759,7 +1792,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
-			Success: result.Success, At: run.Launch.CollectedAt},
+			Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
 	})
 	return err
 }
@@ -1817,7 +1850,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// WRITTEN BEFORE THE TURN RESUMES, since its reviewer's send-back relaunches
 	// on that frame and reads the row: a store that does not take it is a
 	// collection to ask again, which changes nothing else and asks the same.
-	if ranOutOfContext(run, result) {
+	if sessionSpent(run, result) {
 		sessions := sessionsRanOutOfContext(run, result)
 		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
 			return run, Result{}, false, c.collectFailed(ctx, run, err)
@@ -2241,9 +2274,10 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// question it asked on its way out, so judged on the row as claimed, its
 	// session was taken, kept and then retired by the same collection.
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
+	at.refused = requestRefused(asCollected(run, result, ended))
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
-	defer c.keepLater(spooled)
+	defer c.keepLater(ctx, spooled)
 	// HOW THE JOB'S HARNESS ENDED, by the line the take was drawn by: carried
 	// back with the result for the claim it collects for, and recorded on the
 	// job's record by a collection's read whether or not the take took or kept
@@ -2278,15 +2312,15 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 // ([PendingStore.MarkEndedAtDeadline]): what every later collection of the job
 // reads as the cap's verdict ([Coordinator.readBox]).
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]), as the kill that may follow it is:
-// the read can be cut short as it ends the job, and this record is what says
-// to the collection made after it that the job its kill left over was one the
-// cap stopped. A record that does not land is said, and costs only that later
-// collection's sight of it: this read still says the cap ended the run, and
-// the job's own record of the request ([Result.JobEnd]) says so to the next
-// where its script left one.
+// UNDER A CONTEXT OF ITS OWN ([Coordinator.detachedRecord]), as the kill that
+// may follow it is: the read can be cut short as it ends the job, and this
+// record is what says to the collection made after it that the job its kill
+// left over was one the cap stopped. A record that does not land is said, and
+// costs only that later collection's sight of it: this read still says the cap
+// ended the run, and the job's own record of the request ([Result.JobEnd])
+// says so to the next where its script left one.
 func (c *Coordinator) markEndedAtDeadline(ctx context.Context, run PendingRun) {
-	markCtx, cancel := detached(ctx)
+	markCtx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	if _, err := c.pending.MarkEndedAtDeadline(markCtx, run.TurnID, run.LaunchID); err != nil {
 		log.WarnContext(ctx, "sandbox_deadline_end_unrecorded", "turn_id", run.TurnID,
@@ -2662,6 +2696,8 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		switch {
 		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
+		case requestRefused(run, result):
+			rec.ErrorKind = types.ExecutorErrorRequestRefused
 		case result.OutOfMemory && Placement(run.Placement).OwnsMemory():
 			// A direct box's kills are the engine host's domain's, recorded
 			// below and never the run's ending.
@@ -3689,7 +3725,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			}
 			// DETACHED, bounded: the panic may be the cancellation's own,
 			// and an ending on a dead context would write nothing.
-			settle, cancel := detached(ctx)
+			settle, cancel := c.detachedRecord(ctx)
 			defer cancel()
 			c.settleAbandoned(settle, run, note)
 			panic(p)
@@ -4007,15 +4043,17 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 // begins ([ResumeRequest.Begin]), under the claimant's lease, which the claim
 // stamped on the row. A carry the resumer did not say is none to record.
 //
-// BEST EFFORT, AND BOUNDED ([resumeCarryRecordBudget]): nothing the turn does
-// reads it — it is every reader's of whether a relaunch would continue the
-// job's session — so a record the store does not take is logged and the turn
-// goes on, read as one that has not said, which is undecided, never either way.
+// BEST EFFORT, AND BOUNDED ([resumeCarryRecordBudget], and the time the run's
+// row takes to cross to the store, [Coordinator.rowContext]): nothing the turn
+// does reads it — it is every reader's of whether a relaunch would continue
+// the job's session — so a record the store does not take is logged and the
+// turn goes on, read as one that has not said, which is undecided, never
+// either way.
 func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry ResumeCarry) {
 	if !carry.Valid() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, resumeCarryRecordBudget)
+	ctx, cancel := c.rowContext(ctx, resumeCarryRecordBudget)
 	defer cancel()
 	if _, err := c.pending.MarkResumeBegun(ctx, run.TurnID, run.LaunchID, fenceOf(run), carry); err != nil {
 		log.WarnContext(ctx, "sandbox_resume_carry_unrecorded", "turn_id", run.TurnID,
@@ -4025,14 +4063,21 @@ func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry
 	}
 }
 
-// resumeCarryRecordBudget bounds the write that records what a resumed turn
-// does with its job's round ([Coordinator.markResumeBegun]): FIVE SECONDS, as
-// the write recording which session a job's box started is given
-// (internal/engine's sessionStartRecordBudget), and for its reason — one
+// resumeCarryRecordBudget is the reason the write that records what a resumed
+// turn does with its job's round ([Coordinator.markResumeBegun]) is bounded by,
+// beside the time the run's row takes to cross to the store ([RowBudget]):
+// FIVE SECONDS, as the write recording which session a job's box started is
+// given (internal/engine's sessionStartRecordBudget), and for its reason — one
 // compare-and-swap of one row, which a healthy coordination store answers in
 // milliseconds, and a store that has not answered in five is in an outage this
 // write waits out no better. It is on the resume's path, before its turn runs,
-// so a store's slow moment holds the turn back by no more than that.
+// so a store's slow moment holds the turn back by no more than that beyond the
+// row's bytes: none in the store's own process, and across a link at the
+// slowest pace allowed the thirteen minutes a change of a row at its bound
+// takes to cross — its read's reply and its write — which a store that
+// answers ends as soon as the row is in. Held to the five alone, a row of
+// megabytes across a slow link was cut while its bytes were still crossing,
+// and the carry went unrecorded (crewlet/crewlet#1076).
 const resumeCarryRecordBudget = 5 * time.Second
 
 // claimedAnswer reports whether a claimed run carries a RECORDED answer its
@@ -4193,10 +4238,11 @@ func (c *Coordinator) endClaim(ctx context.Context, run PendingRun, e ending) (b
 	// DETACHED, like every other teardown: this is reached from a failure
 	// path and from a queue handler a drain cancels, so the context that
 	// got here is very often already dead — and a settle that no-ops is the
-	// stranded row all over again.
-	endCtx, cancel := detached(ctx)
-	defer cancel()
+	// stranded row all over again. Each of its writes of the row within the
+	// time the row's bytes take to cross besides ([detachedEnding]).
 	e.fence, e.whileIn, e.launch, e.reclaim = fenceOf(run), claimedOnly, run.LaunchID, true
+	endCtx, done := detachedEnding(ctx)
+	defer done()
 	decided, err := c.endRecord(endCtx, run, e)
 	return decided != nil, err
 }
@@ -4361,7 +4407,7 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
 	failed failure, hold *Refusal,
 ) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	ctx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
@@ -4636,12 +4682,16 @@ func endingEventID(run PendingRun) uuid.UUID {
 // a run that goes on without its box: one parked straight into reseed.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	killCtx, cancel := detached(ctx)
-	defer cancel()
 	_ = c.reclaimBox(ctx, killCtx, run)
+	cancel()
 	if run.SandboxID == "" {
 		return
 	}
-	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
+	// THE RECORD'S OWN CONTEXT, never the kill's: the kill's grace is a box
+	// call's, and the release writes the row whole.
+	releaseCtx, release := c.detachedRecord(ctx)
+	defer release()
+	if err := c.pending.ReleaseBox(releaseCtx, run.TurnID); err != nil {
 		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 }
@@ -4773,7 +4823,9 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 // retry, at once and off the frame.
 func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayAsk bool,
 ) (*RecordedEnding, error) {
-	decided, ok, err := c.pending.DecideEnding(ctx, run.TurnID, e.decision())
+	decideCtx, decideDone := c.endingCall(ctx)
+	decided, ok, err := c.pending.DecideEnding(decideCtx, run.TurnID, e.decision())
+	decideDone()
 	if err != nil {
 		c.reportStopped(ctx, run)
 		// FORGOTTEN ON THE SAME GATE THE STOP TAKES, and for the same
@@ -5015,7 +5067,10 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	// before this one may have owed the turn's end, or recorded it, since —
 	// and a step decided off a stale copy is a step made twice. A row that is
 	// gone, or holds another ending, was finished by whoever got there first.
-	switch current, found, err := c.pending.Get(ctx, run.TurnID); {
+	readCtx, readDone := c.endingCall(ctx)
+	current, found, err := c.pending.Get(readCtx, run.TurnID)
+	readDone()
+	switch {
 	case err != nil:
 		// Read as the caller handed it: every step below is one a repeat
 		// makes harmless, and the delete decides on the row as it stands.
@@ -5163,7 +5218,9 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			c.nameDeletedInFlight(ctx, run)
 			named = true
 		}
-		settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+		finishCtx, finishDone := c.endingCall(ctx)
+		settled, deleted, err := c.pending.Finish(finishCtx, run.TurnID, run.Ending.ID)
+		finishDone()
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
@@ -5225,7 +5282,9 @@ type RunCalls struct {
 // the log to its job as readily as any other, and the calls of its round and
 // of the turn's earlier rounds are the turn's all the same.
 func (c *Coordinator) runCalls(ctx context.Context, run PendingRun) RunCalls {
-	calls, err := c.pending.TurnLog(ctx, run)
+	readCtx, readDone := c.endingCall(ctx)
+	defer readDone()
+	calls, err := c.pending.TurnLog(readCtx, run)
 	if err != nil {
 		return RunCalls{Unread: err}
 	}
@@ -5283,7 +5342,7 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	letGo := LetGo{Ending: run.Ending.ID, Answer: answer.EventIDs, HandBack: handBackOf(answer)}
 	var handed []string
 	for range letGoRounds {
-		owing, won, err := c.pending.OweHandBack(ctx, run.TurnID, letGo)
+		owing, won, err := c.oweHandBack(ctx, run.TurnID, letGo)
 		switch {
 		case err == nil && won:
 			return owing, nil
@@ -5307,6 +5366,23 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	}
 	return PendingRun{}, fmt.Errorf("sandbox: letting go of run %s's answer: it kept owing its seat "+
 		"an earlier reply", run.TurnID)
+}
+
+// oweHandBack is the let-go's write of the row ([PendingStore.OweHandBack]),
+// as an ending's call of the store ([Coordinator.endingCall]).
+func (c *Coordinator) oweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error) {
+	writeCtx, done := c.endingCall(ctx)
+	defer done()
+	return c.pending.OweHandBack(writeCtx, turnID, letGo)
+}
+
+// endingCall is [Coordinator.rowContext] for one of an ending's calls of the
+// store on its run's row — its decision, a read of the row or its log, a step's
+// write, the delete — within ctx, the ending's own lifetime ([detachedEnding],
+// or the coordinator's for its retry): the teardown's grace its reason, and
+// each call its own crossing.
+func (c *Coordinator) endingCall(ctx context.Context) (context.Context, context.CancelFunc) {
+	return c.rowContext(ctx, discardGrace)
 }
 
 // letGoRounds bounds [Coordinator.letGoAnswer]'s rounds.
@@ -5383,9 +5459,9 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*Re
 			"owner_epoch", run.OwnerEpoch, "epoch", e.fence.Epoch)
 		return nil, false
 	}
-	endCtx, cancel := detached(ctx)
-	defer cancel()
 	e.whileIn, e.launch, e.reclaim = Active, EveryLaunch, true
+	endCtx, done := detachedEnding(ctx)
+	defer done()
 	decided, err := c.endRecord(endCtx, run, e)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_finish_kept", "turn_id", run.TurnID, "error", err.Error(),
@@ -5415,10 +5491,148 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*Re
 // what Kill's own comment says the wait prevents.
 //
 // WithoutCancel rather than Background, so the warnings still carry the turn's
-// values.
+// values — and through [detach], so a teardown the coordinator's own stopped
+// work makes still ends within the stop's grace.
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	free, release := detach(ctx)
+	bounded, cancel := context.WithTimeout(free, discardGrace)
+	return bounded, func() {
+		cancel()
+		release()
+	}
 }
+
+// detach is ctx with its values and NONE OF ITS CANCELLATION — the context a
+// teardown, a record a failure path must still make, or any call that has to
+// outlive the frame that asked for it, is made under ([detached],
+// [Coordinator.detachedRecord], [detachedEnding], [Coordinator.settleContext]):
+// the frame's context is often already dead, and a call inheriting it does
+// nothing at all — EXCEPT THE STOP'S ONE DEADLINE, which ctx carries where it is
+// the work of a coordinator's own lifetime ([stopBoundKey], [Coordinator.Stop]),
+// so such a call ends with that grace whenever it began, cut with
+// [errStopGrace]. A context nothing ends but its own bound, where ctx carries
+// none: a frame's, whose caller decides how long it waits.
+//
+// THE ONE DETACHMENT A STEP OF THE PACKAGE MAKES — a teardown's, a record's, a
+// box call's: one made with context.WithoutCancel dropped the stop's deadline
+// with the rest, and a stopped retry's teardowns held the stop a grace apiece,
+// one after another ([Coordinator.Stop]). What keeps a WithoutCancel of its
+// own is no such step: a box backend's rollback inside one of its own calls —
+// a local box's write-back of a refreshed login, a staged file an E2B write
+// leaves — bounded by a wait of its own, since it finishes what that call
+// began; the taker lease's give-back, on the lifetime it was claimed on, after
+// the stop's waits ([takerLease.release]); and a waiter's write of a row where
+// the waiter has no lifetime of its own ([Waiter.rowContext]).
+func detach(ctx context.Context) (context.Context, context.CancelFunc) {
+	free := context.WithoutCancel(ctx)
+	last, ok := ctx.Value(stopBoundKey{}).(context.Context)
+	if !ok {
+		return free, func() {}
+	}
+	held, cut := context.WithCancelCause(free)
+	if last.Err() != nil {
+		cut(context.Cause(last))
+		return held, func() { cut(context.Canceled) }
+	}
+	unhook := context.AfterFunc(last, func() { cut(context.Cause(last)) })
+	return held, func() {
+		unhook()
+		cut(context.Canceled)
+	}
+}
+
+// stopBoundKey is the key under which a coordinator's own lifetime
+// ([Coordinator.life]) carries the context that ends one teardown's grace
+// after its stop ([Coordinator.lastCalls]): what every call its work makes
+// once it has stopped is held to, detached or not ([detach]).
+type stopBoundKey struct{}
+
+// detachedRecord is the context a teardown's write of a run's row is made
+// under: one of its own, for [detached]'s reason, within the teardown's grace
+// and the time a row at its bound takes to cross this node's connection to the
+// store ([Coordinator.rowContext]). The grace alone is a box call's, and a row
+// of megabytes sent across a slow link outlasts it while its bytes are still
+// crossing, which left the claim unreleased, the box's release unwritten and
+// the turn's end unowed (crewlet/crewlet#1076). A teardown's box calls keep
+// [detached]; an ending's own steps take a context each ([detachedEnding]).
+func (c *Coordinator) detachedRecord(ctx context.Context) (context.Context, context.CancelFunc) {
+	free, release := detach(ctx)
+	record, cancel := c.rowContext(free, discardGrace)
+	return record, func() {
+		cancel()
+		release()
+	}
+}
+
+// detachedEnding is the context an ending a teardown makes runs under
+// ([Coordinator.endRecord]): ctx's values and none of its cancellation, for
+// [detached]'s reason, and NO DEADLINE OF ITS OWN. Each of the ending's calls
+// of the store on the run's row is bounded by a context of its own
+// ([Coordinator.rowContext]: the teardown's grace and the row's crossing, each
+// call afresh), a box call by [detached], and every other step — a publish,
+// the engine's account of the turn — by what makes it, as the ending's own
+// retry makes them all on the coordinator's lifetime ([Coordinator.retryOwed]).
+//
+// ONE BOUND FOR THE WHOLE ENDING gave a row its crossing once, and an ending
+// writes the row several times — its decision, an answer let go of, the copies
+// it hands back cleared, the turn's end owed, the delete — each reading the
+// row whole and sending it whole: across a link at the slowest pace allowed a
+// row at its bound takes four minutes a read and three a send, so an ending's
+// second write outlasted the bound, and an ending each of whose writes would
+// have landed was cut between two of them and kept for the retry.
+//
+// AN ENDING THE COORDINATOR'S OWN STOPPED WORK MAKES keeps the stop's one
+// deadline ([detach]): released when the ending returns.
+func detachedEnding(ctx context.Context) (context.Context, context.CancelFunc) {
+	return detach(ctx)
+}
+
+// rowContext is the context ONE call of the store on a run's row is made
+// under, within ctx: its reason — a store's slow moment, a leader's election
+// outlasted, a teardown's grace — and the time a row at its bound takes to
+// cross this node's connection to the store ([RowBudget]).
+//
+// HELD TO ITS REASON ALONE ONCE THIS COORDINATOR STOPS, from the moment it
+// does or, where it began after, from its own start ([Coordinator.Stop]): the
+// stop waits for the keeps it cuts to stamp what came of them, and for every
+// retry still running, and a row's crossing in each of those writes held a
+// node's stop for minutes past what its orchestrator's grace gives it — the
+// stop's own longest case, which sizes that grace, counts each write at its
+// reason. And a call the coordinator's OWN work makes — a retry's, on its
+// lifetime — is held to the stop's one grace besides, wherever it began
+// ([detach]): the stop waits for that work, which makes such calls one after
+// another. A write so cut is one a stop leaves undone, as it leaves a keep: a
+// stamp left begun is settled by a peer once this process's taker lease is
+// gone, and an ending or a claim is the seat's next holder's to finish.
+func (c *Coordinator) rowContext(ctx context.Context, reason time.Duration) (context.Context, context.CancelFunc) {
+	row, cancel := context.WithTimeout(ctx, RowBudget(c.pending, reason))
+	held, cut := context.WithCancelCause(row)
+	var mu sync.Mutex
+	var grace *time.Timer
+	ended := false
+	stopping := context.AfterFunc(c.life, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !ended {
+			grace = time.AfterFunc(reason, func() { cut(errStopGrace) })
+		}
+	})
+	return held, func() {
+		stopping()
+		mu.Lock()
+		ended = true
+		if grace != nil {
+			grace.Stop()
+		}
+		mu.Unlock()
+		cut(context.Canceled)
+		cancel()
+	}
+}
+
+// errStopGrace is a call of the store on a run's row a stopping coordinator
+// cut at its reason ([Coordinator.rowContext]).
+var errStopGrace = errors.New("sandbox: the node stopped, and the write was held to its reason alone")
 
 // reclaimBox kills a run's box under killCtx and closes the run's credentials,
 // logging under ctx.

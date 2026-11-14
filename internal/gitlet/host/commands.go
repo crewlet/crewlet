@@ -263,8 +263,10 @@ func commandsRefusal(adm admission, node string, sec section, pre map[string]ans
 			cmds[i].Result, cmds[i].Reason = gitlet.ResultNG, a.Reason
 		}
 	}
-	err := gitlet.Proposal{Principal: adm.principal(), Via: gitlet.ViaGit, Node: node,
-		Commands: cmds}.ValidateCommands()
+	// MEASURED AS IT WILL BE PROPOSED: its principal, and whom it is made
+	// for, which its committer stamps on a seat's entry (admission.writtenFor).
+	err := gitlet.Proposal{Principal: adm.principal(), WrittenFor: adm.writtenFor(), Via: gitlet.ViaGit,
+		Node: node, Commands: cmds}.ValidateCommands()
 	var wide *gitlet.TooWideError
 	switch {
 	case err == nil:

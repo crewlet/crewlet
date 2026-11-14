@@ -39,7 +39,7 @@ func benchmarkOrgCounter(b *testing.B, nodes int) {
 	)
 	org := encodeKey(coord.OrgScope)
 	for i := range stores {
-		stores[i] = openFleetVia(b, leafClientOf(b, port, fmt.Sprintf("leaf-%d", i)), prefix)
+		stores[i] = openFleetVia(b, leafClientOf(b, port, fmt.Sprintf("leaf-%d", i)), AcrossLink, prefix)
 		stores[i].tallies.observe = func(key string, batch, n int) {
 			if key != org {
 				return

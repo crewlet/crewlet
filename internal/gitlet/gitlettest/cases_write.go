@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -73,14 +74,15 @@ func (c *Case) mustLand(w gitlet.EngineWrite) gitlet.EngineWriteResult {
 	return res
 }
 
-// commitFiles is a commit_files of files onto ref by who: onto head, or a new
-// branch from base where head is "".
+// commitFiles is a commit_files of files onto ref by who, made for nobody but
+// who: onto head, or a new branch from base where head is "".
 func commitFiles(t testing.TB, repoID string, who gitlet.Principal, ref, head, base, message string,
 	files ...gitlet.FileOp) gitlet.EngineWrite {
 
 	t.Helper()
-	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repoID, Principal: who, OpID: newOp(t),
-		Fresh: Linearizable, Ref: ref, ExpectedHead: head, Base: base, Message: message, Files: files}
+	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repoID, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: newOp(t), Fresh: Linearizable, Ref: ref, ExpectedHead: head, Base: base,
+		Message: message, Files: files}
 }
 
 // pushesWithID is the push rows of push id.
@@ -263,7 +265,8 @@ func aRevertThatConflictsStoresNothing(t *testing.T, newFleet NewFleet) {
 	before, objects := len(pushRows(c.T, c)), objectNames(t, c.Fleet.Objects())
 
 	res := c.write(gitlet.EngineWrite{Kind: gitlet.WriteRevert, RepoID: repo, Principal: seatAt(t, FixtureAlice),
-		OpID: newOp(t), Fresh: Linearizable, Ref: "refs/heads/topic", ExpectedHead: tip, Commit: reverted})
+		WrittenFor: types.ForNobody(), OpID: newOp(t), Fresh: Linearizable, Ref: "refs/heads/topic",
+		ExpectedHead: tip, Commit: reverted})
 	if res.Refusal != gitlet.WriteConflict || res.Outcome != "" || len(res.Conflicts) != 1 {
 		t.Fatalf("the revert answered %+v, want one conflict and nothing applied", res)
 	}

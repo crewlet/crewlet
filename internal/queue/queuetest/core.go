@@ -614,6 +614,219 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
+	// A PASS HANDS A MESSAGE BACK TO ITS GROUP AND KEEPS CONSUMING: the
+	// fourth outcome, for a delivery THIS node will not handle and a peer may
+	// (an older build during a roll, meeting a record a newer one wrote).
+	// Four things are owed, on every backend:
+	//
+	//   - it comes back, and BEHIND the mail that was waiting, as a failure
+	//     does: the shipped broker spaces it on the failure path's backoff;
+	//   - the attachment that passed it goes on taking mail and is never
+	//     quiesced. Nothing is wrong with the node, so one message it cannot
+	//     read must not stop it taking every other;
+	//   - it spends a delivery like every return, and is dead-lettered with
+	//     its copy once the budget is spent: a message no node reads must not
+	//     circle its group for ever;
+	//   - and that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
+	//     (queue.RetiredTo), where a failure's is kept with its poison
+	//     (a_subscriptions_retired_event_is_one_more_dead_letter): nothing
+	//     steers a pass to a node that can handle it, so the dead letter is
+	//     what a reader that can handle it now finds it again by.
+	//
+	// The mail is HELD while it is published, as the return-order case holds
+	// it, so both events are waiting before anything is fetched and nothing
+	// races the backoff.
+	//
+	// Mutation: quiesce the attachment on a pass, and e2 is never handled;
+	// return a pass at the head as a deferral's, and e1 comes back ahead of
+	// e2; return it without the budget's check, and it is never
+	// dead-lettered; ack it, and it never comes back; count it as a failure
+	// of its message, and its dead letter is kept with the group's poison
+	// while the unhandled subject holds nothing.
+	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		deadLetters := s.needDeadLetters(t)
+		quiescing := s.needQuiescing(t)
+		const topic, group = "topic.pass", "grp"
+		// Three attempts in all, however this backend's broker counts them.
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if labelOf(ev) == "e1" {
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}
+			return queue.Ack()
+		})
+		if err := q.PauseTopic(ctx, topic, group, "test"); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		publish(ctx, t, q, topic, newEvent("e1"))
+		publish(ctx, t, q, topic, newEvent("e2"))
+		if err := q.ResumeTopic(ctx, topic, group, "test"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+
+		seen.awaitLabels(t, "the passed e1 to come back behind e2, and again until its "+
+			"budget is spent", "e1", "e2", "e1", "e1")
+		seen.staysAt(ctx, t, 4, "a message whose three deliveries its passes spent")
+		if quiescing(q, topic, group) {
+			t.Error("a pass quiesced the attachment: nothing is wrong with a node that " +
+				"passes a message, and a quiesced one takes none of its other mail")
+		}
+		awaitState(t, "the passed e1 to be dead-lettered once its budget is spent", func() bool {
+			return equalStrings(labelsOf(deadLetters(q, topic, group)), []string{"e1"})
+		})
+		keptUnhandled(ctx, t, q, topic, group, "e1")
+	})
+
+	// A MESSAGE PASSED UNTIL A HAND-BACK SPENT ITS LAST DELIVERY IS KEPT WITH
+	// ITS GROUP'S UNHANDLED DELIVERIES, where its passes would have kept it.
+	// A pass leaves no failure on the message and a hand-back judges
+	// nothing of it (queue.OutcomeDefer), so the message never failed as
+	// itself (queue.RetiredTo). A newer record's wake that the older nodes of
+	// a roll passed round, whose last delivery met a node that sheds or
+	// stops, is the delivery a reader that can handle it replays; kept with
+	// the poison, it was read as a failure's and never delivered
+	// (crewlet#993). A failure's copy still goes with the poison
+	// (a_subscriptions_retired_event_is_one_more_dead_letter).
+	//
+	// Mutation: count a hand-back as a failure of its message, and the
+	// unhandled subject holds nothing.
+	t.Run("a_pass_then_a_hand_back_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		quiescing := s.needQuiescing(t)
+		const topic, group = "topic.passed_then_handed", "grp"
+		// Three attempts in all: two passes, and the hand-back that spends
+		// the last.
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		var deliveries atomic.Int32
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if deliveries.Add(1) < 3 {
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}
+			return queue.Defer(queue.DeferShedding, "the node sheds")
+		})
+		publish(ctx, t, q, topic, newEvent("e1"))
+
+		seen.awaitLabels(t, "two passes and the hand-back that spends the budget", "e1", "e1", "e1")
+		awaitState(t, "the hand-back to quiesce the attachment", func() bool {
+			return quiescing(q, topic, group)
+		})
+		keptUnhandled(ctx, t, q, topic, group, "e1")
+	})
+
+	// A MESSAGE THAT FAILED AS ITSELF IS POISON, THOUGH A HAND-BACK SPENT ITS
+	// LAST DELIVERY. Where a retired message is kept is decided by its
+	// deliveries, not by the return that spent its budget (queue.RetiredTo):
+	// a hand-back judges nothing of the message. Decided by the last return,
+	// a message whose every delivery failed, and whose last a node that shed
+	// or stopped handed back, was kept with the unhandled deliveries — poison
+	// a reader replays at every start, failing each time, and an alarm calls a
+	// wake nobody has had.
+	//
+	// Mutation: forget the message's earlier failures when a hand-back spends
+	// its budget (the twin's subscription.failed unread, JetStream's
+	// failedAsItself answering the return alone), and its copy is kept with
+	// the unhandled deliveries.
+	t.Run("a_message_that_failed_is_poison_though_a_hand_back_spent_it", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		const topic, group = "topic.failed_then_handed", "grp"
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		var deliveries atomic.Int32
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if deliveries.Add(1) < 3 {
+				return queue.Nak(errors.New("the message cannot be handled"))
+			}
+			return queue.Defer(queue.DeferShedding, "the node sheds")
+		})
+		publish(ctx, t, q, topic, newEvent("e1"))
+
+		seen.awaitLabels(t, "two failures and the hand-back that spends the budget", "e1", "e1", "e1")
+		keptAs(ctx, t, q, topic, group, true, "e1")
+	})
+
+	// A MESSAGE ONLY ITS NODE FAILED IS KEPT WITH THE UNHANDLED DELIVERIES. A
+	// handler whose node could not reach its broker, or whose stop ended it,
+	// answers queue.NakNode: a failure of the node's, never of the message,
+	// so a message whose budget it spends is a healthy delivery no member
+	// handled. A newer record's wake the older nodes of a roll passed round,
+	// whose last delivery reached a newer node that could not publish the
+	// wake, was kept with the poison — a wake nobody replays.
+	//
+	// Mutation: count a node's own failure as the message's, and its copy is
+	// kept with the poison.
+	t.Run("a_message_only_its_node_failed_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		const topic, group = "topic.passed_then_unreachable", "grp"
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+
+		seen := newJournal()
+		var deliveries atomic.Int32
+		subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			seen.record(labelOf(ev))
+			if deliveries.Add(1) < 3 {
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}
+			return queue.NakNode(errors.New("the node's broker did not answer"))
+		})
+		publish(ctx, t, q, topic, newEvent("e1"))
+
+		seen.awaitLabels(t, "two passes and the node's own failure that spends the budget",
+			"e1", "e1", "e1")
+		keptUnhandled(ctx, t, q, topic, group, "e1")
+	})
+
+	// A MESSAGE ONE MEMBER FAILED IS POISON, THOUGH ANOTHER MEMBER'S HAND-BACK
+	// SPENT IT. One message's deliveries go to every member of its group, so
+	// the member whose return spends the budget is rarely the one that saw
+	// its failures: what one member knows of a message's failures, every
+	// member that may retire it has to know. Here the first member fails the
+	// message and steps aside — a hold of its own, so the next delivery is
+	// the other member's — and the second hands the budget's last delivery
+	// back.
+	//
+	// Mutation: keep what a member knows of a message's failures to that
+	// member (JetStream's failure mark neither written nor read), and the
+	// second member keeps the copy with the unhandled deliveries.
+	t.Run("a_message_one_member_failed_is_poison_though_another_spent_it", func(t *testing.T) {
+		t.Parallel()
+		peer := s.needPeer(t)
+		newQueueWithAttempts := s.needAttempts(t)
+		const topic, group = "topic.failed_elsewhere", "grp"
+		first := s.startQueue(ctx, t, newQueueWithAttempts(t, 2))
+		second := s.startQueue(ctx, t, peer(t, first))
+
+		failedBy, handedBy := newJournal(), newJournal()
+		subscribe(ctx, t, first, topic, group, func(hctx context.Context, ev *events.Event) queue.Result {
+			failedBy.record(labelOf(ev))
+			if err := first.PauseTopic(hctx, topic, group, "queuetest-failed-elsewhere"); err != nil {
+				t.Errorf("PauseTopic: %v", err)
+			}
+			return queue.Nak(errors.New("the message cannot be handled"))
+		})
+		publish(ctx, t, first, topic, newEvent("e1"))
+		failedBy.awaitLabels(t, "the first member to fail the message", "e1")
+
+		subscribe(ctx, t, second, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+			handedBy.record(labelOf(ev))
+			return queue.Defer(queue.DeferShedding, "the node sheds")
+		})
+		handedBy.awaitLabels(t, "the second member to hand back the budget's last delivery", "e1")
+		keptAs(ctx, t, first, topic, group, true, "e1")
+	})
+
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -801,10 +1014,15 @@ func (s *suite) runCore(t *testing.T) {
 				return queue.Ack()
 			})
 
-		var wg sync.WaitGroup
+		var (
+			wg        sync.WaitGroup
+			published atomic.Int64
+		)
 		wg.Go(func() {
 			for i := range overlapRounds {
-				_ = q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i)))
+				if q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i))) == nil {
+					published.Add(1)
+				}
 			}
 		})
 		wg.Go(func() {
@@ -824,6 +1042,16 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("the in-flight count went negative (%d), so a drain would "+
 				"never converge", got)
 		}
+		// EVERYTHING FINISHED IS EVERY MESSAGE HANDLED, not the publisher
+		// and the waiter returning: the consumer may still be working
+		// through the backlog then, and a wait begun there can wake on the
+		// moment between two deliveries and read the count after the next
+		// one began — a drain that reports one in flight, rightly, for a
+		// handler that started after it woke. Only once nothing is left to
+		// start is a non-zero answer a handler the count failed to end.
+		awaitState(t, "every published message to be handled", func() bool {
+			return handled.Load() >= published.Load()
+		})
 		remaining, err := q.WaitForHandlers(ctx, settleFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after the overlap: %v", err)
@@ -1156,7 +1384,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},
 		{"Listen", listenErr},
-		{"KeepDeadLetter", q.KeepDeadLetter(ctx, letters, []byte("probe"), []byte("probe"))},
+		{"KeepDeadLetter", second(q.KeepDeadLetter(ctx, letters, "probe", []byte("probe"), []byte("probe")))},
 		{"DeadLettersOn", keptErr(q.DeadLettersOn(ctx, letters))},
 		{"DeadLetterFrame", frameErr(q.DeadLetterFrame(ctx, letters, absentLetter))},
 		{"DeadLetterMarks", marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))},

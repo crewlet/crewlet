@@ -376,6 +376,7 @@ var typedKinds = []typedKind{
 	// answered by the landing on the node that stored it) — for the reason
 	// the list is complete at all.
 	{"gitlet.BadBundle", reflect.TypeFor[*gitlet.BadBundle]()},
+	{"gitlet.ChartRefusal", reflect.TypeFor[*gitlet.ChartRefusal]()},
 	{"gitlet.ErrFutureVersion", reflect.TypeFor[*gitlet.ErrFutureVersion]()},
 	{"gitlet.ErrGitUnready", reflect.TypeFor[*gitlet.ErrGitUnready]()},
 	{"gitlet.TooWideError", reflect.TypeFor[*gitlet.TooWideError]()},

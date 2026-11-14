@@ -2312,6 +2312,13 @@ serving the API answers alike. They are clients of the routes in the
 [API reference](api-endpoints.md#the-wake-feeds-dead-letters), and the token
 in `CREWLET_API_TOKEN` takes `admin`.
 
+A wake the notification service's inbound group passed round during a roll
+and no node took is that subscription's dead letter, not a wake feed's:
+neither command lists or discards it. Every node able to read it replays it:
+one already running within a few seconds of its keep, and otherwise the next
+such node to start; `inbound_dead_lettered` is raised while it waits
+([Dead letters](../concepts/event-system.md#dead-letters)).
+
 ### `crewlet feeds dead-letters`
 
 One row per entry, every feed's in turn: its **id**, the one `discard` names; its
@@ -2343,13 +2350,16 @@ first node on that build replays it.
 The node takes the claim on the entry's going that its replay and the alarm's
 expiry count take, so no node counts a discarded entry as a wake the retention
 lost; it logs `changefeed_dead_letter_discarded` naming who pressed it and
-counts `crewlet.tracker.feed.dead_letter_discarded`. An id no feed holds — never
-an entry, one already replayed, expired or discarded, or a subscription's
-poison under another `dlq.` subject, which this never reaches — is refused as
-`no_dead_letter` and removes nothing. Where a feed could not be listed and no
-other holds the id, the node says so rather than "no such entry": run it again.
-A discard the node did not answer may have been made; `dead-letters` lists what
-the feeds still hold.
+counts `crewlet.tracker.feed.dead_letter_discarded`. A keep of the same record
+that lands within fifteen minutes of its entry — a node whose keep was still
+crossing a link — stores nothing while the broker runs; after a broker restart
+it is stored and listed again, and has to be discarded again. An id no feed
+holds — never an entry, one already replayed, expired or discarded, or a
+subscription's poison under another `dlq.` subject, which this never reaches —
+is refused as `no_dead_letter` and removes nothing. Where a feed could not be
+listed and no other holds the id, the node says so rather than "no such entry":
+run it again. A discard the node did not answer may have been made;
+`dead-letters` lists what the feeds still hold.
 
 ## `crewlet doctor`
 

@@ -12,7 +12,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -536,28 +538,104 @@ func TestClosingABoxRemovesItsDirectory(t *testing.T) {
 // pause / resume / kill
 // ---------------------------------------------------------------------
 
+// groupStates is the state ps reports for every process of group pgid, by
+// pid: T for a stopped one and Z for one that has exited unreaped, on both
+// release platforms.
+func groupStates(t *testing.T, pgid int) map[int]string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "ps", "-A", "-o", "pid=,pgid=,stat=").Output()
+	if err != nil {
+		t.Fatalf("reading the processes' states through ps: %v", err)
+	}
+	states := map[int]string{}
+	for line := range strings.Lines(string(out)) {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		group, groupErr := strconv.Atoi(fields[1])
+		if pidErr == nil && groupErr == nil && group == pgid {
+			states[pid] = fields[2]
+		}
+	}
+	return states
+}
+
+// stoppedTree reports whether the job whose group leader is leader, its
+// group's states as [groupStates] reads them, runs nothing and can run nothing
+// until something continues it: its leader stopped, and every other process of
+// it stopped or exited.
+func stoppedTree(states map[int]string, leader int) bool {
+	if !strings.HasPrefix(states[leader], "T") {
+		return false
+	}
+	for _, state := range states {
+		if !strings.HasPrefix(state, "T") && !strings.HasPrefix(state, "Z") {
+			return false
+		}
+	}
+	return true
+}
+
+// awaitStopped waits for a paused job's tree to stop ([stoppedTree]), failing
+// the case with what if it never does.
+//
+// WAITED FOR, NEVER GIVEN A HEAD START. A SIGSTOP is delivered, not applied:
+// each process stops once it next runs, finishing at most the call it was in,
+// which a loaded runner can leave for longer than any nap. Once every process
+// has stopped none has a write in flight, so a reading taken after is the
+// paused job's last; and a tree that reads stopped does no work until
+// something continues it, which no quiet window can say of a job a runner
+// merely did not schedule inside it.
+//
+// ITS JOB FORKS NOTHING, running builtins alone. A shell starts a command by
+// vfork and waits in the kernel, uninterruptibly, for the child to exec; a
+// stop that lands in that moment stops the child before it does, and leaves
+// the shell waiting on it, reading D rather than T, until something continues
+// the child. Its tree runs nothing then either, but nothing a reader can tell
+// from a shell blocked in a write.
+func awaitStopped(t *testing.T, leader int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		states := groupStates(t, leader)
+		if stoppedTree(states, leader) {
+			return
+		}
+		//fixedwait:measure the poll's own deadline: it only ends a wait for a stop that must come, failing the case
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: the group %d leads reads %v", what, leader, states)
+		}
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
+	}
+}
+
+// PAUSE STOPS THE TREE, read off the state the kernel keeps for each of its
+// processes ([awaitStopped]), and Connect resumes it, which its work shows.
+//
+// Mutation: pause nothing, and the tree never stops; resume nothing on
+// Connect, and the job never works again.
 func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
 
+	// Builtins alone, so it forks nothing a stop could find it waiting on
+	// ([awaitStopped]).
 	if _, err := box.StartBackground(t.Context(),
-		"while true; do echo x >> ticks; sleep 0.02; done", ExecOptions{}); err != nil {
+		"while true; do echo x >> ticks; done", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started ticking")
+	leader := recordedLeader(t, box).PID
 
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	// Let anything already in flight land, then take the reading.
-	time.Sleep(150 * time.Millisecond)
+	awaitStopped(t, leader, "a paused box kept working: its job's tree never stopped")
 	stopped := fileSize(counter)
-	time.Sleep(200 * time.Millisecond)
-	if fileSize(counter) != stopped {
-		t.Fatal("a paused box kept working")
-	}
 
 	resumed, err := local.Connect(t.Context(), box.ID())
 	if err != nil {
@@ -572,23 +650,29 @@ func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 // its files are the host's and its probe asks the host's kernel, so neither
 // needs the job to run — where Connect would SIGCONT it.
 //
-// Mutation: resume in Attach, and the paused job ticks again.
+// READ AT ONCE, NOT OVER A WINDOW: a SIGCONT wakes every process of the group
+// inside the kill(2) that sends it, so a tree an Attach or its probe continued
+// no longer reads stopped by the time they return, however long it then takes
+// to work again. The pause before them is waited for ([awaitStopped]).
+//
+// Mutation: resume in Attach, and the paused tree runs again.
 func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
 	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
+	// Builtins alone, as [awaitStopped] needs.
 	handle, err := box.StartBackground(t.Context(),
-		"while true; do echo x >> ticks; sleep 0.02; done", ExecOptions{})
+		"while true; do echo x >> ticks; done", ExecOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started ticking")
+	leader := recordedLeader(t, box).PID
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond)
-	stopped := fileSize(counter)
+	awaitStopped(t, leader, "the paused job's tree never stopped")
 
 	attached, err := local.Attach(t.Context(), box.ID())
 	if err != nil {
@@ -597,9 +681,8 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 	if state, err := attached.Job(t.Context(), handle); err != nil || state != JobRunning {
 		t.Fatalf("the stopped job reads as %v, %v; want it running and readable", state, err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if after := fileSize(counter); after != stopped {
-		t.Fatalf("attaching resumed the paused box: %d bytes of work ran after it", after-stopped)
+	if states := groupStates(t, leader); !stoppedTree(states, leader) {
+		t.Fatalf("attaching resumed the paused box: its job's tree reads %v", states)
 	}
 }
 
@@ -660,6 +743,27 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
 // process never runs again to handle SIGTERM.
+//
+// THE JOB HANDLES SIGTERM, as a harness cleaning up on its way out does, and
+// leaves a witness outside the box when it does. That the group is gone after
+// Close shows nothing about the SIGCONT: a teardown that terminated the
+// stopped group without continuing it would end it all the same, by the
+// SIGKILL that follows the grace, which reaches a stopped process and which
+// Close waits for. Only the witness shows the job ran again to handle the
+// SIGTERM.
+//
+// ITS JOB FORKS NOTHING, running builtins alone ([awaitStopped]), and the case
+// reads its tree stopped before the teardown, so the SIGCONT has a stopped job
+// to continue.
+//
+// THE BOX IS PAUSED ONLY ONCE ITS JOB SAYS ITS TRAP IS SET, by a ready file
+// it writes after the trap, outside the box like the witness and with a
+// builtin, so it still forks nothing. A pause that lands before the shell runs
+// `trap` leaves SIGTERM at its default, and the teardown's SIGTERM then ends
+// the shell before any trap exists to write the witness.
+//
+// Mutation: tear the box down without the SIGCONT, or without the SIGTERM,
+// and the SIGKILL that follows the grace ends the job before its trap runs.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -667,18 +771,29 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{}); err != nil {
+	dir := t.TempDir()
+	witness, ready := filepath.Join(dir, "term"), filepath.Join(dir, "ready")
+	if _, err := box.StartBackground(t.Context(),
+		"trap 'echo term > "+witness+"; exit 0' TERM; : > "+ready+"; while true; do :; done", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	pid := recordedLeader(t, box).PID
+	waitFor(t, 5*time.Second, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, "the job never set its SIGTERM trap")
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
+	awaitStopped(t, pid, "the box was not actually paused: its job's tree never stopped")
 	if err := box.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	waitFor(t, 10*time.Second, func() bool { return !procgroup.Exists(pid) },
-		"a paused box survived teardown — it never saw SIGTERM")
+		"a paused box survived teardown")
+	if got, err := os.ReadFile(witness); err != nil || string(got) != "term\n" {
+		t.Fatalf("the paused job never handled the teardown's SIGTERM (its witness reads %q, %v)", got, err)
+	}
 }
 
 // Connect resumes, so the pause reaper must not use it: that would boot the
@@ -691,6 +806,16 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 //
 // The tick file lives OUTSIDE the box, because Kill deletes the box: reading a
 // counter inside it would measure the deletion, not the resume.
+//
+// THE JOB HANDLES SIGTERM, as a harness cleaning up on its way out does, and
+// ticks when it does. The teardown's kill continues the group, terminates it
+// and gives it a grace to go, so a Kill through it has the paused job run
+// again for as long as that grace, which the counter shows once the job is
+// scheduled inside it. A SIGCONT that a SIGKILL overtakes before the job runs
+// again runs nothing, and leaves nothing to show.
+//
+// Mutation: kill through the teardown's kill, continuing first, and the paused
+// job works on its way out.
 func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -701,7 +826,8 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 	counter := filepath.Join(t.TempDir(), "ticks")
 	// No sleep in the loop: any scheduling at all after a SIGCONT shows up.
 	if _, err := box.StartBackground(t.Context(),
-		"while true; do echo x >> "+counter+"; done", ExecOptions{}); err != nil {
+		"trap 'echo term >> "+counter+"' TERM; while true; do echo x >> "+counter+"; done",
+		ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started")
@@ -710,13 +836,11 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	// Let anything already in flight land before taking the reading.
-	time.Sleep(200 * time.Millisecond)
+	// THE PREMISE, read off the tree itself ([awaitStopped]): every process
+	// of it stopped, so none has a write in flight and the reading below is
+	// the paused job's last.
+	awaitStopped(t, pid, "the box was not actually paused: its job's tree never stopped")
 	before := fileSize(counter)
-	time.Sleep(100 * time.Millisecond)
-	if fileSize(counter) != before {
-		t.Fatal("the box was not actually paused")
-	}
 
 	if err := local.Kill(t.Context(), box.ID()); err != nil {
 		t.Fatalf("Kill: %v", err)
@@ -1016,40 +1140,48 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 // backend's seats and `crewlet llm` commands take for theirs, so it waits for
 // a writer that holds it rather than comparing against a login being replaced.
 //
+// READ ONCE THE TEARDOWN IS BLOCKED, in a bubble: Wait returns once every
+// goroutine of the case is blocked, and the teardown's first wait is its wait
+// for the lock the case holds. A write that does not wait for it has landed by
+// then, however late a loaded runner ran it, where a quiet window saw only a
+// write that landed inside it.
+//
 // Mutation: compare and write without the lock, and the write lands while
 // another writer holds it.
 func TestAWriteBackWaitsForTheSharedLoginsLock(t *testing.T) {
 	t.Parallel()
-	store := t.TempDir()
-	shared := filepath.Join(store, "credentials.json")
-	writeFile(t, shared, `{"token":"first"}`)
-	local := newDirect(t)
-	box, err := local.Create(t.Context(), Spec{
-		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
+	inBubble(t, func(t *testing.T) {
+		store := t.TempDir()
+		shared := filepath.Join(store, "credentials.json")
+		writeFile(t, shared, `{"token":"first"}`)
+		local := newDirect(t)
+		box, err := local.Create(t.Context(), Spec{
+			CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
 
-	release, err := hostbox.LockCredentials(t.Context(), store)
-	if err != nil {
-		t.Fatalf("taking the shared login's lock: %v", err)
-	}
-	closed := make(chan error, 1)
-	go func() { closed <- box.Close(t.Context()) }()
-	time.Sleep(200 * time.Millisecond)
-	if got := readFile(t, shared); got != `{"token":"first"}` {
+		release, err := hostbox.LockCredentials(t.Context(), store)
+		if err != nil {
+			t.Fatalf("taking the shared login's lock: %v", err)
+		}
+		closed := make(chan error, 1)
+		go func() { closed <- box.Close(t.Context()) }()
+		synctest.Wait()
+		if got := readFile(t, shared); got != `{"token":"first"}` {
+			release()
+			t.Fatalf("shared login = %q while another writer held its lock", got)
+		}
 		release()
-		t.Fatalf("shared login = %q while another writer held its lock", got)
-	}
-	release()
-	if err := <-closed; err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if got := readFile(t, shared); got != `{"token":"rotated"}` {
-		t.Fatalf("shared login = %q; want the refresh written once the lock was free", got)
-	}
+		if err := <-closed; err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if got := readFile(t, shared); got != `{"token":"rotated"}` {
+			t.Fatalf("shared login = %q; want the refresh written once the lock was free", got)
+		}
+	})
 }
 
 // The keys are operator-overridable config.
@@ -1130,25 +1262,43 @@ func TestTheKeepaliveStampIsWhatSparesABoxTheReaper(t *testing.T) {
 	}
 }
 
-// startStranger starts a live process group that no box started: what a
-// recycled pid names from a box's point of view. It is killed when the test
-// ends, so a failure leaks nothing.
-func startStranger(t *testing.T) procgroup.Leader {
+// strangerGroup is a live process group that no box started: what a recycled
+// pid names from a box's point of view ([startStranger]).
+type strangerGroup struct {
+	procgroup.Leader
+	// heard is the file its trap writes when it is sent SIGCONT.
+	heard string
+}
+
+// startStranger starts a stranger that keeps a record of what reaches it, for
+// [assertUntouched] to read: a trap writes its heard file when it is sent
+// SIGCONT, a SIGTERM or a SIGKILL ends it, and a SIGSTOP stops it; sent
+// SIGWINCH, it writes heard's witness. It says it is ready once its traps are
+// set, which this waits for, since a SIGCONT before them would leave no trace.
+// It is killed when the test ends, so a failure leaks nothing.
+func startStranger(t *testing.T) strangerGroup {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300")
+	heard := filepath.Join(t.TempDir(), "heard")
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c",
+		`trap ': > "$1"' CONT; trap ': > "$1.witness"' WINCH; : > "$1.ready"; while :; do sleep 0.05; done`,
+		"sh", heard)
 	procgroup.Set(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting the stranger: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = procgroup.Kill(cmd.Process.Pid)
+		_ = cmd.Wait()
+	})
 	leader, err := procgroup.Identify(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("Identify: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = procgroup.Kill(leader.PID)
-		_ = cmd.Wait()
-	})
-	return leader
+	waitFor(t, 5*time.Second, func() bool {
+		_, err := os.Stat(heard + ".ready")
+		return err == nil
+	}, "the stranger never set its traps")
+	return strangerGroup{Leader: leader, heard: heard}
 }
 
 // recordAsJob writes leader into a box's job record, as StartBackground does.
@@ -1162,7 +1312,7 @@ func recordAsJob(t *testing.T, box Sandbox, leader procgroup.Leader) {
 // recycled is the stranger's pid under a start time that is not its own: the
 // record a box would hold if its job had ended and the kernel had handed the
 // pid to the stranger.
-func recycled(stranger procgroup.Leader) procgroup.Leader {
+func recycled(stranger strangerGroup) procgroup.Leader {
 	return procgroup.Leader{PID: stranger.PID, Start: stranger.Start + "0"}
 }
 
@@ -1209,7 +1359,11 @@ func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 // The same record must not steer a signal either. A teardown, a kill and a
 // pause all act on the group a box recorded, and a group that is no longer the
 // job belongs to somebody else: SIGKILL there takes down a stranger's tree,
-// and SIGSTOP freezes it for as long as the pause lasts.
+// SIGSTOP freezes it for as long as the pause lasts, and SIGCONT wakes one its
+// owner stopped.
+//
+// Mutation: send any of them through a record whose start time is not the
+// stranger's, and the stranger's own record of it fails the case.
 func TestARecycledPidIsNeverSignalled(t *testing.T) {
 	t.Parallel()
 	stranger := startStranger(t)
@@ -1235,36 +1389,56 @@ func TestARecycledPidIsNeverSignalled(t *testing.T) {
 	}
 }
 
-// assertUntouched fails the test unless the stranger's group is still there
-// and still running across a short window.
+// assertUntouched fails the test if anything a box sends reached the
+// stranger's group before now. It sends the stranger SIGWINCH and waits for
+// what that leaves: its witness, or what a signal before it did.
 //
-// A window rather than one reading, because a signal is delivered rather than
-// applied: a SIGSTOP or SIGKILL that did reach the group can take a moment to
-// show. Neither shows through [procgroup.Leader.Current]: the stranger is this
-// test's own unreaped child, so a killed one lingers as a zombie that is still
-// current, and a stopped one is current by definition. So the zombie is read
-// off the kernel's record, and a stop through ps, which reports T for a
-// stopped process on both release platforms.
-func assertUntouched(t *testing.T, stranger procgroup.Leader, when string) {
+// THE WITNESS COMES AFTER EVERY SIGNAL THE CASE COULD HAVE SENT, so this is no
+// quiet window, of any length: a window passes a signal a loaded runner acted
+// on after it. A SIGKILL or a SIGTERM before the witness's signal ends the
+// stranger before any trap runs, and a group the kernel is taking down drops
+// every signal after the fatal one, so it never writes its witness; it
+// lingers as a zombie instead, being this test's own unreaped child, which
+// the kernel's record shows. A SIGSTOP stops the group before any trap runs
+// too, which ps shows as T on both release platforms: the shell's, or the
+// sleep's where the stop caught the shell starting it, since the shell then
+// waits on its stopped child uninterruptibly ([awaitStopped]). And a
+// SIGCONT, which leaves a running process as it was, is caught: the shell runs
+// the traps of the signals it caught in the order of their numbers, and
+// SIGCONT's is below SIGWINCH's on both, so heard is written by the time the
+// witness is.
+//
+// Neither a kill nor a stop shows through [procgroup.Leader.Current]: a killed
+// stranger lingers as a zombie that is still current, and a stopped one is
+// current by definition, so the kernel's record and ps are read instead.
+func assertUntouched(t *testing.T, stranger strangerGroup, when string) {
 	t.Helper()
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for {
+	witness := stranger.heard + ".witness"
+	if err := os.Remove(witness); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clearing the stranger's last witness: %v", err)
+	}
+	if err := syscall.Kill(stranger.PID, syscall.SIGWINCH); err != nil {
+		t.Fatalf("%s sending the stranger its witness signal: %v", when, err)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		if _, err := os.Stat(witness); err == nil {
+			return true
+		}
 		proc, found, err := procgroup.Inspect(stranger.PID)
 		if err != nil || !found || proc.Zombie || proc.Start != stranger.Start {
 			t.Fatalf("%s the stranger is gone (record %+v, found %v, %v): a recycled pid was signalled",
 				when, proc, found, err)
 		}
-		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(stranger.PID)).Output()
-		if err != nil {
-			t.Fatalf("reading the stranger's state through ps: %v", err)
+		for pid, state := range groupStates(t, stranger.PID) {
+			if strings.HasPrefix(state, "T") {
+				t.Fatalf("%s the stranger's group is stopped (pid %d reads %s): a recycled pid was signalled",
+					when, pid, state)
+			}
 		}
-		if strings.HasPrefix(strings.TrimSpace(string(out)), "T") {
-			t.Fatalf("%s the stranger's group is stopped: a recycled pid was signalled", when)
-		}
-		if time.Now().After(deadline) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+		return false
+	}, when+" the stranger never wrote its witness")
+	if _, err := os.Stat(stranger.heard); err == nil {
+		t.Fatalf("%s the stranger was sent SIGCONT: a recycled pid was signalled", when)
 	}
 }
 
@@ -1881,11 +2055,11 @@ func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
 func waitFor(t *testing.T, limit time.Duration, done func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 		if done() {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 	t.Fatal(msg)
 }

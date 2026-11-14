@@ -59,7 +59,7 @@ func stallingMember(t *testing.T) (objstore.Backend, time.Duration, time.Duratio
 // through the [link]: a node without `data`, whose leaf link froze.
 func stallingLeaf(t *testing.T) (objstore.Backend, time.Duration, time.Duration, func() func()) {
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -724,7 +724,7 @@ func patterned(n int) []byte {
 func tcpMember(t *testing.T) *server.Server {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{ServerName: "member", Host: "127.0.0.1", Port: -1,
-		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: t.TempDir(),
+		JetStream: true, JetStreamDomain: jsapi.Domain, StoreDir: brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes, NoSigs: true})
 	if err != nil {
 		t.Fatalf("configure the member: %v", err)

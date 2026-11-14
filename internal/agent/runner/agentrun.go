@@ -246,6 +246,11 @@ type Continuation struct {
 	// on the new job, so that job is not carried on again for it.
 	SignInReplaced bool
 
+	// RequestRefused is a launch carrying on a round whose job's continued
+	// session its provider refused ([Refused]): recorded on the new job, so
+	// that job is not carried on again for it.
+	RequestRefused bool
+
 	// ContextTokens is what the last request of that session carried, as
 	// its newest capture measured it ([SessionBasis.ContextTokens]): what
 	// the relaunch sends again before Brief where it continues the session
@@ -795,6 +800,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Continue: &Continuation{
 			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
+			RequestRefused: isRefused(carry),
 			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
 			// it whether the turn kept it or not: the floor of a launch
 			// that continues it in its box.
@@ -1191,6 +1197,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// own calls' work made, which the closed round's record carries for the
 	// next segment's call log and nothing else reads.
 	work.Elided, work.Absorbed = elided, absorbed
+	// A JOB ITS PROVIDER REFUSED DID NO WORK TO JUDGE: the round carries the
+	// provider's message, and the loop ends the turn on it.
+	work.RequestRefused = r.cfg.Resume.RequestRefused
 	return work, described, nil
 }
 

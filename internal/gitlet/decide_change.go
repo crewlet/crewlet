@@ -97,7 +97,8 @@ import (
 // and the decide holds the push it names to the rows ([landingPusher]): a
 // move of the target, applied, between the record of the change's head
 // revision and the record that last moved the target; its pusher is the
-// landing's actor, and a push that is none of those names nobody.
+// landing's actor, and its routing carries whom the push's row says it was
+// made for. A push that is none of those names nobody.
 //
 // A write that asks for what the change already says — an edit to its own
 // values, a draft's state it is in, the target it has, a close of a closed
@@ -119,18 +120,26 @@ import (
 // naming the field), before it is queued: anything but exactly one of the
 // seven records; an operation id this engine does not accept
 // (statelog.CheckCallerOpID); an asker that is no principal, or that names a
-// run — and a landing that names any asker, being the home's own; a Seen that
-// is no position on the code log; a repository id that is no UUID in its
+// run — and a landing that names any asker, being the home's own; whom the
+// write is made for, where its asker may not state it so or its ceiling does
+// not bound it ([writtenForUnder]: the chart's half is the decide's); a Seen
+// that is no position on the code log; a repository id that is no UUID in its
 // canonical spelling; a change id that is no bare UUIDv7 — and an open's that
 // is not [OpenChangeID] of its operation id; an open or a landing that names a
 // version, or any other write that names none; a branch that is no branch a
 // change may name ([branchProblem]); a title, a body, a close's reason, a work
-// item, a turn or a run its bounds refuse; an edit that sets nothing, or sets
-// a work item and clears it; a field the committer stamps — who wrote it, an
+// item, a turn or a run its bounds refuse; an edit that sets nothing, or sets a
+// work item and clears it; a field the committer stamps — who wrote it, an
 // open's or a reopen's head — set by the asker; a landing of no revision, of a
 // head or a tip that is no whole object id, or found by a node no node id
 // names; and a record past what one proposal may carry ([EntryRoom]). What the
 // repository and the change hold is the decide's to judge, from the rows.
+//
+// Before any of it, a value whom the write is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the proposal at all, and a committer of a build that
+// knows the value does.
 func (p ChangeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -180,13 +189,14 @@ func (p ChangeProposal) record() (OpKind, any) {
 }
 
 // stamped is the op and the payload of p's record as the committer forms it:
-// its asker as the change's owner or as who wrote it, and head as an open's or
-// a reopen's head — the fields no asker sends.
+// its asker as the change's owner or as who wrote it, head as an open's or a
+// reopen's head, and whom an open and a reopen were made for, as p states it
+// ([ChangeOpen.WorkingFor]) — the fields no asker sends.
 func (p ChangeProposal) stamped(head string) (OpKind, any) {
 	op, payload := p.record()
 	switch r := payload.(type) {
 	case ChangeOpen:
-		r.Owner, r.Head = p.Asker, head
+		r.Owner, r.Head, r.WorkingFor = p.Asker, head, p.WrittenFor.Carrier()
 		return op, r
 	case ChangeEdit:
 		r.By = p.Asker
@@ -201,7 +211,7 @@ func (p ChangeProposal) stamped(head string) (OpKind, any) {
 		r.By = p.Asker
 		return op, r
 	case ChangeReopen:
-		r.By, r.Head = p.Asker, head
+		r.By, r.Head, r.WorkingFor = p.Asker, head, p.WrittenFor.Carrier()
 		return op, r
 	}
 	return op, payload
@@ -296,6 +306,11 @@ func (p ChangeProposal) decidedRows() int {
 // validFields is every rule of [ChangeProposal.Validate] but the record's
 // bytes.
 func (p ChangeProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// proposal (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	set := 0
 	for _, isSet := range []bool{p.Open != nil, p.Edit != nil, p.Draft != nil, p.Retarget != nil,
 		p.Close != nil, p.Reopen != nil, p.Landed != nil} {
@@ -328,6 +343,9 @@ func (p ChangeProposal) validFields() error {
 		if why := p.Ceiling.invalid(p.Asker); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
 		}
+	}
+	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil); err != nil {
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -383,9 +401,13 @@ func (p ChangeProposal) validFields() error {
 		}
 		return stampedBy("close", p.Close.By)
 	}
-	if p.Reopen.Head != "" {
+	switch {
+	case p.Reopen.Head != "":
 		return badField("reopen.head", "the committer stamps a reopen's head from its snapshot, and an asker "+
 			"sends none")
+	case p.Reopen.WorkingFor != nil:
+		return badField("reopen.working_for", "the committer stamps whom a reopen was made for from the "+
+			"proposal's written_for, and an asker sends none")
 	}
 	if err := stampedRouting("reopen", p.Reopen.Routing); err != nil {
 		return err
@@ -438,6 +460,9 @@ func (p ChangeProposal) validOpen() error {
 	case o.Owner != (Principal{}):
 		return badField("open.owner", "the committer stamps the change's owner from the proposal's asker, and an "+
 			"asker sends none")
+	case o.WorkingFor != nil:
+		return badField("open.working_for", "the committer stamps whom an open was made for from the proposal's "+
+			"written_for, and an asker sends none")
 	}
 	return stampedRouting("open", o.Routing)
 }
@@ -569,12 +594,12 @@ func (c *Committer) countChange(p ChangeProposal, res ChangeResult, err error) {
 // changeOutcome is what became of a change proposal, as
 // crewlet.code.change.proposals names it: `handed_on` for one this node
 // decided nothing of about itself, which the router asks the repository's
-// runner-up; `failed` for any other error; the refusal's own code; `unchanged`
-// for one answered from the row with no record; and otherwise its outcome —
-// applied, pending or unknown.
+// runner-up ([handedOn]); `failed` for any other error; the refusal's own
+// code; `unchanged` for one answered from the row with no record; and
+// otherwise its outcome — applied, pending or unknown.
 func changeOutcome(res ChangeResult, err error) string {
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		return "handed_on"
 	case err != nil:
 		return "failed"
@@ -603,9 +628,11 @@ type changeDecision struct {
 	// actor and actorKind are who made the change a landing records — the
 	// home's own write, which names no asker — as its decide found them: the
 	// pusher of the push the home found bringing the head into the target
-	// ([landingPusher]).
-	actor     string
-	actorKind PartyKind
+	// ([landingPusher]); and workingFor whom they made that push for, as the
+	// push's row keeps it, nil for nobody.
+	actor      string
+	actorKind  PartyKind
+	workingFor *types.WorkingFor
 }
 
 // routeChange stamps the routing of the record d forms ([routingFor]) for p, its
@@ -625,12 +652,18 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	// bringing the head into the target, as its decide read them — that push
 	// merged the change, so its pusher hears nothing of a merge they made,
 	// and a person who made it is named among the routing's persons, as a
-	// push's own merge names its pusher.
+	// push's own merge names its pusher. AND FOR WHOM: the asker's write was
+	// made for whom its request states, and the landing for whom that push
+	// was made, as its row keeps it — the change's other authors told it
+	// merged read for them, as the push's own merge would have told them
+	// (concerns.go's head, "Whom the actor acted for").
 	actor, actorKind := p.Asker.party()
+	workingFor := p.WrittenFor.Carrier()
 	if p.Landed != nil {
-		actor, actorKind = d.actor, d.actorKind
+		actor, actorKind, workingFor = d.actor, d.actorKind, d.workingFor
 	}
-	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, roster: seats.Roster}
+	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, workingFor: workingFor,
+		roster: seats.Roster}
 	switch {
 	case p.Open != nil:
 		c.mentions = p.Open.Mentions
@@ -693,6 +726,13 @@ func (d changeDecision) refuse(code ChangeRefusal, detail string) (changeDecisio
 func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatRules,
 	retention time.Duration) (changeDecision, error) {
 
+	// WHOM IT IS MADE FOR, ON THE DECIDING CHART, before anything is read
+	// ([writtenForUnder]), whatever the repository holds: a carrier its
+	// ceiling does not bound is its sender's bug, and one this chart alone
+	// refuses a chart that moved under the turn ([ChartRefusal]).
+	if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
+		return changeDecision{}, refusedCarrier(ErrInvalidProposal, err)
+	}
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
@@ -964,11 +1004,13 @@ func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 	// target — an author's push of a merge commit onto it, most often — and
 	// never the push that last moved it, which may be somebody's push on top
 	// that merged nothing. Its pusher is the landing's actor, as a push that
-	// sets the target to exactly the head names its own. Named as nobody, the
-	// pusher would be told `merged` of their own merge: a seat woken for a
-	// turn, a person sent a notice.
+	// sets the target to exactly the head names its own, and whom they made
+	// it for is whom the landing was made for. Named as nobody, the pusher
+	// would be told `merged` of their own merge: a seat woken for a turn, a
+	// person sent a notice.
 	var err error
-	if d.actor, d.actorKind, err = landingPusher(ctx, tx, p.RepoID(), row.id, *l, moved); err != nil {
+	if d.actor, d.actorKind, d.workingFor, err = landingPusher(ctx, tx, p.RepoID(), row.id, *l,
+		moved); err != nil {
 		return changeDecision{}, err
 	}
 	_, d.payload = p.stamped("")
@@ -1227,7 +1269,7 @@ func (c *Committer) refusedChange(ctx context.Context, p ChangeProposal, err err
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		c.log.ErrorContext(ctx, "code_change_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
+		c.log.Log(ctx, invalidLevel(err), "code_change_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
 		return ChangeResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		c.countBusy(p.RepoID(), kindChange, busyContended, 1)

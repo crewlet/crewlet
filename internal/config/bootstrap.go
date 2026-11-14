@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -1675,7 +1676,12 @@ type Stream struct {
 	// EventRetentionHours bounds the event stream. 0 takes the queue's own
 	// default. Unbounded is deliberately not expressible: an event table
 	// nothing ever sweeps grows for the life of the deployment.
-	EventRetentionHours float64 `yaml:"event_retention_hours,omitempty" json:"event_retention_hours,omitempty" js:"min=0" desc:"Event stream retention; 0 takes the queue default."`
+	//
+	// AT LEAST A QUARTER OF AN HOUR otherwise: the dead letters are kept by
+	// the same age, and a keep of one thing is collapsed for
+	// [queue.DeadLetterWindow], which the broker refuses a stream's age to be
+	// shorter than.
+	EventRetentionHours float64 `yaml:"event_retention_hours,omitempty" json:"event_retention_hours,omitempty" js:"min=0" desc:"Event stream retention; 0 takes the queue default, otherwise at least 0.25 (the dead letters' fifteen-minute duplicate window)."`
 
 	// Debug turns on the EMBEDDED broker's own debug logging, which is a
 	// different and much larger population than the boot narration the
@@ -2505,9 +2511,16 @@ func (s *Stream) validate(path Path) error {
 	if err := s.validateSync(path, external, s.Leaf.Joins()); err != nil {
 		p.wrap(err)
 	}
-	if s.EventRetentionHours < 0 {
+	// AT LEAST THE DEAD LETTERS' DUPLICATE WINDOW, because the dead letters
+	// are kept by this age too and the broker refuses a stream whose window
+	// outlasts its age: below it, the node would fail its boot on the
+	// broker's own words, naming neither this field nor the window.
+	if s.EventRetentionHours < 0 || (s.EventRetentionHours > 0 && s.EventRetention() < queue.DeadLetterWindow) {
 		p.add(at(path, "event_retention_hours"), ErrOutOfRange,
-			"must be 0 (the queue default) or positive, got %v", s.EventRetentionHours)
+			"must be 0 (the queue default) or at least %v (%v): the dead letters are kept by "+
+				"this age, and a keep of one thing is collapsed for %v, which a stream's age "+
+				"must cover; got %v", queue.DeadLetterWindow.Hours(), queue.DeadLetterWindow,
+			queue.DeadLetterWindow, s.EventRetentionHours)
 	}
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)

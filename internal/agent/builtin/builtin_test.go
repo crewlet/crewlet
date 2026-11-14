@@ -410,6 +410,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.AtlasSearchTool: false,
 		builtin.AtlasGetTool:    false,
 		builtin.AtlasTraceTool:  false,
+		// AN AGENT'S RECORD IN THE ATLAS, and its dispute: written where
+		// every holder of Atlas and every agent reads, so a worker is never
+		// handed one.
+		builtin.AtlasRecordTool:  true,
+		builtin.AtlasDisputeTool: true,
 		// A server's read changes nothing; an operate command can change
 		// anything on a server, so a worker is never handed it.
 		builtin.SSHReadTool:    false,
@@ -1208,8 +1213,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// out, its row reads as a rule no registered tool answers.
 		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
 		// AND THE ATLAS, over the settings acme runs: left out, its three
-		// rows read as rules no registered tool answers.
-		Atlas: builtin.AtlasDeps{Settings: runsAcme},
+		// rows read as rules no registered tool answers; and an agent's two
+		// records in it, over its log and a day's count.
+		Atlas:       builtin.AtlasDeps{Settings: runsAcme},
+		AtlasRecord: builtin.AtlasRecordDeps{Log: newAtlasLedger(), Allow: (&dayCounter{}).allow},
 		// AND CHATLET, all three halves: left out, its nine tools
 		// were classified by nothing in the table below.
 		Chat: chatDeps(newFakeChat()),

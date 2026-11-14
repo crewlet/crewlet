@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -1537,6 +1539,11 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// mode a deferred record changed is read again at the next poll.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.indexed(ctx, tx, q, &out) }
+	case ReadDefaultTips:
+		// A SET READ OF THE DOMAIN, as the indexer's listing is: the scan
+		// reads each tip it lists again from the repository's own rows.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.defaultTips(ctx, tx, q, &out) }
 	case ReadChecks:
 		// A SET READ, of the repository it names or of the domain for the
 		// window (checksread.go).
@@ -1583,12 +1590,6 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 			}
 			return r.queueListing(ctx, tx, q, chart, &out)
 		}
-	case ReadQueueDue:
-		// A SET READ, of the domain or of the one repository, as
-		// changes_due's: every record the home asks after it is decided
-		// again by the repository's committer from its own snapshot.
-		query = q.queueQuery(fresh)
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.queueDue(ctx, tx, q, &out) }
 	case ReadInbox:
 		// A SET READ OF THE DOMAIN, as a listing of changes across
 		// repositories is: the notices are written by the records of every
@@ -1690,6 +1691,8 @@ func (q ReadQuery) validate() error {
 		return q.validateChangesDue()
 	case ReadIndexed:
 		return q.validateIndexed()
+	case ReadDefaultTips:
+		return q.validateDefaultTips()
 	case ReadChecksDue:
 		return q.validateChecksDue()
 	case ReadExpungeTips:
@@ -1704,8 +1707,6 @@ func (q ReadQuery) validate() error {
 		return q.validateChecksQueued()
 	case ReadChecksRunning:
 		return q.validateChecksRunning()
-	case ReadQueueDue:
-		return q.validateQueueDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1741,9 +1742,9 @@ func (q ReadQuery) validate() error {
 	case q.ChecksQueued != nil:
 		return fmt.Errorf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
 			"reads", ErrInvalid)
-	case q.QueueDue != nil:
-		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
-			"in", ErrInvalid)
+	case q.DefaultTips != nil:
+		return fmt.Errorf("%w: default_tips: only a default_tips read names the repository whose tip it reads",
+			ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
 		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
@@ -1976,6 +1977,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
 	case q.ChecksQueued != nil:
 		return refused("checks_queued", "only a checks_queued read names the cell whose queued checks it reads")
+	case q.DefaultTips != nil:
+		return refused("default_tips", "only a default_tips read names the repository whose tip it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case !q.ScannedBefore.IsZero():
@@ -1983,8 +1986,6 @@ func (q ReadQuery) validateIntroduced() error {
 			"before an instant")
 	case q.Target != "":
 		return refused("target", "only a queue, a landings or a green read names a branch's queue")
-	case q.QueueDue != nil:
-		return refused("queue_due", "only a queue_due read names the repository its home owes queue work in")
 	case q.Reviewer != "":
 		return refused("reviewer", "only a listing of changes or of a reviewer's reviews names a reviewer")
 	case q.Needs != "":
@@ -2066,9 +2067,9 @@ func (q ReadQuery) validateRunPushes() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -2118,9 +2119,9 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -2161,9 +2162,9 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2214,13 +2215,33 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
 		}
+	}
+	return nil
+}
+
+// validateDefaultTips is [ReadQuery.validate] for a `default_tips` read: a
+// bare listing, or ONE repository by its id ([DefaultTipsQuery]).
+func (q ReadQuery) validateDefaultTips() error {
+	one := q.DefaultTips
+	q.DefaultTips = nil
+	if err := q.validateBareListing("a default_tips read lists every active project repository"); err != nil {
+		return err
+	}
+	if one == nil {
+		return nil
+	}
+	if q.Cursor != "" {
+		return fmt.Errorf("%w: cursor: a default_tips read of one repository answers one row", ErrInvalid)
+	}
+	if parsed, err := uuid.Parse(one.RepoID); err != nil || parsed.String() != one.RepoID {
+		return fmt.Errorf("%w: default_tips.repo_id: not a repository's id", ErrInvalid)
 	}
 	return nil
 }
@@ -2274,9 +2295,9 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -2318,8 +2339,8 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
+		{"target", q.Target != ""},
+		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 		{"branch_changes", q.BranchChanges != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 	} {
@@ -2419,8 +2440,8 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
+		{"target", q.Target != ""},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers its repositories' branches' live changes "+
@@ -3560,6 +3581,44 @@ func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Read
 		}
 		out.Indexed = append(out.Indexed, c)
 		if pg.add(2 + field("id", stringBytes(c.ID), true) + field("name", stringBytes(c.Name), false)) {
+			out.Next = c.Name
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// defaultTips serves one page of a `default_tips` read ([ReadDefaultTips]):
+// the active project repositories by name after the cursor, each with its
+// default branch's tip, one walk of code_repos_name_idx. A FULL LISTING,
+// never a delta, for the compaction's listing's reason.
+func (r *Reader) defaultTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	if q.Cursor != "" && !ValidName(q.Cursor) {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	query, args := defaultTipsSQL, []any{q.Cursor, string(RepoProject), r.pageRows}
+	if q.DefaultTips != nil {
+		query, args = defaultTipSQL, []any{q.DefaultTips.RepoID, string(RepoProject)}
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("gitlet: list the repositories' default tips: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c    DefaultTip
+			head sql.NullString
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &c.Visibility, &head); err != nil {
+			return fmt.Errorf("gitlet: list the repositories' default tips: %w", err)
+		}
+		c.Head = head.String
+		out.DefaultTips = append(out.DefaultTips, c)
+		if pg.add(2 + field("id", stringBytes(c.ID), true) + field("name", stringBytes(c.Name), false) +
+			field("visibility", stringBytes(string(c.Visibility)), false) +
+			field("head", stringBytes(c.Head), false)) {
 			out.Next = c.Name
 			break
 		}
@@ -4715,6 +4774,13 @@ const (
 	// its start.
 	indexedSQL = `SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
 		WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`
+	// THE ACTIVE PROJECT REPOSITORIES' DEFAULT TIPS, by name over
+	// code_repos_name_idx, the tip joined as a listing's is (reposHead).
+	defaultTipsSQL = `SELECT r.id, r.name, r.visibility, h.target FROM code_repos r INDEXED BY code_repos_name_idx` +
+		reposHead + ` WHERE r.name > ? AND r.status = 'active' AND r.kind = ? ORDER BY r.name LIMIT ?`
+	// AND ONE OF THEM, by its id: no row for a repository that is not one.
+	defaultTipSQL = `SELECT r.id, r.name, r.visibility, h.target FROM code_repos r` + reposHead + `
+		WHERE r.id = ? AND r.status = 'active' AND r.kind = ?`
 	// THE IMPORTS OWED, by id over code_repos_importing_idx — its partial
 	// predicate repeated verbatim — after the cursor, "" from its start.
 	importsDueSQL = `SELECT id, name, import_source, import_seq, version FROM code_repos

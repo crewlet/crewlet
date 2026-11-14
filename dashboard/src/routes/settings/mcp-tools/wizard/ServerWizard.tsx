@@ -35,7 +35,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Button, ConfirmModal, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import type {
   McpAuthMethod,
   McpCatalogueEntry,
@@ -173,7 +173,7 @@ export function ServerWizard({
   const [initial] = useState<Draft>(() =>
     saved ? fromServer(saved.entity, saved.values, saved.entry, saved.signIn) : emptyDraft(),
   );
-  const [draft, setDraft] = useState<Draft>(initial);
+  const [draft, setDraft] = useDraftState<Draft>(initial);
   const [step, setStep] = useState<Step>(start && steps.includes(start) ? start : steps[0]!);
   const [reached, setReached] = useState<Step>(editing ? "review" : step);
   const [attempted, setAttempted] = useState<ReadonlySet<Step>>(new Set());
@@ -219,6 +219,7 @@ export function ServerWizard({
       : "The MCP server you are adding (not saved)",
     value: draft,
     fields: SERVER_DRAFT_FIELDS,
+    write: readOnlyFrom(setDraft),
   });
 
   const entity = useMemo(() => entityOf(draft, saved?.entity ?? null), [draft, saved]);

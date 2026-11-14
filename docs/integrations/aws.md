@@ -8,7 +8,7 @@ Connecting creates one CloudFormation stack in your account. Crewlet stores no a
 
 | An agent on | Can | Cannot |
 |---|---|---|
-| `read` (the default) | Describe and list EC2 (with VPC), Auto Scaling, Elastic Load Balancing, ECS, EKS, Lambda, RDS, Route 53 and CloudFront; read CloudWatch metrics and CloudWatch Logs; list bucket and object names; read Systems Manager inventory and parameter names; look up CloudTrail events; read ECR, ACM and KMS metadata, tags and AWS Health | Read objects, items, parameter values or secrets, or change anything |
+| `read` (the default) | Describe and list EC2 (with VPC), Auto Scaling, Elastic Load Balancing, ECS, EKS, RDS, Route 53 and CloudFront; read how a Lambda function is wired (its aliases, event sources, URL, policy and concurrency) without listing functions or reading a function's configuration; read CloudWatch metrics and CloudWatch Logs; list bucket and object names; read Systems Manager inventory and parameter names; look up CloudTrail events; read ECR, ACM and KMS metadata, tags and AWS Health | Read objects, items, parameter values or secrets, or change anything |
 | `operate` | Everything `read` can, plus start, stop and reboot instances; scale Auto Scaling groups, ECS services and EKS node groups; invoke functions; reboot, start, stop and snapshot databases; read, write and delete S3 objects; register load balancer targets; invalidate CloudFront; edit CloudWatch alarms and dashboards; read plain Systems Manager parameters | Create key pairs, user data, database passwords, bucket or key policies, DNS records, security group changes, new code or task definitions |
 | `administer` | Everything `operate` can, plus manage those services whole | See below |
 
@@ -18,7 +18,7 @@ Connecting creates one CloudFormation stack in your account. Crewlet stores no a
 
 **Acting as a workload's identity is gated.** Starting a shell or a command on an instance (Session Manager, EC2 Instance Connect), running an ECS task or command, or changing a function's code acts with that workload's own role, so Crewlet allows it only on resources you tag `crewlet:agent-access = administer`, and only at Administer.
 
-**Read includes CloudWatch Logs**, which hold whatever your workloads print. A secret a workload writes to its logs, to its user data, or to a task definition's or function's environment variables is readable at Read.
+**Read includes CloudWatch Logs**, which hold whatever your workloads print. A secret a workload writes to its logs, to its user data, or to a task definition's environment variables is readable at Read. A function's environment variables are not: Read cannot list functions or read a function's configuration, since both answer its environment, so an agent at Read finds a function by its log group or its tags and reads its configuration only at Operate.
 
 The company-wide **Let agents read IAM** option adds `iam:Get*` and `iam:List*` (the account's users, groups, roles and policies) to every agent that is on. It is off by default, since it shows the people in your account.
 
@@ -31,13 +31,14 @@ Company › Integrations › AWS asks, in order:
 1. **Short name**: the name every Crewlet object in your account carries, as `crewlet-<name>`. It is offered from the company's name, holds up to 20 lowercase letters, digits and hyphens, and cannot change once the stack exists.
 2. **Home Region**: where the stack and Crewlet's sign-in live. The list is every Region IAM Roles Anywhere is available in.
 3. **Let agents read IAM**: the option above, off by default.
+4. **See more in Atlas**: optional and off by default. It adds a read-only role for the atlas to the stack ([what the atlas reads](#what-the-atlas-reads)). No agent depends on it.
 
 **Save** mints the **sign-in certificate**: a certificate authority whose key Crewlet seals as `AWS_CERTIFICATE_AUTHORITY` and never shows. The form then shows the **CloudShell block**, which carries only the authority's certificate.
 
-4. Sign in to the AWS account agents will work in, open CloudShell in the home Region, and paste the block. It writes the stack's template, deploys it with `aws cloudformation deploy` (you need permission to create IAM roles and policies), and prints the stack's one output last.
-5. Paste that last line into **Stack output** and choose **Test**.
+5. Sign in to the AWS account agents will work in, open CloudShell in the home Region, and paste the block. It writes the stack's template, deploys it with `aws cloudformation deploy` (you need permission to create IAM roles and policies), and prints the stack's one output last.
+6. Paste that last line into **Stack output** and choose **Test**.
 
-Running the block again updates the stack in place, which is also how a new version of Crewlet's policies, or a change of Regions, reaches your account.
+Running the block again updates the stack in place, which is also how a new version of Crewlet's policies, a change of Regions, or the atlas's role reaches your account. Paste the last line again whenever the block changed what the stack holds.
 
 ### What the stack creates
 
@@ -49,10 +50,13 @@ Running the block again updates the stack in place, which is also how a new vers
 | Broker role and profile | `crewlet/<name>/crewlet-<name>-broker` | Becomes one agent's role at a time, and can do nothing else |
 | Permissions boundary | `crewlet-<name>-seat-boundary` | The most any agent role can ever do |
 | Level policies | `crewlet-<name>-level-read`, `-level-operate`, `-level-administer`, `-level-iam-read` | What each level grants |
+| Atlas role and profile (only with **See more in Atlas**) | `crewlet/<name>/crewlet-<name>-atlas` | Lists what the account runs for the atlas, read-only, and nothing else |
 
 Every object is tagged `crewlet:managed-by = crewlet`, `crewlet:company = <name>` and `crewlet:stack-version`. Agents' roles live under the path `/crewlet/<name>/seat/`.
 
-The provisioner and the broker are separate on purpose. Crewlet's certificate for the provisioner can only become the provisioner, which cannot become any agent. An agent's sign-in can only become the broker, which can only become that agent's own role: each role trusts the broker only in a session named for that agent.
+The provisioner, the broker and the atlas's role are separate on purpose. The atlas's certificate can only become the atlas's role, and neither of the other two can become it.
+
+The provisioner and the broker are separate from each other for the agents' sake. Crewlet's certificate for the provisioner can only become the provisioner, which cannot become any agent. An agent's sign-in can only become the broker, which can only become that agent's own role: each role trusts the broker only in a session named for that agent.
 
 ### Testing before you save
 
@@ -63,9 +67,41 @@ The provisioner and the broker are separate on purpose. Crewlet's certificate fo
 | The sign-in | The trust anchor does not hold this engine's certificate, or the output is another stack's |
 | The stack's version | The stack was made by another version of Crewlet |
 | Every policy and role | The boundary, a level, or the provisioner's or the broker's trust or policy differs from what this engine renders: someone edited it, or the Regions changed |
-| The identity split | An agent's certificate could become the provisioner, or the provisioner's the broker |
+| The identity split | An agent's certificate could become the provisioner, or the provisioner's the broker; with the atlas's role, that its certificate could become either, or either's the atlas |
+| The atlas's role (only with **See more in Atlas**) | The stack or the pasted output does not hold the role yet, or its trust or policy differs. This is a warning beside a connection that works, never a refusal |
 
 Each failure's fix is the same: run the CloudShell block again, which updates the stack, and do not edit Crewlet's roles or policies by hand. When every check passes, the result names the account's IAM role count against its quota, and warns when fewer than 20 roles are left. Every pass afterwards makes the same check, and a difference is a finding on the integration's card.
+
+## What the atlas reads
+
+Without anything further, the [atlas](../concepts/atlas.md) shows the AWS account and the Regions your agents work in, from the settings alone. **See more in Atlas** lets it list what the account runs. It is optional, nothing waits on it, and it never changes what an agent can do.
+
+**The one step.** Turn **See more in Atlas** on and save, run the CloudShell block again, and paste its last line into **Stack output**. The block now creates a role and a profile for the atlas, and the last line holds seven ARNs where it held five. In the company document the switch is `integrations.aws.provisioning.atlas_read`.
+
+**To undo it.** Turn the switch off, save, and run the block again: CloudFormation deletes the role and the profile. Turning the switch off stops the reads at once, before the block is run. Deleting the role in IAM by hand stops them too, and the atlas's Sources tab then says the read failed. What the atlas already recorded stays until a person retires it.
+
+**Who reads.** The engine signs in as the role `crewlet-<name>-atlas`, through the same trust anchor as the rest of the stack and with a certificate named for the atlas, once an hour unless `atlas.refresh_interval_seconds` says otherwise, and when somebody presses **Refresh now**. CloudTrail shows these calls under that role, with the source identity `CN=crewlet-<name>-atlas`, never under an agent's.
+
+**What the role may do.** Its policy allows nine actions and denies every other, so a policy attached to the role by hand widens nothing:
+
+| Action | What the atlas gains |
+|---|---|
+| `ec2:DescribeRegions` | The Regions enabled for the account, each of which is then asked |
+| `ec2:DescribeInstances` | Each instance as a server: its id, its `Name` tag, its private and public addresses and its Region. A terminated instance is left out |
+| `rds:DescribeDBInstances` | Each database instance: its identifier, its engine (`postgres`, `mysql`, `mariadb` or `other`), its engine version and its port |
+| `elasticloadbalancing:DescribeLoadBalancers` | Each application, network and gateway load balancer as the host name it answers on, which is what a DNS record points at. A Classic Load Balancer is not listed |
+| `sqs:ListQueues` | Each queue by its name |
+| `s3:ListAllMyBuckets` | Each bucket by its name and Region |
+| `route53:ListHostedZones`, `route53:ListResourceRecordSets` | Each public hosted zone as a domain, and the host names its A, AAAA and CNAME records and aliases give, with what they resolve to |
+| `iam:ListAccountAliases` | The account's alias, as its name |
+
+From what it finds, the atlas also says which Regions are in use and what the account is used for (`compute`, `database`, `dns`, `object_storage`).
+
+**What is never read.** No Lambda function: every action that lists functions returns their environment variables, so the role holds none. No instance user data or launch template, no task definition, no parameter, secret, object or log. Of what is listed, the atlas keeps no tag but `Name`, no database address, user or secret name, no private hosted zone, and no value of a record that is not an address or a name (a TXT or MX record's value is never decoded).
+
+**A refusal is a finding, never a failed read.** If an organization's policy closes a Region or a service to the role, that part is listed as not read on the atlas's Sources tab, what an earlier read recorded there stands, and everything else is read. Until the stack holds the role, the tab says the step above. A sign-in AWS refuses, or a listing that fails for any other reason, fails the read whole and changes nothing.
+
+**Cost.** AWS does not charge for these calls. A read makes four calls per enabled Region and about one per hosted zone, a few dozen for most accounts, and throttled calls are retried with a doubling wait.
 
 ## Giving each agent its own role
 
@@ -153,6 +189,7 @@ integrations:
       home_region: eu-west-1
       regions: [eu-west-1, us-east-1]
       iam_read: false
+      atlas_read: false
       certificate_authority: "${AWS_CERTIFICATE_AUTHORITY}"
       connection: "arn:aws:rolesanywhere:...,arn:aws:rolesanywhere:...,arn:aws:iam::...,arn:aws:rolesanywhere:...,arn:aws:iam::..."
 ```
@@ -163,8 +200,9 @@ integrations:
 | `home_region` | Where the stack, its trust anchor and its profiles live. |
 | `regions` | The Regions agents may work in. Empty is the home Region and us-east-1. |
 | `iam_read` | Whether every agent that is on can read IAM. |
+| `atlas_read` | Whether the stack holds a read-only role for the atlas. Off by default. |
 | `certificate_authority` | The sealed certificate authority, minted on Save. |
-| `connection` | The stack's `CrewletConnection` output: the trust anchor, the provisioner's profile and role, the agents' profile and the broker, joined by commas. Saving checks that they are one stack's, in one account, with the trust anchor and profiles in the home Region. |
+| `connection` | The stack's `CrewletConnection` output: the trust anchor, the provisioner's profile and role, the agents' profile and the broker, then the atlas's profile and role where the stack holds them, joined by commas. Saving checks that they are one stack's, in one account, with the trust anchor and profiles in the home Region. |
 
 ## AWS's limits worth knowing
 
@@ -187,7 +225,8 @@ integrations:
 | Symptom | Cause and fix |
 |---|---|
 | Test: "AWS refused Crewlet's sign-in" | The trust anchor does not hold this engine's certificate (a new certificate was minted, or the output is another stack's). Run the CloudShell block again in the right account. |
-| Test: "the stack is version ..." or "is not the one this engine expects" | The stack is older than this engine, or was edited by hand. Run the CloudShell block again. |
+| Test: "the stack is version ..." or "is not the one this engine expects" | The stack is older than this engine, or was edited by hand. Run the CloudShell block again. A stack made before version 2 reports this until the block is run once: version 2 narrows what Read can read of Lambda. |
+| Test: "The stack output does not carry the Atlas reader" | **See more in Atlas** is on and the block has not been run since, or its last line was not pasted again. Run the block and paste the last line. Agents are not affected. |
 | An agent's lane: "already exists, and Crewlet has no record of making it" | A role of the agent's name exists that Crewlet did not create. Delete it in IAM if nobody uses it. |
 | An agent's lane: "also holds ..., which no level grants" | Someone attached a policy to the agent's role. Remove it in IAM. |
 | An agent's lane: "AWS is still applying the change" | A level or a new role is propagating through IAM; it clears within a few minutes. |

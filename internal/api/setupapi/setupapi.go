@@ -464,6 +464,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	post("POST /setup/integrations/ssh/hosts/scan", authz.EffectReads, s.sshScan)
 	mount("PUT /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshPutHost)
 	mount("DELETE /setup/integrations/ssh/hosts/{id}", authz.ActionSetupConnect, s.sshDeleteHost)
+	mount("PUT /setup/integrations/ssh/hosts/{id}/inventory", authz.ActionSetupConnect, s.sshPutInventory)
 	mount("GET /setup/integrations/ssh/hosts/{id}/setup", authz.ActionSetupRead, s.sshSetup)
 	// A TEST SIGNS CERTIFICATES and dials the server, so it is the connect
 	// verb; the audit is an administrator's read.

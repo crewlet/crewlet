@@ -131,6 +131,13 @@ func (f *fetches) all() []types.CodeFetched {
 
 // synced brings the i-th Gitlet node's copy of repo to the log's head, folding
 // every push its rows hold into the node's index.
+//
+// A CASE WHOSE CLAIM IS NOT THE READ'S OWN SYNC CALLS IT BEFORE IT READS, and
+// waits on the sync itself, as long as it takes: a read's own sync waits at
+// most statelog.ReadBudget and is then refused as syncing, so a read made
+// straight after a chain of pushes, forced moves above all, decided the case on
+// whether a loaded machine folded them within two seconds. The landing cases'
+// five forced rewrites did not, on an eight-core machine running make check.
 func (x *fixture) synced(i int, repo string) {
 	x.t.Helper()
 	s, err := x.f.Nodes()[i].Cache().Sync(x.t.Context(), repo, gitlettest.Linearizable)

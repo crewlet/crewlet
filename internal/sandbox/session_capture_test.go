@@ -105,7 +105,7 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 				t.Fatalf("the take spooled nothing: %+v", kept)
 			}
 			rig.coordinator.Stop()
-			rig.coordinator.keepLater(spooled)
+			rig.coordinator.keepLater(t.Context(), spooled)
 			if left := rig.spools(t); len(left) != 0 {
 				t.Errorf("a keep the stopped node dropped left its spool: %v", left)
 			}
@@ -245,10 +245,12 @@ func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
 // applies a place's reservation and answers it only once its caller has given
 // up — a coordination store that took the write and whose answer came too late
 // — stamping it, where steal is set, as another read racing this one reserved
-// the same place: at another instant.
+// the same place: at another instant. begun, when set, runs once a place's
+// reservation it did not hold back has landed, before the take goes on.
 type timedStamps struct {
 	PendingStore
 	late, steal bool
+	begun       func()
 
 	mu        sync.Mutex
 	deadlines map[CaptureState][]time.Time
@@ -263,7 +265,11 @@ func (s *timedStamps) StampCapture(ctx context.Context, turnID string, stamp Ses
 	s.deadlines[stamp.State] = append(s.deadlines[stamp.State], deadline)
 	s.mu.Unlock()
 	if !s.late || stamp.State != CaptureBegun {
-		return s.PendingStore.StampCapture(ctx, turnID, stamp)
+		took, err := s.PendingStore.StampCapture(ctx, turnID, stamp)
+		if stamp.State == CaptureBegun && s.begun != nil {
+			s.begun()
+		}
+		return took, err
 	}
 	applied := stamp
 	if s.steal {
@@ -301,21 +307,31 @@ func readUntil(t *testing.T) (read context.Context, by time.Time) {
 // time, and never past by, where the read needs the rest of its time for the
 // box's pause.
 //
-// Mutation: bound the refusal's stamp by the take's own deadline, or by the
-// record's budget alone, and its deadline is not the read's by.
+// THE TAKE TAKES A SECOND between reserving its place and its refusal, on the
+// bubble's clock, so a stamp bounded by the room the read had when the take
+// began, not at by, ends past it, where a take that took no time ended it at
+// by all the same.
+//
+// Mutation: bound the refusal's stamp by the take's own deadline, by the
+// record's budget alone, or by the room the read had when the take began, and
+// its deadline is not the read's by.
 func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, keep := keepingRig(t)
 		keep.sealErr = errors.New("the keyring would not seal")
 		run := rig.launchKept(t, "t1")
-		stamps := &timedStamps{PendingStore: rig.coordinator.pending}
+		stamps := &timedStamps{PendingStore: rig.coordinator.pending,
+			begun: func() { time.Sleep(time.Second) }}
 		rig.coordinator.pending, rig.coordinator.recordBudget = stamps, 10*time.Minute
 		read, by := readUntil(t)
 		spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
 			readCapture(BoxReadCollect, Result{}, true))
 		if spooled != nil {
 			t.Fatalf("a take whose seal failed spooled %+v", spooled)
+		}
+		if len(stamps.askedUnder(CaptureBegun)) == 0 {
+			t.Fatal("the take reserved no place before its refusal, so its clock never moved between the two")
 		}
 		refused := stamps.askedUnder(CaptureRefused)
 		if len(refused) == 0 {
@@ -572,7 +588,7 @@ func TestATakesOwnReservationItsAnswerLostIsItsOwn(t *testing.T) {
 			t.Fatal("a take whose reservation the store applied and whose answer was lost spooled nothing, " +
 				"want it gone on under its own place")
 		}
-		rig.coordinator.keepLater(spooled)
+		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()
 		if c := rig.get("t1").Capture; c == nil || c.State != CaptureLanded ||
 			c.CaptureSeq != spooled.stamp.CaptureSeq {

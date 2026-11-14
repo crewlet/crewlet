@@ -286,10 +286,11 @@ type Turn struct {
 
 	// WorkingFor is who the turn works for when a colleague's ask, the
 	// answer to this seat's own ask, or a colleague's write on Worklet,
-	// Doclet or Chatlet handed it on ([types.WorkingFor]): the requester
-	// ceiling is theirs whoever asked, answered or wrote, read before
-	// Requester. Nil for a turn no hand-on woke, and for one handed on by a
-	// colleague working for itself. Carried on the run's row with Requester.
+	// Doclet, Chatlet or Gitlet handed it on ([types.WorkingFor]): the
+	// requester ceiling is theirs whoever asked, answered or wrote, read
+	// before Requester. Nil for a turn no hand-on woke, and for one handed on
+	// by a colleague working for itself. Carried on the run's row with
+	// Requester.
 	WorkingFor *types.WorkingFor
 
 	// Senders are the parties who triggered this turn, in the order they
@@ -336,6 +337,13 @@ type Turn struct {
 	// one, like Calls. Nil keeps nothing, so every call looks up afresh —
 	// a turn built outside the engine.
 	Lookups *Lookups
+
+	// Seen is what this turn's tool calls answered, which a tool that cites
+	// an earlier call reads the cited answer from; see [Seen]. Shared by
+	// every Turn derived from this one, like Calls. Only grows, and nothing
+	// a model says reaches it but the answers its calls were given. Nil has
+	// seen nothing, so every citation is refused.
+	Seen *Seen
 
 	// Holds is what this turn has named that an expiry could take from under
 	// it — the scratch repositories its code tools reached — and where its
@@ -486,6 +494,15 @@ func (t *Turn) LookedUp() *Lookups {
 		return nil
 	}
 	return t.Lookups
+}
+
+// Answers is what this turn's calls answered, or nil outside a turn; see
+// [Turn.Seen]. A nil record has seen no call.
+func (t *Turn) Answers() *Seen {
+	if t == nil {
+		return nil
+	}
+	return t.Seen
 }
 
 // WithCalls is this turn with calls as its log — a delegated worker's view of

@@ -88,9 +88,9 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, revertVerb, repo.ID, args)
-	w := gitlet.EngineWrite{Kind: gitlet.WriteRevertChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := written(ctx, turn, cv.g.c, gitlet.EngineWrite{Kind: gitlet.WriteRevertChange, RepoID: repo.ID,
 		OpID: op, Fresh: revertFresh(t.deps.writeFresh(turn, cv.g.c, repo), cv.at),
-		Ref: revertBranch(cv.g.c.asker, cv.change.Number), Change: cv.change.Number, Ceiling: cv.g.c.write}
+		Ref: revertBranch(cv.g.c.asker, cv.change.Number), Change: cv.change.Number})
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
@@ -202,10 +202,10 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 	// branch is deleted unless a gate over the target keeps it, a person's
 	// kept.
 	g := cv.g
-	w := gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: g.repo.ID, Principal: writer(ctx, turn, g.c),
+	w := written(ctx, turn, g.c, gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: g.repo.ID,
 		OpID: statelog.StepOpID(op, stepTwo), Fresh: revertFresh(t.deps.writeFresh(turn, g.c, g.repo),
 			res.Position), Ref: cv.change.TargetRef, ExpectedHead: res.Commit, Change: number,
-		Method: gitlet.MergeMethodMerge, Ceiling: g.c.write}
+		Method: gitlet.MergeMethodMerge})
 	if err := w.Validate(); err != nil {
 		notMerged(err.Error())
 		return

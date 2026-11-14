@@ -4,13 +4,11 @@ package procgroup
 
 import (
 	"errors"
-
+	"io"
+	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // The property this package exists for: signalling the process Go started
@@ -18,36 +16,68 @@ import (
 // always a launcher over a runtime that forks helpers, and killing only the
 // launcher leaves those holding memory, sockets and the inherited stderr.
 //
-// The shape: sh starts a long sleep in the background, prints its pid, and
-// exits. The sleep's parent is therefore gone — the only thing that can still
-// reach it is the process GROUP.
+// The shape: sh starts cat in the background and exits. cat's parent is
+// therefore gone — the only thing that can still reach it is the process
+// GROUP. cat reads a pipe whose write end this case holds open, and writes to
+// a pipe whose write end nothing else holds, so it cannot end on its own while
+// the case runs: only a signal ends it, and once the case is over its input's
+// end of file does.
+//
+// GONE IS READ OFF ITS OUTPUT, never off its pid. The kernel closes every
+// descriptor a process holds as it exits, before anything reaps it, so the
+// end of file on cat's output is the moment it has gone, zombie or not.
+// kill(pid, 0) answers yes for a zombie until its adopter reaps it, and an
+// orphan's adopter is whatever the machine runs as its first process: in a
+// container whose first process reaps nothing, never (#1080). A build whose
+// Kill misses cat leaves the read below blocked, and the test binary's own
+// timeout ends it, naming this case.
 func TestSignallingTheGroupReachesAnOrphanedGrandchild(t *testing.T) {
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")
+	input, feed, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closed last, as the case ends: a cat this case failed to kill reads end
+	// of file on its input and exits, so a failure leaves no process behind.
+	t.Cleanup(func() { _ = feed.Close() })
+	output, witness, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = output.Close() })
+
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "cat <&3 >&4 2>/dev/null 3<&- 4>&- &")
+	cmd.ExtraFiles = []*os.File{input, witness}
 	Set(cmd)
-	out, err := cmd.Output()
+	err = cmd.Run()
+	// cmd.Run waits, so the launcher itself has exited by now and cat is
+	// orphaned. Its ends of the two pipes are cat's alone once this process
+	// lets go of its own copies: the end of file below waits on cat and
+	// nothing else.
+	_ = input.Close()
+	_ = witness.Close()
 	if err != nil {
 		t.Fatalf("starting the fake launcher: %v", err)
 	}
-	// cmd.Output waits, so the launcher itself has exited by now and the
-	// grandchild is orphaned.
-	pgid := cmd.Process.Pid
-	grandchild, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		t.Fatalf("reading the grandchild pid from %q: %v", out, err)
+	const ping = "ping\n"
+	if _, err := feed.Write([]byte(ping)); err != nil {
+		t.Fatalf("writing to the grandchild: %v", err)
 	}
-	if !alive(grandchild) {
-		t.Fatalf("the grandchild %d was not running, so the test proves nothing", grandchild)
+	echo := make([]byte, len(ping))
+	if n, err := io.ReadFull(output, echo); err != nil || string(echo) != ping {
+		t.Fatalf("the grandchild echoed %q (%v), not %q, so it was not running and the test proves nothing",
+			echo[:n], err, ping)
 	}
 
-	if err := Kill(pgid); err != nil {
+	if err := Kill(cmd.Process.Pid); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	if waitGone(grandchild) {
-		return
+	rest, err := io.ReadAll(output)
+	if err != nil {
+		t.Fatalf("reading the grandchild's output to its end: %v", err)
 	}
-	// Clean up whatever survived, so a failure does not leak a sleeper.
-	_ = syscall.Kill(grandchild, syscall.SIGKILL)
-	t.Fatalf("the orphaned grandchild %d survived the group kill", grandchild)
+	if len(rest) != 0 {
+		t.Fatalf("the grandchild wrote %q after its echo, which nothing asked it to", rest)
+	}
 }
 
 // Signalling a group that is already gone is the outcome the caller wanted,
@@ -117,17 +147,4 @@ func TestTerminateSendsACatchableSignal(t *testing.T) {
 	if !status.Signaled() || status.Signal() != syscall.SIGTERM {
 		t.Errorf("the child died of %v, want SIGTERM — Terminate must be catchable", status.Signal())
 	}
-}
-
-func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
-
-func waitGone(pid int) bool {
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !alive(pid) {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return false
 }

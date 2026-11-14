@@ -1275,6 +1275,12 @@ func registeredStatements() map[string]statement {
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
+		// THE ACTIVE PROJECT REPOSITORIES' DEFAULT TIPS, the atlas's scan's
+		// listing by name, and one of them by its key.
+		"default tips": {defaultTipsSQL, []any{"", string(RepoProject), MaxSnapshotItems},
+			[]string{"code_repos_name_idx (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"default tip": {defaultTipSQL, []any{"repo-1", string(RepoProject)},
+			[]string{repoKey + " (id=?)", refsKey + " (repo_id=? AND ref=?)"}},
 		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0123's
 		// indexes): the repositories being imported by id, the push mirrors
 		// by id and the pull mirrors least recently synced first — each a

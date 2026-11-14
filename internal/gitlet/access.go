@@ -1,12 +1,16 @@
 package gitlet
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/words"
@@ -334,6 +338,19 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 	g.Relation = relation(s, repo, r)
 	g.Access = min(g.Tier.Cap(), g.Relation)
 	return g
+}
+
+// CredentialPrincipal is a credential acting as no seat, by its login, as a
+// repository's grant judges it ([GrantOf]: it reads every repository and
+// pushes to none itself) — the grant a coding box, and its checkout's
+// precheck, are held under ([Grant.Under]) where the run's turn works for such
+// a credential, so the box changes the seat's own work alone, as the turn's
+// own code writes do for it ([WriteCeilingNobody], ADR-0110), and fetches what
+// its run was given, as the credential reads every repository itself. The ONE
+// SPELLING of that principal for both, so the precheck and the admission
+// cannot judge a credential's run by two grants.
+func CredentialPrincipal(login string) Principal {
+	return Principal{Kind: PrincipalOperator, OperatorID: login}
 }
 
 // AccessOf is GrantOf(p, repo, r).Access.
@@ -732,6 +749,222 @@ func (c WriteCeiling) invalid(asker Principal) string {
 		return "ceiling.seat: a seat's write is never made for the seat itself"
 	}
 	return ""
+}
+
+// writtenForInvalid is why a request asker makes may not state f as whom it is
+// made for (ADR-0109), or nil: the rule every request a code write forms is
+// held to by its own Validate, and so by every node that holds the request —
+// the turn's before it asks, the router's, the node that decides it — each
+// wrapping it in its own refusal, which names written_for ([refusedCarrier]).
+// A request a ceiling rides on is held to that ceiling too ([writtenForUnder]).
+//
+//   - KNOWN TO THIS BUILD, FIRST: a carrier naming a kind, or an app of a
+//     credential's, that this build does not know is a newer build's —
+//     no sender composes one its own build does not know — so it is answered
+//     as the request's own decoder answers it on the wire, by the one place a
+//     build decides it ([unknownToThisBuild]), never as malformed: the
+//     estate's walk asks a node that knows it, here in process as after a
+//     refusal off the wire, and a carrier a stored row holds — which another
+//     build may have written — reaches a node of that build where one serves.
+//   - STATED, BY THE KIND OF WRITER ITS ASKER IS ([Principal.WriterKind],
+//     [types.WrittenFor.For]): an agent's request states whom it is made for —
+//     whoever its turn works for, or nobody — and one that states nothing is
+//     refused ([types.ErrWrittenForUnstated]); a person's, a credential's
+//     acting as no seat and the engine's carry nobody, and one that carries
+//     somebody is refused ([types.ErrWrittenForNotAnAgents]).
+//   - WELL FORMED: a seat by its handle, or a credential acting as no seat by
+//     its login — a machine's coloned handle, the one grammar such a
+//     credential's login has (iam.ValidLoginFor) — with the apps its turn was
+//     held to for it, each an app this build knows and none twice, so at most
+//     len(iam.Apps); and nothing beside either. So a carrier is a handle or a
+//     login of at most iam.MaxLogin bytes and those apps, at most
+//     [MaxCarrierBytes] encoded, wherever it is kept. What this rule refuses
+//     as malformed is what no build composes: the zero kind and the zero app,
+//     which name none, and admin, a name this build knows as no app.
+//   - NEVER A STRANGER'S: no code write is made for somebody the company does
+//     not know, since the turn's own gate refuses a stranger every code tool
+//     (ADR-0110); and none for a credential naming no app, which every reader
+//     of a carrier takes for a stranger (internal/agent/builtin's
+//     credentialCeiling).
+func writtenForInvalid(asker Principal, f types.WrittenFor) error {
+	if err := unknownToThisBuild(writtenForAt, f); err != nil {
+		return err
+	}
+	carrier, err := f.For(asker.WriterKind())
+	switch {
+	case err != nil:
+		return fmt.Errorf("written_for: %w", err)
+	case carrier == nil:
+		return nil
+	}
+	switch carrier.Kind {
+	case types.WorkingForSeat:
+		switch {
+		case !org.ValidHandle(carrier.Seat):
+			return fmt.Errorf("written_for.seat: %q is not a seat's handle", carrier.Seat)
+		case carrier.Login != "" || len(carrier.Apps) > 0:
+			return errors.New("written_for: a seat's carrier names the seat alone, with no login and no app")
+		}
+		return nil
+	case types.WorkingForCredential:
+		switch {
+		case !iam.ValidLoginFor(iam.KindMachine, carrier.Login):
+			return fmt.Errorf("written_for.login: %q is no credential's login: a credential acting as no seat "+
+				"is named by its coloned handle", carrier.Login)
+		case carrier.Seat != "":
+			return errors.New("written_for.seat: a credential's carrier names no seat")
+		case len(carrier.Apps) == 0:
+			return errors.New("written_for.apps: a credential's carrier names the apps its turn was held to, " +
+				"and one naming none is a stranger's to every reader, for whom no code write is made")
+		}
+		for i, app := range carrier.Apps {
+			switch {
+			case !app.IsApp():
+				return fmt.Errorf("written_for.apps: %q is no app: a credential's carrier names the apps its "+
+					"turn was held to", app)
+			case slices.Contains(carrier.Apps[:i], app):
+				return fmt.Errorf("written_for.apps: %q is named twice", app)
+			}
+		}
+		return nil
+	case types.WorkingForStranger:
+		return errors.New("written_for: no code write is made for a stranger: the turn's own gate refuses " +
+			"every code tool to whoever the company does not know (ADR-0110)")
+	}
+	return errors.New("written_for.kind: a carrier names whom a write is made for by its kind, and this one " +
+		"names none: a code write is made for a seat or a credential")
+}
+
+// writtenForUnder is [writtenForInvalid] of a request a ceiling rides on — a
+// change's lifecycle and its conversation, an engine write and a dequeue —
+// with its carrier held to that ceiling, c (nil for none), wherever one is
+// stated: the engine composes the two from one bound ceiling where the turn
+// made the call (internal/agent/builtin's writeCaller and writtenForTurn), so
+// they disagree only where a sender dropped one, and a write whose ceiling and
+// carrier disagreed would be decided for one requester and wake its turns for
+// another.
+//
+//   - A SEAT'S CARRIER, a colleague's, comes with that seat's ceiling, and the
+//     ceiling of a seat with no other carrier.
+//   - A CREDENTIAL'S comes with the ceiling of nobody, since a credential
+//     acting as no seat changes nothing of the company's code itself, and
+//     that ceiling with no seat's carrier.
+//   - A PERSON'S SEAT comes with no ceiling, since a person bounds nothing
+//     ([WriteCeiling]).
+//
+// A NIL CARRIER IS HELD TO NO CEILING: a seat or a Gitlet node of a build
+// before the carrier sends its ceiling alone, which a node of this build reads
+// as stated nobody ([ChangeProposal.UnmarshalJSONFrom]), so its write is
+// decided by its ceiling as before the carrier, and its records carry nobody
+// (ADR-0109's roll).
+//
+// ONLY THE DECIDING CHART TELLS A PERSON'S SEAT FROM A COLLEAGUE'S: roster is
+// that chart where the node deciding the write holds one, and there a seat's
+// carrier comes with no ceiling only where the chart holds the seat as a
+// person's — a colleague's, or one this chart does not place, is decided under
+// its ceiling — and nil where none is at hand (a request's Validate), which
+// leaves those two rules to the node that decides it. A SEAT THE CHART DOES NOT
+// PLACE is held as a colleague's, since deciding its write as the seat's own
+// work would let it escape whoever's ceiling it carries, and its refusal says
+// so, naming the seat and that this node's chart does not place it: a chart
+// lagging the company's then reads as one, never as a request that named an
+// agent seat. EACH OF THE CHART'S REFUSALS IS TYPED ([ChartRefusal]): the
+// sender held the write to the chart its own node held, so the node deciding
+// it logs a chart that moved since as the race it is, at WARN, and every
+// other refusal of this rule, which no chart makes right, as a sender's bug
+// ([invalidLevel]).
+func writtenForUnder(asker Principal, f types.WrittenFor, c *WriteCeiling, roster Roster) error {
+	if err := writtenForInvalid(asker, f); err != nil {
+		return err
+	}
+	carrier := f.Carrier()
+	if carrier == nil {
+		return nil
+	}
+	// WHAT THE DECIDING CHART HOLDS OF A SEAT'S CARRIER, where one is at
+	// hand: whether it places the seat, and whether as a person's.
+	var seat RosterSeat
+	placed := false
+	if roster != nil && carrier.Kind == types.WorkingForSeat {
+		seat, placed = roster.Seat(carrier.Seat)
+	}
+	person := placed && seat.Human
+	switch {
+	case c == nil && carrier.Kind == types.WorkingForCredential:
+		return fmt.Errorf("written_for: a write made for credential %s carries the ceiling of nobody, and this "+
+			"one carries none", carrier.Login)
+	case c == nil && roster != nil && !placed:
+		return &ChartRefusal{Why: fmt.Sprintf("written_for: this node's chart does not place seat %s, so a write "+
+			"made for it is held as a colleague's, which carries that seat's ceiling, and this one carries none",
+			carrier.Seat)}
+	case c == nil && roster != nil && !person:
+		return &ChartRefusal{Why: fmt.Sprintf("written_for: a write made for seat %s, which this node's chart holds "+
+			"as an agent's, carries that seat's ceiling, and this one carries none", carrier.Seat)}
+	case c == nil:
+		return nil
+	case c.Kind == WriteCeilingSeat && (carrier.Kind != types.WorkingForSeat || carrier.Seat != c.Seat):
+		return fmt.Errorf("written_for: a write held to seat %s's ceiling is made for that seat, and this one is "+
+			"made for %s", c.Seat, carried(carrier))
+	case c.Kind == WriteCeilingSeat && person:
+		return &ChartRefusal{Why: fmt.Sprintf("written_for: seat %s is a person's, who bounds nothing, so a write "+
+			"made for them carries no ceiling, and this one carries theirs", carrier.Seat)}
+	case c.Kind == WriteCeilingNobody && carrier.Kind != types.WorkingForCredential:
+		return fmt.Errorf("written_for: a write held to the ceiling of nobody is made for a credential acting "+
+			"as no seat, and this one is made for %s", carried(carrier))
+	}
+	return nil
+}
+
+// carried names whom a carrier says a write is made for, in a refusal.
+func carried(w *types.WorkingFor) string {
+	if w.Kind == types.WorkingForCredential {
+		return "credential " + w.Login
+	}
+	return "seat " + w.Seat
+}
+
+// ChartRefusal is a refusal of whom a write is made for that the deciding
+// chart alone makes ([writtenForUnder]): a seat's carrier with no ceiling,
+// where that chart does not place the seat or holds it as an agent's, and a
+// person's seat under that seat's ceiling.
+//
+// NO SENDER GOT IT WRONG: the turn composed whom its write is made for, and
+// the ceiling beside it, from the chart its own node held, so the two
+// disagree with this chart only where the chart moved under the turn — a
+// person's seat the company no longer has, a seat it now holds as an agent's,
+// a run that outlived the apply — or where the deciding node's chart lags the
+// turn's. That is an expected race, so the node deciding the write logs it at
+// WARN ([invalidLevel]), its words naming the seat and what this node's chart
+// holds of it. Its CLASS stays the rule's own, no proposal a committer can
+// decide ([ErrInvalidProposal]): the chart that decides the write refuses it
+// as it stands, and a request that chart refuses is not one to send again
+// unchanged.
+//
+// EXPORTED, with its words, because a refusal crosses to whoever asked the
+// node that decided it, and every error type of this package crosses the
+// estate's wire whole (internal/estate's typed kinds), so an asker's
+// errors.As finds what the deciding node's does.
+type ChartRefusal struct {
+	// Why is the refusal's sentence: the seat whom the write is made for, and
+	// what the deciding chart holds of it.
+	Why string
+}
+
+func (r *ChartRefusal) Error() string { return r.Why }
+
+// invalidLevel is the level a write refused as no proposal its committer can
+// decide ([ErrInvalidProposal]) is logged at by the node that decided it:
+// WARN where the deciding chart alone refused whom it is made for
+// ([ChartRefusal]), a chart that moved under the turn, and ERROR for every
+// other refusal, which no chart makes right and only a sender's bug forms —
+// an agent's write that states nothing, a carrier of no kind or a stranger's,
+// a credential's naming no app, a person's write carrying somebody, a ceiling
+// beside a carrier it does not bound.
+func invalidLevel(err error) slog.Level {
+	if errors.As(err, new(*ChartRefusal)) {
+		return slog.LevelWarn
+	}
+	return slog.LevelError
 }
 
 // Grant is the ceiling's own standing on repo, read from r — the grant

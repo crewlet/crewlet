@@ -173,7 +173,7 @@ func TestABoxRecordThatIsNotARegularFileIsAnsweredAtOnce(t *testing.T) {
 								t.Fatalf("%s with a %s for its %s = %v; want an answer, not a failure",
 									op, kind, record, err)
 							}
-						case <-time.After(10 * time.Second):
+						case <-time.After(10 * time.Second): //fixedwait:liveness
 							// A blocked open is never released, so the
 							// test binary is what ends it.
 							t.Fatalf("%s with a %s for its %s has not answered in 10s", op, kind, record)
@@ -239,14 +239,14 @@ func TestAWaiterStopsAfterAPollMeetsABoxWithAPipeForARecord(t *testing.T) {
 	waiter.Start(t.Context())
 	select {
 	case <-polled:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the poll never reached the runner: reaching the box blocked on its record")
 	}
 	stopped := make(chan struct{})
 	go func() { waiter.Stop(); close(stopped) }()
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("Waiter.Stop has not returned in 10s")
 	}
 }

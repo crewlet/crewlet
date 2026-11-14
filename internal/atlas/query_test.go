@@ -1,9 +1,11 @@
 package atlas_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,12 @@ import (
 // that runs on it too, and the zone belongs to a DNS account.
 func chain(t *testing.T) atlas.View {
 	t.Helper()
+	return atlas.Fold(chainClaims(t), now)
+}
+
+// chainClaims is the claims chain folds.
+func chainClaims(t *testing.T) []atlas.Claim {
+	t.Helper()
 	m := must(t)
 	zone := atlas.MustRef(atlas.KindDomain, "acme.example")
 	host := atlas.MustRef(atlas.KindHostname, "api.acme.example")
@@ -24,7 +32,7 @@ func chain(t *testing.T) atlas.View {
 	cf := atlas.MustRef(atlas.KindAccount, "cloudflare/0123456789abcdef0123456789abcdef")
 	old := atlas.MustRef(atlas.KindService, "legacy-api")
 	retired := m(atlas.Exists(old, ada, now.Add(-time.Hour)))
-	return atlas.Fold([]atlas.Claim{
+	return []atlas.Claim{
 		m(atlas.Exists(zone, settings, now)), m(atlas.Exists(host, settings, now)), m(atlas.Exists(web, settings, now)),
 		m(atlas.Exists(svc, ada, now)), m(atlas.Exists(db, ada, now)), m(atlas.Exists(cf, settings, now)),
 		m(atlas.Says(cf, atlas.FactVendor, "cloudflare", settings, now)),
@@ -36,7 +44,7 @@ func chain(t *testing.T) atlas.View {
 		m(atlas.Relates(zone, atlas.RelationBelongsTo, cf, settings, now)),
 		m(atlas.Relates(old, atlas.RelationRunsOn, web, ada, now.Add(-time.Hour))),
 		retired, m(atlas.Denial(retired, ada, now)),
-	}, now)
+	}
 }
 
 // A TRACE WALKS AGAINST THE ARROWS FOR WHAT DEPENDS ON AN ENTRY, along them
@@ -93,7 +101,7 @@ func TestAListPagesOnItsCursor(t *testing.T) {
 		var seen []string
 		after := ""
 		for range 10 {
-			page, err := atlas.List(entries, v.Vendors(), sort, after, 2)
+			page, err := atlas.List(entries, v.Summaries(false), sort, after, 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,9 +122,46 @@ func TestAListPagesOnItsCursor(t *testing.T) {
 			t.Errorf("%s listed a retired entry by default", sort)
 		}
 	}
-	page, _ := atlas.List(entries, v.Vendors(), atlas.SortName, "", 2)
-	if _, err := atlas.List(entries, v.Vendors(), atlas.SortKey, page.Next, 2); !errors.Is(err, atlas.ErrQuery) {
+	page, _ := atlas.List(entries, v.Summaries(false), atlas.SortName, "", 2)
+	if _, err := atlas.List(entries, v.Summaries(false), atlas.SortKey, page.Next, 2); !errors.Is(err, atlas.ErrQuery) {
 		t.Errorf("a cursor of another order: %v", err)
+	}
+}
+
+// THE HEALTH ORDER READS THE MOST URGENT FIRST, then the map's order, on
+// every page: a list grouped by health never meets a group twice.
+func TestAListByHealthReadsTheMostUrgentFirst(t *testing.T) {
+	t.Parallel()
+	v := chain(t)
+	for i := range v.Entries {
+		switch v.Entries[i].Ref.Key {
+		case "checkout-api":
+			v.Entries[i].Review = true
+		case "ssh/web-1":
+			v.Entries[i].Signals = []atlas.Signal{{Kind: atlas.SignalServerTestFailed, Severity: atlas.SeverityDanger}}
+		}
+	}
+	entries := v.Select(atlas.Query{})
+	var got []atlas.Health
+	after := ""
+	for range len(entries) + 1 {
+		page, err := atlas.List(entries, v.Summaries(false), atlas.SortHealth, after, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range page.Rows {
+			got = append(got, r.Health)
+		}
+		if after = page.Next; after == "" {
+			break
+		}
+	}
+	want := []atlas.Health{atlas.HealthAlerting, atlas.HealthNeedsLook}
+	for range len(entries) - len(want) {
+		want = append(want, atlas.HealthQuiet)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the health order paged %v, want %v", got, want)
 	}
 }
 
@@ -168,7 +213,7 @@ func TestAnUnconfirmedEntryStaysOutUntilAskedFor(t *testing.T) {
 	if got := v.Facets(atlas.Query{}).Words[atlas.WordUnconfirmed]; got != 1 {
 		t.Errorf("the word facet counts %d unconfirmed entries, want the hidden one counted", got)
 	}
-	if got := v.Map(atlas.Query{}, nil).Nodes; len(got) != 1 {
+	if got := v.Map(atlas.Query{}, nil, false).Nodes; len(got) != 1 {
 		t.Errorf("the map drew %d entries, want the unconfirmed one left off it", len(got))
 	}
 }
@@ -188,7 +233,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 		claims = append(claims, m(atlas.Exists(r, ada, now)),
 			m(atlas.Relates(r, atlas.RelationRunsOn, atlas.MustRef(atlas.KindHost, "ssh/srv-0000"), ada, now)))
 	}
-	mp := atlas.Fold(claims, now).Map(atlas.Query{}, nil)
+	mp := atlas.Fold(claims, now).Map(atlas.Query{}, nil, false)
 	if len(mp.Lanes) != len(atlas.Lanes) {
 		t.Errorf("%d lanes drawn, want every lane", len(mp.Lanes))
 	}
@@ -199,7 +244,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 	if len(mp.Edges) != 0 {
 		t.Errorf("edges to a closed group were drawn: %v", mp.Edges)
 	}
-	open := chain(t).Map(atlas.Query{}, nil)
+	open := chain(t).Map(atlas.Query{}, nil, false)
 	for _, e := range open.Edges {
 		if !e.Relation.Structural() {
 			t.Errorf("the map drew %s at rest", e.Relation)
@@ -208,7 +253,7 @@ func TestAMapClosesGroupsPastItsBound(t *testing.T) {
 	if len(open.Edges) != 5 || len(open.Collapsed) != 0 {
 		t.Errorf("the small map: %d edges, collapsed %v", len(open.Edges), open.Collapsed)
 	}
-	closed := chain(t).Map(atlas.Query{}, []string{"runtime"})
+	closed := chain(t).Map(atlas.Query{}, []string{"runtime"}, false)
 	if slices.ContainsFunc(closed.Nodes, func(s atlas.Summary) bool { return s.Lane == atlas.LaneRuntime }) {
 		t.Error("a group the reader closed was drawn open")
 	}
@@ -233,5 +278,81 @@ func TestAReaderSeesOnlyTheSignalsTheyMayRead(t *testing.T) {
 	}
 	if e := entry(t, v, cf); len(e.Signals) != 1 {
 		t.Error("narrowing for a reader changed the view it was given")
+	}
+}
+
+// A NODE'S ADDRESS IS AN ADMINISTRATOR'S ALONE. The fleet's own records say
+// where its nodes and its broker's servers answer, and every other holder of
+// the atlas reads the node without it: not as the value shown, and not beside
+// an address a person recorded for the same server.
+//
+// Mutation: drop withoutFleetAddresses from For, and a member is shown
+// 10.0.0.4 twice over.
+func TestANodesAddressIsShownToAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	node := atlas.MustRef(atlas.KindHost, "crewlet/node-a")
+	other := atlas.MustRef(atlas.KindHost, "crewlet/node-b")
+	must := func(c atlas.Claim, err error) atlas.Claim {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	fleet := atlas.RecordSource(atlas.RecordFleet)
+	v := atlas.Fold([]atlas.Claim{
+		must(atlas.Exists(node, fleet, at)),
+		must(atlas.FleetAddress(node, "10.0.0.4", at)),
+		must(atlas.Exists(other, fleet, at)),
+		must(atlas.FleetAddress(other, "10.0.0.5", at)),
+		// A PERSON'S ADDRESS for the second node outranks the fleet's, which
+		// then stands beside it.
+		must(atlas.Says(other, atlas.FactAddress, "node-b.acme.example", atlas.PersonSource("ada"), at)),
+	}, at)
+	raw := func(v atlas.View) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	admin := raw(atlas.For(v, atlas.Reader{Admin: true}))
+	for _, address := range []string{"10.0.0.4", "10.0.0.5", "node-b.acme.example"} {
+		if !strings.Contains(admin, address) {
+			t.Errorf("an administrator is not shown %s", address)
+		}
+	}
+	member := raw(atlas.For(v, atlas.Reader{}))
+	for _, address := range []string{"10.0.0.4", "10.0.0.5"} {
+		if strings.Contains(member, address) {
+			t.Errorf("a holder who is no administrator is shown the node address %s", address)
+		}
+	}
+	if !strings.Contains(member, "node-b.acme.example") || !strings.Contains(member, "crewlet/node-a") {
+		t.Error("the node itself, or the address a person recorded for it, went with the fleet's address")
+	}
+}
+
+// THE FLEET'S ADDRESS IS PRIVATE BY RULE: a claim of one that is not marked
+// so is refused by the fold as not in its canonical form, so no path can
+// record a node's address as a public one.
+func TestAFleetAddressNotMarkedPrivateIsRefused(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	node := atlas.MustRef(atlas.KindHost, "crewlet/node-a")
+	exists, err := atlas.Exists(node, atlas.RecordSource(atlas.RecordFleet), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marked, err := atlas.FleetAddress(node, "203.0.113.9", at)
+	if err != nil || !marked.Value.Private {
+		t.Fatalf("FleetAddress = %+v, %v, want a private value", marked.Value, err)
+	}
+	unmarked := marked
+	unmarked.Value.Private = false
+	v := atlas.Fold([]atlas.Claim{exists, unmarked}, at)
+	if len(v.Skipped) != 1 || len(entry(t, v, node).Facts) != 0 {
+		t.Errorf("an unmarked fleet address folded: skipped %+v, facts %+v", v.Skipped, entry(t, v, node).Facts)
 	}
 }

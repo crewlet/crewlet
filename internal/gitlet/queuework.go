@@ -13,8 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a `queue_due`
-// read of ONE repository answers its home one target's [QueueDue] a page —
+// A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a due-queue
+// read of ONE repository ([Reader.QueueDue]) answers its home one target's
+// [QueueDue] a page —
 // everything the home's queue worker (internal/gitlet/home's queue) decides its
 // next step from, in ONE snapshot: the target's tip, the gate its queue lands
 // under (its depth, batch and required checks), its live entries in
@@ -61,7 +62,7 @@ import (
 // cancellation, so a turn that failed to cancel is listed again.
 
 // QueueDue is one target's queue work as one snapshot holds it
-// ([ReadAnswer.DueQueue]).
+// ([QueueDueAnswer.DueQueue]).
 type QueueDue struct {
 	TargetRef string `json:"target_ref"`
 	// Repo is the repository's name, as an operator knows it: what the
@@ -70,8 +71,9 @@ type QueueDue struct {
 	// Mirrored is the repository a PULL MIRROR ([RepoRef.Mirrored]), which
 	// nothing merges into — a candidate and a landing on it are refused
 	// repo_mirrored — so its home builds no train and puts every live entry
-	// out ([EjectRepoMirrored]): an answer between nodes, so an older
-	// reader drops it and reads the queue as it did.
+	// out ([EjectRepoMirrored]). An answer between nodes, read whole
+	// ([QueueDueAnswer]), so a home of a build that does not declare it
+	// refuses the page rather than build a train on a mirror.
 	Mirrored bool `json:"mirrored,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
@@ -115,28 +117,44 @@ type QueueDue struct {
 
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
 // enqueued it — whom its merge commit names and its landing lands it as, and
-// whom its work item is closed as — and its change, as its chain commit is
-// written from. The change's Body and Authors are read only where the
-// snapshot owes a build ([QueueDue.Builds]), the one step that writes a
+// whom its work item is closed as — and for whom, and its change, as its chain
+// commit is written from. The change's Body and Authors are read only where
+// the snapshot owes a build ([QueueDue.Builds]), the one step that writes a
 // commit message from them; every other snapshot answers them empty.
 type QueueWorkEntry struct {
-	EntryID     string            `json:"entry_id"`
-	Seq         statelog.Position `json:"seq"`
-	State       QueueState        `json:"state"`
-	HeadOID     string            `json:"head_oid"`
-	Method      MergeMethod       `json:"method"`
-	CloseTask   bool              `json:"close_task,omitempty"`
-	EnqueuedBy  Principal         `json:"enqueued_by"`
+	EntryID    string            `json:"entry_id"`
+	Seq        statelog.Position `json:"seq"`
+	State      QueueState        `json:"state"`
+	HeadOID    string            `json:"head_oid"`
+	Method     MergeMethod       `json:"method"`
+	CloseTask  bool              `json:"close_task,omitempty"`
+	EnqueuedBy Principal         `json:"enqueued_by"`
+	// WorkingFor is whom the entry's enqueue was made for (ADR-0109), as its
+	// row keeps it ([storedCarrier]): nil for an enqueue made for nobody, a
+	// person's, and one applied before the carrier's build. The home closes
+	// the landed change's work item for them, decided within what they may
+	// use (internal/engine's queue close), as the enqueuing turn's own write
+	// made late.
+	//
+	// THE ONE READ ANSWER THAT CARRIES WHOM A CODE WRITE WAS MADE FOR, and
+	// only because its one caller, the repository's home, writes with it on
+	// its requester's behalf: every other read of the queue — its listings,
+	// a change's entry — builds its answer field by field and leaves the
+	// carrier out, as a reader's view of a Chatlet message does. An answer
+	// between nodes read whole ([QueueDueAnswer]), so a home of a build that
+	// would drop it refuses the page rather than close the item for nobody.
+	WorkingFor  *types.WorkingFor `json:"working_for,omitempty"`
 	Train       string            `json:"train,omitempty"`
 	CandidateID string            `json:"candidate_id,omitempty"`
 	Change      ChainChange       `json:"change"`
 	// WorkItem is the change's work item, nil for none: what a landing
 	// closes where its entry asked it to.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
-	// CloseOp is, on an owed close ([ReadAnswer.QueueOwedCloses]), the
+	// CloseOp is, on an owed close ([QueueDueAnswer.QueueOwedCloses]), the
 	// operation its work item is closed under ([CloseWorkItemOpID] of the
-	// landing's), "" on every other entry. An answer between nodes, so an
-	// older reader drops it and leaves the close owed for a newer home.
+	// landing's), "" on every other entry. An answer between nodes, read
+	// whole ([QueueDueAnswer]), so a home of a build that does not declare
+	// it refuses the page, and the close stays owed for a home that reads it.
 	CloseOp string `json:"close_op,omitempty"`
 }
 
@@ -211,18 +229,16 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 // home cancels it for — [CheckReasonDequeued] where a change that candidate
 // merged left its queue, [CheckReasonAbandoned] for any other giving up.
 //
-// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
-// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
-// has run without it — none of the domain is on main — so a build answering a
-// `queue_due` read with none is one nobody ran; were one ever to run first,
-// its home would cancel nothing, which is what such a build knows.
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
+// domain landed on main with it ([RecordVersion]), so every build that answers
+// a due-queue read answers it.
 type AbandonedCheck struct {
 	CheckKey
 	CandidateID string      `json:"candidate_id"`
 	Reason      CheckReason `json:"reason"`
 }
 
-// MaxAbandonedChecks is the most given-up attempts one `queue_due` page
+// MaxAbandonedChecks is the most given-up attempts one due-queue page
 // answers: a whole train's at the deepest queue and the widest gate,
 // MaxQueueDepth × MaxRequiredChecks — so the attempts one giving up leaves
 // are cancelled in one turn — and the rest on the next, which each
@@ -295,7 +311,7 @@ const (
 // from it ([enqueuedSince]) where its gate requires a check. The first page
 // answers the repository's given-up attempts too ([abandonedChecksIn]),
 // whether or not a target holds a live entry.
-func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
+func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *QueueDueAnswer) error {
 	if cursor == "" {
 		abandoned, err := abandonedChecksIn(ctx, tx, repoID)
 		if err != nil {
@@ -394,9 +410,12 @@ func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since
 const enqueuedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_enqueued_idx
 	WHERE repo_id = ? AND target_ref = ? AND enqueued_at >= ? LIMIT ?)`
 
-// workEntriesOf is entries as the home's queue reads them, their changes read
-// in ONE statement by the changes' key ([changeRowsIn]) — their descriptions
-// left to [descriptionsOf].
+// workEntriesOf is entries as the home's queue reads them, each with whom its
+// enqueue was made for as its row keeps it ([QueueWorkEntry.WorkingFor]) —
+// what the home closes a landed change's work item for, from the entries of
+// the page that landed it — their changes read in ONE statement by the
+// changes' key ([changeRowsIn]) and their descriptions left to
+// [descriptionsOf].
 func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]QueueWorkEntry, error) {
 	ids := make([]string, len(entries))
 	for i, e := range entries {
@@ -416,9 +435,10 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 				"not hold", e.EntryID, e.TargetRef, e.ChangeID)
 		}
 		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
-			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), Train: e.Train,
-			CandidateID: e.CandidateID, Change: ChainChange{ID: row.id, Number: row.number, Title: row.title,
-				SourceRef: row.source, Owner: row.owner}}
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(),
+			WorkingFor: storedCarrier(e.WorkingFor), Train: e.Train, CandidateID: e.CandidateID,
+			Change: ChainChange{ID: row.id, Number: row.number, Title: row.title, SourceRef: row.source,
+				Owner: row.owner}}
 		if row.work.ID != "" {
 			item := row.work
 			out[i].WorkItem = &item
@@ -427,7 +447,7 @@ func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]Que
 	return out, nil
 }
 
-// MaxOwedCloses is the most owed closes one `queue_due` page answers:
+// MaxOwedCloses is the most owed closes one due-queue page answers:
 // [MaxLandEntries], the most one landing leaves owing — so a home settles a
 // whole landing's closes in one turn and one close_settled record (which
 // holds as many), and a repository owing more (several landings no home
@@ -438,7 +458,9 @@ const MaxOwedCloses = MaxLandEntries
 // owedClosesIn is repository repoID's landed entries still owing their work
 // item's close (code_queue.close_op), at most [MaxOwedCloses] in entry id
 // order — one seek of code_queue_close_owed_idx, the operation read beside
-// each row — each with its enqueuer, its change and the change's work item.
+// each row — each with its enqueuer and whom its enqueue was made for, as the
+// home closes the item for them on a later turn as on the landing's own, its
+// change and the change's work item.
 // An entry whose change the repository holds no more is answered with its
 // change's id alone and no work item, which its home settles as not closed.
 func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEntry, error) {
@@ -457,8 +479,8 @@ func owedClosesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]QueueWorkEn
 	out := make([]QueueWorkEntry, len(owed))
 	for i, e := range owed {
 		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
-			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), CloseOp: ops[i],
-			Change: ChainChange{ID: e.ChangeID}}
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(),
+			WorkingFor: storedCarrier(e.WorkingFor), CloseOp: ops[i], Change: ChainChange{ID: e.ChangeID}}
 		row, found := rows[e.ChangeID]
 		if !found {
 			continue

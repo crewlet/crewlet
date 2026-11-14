@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -106,9 +107,11 @@ func discussed(t *testing.T, n *node, name string) (repo, change string) {
 }
 
 // conversing is a write of a change's conversation by asker under an operation
-// id of its own: set fills in the one record it carries.
+// id of its own, made for nobody but the asker: set fills in the one record it
+// carries.
 func conversing(asker gitlet.Principal, set func(w *gitlet.ConversationWrite)) gitlet.ConversationWrite {
-	w := gitlet.ConversationWrite{OpID: statelog.NewOpID(time.Now(), "code_comment_on_change"), Asker: asker}
+	w := gitlet.ConversationWrite{OpID: statelog.NewOpID(time.Now(), "code_comment_on_change"), Asker: asker,
+		WrittenFor: types.ForNobody()}
 	set(&w)
 	return w
 }

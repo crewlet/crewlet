@@ -215,14 +215,16 @@ type Sources struct {
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
 
-	// Builtins is the engine's own tools as this node's seats are offered
-	// them, as catalogue rows: `mcp_servers_status`'s built-in groups. Nil,
-	// or a nil answer (a node with no active revision), sends no group.
+	// Builtins is the engine's own tools as this node's revision offers its
+	// seats them ([BuiltinOffer]): `mcp_servers_status`'s built-in groups, and
+	// what each agent is withheld of them, which its `builtin_tools` counts.
+	// Nil, or an offer with no rows (a node with no active revision), sends no
+	// group and counts every agent none.
 	//
 	// THIS NODE'S, and that is the fleet's answer: every node applies the
 	// same revision, so the tools a seat is offered do not depend on the
 	// node holding it.
-	Builtins func() []ToolRow
+	Builtins func() BuiltinOffer
 
 	// MCPListings is the fleet's listings of its MCP servers' tools and the
 	// schemas they name, as this node's watched copy holds them: what one
@@ -1180,6 +1182,7 @@ func Register(r *Registry, s Sources) {
 	if s.Atlas != nil {
 		// THE ATLAS, read as its asker on the atlas app (atlas.go).
 		registerAtlas(r, s)
+		registerAtlasWork(r, s)
 	}
 }
 

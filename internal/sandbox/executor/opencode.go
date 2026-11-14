@@ -509,6 +509,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		// export the session through the server that is up.
 		line(`  [ -z "$endasked" ] || break`)
 		line(`  s=$(opencode api --server "$url" mcp.list < /dev/null 2> /dev/null)`)
+		b.WriteString(openCodeShadowCheck(req.MCPServers))
 		line(`  ready=1`)
 		b.WriteString(checks)
 		line(`  [ "$ready" = 1 ] && break`)
@@ -886,6 +887,47 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 		pending := present + `,"status":{"status":"pending"`
 		fmt.Fprintf(&b, "  case \"$s\" in *%s*) case \"$s\" in *%s*) ready=0;; esac;; *) ready=0;; esac\n",
 			sandbox.ShellQuote(present), sandbox.ShellQuote(pending))
+	}
+	return b.String()
+}
+
+// openCodeShadowCheck is the part of the readiness loop that ends a run
+// before it starts where the `mcp.list` answer just read ($s) lists a server
+// whose tools OpenCode would name like those of a server the run offers
+// directly ([sandbox.MCPServer.AlwaysLoaded]): the engine's own, `crewlet`.
+//
+// OpenCode names a server's tool `<server>_<tool>`, each part with every
+// character but `A-Za-z0-9_-` written as `_`, and keys its tools by that name,
+// a later registration under one name replacing the earlier (2.0.32, 2.1.4 and
+// 2.2.7 alike, read in their bundles). So a server named `crewlet_x` or
+// `crewlet.x` with a tool `y`, and the engine's own `x_y`, are both
+// `crewlet_x_y`, and the engine's tool is answered by that server or lost. A
+// seat's server cannot be named so (its name is held to lowercase letters,
+// digits and hyphens, and `crewlet` is reserved), but the image's and the
+// repository's OpenCode configuration can declare one, and OpenCode loads it
+// beneath the run's own ([OpenCode.WriteConfig]). The run is refused, naming
+// the server, rather than started with tools it cannot rely on.
+//
+// The name is read as the answer spells it ([jsonStringify]): `"name":"`, the
+// run's server's name, then one character that is neither a letter, a digit,
+// `-` nor the closing quote. The characters are listed rather than ranged, so
+// the match does not depend on the box's locale. Every occurrence of the name
+// is tried, since the run's own server is listed among them.
+func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
+	const kept = `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-`
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if !servers[name].AlwaysLoaded {
+			continue
+		}
+		prefix := sandbox.ShellQuote(`"name":` + strings.TrimSuffix(jsonStringify(name), `"`))
+		fmt.Fprintf(&b, "  r=$s\n")
+		fmt.Fprintf(&b, "  while :; do case \"$r\" in *%s*) r=${r#*%s};; *) break;; esac\n", prefix, prefix)
+		fmt.Fprintf(&b, "    case \"$r\" in [!\\\"%s]*) echo \"crewlet: this box's OpenCode configuration declares an MCP "+
+			"server named \"%s\"${r%%%%\\\"*}, whose tools OpenCode would name like those of the run's own server "+
+			"\"%s\" (\"%s\"_<tool>); rename it in the image's or the repository's OpenCode configuration\" >&2; exit 1;; esac\n",
+			kept, sandbox.ShellQuote(name), sandbox.ShellQuote(name), sandbox.ShellQuote(name))
+		fmt.Fprintf(&b, "  done\n")
 	}
 	return b.String()
 }

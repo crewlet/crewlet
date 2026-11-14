@@ -79,7 +79,7 @@ func watchedBackends(t *testing.T, cfg *config.Company) (*config.Bootstrap, *Bac
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {

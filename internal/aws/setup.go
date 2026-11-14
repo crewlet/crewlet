@@ -9,6 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
+// AtlasRoleLabel is how the atlas's role is named to a person: the name it
+// carries in the account, with the company's short name in it.
+const AtlasRoleLabel = "crewlet-<name>-atlas"
+
 // CertificateAuthoritySecret is the name the engine seals the company's
 // certificate authority under.
 const CertificateAuthoritySecret = "AWS_CERTIFICATE_AUTHORITY"
@@ -107,11 +111,12 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 		{
 			Field: "connection", Label: "Stack output", Kind: setup.KindID,
 			ConfigPath: "integrations.aws.provisioning.connection", Required: caHeld, Connect: true,
-			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority"},
-			Format: "five ARNs joined by commas",
+			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority", "atlas_read"},
+			Format: "five ARNs joined by commas, or seven with the Atlas reader",
 			Hint:   "The last line the CloudShell block prints.",
 			More: "It is also the " + config.AWSConnectionOutput + " value on the stack's Outputs tab, in your " +
-				"{link}. Test checks the sign-in, every Crewlet policy, the identity split and the role quota.",
+				"{link}. Test checks the sign-in, every Crewlet policy, the identity split and the role quota. " +
+				"Paste it again after the block changes what the stack holds.",
 			LinkText: "CloudFormation stacks", VendorURL: "https://console.aws.amazon.com/cloudformation/home",
 			Blocks: integration.FindingApprovalRequired,
 		},
@@ -120,6 +125,18 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			ConfigPath: "integrations.aws.provisioning.iam_read", Default: "false",
 			Hint: "Lets agents read IAM users, groups, roles and policies.",
 			More: "It shows the people in your account, so it is off unless you turn it on.",
+		},
+		{
+			// OPTIONAL, AND NEVER IN THE WAY: off changes nothing an agent
+			// does, and on only adds a role the atlas alone signs in as.
+			Field: "atlas_read", Label: "See more in Atlas", Kind: setup.KindToggle,
+			ConfigPath: "integrations.aws.provisioning.atlas_read", Default: "false",
+			Hint: "Adds a read-only role for Atlas, which lists what the account runs.",
+			More: "Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues " +
+				"and bucket names, read hourly as " + AtlasRoleLabel + ", never as an agent. It reads no function, " +
+				"no user data, no parameter and no object. One step: turn this on and save, run the CloudShell " +
+				"block again, and paste its last line. To undo it, turn this off, save and run the block again, " +
+				"which deletes the role.",
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -145,6 +162,8 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(prov.Connection)
 		case "iam_read":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(prov.IAMRead)
+		case "atlas_read":
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(prov.AtlasRead)
 		case "enabled":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(enabled)
 		}
@@ -171,7 +190,7 @@ func cloudShellView(prov config.AWSProvisioning, bundle string) *setup.PublicVie
 	if !company.Valid() || !config.AWSRegion(home) {
 		return nil
 	}
-	text, err := cloudShellText(company, home, prov.RegionsOrDefault(), bundle)
+	text, err := cloudShellText(company, home, prov.RegionsOrDefault(), prov.AtlasRead, bundle)
 	if err != nil {
 		text = "# Crewlet cannot render the stack: " + strings.TrimPrefix(err.Error(), "aws: ") + "\n"
 	}
@@ -182,18 +201,21 @@ func cloudShellView(prov config.AWSProvisioning, bundle string) *setup.PublicVie
 	return view
 }
 
-func cloudShellText(company Company, home string, regions []string, bundle string) (string, error) {
+func cloudShellText(company Company, home string, regions []string, atlas bool, bundle string) (string, error) {
 	ca, err := ParseCA(bundle)
 	if err != nil {
 		return "", err
 	}
 	tpl, err := RenderStack(StackParams{Company: company, CAPEM: ca.CertificatePEM(),
-		IssuerCN: ca.Cert.Subject.CommonName, Regions: regions})
+		IssuerCN: ca.Cert.Subject.CommonName, Regions: regions, Atlas: atlas})
 	if err != nil {
 		return "", err
 	}
-	return "# Agents may work in " + strings.Join(regions, ", ") + " (integrations.aws.provisioning.regions).\n" +
-		CloudShellBlock(tpl, home, company), nil
+	note := "# Agents may work in " + strings.Join(regions, ", ") + " (integrations.aws.provisioning.regions).\n"
+	if atlas {
+		note += "# The stack holds Atlas's read-only role (integrations.aws.provisioning.atlas_read).\n"
+	}
+	return note + CloudShellBlock(tpl, home, company), nil
 }
 
 // Guide is what the connect form says around its fields: one pass, in order,

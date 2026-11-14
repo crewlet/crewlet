@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
@@ -105,8 +106,8 @@ func (c *mergeCase) meetGate(n int64, approver gitlet.Principal) {
 	d := c.recordFacts(n)
 	approver.Run = gitlet.RunProvenance{}
 	res, err := c.solo().Code(c.T).Converse(c.Ctx, gitlet.ConversationWrite{OpID: opNow(), Asker: approver,
-		Review: &gitlet.Review{RepoID: c.repo, ChangeID: d.ID, Revision: d.Revision, Verdict: gitlet.VerdictApprove,
-			Summary: "Looks right."}})
+		WrittenFor: types.ForNobody(), Review: &gitlet.Review{RepoID: c.repo, ChangeID: d.ID, Revision: d.Revision,
+			Verdict: gitlet.VerdictApprove, Summary: "Looks right."}})
 	if err != nil || res.Refusal != "" {
 		c.T.Fatalf("approve change %d: %+v %v", n, res, err)
 	}
@@ -152,10 +153,12 @@ func (c *mergeCase) recordFacts(n int64) gitlet.ChangeDue {
 	return d
 }
 
-// merge is who's merge_change of change n into main at head, by method.
+// merge is who's merge_change of change n into main at head, by method, made
+// for nobody but who.
 func merge(repo string, who gitlet.Principal, n int64, head string, method gitlet.MergeMethod) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: repo, Principal: who, OpID: opNow(),
-		Fresh: linear, Ref: "refs/heads/main", ExpectedHead: head, Change: n, Method: method}
+	return gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: repo, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/heads/main", ExpectedHead: head,
+		Change: n, Method: method}
 }
 
 // lead is the fixture chart's ENG lead, as their write names them.

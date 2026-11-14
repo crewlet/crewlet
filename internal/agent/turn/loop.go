@@ -110,6 +110,13 @@ type Work struct {
 	// its [Reply.Item] names, read after the phase off the tracker's rows
 	// (ADR-0122). Unread, and empty, where the reply names no item.
 	Answer types.PickupAnswer
+
+	// RequestRefused is the provider's own message where the round's run
+	// ended on a request its provider refused as built, and a fresh session
+	// could not cure it. Such a round holds no work of a model's: it is never
+	// checked, reviewed or compared as an artifact, and it ends the turn
+	// ([types.GuardRequestRefused]). Empty for every other round.
+	RequestRefused string
 }
 
 // RefusedReply is a reply to a question the round's run asked that the engine
@@ -502,6 +509,14 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 	// the closed rounds, in order, the detector sees the sequence one
 	// uninterrupted run of the loop would have — a closed round is exactly
 	// one the loop observed on its way to closing it.
+	//
+	// A SPAN OF ROUNDS A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
+	// ([ledger.Iteration.Through]), which is all it keeps of them: the
+	// detector compares each round it observes with the one before it, and the
+	// round before whatever follows a span is the span's last. Skipping a span
+	// would compare the round after it with the round before it — rounds
+	// apart, a stall nobody repeated — and miss the one the dropped round and
+	// the next really make.
 	stall := StallDetector{}
 	for _, closed := range in.History {
 		if closed.ArtifactHash != "" {
@@ -620,6 +635,23 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 			return res, nil
 		}
 
+		if work.RequestRefused != "" {
+			// NO WORK OF A MODEL'S TO JUDGE: the provider refused the request
+			// before the model read it, and the next launch sends it again. A
+			// round sent back here would repeat the refusal word for word, and
+			// the stall guard would name the turn's failure for it.
+			log.WarnContext(ctx, "turn_request_refused", "turn_id", in.RunID, "round", round,
+				"detail", work.RequestRefused)
+			res.LastWork = &work
+			res.Decision = phase.Failed
+			res.Breach = &Breach{
+				Kind: types.GuardRequestRefused,
+				Detail: "the model's provider refused the request the executor made, which a retry " +
+					"sends again: " + work.RequestRefused,
+			}
+			return res, nil
+		}
+
 		// The engine's own reading of the round, from the record rather
 		// than from the executor's account of it. Two of its three answers
 		// cost no model call at all.
@@ -707,7 +739,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Iterations = append(res.Iterations, ledger.Iteration{
 			Iteration: round,
 			Intent:    work.Summary,
-			Calls:     work.Calls,
+			Calls:     closedCalls(work.Calls),
 			Elided:    work.Elided,
 			Absorbed:  work.Absorbed,
 			// Only the reads actually CALLED, not the whole surface's
@@ -795,6 +827,23 @@ func names(calls []ledger.Call) []string {
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, c.Name)
+	}
+	return out
+}
+
+// closedCalls is a round's calls as its closed record keeps them: every call
+// whole but a SUCCESSFUL call's output, which nothing reads once its round has
+// closed — the prior-work ledger shows a failed call's error alone, a delivery
+// check reads names and outcomes, and a seed reads identities — and which a
+// parked turn would otherwise carry on its run's row for every round it closed.
+// A failed call keeps its error, which the next round reads. calls itself is
+// never changed.
+func closedCalls(calls []ledger.Call) []ledger.Call {
+	out := slices.Clone(calls)
+	for i := range out {
+		if !out[i].Failed {
+			out[i].Result = ""
+		}
 	}
 	return out
 }

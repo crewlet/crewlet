@@ -44,7 +44,7 @@ func TestAStartingNodeAnswersItsProbesBeforeItServes(t *testing.T) {
 	port, socket := reserveNodeSocket(t)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	// THE RELEASE: the tool server waits for this file to exist and then
 	// exits without a word, which ends its start at once as a failed one —
 	// a server that fails only loses its own tools, and the boot goes on.

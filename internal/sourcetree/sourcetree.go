@@ -33,7 +33,9 @@
 //     stale copy: the ADR gate's check that an Enforced-by test exists finds
 //     a deleted test in any checkout taken before it went.
 //   - A DEPENDENCY INSTALL: any entry named `node_modules`. npm writes it,
-//     .gitignore ignores it wherever it appears, and nothing in it is ours.
+//     .gitignore ignores it wherever it appears, go.mod leaves it out of
+//     every package pattern (see "The go command is held to the same rule"),
+//     and nothing in it is ours.
 //
 // Everything else a guard skips — static/'s committed bundle, dist/, schema/,
 // testdata, the guard's own package — is THAT GUARD's decision, because one
@@ -63,6 +65,24 @@
 // `.git` somebody left on disk. And `go build ./...` does not compile a
 // checkout of this module either, for its own reason: the checkout carries a
 // go.mod, and a pattern stops at a module boundary.
+//
+// # The go command is held to the same rule
+//
+// A guard reads the tree through [Walk]; `go build ./...`, `go vet ./...`,
+// golangci-lint and the test partition read it through the go command, whose
+// `...` steps over only names starting with `.` or `_`, `vendor` and
+// testdata, and a directory holding a go.mod of its own. VCS metadata falls
+// to the first and a checkout of this module to the last, but a dependency
+// install to none of them, because an npm package can ship Go with no go.mod
+// beside it. flatted does, and once `npm ci` had run in dashboard/, every one
+// of those commands read it as this module's: golangci-lint failed the second
+// `make check` of a fresh checkout on the package comment flatted lacks, and
+// `make test` compiled and ran it, while CI, whose Go jobs run where no
+// install has, never saw it. So go.mod declares `ignore node_modules`,
+// unanchored like the .gitignore line, which leaves an install at any depth
+// out of every pattern, `./...` and `all` alike; and
+// TestNoPackagePatternReadsADependencyInstall lists planted installs through
+// the repository's real go.mod and holds the answer to this walk's.
 //
 // # The disk, and not `git ls-files`
 //

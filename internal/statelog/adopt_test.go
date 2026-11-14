@@ -111,7 +111,7 @@ type joinDonor struct {
 
 func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -49,19 +50,13 @@ import (
 // would otherwise test a head nobody enqueued. No record waits for another:
 // the change's row and its entry are the same subject's rows.
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// The ops, the payloads and every field here are in the base format: no build
-// that carries the code domain has run without them — none of the domain is on
-// main, so no image and no release holds it — and while that is so, every
-// build that meets an enqueue or a dequeue reads it. Once a build without them
-// has run, each op takes {Name: "MutationRecord.Op <op>", Since: 2, Path:
-// []string{"op"}, Equals: "<op>"} in versionedFields — enqueue, dequeue — with
-// RecordVersion at 2, its line under "What each version added", a Carrying
-// record in the statelogtest candidate and the ops excepted from the stamp
-// test's base-format loop: an older build would otherwise FAIL on such a
-// record at DecodeMutation's default arm rather than retain it. Neither is a
-// gate.
+// The ops, the payloads and every field here are in the base format
+// ([RecordVersion]): the domain landed on main with them, so every build that
+// meets an enqueue or a dequeue reads it — all but whom an agent's enqueue was
+// made for ([Enqueue.WorkingFor]) and a dequeue's routing's
+// ([ChangeRouting.WorkingFor]), which came with version 2. Neither is a gate.
 
 // MergeMethod is how a change merges into its target: a merge commit, one
 // squashed commit, or a fast-forward of the target to the change's head.
@@ -153,7 +148,7 @@ const MaxQueueEntries = 1024
 // trains took), which is what raises code_merge_rate_over_capacity.
 const MergeRateWindow = time.Hour
 
-// MergeRateScan is the most enqueues of one target a `queue_due` read counts
+// MergeRateScan is the most enqueues of one target a due-queue read counts
 // within [MergeRateWindow]: 4 096. A queue at both bounds — depth 8, batch 8
 // — lands 3 840 changes an hour at one-minute rounds, so for every round of a
 // minute or longer a count stopped at the bound is still above the capacity
@@ -177,9 +172,7 @@ func QueueEntryID(opID string) string {
 // its asker was shown ([QueueProposal]): the record of op enqueue on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op enqueue", Since: 2,
-// Path: []string{"op"}, Equals: "enqueue"}.
+// BASE FORMAT, as this file's head says, but for [Enqueue.WorkingFor].
 type Enqueue struct {
 	RepoID string `json:"repo_id"`
 	// EntryID is [QueueEntryID] of the proposal's operation id.
@@ -198,14 +191,26 @@ type Enqueue struct {
 	// Principal is who enqueued it — the proposal's asker, STAMPED by the
 	// committer: the merger the gate judged, and whom the queue lands it as.
 	Principal Principal `json:"principal"`
+	// WorkingFor is whom an agent's enqueue was made for (ADR-0109), whatever
+	// the record wakes — an enqueue has no routing: the carrier its proposal
+	// states ([QueueProposal.WrittenFor]), STAMPED BY THE COMMITTER beside
+	// Principal; an asker sends none. nil for an enqueue made for nobody — the
+	// seat's own work — and for a person's. The apply keeps it on the entry's
+	// row (code_queue.working_for), which the entry's landing fills its push
+	// row from in its own apply ([Land.pushes]), and which the queue's later
+	// records about the entry read back — its landing beside the enqueuer it
+	// names, its ejection and a close it could not make beside no actor — as
+	// does the home's close of the landed change's item, which is written for
+	// them and decided within what they may use ([QueueWorkEntry.WorkingFor]).
+	//
+	// VERSION 2, as every payload's working_for is ([versionedFields]).
+	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
 // Dequeue takes a live entry out of its queue at a principal's ask: the record
 // of op dequeue on the repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op dequeue", Since: 2,
-// Path: []string{"op"}, Equals: "dequeue"}.
+// BASE FORMAT, as this file's head says.
 type Dequeue struct {
 	RepoID  string `json:"repo_id"`
 	EntryID string `json:"entry_id"`
@@ -214,9 +219,7 @@ type Dequeue struct {
 	Principal Principal `json:"principal"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER: the change's authors and its enqueuer, told it left the
-	// queue — all but who asked. Under the condition concerns.go states, it
-	// takes {Name: "Dequeue.Routing", Since: 2, Op: "dequeue", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
+	// queue — all but who asked.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -264,10 +267,33 @@ type QueueProposal struct {
 	//
 	// A proposal is no record — the record is what the committer stamps from
 	// it — so this field takes no versionedFields row; it crosses the
-	// estate's wire to whichever data node decides it under the code domain's
-	// stated condition — no build carrying the domain has run without it,
-	// none of the domain being on main — so every node asked it reads it.
-	Ceiling      *WriteCeiling `json:"ceiling,omitempty"`
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S enqueue or dequeue is made for (ADR-0109),
+	// as [ChangeProposal.WrittenFor] is: whoever the turn that asks it works
+	// for, composed by the engine from the call's own bound ceiling — an
+	// enqueue's handed on by the Gitlet node that forms it from the merge it
+	// was asked — or stated nobody; a person's states nothing, and the queue's
+	// own records, which name no asker, carry nobody. Held to the asker by
+	// [writtenForInvalid], and a dequeue's to its ceiling too
+	// ([writtenForUnder]: by Validate, and against its chart by the committer
+	// that decides it); an enqueue carries no ceiling to hold it to, its
+	// merge's held by the Gitlet node that formed it.
+	//
+	// A proposal is no record, so this field takes no versionedFields row; an
+	// enqueue's record carries it ([Enqueue.WorkingFor]) and a dequeue's beside
+	// the asker on its routing ([ChangeRouting.WorkingFor]), which take theirs.
+	// It crosses the estate's wire to whichever data node decides it, and a
+	// node of a build without it refuses a proposal carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([QueueProposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
+
 	Enqueue      *Enqueue      `json:"enqueue,omitempty"`
 	Dequeue      *Dequeue      `json:"dequeue,omitempty"`
 	Candidate    *Candidate    `json:"candidate,omitempty"`
@@ -497,16 +523,24 @@ func (r MergeRefusal) Valid() bool { return slices.Contains(MergeRefusals(), r) 
 // naming the field), before it is queued: anything but exactly one of the
 // records a queue proposal may be; an operation id this engine does not
 // accept; an enqueue's or a dequeue's asker that is no principal, or names a
-// run, and an asker on one of the queue's own records, which name nobody; a
-// Seen that is no position on the code log; a repository id that is no UUID
-// in its canonical spelling; a drop epoch below zero, or set on a record
-// other than a candidate or a landing; an entry id that is no bare UUIDv7 — and an
-// enqueue's that is not [QueueEntryID] of its operation id; a change id that
-// is no bare UUIDv7; a target that is no branch a change may name; a head that
-// is no whole object id; a method this build does not know; a principal the
-// asker set, which the committer stamps; each of the queue's own records'
-// rules (queuerecords.go); and a record past what one proposal may carry
-// ([EntryRoom]).
+// run, and an asker on one of the queue's own records, which name nobody;
+// whom the write is made for, where its asker may not state it so, or a
+// dequeue's ceiling does not bound it ([writtenForUnder]: the chart's half is
+// the decide's); a Seen that is no position on the code log; a repository id
+// that is no UUID in its canonical spelling; a drop epoch below zero, or set
+// on a record other than a candidate or a landing; an entry id that is no bare
+// UUIDv7 — and an enqueue's that is not [QueueEntryID] of its operation id; a
+// change id that is no bare UUIDv7; a target that is no branch a change may
+// name; a head that is no whole object id; a method this build does not know;
+// a principal the asker set, which the committer stamps; each of the queue's
+// own records' rules (queuerecords.go); and a record past what one proposal
+// may carry ([EntryRoom]).
+//
+// Before any of it, a value whom the write is made for names that this build
+// does not know is answered as its decoder answers it on the wire, never as
+// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
+// this build cannot judge the proposal at all, and a committer of a build that
+// knows the value does.
 func (p QueueProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -548,6 +582,11 @@ func (p QueueProposal) measure() (int, error) {
 // validFields is every rule of [QueueProposal.Validate] but the record's
 // bytes.
 func (p QueueProposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// proposal (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if p.writes() != 1 {
 		return fmt.Errorf("%w: a queue proposal is exactly one of an enqueue, a dequeue, a candidate, an "+
 			"eject, a land, a green, a broken and a close_settled", ErrInvalidProposal)
@@ -569,6 +608,15 @@ func (p QueueProposal) validFields() error {
 		case !p.Asker.Run.IsZero():
 			return badField("asker.run", "a queue's write names its asker alone, never a run")
 		}
+	}
+	// WHOM IT IS MADE FOR: a dequeue's held to its ceiling too, the one queue
+	// write a ceiling rides on.
+	carried := writtenForInvalid(p.Asker, p.WrittenFor)
+	if p.Dequeue != nil {
+		carried = writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, nil)
+	}
+	if carried != nil {
+		return refusedCarrier(ErrInvalidProposal, carried)
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -645,6 +693,9 @@ func (p QueueProposal) validFields() error {
 	case e.Principal != (Principal{}):
 		return badField("enqueue.principal", "the committer stamps who enqueued it from the asker, and an asker "+
 			"sends none")
+	case e.WorkingFor != nil:
+		return badField("enqueue.working_for", "the committer stamps whom an enqueue was made for from the "+
+			"proposal's written_for, and an asker sends none")
 	}
 	return nil
 }
@@ -673,13 +724,14 @@ func (p QueueProposal) record() (OpKind, any) {
 }
 
 // stamped is the op and the payload of p's record as the committer forms it
-// before its decide: an enqueue's and a dequeue's asker as its principal. A
-// landing's stamps are its decide's, from its snapshot.
+// before its decide: an enqueue's and a dequeue's asker as its principal, and
+// whom an enqueue is made for beside it. A landing's stamps are its decide's,
+// from its snapshot.
 func (p QueueProposal) stamped() (OpKind, any) {
 	op, payload := p.record()
 	switch r := payload.(type) {
 	case Enqueue:
-		r.Principal = p.Asker
+		r.Principal, r.WorkingFor = p.Asker, p.WrittenFor.Carrier()
 		return op, r
 	case Dequeue:
 		r.Principal = p.Asker
@@ -810,7 +862,7 @@ func (c *Committer) countQueue(p QueueProposal, res QueueResult, err error) {
 	op, _ := p.record()
 	outcome := string(res.Outcome)
 	switch {
-	case errors.Is(err, ErrNotServing):
+	case handedOn(err):
 		outcome = "handed_on"
 	case err != nil:
 		outcome = "failed"
@@ -850,6 +902,15 @@ func (d queueDecision) refuse(code MergeRefusal, detail string) (queueDecision, 
 func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRules, limits Limits,
 	retention time.Duration, capacity int, now time.Time) (queueDecision, error) {
 
+	// WHOM A DEQUEUE IS MADE FOR, ON THE DECIDING CHART, before anything is
+	// read ([writtenForUnder]), whatever the queue holds: a carrier its
+	// ceiling does not bound is its sender's bug, and one this chart alone
+	// refuses a chart that moved under the turn ([ChartRefusal]).
+	if p.Dequeue != nil {
+		if err := writtenForUnder(p.Asker, p.WrittenFor, p.Ceiling, seats.Roster); err != nil {
+			return queueDecision{}, refusedCarrier(ErrInvalidProposal, err)
+		}
+	}
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
@@ -1021,7 +1082,7 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 		}
 	}
 	// WHOM IT CONCERNS: the change's authors and its enqueuer, told it left
-	// the queue — all but who asked.
+	// the queue — all but who asked, beside whom the dequeue was made for.
 	_, payload := p.stamped()
 	row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
 	if err != nil {
@@ -1030,7 +1091,8 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	if found {
 		out := payload.(Dequeue)
 		if out.Routing, err = routingFor(ctx, tx, concerning{repoName: repo.name, change: row, actor: handle,
-			actorKind: kind, authors: true, dequeued: true, enqueuer: entry.EnqueuedBy.reviewer()}); err != nil {
+			actorKind: kind, workingFor: p.WrittenFor.Carrier(), authors: true, dequeued: true,
+			enqueuer: entry.EnqueuedBy.reviewer()}); err != nil {
 			return queueDecision{}, err
 		}
 		payload = out
@@ -1254,7 +1316,7 @@ func (c *Committer) refusedQueue(ctx context.Context, p QueueProposal, err error
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		c.log.ErrorContext(ctx, "code_queue_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
+		c.log.Log(ctx, invalidLevel(err), "code_queue_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
 		return QueueResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
 		c.countBusy(p.RepoID(), kindQueue, busyContended, 1)
@@ -1296,6 +1358,16 @@ type queueEntry struct {
 	EnqueuedAt, EndedAt                  int64
 	EndedPosition                        int64
 	EndReason                            QueueEndReason
+	// WorkingFor is whom the entry's enqueue was made for, as its row keeps
+	// it (code_queue.working_for, [carrierColumn]): read whole and written
+	// back as read. The entry's landing fills its push row from it in its own
+	// apply ([Land.pushes]), so every node lands the same rows — each filled
+	// the column from the same enqueue — and the queue's records about the
+	// entry carry it on their routings ([storedCarrier]). ONE READ ANSWERS IT:
+	// the home's work on its queue ([QueueWorkEntry.WorkingFor], read whole),
+	// whose close of a landed change's item is made for them; the queue's
+	// listings build their answers field by field and leave it out.
+	WorkingFor sql.NullString
 }
 
 // scanEntry reads one row [entryColumns] spells.
@@ -1306,7 +1378,7 @@ func scanEntry(scan func(...any) error) (queueEntry, error) {
 	)
 	err := scan(&e.RepoID, &e.EntryID, &e.TargetRef, &e.ChangeID, &e.Seq, &e.HeadOID, &method, &e.DeleteSource,
 		&e.CloseTask, &e.EnqueuedBy.Handle, &kind, &e.EnqueuedOperator, &state, &e.Train,
-		&e.CandidateID, &e.CommitOID, &e.EnqueuedAt, &e.EndedAt, &e.EndedPosition, &reason)
+		&e.CandidateID, &e.CommitOID, &e.EnqueuedAt, &e.EndedAt, &e.EndedPosition, &reason, &e.WorkingFor)
 	e.Method, e.EnqueuedBy.Kind, e.State, e.EndReason = MergeMethod(method), PartyKind(kind), QueueState(state),
 		QueueEndReason(reason)
 	return e, err
@@ -1467,12 +1539,12 @@ const (
 	// order.
 	entryColumns = `repo_id, entry_id, target_ref, change_id, seq, head_oid, method, delete_source, close_task,
 		enqueued_by, enqueued_kind, enqueued_operator, state, train, candidate_id, commit_oid, enqueued_at,
-		ended_at, ended_position, end_reason`
+		ended_at, ended_position, end_reason, working_for`
 	// qualifiedEntryColumns is entryColumns read beside json_each, which has
 	// columns of its own: the same columns, in the same order.
 	qualifiedEntryColumns = `q.repo_id, q.entry_id, q.target_ref, q.change_id, q.seq, q.head_oid, q.method,
 		q.delete_source, q.close_task, q.enqueued_by, q.enqueued_kind, q.enqueued_operator, q.state, q.train,
-		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason`
+		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason, q.working_for`
 	entrySQL = `SELECT ` + entryColumns + ` FROM code_queue INDEXED BY ` + queueKey +
 		` WHERE repo_id = ? AND entry_id = ?`
 	liveEntriesSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?) AS j

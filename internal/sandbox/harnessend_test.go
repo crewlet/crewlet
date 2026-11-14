@@ -305,10 +305,11 @@ func (h *heldMarks) asked() []heldMark {
 }
 
 // A JOB'S HARNESS END IS RECORDED AFTER ITS TAKE, WITHIN THE ROOM THE READ LEAVES
-// ITS RECORDS. The read's budget holds no time of its own for the record: asked
-// for before the take, a store slow to answer it cut the take's time; past the
-// room the read leaves the take's own records (recordsBy), the box's pause and
-// the read's answer. So the read that collects a job asks for the record once
+// ITS RECORDS. The record shares that room with the take's own records
+// (Coordinator.takeRecordsRoom), its crossing counted there: asked for before
+// the take, a store slow to answer it cut the take's time; past the room the
+// read leaves the take's own records (Coordinator.recordsBy), the box's pause
+// and the read's answer. So the read that collects a job asks for the record once
 // its take is done, under a deadline no later than its own less the pause's
 // grace, and a store that never answers it still leaves the box its pause.
 //

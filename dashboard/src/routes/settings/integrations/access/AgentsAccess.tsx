@@ -57,7 +57,7 @@ import type {
   AccessSeatLane,
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { asSentence, fmtDate, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
@@ -220,7 +220,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   onReplaceKey,
   stepFor,
 }: AgentsAccessProps) {
-  const [draft, setDraft] = useState<AccessDraft>({});
+  const [draft, setDraft] = useDraftState<AccessDraft>({});
   // WHICH ROWS ARE OPEN, by row key: the grid's expansion is controlled.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [review, setReview] = useState(false);
@@ -309,14 +309,19 @@ export const AgentsAccess = memo(function AgentsAccess({
   const gathered = useContext(AccessDraftPartsContext);
   const part =
     held === undefined && readOnly === undefined && lanes.length > 0 && seats.length > 0
-      ? accessDraftPart({ kind, name, syncing: data.syncing, lanes, seats }, draft, (next) => {
-          setSaid("");
-          // A REFUSAL ABOUT A LANE THE CHANGE MOVED goes, as it does when its
-          // own control changes it. The engine names the lane by its key.
-          const at = (d: AccessDraft, r: PlacedRefusal) => d[r.seat]?.[r.lane as AccessLaneKey];
-          setRefusal((r) => (r && at(draft, r) !== at(next, r) ? null : r));
-          setDraft(next);
-        })
+      ? accessDraftPart(
+          { kind, name, syncing: data.syncing, lanes, seats },
+          draft,
+          writeTo(setDraft, {
+            also: (next) => {
+              setSaid("");
+              // A REFUSAL ABOUT A LANE THE CHANGE MOVED goes, as it does when its
+              // own control changes it. The engine names the lane by its key.
+              const at = (d: AccessDraft, r: PlacedRefusal) => d[r.seat]?.[r.lane as AccessLaneKey];
+              setRefusal((r) => (r && at(draft, r) !== at(next, r) ? null : r));
+            },
+          }),
+        )
       : null;
   useAssistantDraft<AccessDraft>(
     gathered === null && part !== null ? accessDraft(part, data.revision) : null,

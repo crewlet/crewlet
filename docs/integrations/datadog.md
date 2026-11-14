@@ -38,6 +38,7 @@ beside the control, with its facts (Datadog's own reason among them) below it:
 | Reading users | `GET /api/v2/users`, one row | "Both keys are valid, but the application key lacks a permission for reading users." |
 | Reading roles | `GET /api/v2/roles`, one row | the same, naming reading roles |
 | Reading webhooks | `GET` of the configured webhook by name | the same, naming reading webhooks. A webhook that does not exist yet is not a failure: the first reconcile pass creates it |
+| What the atlas reads | one row each of the monitors, the service catalogue, the hosts and the Synthetic tests, together | never a refusal: the result still reads "Works.", with one warning for each listing the application key may not read, naming the permission that restores it ([what the atlas reads](#what-the-atlas-reads)) |
 
 When every stage passes, the result reads "Works. Both keys are valid.", with
 the organization, the site and "They can read: Users, roles and webhooks" below
@@ -202,6 +203,26 @@ resets. A rate limit is never reported as a refused key.
 Datadog sets its limits per endpoint, and its support raises them on request.
 The same headers on any answer show the limit that applies and how much of it
 is left.
+
+### What the atlas reads
+
+The engine reads the organization for the company's [atlas](../concepts/atlas.md#what-integrations-read) with the same key pair, once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. Every call is a `GET`, and nothing at Datadog is changed.
+
+| Listing | Call | Permission | What the atlas gains |
+|---|---|---|---|
+| The organization | `GET /api/v1/org` | none beyond the keys | its name and id, on the Datadog account |
+| Monitors | `GET /api/v1/monitor`, 100 a page | `monitors_read` | each monitor with its name, its state and since when; the service its `service:` tags name and the host its `host:` tags name are watched by it |
+| Service catalogue | `GET /api/v2/services/definitions`, 100 a page | `apm_service_catalog_read` | each service, and the repositories its definition links as type `repo` |
+| Hosts | `GET /api/v1/hosts`, 100 a page | `hosts_read` | each host that reported in the last three hours, with its environment suggested from its `env` tag where every source agrees (`prod` or `production`, `staging`, `dev` or `development`, `test`) |
+| Synthetic tests | `GET /api/v1/synthetics/tests`, 100 a page | `synthetics_read` | for each running test, the address it requests (without credentials, query or fragment) and that address's host name or server are watched by the test's monitor |
+
+**A monitor's state is the health of what it watches.** A monitor in Alert shows itself, its services and its hosts as Alerting on the atlas; Warn and No Data show them as Needs a look. The state is read with the listing, so the atlas follows a change within one refresh interval. A monitor is matched to an entry only by an exact key: the `service:` and `host:` tags it carries, and a Synthetic test's own address. Its query is never read, so a monitor that scopes a host only inside its query watches nothing on the atlas until it carries the tag.
+
+**Each listing takes its own permission, and a missing one never fails the read.** The application key acts as its owner, so it reads what that user's roles allow. A listing Datadog refuses is left out, the source's standing on the atlas names it with the permission to grant, and what an earlier read of that listing recorded stays as it was. Grant the permission to a role of the application key's owner and the next read includes the listing. A listing of more than 20,000 rows is left out the same way.
+
+**What is never read.** A monitor's query and message, a Synthetic test's request headers, body, variables and credentials, a service definition's contacts and description, every creator and every email address or handle, host metadata, and every tag but `service:` and `host:` on a monitor and `env:` on a host. A monitor's name is kept as plain text: square brackets become parentheses and angle brackets are dropped. A value shaped like a credential is refused and counted on the source's standing, never stored.
+
+A read of 2,000 monitors, 500 hosts, 200 services and 300 tests is 35 calls. It shares each endpoint's rate limit with the reconcile loop and waits a limit out as every call does ([below](#when-datadog-limits-the-engines-calls)). A read that fails part way records nothing, and a monitor, a service or a host that two complete reads at least a day apart both miss is retired from the atlas.
 
 ### Disconnecting
 

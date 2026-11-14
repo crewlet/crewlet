@@ -5,12 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -151,7 +157,8 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 					cmds[i] = gitlet.Command{Ref: ref + strings.Repeat(fill, gitlet.MaxRefNameBytes-len(ref)),
 						Old: oidOf(fmt.Sprint("old", i)), New: oidOf(fmt.Sprint("new", i))}
 				}
-				return gitlet.Proposal{Principal: arm.principal, Via: arm.via, Node: node, Commands: cmds}
+				return gitlet.Proposal{Principal: arm.principal, Via: arm.via, Node: node, Commands: cmds,
+					WrittenFor: types.ForNobody()}
 			}
 
 			if err := skeleton(gitlet.MaxCommandsPerPush, "x").ValidateCommands(); err != nil {
@@ -224,6 +231,153 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 					admitted, err)
 			}
 		})
+	}
+}
+
+// A PUSH MEASURED FOR ITS RECORD COUNTS WHOM IT WAS MADE FOR (ADR-0109): a
+// seat's push its committer stamps whom it was made for on — a credential's at
+// its widest, a login of iam.MaxLogin bytes with every app this build knows,
+// under MaxCarrierBytes — is measured carrying it, before its work and as it
+// is proposed. At the most commands of the costliest ref ValidateCommands
+// admits beside that carrier, the entry its committer writes carries it and
+// fits what the push was measured at, and the push its work completes still
+// passes Validate's budget; measured without it, the push is short of the
+// entry its committer writes. And a LANDING keeps on each push row it lands
+// its entry's carrier, read from the entry's row rather than the land record,
+// which carries none: MaxLandEntries entries each enqueued for the widest
+// carrier, landing into a target of the costliest name and deleting sources of
+// it, weigh their carriers on their rows — MaxLandEntries × MaxCarrierBytes at
+// most — and under a quarter of HorizonBytesPerRecord in all, so the history's
+// removal still keeps pace with what one record adds.
+//
+// Mutations: entryWith leaving the carrier off a seat's entry — the entry its
+// committer writes carries nobody, and is measured without it, red; a
+// landing's push rows taking no carrier from their entries' rows — they keep
+// none, red.
+func TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor(t *testing.T) {
+	t.Parallel()
+	widest := &types.WorkingFor{Kind: types.WorkingForCredential,
+		Login: "ci:" + strings.Repeat("c", iam.MaxLogin-len("ci:")), Apps: slices.Clone(iam.Apps)}
+	encoded, err := json.Marshal(widest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > gitlet.MaxCarrierBytes {
+		t.Fatalf("the widest carrier a code write is made for encodes to %d bytes, past MaxCarrierBytes (%d)",
+			len(encoded), gitlet.MaxCarrierBytes)
+	}
+	madeFor := types.ForTurn(widest)
+	costliest := strings.Repeat("&", gitlet.MaxProvenanceBytes)
+	box := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: strings.Repeat("s", 64),
+		Run: gitlet.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest, Model: costliest,
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: costliest, WorkID: costliest,
+			WorkProject: costliest}}
+	skeleton := func(n int, f types.WrittenFor) gitlet.Proposal {
+		cmds := make([]gitlet.Command, n)
+		for i := range cmds {
+			ref := fmt.Sprintf("refs/heads/%04d", i)
+			cmds[i] = gitlet.Command{Ref: ref + strings.Repeat("&", gitlet.MaxRefNameBytes-len(ref)),
+				Old: oidOf(fmt.Sprint("old", i)), New: oidOf(fmt.Sprint("new", i))}
+		}
+		return gitlet.Proposal{Principal: box, Via: gitlet.ViaGit, Node: strings.Repeat("n", 64), Commands: cmds,
+			WrittenFor: f}
+	}
+
+	// THE MOST COMMANDS OF THE COSTLIEST REF ADMITTED BESIDE THE CARRIER.
+	admitted := 0
+	for n := 1; n <= gitlet.MaxCommandsPerPush; n++ {
+		if skeleton(n, madeFor).ValidateCommands() != nil {
+			break
+		}
+		admitted = n
+	}
+	if admitted == 0 || admitted == gitlet.MaxCommandsPerPush {
+		t.Fatalf("%d commands at the costliest ref are admitted: the case reaches no bound", admitted)
+	}
+	// COMPLETED as far as its work can take it.
+	p := skeleton(admitted, madeFor)
+	p.PushID, p.RepoID, p.ReceivedAt = "0190f3c4-0000-7000-8000-000000000002",
+		"0190f3c4-0000-7000-8000-00000000b0b0", harnessAt
+	longest := gitlet.Refusal("")
+	for _, r := range gitlet.Refusals() {
+		if r.Recorded() && len(r) > len(longest) {
+			longest = r
+		}
+	}
+	for i := range p.Commands {
+		p.Commands[i].Forced, p.Commands[i].Result, p.Commands[i].Reason = true, gitlet.ResultNG, longest
+	}
+	p.Commands[0] = update(p.Commands[0].Ref, p.Commands[0].Old, p.Commands[0].New)
+	p.Commands[0].Forced, p.Atomic = true, true
+	for i := range gitlet.MaxIntroduced {
+		p.Introduced = append(p.Introduced, oidOf(fmt.Sprint("introduced", i)))
+	}
+	p.IntroducedCount = math.MaxInt
+	p.Pack = suitePack("completed")
+	p.Pack.PackID = p.PushID
+	entry := gitlet.EntryOf(p, gitlet.LongestDay)
+	if !reflect.DeepEqual(entry.WorkingFor, widest) {
+		t.Fatalf("the entry its committer writes carries %+v, want whom the push was made for", entry.WorkingFor)
+	}
+	stamped, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := len(stamped) + len(p.Commands)*gitlet.CommandResultBound + 1
+	bound, err := gitlet.EntryBound(p)
+	switch {
+	case err != nil:
+		t.Fatalf("measure the completed push: %v", err)
+	case writes > bound:
+		t.Errorf("the entry its committer writes takes %d bytes of its record, past the %d it was measured at",
+			writes, bound)
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a push of %d commands ValidateCommands admitted beside its carrier, completed by the most its "+
+			"work adds: %v", admitted, err)
+	}
+	without := p
+	without.WrittenFor = types.ForTurn(nil)
+	if short, err := gitlet.EntryBound(without); err != nil || short >= writes {
+		t.Errorf("the push measured without whom it was made for takes %d bytes (%v), want short of the %d its "+
+			"committer writes", short, err, writes)
+	}
+
+	// A LANDING AT ITS WIDEST.
+	costliestRef := func(name string) string {
+		ref := "refs/heads/" + name
+		return ref + strings.Repeat("&", gitlet.MaxRefNameBytes-len(ref))
+	}
+	land := gitlet.Land{RepoID: "0190f3c4-0000-7000-8000-00000000b0b0", LandID: uuid.Must(uuid.NewV7()).String(),
+		TargetRef: costliestRef("target-"), BaseOID: oidOf("base"), Node: strings.Repeat("n", 64),
+		ReceivedAt: harnessAt}
+	var sources, heads []string
+	for i := range gitlet.MaxLandEntries {
+		land.Entries = append(land.Entries, gitlet.LandEntry{EntryID: uuid.Must(uuid.NewV7()).String(),
+			ChangeID: uuid.Must(uuid.NewV7()).String(), Commit: oidOf(fmt.Sprint("landed", i)), DeleteSource: true})
+		sources, heads = append(sources, costliestRef(fmt.Sprintf("%04d-", i))), append(heads, oidOf(fmt.Sprint(i)))
+	}
+	rows, carriers, err := gitlet.LandRowWeights(land, widest, sources, heads)
+	if err != nil {
+		t.Fatalf("weigh the widest landing's push rows: %v", err)
+	}
+	weighs, carried := 0, 0
+	for i := range rows {
+		weighs, carried = weighs+rows[i], carried+carriers[i]
+		if carriers[i] != len(encoded) {
+			t.Errorf("the landing's push row %d keeps a carrier of %d bytes, want its entry's %d", i, carriers[i],
+				len(encoded))
+		}
+	}
+	switch {
+	case len(rows) != gitlet.MaxLandEntries:
+		t.Fatalf("the widest landing lands %d push rows, want one an entry, %d", len(rows), gitlet.MaxLandEntries)
+	case carried > gitlet.MaxLandEntries*gitlet.MaxCarrierBytes:
+		t.Errorf("the widest landing's push rows keep %d bytes of carriers its record does not carry, past "+
+			"MaxLandEntries × MaxCarrierBytes (%d)", carried, gitlet.MaxLandEntries*gitlet.MaxCarrierBytes)
+	case weighs > gitlet.HorizonBytesPerRecord/4:
+		t.Errorf("the widest landing's push rows weigh %d bytes, past the quarter of HorizonBytesPerRecord (%d) "+
+			"its bound is stated within", weighs, gitlet.HorizonBytesPerRecord/4)
 	}
 }
 

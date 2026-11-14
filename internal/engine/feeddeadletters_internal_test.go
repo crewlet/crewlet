@@ -12,12 +12,15 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/config"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -62,7 +65,7 @@ type deferLog struct {
 func newDeferLog(t *testing.T) deferLog {
 	t.Helper()
 	q, err := jetstream.Open(t.Context(), jetstream.Config{
-		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+		StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
@@ -466,11 +469,14 @@ var boxSubject = changefeed.DeadLetterSubject(opWaker{}.Source())
 // boxFeeds is the one feed the cases over a [letterBox] read, by its domain.
 var boxFeeds = map[string]changefeed.Source{"tracker": opWaker{}.Source()}
 
-// letterBox is the dead letters of one feed's subject as a case writes, lags
-// and breaks them, counting every read the alarm's reading makes of it.
+// letterBox is the dead letters of one subject — the probe feed's, unless
+// subject names another — as a case writes, lags and breaks them, counting
+// every read the alarm's reading makes of it. A listing of any other subject
+// holds nothing.
 type letterBox struct {
-	mu   sync.Mutex
-	kept []queue.Kept
+	mu      sync.Mutex
+	subject string
+	kept    []queue.Kept
 	// last is the last sequence the box gave any entry: one of the feed's,
 	// or one kept beside them on another subject ([letterBox.keepElsewhere]).
 	last uint64
@@ -484,17 +490,28 @@ type letterBox struct {
 	marked, listed, frames int
 }
 
-func (b *letterBox) KeepDeadLetter(context.Context, string, []byte, []byte) error {
-	return errors.New("no case here keeps through the box")
+func (b *letterBox) KeepDeadLetter(context.Context, string, string, []byte, []byte) (bool, error) {
+	return false, errors.New("no case here keeps through the box")
 }
 
-func (b *letterBox) DeadLettersOn(context.Context, string) ([]queue.Kept, error) {
+// on is the one subject the box holds entries on.
+func (b *letterBox) on() string {
+	if b.subject != "" {
+		return b.subject
+	}
+	return boxSubject
+}
+
+func (b *letterBox) DeadLettersOn(_ context.Context, subject string) ([]queue.Kept, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.fail != nil {
 		return nil, b.fail
 	}
 	b.listed++
+	if subject != b.on() {
+		return nil, nil
+	}
 	out := slices.Clone(b.kept)
 	if b.lag > 0 && len(out) > 0 {
 		b.lag--
@@ -519,7 +536,7 @@ func (b *letterBox) DeadLetterMarks(context.Context, string) (queue.Marks, error
 	b.marked++
 	marks := queue.Marks{Counts: map[string]uint64{}, Last: b.last}
 	if len(b.kept) > 0 {
-		marks.Counts[boxSubject] = uint64(len(b.kept))
+		marks.Counts[b.on()] = uint64(len(b.kept))
 	}
 	return marks, nil
 }
@@ -896,5 +913,183 @@ func TestAnEntryThatExpiresWhileTheListingsFailIsStillCounted(t *testing.T) {
 	if got := expiredCount(rec); got != 1 {
 		t.Errorf("counted %d lost wake(s) across the outage, want the one entry whose expiry "+
 			"passed while the reads failed", got)
+	}
+}
+
+// inboundAlarm is the inbound_dead_lettered alarm of a report whose node holds
+// letters, and whether it was raised.
+func inboundAlarm(at time.Time, letters []statelog.FeedDeadLetter) (statelog.Alarm, bool) {
+	rep := statelog.NewReport(statelog.ReportInputs{NodeID: "node-1", At: at, RegisterReadable: true,
+		Reading: statelog.Reading{InboundDeadLetters: letters}})
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindInboundDeadLettered {
+			return a, true
+		}
+	}
+	return statelog.Alarm{}, false
+}
+
+// inboundExpiredCount is how many lost wakes rec counted on the inbound group.
+func inboundExpiredCount(rec *metrics.Recorder) uint64 {
+	var n uint64
+	for _, s := range rec.Read() {
+		if s.Name == metrics.NotifyInboundDeadLetterExpired {
+			n += s.Total
+		}
+	}
+	return n
+}
+
+// THE ALARM READS THE INBOUND GROUP'S UNHANDLED DELIVERIES BESIDE THE FEEDS'
+// DEAD LETTERS: a delivery the group never handled waits, kept, for a node that
+// reads it, and nothing else names it while it waits — a roll paused for good
+// with no such node running never brings one. So the reading ages each entry
+// to now on every beat and `inbound_dead_lettered` is raised from the first,
+// and an entry the retention let go is counted, once, as the wake it lost; one
+// a replay dropped, taking the claim on its going, is not — though it went
+// within a beat of its expiry, which by its age alone reads as the
+// retention's.
+//
+// Mutation: leave the inbound subject out of the reading, and nothing is
+// raised; count its expiry on the feeds' metric, or not at all, and the lost
+// wake is not counted as the inbound group's; let the replay's drop take no
+// claim, and the entry it delivered is counted as a lost wake.
+func TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	expiring := queue.Kept{Seq: 3, StoredAt: now.Add(5*time.Second - 30*day), Expires: now.Add(5 * time.Second)}
+	// DUE WITHIN A BEAT OF ITS EXPIRY when the replay drops it, as
+	// `expiring` is when the retention takes it: only the claim the drop
+	// takes keeps it from being counted.
+	replayed := queue.Kept{Seq: 6, StoredAt: now.Add(4*time.Second - 30*day), Expires: now.Add(4 * time.Second)}
+	waiting := queue.Kept{Seq: 8, StoredAt: now.Add(-2 * time.Hour), Expires: now.Add(30*day - 2*time.Hour)}
+	box := &letterBox{subject: notify.UnhandledSubject()}
+	box.set(nil, expiring, replayed, waiting)
+	claims := coordmem.NewFleet()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newDeadLetterWatch(newDeadLetterLedger(box, claims), claims, rec)
+
+	letters := w.readInbound(t.Context(), now)
+	if len(letters) != 3 || letters[2].Age != 2*time.Hour {
+		t.Fatalf("the reading carries %v, want the three entries aged to now", letters)
+	}
+	if a, raised := inboundAlarm(now, letters); !raised {
+		t.Fatal("three unhandled deliveries raised no inbound_dead_lettered")
+	} else if want := "2 of them expiring within a day"; !strings.Contains(a.Detail, want) {
+		t.Errorf("the alarm says %q, want %q", a.Detail, want)
+	}
+
+	// A NODE'S REPLAY DROPS ONE through the ledger, taking the claim on its
+	// going, and the retention takes the oldest.
+	replay := newDeadLetterLedger(box, claims)
+	replay.now = func() time.Time { return now }
+	if err := replay.DropDeadLetter(t.Context(), notify.UnhandledSubject(), replayed.Seq); err != nil {
+		t.Fatal(err)
+	}
+	box.set(nil, waiting)
+	letters = w.readInbound(t.Context(), now.Add(statelog.AlarmInterval))
+	if len(letters) != 1 {
+		t.Errorf("the beat after two entries went reads %v, want the waiting one alone", letters)
+	}
+	if got := inboundExpiredCount(rec); got != 1 {
+		t.Errorf("counted %d lost wake(s) of the inbound group, want the one the retention took", got)
+	}
+	if got := expiredCount(rec); got != 0 {
+		t.Errorf("counted %d of the inbound group's lost wakes as a feed's, want none", got)
+	}
+	if _, raised := inboundAlarm(now, nil); raised {
+		t.Error("an inbound group holding nothing raised inbound_dead_lettered")
+	}
+}
+
+// probeSource is the source of the delivery the engine's inbound replay is
+// handed in TestTheInboundReplayDropsThroughTheEnginesLedger, and probeParser
+// the parser that reads it: a delivery that concerns nobody, which the replay
+// handles and drops.
+const probeSource = "replay-probe"
+
+type probeParser struct{}
+
+func (probeParser) Source() string { return probeSource }
+
+func (probeParser) Parse(context.Context, types.RawWebhook, *notify.Registry) ([]notify.Routed, error) {
+	return nil, nil
+}
+
+// THE ENGINE'S INBOUND REPLAY DROPS THROUGH THE LEDGER ITS ALARM READING
+// SHARES.
+//
+// The reading counts an entry gone from the inbound group's unhandled subject
+// within a beat of its expiry as a wake the retention lost, unless whoever
+// dropped it took the claim on its going first — which only a drop through the
+// engine's ledger does (TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries).
+// So the notification service the engine builds is handed that ledger, and
+// its replay's drop is accounted there: dropped here, and the claim taken.
+// Through the queue behind the ledger's back, a copy a newer node's replay
+// delivered a beat before its expiry was counted, fleet-wide, as a lost wake.
+//
+// Mutation: build the service with no dead letters of the engine's (its
+// queue's own), and the ledger never hears of the drop.
+func TestTheInboundReplayDropsThroughTheEnginesLedger(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	q := memory.New()
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("start the queue: %v", err)
+	}
+	claims := coordmem.NewFleet()
+	e := &Engine{backends: &Backends{Queue: q}}
+	e.deadLetterLedger = newDeadLetterLedger(q, claims)
+
+	ev := events.New(types.RawWebhook{Body: map[string]any{"probe": true}, Headers: map[string]string{}},
+		events.NewTrace())
+	ev.Source = probeSource
+	frame, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("encode the copy: %v", err)
+	}
+	subject := notify.UnhandledSubject()
+	if _, err := q.KeepDeadLetter(ctx, subject, "a copy the replay delivers", nil, frame); err != nil {
+		t.Fatalf("KeepDeadLetter: %v", err)
+	}
+	kept, err := q.DeadLettersOn(ctx, subject)
+	if err != nil || len(kept) != 1 {
+		t.Fatalf("DeadLettersOn = %d entries, %v; want the one copy", len(kept), err)
+	}
+	at := letterAt{subject, kept[0].Seq}
+
+	svc, err := e.inboundService(&Company{Config: &config.Company{}}, []notify.Parser{probeParser{}}, nil)
+	if err != nil {
+		t.Fatalf("inboundService: %v", err)
+	}
+	if err := svc.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := svc.Stop(context.WithoutCancel(ctx)); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	// LIVENESS: the replay's first pass drops the copy at once; only a
+	// build that never drops it waits out the bound.
+	bound, cancel := context.WithTimeout(ctx, feedWithin)
+	defer cancel()
+	poll := time.NewTicker(2 * time.Millisecond) //fixedwait:liveness
+	defer poll.Stop()
+	for !e.deadLetterLedger.droppedHere(at) {
+		select {
+		case <-bound.Done():
+			t.Fatalf("the replay's drop of %d never reached the engine's ledger", at.seq)
+		case <-poll.C:
+		}
+	}
+	if won, err := claims.Claim(ctx, goneKey(at), expiredClaimTTL, time.Now().UTC()); err != nil || won {
+		t.Errorf("the claim on the copy's going was free after the replay dropped it (%v): an "+
+			"expiry count would take it", err)
 	}
 }

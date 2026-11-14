@@ -97,7 +97,7 @@ func TestABoxIsSeededWithTheLoginAWriteCommitted(t *testing.T) {
 		after[name] = []byte(body)
 	}
 	var unapplied *hostbox.UnappliedError
-	if err := hostbox.WriteCredentials(scratch, []string{"auth.json", "config.toml"}, after); !errors.As(err, &unapplied) {
+	if err := hostbox.WriteCredentials(scratch, []string{"auth.json", "config.toml"}, after, nil); !errors.As(err, &unapplied) {
 		t.Fatalf("the premise: a write stopped by its second file = %v", err)
 	}
 	for from, to := range map[string]string{
@@ -282,7 +282,7 @@ func TestABoxRefreshThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(obstacle, "in-the-way"), 0o700); err != nil {
 			return err
 		}
-		return hostbox.WriteCredentials(d, names, login)
+		return hostbox.WriteCredentials(d, names, login, nil)
 	}
 
 	got, err := writeBackLogin(t.Context(), layout, twoFileLogin(dir, files), seeded, refuseSecond)

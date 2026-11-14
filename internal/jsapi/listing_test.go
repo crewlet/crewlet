@@ -608,11 +608,14 @@ func TestAConsumerListingSaysWhatEveryConsumerIs(t *testing.T) {
 func TestAReadOfAWholePieceIsGivenItsCrossing(t *testing.T) {
 	t.Parallel()
 	const piece = 128 << 10
-	// THE TERM IS THE CROSSING: a reply of a piece base64-encoded and its
-	// envelope, at the pace, beside the read term.
+	// THE TERM IS THE ARRIVAL: a reply of a piece base64-encoded and its
+	// envelope, handled at a second a mebibyte and crossing at the pace,
+	// beside the read term.
 	plain := mustLeader(t, fakeBroker(t, "unused", func(int, []byte) any { return nil }).js)
 	pace := 30 * time.Second
-	want := jsprovision.ReadTerm + time.Duration(float64(pace)*float64(174764+1024)/float64(1<<20))
+	reply := float64(174764 + 1024)
+	want := jsprovision.ReadTerm + time.Duration(float64(time.Second)*reply/float64(1<<20)) +
+		time.Duration(float64(pace)*reply/float64(1<<20))
 	if got := plain.Carrying(piece, pace).Term(); got != want {
 		t.Errorf("a piece's term at 30 s a mebibyte = %v, want %v", got, want)
 	}

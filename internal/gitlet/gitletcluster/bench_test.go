@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -405,7 +406,7 @@ func room(t target, made, batch int, mix *compactionMix) bool {
 // every write, and a declare of n fresh repositories on it.
 func soloChain(b *testing.B) (*gitlettest.DataNode, func(b *testing.B, n int) []string) {
 	b.Helper()
-	dir := b.TempDir()
+	dir := brokertest.TempDir(b)
 	q, err := js.Open(b.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"),
 		StoreMaxBytes: brokertest.StoreMaxBytes, SyncAlways: true})
 	if err != nil {
@@ -572,7 +573,8 @@ func (r *routedWrites) land(b *testing.B) {
 	r.n++
 	content := fmt.Sprintf("write %d\n", r.n)
 	w := gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: r.repo, Principal: r.who,
-		OpID: statelog.NewOpID(time.Now(), ""), Fresh: statelog.FloorAt(statelog.ReadSession, r.at), Ref: r.ref,
+		WrittenFor: types.ForNobody(), OpID: statelog.NewOpID(time.Now(), ""),
+		Fresh: statelog.FloorAt(statelog.ReadSession, r.at), Ref: r.ref,
 		ExpectedHead: r.head, Message: fmt.Sprintf("write %d", r.n),
 		Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "route/f.txt", Content: &content}}}
 	res, err := r.c.GitWriteThrough(b.Context(), r.via, w)

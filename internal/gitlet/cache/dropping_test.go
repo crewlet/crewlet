@@ -653,6 +653,10 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/blame.go", "cat-file", queryServes},
 	{"internal/gitlet/query/blob.go", "cat-file", queryServes},
 	{"internal/gitlet/query/checksfile.go", "cat-file", queryServes},
+	{"internal/gitlet/query/codefiles.go", "cat-file", "the atlas's read of a listed deploy or dependency " +
+		"file of a commit the copy serves"},
+	{"internal/gitlet/query/codefiles.go", "ls-tree", "the atlas's listing of a commit's deploy and " +
+		"dependency files, of the tree the copy serves"},
 	{"internal/gitlet/query/compare.go", "merge-base", queryServes},
 	{"internal/gitlet/query/compare.go", "rev-list", queryServes},
 	{"internal/gitlet/query/diff.go", "diff-tree", queryServes},

@@ -52,7 +52,7 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	// A MEMBER THAT SERVES LEAVES PERSISTS — it is refused otherwise — and
 	// the leaf creates what it is first to use in the file store to match.
 	if memberCfg.StoreDir == "" {
-		memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
+		memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	}
 	member := startTestServer(t, memberCfg)
 
@@ -161,7 +161,7 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 	t.Parallel()
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}))
 	if err != nil {
 		t.Fatalf("start a member on any leaf port: %v", err)
@@ -208,7 +208,7 @@ func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
 	port := held.Addr().(*net.TCPAddr).Port
 
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth()}))
 	if err == nil {
 		member.Shutdown()
@@ -279,7 +279,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	// is: started on a port found free a moment earlier, this case lost it
 	// whenever anything else on the machine took it first.
 	memberCfg.LeafPort = AnyPort
-	memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
+	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member, err := StartServer(t.Context(), memberCfg)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -354,7 +354,7 @@ func TestALeafLinksOnlyWithAKeyItsMemberHolds(t *testing.T) {
 	}
 
 	member := startTestServer(t, testTimings(Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: ring("k2", k1, k2)}))
 	var mu sync.Mutex
 	refused := map[PeerRefusal]uint64{}

@@ -43,12 +43,15 @@ const (
 	TypeBranch     ValueType = "branch"
 	TypeLabel      ValueType = "label"
 	TypeInstant    ValueType = "instant"
+	// TypeImage is a container image's reference: its repository and, where
+	// it names one, its tag or its digest.
+	TypeImage ValueType = "image"
 )
 
 // ValueTypes is every value type.
 var ValueTypes = []ValueType{
 	TypeWord, TypeInt, TypePort, TypeHostname, TypeIP, TypeAddress, TypeURL,
-	TypeVersion, TypeRegion, TypeAccountRef, TypeBranch, TypeLabel, TypeInstant,
+	TypeVersion, TypeRegion, TypeAccountRef, TypeBranch, TypeLabel, TypeInstant, TypeImage,
 }
 
 // Valid reports whether t is a member of the closed set.
@@ -62,6 +65,9 @@ const (
 	// MaxURLBytes bounds an address; an address longer than this is carrying
 	// something an address does not need.
 	MaxURLBytes = 512
+	// MaxImageBytes bounds an image reference, the limit registries hold a
+	// repository's name to.
+	MaxImageBytes = 255
 	// MaxInt bounds a count: far past any real inventory, short of overflow
 	// in any reader.
 	MaxInt = 1_000_000_000
@@ -94,6 +100,12 @@ var (
 	regionRE     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`) })
 	accountRefRE = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[a-z0-9]([a-z0-9._:/-]{0,126}[a-z0-9])?$`)
+	})
+	// imageRE is an image reference as a registry writes one: an optional
+	// registry host and port, a lowercase path, then a tag, a digest or both.
+	imageRE = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*` +
+			`(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[a-f0-9]{64})?$`)
 	})
 )
 
@@ -165,6 +177,11 @@ func Parse(t ValueType, raw string, set []string) (Value, error) {
 		return Value{Type: t, Text: raw}, nil
 	case TypeLabel:
 		return parseLabel(raw)
+	case TypeImage:
+		if len(raw) > MaxImageBytes {
+			return Value{}, fmt.Errorf("%w: an image reference is at most %d bytes", ErrInvalid, MaxImageBytes)
+		}
+		return matched(t, raw, imageRE(), "an image is a registry's reference: a repository, then a tag or a digest")
 	case TypeInstant:
 		at, err := time.Parse(time.RFC3339, raw)
 		if err != nil {

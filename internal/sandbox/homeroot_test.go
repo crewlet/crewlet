@@ -228,10 +228,10 @@ func TestADirectBoxCommandEntersItsWorkingDirectoryFromItsHome(t *testing.T) {
 			want(t, string(raw))
 			return
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatal("the background job wrote nothing in 10s")
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
@@ -385,7 +385,7 @@ func TestALocalBoxRefusesWhatIsNotADirectoryOnTheWayAtOnce(t *testing.T) {
 		select {
 		case err := <-answered:
 			return err
-		case <-time.After(10 * time.Second):
+		case <-time.After(10 * time.Second): //fixedwait:liveness
 			// A blocked open is never released, so the test binary is what
 			// ends it; the red case is the point.
 			t.Fatalf("%s has not answered in 10s", what)

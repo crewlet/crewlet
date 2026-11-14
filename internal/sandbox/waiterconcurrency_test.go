@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -19,54 +20,62 @@ import (
 // polled beside the others: a stuck box's neighbour is polled, found done and
 // announced while the stuck one is still being waited on.
 //
+// READ IN A BUBBLE, once every goroutine of the case is blocked: the stuck
+// box's poll then waits on its release, and the done box has been polled and
+// announced beside it, with no time having passed at all. A wait of ten
+// seconds for the announcement failed a runner that lost them.
+//
 // Mutation: poll the boxes one after another again, and the done box is not
 // announced until the stuck one is released.
 func TestABoxThatDoesNotAnswerDelaysNoOtherBox(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
-	// Listed first — oldest, then by turn — so a tick that polled in turn
-	// would reach the done box only after the stuck one.
-	stuck := rig.launch("t-1-stuck")
-	rig.launch("t-2-done")
+	inBubble(t, func(t *testing.T) {
+		rig := newWaiterRig(t)
+		// Listed first — oldest, then by turn — so a tick that polled in turn
+		// would reach the done box only after the stuck one.
+		stuck := rig.launch("t-1-stuck")
+		rig.launch("t-2-done")
 
-	release := make(chan struct{})
-	var stuckPolls atomic.Int32
-	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (JobState, error) {
-		if box.ID() == stuck.SandboxID {
-			stuckPolls.Add(1)
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return JobRunning, ctx.Err()
+		release := make(chan struct{})
+		var stuckPolls atomic.Int32
+		rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (JobState, error) {
+			if box.ID() == stuck.SandboxID {
+				stuckPolls.Add(1)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return JobRunning, ctx.Err()
+				}
+				return JobRunning, nil
 			}
-			return JobRunning, nil
+			return JobEnded, nil
 		}
-		return JobEnded, nil
-	}
 
-	ticked := make(chan int, 1)
-	go func() {
-		fired, err := rig.waiter.Tick(t.Context())
-		if err != nil {
-			t.Errorf("Tick: %v", err)
+		ticked := make(chan int, 1)
+		go func() {
+			fired, err := rig.waiter.Tick(t.Context())
+			if err != nil {
+				t.Errorf("Tick: %v", err)
+			}
+			ticked <- fired
+		}()
+		synctest.Wait()
+		if !completionPublished(rig, "t-2-done") {
+			t.Fatal("the done box was not announced while its neighbour's poll was held")
 		}
-		ticked <- fired
-	}()
-	if !announcedWithin(rig, "t-2-done", 10*time.Second) {
-		t.Fatal("the done box was not announced while its neighbour's poll was held")
-	}
-	select {
-	case <-ticked:
-		t.Fatal("the tick ended while a poll it started was still running")
-	default:
-	}
-	close(release)
-	if fired := <-ticked; fired != 1 {
-		t.Errorf("the tick fired %d completions; want the done box's", fired)
-	}
-	if n := stuckPolls.Load(); n != 1 {
-		t.Errorf("the stuck box was polled %d times in one tick; want once", n)
-	}
+		select {
+		case <-ticked:
+			t.Fatal("the tick ended while a poll it started was still running")
+		default:
+		}
+		close(release)
+		if fired := <-ticked; fired != 1 {
+			t.Errorf("the tick fired %d completions; want the done box's", fired)
+		}
+		if n := stuckPolls.Load(); n != 1 {
+			t.Errorf("the stuck box was polled %d times in one tick; want once", n)
+		}
+	})
 }
 
 // A BOX'S POLL IS BOUNDED, however long the box takes to answer: it lasted as
@@ -93,7 +102,7 @@ func TestABoxsPollIsBounded(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("the tick did not end at its box's bound")
 	}
 	if !bounded.Load() {
@@ -148,10 +157,10 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 		if polled == 1 && !rig.waiter.isBusy(other.TurnID) {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline, whose firing only fails the case
 			t.Fatalf("the other box's first poll did not end (polled %d times)", polled)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) //fixedwait:liveness
 	}
 	if _, err := rig.waiter.Tick(t.Context()); err != nil {
 		t.Fatalf("the second tick: %v", err)
@@ -251,7 +260,7 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	}{{"began", firstHeld}, {"ended", firstEnded}} {
 		select {
 		case <-step.ch:
-		case <-time.After(30 * time.Second):
+		case <-time.After(30 * time.Second): //fixedwait:liveness
 			t.Fatalf("the held box's first poll never %s", step.name)
 		}
 	}
@@ -273,38 +282,52 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 // bounded by the claim — its TTL less one interval — wherever that comes
 // before the poll's own bound.
 //
+// IN A BUBBLE, where the poll's end is the duty's to the instant: the poll
+// waits on its context alone, and the clock moves only to the timers that end
+// it. A bound of seconds on the machine's clock passed a poll that outlived
+// its duty by less.
+//
 // Mutation: bound a poll by [pollBound] alone, and it runs on for the ten
 // seconds this case gives it.
 func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
-	rig.launch("t-stuck")
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
-		Interval: 20 * time.Millisecond, DutyTTL: 200 * time.Millisecond,
-		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
-		Now:       func() time.Time { return rig.now },
+	inBubble(t, func(t *testing.T) {
+		rig := newWaiterRigIn(t, E2B)
+		rig.launch("t-stuck")
+		const interval, ttl = 20 * time.Millisecond, 200 * time.Millisecond
+		waiter, err := NewWaiter(WaiterOptions{
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
+			Interval: interval, DutyTTL: ttl,
+			ClaimDuty: func(context.Context) (bool, error) { return true, nil },
+			Now:       func() time.Time { return rig.now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waiter.pollBound = 10 * time.Second
+		type end struct {
+			at  time.Time
+			err error
+		}
+		ended := make(chan end, 1)
+		rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (JobState, error) {
+			<-ctx.Done()
+			ended <- end{at: time.Now(), err: ctx.Err()}
+			return JobRunning, ctx.Err()
+		}
+		claimed := time.Now()
+		if _, err := waiter.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		got := <-ended
+		if ran, duty := got.at.Sub(claimed), ttl-interval; ran != duty {
+			t.Fatalf("the poll ran %v after its claim under a duty of %v; want it ended with the duty, at %v",
+				ran, ttl, duty)
+		}
+		if !errors.Is(got.err, context.DeadlineExceeded) {
+			t.Errorf("the poll ended with %v; want the duty's deadline", got.err)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waiter.pollBound = 10 * time.Second
-	ended := make(chan error, 1)
-	rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (JobState, error) {
-		<-ctx.Done()
-		ended <- ctx.Err()
-		return JobRunning, ctx.Err()
-	}
-	started := time.Now()
-	if _, err := waiter.Tick(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if took := time.Since(started); took > 5*time.Second {
-		t.Fatalf("the poll ran %v under a duty of 200 ms; want it ended with the duty", took)
-	}
-	if err := <-ended; !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("the poll ended with %v; want the duty's deadline", err)
-	}
 }
 
 // A DUTY LOST STOPS EVERY POLL IT AUTHORISED, at once rather than at the
@@ -352,7 +375,7 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	defer waiter.Stop()
 	select {
 	case <-reaching:
-	case <-time.After(10 * time.Second):
+	case <-time.After(10 * time.Second): //fixedwait:liveness
 		t.Fatal("no poll reached the box in 10 s, so there was nothing for a lost duty to stop")
 	}
 	select {
@@ -360,7 +383,7 @@ func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("the poll ended with %v; want it stopped when the duty went to a peer", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(5 * time.Second): //fixedwait:liveness
 		t.Fatal("a poll the lost duty authorised was still running 5 s later")
 	}
 	waiter.Stop()
@@ -435,19 +458,15 @@ func TestAWalkWhoseAuthorityHasEndedStartsNothing(t *testing.T) {
 	}
 }
 
-// announcedWithin waits for a completion of turnID to be published.
-func announcedWithin(rig *waiterRig, turnID string, within time.Duration) bool {
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		rig.queue.mu.Lock()
-		for _, p := range rig.queue.published {
-			if c, ok := p.event.Data.(*types.ExecutorFinished); ok && c.TurnID == turnID {
-				rig.queue.mu.Unlock()
-				return true
-			}
+// completionPublished reports whether a completion of turnID has been
+// published.
+func completionPublished(rig *waiterRig, turnID string) bool {
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	for _, p := range rig.queue.published {
+		if c, ok := p.event.Data.(*types.ExecutorFinished); ok && c.TurnID == turnID {
+			return true
 		}
-		rig.queue.mu.Unlock()
-		time.Sleep(5 * time.Millisecond)
 	}
 	return false
 }

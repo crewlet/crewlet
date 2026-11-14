@@ -55,6 +55,8 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	atlasSources map[string][]byte
+	atlasCode    map[string][]byte
+	atlasRefresh map[string][]byte
 
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
@@ -63,6 +65,10 @@ type Fleet struct {
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
 	accessReviewRevision uint64
+	// atlasWakes is each owning seat's atlas wake record, by its key, and the
+	// counter its revisions are drawn from.
+	atlasWakes        map[string]coord.AtlasWake
+	atlasWakeRevision uint64
 	// conversationHolds is each seat's held conversations, by conversation key.
 	conversationHolds        map[uuid.UUID]map[string]coord.ConversationHold
 	conversationHoldRevision uint64
@@ -194,8 +200,11 @@ func NewFleet() *Fleet {
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
 		atlasSources:      map[string][]byte{},
+		atlasCode:         map[string][]byte{},
+		atlasRefresh:      map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
+		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
@@ -405,15 +414,21 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	if f.set {
 		previous = f.target.At
 	}
+	at := coord.ActivationAt(req.At, previous)
+	// HELD TO WHAT ONE KEY HOLDS by the very record the KV writes for it,
+	// refused before anything here changes.
+	value, err := coord.ActivationValue(req, payload, at)
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err := coord.HoldValue("the activation pointer", len(value)); err != nil {
+		return coord.Activation{}, err
+	}
 	f.payload = payload
 	f.epoch++
 	f.target = coord.Activation{
-		Epoch: f.epoch, RevisionID: req.RevisionID,
-		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
-		Origin: req.Origin, Restored: req.Restore,
-	}
-	if !f.target.Origin.CreatedAt.IsZero() {
-		f.target.Origin.CreatedAt = f.target.Origin.CreatedAt.UTC()
+		Epoch: f.epoch, RevisionID: req.RevisionID, At: at, Summary: req.Summary,
+		Origin: req.Origin.UTC(), Restored: req.Restore,
 	}
 	f.set = true
 	return f.target, nil
@@ -1005,6 +1020,9 @@ func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an integration status needs a surface name")
 	}
+	if err := coord.HoldValue("the integration status of "+kind, len(value)); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.integrations[kind] = bytes.Clone(value)
@@ -1040,6 +1058,9 @@ func (f *Fleet) PutAtlasSourceStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an atlas source standing needs a source name")
 	}
+	if err := coord.HoldValue("the atlas source standing of "+kind, len(value)); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.atlasSources[kind] = bytes.Clone(value)
@@ -1052,6 +1073,77 @@ func (f *Fleet) DeleteAtlasSourceStatus(_ context.Context, kind string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.atlasSources, kind)
+	return nil
+}
+
+// ---- the atlas sources' refresh asks ------------------------------------ //
+
+// AtlasSourceRefreshes returns every waiting ask, keyed by source, each
+// cloned on the way out.
+func (f *Fleet) AtlasSourceRefreshes(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasRefresh))
+	for kind, value := range f.atlasRefresh {
+		out[kind] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasSourceRefresh records an ask for one source.
+func (f *Fleet) PutAtlasSourceRefresh(_ context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an atlas source refresh ask needs a source name")
+	}
+	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value)); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasRefresh[kind] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasSourceRefresh drops a source's ask; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasSourceRefresh(_ context.Context, kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasRefresh, kind)
+	return nil
+}
+
+// ---- the atlas code scans' standings ------------------------------------ //
+
+// AtlasCodeScans returns every recorded standing, keyed by repository, each
+// cloned on the way out.
+func (f *Fleet) AtlasCodeScans(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.atlasCode))
+	for repo, value := range f.atlasCode {
+		out[repo] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutAtlasCodeScan records one repository's standing.
+func (f *Fleet) PutAtlasCodeScan(_ context.Context, repo string, value []byte) error {
+	if repo == "" {
+		return errors.New("coord/memory: an atlas code scan standing needs a repository")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atlasCode[repo] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteAtlasCodeScan drops a repository's standing; one that is not there is
+// the outcome asked for.
+func (f *Fleet) DeleteAtlasCodeScan(_ context.Context, repo string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.atlasCode, repo)
 	return nil
 }
 

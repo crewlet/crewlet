@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestARequesterWithoutTheAppRefusesItsVerbs`, `internal/authz.TestTheAskedArmAdmitsTheRequesterTheAskNames`, `internal/authz.TestAStrangerHoldsNoApp`, `internal/authz.TestARequesterWhoMayNotActHoldsNoApp`, `internal/authz.TestARowNamingNoAppIsNotBoundedByTheApps`, `internal/authz.TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot`, `internal/agent/builtin.TestEveryAppVerbIsHeldToTheRequestersApps`, `internal/agent/builtin.TestAnInToolDecisionIsHeldToTheCeiling`, `internal/agent/builtin.TestAPlainBuiltinStillAnswersOutsideATurn`, `internal/agent/builtin.TestOneCallComposesItsRequesterOnce`, `internal/tools.TestASeatsCallTellsATurnBoundToolItsTurn`, `internal/engine.TestTheRequesterCarriesTheirApps`, `internal/estate.TestARequesterCrossesAsOneSeatsAnswer`, `internal/estate.TestTheRequesterReadCarriesGrantsAndNothingElse`, `internal/estate.TestARetiredIdentityQuestionIsLeftUnserved`, `internal/iamdomain.TestTheRequesterIsTheSeatHolderWithTheirGrants`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`, `internal/agent/builtin.TestATokensWorkUsesTheAppsItHolds`, `internal/agent/builtin.TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode`, `internal/engine.TestACredentialIsPlacedByItsLoginsNamespaceAlone`, `internal/engine.TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried`, `internal/engine.TestAFirstPartyNoticeIsFromWhoeverWroteIt`, `internal/notify.TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames`, `internal/iam.TestActorAppsAreACredentialsAlone`, `internal/notify.TestOneTurnWorksForOneWriter`, `internal/notify.TestEveryWriterIsAPartitionOfItsOwn`, `internal/engine.TestAPersonAndAStrangerInOneThreadAreTwoTurns`, `internal/agent/prefetch.TestAnotherWritersWaitingMessageIsOwedItsOwnTurn`, `internal/agent/builtin.TestWhoAHandOnWorksForIsTheHandingTurnsOwnCeiling`, `internal/agent/builtin.TestAHandedOnTurnIsHeldToWhoeverItCarried`, `internal/agent/builtin.TestAColleaguesAskCarriesWhoeverTheAskingTurnWorksFor`, `internal/engine.TestAHandOnWakesATurnWorkingForWhoeverItCarried`, `internal/engine.TestAnAnswerIsWorkedForWhoeverItsAskWasWorkedFor`, `internal/events/types.TestAnAgentsWriteStatesWhomItWasMadeFor`, `internal/events/types.TestWhomAWriteWasMadeForCrossesTheWireAsStated`, `internal/agent/builtin.TestAWriteCarriesWhoeverTheWritingTurnWorksFor`, `internal/agent/builtin.TestAWriteWhoseArgumentsNameSomebodyGetsNothingWider`, `internal/agent/builtin.TestAWriteWhoseRequesterCannotBeComposedWritesNothing`, `internal/worklet.TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/doclet.TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/chatlet.TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/doclet.TestAPageActorCrossesTheWireAsItWasStated`, `internal/chatlet.TestAChatActorCrossesTheWireAsItWasStated`, `internal/estate.TestATrackerActorCrossesTheWireAsItWasStated`, `internal/estate.TestAPlainlyEncodedActorWritesItsPlainEncoding`, `internal/estate.TestAnActorThatCannotWriteIsRefusedBeforeAnythingIsAsked`, `internal/estate.TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite`, `internal/estate.TestAWriteWhoseActorCannotWriteIsRefusedBeforeAnyPeerRunsIt`, `internal/estate.TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn`, `internal/engine.TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody`, `internal/estate.TestAnUnknownMemberInsideARoutedActorIsRefusedAtItsPath`, `internal/worklet.TestAHistoryRowKeepsWhomAnAgentsWriteWasMadeFor`, `internal/chatlet.TestAPostKeepsWhomAnAgentsMessageWasWrittenFor`, `internal/worklet.TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor`, `internal/worklet.TestACredentialsWriteCarriesTheAppsItUsedHere`, `internal/doclet.TestAPageWriteCarriesWhomItWasWrittenForWhereItMayWakeAnAgent`, `internal/chatlet.TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody`, `internal/estate.TestAWriteForSomebodyMovesOffADataNodeWithoutTheCarrier`, `internal/notify.TestAnAgentsWriterCarriesWhomItWroteFor`, `internal/notify.TestEveryWhomAnAgentWroteForIsAPartitionOfItsOwn`, `internal/engine.TestATurnAWriteWakesIsHeldToWhoeverTheWriteWasMadeFor`, `internal/engine.TestARequesterRidesEveryHopOfWhatSeatsWrite`, `internal/engine.TestOneSeatsWritesForTwoRequestersWakeItsColleagueTwice`, `internal/engine.TestAWriteWakesATurnWorkingForWhoeverItWasWrittenFor`, `internal/engine.TestATurnAWriteWokeIsStillItsRequestersWhenItResumes`, `internal/engine.TestAQueuedCloseIsWrittenAsItsEnqueuer`, `internal/chatlet.TestWhomAMessageWasWrittenForStaysOffItsReads`, `internal/chatlet.TestAWritesAnswerHandsItsMessageOverWithoutWhomItWasWrittenFor`, `internal/worklet.TestACredentialsAssignmentCarriesItsAppsOnlyWhereItMovesTheAssignee`, `internal/worklet.TestAPickupWorksForWhomItsAssignmentWasWrittenFor`, `internal/worklet.TestWorkASeatFiledForSomebodyIsTheirs`, `internal/worklet.TestATakeMadeForSomebodyIsWorkedForThem`, `internal/worklet.TestWorkHandedBackToTheSeatItWasDoneForIsItsOwn`, `internal/agent/prefetch.TestAWaitingMessageWrittenForAnotherRequesterIsOwedItsOwnTurn`, `internal/agent/prefetch.TestAWaitingMessageIsMatchedToWhomTheTurnWorksForNotToItsTriggersPost`, `internal/chatlet.TestTheTurnStartThreadReadHandsTheEngineWhomEachMessageWasWrittenFor`, `internal/estate.TestOnlyTheEngineReadsWhomAMessageWasWrittenFor`, `internal/estate.TestATurnThreadNoDataNodeServesFallsBackToThePlainThreadAndSaysSo`, `internal/sandbox.TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor`
+- **Enforced-by:** `internal/authz.TestARequesterWithoutTheAppRefusesItsVerbs`, `internal/authz.TestTheAskedArmAdmitsTheRequesterTheAskNames`, `internal/authz.TestAStrangerHoldsNoApp`, `internal/authz.TestARequesterWhoMayNotActHoldsNoApp`, `internal/authz.TestARowNamingNoAppIsNotBoundedByTheApps`, `internal/authz.TestAnAgentsOwnEditsAreSteeredAndItsReadsAreNot`, `internal/agent/builtin.TestEveryAppVerbIsHeldToTheRequestersApps`, `internal/agent/builtin.TestAnInToolDecisionIsHeldToTheCeiling`, `internal/agent/builtin.TestAPlainBuiltinStillAnswersOutsideATurn`, `internal/agent/builtin.TestOneCallComposesItsRequesterOnce`, `internal/tools.TestASeatsCallTellsATurnBoundToolItsTurn`, `internal/engine.TestTheRequesterCarriesTheirApps`, `internal/estate.TestARequesterCrossesAsOneSeatsAnswer`, `internal/estate.TestTheRequesterReadCarriesGrantsAndNothingElse`, `internal/estate.TestARetiredIdentityQuestionIsLeftUnserved`, `internal/iamdomain.TestTheRequesterIsTheSeatHolderWithTheirGrants`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`, `internal/agent/builtin.TestATokensWorkUsesTheAppsItHolds`, `internal/agent/builtin.TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode`, `internal/engine.TestACredentialIsPlacedByItsLoginsNamespaceAlone`, `internal/engine.TestACredentialsTurnUsesOnlyWhatEveryOneOfItsWritesCarried`, `internal/engine.TestAFirstPartyNoticeIsFromWhoeverWroteIt`, `internal/notify.TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames`, `internal/iam.TestActorAppsAreACredentialsAlone`, `internal/notify.TestOneTurnWorksForOneWriter`, `internal/notify.TestEveryWriterIsAPartitionOfItsOwn`, `internal/engine.TestAPersonAndAStrangerInOneThreadAreTwoTurns`, `internal/agent/prefetch.TestAnotherWritersWaitingMessageIsOwedItsOwnTurn`, `internal/agent/builtin.TestWhoAHandOnWorksForIsTheHandingTurnsOwnCeiling`, `internal/agent/builtin.TestAHandedOnTurnIsHeldToWhoeverItCarried`, `internal/agent/builtin.TestAColleaguesAskCarriesWhoeverTheAskingTurnWorksFor`, `internal/engine.TestAHandOnWakesATurnWorkingForWhoeverItCarried`, `internal/engine.TestAnAnswerIsWorkedForWhoeverItsAskWasWorkedFor`, `internal/events/types.TestAnAgentsWriteStatesWhomItWasMadeFor`, `internal/events/types.TestWhomAWriteWasMadeForCrossesTheWireAsStated`, `internal/agent/builtin.TestAWriteCarriesWhoeverTheWritingTurnWorksFor`, `internal/agent/builtin.TestAWriteWhoseArgumentsNameSomebodyGetsNothingWider`, `internal/agent/builtin.TestAWriteWhoseRequesterCannotBeComposedWritesNothing`, `internal/worklet.TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/doclet.TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/chatlet.TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor`, `internal/doclet.TestAPageActorCrossesTheWireAsItWasStated`, `internal/chatlet.TestAChatActorCrossesTheWireAsItWasStated`, `internal/estate.TestATrackerActorCrossesTheWireAsItWasStated`, `internal/estate.TestAPlainlyEncodedTypeWritesItsPlainEncoding`, `internal/estate.TestAnActorThatCannotWriteIsRefusedBeforeAnythingIsAsked`, `internal/estate.TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite`, `internal/estate.TestAWriteWhoseActorCannotWriteIsRefusedBeforeAnyPeerRunsIt`, `internal/estate.TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn`, `internal/engine.TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody`, `internal/estate.TestAnUnknownMemberInsideARoutedActorIsRefusedAtItsPath`, `internal/worklet.TestAHistoryRowKeepsWhomAnAgentsWriteWasMadeFor`, `internal/chatlet.TestAPostKeepsWhomAnAgentsMessageWasWrittenFor`, `internal/worklet.TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor`, `internal/worklet.TestACredentialsWriteCarriesTheAppsItUsedHere`, `internal/doclet.TestAPageWriteCarriesWhomItWasWrittenForWhereItMayWakeAnAgent`, `internal/chatlet.TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody`, `internal/estate.TestAWriteForSomebodyMovesOffADataNodeWithoutTheCarrier`, `internal/notify.TestAnAgentsWriterCarriesWhomItWroteFor`, `internal/notify.TestEveryWhomAnAgentWroteForIsAPartitionOfItsOwn`, `internal/engine.TestATurnAWriteWakesIsHeldToWhoeverTheWriteWasMadeFor`, `internal/engine.TestARequesterRidesEveryHopOfWhatSeatsWrite`, `internal/engine.TestOneSeatsWritesForTwoRequestersWakeItsColleagueTwice`, `internal/engine.TestAWriteWakesATurnWorkingForWhoeverItWasWrittenFor`, `internal/engine.TestATurnAWriteWokeIsStillItsRequestersWhenItResumes`, `internal/engine.TestAQueuedCloseIsWrittenAsItsEnqueuer`, `internal/chatlet.TestWhomAMessageWasWrittenForStaysOffItsReads`, `internal/chatlet.TestAWritesAnswerHandsItsMessageOverWithoutWhomItWasWrittenFor`, `internal/worklet.TestACredentialsAssignmentCarriesItsAppsOnlyWhereItMovesTheAssignee`, `internal/worklet.TestAPickupWorksForWhomItsAssignmentWasWrittenFor`, `internal/worklet.TestWorkASeatFiledForSomebodyIsTheirs`, `internal/worklet.TestATakeMadeForSomebodyIsWorkedForThem`, `internal/worklet.TestWorkHandedBackToTheSeatItWasDoneForIsItsOwn`, `internal/agent/prefetch.TestAWaitingMessageWrittenForAnotherRequesterIsOwedItsOwnTurn`, `internal/agent/prefetch.TestAWaitingMessageIsMatchedToWhomTheTurnWorksForNotToItsTriggersPost`, `internal/chatlet.TestTheTurnStartThreadReadHandsTheEngineWhomEachMessageWasWrittenFor`, `internal/estate.TestOnlyTheEngineReadsWhomAMessageWasWrittenFor`, `internal/estate.TestOnlyTheEngineReadsWhomAQueuedChangeWasEnqueuedFor`, `internal/estate.TestATurnThreadNoDataNodeServesFallsBackToThePlainThreadAndSaysSo`, `internal/sandbox.TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor`, `internal/agent/builtin.TestEveryCodeWriteStatesWhomItIsMadeFor`, `internal/agent/builtin.TestACodeWriteWhoseArgumentsNameSomebodyGetsNothingWider`, `internal/gitlet.TestACodeWriteWhoseCarrierAndCeilingDisagreeIsRefused`, `internal/gitlet/host.TestAnEngineWriteLandsCarryingWhomItWasMadeFor`, `internal/estate.TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody`, `internal/estate.TestATypeThatDecodesItselfAndWritesNoEncodingIsWalkedInto`, `internal/estate.TestACodeWriteFromABuildWithoutTheCarrierIsMadeForNobody`, `internal/estate.TestACodeWriteForSomebodyMovesOffANodeWithoutTheCarrier`, `internal/estate.TestACodeWriteForACredentialMovesOffANodeThatDoesNotKnowItsApp`, `internal/estate.TestACodeWriteMovesOffANodeThatDoesNotKnowItsCarriersKind`, `internal/estate.TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild`, `internal/estate.TestAnInProcessCommitterAnswersAStoredCarriersUnknownKindAsAnotherBuild`, `internal/estate.TestAnInProcessGitletNodeAnswersACarriersUnknownAppAsAnotherBuild`, `internal/engine.TestARunsOpenThatRanNowhereComesBackNotOpenedAskedOnce`, `internal/gitlet.TestACodeRecordCarriesWhomItsAgentWroteItForWhereItWakesASeat`, `internal/gitlet.TestAnOpenAPushAMergeAndAnEnqueueCarryWhomTheyWereMadeForWhateverTheyWake`, `internal/gitlet.TestACodeRowKeepsWhomItsWriteWasMadeFor`, `internal/gitlet.TestARevisionsFactsWakeForWhomItsRevisionWasPushed`, `internal/gitlet.TestAFailedCheckWakesForWhomItsHeadWasPushed`, `internal/gitlet.TestALandingTheHomeFoundWakesForWhomItsMergingPushWasMade`, `internal/gitlet.TestAStoredCarrierThisBuildCannotReadIsAStrangers`, `internal/gitlet.TestACodeWakeIsWrittenForWhomItsAgentWroteIt`, `internal/gitlet.TestAQueuesLandingWakesForWhomItsEntryWasEnqueued`, `internal/gitlet.TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade`, `internal/gitlet.TestARoutingBesideAPersonsActCarriesNobody`, `internal/gitlet.TestTheHomesQueueWorkSaysWhomEachEntryWasEnqueuedFor`, `internal/gitlet/home.TestTheHomeClosesAnEntryForWhomItWasEnqueued`, `internal/engine.TestAQueuedCloseIsDecidedWithinTheAppsOfWhomItsEnqueueWasMadeFor`, `internal/engine.TestAnEngineRecordAboutAnAgentsActIsWorkedForWhomTheActWasMadeFor`, `internal/estate.TestAHomesQueueReadIsReadWholeOrRefused`, `internal/gitlet/host.TestABoxPushCarriesWhomItsRunWorksFor`, `internal/gitlet/host.TestABoxACredentialsTurnLaunchedPushesOnlyItsSeatsOwnWork`
 - **Measured:** `iamdomain.BenchmarkRequester`: one seat's requester, its holder and the holder's grants, is about 75 µs a question at people=100 and at people=10000 alike (beside as many removal tombstones), against about 64 µs for the seat's holder alone before. The document's decode adds about a fifth to the seeks, which still dominate. So the grants are read from the document the row already carries, and no column holds them apart.
 - **Cost-when-tried:** the ceiling before this gave every person every app (`internal/engine/requesters.go`: "holding every app and never admin … and never the grants"). A person the company kept off Worklet, Doclet, Chatlet or authoring artifacts could message any agent and have it use the app for them. ADR-0034's "writes for them only what they could write" was false for the authoring app. Worklet, Doclet and Chatlet tools were never decided for the requester at all.
 - **Tag-status:** unreleased
@@ -69,8 +69,7 @@
 
 - **What an agent may already know and say.** That is the provenance fences' and the model's, as before (ADR-0040).
 - **Tools that are not apps.** A vendor's MCP server acts with the seat's own credential at that vendor, which the vendor bounds.
-- **Surfaces that carry no requester.** What a seat writes on a vendor's surface, and what Gitlet records until crewlet#798's piece 4c, wakes its seat in a turn worked for the seat that wrote it: the amendment "A requester rides on what a seat writes" states the edge.
-- **Gitlet's grant.** Piece 5 of crewlet#733 makes Gitlet an app, and this record then holds it like the rest.
+- **Surfaces that carry no requester.** What a seat writes on a vendor's surface wakes its seat in a turn worked for a seat rather than for whom that write was made for: the amendment "A requester rides on what a seat writes" states the edges.
 
 ## Amendment: one turn works for one writer
 
@@ -112,45 +111,72 @@ accepted as ADR-0110's was.
 
 What an agent seat writes on the engine's own surfaces in a turn somebody woke carries that
 somebody, so the turn its write wakes works for them too, never for the writing seat, which holds
-every app. It covers every write of Worklet, Doclet and Chatlet: an item filed, assigned or moved, a
-comment, a page or a comment on one, a message. A chain of writes carries the requester end to end,
-as a chain of asks does.
+every app. It covers every write of Worklet, Doclet, Chatlet and Gitlet: an item filed, assigned or
+moved, a comment, a page or a comment on one, a message; a change opened, edited, closed or
+reopened, an ask to review, a review, a comment on a change, a finding's answer, a push, a merge, an
+enqueue and a dequeue, the pushes of the seat's executor's box and the change its run opens
+among them (crewlet#798's piece 4c-i;
+[ADR-0093](0093-a-box-reaches-git-with-its-runs-credential.md)'s amendment). So does what the
+engine records on Gitlet about an agent's earlier push or enqueue: a revision's facts, a failed
+check of its head and a landing the change's home found carry whom that push was made for, and the
+merge queue's landing, its ejection and a close it could not make carry whom the enqueue was made
+for; and the merge queue's close of a landed change's work item, the enqueuing turn's write made
+late, is written for them and decided within the apps they use (crewlet#798's piece 4c-ii). A chain
+of writes carries the requester end to end, as a chain of asks does.
 
 **Composed by the engine, from the bound ceiling alone.** The carrier is the ask's
 (`types.WorkingFor`), composed where a seat's actor is built (internal/agent/builtin's
 `writtenForTurn`: `ceilingOf`, then `workingForOf`), never from a tool's arguments or anything the
-model wrote. A turn whose ceiling cannot be composed writes nothing, refused as unavailable: a write
-carrying nobody would wake its seat for the writer with every app.
+model wrote: a code tool's request takes it from its caller's actor, and a run's checkout composes
+it from the same binding for the run's box and the change its run opens, which the run's row keeps.
+A turn whose ceiling cannot be composed writes nothing, refused as unavailable: a write carrying
+nobody would wake its seat for the writer with every app.
 
 **Every actor built for a turn states it, and the type refuses one that does not.** The actor's
 field is `types.WrittenFor`, whose zero value states nothing: Worklet's writer, Doclet's store and
 Chatlet's store refuse an agent's write that states nothing (`types.WrittenFor.For`), and a carrier
-on the write of a person, a credential or the engine, who write for nobody but themselves. A turn's
-write states `types.ForTurn` (nobody, for a turn that works for its own seat); the engine's own write
-made as a seat states `types.ForNobody` and says why where it does: the merge queue's close of a
-landed change's item (Gitlet's edge, below) and the charge of a turn's spend, which wakes nobody. A
+on the write of a person, a credential or the engine, who write for nobody but themselves. A seat's
+code write states it on the request it forms, since a code record names the node that decided it
+as its actor: `WrittenFor` on each of the six (`ChangeProposal`, `ConversationWrite`, `EngineWrite`,
+`QueueProposal`, `MergeProposal` and `Proposal`), which every node deciding one holds to its asker
+by the same rule and, on the four that carry the ceiling the write is decided under (a change's
+lifecycle and its conversation, an engine write and a dequeue), to that ceiling: a colleague's
+carrier comes with that seat's ceiling, a credential's with the ceiling of nobody, and a person's
+seat with no ceiling (internal/gitlet's `writtenForInvalid` and `writtenForUnder`). A turn's write
+states `types.ForTurn` (nobody, for a turn that works for its own seat), and so does a write the
+engine makes for a turn after it ended: the merge queue's close of a landed change's item, written
+`ForTurn` of whom the entry's enqueue was made for (below); the engine's own write made as a seat
+states `types.ForNobody` and says why where it does: the charge of a turn's spend, which wakes
+nobody. A
 node also refuses to ASK such a write anywhere, in ADR-0025's own idiom for a value a request may not
 carry: the router checks the actor before the write is asked of any node, its own copy in process
 included, so one answer comes in process and routed alike (internal/estate's `actorWrites`: through
 `op.refusedBeforeAsking` on every page and chat write whose arguments hold the actor, a chat reach
 being a read, which a gate over the operation registry holds every such operation to, and in
 `callAs` for every operation that runs as an actor, the tracker's and `tracker.view_prior` among
-them). The actors' codecs carry no policy. What a data node decodes as
+them; and its `codeWrites`, through `op.refusedBeforeAsking` on every code write whose arguments
+hold a code principal and its carrier, which a gate of its own holds every such operation to). The
+actors' codecs carry no policy. What a data node decodes as
 nobody is therefore what its sender stated, or an older node's write, and each actor's own decoder
 (`UnmarshalJSONFrom`) states it, on the actor and whatever members arrived: internal/estate's `Actor`
 whether or not a provenance did, since an older node sends an agent's provenance that carries
-nothing as no member at all. So a data node never refuses a write for a key its sender left out
-because it carried nobody. And the actors cross under ADR-0025's rule for what an operation takes,
-as every other member of a request does: each actor has no encoder, so its plain encoding under the
-request's options is what crosses, and it and `types.WrittenFor` decode through the request's own
-decoder (`encoding/json/v2`'s `UnmarshalJSONFrom`, never an `UnmarshalJSON`, which starts again from
-`encoding/json`'s defaults, and returning the decoder's own error unwrapped, so the wire reads the
-member's path as the decoder recorded it), so a field at its zero is left off inside an actor and
-its carrier, and a member the serving build does not declare there is refused at its path.
+nothing as no member at all, and each of the six code requests states its carrier received the
+same way. So a data node never refuses a write for a key its sender left out
+because it carried nobody. And the actors and the six code requests cross under ADR-0025's rule for
+what an operation takes, as every other member of a request does: each has no encoder, so its plain
+encoding under the request's options is what crosses, and it and `types.WrittenFor` decode through
+the request's own decoder (`encoding/json/v2`'s `UnmarshalJSONFrom`, never an `UnmarshalJSON`, which
+starts again from `encoding/json`'s defaults, and returning the decoder's own error unwrapped, so
+the wire reads the member's path as the decoder recorded it), so a field at its zero is left off
+inside an actor, a request and its carrier, and a member the serving build does not declare there
+is refused at its path. So, on a code request, is a credential's app or a carrier's kind the
+serving build does not know, which only a newer build composes (the roll windows below).
 
 **On every record a later turn reads, and no other.** `MutationRecord.WorkingFor` rides an agent's
 record that a later turn reads to learn whom it works for, a wake now or a pickup later: Worklet at
-record version 13, Doclet at 4, Chatlet at 3. Worklet carries it on an item's own creation (a create of
+record version 13, Doclet at 4, Chatlet at 3. Gitlet's code records carry it at version 2, on the
+routing and the payload that name their agent, since a code record's actor is the node that
+decided it. Worklet carries it on an item's own creation (a create of
 kind `created`, never the alias a move claims for the item's old key, which nothing reads) and on
 every record whose patch moves the item's assignee, whatever kind it ends with and whatever they
 wake, a status move that takes the item included, because the work pickup reads an item's
@@ -162,14 +188,35 @@ ordinary or the fallback chain's, that hears it and whose notice starts a turn, 
 live roster wakes the lead when the one candidate it heard has left; in Doclet, a change that
 offers its container's lead, whom only the parser's chart names, or one that offers anybody but the
 writer, an agent's comment that asks nothing only where its thread awaits an asker; in Chatlet, a
-record that routes to somebody (`Notify.Recipients`, never whether the message was silent). A
+record that routes to somebody (`Notify.Recipients`, never whether the message was silent); on
+Gitlet, a routing that may wake a seat, beside the agent's actor it names
+(`ChangeRouting.WorkingFor`): some concern hears it that is not a person, the repository lead's
+fallback counted, since a routing that tells only persons wakes no turn (internal/gitlet's
+`wakesASeat`, the one test the code feed relays a record by too). Gitlet also carries it on an
+open, a reopen, a push's entry, a merge and an enqueue whatever they wake, since the engine's later
+records about them and the merge queue's close read it back from the rows those fill. A
 record that carries none, a gate, an erase or a prune always among them, stays at the version every
 build reads, and Worklet's `ActorApps` follow the same rule. Worklet's history row (`tracker_history.working_for`, migration
 0160) and Chatlet's message (`Message.WorkingFor`) keep it from the carrier's first build on,
 applied on every node from the record, for the reads crewlet#798's piece 4b-ii brings: a replicated
 migration runs on each node when it opens and not at a log position, so a column or a field a later
 build began to fill would hold nothing for the records a node applied before it upgraded and the
-carrier for the same records on a node that applied them after. Chatlet's stays on the stored document
+carrier for the same records on a node that applied them after. Gitlet's rows keep it the same way
+(`working_for` on `code_revisions`, `code_pushes` and `code_queue`, the replicated migration
+`a_code_row_keeps_whom_an_agents_write_was_made_for`), for the engine's records about an agent's
+earlier write, which carry it beside the actor they name, on the routing that may wake a seat: a
+revision's facts and a failed check of a change's head read the revision's row, and a landing the
+change's home found the row of the push it names as the merge, each in the statement that reads its
+actor (internal/gitlet's `revisionPusher` and `landingPusher`); and the merge queue's records about
+an entry read the entry's row their decide reads: its landing carries it beside the enqueuer it
+names, and its ejection and a close it could not make beside no actor (below). A landing's push rows
+take theirs from its entries' rows, which every node filled from the same enqueue. One read answer
+hands it out: the home's work on its queue (`code.queue_due`, read whole,
+`gitlet.QueueWorkEntry.WorkingFor`), the read the repository's home works its queue from, whose
+close of a landed change's item is made for them; every listing of the queue leaves it out, and
+the engine-class guard holds every package that serves a person or a model off that read, as it
+holds them off Chatlet's turn-start thread read below.
+Chatlet's stays on the stored document
 alone: no read view of a message and no write's answer hands it out (`Message.forReaders`), since
 a room's reader needs no requester's seat, login or apps, so the engine's turn-start thread read
 alone hands it over (`chat.turn_thread`, through the engine-only facade `estate.TurnThreads`), never
@@ -177,10 +224,12 @@ a reader's view.
 Doclet's carrier stays on its record alone.
 
 **On the wake, and in the partition.** `notify.FirstPartyWriter(kind, actor, apps, workingFor)`
-puts it on the wake's writer (`NotificationWriter.WorkingFor`), for an agent's write alone, and
-Chatlet's inbound now states its writer as the other families' do, so its partition keys on the
-seat (`seat:`) rather than the actor. The partition function appends the whole carrier to an agent
-writer's key, escaped (`notify.ForSeparator`), a credential's apps included: a turn works for one
+puts it on the wake's writer (`NotificationWriter.WorkingFor`), for an agent's write (Gitlet's
+parser hands it the routing's carrier beside the routing's agent actor, internal/gitlet's
+`writerOf`), and Chatlet's inbound now states its writer as the other families' do, so its
+partition keys on the seat (`seat:`) rather than the actor. The partition function appends the
+whole carrier to an agent writer's key, escaped (`notify.ForSeparator`), a credential's apps
+included: a turn works for one
 writer and for one whom, so one seat's writes for two requesters are two turns. One deliberate
 exception keeps the thread as its key: ADR-0120's seen-through mark (`notify.KeyOfAll`, the thread and
 never the thread split by writer). A completed turn absorbs a later wake at or below its mark that
@@ -191,23 +240,105 @@ the carrier off the first constituent (internal/engine's `workingForIn`), which 
 every constituent's, and composes it again on its own node as an ask's carrier is. Whom it replies
 to stays the writing seat (`requesterOf`).
 
+**The writer rule's one exception: the engine's record about an agent's earlier enqueue.** A
+person, a credential and the engine write for nobody but themselves, and the stores refuse a
+carrier on their writes. But the merge queue's ejection and a close it could not make, settled
+`not_closed`, are records no principal's act made, which name no actor and tell the entry's
+enqueuer and its change's authors about that enqueue: worked for the told seat's own, the turn would
+fix the conflict and queue the change again, or close the item its requester could not, with every
+app the seat holds, one hop after the engine's own close was held to them. So each carries whom the
+enqueue was made for beside no actor, where its routing may wake a seat (internal/gitlet's
+`concerning.enqueuedFor`), Gitlet's parser hands it to the engine's writer for those two ops alone
+(`writerOf`), `notify.FirstPartyWriter` keeps it for the engine as for an agent, the partition keys
+it after the engine's own key (`system for seat:ada`), so the engine's records for two requesters
+are two turns, and the woken turn reads it as an agent's (internal/engine's `writtenForIn`). No
+other engine record carries one: a mergeability and a broken landing name no earlier act made for
+anybody.
+
 **The roll windows**, accepted as the ask's was, with no protocol gating; each lasts the minutes of
 a roll:
 - an older applier retains a record carrying the field at its position, the established deferral;
 - an older change feed defers that record's wake to a newer peer rather than dropping it
   (internal/changefeed, crewlet#842);
-- an older notify parser ignores the carrier, and the turn it wakes works for the writing seat;
+- an older notify parser cannot read that record either, so it passes the record's wake back to
+  the inbound group for a node of the newer build rather than acknowledging it as a payload it
+  cannot parse (internal/notify, crewlet#993); a wake no such node took within the group's
+  deliveries is kept with the group's unhandled deliveries, and a node of the newer build replays
+  it — one already running within a poll of the keep, the next to start otherwise — so the wake
+  is late rather than acknowledged away, save the losses internal/notify's Deferral names, and
+  never delivered by a node that could not read its carrier;
 - an older data node refuses a routed write whose actor carries a requester, naming the key
   (`actor.provenance.WrittenFor` for Worklet, `args.Actor.WrittenFor` for Doclet and Chatlet), and
-  runs none of it (ADR-0025's amendment). The router asks the next data node, so a data node of the
-  newer build serves it. Where none does, the agent's tool answers `fleet_builds_differ` and nothing
+  runs none of it (ADR-0025's amendment), and an older data node or Gitlet node refuses a code
+  write whose request carries one the same way (`args.written_for`). The router asks the next data
+  node, or for a code write the repository's next committer or the next Gitlet node, so a node of
+  the newer build serves it, and a box's push refused so is pushed again by its harness. Where none
+  does, the agent's tool answers `fleet_builds_differ` and nothing
   is written: `save_work_view`'s prior read is refused alike, and `code_merge_change` merges and
-  leaves its item open, saying so. A write that carries nobody (a turn for its own seat,
+  leaves its item open, saying so. A run whose collection meets no committer of the newer build
+  comes back with its commits pushed and its change not opened, its report saying that nothing of
+  the open ran, and the seat opens it again with `code_open_change`: the collection does not ask
+  again, since it holds the run's seat until the turn resumes and the roll may outlast it
+  (internal/engine's `ranNowhere`). A write that carries nobody (a turn for its own seat,
   `ForNobody`, a person's, a credential's or the engine's) crosses without the key, and either build
   serves it. Upgrading the data nodes first avoids the refusal, and crewlet-operator rolls the data
   pods first (its `docs/concepts/runtime.md`, "The seat pods follow the data pods"). An older seat
   node composes no carrier, so a newer data node reads its actor as stated nobody, and that write
-  wakes its colleague for the writing seat until the roll completes.
+  wakes its colleague for the writing seat until the roll completes; so does a code write an older
+  seat node or Gitlet node sends, which a newer node decides by the ceiling it carries alone, as
+  before, and records at code record version 1;
+- a node whose build does not know an app a credential's carrier names, or the carrier's kind,
+  answers a code write carrying it as it answers a member it does not declare
+  (`args.written_for.apps[]`, `args.written_for.kind`), never as malformed, since only a newer build
+  composes one: the walk asks the next node until one that knows it serves the write, or answers
+  `fleet_builds_differ`. One place decides what a build knows (internal/gitlet's
+  `unknownToThisBuild`), and a node's own copy asked in process answers as its wire would, before
+  any other rule of the write and whatever else the write breaks, since this build cannot judge it,
+  so a landing, and a carrier a run's row stored, reach a newer committer where one serves. A carrier of
+  no kind, or a credential's naming no app, stays malformed, since no build composes one. A Gitlet
+  node whose build does not know the kind a run's row names answers that run's box
+  `503 carrier_unknown`: a node of a newer build judges it, and the harness's push again reaches one;
+- an older node deciding a revision's facts, a failed check of a change's head, a landing the
+  change's home found, or the merge queue's landing, ejection or settled close reads no carrier back
+  from the rows, so the record it writes carries nobody and the turn it wakes works for the pusher's
+  or the enqueuer's seat, or the told seat's own, as before the carrier, until the roll completes;
+  the same record a node of the newer build decides carries the stored carrier on its routing at
+  code record version 2, which every build since the carrier's first reads, so no record version
+  moves. A carrier stored under a kind the deciding node's build does not know rides its record as
+  the row kept it, never rewritten, and a seat node whose build does not know the kind either
+  composes it as a stranger's, the closed end (internal/gitlet's `storedCarrier`);
+- an older seat node reads no carrier off the engine's writer and keys the engine's wakes as one,
+  so an ejection or a settled close such a node takes wakes its seat for the told seat's own, until
+  the roll completes;
+- the merge queue's close reads the carrier the entry's row stored: a home of the newer build
+  closes each landed change's item for whom the entry's enqueue was made, within the apps they use,
+  never without it, since it reads its queue work whole or not at all, through an operation of its
+  own (internal/estate's `code.queue_due`): it lands, ejects, closes and settles each entry as it
+  read it, and would carry an entry on without any field its build dropped. A home of an older build
+  asks that read as a kind of `code.read`, which a data node of the newer build refuses naming
+  `args.queue_due`, so it reads its queue only from a data node of its own build, which hands it no
+  carrier, and closes for the enqueuer alone, as before the carrier, until the roll completes;
+  crewlet-operator rolls the data pods first, so once they are upgraded an older home's queue waits,
+  stepping on nothing, until the home is upgraded too. A carrier whose kind the closing home's build
+  does not know is decided not at all: the close stays owed, logged at WARN as the fleet's builds
+  differing, for a home of the build that knows the kind (internal/engine's queue close);
+- a home of the newer build whose data nodes are all older finds `code.queue_due` answered
+  unserved, an operation their build does not know, so its walk asks the next data node, and where
+  none of its build is left its queue waits, stepping on nothing and losing nothing, until a data
+  node of its build serves it: since crewlet-operator rolls the data pods first, only a roll that
+  upgrades the homes first meets this wait;
+- a run launched by a build before the carrier carries nobody on its row, so until the run ends its
+  box's pushes and the change its run opens wake whoever they reach for the seat itself, and a
+  credential's box keeps the seat's bound alone. Its grants were taken for nobody, and a run granted
+  for nobody is never used for somebody, whichever build wrote its row: carried on by a node of the
+  newer build in a turn that works for somebody, the run is refused every checkout as a conflict, of
+  a repository it holds already as much as of another, and its seat is told that a turn working for
+  somebody starts a new run. That fails closed: the run keeps what it was given and pushes it for
+  nobody. No field tells its row from one granted for nobody, and none is added, since a node keeps
+  no compatibility with an unreleased build: no arm adopts the first carrier a checkout names, and
+  no row marks the build that wrote it (internal/sandbox's `sameRequester`). A Gitlet node of such a
+  build admits a newer run's box by its colleague's ceiling and ignores the carrier until it
+  upgrades ([ADR-0093](0093-a-box-reaches-git-with-its-runs-credential.md)'s amendment).
 
 **The edges.** A vendor's surface (Slack, Mattermost, Jira, GitHub, GitLab, Confluence) carries no
 requester: the agent writes through the vendor's MCP server and the wake comes back by webhook with
@@ -216,10 +347,22 @@ request a task waits on reach the task (ADR-0121): internal/engine's `settleChan
 settles it in a turnless write the node makes as the engine, which carries nobody because the
 vendor's event carries no requester, so the turn it wakes in the item's holder works for the
 holder's own seat. A company that wants the
-bound to hold keeps agent-to-agent work on the engine's own surfaces: Worklet, Doclet, Chatlet and
-`a2a_ask`, and Gitlet once crewlet#798's piece 4c lands. Until then Gitlet's change, review and
-comment records carry no carrier, so a turn one wakes works for the seat that wrote it, and so does
-the turn the merge queue's close of a landed change's work item wakes. The three reads that keyed
+bound to hold keeps agent-to-agent work on the engine's own surfaces: Worklet, Doclet, Chatlet,
+Gitlet and `a2a_ask`. On Gitlet, what the engine records about no earlier write carries nobody: a
+mergeability and a broken landing wake their seats for themselves. What it records about an agent's
+earlier push carries whom that push was made for, as the push's rows keep it: a revision's facts, a
+failed check of a change's head and a landing its home found. What the merge queue records about an
+agent's enqueue carries whom the enqueue was made for, as the entry's row keeps it: its landing
+beside the enqueuer, and its ejection and a close it could not make beside no actor (the writer
+rule's one exception, above); and its close of a landed change's work item is written for them and
+decided within the apps they use, composed again on the closing node, so a requester who has left
+the organisation, or who does not use Worklet, has the close settled `not_closed`, naming them. A
+person's push, a repository's import and a pull mirror's sync carry nobody
+either, since a person writes for nobody but themselves and the other two wake nobody, and a row
+applied before the carrier's build holds nobody, as a record below its version carries nobody (the
+legacy edge below), so the facts of a revision pushed then, and the landing of a push made then,
+wake their seats for the pusher's seat, and an entry queued then is closed for its enqueuer alone.
+The three reads that keyed
 on the writer alone take whom a write was made for too (the amendment "a later read takes whom a
 write was made for" below). ADR-0120's seen-through mark is not one of them: it stays keyed on the
 thread by design (the partition above).

@@ -32,7 +32,7 @@ func (nobody) Principal(context.Context, string) (iam.Principal, iam.Resolution)
 func TestTheArtifactOriginIsBuiltOverTheEngine(t *testing.T) {
 	t.Parallel()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.API.ExternalURL = "http://127.0.0.1:8000"
 		b.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: 8001,
 			ExternalURL: "http://127.0.0.1:8001"}

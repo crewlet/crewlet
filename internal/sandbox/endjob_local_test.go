@@ -6,13 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -143,8 +146,17 @@ func TestADirectBoxEndsOnlyAProcessOfItsJob(t *testing.T) {
 // outlives the grace and is taken by SIGKILL, nothing of the job's group is
 // left running, and the box's files are still there to read.
 //
+// THE GRACE IS THE BUBBLE'S: the kill runs in a synctest bubble, where its
+// wait for the group to go is timers that fire at exactly their times, and at
+// the grace's last instant, the kill waiting on the timer that ends it, the
+// member that ignores SIGTERM is read for a SIGKILL ([killSent]). A floor on
+// how long the kill took on the machine's clock passed a kill that gave a
+// shorter grace, and one that gave none whenever the kernel then took its
+// time to reap the group.
+//
 // Mutation: kill through Close, and the box's files are gone; drop the
-// SIGKILL, and the member that ignores SIGTERM is left running.
+// SIGKILL, and the member that ignores SIGTERM is left running; send it before
+// the grace runs out, and the member reads killed inside it.
 func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -164,23 +176,76 @@ func TestADirectBoxKillsEveryProcessOfItsJobAndKeepsTheBox(t *testing.T) {
 	}
 	job := recordedLeader(t, box)
 
-	began := time.Now()
-	if err := box.KillJob(t.Context(), handle); err != nil {
-		t.Fatalf("KillJob: %v", err)
-	}
-	if took := time.Since(began); took < JobStopGrace/2 {
-		t.Fatalf("the kill took %v: the member that ignores SIGTERM cannot have been given its grace", took)
-	}
+	inBubble(t, func(t *testing.T) {
+		killed := make(chan error, 1)
+		go func() { killed <- box.KillJob(t.Context(), handle) }()
+		// THE GRACE'S LAST INSTANT, every goroutine of the bubble blocked
+		// again: the kill on the timer that ends the grace.
+		time.Sleep(JobStopGrace - time.Nanosecond)
+		synctest.Wait()
+		if killSent(t, stubborn) {
+			t.Fatalf("the member that ignores SIGTERM was killed inside its %v grace", JobStopGrace)
+		}
+		if err := <-killed; err != nil {
+			t.Fatalf("KillJob: %v", err)
+		}
+	})
 	if !procgrouptest.AwaitGone(t, stubborn, 5*time.Second) {
 		t.Fatal("the member that ignores SIGTERM outlived the kill")
 	}
-	if current, err := job.Current(); err != nil || current {
-		t.Fatalf("the job's group is current after the kill (%v, %v): a member was left running", current, err)
-	}
+	// THE KERNEL REAPS ON THE MACHINE'S CLOCK, and the kill's wait for it ran
+	// on the bubble's, whose polls may outrun a loaded kernel: the group is
+	// waited for here.
+	waitFor(t, 5*time.Second, func() bool {
+		current, err := job.Current()
+		return err == nil && !current
+	}, "the job's group is still current after the kill: a member was left running")
 	got, err := box.ReadFile(t.Context(), kept)
 	if err != nil || string(got) != "what the read reads" {
 		t.Fatalf("the box's file reads %q (%v) after the kill, want it kept for the read", got, err)
 	}
+}
+
+// killSent reports whether pid has been sent SIGKILL: it has exited — a
+// zombie, or gone — or a SIGKILL waits on it. Linux keeps a process's pending
+// signals where a test can read them (/proc/<pid>/status), and a SIGKILL sent
+// to its group waits in its shared set from the moment kill(2) returns until
+// it is reaped, so there the answer is the kernel's the instant it is read:
+// never a kill the process has not yet acted on read as none. Elsewhere it is
+// read off whether the process has exited alone.
+func killSent(t *testing.T, pid int) bool {
+	t.Helper()
+	proc, found, err := procgroup.Inspect(pid)
+	if err != nil {
+		t.Fatalf("reading pid %d: %v", pid, err)
+	}
+	if !found || proc.Zombie {
+		return true
+	}
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	status, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		t.Fatalf("reading pid %d's pending signals: %v", pid, err)
+	}
+	for line := range strings.Lines(string(status)) {
+		name, mask, ok := strings.Cut(line, ":")
+		if !ok || (name != "SigPnd" && name != "ShdPnd") {
+			continue
+		}
+		pending, parseErr := strconv.ParseUint(strings.TrimSpace(mask), 16, 64)
+		if parseErr != nil {
+			t.Fatalf("pid %d's %s mask %q: %v", pid, name, mask, parseErr)
+		}
+		if pending&(1<<(syscall.SIGKILL-1)) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // containerRig is a container box driven through a stand-in runtime that runs

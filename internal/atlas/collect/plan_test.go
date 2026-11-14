@@ -1,6 +1,7 @@
 package collect_test
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -236,4 +237,148 @@ func TestASourceIsDueByTheIntervalInForce(t *testing.T) {
 	if failed.Due(t0.Add(4*time.Minute), time.Hour) || !failed.Due(t0.Add(collect.RetryAfter), time.Hour) {
 		t.Error("a source whose read failed is not retried after the retry wait")
 	}
+}
+
+// A PART THE READ WAS REFUSED CHANGES NOTHING: what an earlier read of it
+// recorded is neither withdrawn nor missed, a miss it already had is kept at
+// its first instant and never advanced to a retirement, the rest of the read
+// is diffed as ever, and the standing names the part.
+//
+// Mutation: skip carry in Decide, and the refused part's entry is missed,
+// then retired a day later.
+func TestARefusedPartIsCarriedAndRetiresNothing(t *testing.T) {
+	t.Parallel()
+	live := world(t, t0, originA)
+	// The read lists everything but www, and was refused the part www is in.
+	read := collect.Read{
+		Claims: slices.DeleteFunc(world(t, t0.Add(time.Hour), originB), func(c atlas.Claim) bool { return c.Subject == www }),
+		Unread: []collect.Unread{{Part: "names", Detail: "Grant the permission to read names.",
+			Holds: func(c atlas.Claim) bool { return c.Subject == www }}},
+	}
+	missed := standing()
+	missed.Missing = []collect.Missing{{Since: t0.Add(-48 * time.Hour), Entries: []string{www.ID().String()}}}
+	for name, status := range map[string]collect.Status{"never missed": standing(), "missed two days ago": missed} {
+		plan := collect.Decide(live, read, status, t0.Add(time.Hour))
+		// The part that was read is diffed as ever: api moved to a new origin.
+		if got := entries(plan); !slices.Equal(got, []string{originB.String(), api.String()}) {
+			t.Errorf("%s: recorded %v, want the moved name and its new origin alone", name, got)
+		}
+		// The old origin is newly missed; www keeps exactly the miss it had.
+		since := map[string]time.Time{}
+		for _, g := range plan.Status.Missing {
+			for _, id := range g.Entries {
+				since[id] = g.Since
+			}
+		}
+		want := map[string]time.Time{originA.ID().String(): t0.Add(time.Hour)}
+		if len(status.Missing) > 0 {
+			want[www.ID().String()] = t0.Add(-48 * time.Hour)
+		}
+		if !maps.EqualFunc(since, want, time.Time.Equal) {
+			t.Errorf("%s: missing %v, want %v", name, since, want)
+		}
+		if plan.Status.Retired != 0 {
+			t.Errorf("%s: a read refused a part retired %d", name, plan.Status.Retired)
+		}
+		if len(plan.Status.Unread) != 1 || plan.Status.Unread[0].Part != "names" ||
+			plan.Status.Unread[0].Detail != "Grant the permission to read names." {
+			t.Errorf("%s: the standing's findings: %+v", name, plan.Status.Unread)
+		}
+	}
+	// A later read that is whole again clears the finding.
+	if plan := collect.Decide(live, collect.Read{Claims: world(t, t0, originA)}, missed, t0.Add(time.Hour)); len(plan.Status.Unread) != 0 {
+		t.Errorf("a whole read kept the finding: %+v", plan.Status.Unread)
+	}
+}
+
+// A VOICE DENIES ONLY WHAT IT SAID EXISTS: an entry it only related or
+// described is released after the same two misses a day apart, its slots
+// withdrawn and nothing denied, so it never retires an entry another source
+// holds.
+//
+// Mutation: build a denial for an entry the voice never claimed, and a
+// monitor somebody deletes retires the service it watched.
+func TestAVoiceDeniesOnlyWhatItSaidExists(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	// The voice says www is in the zone, and never that www exists.
+	live := []atlas.Claim{
+		m(atlas.Exists(zone, cloudflare, t0)),
+		m(atlas.Relates(www, atlas.RelationInZone, zone, cloudflare, t0)),
+	}
+	read := collect.Read{Claims: []atlas.Claim{m(atlas.Exists(zone, cloudflare, t0))}}
+	first := collect.Decide(live, read, standing(), t0.Add(time.Hour))
+	if len(first.Records) != 0 || len(first.Status.Missing) != 1 {
+		t.Fatalf("the first miss recorded %+v and missed %+v", first.Records, first.Status.Missing)
+	}
+	second := collect.Decide(live, read, first.Status, t0.Add(26*time.Hour))
+	if len(second.Records) != 1 {
+		t.Fatalf("the second miss recorded %+v", second.Records)
+	}
+	rec := second.Records[0]
+	if rec.Entry != www || rec.Retires || len(rec.Claims) != 0 || len(rec.Withdrawn) != 1 {
+		t.Errorf("an entry the voice never claimed was not simply released: %+v", rec)
+	}
+	if second.Status.Retired != 0 || second.Status.Recorded != 1 || len(second.Status.Missing) != 0 {
+		t.Errorf("the standing after a release: %+v", second.Status)
+	}
+}
+
+// AN OPTIONAL PART NOTHING WAS READ FROM IS NO FINDING, AND ONE SOMETHING
+// WAS READ FROM IS: a part behind a permission nobody asked the company for
+// (ADR-0145) is named on the standing only where the voice holds a live entry
+// the part said exists. A part that is not optional is named whatever the
+// log holds, a fact two parts share names neither, and a retired entry is no
+// longer something that was read.
+//
+// Mutation: name every unread part, and each company's source is partly read
+// from its first read, for a permission it was never asked for.
+func TestAnOptionalPartNothingWasReadFromIsNoFinding(t *testing.T) {
+	t.Parallel()
+	m := must(t)
+	account := atlas.MustRef(atlas.KindAccount, "cloudflare/0123456789abcdef0123456789abcdef")
+	worker := atlas.MustRef(atlas.KindWorkload, "cloudflare/workers/edge-api")
+	ofWorkers := func(c atlas.Claim) bool {
+		return c.Subject == worker || (c.Subject == account && c.Facet.Kind == atlas.FacetFact)
+	}
+	base := world(t, t0, originA)
+	uses := m(atlas.Says(account, atlas.FactCapability, "compute", cloudflare, t0))
+	exists := m(atlas.Exists(worker, cloudflare, t0))
+	read := func(optional bool) collect.Read {
+		return collect.Read{Claims: world(t, t0.Add(time.Hour), originA), Unread: []collect.Unread{{
+			Part: "workers", Detail: "See more in Atlas: add Workers Scripts: Read.", Optional: optional, Holds: ofWorkers,
+		}}}
+	}
+	for name, tc := range map[string]struct {
+		live     []atlas.Claim
+		optional bool
+		named    int
+	}{
+		"never read, optional":               {base, true, 0},
+		"never read, expected":               {base, false, 1},
+		"an entry read earlier, optional":    {append(slices.Clone(base), exists, uses), true, 1},
+		"only a shared fact held, optional":  {append(slices.Clone(base), uses), true, 0},
+		"an entry already retired, optional": {append(slices.Clone(base), denied(exists)), true, 0},
+		"an entry read earlier, and no fact": {append(slices.Clone(base), exists), true, 1},
+	} {
+		plan := collect.Decide(tc.live, read(tc.optional), standing(), t0.Add(time.Hour))
+		if len(plan.Status.Unread) != tc.named {
+			t.Errorf("%s: the standing names %d parts, want %d: %+v", name, len(plan.Status.Unread), tc.named, plan.Status.Unread)
+		}
+		// Named or not, a refusal withdraws and retires nothing.
+		for _, rec := range plan.Records {
+			if rec.Entry == worker || rec.Entry == account {
+				t.Errorf("%s: the refused part recorded %+v", name, rec)
+			}
+		}
+		if len(plan.Status.Missing) != 0 {
+			t.Errorf("%s: the refused part missed %+v", name, plan.Status.Missing)
+		}
+	}
+}
+
+// denied is c as its voice retired it.
+func denied(c atlas.Claim) atlas.Claim {
+	c.Denied = true
+	return c
 }

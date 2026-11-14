@@ -12,9 +12,15 @@
  * not in browser storage either: what this tab has not said is not state
  * anything else on the machine should be able to read. A reload starts clean,
  * which is what closing a half-written letter does.
+ *
+ * A BRANDED STORE ([DraftStore], `draft.ts`): what a box holds is a field of
+ * the room's one draft for the person's own assistant, so the draft gate
+ * reads a call into this store as a write of that draft, wherever it is
+ * made.
  */
 
 import { createContext, useContext, useState, useSyncExternalStore } from "react";
+import { DraftStore } from "~/app/assistant/draft.ts";
 
 /** One unsent draft, as Drafts and sent lists it. */
 export interface ChatDraft {
@@ -32,7 +38,7 @@ export function draftKey(room: string, root?: string): string {
   return root ? `${room}/${root}` : room;
 }
 
-export class ChatDrafts {
+export class ChatDrafts extends DraftStore {
   private readonly held = new Map<string, ChatDraft>();
   private readonly listeners = new Set<() => void>();
   /** Bumped on every change, so a reader's snapshot is a cheap number. */

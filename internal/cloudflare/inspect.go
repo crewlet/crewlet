@@ -21,6 +21,11 @@ type inspection struct {
 	// unheld is the provisioner groups the token does not hold itself; nil
 	// where its own policy could not be read.
 	unheld []string
+
+	// atlasUnheld is the atlas's optional groups the token does not hold;
+	// nil where its own policy could not be read. Never a gap: a token
+	// without them is whole (ADR-0145).
+	atlasUnheld []string
 }
 
 // stage is one read of an inspection, and the permission it needs.
@@ -104,34 +109,36 @@ func inspect(
 	in.unresolved = in.cat.unresolvedLevels()
 	err := call(stageOwn, func(ctx context.Context) error {
 		var err error
-		in.unheld, err = readUnheld(ctx, c, in.cat, in.status.ID)
+		in.unheld, in.atlasUnheld, err = readUnheld(ctx, c, in.cat, in.status.ID)
 		return err
 	})
 	return in, err
 }
 
-// readUnheld is the provisioner groups the token tokenID does not hold, read
-// from its own policy; nil where Cloudflare will not show the token that
-// policy, which says nothing about what it holds, so nothing is guessed.
-func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) ([]string, error) {
+// readUnheld is the provisioner groups the token tokenID does not hold, and
+// the atlas's optional ones it does not, read from its own policy; nil where
+// Cloudflare will not show the token that policy, which says nothing about
+// what it holds, so nothing is guessed.
+func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) (unheld, optional []string, err error) {
 	own, found, err := c.Token(ctx, tokenID)
 	if Status(err) == http.StatusForbidden {
 		// NOT SHOWN, which is an answer rather than a failure: no gap is judged.
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !found {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return cat.unheld(own.Policies), nil
+	return cat.unheldOf(own.Policies, ProvisionerGroups()), cat.unheldOf(own.Policies, AtlasGroups()), nil
 }
 
-// unheld is every provisioner group the policies do not allow, by name. A
-// group the catalogue cannot resolve is not judged here: the level that names
-// it is reported instead.
-func (c catalogue) unheld(policies []Policy) []string {
+// unheldOf is every group of names the policies do not allow. A group the
+// catalogue cannot resolve is not judged here: for a provisioner group the
+// level that names it is reported instead, and an optional one the account
+// is not offered is nothing a token could add.
+func (c catalogue) unheldOf(policies []Policy, names []string) []string {
 	held := map[string]bool{}
 	for _, p := range policies {
 		if p.Effect != "allow" {
@@ -142,7 +149,7 @@ func (c catalogue) unheld(policies []Policy) []string {
 		}
 	}
 	out := []string{}
-	for _, name := range ProvisionerGroups() {
+	for _, name := range names {
 		ids := slices.Concat(c.idsNamed(name, scopeAccount), c.idsNamed(name, scopeZone))
 		if len(ids) == 0 {
 			continue

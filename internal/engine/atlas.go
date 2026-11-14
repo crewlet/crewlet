@@ -28,7 +28,28 @@ func AtlasToolDeps(e *Engine) builtin.AtlasDeps {
 	if e == nil {
 		return builtin.AtlasDeps{}
 	}
-	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords}
+	return builtin.AtlasDeps{Settings: e.atlasSettings, Records: e.atlasRecords, Log: e.atlasLog, Sources: e}
+}
+
+// AtlasRefreshToolDeps is what a person asks for a read of one atlas source
+// through on this node: the coordination store, where the node holding the
+// collect duty reads the ask. Who asks is the surface's, set per call. The
+// zero value where this node has no coordination store.
+func AtlasRefreshToolDeps(e *Engine) builtin.AtlasRefreshDeps {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return builtin.AtlasRefreshDeps{}
+	}
+	return builtin.AtlasRefreshDeps{Sources: e}
+}
+
+// atlasLog is the atlas's log as this node reads it: through the router, so
+// a node without the data role reads its lines and its counts too.
+func (e *Engine) atlasLog(context.Context) (builtin.AtlasLogReads, bool) {
+	reads, ok := e.AtlasReads()
+	if !ok {
+		return nil, false
+	}
+	return reads, true
 }
 
 // atlasRecords is every record source of the engine's the atlas reads, as
@@ -85,6 +106,32 @@ func AtlasWriteToolDeps(e *Engine) builtin.AtlasWriteDeps {
 		return builtin.AtlasWriteDeps{}
 	}
 	return builtin.AtlasWriteDeps{Log: atlasLog{AtlasReader: reads, AtlasWriter: writes}}
+}
+
+// atlasRecordBucket is the fleet counter one seat's atlas records are counted
+// in, by the seat's derived agent id, as its token counter is keyed.
+func atlasRecordBucket(agentID string) string { return "atlas-records:" + agentID }
+
+// AtlasRecordToolDeps is what an agent's atlas records are made through on
+// this node (ADR-0132): the log's writer through the router, so a seat held
+// on a node without data records too, and the fleet's shared counter, a UTC
+// day wide, so a seat's allowance holds whichever node runs its turns. The
+// zero value where this node reaches no writer or no counter.
+func AtlasRecordToolDeps(e *Engine) builtin.AtlasRecordDeps {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return builtin.AtlasRecordDeps{}
+	}
+	writes, writable := e.AtlasWrites()
+	if !writable {
+		return builtin.AtlasRecordDeps{}
+	}
+	counter := e.backends.Fleet
+	return builtin.AtlasRecordDeps{
+		Log: writes,
+		Allow: func(ctx context.Context, agentID string, limit int, now time.Time) (bool, error) {
+			return counter.Allow(ctx, atlasRecordBucket(agentID), limit, coord.MaxCounterWindow, now)
+		},
+	}
 }
 
 // atlasLog is the log's two sides as one, as the write tools take it.

@@ -308,6 +308,23 @@
 // package holds is [settled]: its conditional writes are retried through
 // [jsinflight.Decide] until the leader decides them, and one still undecided
 // at its deadline is UNKNOWN rather than a race somebody else won (settle.go).
+//
+// # A write across a link waits as long as its bytes take to cross
+//
+// A node without the `data` role reaches these buckets across its leaf link,
+// and every node on an external broker across the network, at a pace the
+// engine allows to be as slow as the object store's floor, thirty seconds a
+// mebibyte. A write whose caller set no deadline was held to the client's five
+// seconds, and one whose value took longer to cross failed as the store being
+// unavailable while its bytes were still on the link; an MCP listing of up to
+// 896 KiB, which every node with seats writes, failed the same way under the
+// fifteen seconds of the beat that wrote it, on any link below about 60 KiB a
+// second at its bound. So every write of a settled bucket whose caller set no deadline
+// waits the request term and, across a link, the crossing of what it carries
+// for every send the client may make of it (settle.go), and each store is told
+// how its connection reaches its buckets where it is opened ([Reach]: the
+// engine states it from its broker's kind), since nothing it is handed can
+// say.
 package kv
 
 import (
@@ -425,9 +442,17 @@ type Config struct {
 	// the other's claims, because the protocol gate is deliberately
 	// fleet-wide.
 	BucketPrefix string
+
+	// Reach is how this node's connection reaches the buckets — in its own
+	// process, or across a link — which decides how long a write's bytes
+	// are given to cross ([Reach]). Required.
+	Reach Reach
 }
 
 func (c *Config) normalize() error {
+	if err := checkReach("Config", c.Reach); err != nil {
+		return err
+	}
 	switch {
 	case c.TTL <= 0:
 		return fmt.Errorf("coord/kv: Config.TTL is required")
@@ -447,7 +472,8 @@ func (c *Config) normalize() error {
 // lease buckets: ONE prefix and one replica count, so a store and a counter
 // opened from the same deployment name the same bucket (see [OpenEpochs]).
 func (c *Config) buckets() EpochsConfig {
-	return EpochsConfig{Clustered: c.Clustered, Replicas: c.Replicas, BucketPrefix: c.BucketPrefix}
+	return EpochsConfig{Clustered: c.Clustered, Replicas: c.Replicas, BucketPrefix: c.BucketPrefix,
+		Reach: c.Reach}
 }
 
 // lane is one lease bucket and the rule its records expire by.
@@ -619,7 +645,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// bucket, so believing a number the bucket does not carry would
 		// accept deadlines it will not honour.
 		leases: &lane{
-			kv:         settled(js, leases),
+			kv:         settled(js, leases, cfg.Reach),
 			read:       readers[0],
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
@@ -628,7 +654,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		// The duty bucket's ceiling is the CONTRACT's, and its age only has
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
-			kv:         settled(js, duties),
+			kv:         settled(js, duties, cfg.Reach),
 			read:       readers[1],
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
@@ -1841,7 +1867,16 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 }
 
 // unavailable turns a transport failure into the contract's third answer.
+//
+// A REFUSAL MADE BEFORE ANYTHING WAS SENT is not one, and passes through
+// unmarked: a value past what a key holds ([coord.ErrValueTooLarge]) is a
+// definite answer no retry changes, and marked unavailable it read to its
+// caller as an outage — a config write answered with a store outage, a sandbox
+// row's every write retried for good.
 func unavailable(what string, err error) error {
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	return fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
 }
 
@@ -1850,8 +1885,13 @@ func unavailable(what string, err error) error {
 //
 // For the methods that read before they write, whose caller cannot otherwise
 // tell this failure from the read's — after which nothing was written — and
-// would tell a person a change that may have happened did not.
+// would tell a person a change that may have happened did not. A refusal made
+// before anything was sent passes through as [unavailable] says: it was never
+// sent, so it cannot have landed.
 func writeUnknown(what string, err error) error {
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	return fmt.Errorf("%w: %w: %s: %w", coord.ErrUnavailable, coord.ErrWriteUnknown, what, err)
 }
 

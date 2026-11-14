@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -100,12 +101,15 @@ func repoOn(t testing.TB, n *node, name string) string {
 	return repo
 }
 
-// proposal is one push to repo of undecided commands, with no pack.
+// proposal is one push to repo of undecided commands, with no pack, made for
+// nobody but its pusher — stated, so the seat's a case puts in its place
+// (seatProposal) states it too.
 func proposal(repo string, cmds ...gitlet.Command) gitlet.Proposal {
 	return gitlet.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
 		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-1", Seat: "ada"},
 		Via:       gitlet.ViaGit, Node: "node-a", Commands: cmds, ReceivedAt: harnessAt,
+		WrittenFor: types.ForNobody(),
 	}
 }
 

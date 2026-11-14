@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -487,10 +488,11 @@ func (s *Server) ClientListener() string {
 // stopped but one: a consumer's state write already in flight, which
 // nats-server waits for for at most 100 ms. A write that a loaded machine
 // stretches past that lands afterwards. So the caller's next step — a
-// test's TempDir removing the store, a scratch store being deleted, a process
-// exiting with its consumers' last acknowledgements on disk — can still meet
-// one late write. It is rare on an idle host and measured under contention in
-// [shutdownAndClean], which also says what would remove it.
+// test removing the store, a scratch store being deleted, a process exiting
+// with its consumers' last acknowledgements on disk — can still meet one late
+// write. It is rare on an idle host and measured under contention in
+// [shutdownAndClean], which also says what would remove it, and what a test
+// does until then.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
 		s.embedded.shutdown()
@@ -836,9 +838,13 @@ func routeURLs(peers []string, username, password string) ([]*url.URL, error) {
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	// A TEST'S BROKER DECLARES ITS SIZE, before anything is built for it
-	// ([ErrUndeclaredSize]).
+	// A TEST'S BROKER DECLARES ITS SIZE AND KEEPS ITS STORE IN A
+	// brokertest.TempDir, both before anything is built for it
+	// ([ErrUndeclaredSize], [ErrStoreOutsideTempDir]).
 	if err := undeclaredSize(ctx, cfg); err != nil {
+		return nil, err
+	}
+	if err := storeOutsideTempDir(cfg); err != nil {
 		return nil, err
 	}
 	// THE AUTHENTICATOR, with this start's own keys: the engine's on every
@@ -1579,7 +1585,13 @@ type stoppable interface {
 // flight or landing after this returned (0 of 1,200 in the lighter harness
 // above). With the stop joining the flush loop instead of polling for it, the
 // same runs gave 0 of 1,531. That change is nats-server's to make; nothing
-// here can join a goroutine the server keeps no handle to.
+// here can join a goroutine the server keeps no handle to. Until a pinned
+// release makes it, a TEST keeps its store in brokertest.TempDir, whose
+// removal tries again while a late write leaves the directory not empty
+// (crewlet/crewlet#1079), where a t.TempDir's single removal failed the case,
+// and a test binary refuses to start a broker whose store is anywhere else
+// ([ErrStoreOutsideTempDir]); that retry and that refusal go, and this
+// paragraph with them, once the pin joins the loop.
 //
 // It exists because the two shapes had drifted: the ordinary teardown waited
 // and the two failure paths inside [startEmbedded] did not, which is the
@@ -1711,6 +1723,62 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 // to either side has to read.
 const externalHandshake = 2 * time.Second
 
+// externalWriteDeadline is how long one socket Write of an external dial's
+// client may take before the client gives the connection up
+// (nats.FlusherTimeout): the largest Write the client makes, at the slowest
+// pace the engine allows a link (objstore.MiBPace) — about eight minutes.
+//
+// # The client writes a large message whole, in ONE Write, under ONE deadline
+//
+// A publish takes the connection's lock (nats.go v1.55.0, nats.go:4730) and
+// appends its message to the write buffer (:4814); past the buffer's flush
+// threshold, 32 KiB (DefaultWriteBufSize, :64), the buffer is flushed there and
+// then as one Write (:2364, :2389) through a writer that sets FlusherTimeout
+// as that Write's deadline (:2342-2346, :7026-7030), and a Write cut part way
+// closes the connection (:2389-2395). A reconnect flushes what it buffered
+// while the connection was down the same way, as one Write (:3350-3351,
+// :3603, :2411-2420), and that buffer takes a message as long as it holds
+// less than its limit (:2422-2427, :4758), DefaultReconnectBufSize, 8 MiB
+// (:63, :181). Left at the client's minute (DefaultFlusherTimeout, :67, :183),
+// a write of more than about two mebibytes at the floor was cut at a minute,
+// and the connection with it — every request, acknowledgement and coordination
+// write on it failing too — long before the budget the write itself was given
+// (internal/jsapi's WriteBound), so on `stream.type: nats` a write at the
+// contract's ceiling could never be acknowledged at the floor.
+//
+// # Sized by the write's own rule
+//
+// One message at the contract's ceiling (queue.MaxPayloadBytes) behind as much
+// as either of the client's buffers holds short of its limit — the write
+// buffer's 32 KiB in service, the reconnect buffer's 8 MiB after a
+// reconnect — crossing at the floor, its protocol line counted
+// (jsapi.Sending): sixteen mebibytes, about eight minutes.
+//
+// WHAT IT COSTS: a connection that dies while a large Write is on it is given
+// up only when that Write's deadline passes — up to about eight minutes, where
+// it was one — and the connection's lock is held all the while, so nothing
+// else on it moves (the head of the line crewlet/crewlet#1035 is about). A
+// small write never waits on it: it fits the socket's send buffer and returns
+// at once, and a peer that dies under small writes is found by the client's
+// pings as before. A member's own connection is in its own process and
+// crosses nothing, and keeps the client's minute.
+//
+// AND IT HOLDS EVERY CALLER ON THE CONNECTION PAST ITS OWN DEADLINE, not only
+// the one whose write is in the socket: the client checks a caller's context
+// before a request is sent and while its reply is awaited (nats.go v1.55.0,
+// context.go:49, :67-79), but the send (nats.go:4873, :4730) and giving up on
+// the reply (context.go:76) each wait for the connection's lock, unchecked, and
+// a large Write holds that lock for its whole length: publish's own flush past
+// the write buffer (:4814 to :4825), the flusher's (:4248 to :4272) and a
+// reconnect's flush of its buffer (:3554 to :3632). So a caller, a small write
+// and a lease renewal among them, is held behind every large Write ahead of it
+// on the connection, each up to this deadline, about eight minutes where the
+// client's minute cut the Write and the connection with it, and then for its
+// own; nothing bounds how many are ahead. Bounding the wait needs the write
+// windowed, crewlet/crewlet#1035.
+var externalWriteDeadline = jsapi.Sending(
+	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
+
 // dialOptions is the option list, separated from the dial so a test can
 // assert what a config produces without a broker to connect to — and the
 // [infoDialer] the list dials through, which keeps the INFO line
@@ -1739,6 +1807,12 @@ func dialOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.Timeout(externalHandshake),
+		// EVERY WRITE OF THE LARGEST THE CLIENT MAKES, AT THE FLOOR, before
+		// the client cuts the connection under it: left at its minute, a
+		// write of more than about two mebibytes across a link at the
+		// floor broke the connection long before its own budget ended. See
+		// [externalWriteDeadline], and what the longer deadline costs.
+		nats.FlusherTimeout(externalWriteDeadline),
 		// And say so when a reconnect lands on a member that holds this
 		// connection to less than the contract — the half of the dial's
 		// own check a boot cannot reach. See [reconnectWatch].

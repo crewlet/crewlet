@@ -23,6 +23,13 @@ import (
 // the engine reads the whole turn's record (turn.Record), and a round sent
 // back for a re-read that believed otherwise submitted with no citation, or
 // went looking for some other surface to deliver on.
+//
+// AND A LINE COUNTING CALLS BY TOOL IS READ BY THE SAME RULES. A record that
+// no longer lists calls one by one counts them by tool (ledger.FormatElided):
+// a long run's middle its row dropped, a parked turn's rounds condensed past
+// their calls, and rounds a park dropped whole, which are drawn as nothing
+// else. Told only how to read a marked line, a model read a counted call as
+// one it could make again — the duplicate this header exists to prevent.
 const PriorWorkHeader = "## Already done earlier in this turn" +
 	"\nAn earlier round of this turn was sent back. Every call below marked" +
 	" `→ success` ALREADY RAN:" +
@@ -33,6 +40,11 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" was the delivery, it still counts: name it in `" + toolname.SubmitWork + "`'s" +
 	" `deliveries`." +
 	"\n- **`→ error`** did not take effect: retry it, fixed." +
+	"\n- **A line counting calls by tool** (`some_tool ×3 (1 failed)`)" +
+	" stands for calls the record no longer lists one by one, and they ran" +
+	" all the same: those it does not count as failed ALREADY RAN, read by" +
+	" the rules above, and one it says has an unknown outcome may have taken" +
+	" effect: check whether it did before making it again." +
 	"\nDeliver only what is still missing. A follow-up to an earlier" +
 	" delivery ADDS to it — reply in its thread, edit the item — rather than" +
 	" re-sending it, and is not a duplicate."

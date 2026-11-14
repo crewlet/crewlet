@@ -84,6 +84,43 @@ func TestAClaudeRunIsChargedWhatItsOwnResultsStated(t *testing.T) {
 	}
 }
 
+// A CLAUDE CODE RUN WHOSE RESULT STATES ITS SPEND FOR MORE MODELS THAN A
+// RESULT IS READ FOR IS CHARGED WHAT ITS RESULT STATES, as a run on a release
+// that states no spend model by model is: that result is read for none of its
+// models, so no sum of its results' spend is the run's own, and the run is
+// charged neither the sum of the results before it nor that of the models
+// before the bound, either of which would leave calls it made uncharged. A
+// fresh run's result states the run's own spend.
+//
+// Mutation: drop the bound, or read a result past it as one that states
+// nothing, and the run is charged a sum of its results' spend model by model.
+func TestAClaudeRunWhoseResultNamesTooManyModelsIsChargedItsResult(t *testing.T) {
+	t.Parallel()
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	models := make([]string, 0, executor.ClaudeResultModelsMax+1)
+	for i := range executor.ClaudeResultModelsMax + 1 {
+		models = append(models, `"claude-test-`+itoa(i)+`":{"inputTokens":1,"outputTokens":1,"costUSD":0.01}`)
+	}
+	first := claudeResultLine(5000, 900, 70000, 4000, 9.5,
+		`{"claude-opus-5-5":{"inputTokens":10,"outputTokens":5,"cacheReadInputTokens":100,`+
+			`"cacheCreationInputTokens":1,"costUSD":0.10}}`)
+	last := claudeResultLine(5030, 912, 70300, 4003, 9.8, "{"+strings.Join(models, ",")+"}")
+	b.Put(p.Stream(), first+"\n"+last+"\n")
+	b.Put(p.Result(), last)
+	b.Put(p.ExitCode(), "0")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	want := spend{input: 5030 + 70300 + 4003, output: 912, cacheRead: 70300, cacheWrite: 4003, cost: 9.8}
+	if got := spendOf(res); !got.near(want) {
+		t.Fatalf("the run was charged %+v, want what its result states, %+v", got, want)
+	}
+}
+
 // A RESULT THAT STATES NO PER-RUN FIGURES IS CHARGED AS IT IS, where the run
 // did not continue a session: its totals are the run's own on every release.
 //

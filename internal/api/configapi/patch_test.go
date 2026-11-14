@@ -641,3 +641,53 @@ func TestAStalePreconditionIsStillRefused(t *testing.T) {
 		t.Fatalf("Apply on a stale base = %v, want a RacedError", err)
 	}
 }
+
+// A DOCUMENT ITS ACTIVATION CANNOT CARRY IS REFUSED BEFORE ANYTHING IS STORED.
+//
+// The company document reaches every node sealed inside the activation
+// pointer, one value of the coordination store, which holds a key to
+// coord.MaxValueBytes. A body is held to MaxBodyBytes, but a patch is merged
+// onto the active document and grows it by up to a body each time, and the
+// seal writes it a third larger: a document past what the pointer carries was
+// stored as history no node could ever be pointed at, and its activation
+// answered as a store outage. Here a peer-extended document of two and a half
+// mebibytes is patched past six, each body inside its bound: the write is
+// refused as too large, naming the document's size and the pointer's, and no
+// revision is stored.
+//
+// Mutation: hold the document to the pointer's bound only after the revision
+// is stored, or not at all, and a revision is kept that nothing can activate.
+func TestADocumentItsActivationCannotCarryIsRefusedBeforeAnythingIsStored(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedStored(t, companyDoc, func(document map[string]any) {
+		document["a_setting_from_a_newer_build"] = strings.Repeat("a", 5<<19)
+	})
+	before := s.revisionCount(t)
+
+	grown, err := json.Marshal(map[string]any{"skill_variables": map[string]string{
+		"grown_a": strings.Repeat("b", 15<<17), "grown_b": strings.Repeat("c", 15<<17)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grown) > configapi.MaxBodyBytes {
+		t.Fatalf("the patch is %d bytes, past the %d a body may be", len(grown), configapi.MaxBodyBytes)
+	}
+	res := s.do(t, http.MethodPatch, "/config", string(grown), summaryHeader)
+	if res.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PATCH of a document past what its activation carries = %d %s, want 413",
+			res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode the refusal: %v", err)
+	}
+	if body["error"] != "body_too_large" || body["document_bytes"] == nil ||
+		body["pointer_bytes"] == nil || body["max_pointer_bytes"] != float64(coord.MaxValueBytes) {
+		t.Errorf("the refusal does not say what was too large, and by how much: %s", res.Body.String())
+	}
+	if after := s.revisionCount(t); after != before {
+		t.Errorf("a refused write stored %d revisions, want none: no node could be pointed at it",
+			after-before)
+	}
+}

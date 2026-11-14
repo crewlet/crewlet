@@ -73,7 +73,7 @@ import type {
   SetupVerdict,
 } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";
@@ -652,7 +652,7 @@ export function SetupForm({
     [sections],
   );
 
-  const [values, setValues] = useState<Record<string, string>>(() => {
+  const [values, setValues] = useDraftState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const section of sections) {
       for (const r of ownBy.get(sectionKey(section)) ?? []) {
@@ -872,7 +872,7 @@ export function SetupForm({
           .map((r) => ({ key: valueKey(section, r), r })),
       ),
     ),
-    apply: (next) => setValues({ ...next }),
+    write: writeVia(setValues, (next: Readonly<Record<string, string>>) => ({ ...next })),
     blocked: () => (busy ? "Waiting for the engine to finish writing." : null),
   });
 

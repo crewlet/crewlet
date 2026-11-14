@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest";
 import { draftSnapshot, parseDraftChange } from "~/app/assistant/draft.ts";
 import type { SetupRequirement } from "~/protocol/index.ts";
 import { setupDraftFields, setupPath } from "./setupDraft.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 const req = (over: Partial<SetupRequirement>): SetupRequirement =>
   ({
@@ -47,7 +48,7 @@ const spec = (apply = (_: Readonly<Record<string, string>>) => {}) => ({
       }),
     },
   ]),
-  apply,
+  write: heldWrite(apply),
 });
 
 describe("the integration settings draft", () => {

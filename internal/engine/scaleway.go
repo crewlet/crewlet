@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/scaleway"
@@ -16,9 +18,11 @@ import (
 // key and the organization it provisions in, then each agent's own
 // application, policy and key.
 //
-// NO TEARDOWN: the engine puts nothing company-wide at Scaleway. Every agent's
-// application is deleted by the disconnect's access sync
-// ([Engine.tearDownSeatAccess]), from the ledger.
+// ONE THING IS COMPANY-WIDE AT SCALEWAY: the atlas application, made where
+// the company switched `integrations.scaleway.atlas` on (ADR-0144). The pass
+// keeps it and its teardown deletes it. Every agent's application is deleted
+// by the disconnect's access sync ([Engine.tearDownSeatAccess]), from the
+// ledger.
 type scalewayPass struct{ engine *Engine }
 
 func (*scalewayPass) Kind() integration.Kind { return integration.KindScaleway }
@@ -31,7 +35,7 @@ func (p *scalewayPass) Run(ctx context.Context, in setup.PassInput) ([]integrati
 	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
 }
 
-func (p *scalewayPass) run(ctx context.Context, _ setup.PassInput) ([]integration.Finding, error) {
+func (p *scalewayPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Scaleway
 	if cfg == nil || !cfg.Enabled {
@@ -89,12 +93,98 @@ func (p *scalewayPass) run(ctx context.Context, _ setup.PassInput) ([]integratio
 	}
 	res, err := scaleway.Reconcile(ctx, scaleway.Options{
 		Client: client, AccessKey: access, Company: company.Config.Name, Seats: seats,
-		InUse: seataccess.LevelsInUse(company.Config, seataccess.LaneScaleway),
+		InUse:              seataccess.LevelsInUse(company.Config, seataccess.LaneScaleway),
+		AtlasApplicationID: sealedValue(env, scaleway.AtlasApplicationName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: scaleway pass: %w", err)
 	}
-	return res.Findings(), nil
+	found, err := p.atlas(ctx, in, client, company.Config.Name, cfg.Atlas)
+	if err != nil {
+		return nil, err
+	}
+	return append(res.Findings(), found...), nil
+}
+
+// sealedValue is the value sealed under name on this node, "" where none is.
+func sealedValue(env *config.Resolver, name string) string {
+	return strings.TrimSpace(env.Value("${" + name + "}"))
+}
+
+// atlas brings the atlas application to the company's setting.
+//
+// A FAILURE HERE IS A FINDING, NEVER THE PASS'S: the atlas is optional
+// reading, and a pass that failed over it would report the whole connection
+// broken while every agent's application works. Only a pass that was
+// cancelled answers an error.
+func (p *scalewayPass) atlas(
+	ctx context.Context, in setup.PassInput, client *scaleway.Client, company string, want bool,
+) ([]integration.Finding, error) {
+	env := p.engine.resolver()
+	found, err := scaleway.ReconcileAtlas(ctx, scaleway.AtlasOptions{
+		Client: client, Company: company, Want: want, Sink: in.Sink,
+		ApplicationID: sealedValue(env, scaleway.AtlasApplicationName),
+		AccessKey:     sealedValue(env, scaleway.AtlasAccessName),
+		SecretHeld:    sealedValue(env, scaleway.AtlasSecretName) != "",
+	})
+	switch {
+	case err == nil:
+		return found, nil
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("engine: scaleway pass: %w", ctx.Err())
+	}
+	log.WarnContext(ctx, "scaleway_atlas_application_unconverged", "error", err)
+	title, detail := "Atlas application not up to date", "Crewlet could not bring the read-only IAM application "+
+		"it keeps for Atlas up to date, so Atlas may read less at Scaleway. The next check tries again"
+	if !want {
+		title, detail = "Atlas application not deleted", "Crewlet could not delete the read-only IAM application "+
+			"it made for Atlas. The next check tries again"
+	}
+	return append(found, integration.Finding{
+		Kind: integration.FindingCoveragePartial, Subject: "integrations.scaleway.atlas",
+		Title: title, Detail: detail, ActionURL: scaleway.ApplicationsURL,
+		Remedy: "If it stays, check the provisioner application still holds IAMApplicationManager and " +
+			"IAMPolicyManager on the Organization",
+	}), nil
+}
+
+// Teardown deletes the atlas application with its policy and its key, and
+// forgets what was sealed for it. One never made, or already gone, is the
+// state asked for.
+func (p *scalewayPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Scaleway
+	env := p.engine.resolver()
+	appID := sealedValue(env, scaleway.AtlasApplicationName)
+	if appID == "" && sealedValue(env, scaleway.AtlasAccessName) == "" && sealedValue(env, scaleway.AtlasSecretName) == "" {
+		return provision.Removed{}, nil
+	}
+	if appID != "" {
+		if cfg == nil || cfg.Provisioning == nil {
+			return provision.Removed{}, errors.New("engine: scaleway teardown: the atlas application cannot be " +
+				"deleted without integrations.scaleway.provisioning")
+		}
+		client, err := scaleway.NewClient(scaleway.ClientOptions{
+			OrganizationID: env.Value(cfg.Provisioning.OrganizationID),
+			SecretKey:      env.Value(cfg.Provisioning.SecretKey),
+		})
+		if err != nil {
+			return provision.Removed{}, fmt.Errorf("engine: scaleway teardown: %w", err)
+		}
+		if err := scaleway.RemoveAtlas(ctx, client, appID); err != nil {
+			return provision.Removed{}, fmt.Errorf("engine: scaleway teardown: %w", err)
+		}
+	}
+	// FORGOTTEN HERE, not through the seats' removal list: these names are no
+	// seat's, and the key they held died with the application.
+	sink, err := p.engine.SetupSink(in.By)
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: scaleway teardown: %w", err)
+	}
+	if err := sink.Forget(ctx, scaleway.AtlasSealedNames()...); err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: scaleway teardown: %w", err)
+	}
+	return provision.Removed{}, nil
 }
 
 // seatPlan is every agent that is on at Scaleway, whose secret key and access

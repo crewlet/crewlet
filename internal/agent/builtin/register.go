@@ -151,6 +151,11 @@ type Deps struct {
 	// whoever woke its turn (ADR-0109), a private address only within its own
 	// reach. The zero value omits them. See atlas.go.
 	Atlas AtlasDeps
+
+	// AtlasRecord is the atlas's agent tools': what a seat records in the
+	// atlas from a call of its own turn, and its dispute of what the atlas
+	// holds (ADR-0132). The zero value omits them. See atlasrecord.go.
+	AtlasRecord AtlasRecordDeps
 	// Delegated is what a delegate's verdict tool acts through (ADR-0125);
 	// a nil desk omits review_delegated.
 	Delegated DelegatedDeps
@@ -232,6 +237,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		deps.Artifacts.Requesters, deps.Code.Requesters = deps.Requesters, deps.Requesters
 		deps.Health.Requesters = deps.Requesters
 	}
+
+	deps.Work.entries = atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}
 
 	withdraw := deps.Withdraw
 	withdraw.Work = deps.Work
@@ -367,6 +374,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
 		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
 		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
+		atlasAgentCandidates(deps.AtlasRecord,
+			atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		releaseCandidates(release), delegatedCandidates(delegatedDeps))
 
 	var names []string
@@ -492,6 +501,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := atlasAnnotations(name); ok {
+		return a
+	}
+	if a, ok := atlasAgentAnnotations(name); ok {
 		return a
 	}
 	if name == ReviewDelegatedTool {
@@ -836,6 +848,12 @@ func annotationsFor(name string) tools.Annotations {
 		// has resumed it, and the annotation describes the tool rather
 		// than the engine's protection.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case AtlasRefreshTool:
+		// AN ASK, which replaces nothing and is the same ask made twice, so
+		// neither destructive nor a second change. Open-world: honouring it,
+		// the engine reads a vendor outside itself.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
 		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
 		// executor it has out with its box, and neither is run again —

@@ -1396,9 +1396,28 @@ const (
 	// bounds held to the engine's among them, and the pin page folded into the
 	// frame's half), took it to 400.5 KiB (410,133 bytes, -1,515) there.
 	// Merged with main since the required checks it measures 402.5 KiB
-	// (412,160 bytes), 1,536 bytes inside 404 KiB: the next addition to
-	// the entry moves this budget only with a reason of its own.
-	initialBudget = 404 << 10
+	// (412,160 bytes), 1,536 bytes inside 404 KiB. Ask Crewlet reading the
+	// atlas took it to 402.5 KiB (412,164 bytes), and every declared draft
+	// held in branded state, merged on top of it, to 402.5 KiB (412,161
+	// bytes, -3), 1,535 bytes inside it: the next addition to the entry moves
+	// this budget only with a reason of its own.
+	// Kit 0.123.0 and the one-page Company › Atlas took it to 406.1 KiB
+	// (about +3,690 gzipped): the one sheet +3,376 (the kit's layered service
+	// map, its colour steps per palette and mode, the ring, the disc and the
+	// pointed row, which ride it by rule while the map's code is the atlas
+	// chunk's) and the kit's shared chunks about +310. Every screen's module
+	// of it is lazy. So it moved to 407 KiB, 2.22 seconds.
+	// The advisor's two sentences for an atlas it could not read, which the
+	// attention queue says to an administrator and so the entry carries,
+	// took it to 407.02 KiB (416,788 bytes), 20 bytes past it: 408 KiB,
+	// 2.23 seconds.
+	// A task's atlas entries took it to 407.1 KiB, 86 bytes gzipped in
+	// modules the entry already reads: the act row's argument and the atlas
+	// questions it refreshes, the three questions' names, and the history's
+	// wording for the count. The rail's group, the link dialog, the Work tab
+	// and the marks are the Worklet and atlas chunks'. So it moved to 408
+	// KiB, 2.23 seconds.
+	initialBudget = 408 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2302,7 +2321,68 @@ const (
 	// certificate kind, the facts and the relation an integration's read
 	// fills, named in the atlas words, merged on top of it, took it to 5841.0
 	// KiB (5,981,148 bytes, +386, all script), 36 bytes inside it.
-	treeBudget = 5<<20 + 721<<10
+	// Every draft a screen declares to Ask Crewlet held in branded state, so
+	// the draft gate reads through the checker which modal a page hands its
+	// draft to (draft.ts's mints, and every declaring screen, box and store
+	// moved onto them), merged on top of it, took it to 5841.8 KiB
+	// (5,982,024 bytes, +876, all script): 5842 KiB.
+	// A monitor's state and since when, and the three signals a monitor
+	// raises on what it watches, named in the atlas words, took it to 5842.0
+	// KiB (5,982,209 bytes, +185, all script), one byte past it: 5843 KiB.
+	// The one-page Company › Atlas on kit 0.123.0, merged on top of it, took
+	// it to 5895.6 KiB (6,037,106 bytes, +54,642: script about +26,500, of
+	// which the atlas chunk, the band, the catalogue, the neighbourhood
+	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
+	// sheets about +28,100, the kit's layered service map in the one sheet
+	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
+	// Kit 0.124.0 and the decision rows read in product words took it to
+	// 5898.0 KiB (6,039,547 bytes, +2,441: script +1,811, a held call's
+	// title from its own arguments, the one escalation heading and the row's
+	// detail; the sheets +630, the kit's quiet callout and compact finding
+	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
+	// moves this budget with a reason of its own.
+	// Adding, correcting and confirming in the atlas (Add entry, an entry's
+	// actions and their dialogs, History, Changes, Review and its bulk
+	// decision, and the vocabulary's fact and relation tables the dialogs
+	// offer from), merged on top of it, added 48,677 bytes, nearly all of it
+	// the atlas chunk's script. The SSH integration's Servers section (each
+	// server's "Read for Atlas" switch and the dialog that lists the commands
+	// first) and the atlas's workload kind, image and open ports, named in
+	// the atlas words, added 3,572, all script. A repository's files as an
+	// atlas source, with the workload's rows in the tables the dialogs offer
+	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
+	// +52,609): 5950 KiB.
+	// Atlas, Sources (each source's card with its last read in figures, what
+	// it was refused, the servers' table and Refresh now, with the route, the
+	// band's link and the question's and the action's declarations) added
+	// 6,268 bytes, script +6,171 and the atlas sheet +97, and took it to
+	// 5955.5 KiB (6,098,424 bytes): 5956 KiB.
+	// An agent's evidence in Review (each report's by-line and the call it
+	// cited, under a waiting entry and beside an agent's value), the bulk
+	// dialog's reporter and the Inbox's notice of drift on what the reader
+	// set added 2,322 bytes, script +2,286 and the atlas sheet +36. Built
+	// beside Sources the tree measures 5957.8 KiB (6,100,752 bytes, 6 over
+	// the sum of the two): 5958 KiB.
+	// The setup advisor's atlas findings (the fix dialog in the atlas chunk,
+	// with its owner, monitor, decision and read-now rows, and the advisor's
+	// row, lazy mount and unread words) added 4,452 bytes, all script, and
+	// took it to 5962.1 KiB (6,105,204 bytes): 5963 KiB.
+	// The work that touches an entry (its Work tab and sheet section, the
+	// open-work notch and count, and a task's Atlas entries group with its
+	// link dialog) added 8,469 bytes, all script, and took it to 5966.0 KiB
+	// (6,109,221 bytes): 5967 KiB.
+	// Built together, the advisor's findings and the work that touches an
+	// entry measure 5970.4 KiB (6,113,724 bytes), 51 bytes over the two
+	// added to 5958 KiB's tree: 5971 KiB.
+	// The atlas's Home widget (its card, the two reads behind it, the board
+	// kit's shared "more on the page" link and a two-line row held to its
+	// width) added 2,283 bytes, nearly all script, and took it to 5972.7 KiB
+	// (6,116,007 bytes): 5973 KiB.
+	// An artifact on a page of its own (the standalone route, the frame with
+	// no sidebar, Open in new tab in the bar, in its More and in a listed
+	// artifact's menu) on kit 0.125.0 added 1,048 bytes, nearly all script,
+	// and took it to 5973.7 KiB (6,117,055 bytes): 5974 KiB.
+	treeBudget = 5<<20 + 854<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

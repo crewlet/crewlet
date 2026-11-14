@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -99,10 +100,9 @@ const (
 	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
 	// not apply cleanly stops it, nothing stored, every conflicting path
 	// named. A write is no record (this file's doc), so the kind takes no
-	// versionedFields row; it crosses the estate's wire to the Gitlet node
-	// under the code domain's stated condition (M3-O84 §2 item 5: no build
-	// carrying the domain has run without it), and the push it lands opens
-	// its change through PushEntry.Change, under the condition its doc states.
+	// versionedFields row; it crosses the estate's wire to the Gitlet node,
+	// and the domain landed on main with it ([RecordVersion]). The push it
+	// lands opens its change through PushEntry.Change, in the base format.
 	WriteRevertChange EngineWriteKind = "revert_change"
 )
 
@@ -233,10 +233,27 @@ type EngineWrite struct {
 	//
 	// A write is no record (this file's doc), so the field takes no
 	// versionedFields row; it crosses the estate's wire to the repository's
-	// Gitlet node under the code domain's stated condition — no build carrying
-	// the domain has run without it, none of the domain being on main — so
-	// every Gitlet node asked it reads it.
+	// Gitlet node, and every Gitlet node asked it reads it: the domain landed
+	// on main with it ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// WrittenFor is whom a SEAT'S write is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asks it works for,
+	// composed by the engine from the call's own bound ceiling, or stated
+	// nobody; a person's states nothing. Held to the principal and the
+	// ceiling by [writtenForUnder]: by Validate, and against its chart by the
+	// Gitlet node that builds the write ([EngineWrite.WrittenForOn]), which
+	// hands it on to the push, the merge or the enqueue it lands.
+	//
+	// A write is no record, so this field takes no versionedFields row. It
+	// crosses the estate's wire to the repository's Gitlet node, and a node of
+	// a build without it refuses a write carrying somebody, naming
+	// args.written_for, so the walk asks one that reads it, and a node of a
+	// build that does not know its carrier's kind, or an app a credential's
+	// carrier names, refuses it alike, naming args.written_for.kind or
+	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
+	// no member, as such a build does. What such a build sends arrives stated
+	// nobody ([EngineWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 	// Change is a merge_change's or a rebase_change's change, by its number
 	// on the repository — web!42's 42, the name every change tool and the
 	// `change` read give it — whose row the Gitlet node reads at the caller's
@@ -256,8 +273,8 @@ type EngineWrite struct {
 	// because false is a word a caller says (keep it), never the default.
 	//
 	// A write is no record, so the field takes no versionedFields row; it
-	// crosses the estate's wire to the repository's Gitlet node under the code
-	// domain's stated condition, as Ceiling does.
+	// crosses the estate's wire to the repository's Gitlet node, as Ceiling
+	// does.
 	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
@@ -676,8 +693,15 @@ func (w EngineWrite) Instant() time.Time {
 
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
 // field): the one rule the tool that asks a write, the router that carries it
-// and the Gitlet node that builds it all hold it to.
+// and the Gitlet node that builds it all hold it to. Before any of it, a value
+// whom the write is made for names that this build does not know is answered
+// as its decoder answers it on the wire, never as ErrInvalid, whatever else
+// the write holds ([unknownToThisBuild]): this build cannot judge the write at
+// all, and a Gitlet node of a build that knows the value does.
 func (w EngineWrite) Validate() error {
+	if err := unknownToThisBuild(writtenForAt, w.WrittenFor); err != nil {
+		return err
+	}
 	if !w.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
 	}
@@ -711,6 +735,12 @@ func (w EngineWrite) Validate() error {
 		if why := w.Ceiling.invalid(w.Principal); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalid, why)
 		}
+	}
+	// WHOM IT IS MADE FOR, held to the principal and to the ceiling beside
+	// it ([writtenForUnder]); the half only a chart decides is the Gitlet
+	// node's that builds the write ([EngineWrite.WrittenForOn]).
+	if err := writtenForUnder(w.Principal, w.WrittenFor, w.Ceiling, nil); err != nil {
+		return refusedCarrier(ErrInvalid, err)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		var bad *statelog.CallerOpIDError

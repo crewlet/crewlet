@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -24,11 +24,12 @@ import (
 // row ([PendingRun]), read and written whole by every mutation (coordstore.go),
 // and beside it the parts a job can make large — the bridged call log
 // ([BridgeLog]), read and written whole by every append, and the secrets the
-// job's box was handed. One value is one broker message, held to
-// [queue.MaxPayloadBytes] with its headers, and past it every write of the
-// value is refused at the broker: for the row, a lease stamped on the run, a
-// status flip, the hold a turn takes on its next scratch repository; for the
-// log, every call's append. The bridged call log grew one call at a time with
+// job's box was handed. One value is held to what one key of the store holds,
+// [coord.MaxValueBytes] — the largest whose read a node without `data` takes
+// back across its leaf link, base64-encoded in its stream leader's reply — and
+// past it every write of the value is refused ([coord.ErrValueTooLarge]): for
+// the row, a lease stamped on the run, a status flip, the hold a turn takes on
+// its next scratch repository; for the log, every call's append. The bridged call log grew one call at a time with
 // nothing measuring it — two hundred builtin answers of 64 KiB are 12.8 MiB —
 // so a long run's log stopped taking writes, and its calls were the first
 // thing to go: the resumed turn's ledger, its delivery check and its
@@ -44,9 +45,9 @@ import (
 //
 //	the parked turn's state ......... ExecuteStateBytes   2,097,152  (2 MiB)
 //	everything else, and the room
-//	  a later build adds fields in .. RestBytes           6,287,360  (6 MiB less 4 KiB)
+//	  a later build adds fields in .. RestBytes           4,193,390  (4 MiB less 914 bytes)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // and the log's three ways, beside it, a split that closes as its figures are
 // stated (TestACallInFlightIsHeldToItsShare):
@@ -56,9 +57,9 @@ import (
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        1,768,558  (1.69 MiB)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
@@ -106,7 +107,7 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,702,523  (with 2,987,355 to spare)
+//	every other field, measured ..... 1,705,716  (with 890,192 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
@@ -137,10 +138,13 @@ import (
 const (
 	// RowBytes is what one value of a run may weigh as the coordination store
 	// holds it — its row, and each part beside it, the bridged call log
-	// first: the broker's payload bound less the room its headers take inside
-	// it — a KV update carries its expected-revision header in the same
-	// max_payload, about seventy bytes, and four KiB is that with room.
-	RowBytes = queue.MaxPayloadBytes - 4<<10
+	// first: what one key holds, the store's own bound on a value, which
+	// every backend refuses a write past ([coord.MaxValueBytes]). The
+	// transport's ceiling is not it: a value that large has a leader's read
+	// a leaf's link closes on, so the store holds a value to the largest whose
+	// read crosses, and a share budgeted to the transport would be one the
+	// store refuses every write of.
+	RowBytes = coord.MaxValueBytes
 
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
@@ -406,7 +410,7 @@ const (
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
 	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
 	// docs/concepts/code-sandbox.md that state it, move with it.
-	LogRestBytes = 3_862_528
+	LogRestBytes = 1_768_558
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
@@ -420,6 +424,48 @@ const (
 // rowRecord is the record a payload this package keeps in part says it is not
 // kept on.
 const rowRecord kept.Record = "the run's record"
+
+// RowBudget is the bound of a change of a run's row, or of a part beside it,
+// whose caller bounds it for a reason of its own: that reason — a store's slow
+// moment, a leader's election outlasted, a teardown's grace — and the time a
+// change of a value at its bound ([RowBytes]) takes to cross this node's
+// connection to the coordination store — the read its decision is taken on,
+// and the write, for every time the store may send it — as the store says
+// ([PendingStore.RowCrossing]). In the store's own process that is none, and
+// the bound is the reason alone.
+//
+// # A row's bytes are the change's, not the reason's
+//
+// Every change of a row reads it whole and writes it whole — up to six
+// megabytes — and a node without the `data` role, or any node of an external
+// cluster, reads and sends it across a link the engine allows to carry as
+// little as a mebibyte in thirty seconds both ways: the read's reply, a third
+// larger than the row, is heard only once its last byte is in, and the
+// store's acknowledgement of the write waits on its last byte too. The store
+// gives the read the time its reply takes to arrive, and a write whose caller
+// set no deadline the crossing of what it carries; a caller's own deadline it
+// keeps. Held to a reason alone — five seconds, thirty — a row of megabytes
+// was cut while its bytes were still crossing, and read as a store that did
+// not answer: a resumed turn's carry went unrecorded, a capture's stamp was
+// asked again sending the whole row from its first byte until its budget
+// ended, and a teardown's write was abandoned (crewlet/crewlet#1076); and
+// given the write's sends alone, the read before it — four minutes for a row
+// at its bound at the floor — was left nothing (crewlet/crewlet#1149).
+// Counted at the row's bound, never at the row being changed: the store
+// decides what it writes inside its own read-decide-write, after the caller's
+// deadline is set, and a row grows between two changes of it.
+//
+// So a store that does not answer is waited on for the reason's length beyond
+// the crossing, and a healthy one answers as soon as the row is in. A budget
+// whose reader is ANOTHER node — how long a capture a node elsewhere keeps is
+// in flight, and a read stands by for it ([SessionCaptureBudget],
+// [standbyBudget]), how long a box's host may take over a read of it
+// ([BoxReadBudget]) — counts the slowest node's crossing instead,
+// coord.MaxValueCrossing, since it cannot know which node's it is. And a
+// stopping node gives no change its crossing ([Coordinator.rowContext]).
+func RowBudget(store PendingStore, reason time.Duration) time.Duration {
+	return reason + store.RowCrossing()
+}
 
 // ErrStateTooLarge is a parked turn's state past its share of the row
 // ([ExecuteStateBytes]), refused by [PendingStore.MarkSuspended] rather than by

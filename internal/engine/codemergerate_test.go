@@ -49,16 +49,13 @@ const (
 
 var rateRepo = uuid.NewSHA1(uuid.NameSpaceOID, []byte(rateRepoName)).String()
 
-func (q *behindQueue) Read(ctx context.Context, rq gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
-	if rq.Kind != gitlet.ReadQueueDue {
-		return q.Estate.Read(ctx, rq)
-	}
+func (q *behindQueue) QueueDue(_ context.Context, rq gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
 	at := statelog.Position{Stream: topics.CodeLogStream, Seq: 1}
-	if rq.QueueDue == nil || rq.QueueDue.RepoID == "" {
-		return gitlet.ReadAnswer{DueRepos: []string{rateRepo}, Position: at}, nil
+	if rq.RepoID == "" {
+		return gitlet.QueueDueAnswer{DueRepos: []string{rateRepo}, Position: at}, nil
 	}
-	if rq.QueueDue.RepoID != rateRepo {
-		return gitlet.ReadAnswer{Position: at}, nil
+	if rq.RepoID != rateRepo {
+		return gitlet.QueueDueAnswer{Position: at}, nil
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -75,7 +72,7 @@ func (q *behindQueue) Read(ctx context.Context, rq gitlet.ReadQuery) (gitlet.Rea
 			Commits: []gitlet.QueueWorkCommit{{EntryID: entry.EntryID, Commit: rateCommit}}}}
 	}
 	due.Entries = []gitlet.QueueWorkEntry{entry}
-	return gitlet.ReadAnswer{DueQueue: &due, Position: at}, nil
+	return gitlet.QueueDueAnswer{DueQueue: &due, Position: at}, nil
 }
 
 func (q *behindQueue) Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error) {

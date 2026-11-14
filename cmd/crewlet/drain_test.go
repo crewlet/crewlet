@@ -174,7 +174,7 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	port, socket := reserveNodeSocket(t)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	// THE KEYRING IS PART OF A RUNNABLE TIER A, and this case starts a node
 	// from a real file in a real process: every record on every state log
 	// is signed under it, so a document without one is a node that refuses

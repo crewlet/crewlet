@@ -17,6 +17,10 @@ import (
 const rerun = "Run the CloudShell block on the AWS connection again to update the stack, then test again. " +
 	"Do not edit Crewlet's roles or policies by hand."
 
+// atlasRerun is the fix for an Atlas reader the stack or its output lacks.
+const atlasRerun = "Run the CloudShell block on the AWS connection again and paste its last line, then test again. " +
+	"Agents are not affected."
+
 // Probe checks the connection with reads only, before or after it is stored:
 // the provisioner's sign-in, every Crewlet policy and role against what this
 // engine renders, the stack's version, the identity split and the account's
@@ -35,7 +39,8 @@ func Probe(hc *http.Client) setup.Probe {
 			return strings.TrimSpace(check.Value(field))
 		}
 		prov := config.AWSProvisioning{Slug: value("slug"), HomeRegion: value("home_region"), Regions: check.Regions,
-			CertificateAuthority: value("certificate_authority"), Connection: value("connection")}
+			CertificateAuthority: value("certificate_authority"), Connection: value("connection"),
+			AtlasRead: value("atlas_read") == "true"}
 		return probeCheck(ctx, prov, func(conn *Connection) *Client { return NewClient(conn, hc) })
 	}
 }
@@ -56,7 +61,7 @@ func probeCheck(ctx context.Context, prov config.AWSProvisioning, build func(*Co
 	}
 	ctx, cancel := context.WithTimeout(ctx, setup.VerifyBudget)
 	defer cancel()
-	report, err := build(conn).CheckStack(ctx, prov.RegionsOrDefault())
+	report, err := build(conn).CheckStack(ctx, prov.RegionsOrDefault(), prov.AtlasRead)
 	if err != nil {
 		return checkRefusal(ctx, conn, err), nil
 	}
@@ -100,6 +105,11 @@ func verdictOf(conn *Connection, r StackReport) setup.Verdict {
 				Action: "Ask AWS to raise the IAM roles quota before adding agents.",
 			})
 		}
+	}
+	// THE ATLAS'S ROLE NEVER REFUSES THE CONNECTION: agents work without it,
+	// so what it lacks is said beside a stack that works.
+	for _, problem := range r.Atlas {
+		details = append(details, setup.Warning{Title: sentence(problem), Action: atlasRerun})
 	}
 	return setup.Works("Works. Crewlet signs in, and every policy and role matches this version.", details...)
 }

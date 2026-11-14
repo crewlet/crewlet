@@ -80,7 +80,13 @@ import {
   type CanvasMerge,
   type DesignCanvas,
 } from "~/lib/artifacts/canvas.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { FrameView } from "./FrameView.tsx";
 import type { PresenceReport } from "./presence.ts";
 
@@ -173,7 +179,7 @@ function Design({
 
   // THE DRAFT AND THE TEXT IT STARTED FROM: a save replaces exactly that text,
   // which after a merge is the newer version's.
-  const [draft, setDraft] = useState<DesignCanvas | null>(null);
+  const [draft, setDraft] = useDraftState<DesignCanvas | null>(null);
   const [base, setBase] = useState<{ canvas: DesignCanvas; text: string; number: number }>({
     canvas,
     text,
@@ -231,7 +237,7 @@ function Design({
           scope: `Your edit of “${detail.title}” (not saved)`,
           value: shown,
           fields: canvasFields(shown),
-          apply: setDraft,
+          write: writeVia(setDraft, (next: DesignCanvas) => next),
           blocked: () => (saving ? "The design is being saved." : null),
         }
       : null,

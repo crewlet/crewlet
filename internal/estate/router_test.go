@@ -3815,7 +3815,7 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 		opCodeMirrorSync.spec, opCodeChange.spec,
 		opCodeQueue.spec, opCodeMerge.spec, opCodeConversation.spec, opCodeMark.spec, opCodeChecks.spec,
 		opCodeResolve.spec,
-		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
+		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeQueueDue.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (gitlet.Domain{}).Stream().Name ||
 			spec.copies != "code" {
@@ -3840,6 +3840,9 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Read(ctx, gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
+	}
+	if _, err := seam.QueueDue(ctx, gitlet.QueueDueQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1"}); err != nil {
+		t.Fatalf("queue due: %v", err)
 	}
 	if _, err := seam.ResolveRef(ctx, gitlet.RefQuery{Repo: "app", Refs: []string{"main"},
 		Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}}); err != nil {

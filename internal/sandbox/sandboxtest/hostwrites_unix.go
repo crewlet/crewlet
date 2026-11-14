@@ -113,7 +113,7 @@ func HostWrites(t *testing.T, fresh func(t *testing.T) (sandbox.Sandbox, string)
 						!strings.Contains(err.Error(), "not written") {
 						t.Errorf("%s over a %s = %v; want ErrNotRegularFile saying what it is", shape, kind, err)
 					}
-				case <-time.After(10 * time.Second):
+				case <-time.After(10 * time.Second): //fixedwait:liveness
 					t.Fatalf("%s over a %s has not answered in 10s", shape, kind)
 				}
 				if _, err := os.Lstat(outside); !errors.Is(err, os.ErrNotExist) {

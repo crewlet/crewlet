@@ -409,6 +409,70 @@ func TestACommandsFailureIsAClosedWord(t *testing.T) {
 	}
 }
 
+// THE ENGINE'S OWN INVENTORY IS RECORDED UNDER NO SEAT. An inventory
+// certificate and its command are held by the engine, in the place a seat's
+// handle takes; no seat holds an inventory certificate, the engine holds no
+// other kind, and its command is a read that serves no turn. Both are read
+// back by the audit under the engine's holder.
+//
+// Mutation: let a seat hold the inventory's purpose, or the engine an operate
+// command, and a case is red.
+func TestTheEnginesInventoryIsRecordedUnderNoSeat(t *testing.T) {
+	t.Parallel()
+	log := openAccessLog(t)
+	node := newWriteNode(t, log, "data-1")
+	ran := command(accessdomain.EngineHolder, "", "/usr/bin/ss -tln")
+	ran.HeldCall, ran.User, ran.Level = "", "crewlet-read", accessdomain.LevelRead
+	ran.Approver, ran.Decision, ran.CertificateSerial = "", accessdomain.DecisionNone, 7
+	id := ran.ID
+	cert := certificate("sre", "", 7)
+	cert.Handle, cert.Purpose = accessdomain.EngineHolder, accessdomain.PurposeInventory
+	cert.KeyID, cert.Principals = "crewlet/_engine/inventory/"+id, []string{"crewlet.api-1.inventory"}
+	for name, mutate := range map[string]func(*accessdomain.NewCertificate){
+		"a seat holding the inventory": func(c *accessdomain.NewCertificate) { c.Handle = "sre" },
+		"the engine holding a read":    func(c *accessdomain.NewCertificate) { c.Purpose = accessdomain.PurposeRead },
+		"an inventory of a turn":       func(c *accessdomain.NewCertificate) { c.Turn = "turn-1" },
+		"an inventory of two hosts":    func(c *accessdomain.NewCertificate) { c.HostIDs = []string{"api-1", "db-2"} },
+	} {
+		bad := cert
+		mutate(&bad)
+		if _, err := node.writer.Issued(t.Context(), engineCall(), bad); !errors.Is(err, accessdomain.ErrInvalid) {
+			t.Errorf("%s answers %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := node.writer.Issued(t.Context(), engineCall(), cert); err != nil {
+		t.Fatalf("the engine's inventory certificate: %v", err)
+	}
+	for name, mutate := range map[string]func(*accessdomain.NewCommand){
+		"the engine's command of a turn": func(c *accessdomain.NewCommand) { c.Turn = "turn-1" },
+		"the engine's operate command": func(c *accessdomain.NewCommand) {
+			c.Level, c.Decision, c.Approver = accessdomain.LevelOperate, accessdomain.DecisionApproved, "ops-lead"
+		},
+	} {
+		bad := ran
+		mutate(&bad)
+		if _, err := node.writer.Ran(t.Context(), engineCall(), bad); !errors.Is(err, accessdomain.ErrInvalid) {
+			t.Errorf("%s answers %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := node.writer.Ran(t.Context(), engineCall(), ran); err != nil {
+		t.Fatalf("the engine's inventory command: %v", err)
+	}
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	q := accessdomain.AuditQuery{Handle: accessdomain.EngineHolder}
+	certs, err := node.reader().Certificates(t.Context(), q, fresh)
+	if err != nil || len(certs.Rows) != 1 || certs.Rows[0].Purpose != accessdomain.PurposeInventory {
+		t.Fatalf("the audit answers certificates %+v, %v", certs.Rows, err)
+	}
+	cmds, err := node.reader().Commands(t.Context(), q, fresh)
+	if err != nil || len(cmds.Rows) != 1 || cmds.Rows[0].Handle != accessdomain.EngineHolder || !cmds.Rows[0].Ran {
+		t.Fatalf("the audit answers commands %+v, %v", cmds.Rows, err)
+	}
+	if text, err := cmds.Rows[0].Open(node.sealer); err != nil || text != "/usr/bin/ss -tln" {
+		t.Errorf("the command opens as %q, %v", text, err)
+	}
+}
+
 // A REKEY RESEALS EVERY COMMAND UNDER THE ACTIVE KEY: a node whose keyring made
 // a new key active moves each command still sealed under the old one by a
 // record on the command's own subject, which every node applies, so the rows

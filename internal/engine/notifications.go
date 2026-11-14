@@ -711,7 +711,35 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if !e.joins(ctx, notify.InboundGroup) {
 		return nil
 	}
-	svc, err := notify.New(notify.Options{
+	svc, err := e.inboundService(c, parsers, prompts)
+	if err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+	if err := svc.Start(ctx); err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+
+	e.notify.mu.Lock()
+	e.notify.service = svc
+	e.notify.mu.Unlock()
+	return nil
+}
+
+// inboundService is the notification service this node routes c's inbound
+// deliveries with, through parsers and prompts: everything [Engine.startNotifications]
+// starts but the start.
+func (e *Engine) inboundService(c *Company, parsers []notify.Parser,
+	prompts []notify.Prompt) (*notify.Service, error) {
+
+	// THE REPLAY'S DROPS THROUGH THE LEDGER THE ALARM'S READING SHARES, so a
+	// copy the replay delivered is accounted for as delivered and never
+	// counted as a wake the retention lost (feeddeadletters.go). Nil where
+	// none is wired, and the service then uses its queue's own verbs.
+	var letters notify.DeadLetters
+	if e.deadLetterLedger != nil {
+		letters = e.deadLetterLedger
+	}
+	return notify.New(notify.Options{
 		// THE NODE'S WAKE QUEUE, so a delivery routed to a seat whose
 		// mailbox is not complete yet is NAKed and redelivered rather than
 		// published onto a subject the stream discards. See [Engine.wakes].
@@ -729,18 +757,12 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		Admits: e.admits,
 		// AND A LINKED CHANGE'S SETTLE, which no wake carries (ADR-0121).
 		Observe: e.observeInbound,
+		// EVERY SOURCE THIS BUILD'S OWN PRODUCERS WRITE, whether or not
+		// this company runs it, so a first-party delivery from any other —
+		// a newer build's — is passed to a peer that parses it.
+		FirstParty:  declaredInboundSources(),
+		DeadLetters: letters,
 	})
-	if err != nil {
-		return fmt.Errorf("engine: notifications: %w", err)
-	}
-	if err := svc.Start(ctx); err != nil {
-		return fmt.Errorf("engine: notifications: %w", err)
-	}
-
-	e.notify.mu.Lock()
-	e.notify.service = svc
-	e.notify.mu.Unlock()
-	return nil
 }
 
 // notificationRateLimit is the per-seat notification cap the inbound edge
@@ -1048,6 +1070,12 @@ func (v *notifyValve) Allow(ctx context.Context, bucket string, limit int, now t
 	return v.counter.Allow(ctx, bucket, limit, coord.RateWindow, now)
 }
 
+// Reopens implements [notify.Valve]: the end of the fixed window containing
+// now, which the counter truncates from the zero time ([coord.Counter]).
+func (v *notifyValve) Reopens(now time.Time) time.Time {
+	return now.Truncate(coord.RateWindow).Add(coord.RateWindow)
+}
+
 // admits reports whether this node may take inbound work, deferring to the
 // caller-supplied posture. Nil admits everything.
 func (e *Engine) admits() bool {
@@ -1192,11 +1220,24 @@ func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) st
 // stopNotifications takes the inbound edge down.
 func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mu.Lock()
+	service := e.notify.service
 	selfHosted := e.notify.mattermost
 	hosted := e.notify.slack
 	chatletStatus := e.notify.chatletStatus
 	e.notify.mattermost, e.notify.slack, e.notify.chatletStatus = nil, nil, nil
 	e.notify.mu.Unlock()
+	if service != nil {
+		// THE REPLAY OF THE INBOUND GROUP'S UNHANDLED DELIVERIES, which
+		// runs on a goroutine of the service's own ([notify.Service.Start])
+		// and reads the queue this teardown is about to close: ended and
+		// waited for first, so it never calls a closed queue. What it did
+		// not reach stays kept for the next start.
+		if err := service.Stop(ctx); err != nil {
+			log.WarnContext(ctx, "inbound_replay_stop_unfinished", "error", err.Error(),
+				"detail", "the replay of the inbound group's unhandled deliveries was "+
+					"still running when the stop's allowance ran out")
+		}
+	}
 	if chatletStatus != nil {
 		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the room's presence
 		// would go on showing a seat working on a turn this process is

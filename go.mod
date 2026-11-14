@@ -2,7 +2,14 @@ module github.com/crewlet/crewlet
 
 go 1.27.2
 
+// No package pattern reads an npm install as this module's, at any depth:
+// flatted ships a Go package, so once `npm ci` had run in dashboard/, every
+// ./... (vet, build, golangci-lint, the test partition) took it in. The rule
+// is internal/sourcetree's, and a test there holds this line to it.
+ignore node_modules
+
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.47.8
 	github.com/aws/aws-sdk-go-v2/config v1.33.16
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.16

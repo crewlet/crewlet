@@ -20,7 +20,14 @@ import (
 // figures internal/worklet's codeLogDay prices the reference company's
 // changes at (its codeChange… constants, which state the same numbers), each
 // a record alone in the log, measured by the log's growth as
-// BenchmarkPushLogBytes measures a push:
+// BenchmarkPushLogBytes measures a push. Every write a seat makes here is made
+// for the person who assigned the change's work item, so the records that
+// carry a carrier — the open's, the merge's and the enqueue's payload, and the
+// routings of the ask, the reviews and the answer — carry theirs, and the
+// home's records that read it back carry it only where they wake a seat,
+// which the reference revision's facts, its passing checks and its queue's
+// landing — told to the change's authors but the seat that queued its own
+// change — do not, and a closed settle routes nobody:
 //
 //   - open: a seat's code_open_change, its title a short sentence and its
 //     description the reference text's 2 KiB, carrying the turn and its
@@ -103,22 +110,22 @@ import (
 // authored one, and a record the writers grow past its figure, or shrink
 // well below it, is a code log's day the docs no longer state.
 var changeRecordBytes = map[string]int64{
-	"open":                   3_100,
+	"open":                   3_160,
 	"edit":                   2_770,
-	"reviewers":              1_190,
+	"reviewers":              1_240,
 	"revise":                 1_420,
 	"mergeability":           1_030,
 	"mergeability_recheck":   880,
 	"mergeability_refresh":   860,
 	"mergeability_ready":     1_460,
 	"check_dispatched_empty": 840,
-	"review_findings":        5_030,
-	"review":                 2_340,
-	"answer":                 1_290,
+	"review_findings":        5_070,
+	"review":                 2_380,
+	"answer":                 1_340,
 	"comment":                1_950,
 	"thread_resolve":         840,
-	"merge":                  1_990,
-	"enqueue":                980,
+	"merge":                  2_040,
+	"enqueue":                1_030,
 	"candidate":              1_290,
 	"candidate_check_queued": 1_010,
 	"land":                   1_530,
@@ -185,6 +192,21 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		t.Logf("a change's %s carries %q", name, carriedKeys(rec.Mutation))
 	}
 	description, remark := referenceText(2<<10), referenceText(1<<10)
+	// WHOM THE REFERENCE COMPANY'S SEATS WRITE FOR: the person who assigned
+	// the work item the change carries, as a pickup of an assigned item works
+	// for whom it was assigned (ADR-0109). Every write a seat forms here is
+	// made for them, so each record that carries a carrier — an open's, a
+	// merge's and an enqueue's payload, and the routing of an ask, a review
+	// and an answer, each of which wakes a seat — carries theirs. The home's
+	// facts of the revision read the open's back, and the queue's landing the
+	// enqueue's, and carry it only where they wake a seat, which the
+	// reference facts, asking nobody, and the reference landing, telling no
+	// seat but the one that queued its own change, do not.
+	founder := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"})
+	forFounder := func(w gitlet.ConversationWrite) gitlet.ConversationWrite {
+		w.WrittenFor = founder
+		return w
+	}
 
 	// THE CHANGE, a seat's, opened from its own branch into a protected main
 	// on a repository its unit owns.
@@ -195,6 +217,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, gitlet.ZeroOID, oidOf("A")),
 		set(seatRef, gitlet.ZeroOID, oidOf("B"))))
 	open := opening(repo, seatRef, mainRef, dev)
+	open.WrittenFor = founder
 	open.Open.Title, open.Open.Body = "Retry the upload when the store answers busy", description
 	open.Open.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("the turn")).String()
 	open.Open.WorkItem = &types.WorkItem{Backend: types.WorkWorklet,
@@ -209,7 +232,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	took("edit", func() {
 		rewritten := "In short: " + description[:len(description)-len("In short: ")]
 		res, err := c.ProposeChange(t.Context(), writing(dev, version, func(p *gitlet.ChangeProposal) {
-			p.Edit = &gitlet.ChangeEdit{RepoID: repo, ChangeID: change, Body: &rewritten}
+			p.WrittenFor, p.Edit = founder, &gitlet.ChangeEdit{RepoID: repo, ChangeID: change, Body: &rewritten}
 		}))
 		requireChanged(t, res, err)
 	})
@@ -218,7 +241,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	// the sizes a push's run names.
 	turn := uuid.NewSHA1(uuid.NameSpaceOID, []byte("the review turn")).String()
 	const model = "claude-sonnet-4-6"
-	took("reviewers", func() { converse(t, w, asking(repo, change, dev, "plat-lead")) })
+	took("reviewers", func() { converse(t, w, forFounder(asking(repo, change, dev, "plat-lead"))) })
 	took("revise", func() {
 		converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go",
 			"upload/retry_test.go", "upload/store.go", "upload/store_test.go", "docs/upload.md"))
@@ -229,21 +252,23 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		first, second := raising(gitlet.SeverityMajor, 12, "The retry never stops"),
 			raising(gitlet.SeverityMinor, 30, "Name the wait")
 		first.Body, second.Body = remark, remark
-		review := reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil, first, second)
+		review := forFounder(reviewing(repo, change, platLead, 1, gitlet.VerdictRequestChanges, nil, first, second))
 		review.Review.Summary, review.Review.TurnID, review.Review.Model = remark, turn, model
 		res, err := w.Converse(t.Context(), review)
 		findings = requireReviewed(t, res, err)
 	})
-	took("answer", func() { converse(t, w, answering(repo, change, dev, gitlet.FindingResolved, findings...)) })
+	took("answer", func() {
+		converse(t, w, forFounder(answering(repo, change, dev, gitlet.FindingResolved, findings...)))
+	})
 	var thread string
 	took("comment", func() {
-		comment := saying(repo, change, dev, "", remark)
+		comment := forFounder(saying(repo, change, dev, "", remark))
 		comment.Comment.TurnID = turn
 		thread = converse(t, w, comment).ID
 	})
-	took("thread_resolve", func() { converse(t, w, resolving(repo, change, dev, thread, true)) })
+	took("thread_resolve", func() { converse(t, w, forFounder(resolving(repo, change, dev, thread, true))) })
 	took("review", func() {
-		review := reviewing(repo, change, platLead, 1, gitlet.VerdictApprove, nil)
+		review := forFounder(reviewing(repo, change, platLead, 1, gitlet.VerdictApprove, nil))
 		review.Review.Summary, review.Review.TurnID, review.Review.Model = remark, turn, model
 		converse(t, w, review)
 	})
@@ -253,7 +278,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		merger := dev
 		merger.Run = gitlet.RunProvenance{TurnID: turn, WorkBackend: "native", WorkKey: "ENG-1234", Model: model}
 		p := merging(repo, change, merger, gitlet.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
-		p.Merge.DeleteSource = true
+		p.WrittenFor, p.Merge.DeleteSource = founder, true
 		res, err := c.ProposeMerge(t.Context(), p)
 		requireMerged(t, res, err, oidOf("M"))
 	})
@@ -274,7 +299,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	queued := opened.ChangeID
 	ready(t, n, w, queue, queued)
 	enqueued := enqueueing(queue, queued, dev, oidOf("B"))
-	enqueued.Enqueue.DeleteSource = true
+	enqueued.WrittenFor, enqueued.Enqueue.DeleteSource = founder, true
 	took("enqueue", func() {
 		res, err := c.ProposeQueue(t.Context(), enqueued)
 		requireQueued(t, res, err, gitlet.QueueWaiting, 1)

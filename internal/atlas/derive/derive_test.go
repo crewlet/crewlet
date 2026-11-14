@@ -153,6 +153,44 @@ func TestTheSettingsDeclareWhatTheCompanyRunsOn(t *testing.T) {
 	}
 }
 
+// A REPOSITORY THE SETTINGS NAME HAS THE KEY ITS FORGE'S ADDRESS GIVES IT, on
+// a forge served under a path of its host as well, so the settings, the
+// forge's own read and a mirror's address name one entry.
+//
+// Mutation: key it by the forge's host and the path alone, and an instance
+// under /gitlab shows each named project twice once GitLab is read.
+func TestANamedRepositoryIsKeyedByItsForgesAddress(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GitLab.URL = "https://git.acme.example/gitlab/"
+	c.Integrations.GitLab.Provisioning.Group = "Acme"
+	c.Integrations.GitLab.Provisioning.Projects = []string{"API", "partners/Shared"}
+	v := read(c)
+	account := find(t, v, atlas.KindAccount, "gitlab/git.acme.example/acme")
+	for _, key := range []string{"git.acme.example/gitlab/acme/api", "git.acme.example/gitlab/partners/shared"} {
+		if got := related(v, find(t, v, atlas.KindRepository, key), atlas.RelationBelongsTo); !slices.Equal(got, []string{account.Ref.Key}) {
+			t.Errorf("%s belongs to %v", key, got)
+		}
+	}
+}
+
+// A DIGITALOCEAN TEAM IS KEYED BY ITS NAME'S SLUG: a team's name may hold a
+// space, which an account's key may not, and the read of the team keys it
+// the same way, so the two name one entry.
+//
+// Mutation: key the account by the name lowercased, and a team named with a
+// space is withheld, so the company's DigitalOcean account is no entry.
+func TestADigitalOceanTeamWithASpaceIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.DigitalOcean.Provisioning.Team = "Acme Labs"
+	v := read(c)
+	account := find(t, v, atlas.KindAccount, "digitalocean/acme-labs")
+	if account.Name != "DigitalOcean" {
+		t.Errorf("the team's account is named %q", account.Name)
+	}
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {

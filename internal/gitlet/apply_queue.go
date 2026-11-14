@@ -28,7 +28,9 @@ import (
 // record on its subject meets skips it when it is met again.
 
 // applyEnqueue puts the change e names in its target's queue: its entry's row,
-// waiting, its place the record's position.
+// waiting, its place the record's position, keeping whom the enqueue was made
+// for ([keptCarrier]) — which its landing's push rows take from the row, in the
+// landing's own apply ([Land.pushes]).
 func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext, e Enqueue) (int, error) {
 	row, found, err := changeRowIn(ctx, tx, e.ChangeID)
 	if err != nil {
@@ -59,9 +61,13 @@ func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext,
 	if kind == PartyPerson {
 		operator = e.Principal.OperatorID
 	}
+	madeFor, err := carrierColumn(keptCarrier(at, e.WorkingFor))
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, enqueueSQL, e.RepoID, e.EntryID, e.TargetRef, e.ChangeID, at.packed, e.HeadOID,
 		string(e.Method), e.DeleteSource, e.CloseTask, by, string(kind), operator,
-		string(QueueWaiting), at.at())
+		string(QueueWaiting), at.at(), madeFor)
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: enqueue change %s at %s: %w", e.ChangeID, at.position, err)
 	}
@@ -182,8 +188,9 @@ func queueNotApplied(ctx context.Context, at applyContext, repoID, entryID, why 
 // code_queue_live_idx is partial on them.
 const (
 	enqueueSQL = `INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
-			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at,
+			working_for)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, entry_id) DO NOTHING`
 	endEntrySQL = `UPDATE code_queue INDEXED BY ` + queueKey + ` SET state = ?, ended_at = ?, ended_position = ?,
 		end_reason = ? WHERE repo_id = ? AND entry_id = ?`

@@ -90,14 +90,22 @@ type NotificationWriter struct {
 
 	// WorkingFor is whom an AGENT'S write was made for (ADR-0109): whoever the
 	// turn that wrote it worked for, as its record carries it (Worklet's,
-	// Doclet's and Chatlet's MutationRecord.WorkingFor), and nil for every
-	// other writer and for an agent's write made for nobody else. The turn the
-	// write wakes works for them, composed again on the node that runs it as a
-	// colleague's ask's carrier is, and never for the writing seat, which holds
-	// every app; and since the partition splits on it (notify.KeyOf), every
-	// constituent of one turn carries the same. An older notify parser ignores
-	// it, and a turn it wakes then works for the writing seat until the roll
-	// completes.
+	// Doclet's and Chatlet's MutationRecord.WorkingFor, and the routing of
+	// Gitlet's record, ChangeRouting.WorkingFor), and nil for an agent's write
+	// made for nobody else. ONE EXCEPTION carries it for the ENGINE's writer:
+	// its record about an agent's earlier act made for somebody — Gitlet's
+	// merge queue's ejection of an entry and a close of its change's work item
+	// the queue could not make — carries whom the entry's enqueue was made for
+	// (ADR-0109's amendment; internal/gitlet's writerOf). Nil for a person's
+	// and a credential's writer, who write for nobody but themselves, and for
+	// every other record of the engine's. The turn the write wakes works for
+	// them, composed again on the node that runs it as a colleague's ask's
+	// carrier is, and never for the writing seat, which holds every app, nor
+	// for the seat the engine's record wakes; and since the partition splits on
+	// it (notify.KeyOf), every constituent of one turn carries the same. An
+	// older notify parser cannot read the record that carries it, a version
+	// past its build's, so it passes the wake to a node of the newer build
+	// rather than wake a turn that leaves it out (internal/notify's Deferral).
 	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 

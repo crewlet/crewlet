@@ -9,6 +9,7 @@ import { describe, expect, test, vi } from "vitest";
 import { draftSnapshot, parseDraftChange } from "~/app/assistant/draft.ts";
 import { charterDraft } from "./assistantAction.ts";
 import { INITIAL, reducer } from "./state.ts";
+import { heldDispatch } from "~/test/drafts.ts";
 
 const CHARTER = { mission: "Ship calm software.", vision: "Old vision", policies: ["Be kind"] };
 
@@ -20,8 +21,13 @@ const open = reducer(INITIAL, {
   focus: false,
 });
 
-const spec = (change = vi.fn()) =>
-  charterDraft({ state: open, charter: CHARTER, change, blocked: () => null });
+const spec = (dispatch = vi.fn()) =>
+  charterDraft({
+    state: open,
+    charter: CHARTER,
+    dispatch: heldDispatch(dispatch),
+    blocked: () => null,
+  });
 
 describe("the principles draft", () => {
   test("shows every part, and only an open one as settable", () => {
@@ -47,15 +53,19 @@ describe("the principles draft", () => {
   });
 
   test("sets an open part through the editor's own change", () => {
-    const change = vi.fn();
-    const draft = spec(change);
+    const dispatch = vi.fn();
+    const draft = spec(dispatch);
     const parsed = parseDraftChange(draft, { values: { vision: "A new vision." } });
     expect(parsed).toMatchObject({
       ok: true,
       value: { rows: [{ next: "A new vision.", current: "Old vision" }] },
     });
-    if (parsed.ok) draft.apply!(parsed.value.next);
-    expect(change).toHaveBeenCalledWith("vision", "A new vision.");
+    if (parsed.ok && typeof draft.write === "function") draft.write(parsed.value.next);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "change",
+      part: "vision",
+      draft: "A new vision.",
+    });
   });
 
   test("refuses a part the person has not opened, rather than opening it", () => {

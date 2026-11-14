@@ -92,6 +92,10 @@ type Config struct {
 	// see [seat.Config].GitBackground. Nil on a node without the gitlet role.
 	GitBackground func() int64
 
+	// Infra is what this node says of what it runs on, written on every
+	// presence beat: see [seat.Config].Infra. Nil where it says nothing.
+	Infra map[string]any
+
 	// RoleNeeded is whether the company needs a role at all right now,
 	// asked by the fleet's unmanned-role check: see [seat.Config].RoleNeeded.
 	// Nil needs every role.
@@ -314,6 +318,7 @@ func New(cfg Config) (*Node, error) {
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
 		GitBackground:     cfg.GitBackground,
+		Infra:             cfg.Infra,
 		RoleNeeded:        cfg.RoleNeeded,
 		Hooks:             n,
 		TTL:               cfg.LeaseTTL,

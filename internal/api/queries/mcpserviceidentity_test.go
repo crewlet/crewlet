@@ -60,7 +60,7 @@ func TestAServiceIdentityIsReadAsItsInstancesAndNeverAsASignIn(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{
 		Coord: backend, Company: companySource(t, cfg),
-		Builtins:  func() []queries.ToolRow { return catalogueBuiltins() },
+		Builtins:  catalogueOffer,
 		MCPGrants: grantsReader{grants: []coord.MCPGrant{stale}},
 		Now:       func() time.Time { return oauthNow },
 	})

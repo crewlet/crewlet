@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -282,9 +283,9 @@ func (t *atlasWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if given && versions[plan.entry.ID()] != ifMatch {
-		return refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
+		return toPerson(refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
 			"nothing: %s is at version %d and the change was decided from %d. Read it again and decide.",
-			t.Name(), plan.entry, versions[plan.entry.ID()], ifMatch)), nil
+			t.Name(), plan.entry, versions[plan.entry.ID()], ifMatch)), caveat.AtlasChangedMeanwhile()), nil
 	}
 	return t.write(ctx, actor, plan, versions, args), nil
 }
@@ -324,9 +325,9 @@ func (t *atlasWrite) versions(ctx context.Context, n *atlasNow, plan atlasPlan) 
 			continue
 		}
 		if int64(row.Version) > n.recordedAt.Packed() {
-			r := refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
+			r := toPerson(refusedBy(tools.RefusalStaleVersion, atlasdomain.ErrStaleVersion, fmt.Sprintf("%s wrote "+
 				"nothing: %s changed while the change was being decided. Read it again and decide.",
-				t.Name(), subject))
+				t.Name(), subject)), caveat.AtlasChangedMeanwhile())
 			return nil, &r
 		}
 		out[id] = row.Version
@@ -338,32 +339,35 @@ func (t *atlasWrite) versions(ctx context.Context, n *atlasNow, plan atlasPlan) 
 // the chart.
 func (t *atlasWrite) now(ctx context.Context, turn *turnctx.Turn, actor Actor) (*atlasNow, *tools.Result) {
 
-	n := &atlasNow{tool: t.Name(), at: t.deps.now(), person: atlas.PersonSource(actor.Handle)}
-	answer, read, why := t.read.atlas(ctx, turn, t.Name(), atlasdomain.DefaultRead(), n.at)
-	if why != "" {
-		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: %s", t.Name(), why))
-		return nil, &r
+	n, refusal := readAtlasNow(ctx, t.read, turn, t.Name(), t.deps.now())
+	if refusal != nil {
+		return nil, refusal
 	}
-	// A CHANGE IS DECIDED ON ALL OF WHAT THE CALLER READS: a source this node
-	// serves that answered in part may hold the very fact the write would
-	// claim beside. One this node does not serve, and Gitlet where the caller
-	// may not read it, hold nothing the write may touch.
-	for _, c := range answer.Coverage {
-		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !read {
-			continue
-		}
-		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
-			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
-			t.Name(), strings.ReplaceAll(string(c.Source), "_", " ")))
-		return nil, &r
-	}
-	n.view, n.recorded, n.recordedAt, n.gitlet = answer.View, answer.Recorded, answer.RecordedAt, read
+	n.person = atlas.PersonSource(actor.Handle)
 	if n.chart = t.deps.Org(); n.chart == nil {
 		r := refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("%s wrote nothing: this node runs no company "+
 			"yet. Try again once its settings are applied.", t.Name()))
 		return nil, &r
 	}
 	return n, nil
+}
+
+// wholeRead refuses a change decided on an atlas read in part. A CHANGE IS
+// DECIDED ON ALL OF WHAT THE CALLER READS: a source this node serves that
+// answered in part may hold the very fact the write would claim beside. One
+// this node does not serve, and Gitlet where the caller may not read it, hold
+// nothing the write may touch.
+func wholeRead(tool string, coverage []gather.Coverage, gitletRead bool) *tools.Result {
+	for _, c := range coverage {
+		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !gitletRead {
+			continue
+		}
+		r := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s wrote nothing: the atlas's %s "+
+			"could not be read in full just now, and a change is decided on all of it. Try again shortly.",
+			tool, strings.ReplaceAll(string(c.Source), "_", " ")))
+		return &r
+	}
+	return nil
 }
 
 // write records a plan's steps in order, each under its own operation derived
@@ -461,7 +465,17 @@ func orAgain(again string) string {
 // anything else this node's fault.
 func atlasWriteFailure(ctx context.Context, tool string, actor Actor, entry atlas.Ref, err error) tools.Result {
 	if class, ok := WriterClass(err); ok {
-		return refusedBy(class, err, domainRefusal(tool, err))
+		r := refusedBy(class, err, domainRefusal(tool, err))
+		switch {
+		case !r.PersonRefusal.IsZero():
+		case errors.Is(err, atlasdomain.ErrStaleVersion):
+			r = toPerson(r, caveat.AtlasChangedMeanwhile())
+		// THE VOCABULARY'S REFUSALS ALONE: the log refuses other things as
+		// invalid (an operation id), which are no form of a person's to change.
+		case errors.Is(err, atlas.ErrInvalid), errors.Is(err, atlas.ErrCredential):
+			r = toPerson(r, atlasForm(err))
+		}
+		return r
 	}
 	again := sameCall(actor, tool)
 	if again == "" {
@@ -552,8 +566,8 @@ func (n *atlasNow) entry(a map[string]any, arg string) (member, *tools.Result) {
 		}
 		parsed, err := atlas.RecordedRef(atlas.Kind(kind), key)
 		if err != nil {
-			r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `%s`: %s.", n.tool, arg,
-				atlasdomain.Sentence(err)))
+			r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `%s`: %s.", n.tool, arg,
+				atlasdomain.Sentence(err))), atlasForm(err))
 			return member{}, &r
 		}
 		ref = parsed
@@ -620,8 +634,9 @@ func declared(winner atlas.Source, others []atlas.Claimed) (atlas.Source, bool) 
 
 // declaredRefusal is a write on what src declares.
 func (n *atlasNow) declaredRefusal(what string, src atlas.Source) *tools.Result {
-	r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s declare %s, and what they "+
-		"declare is changed there, never in the atlas.", n.tool, declarer(src), what))
+	r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s declare %s, and what they "+
+		"declare is changed there, never in the atlas.", n.tool, declarer(src), what)),
+		caveat.AtlasDeclaredElsewhere(declarer(src)))
 	return &r
 }
 
@@ -641,6 +656,24 @@ func (n *atlasNow) fact(a map[string]any, ref atlas.Ref) (atlas.Fact, *tools.Res
 	return f, nil
 }
 
+// atlasForm is a key or a value the vocabulary refused, as a person is told:
+// a credential's shape in words that never repeat it, any other rule in the
+// vocabulary's own sentence.
+func atlasForm(err error) caveat.Refusal {
+	if errors.Is(err, atlas.ErrCredential) {
+		return caveat.AtlasCredentialShaped()
+	}
+	// THE RULE ALONE: the sentence leads with the kind or the fact it is about
+	// ("service key: ..."), which the person's own form already names.
+	// A RULE MAY HOLD A COLON OF ITS OWN (a key's alphabet lists one), so only
+	// the lead is cut.
+	rule := atlasdomain.Sentence(err)
+	if _, after, cut := strings.Cut(rule, ": "); cut {
+		rule = after
+	}
+	return caveat.AtlasNotInItsForm(rule)
+}
+
 // claim builds one claim through the vocabulary's constructors, a refusal of
 // which is the caller's argument to change.
 func (n *atlasNow) claim(c atlas.Claim, err error) (*atlas.Claim, *tools.Result) {
@@ -648,18 +681,20 @@ func (n *atlasNow) claim(c atlas.Claim, err error) (*atlas.Claim, *tools.Result)
 		err = c.Recordable()
 	}
 	if err != nil {
-		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s wrote nothing: %s.", n.tool,
-			atlasdomain.Sentence(err)))
+		r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s wrote nothing: %s.", n.tool,
+			atlasdomain.Sentence(err))), atlasForm(err))
 		return nil, &r
 	}
 	return &c, nil
 }
 
-// factOn is the fact f as the entry shows it: its one value, or for a fact
-// that holds many the value named.
-func factOn(e atlas.Entry, f atlas.Fact, value string) (atlas.FactView, bool) {
+// factOn is the fact f as the entry shows it: its one value, for a fact that
+// holds many the value named, and for a fact of each host the one of on, the
+// member the caller named.
+func factOn(e atlas.Entry, on atlas.Ref, f atlas.Fact, value string) (atlas.FactView, bool) {
+	spec := f.Spec()
 	for _, fv := range e.Facts {
-		if fv.Fact == f && (!f.Spec().Many || fv.Value.Text == value) {
+		if fv.Fact == f && (!spec.Many || fv.Value.Text == value) && (!spec.PerHost || fv.Of == on) {
 			return fv, true
 		}
 	}
@@ -697,7 +732,9 @@ var atlasVerbs = []atlasVerb{
 		description: "Add an entry to the company's atlas that no source reports: a service, a " +
 			"database, a queue, a bucket, a host, a domain or anything else the company runs on, by its " +
 			"kind and its key, with a name if its key is not one. A vendor the atlas does not know is an " +
-			"account with vendor `other`. Entries the company's settings or Gitlet declare are added there.",
+			"account with vendor `other`. Entries the company's settings or Gitlet declare are added there. " +
+			"What you know of it is recorded with it: its purpose, the account it belongs to, its owner and " +
+			"the page that documents it.",
 		params: func() map[string]any {
 			return map[string]any{
 				"kind": map[string]any{"type": "string", "enum": atlasKinds(), "description": "The entry's kind."},
@@ -706,6 +743,12 @@ var atlasVerbs = []atlasVerb{
 					"`<vendor>/<account id>` for an account."},
 				"name": map[string]any{"type": "string", "description": fmt.Sprintf("A name to show, plain "+
 					"text of at most %d characters. Omit it to show the key.", atlas.MaxLabelRunes)},
+				"purpose": map[string]any{"type": "string", "description": fmt.Sprintf("What it is for, one "+
+					"line of plain text of at most %d characters.", atlas.MaxLabelRunes)},
+				"belongs_to":  entryArg("The vendor account it belongs to"),
+				"seat":        map[string]any{"type": "string", "description": "The owning seat's handle."},
+				"unit":        map[string]any{"type": "string", "description": "The owning unit's key."},
+				"doclet_page": pageArg("The Doclet page that documents it"),
 			}
 		},
 		required: []string{"kind", "key"},
@@ -752,28 +795,32 @@ var atlasVerbs = []atlasVerb{
 		name: AtlasRelateTool,
 		description: "Draw one relation between two atlas entries, from the one that relies to the one " +
 			"relied on: a service `runs_on` a host, `depends_on` a database, a host name `resolves_to` a " +
-			"host. An owner is set with " + AtlasSetOwnerTool + ".",
+			"host. With `documented_in`, it names the Doclet page (`doclet_page`) that documents the entry instead. " +
+			"An owner is set with " + AtlasSetOwnerTool + ".",
 		params: func() map[string]any {
 			return map[string]any{
 				"atlas_entry": entryArg("The entry that relies"),
-				"relation":    map[string]any{"type": "string", "enum": atlasEntryRelations(), "description": "The relation."},
-				"to":          entryArg("The entry relied on"),
+				"relation":    map[string]any{"type": "string", "enum": atlasDrawnRelations(), "description": "The relation."},
+				"to":          entryArg("The entry relied on, for every relation but `documented_in`"),
+				"doclet_page": pageArg("With `documented_in`, the page"),
 			}
 		},
-		required: []string{"atlas_entry", "relation", "to"},
+		required: []string{"atlas_entry", "relation"},
 		plan:     planRelate(false),
 	},
 	{
-		name:        AtlasUnrelateTool,
-		description: "Remove one relation the atlas shows between two entries: it is recorded that it does not hold.",
+		name: AtlasUnrelateTool,
+		description: "Remove one relation the atlas shows between two entries, or from an entry to the " +
+			"Doclet page that documents it (`documented_in` and `doclet_page`): it is recorded that it does not hold.",
 		params: func() map[string]any {
 			return map[string]any{
 				"atlas_entry": entryArg("The entry the relation runs from"),
-				"relation":    map[string]any{"type": "string", "enum": atlasEntryRelations(), "description": "The relation."},
-				"to":          entryArg("The entry it points at"),
+				"relation":    map[string]any{"type": "string", "enum": atlasDrawnRelations(), "description": "The relation."},
+				"to":          entryArg("The entry it points at, for every relation but `documented_in`"),
+				"doclet_page": pageArg("With `documented_in`, the page"),
 			}
 		},
-		required: []string{"atlas_entry", "relation", "to"},
+		required: []string{"atlas_entry", "relation"},
 		plan:     planRelate(true),
 	},
 	{
@@ -852,8 +899,20 @@ func atlasFacts() []string {
 	return out
 }
 
+// atlasDrawnRelations is every relation a person draws or removes by name:
+// those between two entries, and the page that documents one. An owner is one
+// seat or one unit, set by its own tool.
+func atlasDrawnRelations() []string {
+	return append(atlasEntryRelations(), string(atlas.RelationDocumentedIn))
+}
+
+// pageArg describes an argument naming a Doclet page.
+func pageArg(what string) map[string]any {
+	return map[string]any{"type": "string", "description": what + ": its id, as Doclet answers it."}
+}
+
 // atlasEntryRelations is every relation between two entries, as a schema
-// names them: the owner and a page are named by their own tools.
+// names them.
 func atlasEntryRelations() []string {
 	var out []string
 	for _, r := range atlas.Relations {
@@ -872,37 +931,127 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	}
 	ref, err := atlas.RecordedRef(kind, argString(a, "key"))
 	if err != nil {
-		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `key`: %s.", n.tool, atlasdomain.Sentence(err)))
+		r := toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: `key`: %s.", n.tool,
+			atlasdomain.Sentence(err))), atlasForm(err))
 		return atlasPlan{}, &r
 	}
 	if src, ok := ref.EngineNamed(); ok {
-		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: a %s keyed %s is one %s "+
-			"declare, and enters the atlas from there.", n.tool, kind, ref.Key, declarer(src)))
+		r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: a %s keyed %s is one %s "+
+			"declare, and enters the atlas from there.", n.tool, kind, ref.Key, declarer(src))),
+			caveat.AtlasDeclaredElsewhere(declarer(src)))
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("added", ref)}
-	if e, found := n.view.Find(ref.ID()); found {
-		if e.State == atlas.StateRetired {
-			r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, retired. "+
-				"Bring it back with %s.", n.tool, ref, AtlasRestoreTool))
-			return atlasPlan{}, &r
-		}
-		r := refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s is in "+
-			"the atlas already, as entry %s.", n.tool, ref, e.ID))
+	e, found := n.view.Find(ref.ID())
+	if found && e.State == atlas.StateRetired {
+		r := toPerson(refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: %s is in the atlas, "+
+			"retired. Bring it back with %s.", n.tool, ref, AtlasRestoreTool)), caveat.AtlasEntryExists(true))
 		return atlasPlan{}, &r
 	}
-	exists, refusal := n.claim(atlas.Exists(ref, n.person, n.at))
-	if refusal != nil {
-		return atlasPlan{}, refusal
+	// AN ADD THAT STOPPED PART OF THE WAY IS FINISHED BY THE SAME CALL: where
+	// the caller's own claim already stands on the entry, what the call still
+	// says of it and the atlas does not is recorded, and an add that would
+	// record nothing is refused as the second add it is.
+	// THE CALLER'S OWN ADD, not any claim of theirs: a person who corrected a
+	// fact on an entry an integration reports has not added it.
+	mine := found && slices.ContainsFunc(n.recorded, func(c atlas.Claim) bool {
+		return c.Subject == ref && c.Facet.Kind == atlas.FacetExists && c.Source == n.person && !c.Denied
+	})
+	if found && !mine {
+		r := toPerson(refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s "+
+			"is in the atlas already, as entry %s.", n.tool, ref, e.ID)), caveat.AtlasEntryExists(false))
+		return atlasPlan{}, &r
 	}
-	plan.steps = append(plan.steps, atlasStep{name: "add", claim: exists})
+	step := func(name, key string) func(atlas.Claim, error) *tools.Result {
+		return func(c atlas.Claim, invalid error) *tools.Result {
+			claim, bad := n.claim(c, invalid)
+			if bad != nil {
+				return bad
+			}
+			plan.steps = append(plan.steps, atlasStep{name: name, key: key, claim: claim})
+			return nil
+		}
+	}
+	if !found {
+		if bad := step("add", "")(atlas.Exists(ref, n.person, n.at)); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	says := func(stepName string, f atlas.Fact, raw string) *tools.Result {
+		c, invalid := atlas.Says(ref, f, raw, n.person, n.at)
+		if invalid == nil {
+			plan.said[string(f)] = c.Value.Text
+			if now, held := factOn(e, ref, f, c.Value.Text); held && now.Value.Equal(c.Value) {
+				return nil
+			}
+		}
+		return step(stepName, "")(c, invalid)
+	}
 	if name := strings.TrimSpace(argString(a, "name")); name != "" && name != ref.Key {
-		named, bad := n.claim(atlas.Says(ref, atlas.FactName, name, n.person, n.at))
+		if bad := says("name", atlas.FactName, name); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if purpose := strings.TrimSpace(argString(a, "purpose")); purpose != "" {
+		if bad := says("purpose", atlas.FactPurpose, purpose); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if strings.TrimSpace(argString(a, "belongs_to")) != "" {
+		account, bad := n.held(a, "belongs_to")
 		if bad != nil {
 			return atlasPlan{}, bad
 		}
-		plan.steps = append(plan.steps, atlasStep{name: "name", claim: named})
-		plan.said["name"] = named.Value.Text
+		if !atlas.RelationBelongsTo.Joins(kind, account.entry.Ref.Kind) {
+			r := failed(fmt.Sprintf("%s: `belongs_to` names a vendor account, which a %s may belong to; "+
+				"a %s does not belong to a %s.", n.tool, atlas.KindService, kind, account.entry.Ref.Kind))
+			return atlasPlan{}, &r
+		}
+		plan.said["belongs_to"] = account.entry.ID.String()
+		if _, drawn := edgeOn(e, atlas.RelationBelongsTo, account.entry.ID); !drawn {
+			bad = step("belong", "")(atlas.Relates(ref, atlas.RelationBelongsTo, account.entry.Ref, n.person, n.at))
+			if bad != nil {
+				return atlasPlan{}, bad
+			}
+		}
+	}
+	seat, unit := strings.TrimSpace(argString(a, "seat")), strings.TrimSpace(argString(a, "unit"))
+	if seat != "" && unit != "" {
+		r := failed(fmt.Sprintf("%s: an owner is one seat (`seat`) or one unit (`unit`), never both.", n.tool))
+		return atlasPlan{}, &r
+	}
+	names := func(stepName string, r atlas.Relation, external atlas.External, name string) *tools.Result {
+		if slices.ContainsFunc(e.Relations, func(ed atlas.Edge) bool {
+			return ed.Relation == r && ed.External == external && ed.Name == name
+		}) {
+			return nil
+		}
+		return step(stepName, name)(atlas.Names(ref, r, external, name, n.person, n.at))
+	}
+	owner, refusal := n.owner(seat, unit)
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	if owner.External != "" {
+		plan.said["owner"] = string(owner.External) + ":" + owner.Name
+		if bad := names("own", atlas.RelationOwnedBy, owner.External, owner.Name); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if strings.TrimSpace(argString(a, "doclet_page")) != "" {
+		page, bad := n.page(a)
+		if bad != nil {
+			return atlasPlan{}, bad
+		}
+		plan.said["doclet_page"] = page
+		if bad = names("document", atlas.RelationDocumentedIn, atlas.ExternalPage, page); bad != nil {
+			return atlasPlan{}, bad
+		}
+	}
+	if found && len(plan.steps) == 0 {
+		r := toPerson(refusedBy(tools.RefusalExists, atlasdomain.ErrExists, fmt.Sprintf("%s wrote nothing: %s "+
+			"is in the atlas already, as entry %s.", n.tool, ref, e.ID)), caveat.AtlasEntryExists(false))
+		return atlasPlan{}, &r
 	}
 	return plan, nil
 }
@@ -917,6 +1066,11 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, refusal
 	}
 	ref, raw, wrong := m.entry.Ref, argString(a, "value"), argBool(a, "wrong")
+	// A FACT OF EACH HOST IS WRITTEN ON THE MEMBER THE CALLER NAMED, whichever
+	// member the entry is known by: a mirror's visibility is not its source's.
+	if f.Spec().PerHost {
+		ref = m.ref
+	}
 	many := f.Spec().Many
 	plan := atlasPlan{entry: ref, said: said("corrected", ref)}
 	plan.said["fact"] = string(f)
@@ -931,13 +1085,14 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, bad
 		}
 		plan.said["value"] = says.Value.Text
-		now, held := factOn(m.entry, f, says.Value.Text)
+		now, held := factOn(m.entry, ref, f, says.Value.Text)
 		if held {
 			if src, ok := declared(now.Source, now.Others); ok {
 				return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("%s's %s", ref, f), src)
 			}
 			plan.said["before"] = shown(now)
-			if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(says.Value) && !now.Suggested {
+			if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(says.Value) && !now.Suggested &&
+				now.Standing == atlas.StandingSettled {
 				return plan, nil
 			}
 		}
@@ -955,7 +1110,12 @@ func planCorrect(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		r := failed(fmt.Sprintf("%s: %s holds many values: `value` names the one that is wrong.", n.tool, f))
 		return atlasPlan{}, &r
 	}
-	now, held := factOn(m.entry, f, lookup)
+	// AS THE ATLAS WRITES IT: a value named in another spelling of its
+	// grammar is the value shown.
+	if v, invalid := f.Value(lookup); many && invalid == nil {
+		lookup = v.Text
+	}
+	now, held := factOn(m.entry, ref, f, lookup)
 	if !held {
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: the atlas shows no %s on %s "+
 			"that value could be.", n.tool, f, ref))
@@ -1002,12 +1162,16 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		if bad != nil {
 			return atlasPlan{}, bad
 		}
+		if f.Spec().PerHost {
+			ref = m.ref
+			plan = atlasPlan{entry: ref, said: said("confirmed", ref)}
+		}
 		value := argString(a, "value")
 		lookup := value
 		if !f.Spec().Many {
 			lookup = ""
 		}
-		now, ok := factOn(m.entry, f, lookup)
+		now, ok := factOn(m.entry, ref, f, lookup)
 		if !ok {
 			r := refused(tools.RefusalConflict, fmt.Sprintf("%s wrote nothing: the atlas shows no %s on %s "+
 				"to confirm; set it with %s.", n.tool, f, ref, AtlasCorrectTool))
@@ -1030,7 +1194,10 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			}
 			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("%s's %s", ref, f), src)
 		}
-		if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(pick) && !now.Suggested {
+		// A PERSON'S VALUE A NEWER REPORT CONTRADICTS IS SAID AGAIN: only a
+		// claim newer than the report settles what the two disagree on.
+		if now.Source.Kind == atlas.SourcePerson && now.Value.Equal(pick) && !now.Suggested &&
+			now.Standing == atlas.StandingSettled {
 			return plan, nil
 		}
 		says, bad := n.claim(atlas.Says(ref, f, pick.Text, n.person, n.at))
@@ -1051,7 +1218,8 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, &res
 		}
 		plan.said["relation"], plan.said["to"] = string(r), to.entry.ID.String()
-		if ed.Source.Kind.Computed() || ed.Source.Kind == atlas.SourcePerson && !ed.Suggested {
+		if ed.Source.Kind.Computed() || ed.Source.Kind == atlas.SourcePerson && !ed.Suggested &&
+			ed.Standing == atlas.StandingSettled {
 			return plan, nil
 		}
 		claim, bad := n.claim(atlas.Relates(ref, r, to.entry.Ref, n.person, n.at))
@@ -1066,7 +1234,10 @@ func planConfirm(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			"with %s.", n.tool, ref, AtlasRestoreTool))
 		return atlasPlan{}, &r
 	}
-	if m.entry.State == atlas.StateConfirmed {
+	// CONFIRMED IS THE ENTRY'S OWN WORD, not only its state: an entry an agent
+	// reported stays "likely" after a person corrects one fact on it, and it
+	// waits in review until somebody says the entry itself is there.
+	if m.entry.State == atlas.StateConfirmed && m.entry.Word == atlas.WordConfirmed {
 		return plan, nil
 	}
 	exists, refusal := n.claim(atlas.Exists(ref, n.person, n.at))
@@ -1086,6 +1257,11 @@ func (n *atlasNow) relation(a map[string]any) (atlas.Relation, member, *tools.Re
 			words.Or(atlasEntryRelations()), AtlasSetOwnerTool))
 		return "", member{}, &res
 	}
+	if strings.TrimSpace(argString(a, "doclet_page")) != "" {
+		res := failed(fmt.Sprintf("%s: `doclet_page` goes with %s alone; %s points at an entry, named by `to`.",
+			n.tool, atlas.RelationDocumentedIn, r))
+		return "", member{}, &res
+	}
 	to, refusal := n.held(a, "to")
 	if refusal != nil {
 		return "", member{}, refusal
@@ -1098,6 +1274,9 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		m, bad := n.held(a, "atlas_entry")
 		if bad != nil {
 			return atlasPlan{}, bad
+		}
+		if strings.TrimSpace(argString(a, "relation")) == string(atlas.RelationDocumentedIn) {
+			return planPage(n, a, m, remove)
 		}
 		r, to, bad := n.relation(a)
 		if bad != nil {
@@ -1133,7 +1312,7 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 			return atlasPlan{}, bad
 		}
 		switch {
-		case !remove && shownNow && ed.Source.Kind == atlas.SourcePerson:
+		case !remove && shownNow && ed.Source.Kind == atlas.SourcePerson && ed.Standing == atlas.StandingSettled:
 			return plan, nil
 		case remove && !shownNow:
 			return plan, nil
@@ -1147,6 +1326,89 @@ func planRelate(remove bool) func(n *atlasNow, a map[string]any) (atlasPlan, *to
 		plan.steps = []atlasStep{{name: change, claim: claim}}
 		return plan, nil
 	}
+}
+
+// page reads a write's `doclet_page`: a Doclet page by its id, in its canonical
+// form. THE PAGE IS NOT READ HERE: whether it exists and who may read it is
+// Doclet's to say on every read of it, and the atlas keeps only its id, so a
+// link is never a way to learn of a page.
+func (n *atlasNow) page(a map[string]any) (string, *tools.Result) {
+	raw := strings.TrimSpace(argString(a, "doclet_page"))
+	id, err := uuid.Parse(raw)
+	if err != nil || id.String() != raw {
+		r := failed(fmt.Sprintf("%s: `doclet_page` is a Doclet page's id, as Doclet answers it.", n.tool))
+		return "", &r
+	}
+	return raw, nil
+}
+
+// planPage draws or removes the page that documents an entry.
+func planPage(n *atlasNow, a map[string]any, m member, remove bool) (atlasPlan, *tools.Result) {
+	if strings.TrimSpace(argString(a, "to")) != "" {
+		r := failed(fmt.Sprintf("%s: %s names a page by `doclet_page`, never an entry by `to`.", n.tool,
+			atlas.RelationDocumentedIn))
+		return atlasPlan{}, &r
+	}
+	page, refusal := n.page(a)
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	ref := m.entry.Ref
+	change := "related"
+	if remove {
+		change = "unrelated"
+	}
+	plan := atlasPlan{entry: ref, said: said(change, ref)}
+	plan.said["relation"], plan.said["doclet_page"] = string(atlas.RelationDocumentedIn), page
+	at := slices.IndexFunc(m.entry.Relations, func(ed atlas.Edge) bool {
+		return ed.Relation == atlas.RelationDocumentedIn && ed.External == atlas.ExternalPage && ed.Name == page
+	})
+	if at >= 0 {
+		ed := m.entry.Relations[at]
+		if src, ok := declared(ed.Source, ed.Others); ok {
+			if !remove {
+				return plan, nil
+			}
+			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("the page that documents %s", ref), src)
+		}
+		if !remove && ed.Source.Kind == atlas.SourcePerson && ed.Standing == atlas.StandingSettled {
+			return plan, nil
+		}
+	} else if remove {
+		return plan, nil
+	}
+	claim, refusal := n.claim(atlas.Names(ref, atlas.RelationDocumentedIn, atlas.ExternalPage, page, n.person, n.at))
+	if refusal != nil {
+		return atlasPlan{}, refusal
+	}
+	if remove {
+		if claim, refusal = n.claim(atlas.Denial(*claim, n.person, n.at)); refusal != nil {
+			return atlasPlan{}, refusal
+		}
+	}
+	plan.steps = []atlasStep{{name: change, key: page, claim: claim}}
+	return plan, nil
+}
+
+// owner is the seat or the unit of the chart a write names as an owner, the
+// zero edge where it names neither.
+func (n *atlasNow) owner(seat, unit string) (atlas.Edge, *tools.Result) {
+	switch {
+	case seat != "":
+		if n.chart.Role(seat) == nil {
+			r := failed(fmt.Sprintf("%s: no seat of the chart has the handle `seat` names.", n.tool))
+			return atlas.Edge{}, &r
+		}
+		return atlas.Edge{External: atlas.ExternalSeat, Name: seat}, nil
+	case unit != "":
+		u := n.chart.UnitByRef(unit)
+		if u == nil {
+			r := failed(fmt.Sprintf("%s: no unit of the chart has the key `unit` names.", n.tool))
+			return atlas.Edge{}, &r
+		}
+		return atlas.Edge{External: atlas.ExternalUnit, Name: u.Key()}, nil
+	}
+	return atlas.Edge{}, nil
 }
 
 func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
@@ -1169,27 +1431,14 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 		return atlasPlan{}, &r
 	}
 	plan := atlasPlan{entry: ref, said: said("owner set", ref)}
-	var want atlas.Edge
-	switch {
-	case seat != "":
-		if n.chart.Role(seat) == nil {
-			r := failed(fmt.Sprintf("%s: no seat of the chart has the handle `seat` names.", n.tool))
-			return atlasPlan{}, &r
-		}
-		want = atlas.Edge{External: atlas.ExternalSeat, Name: seat}
-	case unit != "":
-		u := n.chart.UnitByRef(unit)
-		if u == nil {
-			r := failed(fmt.Sprintf("%s: no unit of the chart has the key `unit` names.", n.tool))
-			return atlasPlan{}, &r
-		}
-		want = atlas.Edge{External: atlas.ExternalUnit, Name: u.Key()}
-		plan.said["owner"] = "unit:" + u.Key()
-	default:
-		plan.said["change"] = "owner cleared"
+	want, refusal := n.owner(seat, unit)
+	if refusal != nil {
+		return atlasPlan{}, refusal
 	}
-	if want.External == atlas.ExternalSeat {
-		plan.said["owner"] = "seat:" + want.Name
+	if want.External == "" {
+		plan.said["change"] = "owner cleared"
+	} else {
+		plan.said["owner"] = string(want.External) + ":" + want.Name
 	}
 	// THE OWNER A PERSON NAMED BEFORE IS WITHDRAWN, and so is one an
 	// integration only suggested: an owner is one seat or one unit, and a
@@ -1207,7 +1456,7 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			return atlasPlan{}, n.declaredRefusal(fmt.Sprintf("who owns %s", ref), src)
 		}
 		if ed.External == want.External && ed.Name == want.Name {
-			kept = ed.Source.Kind == atlas.SourcePerson && !ed.Suggested
+			kept = ed.Source.Kind == atlas.SourcePerson && !ed.Suggested && ed.Standing == atlas.StandingSettled
 			continue
 		}
 		owner, bad := n.claim(atlas.Names(ref, atlas.RelationOwnedBy, ed.External, ed.Name, n.person, n.at))

@@ -101,7 +101,7 @@ func substrates() []substrate {
 				// provisions a single node (clusteredStream is false there).
 				// The cluster substrate below is the one that says Clustered.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(),
-					coordkv.Config{TTL: fleetTTL})
+					coordkv.Config{TTL: fleetTTL, Reach: coordkv.InProcess})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)
 				}
@@ -140,7 +140,7 @@ func substrates() []substrate {
 				// without it the buckets are provisioned on the SOLO budget
 				// against a three-member metadata group.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(), coordkv.Config{
-					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true,
+					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true, Reach: coordkv.InProcess,
 				})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)

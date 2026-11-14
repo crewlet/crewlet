@@ -95,7 +95,7 @@ import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
 import { WidgetTray } from "./board/tray.tsx";
 import { openLinksInNewTab } from "./board/newTab.ts";
 import { homeBoardDraft } from "./board/assistantDraft.ts";
-import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import { EditBar, editMenu } from "./board/EditBar.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
 
@@ -118,7 +118,7 @@ export function Home() {
   const runs = useServicesRun();
   const saved = store.use();
   const toast = useToast();
-  const [draft, setDraft] = useState<Board | null>(null);
+  const [draft, setDraft] = useDraftState<Board | null>(null);
   const [past, setPast] = useState<Board[]>([]);
   const [future, setFuture] = useState<Board[]>([]);
   const [settingsId, setSettingsId] = useState<string | null>(null);
@@ -298,6 +298,7 @@ export function Home() {
     editing
       ? homeBoardDraft({
           board,
+          held: setDraft,
           settings: settingsWidget ? widgetName(settingsWidget) : null,
           changed,
         })

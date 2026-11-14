@@ -49,6 +49,10 @@ func UnreadNote(unread int64) string { return unreadNote(unread, false) }
 // MaxLineBytes is the line bound every runner New builds reads to.
 const MaxLineBytes = maxLineBytes
 
+// ClaudeResultModelsMax is the most models a Claude Code result's spend model
+// by model is read for.
+const ClaudeResultModelsMax = claudeResultModelsMax
+
 // LiveWindow and LiveBacklog are the live reading's: how much of a stream's
 // end it begins from, and the most one read catches up before beginning again.
 const (
@@ -177,12 +181,15 @@ func AttributionHook(a sandbox.CommitAttribution) ([]byte, error) {
 	return attributionHook(trailers), nil
 }
 
-// ClaudeSkillsFloor and ClaudeNotesFloor are the oldest Claude Code releases a
-// run is started with its skills' plugin, and the settings that keep its hook
-// on, and with its notes' hooks ([claudeSkillsFloor], [claudeNotesFloor]).
+// ClaudeSkillsFloor, ClaudeNotesFloor and ClaudeSettingsPinFloor are the
+// oldest Claude Code releases a run is started with its skills' plugin, and the
+// settings that keep its hook on, with its notes' hooks, and with its settings'
+// pinned copy ([claudeSkillsFloor], [claudeNotesFloor],
+// [claudeSettingsPinFloor]).
 const (
-	ClaudeSkillsFloor = claudeSkillsFloor
-	ClaudeNotesFloor  = claudeNotesFloor
+	ClaudeSkillsFloor      = claudeSkillsFloor
+	ClaudeNotesFloor       = claudeNotesFloor
+	ClaudeSettingsPinFloor = claudeSettingsPinFloor
 )
 
 // ReleaseAtLeast reports whether a Claude Code release is at or after floor,

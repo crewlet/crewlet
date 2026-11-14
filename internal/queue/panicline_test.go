@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,11 +84,6 @@ func TestAPanicLineNamesThePanicAndTheTopic(t *testing.T) {
 // event itself, because a hand-written line is how three backends ended up
 // with three names for one situation.
 func TestNoBackendWritesItsOwnPanicLine(t *testing.T) {
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("locating this package: %v", err)
-	}
-
 	// The names a backend must not emit directly — the two the contract
 	// owns, plus the two spellings the backends had drifted onto, so a
 	// revert to either is caught rather than silently re-landing.
@@ -101,36 +94,13 @@ func TestNoBackendWritesItsOwnPanicLine(t *testing.T) {
 		`"stream_handler_failed"`,
 	}
 
-	for _, backend := range []string{"memory", "jetstream"} {
-		entries, err := os.ReadDir(filepath.Join(dir, backend))
-		if err != nil {
-			t.Fatalf("reading backend %s: %v", backend, err)
-		}
-		var scanned int
-		for _, entry := range entries {
-			name := entry.Name()
-			if entry.IsDir() || !strings.HasSuffix(name, ".go") ||
-				strings.HasSuffix(name, "_test.go") {
-				continue
+	for file, raw := range backendSources(t) {
+		for _, bad := range forbidden {
+			if bytes.Contains(raw, []byte(bad)) {
+				t.Errorf("%s spells %s itself; call "+
+					"queue.LogListenerPanic / queue.LogStreamHandlerPanic "+
+					"so every backend says the same thing", file, bad)
 			}
-			scanned++
-			raw, err := os.ReadFile(filepath.Join(dir, backend, name))
-			if err != nil {
-				t.Fatalf("reading %s/%s: %v", backend, name, err)
-			}
-			for _, bad := range forbidden {
-				if bytes.Contains(raw, []byte(bad)) {
-					t.Errorf("%s/%s spells %s itself; call "+
-						"queue.LogListenerPanic / queue.LogStreamHandlerPanic "+
-						"so every backend says the same thing",
-						backend, name, bad)
-				}
-			}
-		}
-		// A backend whose files stopped being found would pass this test
-		// by reading nothing at all.
-		if scanned == 0 {
-			t.Errorf("scanned no source files for backend %s", backend)
 		}
 	}
 }

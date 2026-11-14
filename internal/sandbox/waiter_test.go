@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
@@ -1102,30 +1103,41 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 // the loop
 // ---------------------------------------------------------------------
 
+// THE LOOP TICKS ON ITS INTERVAL AND STOPS CLEANLY. Its first pass comes by
+// the most its jitter makes of the interval it was given, on the bubble's
+// clock, which keeps the interval exactly: a bound of seconds on the
+// machine's clock passed a loop ticking on a hundred times its interval, and
+// failed one a loaded runner kept from firing for as long.
+//
+// Mutation: tick on the default interval rather than the one configured, and
+// no pass comes inside the configured one.
 func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
-	rig.launch("t1")
-	rig.runner.Finish(Result{Success: true})
+	inBubble(t, func(t *testing.T) {
+		rig := newWaiterRig(t)
+		rig.launch("t1")
+		rig.runner.Finish(Result{Success: true})
 
-	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Drives: DrivesLocal, Interval: 5 * time.Millisecond,
+		const interval = 5 * time.Millisecond
+		waiter, err := NewWaiter(WaiterOptions{
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+			Drives: DrivesLocal, Interval: interval,
+		})
+		if err != nil {
+			t.Fatalf("NewWaiter: %v", err)
+		}
+		waiter.Start(t.Context())
+		// THE FIRST PASS IS DUE BY THEN, and its polls have run once every
+		// goroutine of the case is blocked again.
+		time.Sleep(time.Duration(float64(interval) * (1 + jitterFraction)))
+		synctest.Wait()
+		if rig.queue.count() == 0 {
+			t.Fatalf("the loop fired no completion within its %v interval", interval)
+		}
+		waiter.Stop()
+		// Stop is idempotent and returns only once the in-flight tick is done.
+		waiter.Stop()
 	})
-	if err != nil {
-		t.Fatalf("NewWaiter: %v", err)
-	}
-	waiter.Start(t.Context())
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && rig.queue.count() == 0 {
-		time.Sleep(2 * time.Millisecond)
-	}
-	waiter.Stop()
-	if rig.queue.count() == 0 {
-		t.Fatal("the loop never fired a completion")
-	}
-	// Stop is idempotent and returns only once the in-flight tick is done.
-	waiter.Stop()
 }
 
 // A PASS LEAVES NOTHING BEHIND IN THE CONTEXT IT WAS GIVEN. That context is

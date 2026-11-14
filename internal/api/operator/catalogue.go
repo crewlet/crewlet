@@ -209,6 +209,9 @@ type Halves struct {
 	// node that reaches no copy of its log. Who writes and the chart an
 	// owner is named from are set per call.
 	AtlasWrite builtin.AtlasWriteDeps
+	// AtlasRefresh is the half a person asks for a read of an atlas source
+	// through, or the zero value on a node with no coordination store.
+	AtlasRefresh builtin.AtlasRefreshDeps
 
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
@@ -422,13 +425,16 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	arts.CallerKey = keyFrom
 	atlasWrite := halves.AtlasWrite
 	atlasWrite.Actor, atlasWrite.Org = workActor, s.org
+	atlasRefresh := halves.AtlasRefresh
+	atlasRefresh.Actor = workActor
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
-		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite, Org: s.org,
+		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite,
+		AtlasRefresh: atlasRefresh, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

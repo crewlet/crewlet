@@ -50,6 +50,12 @@ func CapReads(box Sandbox, n int) Sandbox {
 	return box
 }
 
+// ObserveCredentialWrites hands every login write-back l's boxes make the
+// observer steps ([hostbox.CredentialSteps]), for the kill matrix's writer
+// (writebackwriter_test.go): set before l makes a box, which takes it with its
+// layout.
+func ObserveCredentialWrites(l *Local, steps hostbox.CredentialSteps) { l.credentialSteps = steps }
+
 // ReadLimit is the most box reads whole.
 func ReadLimit(box Sandbox) int {
 	switch b := box.(type) {

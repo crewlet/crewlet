@@ -273,6 +273,15 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // colleague out of the owning unit stops the next write made for it. A
 // change's write holds a colleague at the access [changeToolNeeds] names for
 // its tool, and the relation beyond it is the seat's alone.
+//
+// AND WHOM THE WRITE IS MADE FOR rides beside the ceiling, on every request a
+// code write forms ([gitlet.EngineWrite.WrittenFor] and its siblings,
+// ADR-0109): the caller's actor's carrier, composed from the same bound
+// ceiling where the caller was resolved ([actorFor], [writtenForTurn]) — a
+// colleague seat, a person's seat, a credential with the apps this node holds
+// it to, or nobody — and stamped beside the ceiling by every sender
+// ([written], [CodeDeps.proposeChange], conversing.decided), so the node that
+// decides the write holds the two to each other.
 func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
 	actor, asker, refusal := d.asker(ctx, turn, tool)
 	if refusal != nil {
@@ -339,6 +348,19 @@ func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) gitlet.Princi
 		p.Run.WorkKey = gitlet.FitProvenance(item.Key)
 	}
 	return p
+}
+
+// written is engine write w as c makes it: its principal ([writer]), the
+// ceiling whoever the turn works for bounds it by ([CodeDeps.writeCaller]) and
+// whom it is made for — c's actor's carrier, composed from the call's own bound
+// ceiling where the caller was resolved ([actorFor], [writtenForTurn]), never
+// from a tool's arguments — STAMPED TOGETHER, so no engine write sets one
+// without the others and the Gitlet node holds the carrier to the ceiling it
+// was composed beside (gitlet.EngineWrite.WrittenFor). Every engine write a
+// code tool asks goes through it.
+func written(ctx context.Context, turn *turnctx.Turn, c codeCaller, w gitlet.EngineWrite) gitlet.EngineWrite {
+	w.Principal, w.Ceiling, w.WrittenFor = writer(ctx, turn, c), c.write, c.actor.WrittenFor
+	return w
 }
 
 // writeFresh is the floor an engine write of repo is built at: a seat's
@@ -524,8 +546,8 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.ExpectedHead != "", w.Ref); refusal != nil {
 		return *refusal, nil
 	}
-	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)
-	w.Ceiling = c.write
+	w = written(ctx, turn, c, w)
+	w.RepoID, w.Fresh = repo.ID, t.deps.writeFresh(turn, c, repo)
 	w.OpID = opIDFor(actor, tool, codeWriteVerb, repo.ID, args)
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, actor, repo.Name, err), nil

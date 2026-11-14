@@ -1000,7 +1000,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 	t.Helper()
 	q, err := jetstream.Open(t.Context(), jetstream.Config{
-		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+		StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)

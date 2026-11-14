@@ -68,6 +68,58 @@
 // refusals, and a second classification beneath it would be a second answer
 // to one question.
 //
+// # A write across a link is given the time its bytes take to cross
+//
+// A write here — a Publish, a dead letter's keep (KeepDeadLetter, or the
+// delivery budget's), a state log's Append — returns once its stream has
+// acknowledged it, and the stream acknowledges a message only once its last
+// byte is in. A member's own connection reaches its broker in its own process,
+// but a leaf's crosses its link to the members and an external cluster's
+// client crosses the network to it, and the engine allows such a link to be as
+// slow as the object store's floor, a mebibyte in thirty seconds
+// (objstore.MiBPace). The connection's pace is decided once, where it is made
+// (linkOf), and every crossing on it reads it: a read's reply (DomainLog.At,
+// the dead letters' frames) and a write's request alike. So a write whose
+// caller set no deadline waits the request term (jsapi.RequestTerm, five
+// seconds) and, where its connection crosses a link, its bytes at that pace
+// for each of its first three sends (jsapi.WriteSends; Queue.writing,
+// jsapi.Budget): a write is sent again — the client's own re-sends turned off
+// and made here, so each is a send of the queue's (sendWithin) — where nobody
+// heard it, and an append again where the leader refused it while another
+// write to its subject was in flight, and each send carries the whole message
+// across the link again; a send past the third waits in the budget as it
+// stands. A
+// caller's own deadline is kept, never extended: a caller that cannot wait for
+// a slow link says so. On an external broker the client does not check that
+// deadline while the request waits for the connection's lock, which a large
+// write holds for its whole socket Write, nor while its own write is in the
+// socket, so the caller is held behind every large write ahead of it, each up
+// to the dial's write deadline (externalWriteDeadline, about eight minutes),
+// and then for its own; bounding that needs the write windowed
+// (crewlet/crewlet#1035).
+//
+// Held to the five seconds alone, a write at the transport's eight-mebibyte
+// ceiling could not be acknowledged on any link slower than 1.6 MiB/s and
+// failed as queue.ErrUnavailable while the link was still carrying it — and a
+// keeper retries an unavailable broker for ever, each copy of the entry
+// crossing and landing behind the last (crewlet/crewlet#1005).
+//
+// WHAT THAT GIVES, AND WHAT IT DOES NOT. A write is given its own bytes at the
+// floor, so a link that carries it alone at the floor or faster never fails
+// it — an external dial's socket write deadline included, which is the
+// largest write its client makes at the floor (externalWriteDeadline). A link
+// slower than the floor still fails it, and so can a link busy
+// with something ahead of it — another large write, an object store put's
+// window — whose bytes no budget here counts. And the worst case is long, and
+// not only for the write: one at the ceiling across a link at the floor waits
+// five seconds and about four minutes a send before it reads as an outage —
+// up to three sends, about twelve minutes, for a write whose answer decided
+// nothing, the bound its budget is fixed at when it starts (jsapi.WriteSends)
+// — and everything the node sends behind it on that link waits as long, its
+// lease renewals among them, which at the shipped lease lapse long before it
+// is in. That is a defect of its own (crewlet/crewlet#1035), which these
+// budgets do not fix.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a
@@ -240,6 +292,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -283,6 +336,39 @@ func budgetFor(cfg Config) int {
 	}
 	return maxDeliver
 }
+
+// keepRetries is how many deliveries past its budget the broker still makes
+// of a subscription's message ([backstopFor]): the deliveries a dead letter's
+// keep has to land in once the budget is spent.
+//
+// WHY THE BROKER'S BACKSTOP STANDS PAST THE BUDGET. The consume loop retires a
+// message at its budget's delivery by keeping its copy and then terminating it
+// (attachment.retire), and a keep can fail for nothing wrong with the message
+// — a stop that closes the connection under it, a node killed while it
+// crosses, a dead-letter stream electing its leader. With the backstop AT the
+// budget that delivery was the broker's last, so a failed keep had nothing to
+// fall back on: terminated, the copy was gone; left unacknowledged, the broker
+// dropped it at its acknowledgement window. Past it, the message goes back and
+// its next delivery — a handler's first, which may handle it — keeps the copy
+// under the message's own identity, so a keep that had stored its entry and
+// lost its answer is stored as nothing.
+//
+// FIVE: each comes back at the failure path's ceiling, about thirty seconds,
+// so five span two and a half minutes of keeps — an election of the
+// dead-letter stream's leader many times over, and the redelivery of a
+// message a stopped or killed node held, which comes back once, at the end
+// of its acknowledgement window ([DefaultAckWait]). A dead-letter stream that
+// refuses every keep for longer refuses for a reason no retry answers — full,
+// or an external account's limits — and the keep at the backstop's own
+// delivery then says the copy is lost.
+const keepRetries = 5
+
+// backstopFor is the broker's own MaxDeliver for a subscription's consumer:
+// its budget, and [keepRetries] past it. The consume loop retires a message at
+// its budget, never the broker, so this bounds only how often a keep that
+// failed is made again, and a bug in that path cannot circle a message for
+// ever.
+func backstopFor(cfg Config) int { return budgetFor(cfg) + keepRetries }
 
 // DefaultAckWait bounds how long a fetched-unacked message stays invisible.
 //
@@ -539,10 +625,36 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// Dead letters are kept by age, not by interest: nothing
 			// consumes them automatically, and an operator investigating
 			// poison needs them to still be there.
-			name:      streamDeadLetter,
-			subjects:  []string{topics.DeadLetterPrefix + ">"},
-			retention: jetstream.LimitsPolicy,
-			maxAge:    eventRetention,
+			//
+			// AND A KEEP OF ONE IDENTITY IS ONE ENTRY: a keep carries its
+			// identity as its message id (letterMsg), and this window is
+			// the contract's (queue.DeadLetterWindow, fifteen minutes) —
+			// the longest a keep waits, at the transport's ceiling across a
+			// link at the floor, is the request term and a crossing of
+			// eight mebibytes at thirty seconds a mebibyte for each of the
+			// three sends a write may make, 5 s + 3 × 240 s, about twelve
+			// minutes, so a second copy still crossing when the first
+			// landed is stored as nothing. A retention shorter than the
+			// window is refused by the broker, and by Tier A before it.
+			name:       streamDeadLetter,
+			subjects:   []string{topics.DeadLetterPrefix + ">"},
+			retention:  jetstream.LimitsPolicy,
+			maxAge:     eventRetention,
+			duplicates: queue.DeadLetterWindow,
+		},
+		{
+			// Which of a subscription's messages failed as themselves at
+			// a delivery: an empty mark per message, ONE PER SUBJECT, so
+			// whether a message is marked is one read of its subject's
+			// newest message (failuremarks.go). By the event stream's
+			// age, as the dead letters it decides the subject of: a
+			// mark nobody deleted — its message settled by a member that
+			// never wrote it — goes with them.
+			name:          streamFailures,
+			subjects:      []string{failurePrefix + ">"},
+			retention:     jetstream.LimitsPolicy,
+			maxAge:        eventRetention,
+			maxPerSubject: 1,
 		},
 	}
 }

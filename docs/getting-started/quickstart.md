@@ -718,13 +718,14 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and twenty-six
+over the tracker, five over the pages and nine in the chat) and twenty-seven
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering an executor's question, answering a
+steering a running turn, answering an executor's question, asking for a read
+of one of the atlas's sources now, answering a
 question from the company's knowledge and, where the company hosts its code,
 reading who read a unit's repository and marking your own code notices. With
 the Atlas permission it also gets the company's atlas: the same three tools a

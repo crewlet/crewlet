@@ -332,6 +332,9 @@ func (s *Service) writeCharter(w http.ResponseWriter, r *http.Request, c charter
 		return false, err
 	}
 	if c.dryRun {
+		if err = s.checks(prepared, summary); err != nil {
+			return false, err
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"valid": true, "charter": c.next, "changed": true,
 		})

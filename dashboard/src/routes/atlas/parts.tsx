@@ -1,32 +1,51 @@
 /**
- * The pieces every atlas screen draws an entry with: its glyph, its vendor,
- * its health and confidence words, a fact's value and where a claim came from.
+ * The pieces every atlas screen draws an entry with: its disc, its vendor,
+ * its owner, its health and confidence words, a fact's value and where a
+ * claim came from. An entry looks like itself on the map, in the catalogue
+ * and in its sheet because all three draw it from here.
  */
 
 import { VendorMark } from "@crewlethq/icons";
-import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { Tag } from "@crewlethq/ui";
+import { ArrowUpRightGlyph, CornerDownLeftGlyph } from "@crewlethq/icons/glyphs";
+import {
+  EmptyValue,
+  EntityChip,
+  IconTile,
+  StatusDot,
+  Tag,
+  Text,
+  VisuallyHidden,
+} from "@crewlethq/ui";
+import { href } from "~/app/router.tsx";
 import type {
   AtlasCoverage,
   AtlasHealth,
-  AtlasKind,
   AtlasRead,
   AtlasSource,
+  AtlasSummary,
   AtlasValue,
   AtlasVendor,
   AtlasWord,
 } from "~/contract/atlas.ts";
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { seatPath, unitByKey, useOrgIndex } from "~/lib/seats.ts";
 import { andList } from "~/lib/words.ts";
-import { COVERAGE, HEALTH, KINDS, RECORDS, VENDORS, WORDS, entries, valueWord } from "./words.ts";
+import {
+  COVERAGE,
+  EVIDENCE,
+  HEALTH,
+  RECORDS,
+  VENDORS,
+  WORDS,
+  entries,
+  valueWord,
+} from "./words.ts";
+import { KindGlyph } from "./glyph.tsx";
 // THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
 import "~/styles/atlas.css";
 
-/** The kind's glyph, decorative: the kind word is always said beside it. */
-export function KindGlyph({ kind, size = "sm" }: { kind: AtlasKind; size?: "sm" | "md" }) {
-  return <NamedGlyph name={KINDS[kind].glyph} size={size} />;
-}
+export { KindGlyph };
 
 /** A vendor's mark, where the kit draws one: decorative, its name is beside it. */
 export function VendorLead({ vendor }: { vendor: AtlasVendor | undefined }) {
@@ -44,21 +63,87 @@ export function VendorName({ vendor }: { vendor: AtlasVendor }) {
   );
 }
 
-/** An entry's health as a toned tag, or nothing for a quiet one. */
-export function HealthTag({ health }: { health: AtlasHealth }) {
-  if (health === "quiet") return null;
-  const { label, tone } = HEALTH[health];
+/** What every surface needs of an entry to draw it as itself. */
+export type EntryFace = Pick<AtlasSummary, "kind" | "vendor" | "health" | "word">;
+
+/**
+ * An entry's disc: its kind's glyph, its vendor's mark on the corner, a ring
+ * and a badge when it needs a person, and a dashed edge while nobody has
+ * confirmed it. Decorative: the words are always said beside it.
+ */
+export function EntryDisc({ entry, size = "md" }: { entry: EntryFace; size?: "sm" | "md" | "lg" }) {
+  const mark = entry.vendor ? VENDORS[entry.vendor].mark : undefined;
+  const tone = HEALTH[entry.health].dot;
   return (
-    <Tag variant={tone} size="sm" dot>
-      {label}
-    </Tag>
+    <IconTile
+      shape="disc"
+      tone="neutral"
+      size={size}
+      mark={mark ? <VendorMark vendor={mark} /> : undefined}
+      status={tone ? { tone } : undefined}
+      dashed={entry.word === "unconfirmed"}
+    >
+      <KindGlyph kind={entry.kind} size={size === "sm" ? "sm" : "md"} />
+    </IconTile>
+  );
+}
+
+/** An entry's health as its mark and its word, a quiet one included. */
+export function HealthWord({ health }: { health: AtlasHealth }) {
+  const { label, tone } = HEALTH[health];
+  return <StatusDot tone={tone}>{label}</StatusDot>;
+}
+
+/**
+ * Who answers for an entry: the seat or the unit by its name on the chart,
+ * or the key as written where the chart no longer holds it. `link` leads to
+ * the seat, where the chip does not already stand inside a row's own link.
+ */
+export function OwnerChip({
+  owner,
+  link = false,
+}: {
+  owner: NonNullable<AtlasSummary["owner"]>;
+  link?: boolean;
+}) {
+  const index = useOrgIndex();
+  if (owner.kind === "seat") {
+    const seat = index.byHandle.get(owner.name);
+    return (
+      <EntityChip
+        name={seat?.name ?? owner.name}
+        kind={seat?.kind}
+        size="xs"
+        href={link && seat ? href(seatPath(seat)) : undefined}
+      />
+    );
+  }
+  return <EntityChip name={unitByKey(index, owner.name)?.name ?? owner.name} size="xs" />;
+}
+
+/** How an entry relates, as two counts: what relies on it, and what it relies on. */
+export function RelationChips({ relations }: { relations: AtlasSummary["relations"] }) {
+  if (relations.used_by === 0 && relations.depends_on === 0) {
+    return <EmptyValue label="No relations" />;
+  }
+  return (
+    <span className="atlas-chips">
+      <Tag size="xs" appearance="outline" leadingIcon={<CornerDownLeftGlyph />}>
+        {relations.used_by.toLocaleString()}
+        <VisuallyHidden> used by</VisuallyHidden>
+      </Tag>
+      <Tag size="xs" appearance="outline" leadingIcon={<ArrowUpRightGlyph />}>
+        {relations.depends_on.toLocaleString()}
+        <VisuallyHidden> depends on</VisuallyHidden>
+      </Tag>
+    </span>
   );
 }
 
 /** A confidence word on the neutral pill: confidence is a word, never a colour. */
 export function WordTag({ word }: { word: AtlasWord }) {
   return (
-    <Tag variant="neutral" size="sm" appearance={word === "unconfirmed" ? "outline" : "soft"}>
+    <Tag variant="neutral" size="xs" appearance={word === "confirmed" ? "quiet" : "outline"}>
       {WORDS[word]}
     </Tag>
   );
@@ -74,6 +159,7 @@ const MONO = new Set<AtlasValue["type"]>([
   "version",
   "account_ref",
   "branch",
+  "image",
 ]);
 
 /** A fact's value as the engine canonicalised it, with an internal address marked as one. */
@@ -123,6 +209,8 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
       return RECORDS[name] ?? name;
     case "integration":
       return INTEGRATION_NAMES[name] ?? VENDORS[name as AtlasVendor]?.name ?? name;
+    case "code":
+      return `the files of ${name}`;
     case "agent":
     case "person":
       return seatName(name);
@@ -130,9 +218,10 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
 }
 
 /**
- * Where a claim came from as a by-line: set by the settings or a person, seen
- * by an integration or the engine's records, observed by an agent in its turn,
- * with the confidence word after the actor and when it was last seen.
+ * Where a claim came from as a by-line: set by the settings, a person or a
+ * repository's files, seen by an integration or the engine's records,
+ * observed by an agent in its turn, with the confidence word after the actor
+ * and when it was last seen.
  */
 export function sourceSetBy(
   claim: { source: AtlasSource; word?: AtlasWord; observed_at: string },
@@ -157,6 +246,27 @@ export function sourceSetBy(
     actorKind: source.kind === "agent" ? "agent" : source.kind === "person" ? "human" : "system",
     turnId: source.turn,
   };
+}
+
+/**
+ * The call an agent's claim rests on, under its by-line: the tool it cited,
+ * as the turn recorded it, and what a call of that tool is evidence of. A
+ * record made before the engine kept the tool's name says only the class.
+ */
+export function Cited({ source }: { source: AtlasSource }) {
+  if (source.kind !== "agent" || !source.evidence) return null;
+  return (
+    <Text variant="caption" tone="secondary" className="atlas-cited">
+      {source.tool ? (
+        <>
+          Cited its call of <span className="mono">{source.tool}</span>: {EVIDENCE[source.evidence]}
+          .
+        </>
+      ) : (
+        <>Cited {EVIDENCE[source.evidence]}.</>
+      )}
+    </Text>
+  );
 }
 
 /** At most this many vendors are named in the coverage line before "and N more". */

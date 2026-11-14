@@ -47,6 +47,7 @@ import {
   type Lane,
 } from "./logic.ts";
 import { laneWords } from "./words.ts";
+import { heldWrite } from "~/test/drafts.ts";
 
 /** An answer's tab as it declares its draft, holding `draft`. */
 function tab(answer: AccessAnswer, draft: AccessDraft = {}) {
@@ -60,7 +61,7 @@ function tab(answer: AccessAnswer, draft: AccessDraft = {}) {
       seats: answer.seats,
     },
     draft,
-    apply,
+    heldWrite(apply),
   );
   return { spec: accessDraft(part, answer.revision), part, apply };
 }
@@ -573,7 +574,7 @@ describe("an agent's Access page, every tab one draft", () => {
     ]);
     const parsed = parseDraftChange(spec, { values: { "agent_1.gitlab.level": "Maintainer" } });
     if (!parsed.ok) throw new Error(parsed.reason);
-    spec.apply?.(parsed.value.next);
+    if (typeof spec.write === "function") spec.write(parsed.value.next);
     const dev = at(gitlab, "dev", "gitlab");
     expect(second.apply).toHaveBeenCalledWith(withLevel({}, dev.seat, dev.lane, "40"));
     expect(first.apply).not.toHaveBeenCalled();

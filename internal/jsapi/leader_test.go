@@ -3,6 +3,7 @@ package jsapi_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func leaderServerFor(t *testing.T, opts ...jetstream.JetStreamOpt) (*server.Serv
 		ServerName:        "jsapi-leader-test",
 		JetStream:         true,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {
@@ -291,5 +292,42 @@ func TestALeaderReadWithNoDeadlineEndsAtItsClientsDefault(t *testing.T) {
 					"none and two seconds", n, bound)
 			}
 		})
+	}
+}
+
+// A CARRYING READ WHOSE CALLER SET NO DEADLINE IS GIVEN ITS CROSSING.
+//
+// A read whose caller set no deadline is held to its client's own bound — the
+// bound its one request had, the time the broker takes to answer, with no
+// crossing in it. A reader carrying a large message's reply across a link
+// hears nothing until that reply has crossed, so held to the bound alone it
+// was cut at five seconds whatever its term said: a dead letter's frame read
+// by a feed's replay, which sets no deadline, failed at every start for an
+// entry whose reply took longer than that to cross. Here a read carrying a
+// piece at a pace that crosses it in ten seconds is answered at six, past the
+// client's five and inside its term: the read takes the answer.
+//
+// Mutation: hold a carrying read whose caller set no deadline to the client's
+// bound alone, and it fails at five seconds.
+func TestACarryingReadWhoseCallerSetNoDeadlineIsGivenItsCrossing(t *testing.T) {
+	t.Parallel()
+	const piece = 128 << 10
+	late := jsapi.RequestTerm + time.Second
+	f := fakeBroker(t, fmt.Sprintf(server.JSApiMsgGetT, "OBJ"), func(int, []byte) any {
+		time.Sleep(late) //fixedwait:simulated a reply that takes longer than the client's own bound to cross a link
+		return server.JSApiMsgGetResponse{
+			ApiResponse: server.ApiResponse{Type: server.JSApiMsgGetResponseType},
+			Message:     &server.StoredMsg{Subject: "obj.c.x", Sequence: 1, Data: []byte("piece")},
+		}
+	})
+	leader := mustLeader(t, f.js).Carrying(piece, 60*time.Second)
+	if leader.Term() <= late {
+		t.Fatalf("a piece's term at a minute a mebibyte is %v, which an answer at %v does not "+
+			"fall inside", leader.Term(), late)
+	}
+	msg, err := leader.First(context.Background(), "obj.c.x")
+	if err != nil || string(msg.Data) != "piece" {
+		t.Fatalf("a carrying read answered past its client's bound and inside its term = %q, %v, "+
+			"want the piece", msg.Data, err)
 	}
 }

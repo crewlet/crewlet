@@ -10,7 +10,7 @@
  * rather than overwritten.
  */
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import {
   AttentionList,
   Button,
@@ -29,10 +29,17 @@ import { FixDialog } from "~/components/advisorFix.tsx";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useAssistantControl, type AssistantControl } from "~/app/assistant/control.ts";
+import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
 import { href } from "~/app/router.tsx";
 import { unreadSentences } from "~/lib/advisorUnread.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorFinding, AdvisorSeverity } from "~/protocol/advisor.ts";
+
+/**
+ * An atlas finding's fix (ADR-0141), from the atlas's own chunk: its pickers
+ * and decisions are the atlas's, loaded when a reader first opens one.
+ */
+const AtlasFixDialog = lazyScreen("atlas", (m) => m.AdvisorAtlasFix);
 
 /** How often the list is read again at rest: a setup changes by revisions. */
 const POLL_MS = 60_000;
@@ -97,7 +104,20 @@ export function Advisor() {
           />
         )}
       </QueryState>
-      {open && (
+      {open?.fix.kind === "atlas_act" && (
+        <ChunkRegion resetKey={open.class + open.path}>
+          <Suspense fallback={null}>
+            <AtlasFixDialog
+              finding={open}
+              onClose={() => {
+                setOpen(null);
+                refetch();
+              }}
+            />
+          </Suspense>
+        </ChunkRegion>
+      )}
+      {open && open.fix.kind !== "atlas_act" && (
         <FixDialog
           finding={open}
           onClose={() => setOpen(null)}
@@ -182,6 +202,13 @@ function findingItem(
     action = (
       <Button size="small" onClick={review}>
         Review the change
+      </Button>
+    );
+  } else if (review && f.fix.kind === "atlas_act" && f.fix.act) {
+    // AN ATLAS FIX IS SENT WITH THE ATLAS'S OWN TOOLS, one call per entry it names.
+    action = (
+      <Button size="small" onClick={review}>
+        Review the fix
       </Button>
     );
   } else if (review && f.fix.kind === "external_step" && f.fix.url) {

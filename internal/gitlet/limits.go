@@ -200,13 +200,13 @@ const (
 	// this log whether or not the company hosts code, and prices what this
 	// log takes a day at the reference company, each push priced
 	// as a coding box's, the most a seat's push takes: 3 000 pushes at the
-	// MEASURED 1 625 bytes a seat's coding box's push alone in its record
-	// (BenchmarkPushLogBytes), 4.9 MB, the compactions that merge their
+	// MEASURED 1 667 bytes a seat's coding box's push alone in its record
+	// (BenchmarkPushLogBytes), 5.0 MB, the compactions that merge their
 	// packs and the sweeps of what those retired at the MEASURED 108 and 44
 	// bytes a push (internal/gitlet/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.5–86.4 MB (each MEASURED as its writer forms it,
+	// records, 14.6–86.5 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -649,10 +649,25 @@ const (
 	// by MaxRoutedParticipants — and a record fills only the roles its op
 	// routes by (concerns.go), so the widest, a comment's — its mentions,
 	// its thread's participants, the finding it answers and which of them
-	// are persons — is some 15 KiB at handles of iam.MaxLogin bytes: the
-	// room is four times what any record's routing reaches, kept so a role
-	// a later op routes by fits beside the rest.
+	// are persons — is some 15 KiB at handles of iam.MaxLogin bytes, whom
+	// its actor acted for, at most MaxCarrierBytes, among them: the room is
+	// four times what any record's routing reaches, kept so a role a later op
+	// routes by fits beside the rest.
 	MaxRoutingBytes = 64 << 10
+
+	// MaxCarrierBytes is the most bytes whom one code write was made for
+	// takes, encoded, wherever it is kept — a routing and a payload of its
+	// record, and a revision's, a push's and a queue entry's working_for
+	// (ADR-0109): a seat's handle, or a credential's login with the apps its
+	// turn was held to, each an app this build knows and named once, which
+	// writtenForInvalid holds every carrier a request states to. The widest
+	// is a credential's login of iam.MaxLogin bytes with every app iam.Apps
+	// holds, 163 bytes with this build's six; 200 leaves room for an app or
+	// two a later build adds before it moves, and
+	// TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor holds the widest
+	// under it. Nothing refuses at it: it is what the bytes a landing's push
+	// rows keep beside its record's are counted by (HorizonBytesPerRecord).
+	MaxCarrierBytes = 200
 
 	// MaxMentions is the most handles one write of a change mentions that
 	// its record routes: the tracker's own bound on the people one item
@@ -699,19 +714,27 @@ const (
 
 	// HorizonBytesPerRecord is how many BYTES of expired push rows one push
 	// record removes beside HorizonDeletesPerRecord's count — each row
-	// weighed by its row_bytes, the commands, introduced ids and seat's run
-	// it carries — taking rows oldest first until their bytes reach it, so a
-	// removal passes it by at most one row.
+	// weighed by its row_bytes, the commands, introduced ids, seat's run and
+	// carrier it keeps — taking rows oldest first until their bytes reach
+	// it, so a removal passes it by at most one row.
 	//
-	// MaxRecordBytes, the most push-row bytes one record can ADD: a row's
-	// commands, introduced ids and run are its record's own, stored with
-	// less (no refusal sentence, the ids space-separated rather than quoted,
-	// each run field its bytes with no key and no escape). A
-	// removal that stops at either bound has therefore taken at least the
-	// oldest record's whole contribution — its rows share one instant and
-	// one position, so they are first in the order and together — and the
-	// history's removal keeps pace with its growth in rows and in bytes
-	// alike.
+	// MaxRecordBytes, the most push-row bytes one record can ADD. A push's
+	// and a merge's rows keep their record's own commands, introduced ids,
+	// run and carrier, stored with less (no refusal sentence, the ids
+	// space-separated rather than quoted, each run field its bytes with no
+	// key and no escape). A landing's keep more than its record carries:
+	// each entry's carrier, read from the entry's row (code_queue) rather
+	// than the record, a deleted source's name, read from the change's row,
+	// and on every row the target's name the record holds once — at most
+	// MaxLandEntries rows of two commands, one introduced id and one
+	// carrier, their carriers MaxLandEntries × MaxCarrierBytes at most,
+	// under a quarter of MaxRecordBytes at the widest refs JSON spells
+	// (pushRowBytes, which TestAPushMeasuredForItsRecordCountsWhomItWasMadeFor
+	// measures at the widest landing). A removal that stops at either bound
+	// has therefore taken at least the oldest record's whole contribution —
+	// its rows share one instant and one position, so they are first in the
+	// order and together — and the history's removal keeps pace with its
+	// growth in rows and in bytes alike.
 	//
 	// NO MORE, because this is the push history, the widest rows the domain
 	// keeps (a push row reaches 461 000 bytes), and deleting a row frees its

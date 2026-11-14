@@ -138,7 +138,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Seven more are a
+itself is recorded beside either as the write's `operator_id`. Eight more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
@@ -152,7 +152,11 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox).
+the code writes (a seat is woken, never shown an inbox); and `atlas_refresh`,
+any Atlas holder's ask that one integration be read for the atlas now rather
+than on its next scheduled read, which the engine honours within a minute and
+refuses for a source read less than five minutes ago
+([Sources](atlas.md#sources-and-refresh-now)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
@@ -235,8 +239,8 @@ and can message the agent may ask it to edit, as with all other agent work;
 reading and sharing are never exempt. A turn woken by somebody the company
 does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's, and it
 follows the turn's work: a colleague it asks, the turn the answer wakes, and a
-colleague its writes on Worklet, Doclet or Chatlet wake all read for the same
-somebody, and what the agent already knows is no read
+colleague its writes on Worklet, Doclet, Chatlet or Gitlet wake all read for
+the same somebody, and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
@@ -569,8 +573,8 @@ Gitlet permission woke reads nothing: every code tool is refused before
 anything is read, and the seat is told why and that an administrator can give
 the person Gitlet
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
-The bound is that turn's alone: a colleague the seat asks reads for the seat,
-and the turn the answer wakes is the seat's own work.
+The bound follows the turn's work: a colleague the seat asks reads for the same
+somebody, and so does the turn the answer wakes.
 An operator's own assistant calls the tools in no turn, for its caller alone.
 
 **A repository's text is fenced.** A file's lines — a blame's among them —
@@ -638,6 +642,9 @@ same way: a colleague must hold the access the write needs on the repository
 write), and a stranger or a person without the permission has a seat write
 nothing of a change
 ([Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
+And a write made in such a turn carries them on, so a colleague it wakes works
+for them too ([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
 Every call names one
 operation — derived from the turn or a request's own key, or on the operator
 catalogue the `op_id` the call was answered — so the same call made again,
@@ -758,7 +765,8 @@ See [The health tools](fleet.md#the-health-tools).
 
 ### The company's atlas
 
-Three read-only tools read the company's [atlas](../concepts/atlas.md):
+Three read-only tools read the company's [atlas](../concepts/atlas.md), and an
+agent holds two more that record in it. The three:
 `atlas_search` finds entries by part of a name or key, or by id;
 `atlas_get` reads one entry in full, named by its `id` or by its exact name or
 key, with `used_by`, what relies on it; and `atlas_trace` walks from one entry
@@ -772,6 +780,29 @@ In a turn somebody woke, a seat reads the atlas only if they hold `atlas` too,
 and its repositories only if they hold `gitlet`
 ([ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
+Two more are an agent's alone, and record in the atlas
+([What agents record](../concepts/atlas.md#what-agents-record),
+[ADR-0132](../../adr/0132-an-agent-records-in-the-atlas-only-what-a-call-of-its-own-turn-showed.md)):
+
+| Tool | Arguments | What it records |
+|---|---|---|
+| `atlas_record` | `atlas_entry` (an id, or `kind:key`, which the atlas need not hold yet), `name`, `facts` (up to eight, each a `fact` and a `value`), `relation` and `to`, and `seen_in` | The entry, its facts and one relation, each a claim in the agent's voice naming the turn |
+| `atlas_dispute` | `atlas_entry`, `reason` (`gone`, `wrong_value` with `fact` and for a fact that holds several a `value`, or `wrong_link` with `relation` and `to`), and `seen_in` | That the entry, the fact or the relation is not as the atlas holds it. Nothing is removed |
+
+`seen_in` is required on both: the name of a tool the agent called in the same
+turn. The engine reads that call's answer and refuses a record whose values it
+does not show, and it decides from that tool how far the record is trusted: a
+read of a server or of a vendor through the agent's own credential makes it
+likely, a repository file makes it likely as declared in code, and anything
+else leaves it unconfirmed and hidden until a person confirms it. The answer
+says which (`evidence`, `shown_as`), how many claims were `recorded`, and how
+many the atlas `already_known`. An agent cannot record a purpose, an
+environment, an importance, an owner or a dependency, and a value shaped like
+a credential is refused. A turn records at most 20 times and an agent at most
+200 times a day; past either the call is refused as `quota_exceeded`. Neither
+tool is offered to a person, and both are refused in a turn woken by somebody
+without `atlas`. `atlas.agent_records: false` turns both off for the company.
+
 **An agent reads an internal address only within its own reach.** A private IP
 address, or a host name on a private network, is shown to an agent only on an
 entry its own access reaches: a server its SSH access names, a tool server it
@@ -780,6 +811,9 @@ at a vendor. Any other entry keeps its name and loses its private values, an
 entry whose key is itself a private address is left out with every relation to
 it, and the answer counts what it left out as `private_withheld`. A person
 holding `atlas` reads every address.
+
+**An agent never reads an unbacked record.** What an agent recorded with
+nothing the engine could check behind it is left out of every agent's read.
 
 **Every answer is fenced as text somebody else wrote**, labelled at the least
 trust any writer of what it carries earns: the settings, the engine's records
@@ -1655,8 +1689,12 @@ agent's MCP tools (`agents`) and flags every agent holding more than
   to nobody. The agent's own limits count as they hold it
   ([Narrowing a server for a team](#narrowing-a-server-for-a-team)): a tool a
   limit blocks for it does not count, and a server a limit turns off for it
-  counts nothing. The engine's own tools are not counted (`builtin_tools` says how
-  many every agent holds).
+  counts nothing. The engine's own tools are not counted: `builtin_tools` says
+  how many of them the agent is offered, every one but those the engine leaves
+  off its surfaces, such as the health tools for an agent whose role carries no
+  `health_tools` and, below `full_access`, the code writes
+  ([Groups, and who may call each one](#groups-and-who-may-call-each-one),
+  [The company's code](#the-companys-code)).
 - **Each name counts once.** Two of an agent's servers listing a tool under
   the same name hand it one tool, so its total (`mcp_tools`) can be less than
   its servers' counts added up.
@@ -1683,9 +1721,10 @@ The page's **Agent access** tab draws `agents`: one row per agent, a column
 per server with the tools it offers the agent there (or the server's state,
 where it is not running), the agent's total, and **Over 100** beside an agent
 the engine flags. A callout names every agent over the budget. Choosing an
-agent opens its tools: its total against the budget, and each server it
-reaches with why and how many of its tools sit at each level. The tab is the
-administrator's, since `agents` is.
+agent opens its tools: its total against the budget, each server it reaches
+with why and how many of its tools sit at each level, and how many of the
+built-in tools it is offered. The tab is the administrator's, since `agents`
+is.
 
 ### Turning a server off
 

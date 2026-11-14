@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SourceKind is where a claim came from. A closed set, and the claim's
@@ -26,6 +27,9 @@ const (
 	SourceRecords SourceKind = "records"
 	// SourceIntegration is an integration's read with the company's credential.
 	SourceIntegration SourceKind = "integration"
+	// SourceCode is a repository's deploy and dependency files, read at its
+	// default branch: declared in code, never seen running.
+	SourceCode SourceKind = "code"
 	// SourceAgent is an agent in a named turn.
 	SourceAgent SourceKind = "agent"
 	// SourcePerson is a person.
@@ -33,7 +37,7 @@ const (
 )
 
 // SourceKinds is every source kind.
-var SourceKinds = []SourceKind{SourceSettings, SourceRecords, SourceIntegration, SourceAgent, SourcePerson}
+var SourceKinds = []SourceKind{SourceSettings, SourceRecords, SourceIntegration, SourceCode, SourceAgent, SourcePerson}
 
 // Valid reports whether k is a member of the closed set.
 func (k SourceKind) Valid() bool { return slices.Contains(SourceKinds, k) }
@@ -49,9 +53,12 @@ const (
 	// EvidenceCall is a server or vendor tool call of the same turn whose
 	// answer showed the value.
 	EvidenceCall Evidence = "call"
-	// EvidenceFile is a repository file, a page or a work item the agent read.
+	// EvidenceFile is a repository file the agent read in the same turn,
+	// which showed the value: declared in code, not seen running.
 	EvidenceFile Evidence = "file"
-	// EvidenceNone is nothing the engine can check.
+	// EvidenceNone is nothing the engine can check: a call that showed the
+	// value and was text anybody could have written (a message, a page, a
+	// work item, a colleague's answer). Never evidence for a fact.
 	EvidenceNone Evidence = "none"
 )
 
@@ -62,14 +69,19 @@ var Evidences = []Evidence{EvidenceCall, EvidenceFile, EvidenceNone}
 func (e Evidence) Valid() bool { return slices.Contains(Evidences, e) }
 
 // Source is who or what made one claim. Name is what within its kind: a
-// [Record] word for the engine's records, an integration's kind, an agent's
-// seat handle, a person's handle; empty for the settings, named by Revision.
+// [Record] word for the engine's records, an integration's kind, the id of
+// the repository whose files were read, an agent's seat handle, a person's
+// handle; empty for the settings, named by Revision. Turn, Evidence and Tool
+// are an agent's alone: the run it recorded in, what the call it cited is
+// evidence of, and that call's tool by name, empty where the name is not one
+// a record keeps ([CitableTool]).
 type Source struct {
 	Kind     SourceKind `json:"kind"`
 	Name     string     `json:"name,omitempty"`
 	Revision string     `json:"revision,omitempty"`
 	Turn     string     `json:"turn,omitempty"`
 	Evidence Evidence   `json:"evidence,omitempty"`
+	Tool     string     `json:"tool,omitempty"`
 }
 
 // Record is which of the engine's own records a computed claim was read from.
@@ -84,12 +96,15 @@ const (
 	RecordSSHTests     Record = "ssh_tests"
 	RecordAccessLog    Record = "access_log"
 	RecordUsage        Record = "usage"
+	// RecordFleet is the live nodes' presence rows: each node, and what it
+	// says of the broker and the object store it runs on (ADR-0142).
+	RecordFleet Record = "fleet"
 )
 
 // Records is every record family.
 var Records = []Record{
 	RecordGitlet, RecordIntegrations, RecordSeatAccess, RecordToolServers,
-	RecordSSHTests, RecordAccessLog, RecordUsage,
+	RecordSSHTests, RecordAccessLog, RecordUsage, RecordFleet,
 }
 
 // Valid reports whether r is a member of the closed set.
@@ -111,8 +126,30 @@ func AgentSource(seat, turn string, evidence Evidence) Source {
 	return Source{Kind: SourceAgent, Name: seat, Turn: turn, Evidence: evidence}
 }
 
+// toolRE is a tool's name as a record keeps it: the engine's own tools and a
+// tool server's, with the separators their names are joined by.
+var toolRE = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$`) })
+
+// CitableTool reports whether name is a tool's name a record keeps. A tool
+// server names its tools itself, so a name outside the grammar or shaped like
+// a credential is kept by no record: the claim then names its turn alone.
+func CitableTool(name string) bool { return toolRE().MatchString(name) && !redact.Contains(name) }
+
+// Citing is the agent's source s naming the tool whose answer its claim
+// cited, where the name is one a record keeps, and s as it is otherwise.
+func (s Source) Citing(tool string) Source {
+	if s.Kind == SourceAgent && CitableTool(tool) {
+		s.Tool = tool
+	}
+	return s
+}
+
 // IntegrationSource is the source of a claim an integration's read made.
 func IntegrationSource(kind string) Source { return Source{Kind: SourceIntegration, Name: kind} }
+
+// CodeSource is the source of a claim the deploy and dependency files of the
+// repository with this id make. One repository is one voice.
+func CodeSource(repository string) Source { return Source{Kind: SourceCode, Name: repository} }
 
 // Confidence is how far a claim can be trusted, DERIVED from its source and
 // the evidence the engine checked, never chosen by whoever made the claim: a
@@ -125,6 +162,10 @@ func (s Source) Confidence() Confidence {
 		return ConfidenceAsserted
 	case SourceIntegration:
 		return ConfidenceVerified
+	case SourceCode:
+		// DECLARED IN CODE IS INTENT, NOT RUNNING STATE: as far as an agent
+		// that read the same file, and never confirmed until a person says so.
+		return ConfidenceInferred
 	case SourceAgent:
 		switch s.Evidence {
 		case EvidenceCall:
@@ -145,11 +186,11 @@ func (s Source) validate() error {
 	case !s.Kind.Valid():
 		return errors.New("source: not a kind of source")
 	case s.Kind == SourceSettings:
-		if s.Name != "" || s.Turn != "" || s.Evidence != "" {
+		if s.Name != "" || s.Turn != "" || s.Evidence != "" || s.Tool != "" {
 			return errors.New("source: the settings are named by their revision alone")
 		}
 	case s.Kind == SourceRecords:
-		if !Record(s.Name).Valid() || s.Revision != "" || s.Turn != "" || s.Evidence != "" {
+		if !Record(s.Name).Valid() || s.Revision != "" || s.Turn != "" || s.Evidence != "" || s.Tool != "" {
 			return errors.New("source: not one of the engine's records")
 		}
 	case !nameRE().MatchString(s.Name):
@@ -158,8 +199,12 @@ func (s Source) validate() error {
 		if s.Turn == "" || !s.Evidence.Valid() {
 			return errors.New("source: an agent's claim names its turn and its evidence")
 		}
-	case s.Turn != "" || s.Evidence != "":
-		return fmt.Errorf("source: only an agent's claim names a turn and evidence, not a %s's", s.Kind)
+		if s.Tool != "" && !CitableTool(s.Tool) {
+			return errors.New("source: the tool an agent's claim cites is named by its name, never by a " +
+				"value shaped like a credential")
+		}
+	case s.Turn != "" || s.Evidence != "" || s.Tool != "":
+		return fmt.Errorf("source: only an agent's claim names a turn, evidence and a tool, not a %s's", s.Kind)
 	}
 	return nil
 }
@@ -219,7 +264,8 @@ var Words = []Word{WordConfirmed, WordLikely, WordUnconfirmed}
 
 // Display is the word a reader is shown: confirmed for the settings, the
 // engine's records, a person and an integration; likely for an agent backed by
-// a call or a file; unconfirmed for an agent with nothing to check.
+// a call or a file and for what a repository's files declare; unconfirmed for
+// an agent with nothing to check.
 func (c Confidence) Display() Word {
 	switch c.Rank() {
 	case 0, 1:
@@ -301,6 +347,27 @@ func Says(subject Ref, f Fact, raw string, src Source, at time.Time) (Claim, err
 	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: f}, Value: v, Source: src, ObservedAt: at})
 }
 
+// FleetAddress is the fleet's claim that subject, a node or a server of its
+// broker, answers at raw. ALWAYS PRIVATE, whatever network the address is on:
+// it is where the engine's own members reach each other, so it is marked
+// internal for every reader it is shown to, merges no two entries
+// ([joinKeysOf]) and is an administrator's alone ([For]).
+func FleetAddress(subject Ref, raw string, at time.Time) (Claim, error) {
+	v, err := FactAddress.Value(raw)
+	if err != nil {
+		return Claim{}, err
+	}
+	v.Private = true
+	return checked(Claim{Subject: subject, Facet: Facet{Kind: FacetFact, Fact: FactAddress}, Value: v,
+		Source: RecordSource(RecordFleet), ObservedAt: at})
+}
+
+// fleetAddress reports whether a fact is an address the fleet's own records
+// say: a node's, or a server's of its broker.
+func fleetAddress(f Fact, src Source) bool {
+	return f == FactAddress && src.Kind == SourceRecords && src.Name == string(RecordFleet)
+}
+
 // Relates is the claim that from relies on the entry to through r.
 func Relates(from Ref, r Relation, to Ref, src Source, at time.Time) (Claim, error) {
 	return checked(Claim{Subject: from, Facet: Facet{Kind: FacetRelation, Relation: r, Target: Target{Entry: to}},
@@ -341,7 +408,23 @@ func (c Claim) Slot() string {
 // Denial is a person's claim that c does not hold: the entry is retired, the
 // value is wrong, the relation is not there.
 func Denial(c Claim, person Source, at time.Time) (Claim, error) {
+	if person.Kind != SourcePerson {
+		return Claim{}, fmt.Errorf("atlas: claim on %s: only a person denies a claim; an agent disputes one",
+			c.Subject)
+	}
 	c.Denied, c.Source, c.ObservedAt, c.Position = true, person, at, 0
+	return checked(c)
+}
+
+// Dispute is an agent's claim that c does not hold as the atlas says it. It
+// is the same shape as a person's denial and never its equal: the fold never
+// lets it win a facet, so it removes nothing and retires nothing, and where
+// the engine checked evidence behind it, it sends the entry to review.
+func Dispute(c Claim, agent Source, at time.Time) (Claim, error) {
+	if agent.Kind != SourceAgent {
+		return Claim{}, fmt.Errorf("atlas: claim on %s: only an agent disputes; a person denies", c.Subject)
+	}
+	c.Denied, c.Source, c.ObservedAt, c.Position = true, agent, at, 0
 	return checked(c)
 }
 
@@ -355,9 +438,10 @@ func checked(c Claim) (Claim, error) {
 // Validate refuses a claim no writer may make: an entry or a target outside
 // its kind's grammar, a fact or a relation its kind does not take, a value its
 // fact's grammar does not read back to itself, a source that names itself
-// wrongly, a denial from anybody but a person (an integration's read may deny
-// the entry itself alone), a "not the same" from anybody but a person, and a
-// fact of meaning or an owner from an agent.
+// wrongly, a denial from an integration of anything but the entry itself (a
+// person denies any claim, and an agent's denial is a dispute the fold never
+// lets win), a "not the same" from anybody but a person, and a fact of meaning
+// or an owner from an agent or from a repository's files.
 func (c Claim) Validate() error {
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("atlas: claim on %s: %w", c.Subject, err)
@@ -401,12 +485,13 @@ func (c Claim) validate() error {
 	if c.ObservedAt.IsZero() {
 		return errors.New("a claim says when it was seen")
 	}
-	if c.Denied && c.Source.Kind != SourcePerson &&
-		(c.Source.Kind != SourceIntegration || c.Facet.Kind != FacetExists) {
+	if c.Denied && !c.deniable() {
 		// A PERSON DENIES ANY CLAIM. An integration's read denies only the
 		// entry itself: its retirement, once two complete reads missed it.
 		// It never denies a fact or a relation, which it withdraws instead.
-		return errors.New("only a person denies a claim, and an integration only the entry itself")
+		// AN AGENT'S DENIAL IS A DISPUTE ([Dispute]), which never wins.
+		return errors.New("only a person denies a claim, an integration only the entry itself, " +
+			"and an agent only disputes one")
 	}
 	if c.Facet.Kind != FacetFact && !c.Value.Equal(Value{}) {
 		return errors.New("only a fact carries a value")
@@ -436,6 +521,21 @@ func (c Claim) validate() error {
 	return nil
 }
 
+// deniable reports whether c's source may say c does not hold.
+func (c Claim) deniable() bool {
+	switch c.Source.Kind {
+	case SourcePerson, SourceAgent:
+		return true
+	case SourceIntegration:
+		return c.Facet.Kind == FacetExists
+	}
+	return false
+}
+
+// Disputes reports an agent's denial: a dispute, which the fold shows beside
+// the value and never lets win.
+func (c Claim) Disputes() bool { return c.Denied && c.Source.Kind == SourceAgent }
+
 func (c Claim) validateFact() error {
 	f := c.Facet.Fact
 	if c.Facet.Relation != "" || c.Facet.Target != (Target{}) {
@@ -447,12 +547,23 @@ func (c Claim) validateFact() error {
 	if c.Source.Kind == SourceAgent && f.Spec().Meaning {
 		return fmt.Errorf("an agent never sets %s: a person decides it", f)
 	}
+	if c.Source.Kind == SourceCode && f.Spec().Meaning {
+		return fmt.Errorf("a repository's files never set %s: a person decides it", f)
+	}
 	v, err := f.Value(c.Value.Text)
 	if err != nil {
 		return err
 	}
+	if fleetAddress(f, c.Source) {
+		// THE FLEET'S OWN ADDRESS IS PRIVATE BY RULE ([FleetAddress]), so a
+		// claim of one that is not marked so is not in its canonical form.
+		v.Private = true
+	}
 	if v != c.Value {
 		return fmt.Errorf("%s: the value is not in its canonical form", f)
+	}
+	if set := f.WordsOn(c.Subject); f.Spec().PerHost && !slices.Contains(set, v.Text) {
+		return fmt.Errorf("%s: %w: on this host it is %s", f, ErrInvalid, words.Or(set))
 	}
 	return nil
 }
@@ -462,8 +573,18 @@ func (c Claim) validateRelation() error {
 	if c.Facet.Fact != "" {
 		return errors.New("a relation names no fact")
 	}
-	if r == RelationOwnedBy && c.Source.Kind == SourceAgent {
-		return errors.New("an agent never sets an owner: a person decides it")
+	if c.Source.Kind == SourceAgent && !c.Denied {
+		// WHAT ONLY A PERSON DECIDES: who owns a thing, and what depends on
+		// what, which is a judgement and never something a call shows.
+		switch r {
+		case RelationOwnedBy:
+			return errors.New("an agent never sets an owner: a person decides it")
+		case RelationDependsOn:
+			return errors.New("an agent never sets what depends on what: a person decides it")
+		}
+	}
+	if c.Source.Kind == SourceCode && r == RelationOwnedBy {
+		return errors.New("a repository's files never set an owner: a person decides it")
 	}
 	if t.External != "" {
 		if t.Entry != (Ref{}) || !r.Names(c.Subject.Kind, t.External) {

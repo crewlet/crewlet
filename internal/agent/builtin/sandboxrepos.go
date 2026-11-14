@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -98,8 +99,23 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 // which anybody who can message it steers. The checkout prechecks the
 // same rule ([runAccess]), so `access: write` on a branch the colleague could
 // not push is refused at the checkout rather than at the box's first push, and an access left out is
-// write only where the box could push. A person bounds nothing, holding
-// maintain on every repository, and a stranger's turn reads nothing at all.
+// write only where the box could push. A CREDENTIAL acting as no seat pushes
+// to no repository itself, so in a turn one woke the box pushes the seat's
+// own work alone and fetches what it was given, as the credential reads every
+// repository: Gitlet's box admission holds it to the credential's own grant
+// (gitlet.CredentialPrincipal), which the checkout prechecks the same way, as
+// the turn's own code writes for it are held to the seat's own work
+// (ADR-0110). A person bounds nothing, holding maintain on every repository,
+// and a stranger's turn reads nothing at all.
+//
+// AND WHOM THE TURN WORKS FOR RIDES ON THE RUN'S ROW ([RunRepos.WorkingFor],
+// the row's CodeWorkingFor, ADR-0109): what the box pushes, and the change the
+// run's collection opens, are the turn's writes made late, so each carries
+// whom the turn works for as the turn's own code writes do — the carrier the
+// resolution's caller composed from the same bound ceiling (its actor's,
+// [writtenForTurn]), never one derived again from the row's requester, which
+// would restate that composition outside it and lose this node's narrowing of a
+// credential's apps.
 
 // RunRepos is what the repositories a checkout names resolve to.
 type RunRepos struct {
@@ -123,6 +139,13 @@ type RunRepos struct {
 	// ceiling ([gitlet.ReadQuery.CeilingSeat]) — and "" where no colleague seat
 	// bounds the run.
 	Ceiling string
+	// WorkingFor is whom the turn works for, as every code write its own tools
+	// make states it (the resolution's caller's carrier, [writtenForTurn]): a
+	// colleague's seat, a person's, or a credential acting as no seat with the
+	// apps this node holds it to — and nil for a turn that works for its own
+	// seat. The run's row carries it, and the box's pushes and the change the
+	// run's collection opens state it.
+	WorkingFor *types.WorkingFor
 }
 
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
@@ -159,7 +182,9 @@ type GrantFunc func(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant
 //     box will be judged by — the seat's grant held to a run given write and,
 //     in a turn a colleague woke, to that colleague's grant outside the
 //     seat's own work (gitlet.Grant.Under: its own namespace, and a repository
-//     it owns) — and the repository must not be archived; `read`
+//     it owns), and in one a credential acting as no seat woke, to the
+//     credential's own, which pushes nothing — and the repository must not be
+//     archived; `read`
 //     is read, and none asked is write where `write` would pass, else read;
 //     a run that asks to open a change must come to write, or it could
 //     deliver nothing to open one from;
@@ -186,7 +211,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 		return RunRepos{}, &RefusedCheckout{Result: refused(tools.RefusalForbidden,
 			CodeCheckoutTool+" gives repositories to a seat's executor, and this call is no seat's.")}
 	}
-	out := RunRepos{Ceiling: c.ceiling}
+	out := RunRepos{Ceiling: c.ceiling, WorkingFor: c.actor.WrittenFor.Carrier()}
 	byID := map[string]string{}
 	for _, req := range reqs {
 		got, refusal := d.runRepo(ctx, turn, c, req, grant)
@@ -331,8 +356,13 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	// in a turn a colleague woke, to that colleague's own grant outside the
 	// seat's namespace, as Gitlet's box admission holds it.
 	boxGrant := grant(c.asker, current).Within(gitlet.AccessWrite)
-	if c.ceiling != "" {
+	if w := c.actor.WrittenFor.Carrier(); c.ceiling != "" {
 		boxGrant = boxGrant.Under(grant(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: c.ceiling}, current))
+	} else if w != nil && w.Kind == types.WorkingForCredential {
+		// A CREDENTIAL ACTING AS NO SEAT pushes to no repository itself, so
+		// a run it woke writes the seat's own work alone, as Gitlet's box
+		// admission holds its box to (gitlet.CredentialPrincipal).
+		boxGrant = boxGrant.Under(grant(gitlet.CredentialPrincipal(w.Login), current))
 	}
 	access, refusal := runAccess(req, branch, head, current, boxGrant)
 	if refusal != nil {
@@ -415,7 +445,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 // held to g, the grant its box will be judged by on the run's branch — or the
 // refusal: `write` asked on a repository that takes no push — archived, being
 // imported, or a pull mirror — or on a branch g's ref rule refuses (the
-// seat's, or the colleague's its turn works for), is refused with
+// seat's, or that of the colleague or the credential its turn works for), is
+// refused with
 // Gitlet's sentence; none asked is write exactly where write would pass, so a
 // read-only seat naming a repository to look at is not refused, and a run that
 // forgot the field can deliver where its box may.

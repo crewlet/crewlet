@@ -685,7 +685,7 @@ func memberConfig(base js.Config, cluster string, i, n, clusterPort int, routes 
 // nothing.
 func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int) error {
 	t.Helper()
-	cfg.StoreDir = t.TempDir()
+	cfg.StoreDir = brokertest.TempDir(t)
 	// SIZED WITH ITS DIRECTORY, for brokertest's reason: a member left to
 	// derive its cap takes three quarters of the runner's free space, and a
 	// case reserving gibibytes on every member — a log at three replicas

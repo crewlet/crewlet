@@ -89,7 +89,14 @@ import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } fr
 import { filedTaskText, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { createDraft } from "./assistantDraft.ts";
-import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeEach,
+  writeVia,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -184,9 +191,9 @@ export function SheetCreate() {
   const people = useArtifactPeople().sheetPeople;
   const context = useMemo(() => valueContext(people), [people]);
 
-  const [title, setTitle] = useState("");
-  const [start, setStart] = useState<Start>("blank");
-  const [drafts, setDrafts] = useState<Partial<Record<Start, SheetDraft>>>(() => ({
+  const [title, setTitle] = useDraftState("");
+  const [start, setStart] = useDraftState<Start>("blank");
+  const [drafts, setDrafts] = useDraftState<Partial<Record<Start, SheetDraft>>>(() => ({
     blank: templateDraft("blank", false),
   }));
   const [examples, setExamples] = useState<Partial<Record<SheetTemplate, boolean>>>({});
@@ -196,7 +203,7 @@ export function SheetCreate() {
   const [settingsColumn, setSettingsColumn] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useDraftState("");
   const nav = useNavigator();
   const who = useWhoBuildsIt("sheet");
   const task = useFileArtifactTask();
@@ -222,18 +229,30 @@ export function SheetCreate() {
     [start],
   );
 
-  const choose = (next: Start) => {
+  /**
+   * The drafts with a template's grid made the first time it is chosen, with
+   * its examples as the reader last left them; a CSV's grid is its file's.
+   */
+  const withTemplate = (all: Partial<Record<Start, SheetDraft>>, next: Start) =>
+    next === "import" || all[next]
+      ? all
+      : { ...all, [next]: templateDraft(next, examples[next] ?? true) };
+
+  /** What a new way in shows: no column's settings open, and the grid it changes. */
+  const showChosen = () => {
     setSettingsColumn(null);
-    setStart(next);
-    if (next !== "import" && !drafts[next]) {
-      setDrafts((all) => ({ ...all, [next]: templateDraft(next, examples[next] ?? true) }));
-    }
     // BELOW A LAPTOP'S WIDTH the rail stands under the grid, so what a choice
     // changes is above it, out of view: the page goes back up to show it.
     if (window.matchMedia?.("(width < 1024px)").matches) {
       const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       body.current?.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
     }
+  };
+
+  const choose = (next: Start) => {
+    setStart(next);
+    setDrafts((all) => withTemplate(all, next));
+    showChosen();
   };
 
   const keepExamples = (key: SheetTemplate, keep: boolean) => {
@@ -366,9 +385,18 @@ export function SheetCreate() {
           rows: filledRows,
         },
         fields: SHEET_FIELDS,
-        apply: (next) => {
-          if (next.start !== start) choose(next.start);
-        },
+        // AS ITS CARD'S PRESS: the way in set and its template's grid made,
+        // two writes of the draft, and what it changes shown.
+        write: writeEach(
+          writeVia(
+            setStart,
+            (next: SheetSummary) => next.start,
+            (next) => {
+              if (next.start !== start) showChosen();
+            },
+          ),
+          writeVia(setDrafts, (next: SheetSummary, all) => withTemplate(all, next.start)),
+        ),
       },
       blocked: () => (create.busy ? "The sheet is being created." : null),
     }),

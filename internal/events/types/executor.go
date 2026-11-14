@@ -338,6 +338,11 @@ const (
 	// meets again, which is why it is told from the rest and why no later
 	// launch continues that session (internal/sandbox's ranOutOfContext).
 	ExecutorErrorContextExhausted = "context_exhausted"
+	// ExecutorErrorRequestRefused is a run whose provider refused the request
+	// its harness made as built (an invalid tool definition, a message its
+	// session carries): the error is the provider's own message, the session
+	// is retired as one out of context is, and it is never the run's report.
+	ExecutorErrorRequestRefused = "request_refused"
 	// ExecutorErrorOutOfMemory is a run whose harness the kernel killed for
 	// memory: its box's ceiling, which the same work meets again until the
 	// box is larger or a person changes the work.

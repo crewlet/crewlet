@@ -186,6 +186,26 @@ export function artifactPath(id: string): string[] {
   return ["artifacts", id];
 }
 
+/** The word that opens an artifact on a page of its own, after its id. */
+export const ARTIFACT_STANDALONE = "standalone";
+
+/**
+ * An artifact on a page of its own: its bar and the artifact, with no sidebar,
+ * for a tab opened beside the dashboard. Here for the reason [artifactPath] is.
+ */
+export function artifactStandalonePath(id: string): string[] {
+  return ["artifacts", id, ARTIFACT_STANDALONE];
+}
+
+/**
+ * The page an address opens: an artifact's standalone page is its artifact's
+ * page, so a recent or a star kept from either is the one artifact.
+ */
+export function pagePath(path: readonly string[]): string[] {
+  const where = resolve([...path]);
+  return where.resolved && where.screen === "artifact" ? artifactPath(where.id) : [...path];
+}
+
 /**
  * The Folders section's address: the company's top-level folders the reader
  * can see, then what is in none of them. Here for the reason [artifactPath]
@@ -302,8 +322,11 @@ export type FramedScreen =
   | { screen: "seat"; handle: string }
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
-  /** The atlas, drawn as its map or its list (`shape=`), and one entry's page by its id. */
+  /** The atlas, its map over its catalogue, and one entry's page by its id. */
   | { screen: "atlas" }
+  | { screen: "atlas-changes" }
+  | { screen: "atlas-review" }
+  | { screen: "atlas-sources" }
   | { screen: "atlas-entry"; id: string }
   | { screen: "budgets" }
   /**
@@ -331,7 +354,8 @@ export type FramedScreen =
   | { screen: "artifacts"; section: ArtifactSection }
   | { screen: "artifact-folders" }
   | { screen: "artifact-folder"; id: string }
-  | { screen: "artifact"; id: string }
+  /** One artifact: in the frame, or on a page of its own with no sidebar (`standalone`). */
+  | { screen: "artifact"; id: string; standalone: boolean }
   /** A kind's own create page, or, with no kind, the address that redirects to one. */
   | { screen: "new-artifact"; kind: MakeKind | null }
   | { screen: "models"; id?: string }
@@ -606,6 +630,10 @@ function company(rest: string[], screen: Make, under: Under): Route {
       // AN ENTRY BY ITS ID, the one segment under it: a uuid, which no word
       // the atlas may reserve later can be.
       if (tail.length === 0) return screen({ screen: "atlas" });
+      // ITS PAGES BY NAME, read before an id: no entry's id is a word.
+      if (tail.length === 1 && tail[0] === "changes") return screen({ screen: "atlas-changes" });
+      if (tail.length === 1 && tail[0] === "review") return screen({ screen: "atlas-review" });
+      if (tail.length === 1 && tail[0] === "sources") return screen({ screen: "atlas-sources" });
       if (tail.length === 1 && ID_SHAPE.test(tail[0]!)) {
         return screen({ screen: "atlas-entry", id: tail[0]! });
       }
@@ -778,10 +806,16 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
       "a folder is opened from Folders, an artifact's details or a link somebody shared",
     );
   }
-  // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its
-  // compare are queries on its own address (`tab=`, `version=`, `against=`),
-  // so a link survives a reload and a pasted address in chat.
-  if (tail.length > 0) return missing("artifacts", under("Artifacts"));
+  // ONE THING IS ADDRESSED UNDER AN ARTIFACT, its standalone page, because the
+  // frame is chosen by the path before the screen mounts. Its panel, version
+  // and compare are queries on either address (`panel=`, `version=`,
+  // `against=`), so a link survives a reload and a pasted address in chat.
+  if (tail.length > 0) {
+    if (tail.length === 1 && tail[0] === ARTIFACT_STANDALONE && ID_SHAPE.test(first)) {
+      return screen({ screen: "artifact", id: first, standalone: true });
+    }
+    return missing("artifacts", under("Artifacts"));
+  }
   if (ARTIFACT_SECTIONS.includes(first as ArtifactSection)) {
     return screen({ screen: "artifacts", section: first as ArtifactSection });
   }
@@ -791,7 +825,7 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
   if (moved) return screen({ screen: "artifacts", section: moved });
   // AN ARTIFACT BY ITS ID, the uuid the engine derived from the operation
   // that created it; a word here names nothing the engine could have minted.
-  if (ID_SHAPE.test(first)) return screen({ screen: "artifact", id: first });
+  if (ID_SHAPE.test(first)) return screen({ screen: "artifact", id: first, standalone: false });
   return missing(
     "artifacts",
     under("Artifacts"),

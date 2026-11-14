@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -24,7 +25,7 @@ func (f *inFlightJS) Options() jetstream.JetStreamOptions {
 	return jetstream.JetStreamOptions{DefaultTimeout: time.Minute}
 }
 
-func (f *inFlightJS) Publish(context.Context, string, []byte, ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+func (f *inFlightJS) PublishMsg(context.Context, *nats.Msg, ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	f.calls++
 	if f.calls <= f.refusals {
 		return nil, &jetstream.APIError{Code: 400,
@@ -55,7 +56,7 @@ func TestAnAppendIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	expect := uint64(41)
 
 	js := &inFlightJS{refusals: 2}
-	seq, _, err := (&DomainLog{js: js}).Append(t.Context(), "crewlet.log.x", "op-1",
+	seq, _, err := (&DomainLog{js: js, q: &Queue{js: js}}).Append(t.Context(), "crewlet.log.x", "op-1",
 		&expect, []byte("{}"))
 	if err != nil || seq != 42 {
 		t.Fatalf("Append = (%d, %v) once the write ahead cleared, want 42 appended", seq, err)
@@ -66,7 +67,8 @@ func TestAnAppendIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
-	_, _, err = (&DomainLog{js: &inFlightJS{refusals: 1 << 30}}).Append(ctx,
+	forever := &inFlightJS{refusals: 1 << 30}
+	_, _, err = (&DomainLog{js: forever, q: &Queue{js: forever}}).Append(ctx,
 		"crewlet.log.x", "op-2", &expect, []byte("{}"))
 	var api *jetstream.APIError
 	switch {

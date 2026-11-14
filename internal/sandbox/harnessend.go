@@ -110,14 +110,17 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 // markHarnessEnd records on run's job's record how its harness ended, as the
 // read that collects the job found it ([PendingStore.MarkHarnessEnd]).
 //
-// UNDER A CONTEXT OF ITS OWN ([stampContext]), as the take's own records are:
-// the record is owed to a relaunch that may come days later, on another node —
-// a person's answer — whatever becomes of this read's context. AND IN THE ROOM
-// THE READ LEAVES THOSE RECORDS ([recordsBy]), after the take: the read's budget
-// ([BoxReadBudget]) holds no time of its own for this write, so made before the
-// take, a store slow to answer it cut the take's time, and made past that room,
-// the box's pause and the read's answer. A record that does not land is said,
-// and the job then reads as one whose harness may have been cut off: a relaunch
+// UNDER A CONTEXT OF ITS OWN ([Coordinator.recordContext]), as the take's own
+// records are, within a teardown's grace and the time the run's row takes to
+// cross to the store: the record is owed to a relaunch that may come days
+// later, on another node — a person's answer — whatever becomes of this read's
+// context. AND IN THE ROOM THE READ LEAVES THOSE RECORDS
+// ([Coordinator.recordsBy], [Coordinator.takeRecordsRoom]), after the take,
+// which counts this write's crossing as the read's budget does
+// ([BoxReadBudget]): made before the take, a store slow to answer it cut the
+// take's time, and made past that room, the box's pause and the read's answer.
+// A record that does not land is said, and the job then reads as one whose
+// harness may have been cut off: a relaunch
 // that reads the record later carries its round on in its box telling the
 // session there what such a copy may lack, which it may already hold, and that
 // longer brief counts toward the launch's floor where a capture measured the
@@ -125,7 +128,7 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 // for is told what the read found whether or not the record landed
 // ([Coordinator.collectClaimed]).
 func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, end HarnessEnd) {
-	markCtx, cancel := stampContext(ctx, recordsBy(ctx))
+	markCtx, cancel := c.recordContext(ctx, c.recordsBy(ctx))
 	defer cancel()
 	if _, err := c.pending.MarkHarnessEnd(markCtx, run.TurnID, run.LaunchID, end); err != nil {
 		log.WarnContext(ctx, "sandbox_harness_end_unrecorded", "turn_id", run.TurnID,

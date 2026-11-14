@@ -64,7 +64,7 @@ func brokerServerWith(t *testing.T, configure func(*server.Options),
 	connect ...nats.Option) (*server.Server, *nats.Conn) {
 
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	opts := &server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
 		DontListen: true, StoreDir: dir,

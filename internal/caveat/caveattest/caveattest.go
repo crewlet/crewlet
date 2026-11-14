@@ -122,7 +122,10 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// owner as the atlas keeps them, a value as the person gave it, what a
 	// purge erased by its word, and who held a value a write replaced and
 	// the word it read as.
-	"entry", "other", "to", "change", "fact", "relation", "value", "owner", "purged", "source", "word"}
+	"entry", "other", "to", "change", "fact", "relation", "value", "owner", "purged", "source", "word",
+	// AND ITS ASK FOR A READ OF A SOURCE: when it was made and whose it is, by
+	// their handle, which a source's card words itself.
+	"requested_at", "requested_by"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

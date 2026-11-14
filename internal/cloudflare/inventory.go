@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 )
 
 // The reads the atlas makes of the account, under the Read groups the
@@ -36,9 +38,9 @@ func (c *Client) Account(ctx context.Context) (Account, error) {
 // record's content, where verification tokens and signing keys sit, is never
 // decoded.
 const (
-	RecordA     = "A"
-	RecordAAAA  = "AAAA"
-	RecordCNAME = "CNAME"
+	RecordA     = collect.RecordA
+	RecordAAAA  = collect.RecordAAAA
+	RecordCNAME = collect.RecordCNAME
 )
 
 // DNSRecord is one record of a zone, as the atlas reads it: its id, type and

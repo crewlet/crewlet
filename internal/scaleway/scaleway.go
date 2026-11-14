@@ -35,6 +35,24 @@
 // the seat's box reads them as SCW_SECRET_KEY and SCW_ACCESS_KEY, two lines of
 // `role.sandbox.env`, and the engine supplies the organization and the default
 // project itself ([accessVendor.BoxDefaults]).
+//
+// # The atlas reads the projects under the provisioner key
+//
+// The Organization and each of its projects are accounts of the atlas
+// (ADR-0137, atlas.go): one listing, under the permission set the provisioner
+// already holds, and nothing inside a project.
+//
+// # The atlas reads the products under an application of its own
+//
+// Where a company switches `integrations.scaleway.atlas` on, the company pass
+// makes one more application, named for the atlas, with one policy of nine
+// read-only permission sets on every project and one key it rotates
+// (ADR-0144, atlasapp.go), and the atlas reads what the projects hold under
+// that key (atlasproducts.go). It is the atlas's alone: sealed under fixed
+// names, bound to no seat, recorded by its ID like every application the
+// engine makes, and deleted when the switch goes off. An application somebody
+// deleted at Scaleway is a person revoking the atlas there, and is not made
+// again unasked.
 package scaleway
 
 // Backend is the integration's name: the config block's key, the integration

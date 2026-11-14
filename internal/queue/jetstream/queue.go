@@ -208,9 +208,11 @@ type Config struct {
 	// EventRetention bounds the audit/event stream.
 	EventRetention time.Duration
 
-	// MaxDeliver overrides the delivery budget. Zero uses the derived
-	// default; tests shrink it so a dead-letter assertion costs a handful
-	// of handler runs rather than dozens.
+	// MaxDeliver overrides the delivery budget: the delivery at which the
+	// consume loop dead-letters a message a return spent. Zero uses the
+	// derived default; tests shrink it so a dead-letter assertion costs a
+	// handful of handler runs rather than dozens. The broker's own
+	// MaxDeliver stands past it ([backstopFor]).
 	MaxDeliver int
 
 	// AckWait overrides how long a fetched-unacked message stays
@@ -324,6 +326,14 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
+	// link is what stands between nc and the streams it reaches: the
+	// slowest it may carry a mebibyte either way, the object store's floor
+	// where it crosses a link and none on a member's own connection, and
+	// whether a leaf's link is part of it ([linkOf]). Decided once, where
+	// the connection is made, and read by every crossing on it, a read's
+	// reply and a write's request alike.
+	link link
+
 	// lost is where this queue's own connection, and every second one
 	// dialled through [Queue.DialWatched], records being closed for good.
 	// See [Queue.Lost], and [Queue.AcksLost] for the queue's own alone.
@@ -361,9 +371,20 @@ type Queue struct {
 	// the first registration, so a Queue built without one reads empty.
 	answering map[string][]*queue.AnswerGate
 
-	// inFlight counts handler invocations, which is the number an
+	// inFlight counts handler invocations, each until what it returned is
+	// settled, and the hand-backs this client makes itself of a delivery
+	// it will not dispatch, each until it is settled: the number an
 	// operator watches converge to zero during a drain.
 	inFlight queue.Inflight
+
+	// keeping counts the dead letters a return of this client's is keeping
+	// right now ([attachment.retire]): what [Queue.Stop] waits for before
+	// it closes the connection under them.
+	keeping queue.Inflight
+
+	// marks is the failure marks' stream as this client reads and purges
+	// it (failuremarks.go).
+	marks failureMarks
 
 	// consumerProposals counts the consumer CREATES and UPDATES this
 	// client has asked the broker for. See [Queue.ConsumerProposals].
@@ -432,6 +453,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		contract:    contract,
 		embedded:    embedded,
 		ownsServer:  owns,
+		link:        linkOf(embedded),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
@@ -876,7 +898,7 @@ func (q *Queue) createOrObserveStream(
 		// subject whose derived stream overlapped the engine's own paid
 		// that on every call, because a stream is remembered only once
 		// it exists.
-		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
+		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr, q.windowCause(spec, createErr))
 	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
@@ -921,6 +943,34 @@ func (q *Queue) createOrObserveStream(
 			"exists, which is a peer having won the race; its configuration "+
 			"is compared here exactly as one found on the first look would be")
 	return q.observeStream(spec, config, info)
+}
+
+// windowCause is what a create the broker refused as an invalid configuration
+// most likely means, for a stream that declares a duplicate window on a broker
+// the operator runs — and nothing for any other refusal, or on a broker the
+// engine embeds.
+//
+// AN OPERATOR'S SERVER MAY CAP THE WINDOW: nats-server refuses a stream whose
+// duplicate window is above its own `jetstream { limits { duplicate_window } }`
+// (v2.15.2, server/stream.go's checkStreamCfg), where it clamps the default
+// window of a stream that declares none, and on `stream.type: nats` the
+// setting is the operator's. The dead letters declare fifteen minutes
+// ([queue.DeadLetterWindow]), and refused on the broker's words alone the boot
+// named neither that window nor where the limit is set. A LIKELY CAUSE, NEVER A
+// CERTAINTY: the broker answers every invalid configuration with one code
+// ([jsprovision.InvalidConfig]), its words are no contract to match, and no
+// client can read the server's limit to compare, so the sentence names the
+// cause as likely and the broker's own error stays beside it. An embedded
+// broker sets no such limit, so a refusal there is the engine's own.
+func (q *Queue) windowCause(spec streamSpec, err error) string {
+	if q.cfg.URL == "" || spec.duplicates <= 0 || !jsprovision.InvalidConfig(err) {
+		return ""
+	}
+	return fmt.Sprintf("; %s declares a duplicate window of %v, and a server whose JetStream limits "+
+		"cap the window below that refuses the stream as an invalid configuration, so the likely "+
+		"cause is jetstream { limits { duplicate_window } } set below %v: raise it to %v or more, "+
+		"or remove it, in the configuration of every server stream.url reaches",
+		spec.name, spec.duplicates, spec.duplicates, spec.duplicates)
 }
 
 // observeStream compares a running stream against this node's spec and decides
@@ -1311,7 +1361,17 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	// the lane is how this backend keeps one subscription's order and not
 	// a different destination.
 	subject := queue.SubjectFor(topic, ev)
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
+	// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS, where its caller set no
+	// deadline: the request term, and across a link the time the event takes
+	// at the connection's pace, each time it is sent ([Queue.write]) — an
+	// event may be the transport's whole eight mebibytes, about four minutes
+	// at the slowest pace allowed, and held to the request term alone it
+	// failed as an outage while the link was carrying it. For those minutes
+	// everything the node sends behind it on the link waits too, its lease
+	// renewals among them (crewlet/crewlet#1035, which this does not fix).
+	// Classified on the CALLER's context, for the keep's reason
+	// ([Queue.KeepDeadLetter]).
+	if _, err := q.write(ctx, &nats.Msg{Subject: subject, Data: data}); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -1489,7 +1549,10 @@ func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
 		// consumer — which is the whole failure this call prevents.
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckWait:       q.ackWait(),
-		MaxDeliver:    budgetFor(q.cfg),
+		// THE BROKER'S BACKSTOP, past the budget the consume loop
+		// retires a message at, so a keep that failed there is made
+		// again ([keepRetries]).
+		MaxDeliver: backstopFor(q.cfg),
 	})
 	if err != nil {
 		return false, fmt.Errorf("ensure consumer %s: %w", name, q.brokerFailed(ctx, err))
@@ -1910,7 +1973,9 @@ func (q *Queue) noteConsumerProposal() { q.consumerProposals.Add(1) }
 // through a capability, which is where a backend-specific observable belongs.
 func (q *Queue) ConsumerProposals() int { return int(q.consumerProposals.Load()) }
 
-// InFlightCount reports handler invocations currently mid-flight.
+// InFlightCount reports handler invocations currently mid-flight, each until
+// what its handler returned is settled, and this client's own hand-backs of a
+// delivery it will not dispatch, each until it is settled.
 func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
 // PauseDelivery stops dispatching new events while leaving Publish working,
@@ -1927,10 +1992,10 @@ func (q *Queue) PauseDelivery(context.Context) error {
 	return nil
 }
 
-// WaitForHandlers waits for in-flight handlers, returning how many were
-// still running when the wait ended. Zero means a clean drain; non-zero
-// means the timeout expired, which is not an error — the caller owns any
-// "too long" policy.
+// WaitForHandlers waits for in-flight handlers, and for the settling of what
+// each returned, returning how many were still in flight when the wait ended.
+// Zero means a clean drain; non-zero means the timeout expired, which is not
+// an error — the caller owns any "too long" policy.
 func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error) {
 	return q.inFlight.Wait(ctx, timeout)
 }
@@ -1945,10 +2010,22 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 // AN IDLE LOOP DOES NOT SPEND IT: Stop ends every outstanding fetch (see
 // [attachment.stop]), so a loop parked in one exits at once. What it bounds
 // is a loop inside a handler that ignores its context.
+//
+// NOR DOES A LOOP KEEPING A DEAD LETTER, which is no handler: Stop waits for
+// every keep in flight once the loops have had their grace ([Queue.awaitKeeps]).
 const stopGrace = 250 * time.Millisecond
 
 // Stop closes every attachment and the connection, and shuts down the
 // embedded server when this process is running one.
+//
+// THE CONNECTION CLOSES ONLY ONCE NO DEAD LETTER IS BEING KEPT
+// ([Queue.awaitKeeps]): a stop ends every consume loop, and a loop that meets
+// the end holding a delivery hands it back — the one that spends its budget is
+// kept as a dead letter, a write that crosses a link at its bytes' pace — so a
+// stop that closed the connection a [stopGrace] after ending the loops cut the
+// keep under it. Bounded by ctx, the stop's own allowance, and by each keep's
+// own write budget; a keep the close cuts all the same leaves its message
+// unterminated, for the next delivery to keep ([attachment.returnMsg]).
 func (q *Queue) Stop(ctx context.Context) error {
 	q.mu.Lock()
 	if q.closed {
@@ -1977,12 +2054,29 @@ func (q *Queue) Stop(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
+	q.awaitKeeps(ctx)
 
 	if q.nc != nil {
 		q.nc.Close()
 	}
 	q.shutdownServer()
 	return nil
+}
+
+// awaitKeeps waits until no return of this client is keeping a dead letter
+// ([Queue.keeping]), or ctx ends — a keep begun while it waits, by a loop
+// still settling what it handed back, waited for too.
+func (q *Queue) awaitKeeps(ctx context.Context) {
+	for q.keeping.Count() > 0 {
+		if _, err := q.keeping.Wait(ctx, 0); err != nil {
+			q.log.WarnContext(ctx, "dead_letter_keep_cut", "keeping", q.keeping.Count(),
+				"error", err.Error(),
+				"detail", "the stop's allowance ended while a dead letter was being kept, so "+
+					"the connection closes under it: its message is left unterminated, and "+
+					"the broker's next delivery of it keeps the copy")
+			return
+		}
+	}
 }
 
 func (q *Queue) shutdownServer() {
@@ -2000,18 +2094,46 @@ func (q *Queue) attachmentsLocked() []*attachment {
 	return out
 }
 
-// deadLetter publishes a message the delivery budget has exhausted, to a
-// subject outside the crewlet.* space so the dashboard's crewlet.events.>
-// stream cannot resurface poison as live traffic.
-func (q *Queue) deadLetter(ctx context.Context, topic, group string, data []byte) {
-	subject := topics.DeadLetter(topic, group)
-	if _, err := q.streamFor(ctx, subject); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
-		return
+// deadLetter publishes data, a message the delivery budget has exhausted, to
+// subject, one of its pair's two dead-letter subjects ([queue.RetiredTo]) —
+// outside the crewlet.* space, so the dashboard's crewlet.events.> stream
+// cannot resurface poison as live traffic — under id, the message's own
+// identity ([letterOf]), and answers why it could not, which its caller acts
+// on ([attachment.retire]).
+//
+// AS THE MESSAGE'S OWN BYTES, with no keeper's header beside them, as it
+// always was: the subject, and never a header, says whether a copy is poison
+// or a delivery its group never handled, so no copy is too large to be found
+// as what it is.
+//
+// ONE ENTRY FOR ONE MESSAGE, by id carried as the message's `Nats-Msg-Id`
+// ([letterMsg]), as every keep through the contract is ([Queue.KeepDeadLetter]):
+// a message whose keep failed is kept again by its next delivery
+// ([attachment.retire]), and a keep that stored its entry and lost its answer
+// failed as far as its keeper heard, so the next keep of the message is stored
+// as nothing, inside the stream's duplicate window. A copy within the framing
+// of the transport's ceiling has no room for that header beside it
+// ([queue.LetterFits]) and is kept with none: a keep of it made again after a
+// lost answer is stored twice — two copies of one delivery, which its reader
+// collapses as it collapses any second delivery, and never none.
+//
+// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]), as every
+// write of this queue's whose caller set no deadline is: the consume loop's
+// context carries none, and the message may be as large as the transport
+// carries. Held to the request term alone, a large one dead-lettered across a
+// slow link was reported as failed while its bytes were still crossing to
+// land: a `dead_letter_failed` line for a message the stream went on to keep.
+func (q *Queue) deadLetter(ctx context.Context, subject, id string, data []byte) error {
+	stream, err := q.streamFor(ctx, subject)
+	if err != nil {
+		return err
 	}
-	if _, err := q.js.Publish(ctx, subject, data); err != nil {
-		q.log.Error("dead_letter_failed", "topic", topic, "group", group, "error", err.Error())
+	msg := &nats.Msg{Subject: subject, Data: data}
+	if queue.LetterFits(nil, data) {
+		msg = letterMsg(subject, stream, id, nil, data)
 	}
+	_, err = q.write(ctx, msg)
+	return err
 }
 
 var _ queue.EventQueue = (*Queue)(nil)

@@ -51,10 +51,17 @@ func Fold(claims []Claim, now time.Time) View {
 	})
 	canonical := merge(live)
 	byEntry := map[Ref][]*Claim{}
+	// hosts is the member each claim on a fact of each host was made about,
+	// kept here because the claim itself moves onto the entry that member
+	// merged into: such a fact stays its own host's ([Spec.PerHost]).
+	hosts := map[*Claim]Ref{}
 	for i := range live {
 		c := &live[i]
 		if c.Facet.Kind == FacetDistinct || c.Facet.Kind == FacetSame {
 			continue
+		}
+		if c.Facet.Kind == FacetFact && specs()[c.Facet.Fact].PerHost {
+			hosts[c] = c.Subject
 		}
 		c.Subject = canonical.of(c.Subject)
 		if c.Facet.Kind == FacetRelation && c.Facet.Target.External == "" {
@@ -67,7 +74,7 @@ func Fold(claims []Claim, now time.Time) View {
 	}
 	view.Entries = make([]Entry, 0, len(byEntry))
 	for ref, cs := range byEntry {
-		if e, ok := entryOf(ref, cs, canonical.members[ref], now); ok {
+		if e, ok := entryOf(ref, cs, hosts, canonical.members[ref], now); ok {
 			view.Entries = append(view.Entries, e)
 		}
 	}
@@ -107,6 +114,9 @@ func compareRef(a, b Ref) int {
 type facetID struct {
 	facet Facet
 	value string
+	// member is the member a fact of each host is of, so two hosts' values
+	// are two facets and never two voices on one.
+	member Ref
 }
 
 func facetOf(c *Claim) facetID {
@@ -182,7 +192,9 @@ func decides(c *Claim) bool { return c.Source.Kind == SourcePerson || c.Source.K
 // resolve folds the live claims on one facet. Each source's newest claim
 // stands for it; the most trusted then newest wins; a fact of meaning is won
 // only by a person, the settings or the engine's records, and is otherwise a
-// suggestion.
+// suggestion. AN AGENT'S DISPUTE NEVER WINS: an agent removes nothing, so its
+// denial only stands beside the value, and a facet nothing but disputes speak
+// on has no winner and is no fact at all (ADR-0132).
 func resolve(claims []*Claim) resolution {
 	voices := make([]*Claim, 0, len(claims))
 	for _, c := range claims {
@@ -195,8 +207,12 @@ func resolve(claims []*Claim) resolution {
 		}
 	}
 	slices.SortFunc(voices, order)
-	r := resolution{winner: voices[0], standing: StandingSettled, voices: voices}
-	if meaningful(voices[0]) {
+	first := slices.IndexFunc(voices, func(c *Claim) bool { return !c.Disputes() })
+	if first < 0 {
+		return resolution{standing: StandingSettled, voices: voices}
+	}
+	r := resolution{winner: voices[first], standing: StandingSettled, voices: voices}
+	if meaningful(r.winner) {
 		if i := slices.IndexFunc(voices, decides); i >= 0 {
 			r.winner = voices[i]
 		} else {
@@ -225,22 +241,31 @@ func resolve(claims []*Claim) resolution {
 func agrees(a, b *Claim) bool { return a.Denied == b.Denied && a.Value.Equal(b.Value) }
 
 // entryOf folds one entry's claims. An entry nothing live asserts is no entry.
-func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, bool) {
+func entryOf(ref Ref, claims []*Claim, hosts map[*Claim]Ref, members []Ref, now time.Time) (Entry, bool) {
 	facets := map[facetID][]*Claim{}
 	for _, c := range claims {
 		k := facetOf(c)
+		k.member = hosts[c]
 		facets[k] = append(facets[k], c)
 	}
 	e := Entry{ID: ref.ID(), Ref: ref, Lane: ref.Kind.Lane(), Name: ref.Key, Members: members,
 		Facts: []FactView{}, Relations: []Edge{}, Sources: []Source{}}
 	var exists *resolution
-	asserted, sources := false, map[voice]Source{}
+	// THE NEWEST LIVE CLAIM OF EACH VOICE names the voice: an agent's source
+	// carries its turn, and a voice that recorded in several turns is named
+	// by its latest, never by whichever facet a map walk met last.
+	asserted, sources := false, map[voice]*Claim{}
 	var support, winners []*Claim
 	for k, cs := range facets {
 		r := resolve(cs)
+		if r.winner == nil {
+			continue
+		}
 		for _, c := range r.voices {
 			if !c.Denied {
-				sources[voiceOf(c)] = c.Source
+				if held, ok := sources[voiceOf(c)]; !ok || newer(c, held) < 0 {
+					sources[voiceOf(c)] = c
+				}
 				if c.ObservedAt.After(e.LastSeen) {
 					e.LastSeen = c.ObservedAt
 				}
@@ -262,7 +287,7 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 		}
 		switch r.winner.Facet.Kind {
 		case FacetFact:
-			e.Facts = append(e.Facts, factView(r))
+			e.Facts = append(e.Facts, factView(r, k.member))
 		case FacetRelation:
 			e.Relations = append(e.Relations, edge(r))
 		}
@@ -270,11 +295,17 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 	if !asserted && (exists == nil || !exists.winner.Denied) {
 		return Entry{}, false
 	}
-	for _, s := range sources {
-		e.Sources = append(e.Sources, s)
+	for _, c := range sources {
+		e.Sources = append(e.Sources, c.Source)
+		if c.Source.Kind == SourceAgent {
+			e.reports = append(e.reports, Report{Source: c.Source, ObservedAt: c.ObservedAt})
+		}
 	}
 	slices.SortFunc(e.Sources, func(a, b Source) int {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	})
+	slices.SortFunc(e.reports, func(a, b Report) int {
+		return cmp.Or(b.ObservedAt.Compare(a.ObservedAt), cmp.Compare(a.Source.Name, b.Source.Name))
 	})
 	e.State, e.Confidence = stateOf(exists, support, winners, now)
 	e.Word = e.Confidence.Display()
@@ -285,7 +316,7 @@ func entryOf(ref Ref, claims []*Claim, members []Ref, now time.Time) (Entry, boo
 	}
 	slices.SortFunc(e.Facts, func(a, b FactView) int {
 		return cmp.Or(cmp.Compare(slices.Index(Facts, a.Fact), slices.Index(Facts, b.Fact)),
-			cmp.Compare(a.Value.Text, b.Value.Text))
+			compareRef(a.Of, b.Of), cmp.Compare(a.Value.Text, b.Value.Text))
 	})
 	slices.SortFunc(e.Relations, func(a, b Edge) int {
 		return cmp.Or(cmp.Compare(slices.Index(Relations, a.Relation), slices.Index(Relations, b.Relation)),
@@ -333,11 +364,11 @@ func claimed(cs []*Claim) []Claimed {
 	return out
 }
 
-func factView(r resolution) FactView {
+func factView(r resolution, of Ref) FactView {
 	w := r.winner
 	return FactView{Fact: w.Facet.Fact, Value: w.Value, Source: w.Source, Confidence: w.Confidence(),
 		Word: w.Confidence().Display(), ObservedAt: w.ObservedAt, Standing: r.standing,
-		Suggested: r.suggested, Others: claimed(r.others)}
+		Suggested: r.suggested, Others: claimed(r.others), Of: of}
 }
 
 func edge(r resolution) Edge {
@@ -456,7 +487,7 @@ func merge(claims []Claim) merges {
 	}
 	for _, cs := range joinFacets {
 		w := resolve(cs).winner
-		if w.Confidence().Rank() > ConfidenceVerified.Rank() {
+		if w == nil || w.Confidence().Rank() > ConfidenceVerified.Rank() {
 			continue
 		}
 		for _, key := range joinKeysOf(w) {

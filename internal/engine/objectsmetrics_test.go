@@ -20,7 +20,7 @@ import (
 func s3Bootstrap(t *testing.T, srv *s3fake.Server) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
 			Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), PathStyle: true,
 			AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",

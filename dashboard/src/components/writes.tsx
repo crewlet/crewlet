@@ -743,9 +743,9 @@ type AnswerAskProps = {
  * THREE LAYOUTS OF ONE ANSWER. `line` is the one above, for a thread where
  * an ask is one entry among others. `row` is for a list of decisions, where
  * the row already says the recommendation beside the ask's key
- * ([Recommendation]): at rest it draws only Accept and Change, Change as a
- * quiet button so Accept is the one filled control on the row, and open it is
- * `line`'s open state. `buttons` is for a screen where the question is the
+ * ([Recommendation]): at rest it draws only Accept and Change, a filled
+ * answer beside an outlined one as every decision row draws its two, and open
+ * it is `line`'s open state. `buttons` is for a screen where the question is the
  * whole of what is open (the Inbox's pane): every option is a button that
  * sends it with one press (`AnswerChoices`, which an executor's options are
  * drawn with too), the recommended one first and filled, and
@@ -954,7 +954,7 @@ function AskAnswer({
             <WriteButton
               write={write}
               size="small"
-              variant={rec ? (row ? "ghost" : "secondary") : "primary"}
+              variant={rec ? "secondary" : "primary"}
               showRefusal={false}
               pressing={false}
               blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
@@ -1033,11 +1033,14 @@ function AskAnswer({
 export function AnswerRunButton({
   run,
   seat,
+  variant = "secondary",
 }: {
   /** The parked executor: its turn and the question it asks, which the answer names. */
   run: AnsweredRun;
   /** Whose executor it is, by name, for the dialog's title. */
   seat: string;
+  /** Filled where Answer is the row's one answer (a decision row), outlined beside other controls. */
+  variant?: "primary" | "secondary";
 }) {
   // WHO MAY ANSWER IS THE SEAT'S RULE, for the question and a held call alike
   // (`useAnswerHold`): held with who may, on hover and on keyboard focus.
@@ -1061,7 +1064,7 @@ export function AnswerRunButton({
       <Button
         tooltip
         size="small"
-        variant="secondary"
+        variant={variant}
         leadingIcon={<CornerDownLeftGlyph />}
         disabledReason={held}
         onClick={(event) => {

@@ -156,7 +156,8 @@ type WorkDeps struct {
 	// or nil, and raw names an item.
 	ChangeRef func(raw string) (ref, refused string)
 
-	// Authorize decides the checks a tool can only take AFTER a read.
+	// Authorize decides the checks a tool can only take AFTER a read, and
+	// the verb a write that copies a project's file asks before it reads.
 	//
 	// THE SAME SEAM THE REGISTRATION GATE USES, pushed down by [Register]
 	// and [OperatorTools] so a caller cannot set the two differently.
@@ -165,6 +166,13 @@ type WorkDeps struct {
 	// the lead of the task's HOME project's decision, and which project
 	// that is comes out of the stored row. So those ask here, with their
 	// own action, against the same table.
+	//
+	// A COPY OF A PROJECT'S FILE ASKS HERE TOO, before anything is read: a
+	// write that copies one — an artifact's `from_project_file` — asks
+	// read_project_file's verb of the caller ([WorkDeps.copyFrom]), since
+	// its own gate decided only its own verb. The artifact tools reach the
+	// surface's authority through this field alone, so a surface that
+	// leaves it nil refuses every such copy.
 	//
 	// IT REPLACED TWO BOOL SEAMS — `Leads` and `LeadsProject` — which
 	// asked the chart the same two questions a class already asks, from
@@ -403,6 +411,10 @@ type WorkDeps struct {
 	// request's key does — the one rule every family of write tools takes
 	// ([operations]), set by [OperatorTools] alone. Its zero value takes no
 	// `op_id`, which is every surface but the operator's.
+	// entries reads the atlas as a call's caller, for `linked_entries`:
+	// pushed down by [Register] and [OperatorTools] beside Authorize.
+	entries atlasReader
+
 	ops operations
 }
 
@@ -1505,6 +1517,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			"the newest comments.", GetWorkItemTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, GetWorkItemTool, err), nil
+	}
+	if !t.deps.readsAtlas(ctx) {
+		// THE ATLAS IS ITS HOLDERS': counted, never named (ADR-0140).
+		detail = detail.WithoutEntries()
 	}
 	// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT. It used to be cut to
 	// four kilobytes here, with a `body: true` argument to get the rest —
@@ -2713,6 +2729,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
+			"linked_entries": setArgSchema("Entries of the company's atlas this item touches (the " +
+				"servers, services, databases, domains or accounts the work changes), each by its id " +
+				"as " + AtlasSearchTool + " answers it, or by its exact name or key."),
 			"fields": map[string]any{
 				"type": "object",
 				"description": "Custom fields, keyed by SLUG — read them with " +
@@ -2886,7 +2905,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// a dependency has two ends: a `linked` edge is one collection on one
 	// item, while `waiting_on` is an authored edge on one item and a
 	// mirrored entry on another, which is a sequence rather than a field.
-	inert, relationRefusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
+	inert, relationRefusal := t.deps.inertRelations(ctx, turn, UpdateWorkItemTool, args,
 		before.Task)
 	if relationRefusal != nil {
 		return *relationRefusal, nil

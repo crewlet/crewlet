@@ -32,6 +32,28 @@ type Source interface {
 	Collect(ctx context.Context, in Input) (Read, error)
 }
 
+// Optional is a source a company turns on apart from its integration, because
+// it reads under an identity the company adds by choice (ADR-0148). Off, it is
+// neither read nor listed among the atlas's sources: nothing waits on it, and
+// a source nobody asked to read is not one to show as waiting for a read.
+type Optional interface {
+	Source
+
+	// On reports whether c asks for the read.
+	On(c *config.Company) bool
+}
+
+// Connected reports whether c asks for src to be read: it connects the
+// source's integration and, for an [Optional] source, asks for the read. The
+// one rule the duty reads by and the report of sources lists by.
+func Connected(src Source, c *config.Company) bool {
+	if c == nil || !c.DeclaresIntegration(src.Kind().String()) {
+		return false
+	}
+	opt, optional := src.(Optional)
+	return !optional || opt.On(c)
+}
+
 // Input is what one read is handed.
 type Input struct {
 	// Config is the live company document, whose credentials resolve through
@@ -60,6 +82,40 @@ type Read struct {
 
 	// Calls is how many requests the read made at the vendor.
 	Calls int
+
+	// Unread is every part of the vendor the credential may not read. The
+	// read is still whole: each part's earlier claims stand as they were.
+	Unread []Unread
+
+	// Scopes is every part of the world the read visited that keeps a
+	// standing of its own ([Scope]): each server the SSH source read.
+	Scopes []string
+}
+
+// Unread is one part of a vendor a read was refused: a listing the company's
+// credential lacks the permission for. It is a finding on the source's
+// standing, never a fault of the read.
+type Unread struct {
+	// Part names the listing, and Detail says what to grant so it is read.
+	// Both are the source's own words, never the vendor's answer.
+	Part   string
+	Detail string
+
+	// Scope is the scope the part belongs to ([Read.Scopes]), where the
+	// source keeps one standing per scope; "" otherwise.
+	Scope string
+
+	// Optional is a part behind a permission the company's credential was
+	// never asked to hold (ADR-0145): one a company may add to see more. A
+	// refusal of it is a finding only while the voice holds an entry the
+	// part said exists, which is a permission somebody took away. Where it
+	// holds none, nothing was lost, and the standing does not name the part.
+	Optional bool
+
+	// Holds reports whether a claim the voice already holds came from this
+	// part. Such a claim is carried as it stands: a refusal withdraws and
+	// retires nothing, since it says nothing about what the vendor holds.
+	Holds func(atlas.Claim) bool `json:"-"`
 }
 
 // registry is every registered source, by kind.

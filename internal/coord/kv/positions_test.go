@@ -93,6 +93,7 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		Reach:            InProcess,
 		BucketPrefix:     fmt.Sprintf("p%d", bucketSeq.Add(1)),
 		MaxRateWindow:    ttl,
 		MaxClaimTTL:      ttl,
@@ -134,7 +135,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	store := openFleetForTest(t, nc, prefix)
 	ctx := context.Background()
 
-	// One key per class, all in the one register. All NINE of them, and
+	// One key per class, all in the one register. All TEN of them, and
 	// `maintenance` beside `maintenance-ack` is the adversarial pair: one
 	// class name is a STRING PREFIX of the other, so a filter built by
 	// concatenation rather than by the grammar would hand every
@@ -143,7 +144,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	classes := []string{
 		"node", "floor", "hold", "backup",
 		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
-		coord.ConversationHoldClass,
+		coord.ConversationHoldClass, coord.AtlasWakeClass,
 	}
 	for _, class := range classes {
 		key := coord.DocumentKey(class, "n-1")
