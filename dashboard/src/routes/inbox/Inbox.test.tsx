@@ -962,6 +962,27 @@ describe("the list", () => {
   });
 });
 
+describe("an update's row", () => {
+  // THE REASON IS A LABEL, AND WHAT WAS SAID FOLLOWS IT: the kit joins the
+  // row's words and its excerpt with a space, so a reason with no stop of its
+  // own read as one run-on sentence ("You reported it Mobile PR #22 is
+  // merged"). Mutation: drop the colon, and this fails.
+  test("ends its reason before what was said", async () => {
+    mount({
+      answers: {
+        inbox: inboxes({
+          unread: [notice("r-7", { reason: "reporter", primary: true, excerpt: "The fix is merged." })],
+        }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /^Updates/ }));
+    await settle();
+    const text = document.querySelector(".crewlet-inbox-row__text")?.textContent ?? "";
+    expect(text).toMatch(/^You reported it: The fix is merged\./);
+  });
+});
+
 describe("a question asked before its agent's access changed", () => {
   // THE PERSON ANSWERS KNOWING THE AGENT MAY NOT BE ABLE TO ACT ON IT: the row
   // and the reading pane say the question was asked before the agent's access

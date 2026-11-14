@@ -68,6 +68,7 @@ import {
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
+import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { heldRunTitle } from "~/lib/heldCall.ts";
 import { runAskTexts } from "~/lib/runs.ts";
@@ -289,7 +290,7 @@ export function InboxColumn({
       )}
       {more && updates.open && (
         <Text as="p" variant="caption" className="inbox-note">
-          More unread below. Read these to see them.
+          {`These are the newest ${INBOX_PAGE} unread updates. Mark them read to see older ones.`}
         </Text>
       )}
       {bound && (
@@ -398,7 +399,8 @@ function LaterRows({
  * names the row opening.
  */
 export function rowSpoken(row: InboxRow, index: OrgIndex): string {
-  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text}`;
+  // THE LABEL'S COLON is for the eye, before the excerpt; spoken alone it ends the sentence.
+  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text.replace(/:$/, "")}`;
 }
 
 /** What a row says under the name, and the quieter words after it. */
@@ -426,9 +428,12 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     case "answered":
       return { text: answeredPreview(row.answered) };
     case "notice": {
+      // THE REASON IS A LABEL AND WHAT WAS SAID FOLLOWS IT, so a colon ends
+      // the label: the kit joins the two with a space, and "You reported it
+      // Mobile PR #22 is merged" read as one run-on sentence.
       const said = noticeText(row.notice, index);
       return said
-        ? { text: noticeTitle(row.notice), excerpt: said }
+        ? { text: `${noticeTitle(row.notice)}:`, excerpt: said }
         : { text: noticeTitle(row.notice) };
     }
     case "change":
