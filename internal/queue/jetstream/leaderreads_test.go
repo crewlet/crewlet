@@ -884,7 +884,8 @@ func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.
 //
 // Mutation: pace a member's own connection, leave a leaf's or an external
 // cluster's unpaced, take an external dial for a leaf's link or a leaf's for
-// none, and its row goes red.
+// none, and its row goes red; give a member's record read no handling, or a
+// crossing, and its log's does.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -899,5 +900,22 @@ func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 		if got := linkOf(c.embedded); got != c.want {
 			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
+	}
+
+	// A MEMBER'S OWN LOG: its record read is given the handling of a reply of
+	// its largest record, and no crossing.
+	q := openForTest(t, Config{})
+	spec := probeDomain()
+	spec.MaxMessageBytes = 1 << 20
+	if err := q.EnsureDomainStream(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	log, err := q.DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	if want := jsapi.Handling(int(spec.MaxMessageBytes)); log.arrival != want {
+		t.Errorf("a member's record read is given %v beyond the read term, want the handling of a reply "+
+			"of its largest record and no crossing, %v", log.arrival, want)
 	}
 }
