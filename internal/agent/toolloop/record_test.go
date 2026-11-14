@@ -52,7 +52,8 @@ func pause(d time.Duration) func() { return func() { time.Sleep(d) } }
 // clock is the clock a case hands the loop as [toolloop.Config.Now]: it moves
 // only when the case moves it, so every span on the record is exactly what the
 // case's scripted model and tools took, and nothing a runner spends scheduling
-// the harness and its socket is added to any of them.
+// the harness and its socket is added to any of them. It holds a mutex because
+// the loop reads it from several goroutines at once.
 type clock struct {
 	mu sync.Mutex
 	at time.Time

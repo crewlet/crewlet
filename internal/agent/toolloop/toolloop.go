@@ -46,10 +46,11 @@
 //     reconstructs timing from event arrival subtracts two publishers' clocks
 //     and a queue's latency, and a request's cache tokens exist nowhere else:
 //     the harness's record reports them and this is the one frame that sees every
-//     request. Every instant on the record is read off ONE clock,
-//     [Config.Now]: a request's start is the latest of its run's start, the
-//     response before it and the calls that returned, so one stamp read off
-//     another clock would place the request wrongly.
+//     request. Every instant on the record is read off ONE clock — time.Now,
+//     unless a caller hands the loop its own ([Config.Now]): a request's start
+//     is the latest of its run's start, the response before it and the calls
+//     that returned, so one stamp read off another clock would place the
+//     request wrongly.
 //   - THE SEAT FENCE RUNS BEFORE EVERY RUN, before any tokens are spent and
 //     before anything fires, AND BEFORE AND AFTER EACH TOOL CALL, because a
 //     round is one model request but many calls and the calls are what reach
@@ -380,7 +381,8 @@ type Execution struct {
 
 	// StartedAt is when the call was handed to the surface, in UTC, and
 	// Duration how long the surface took to answer — measured on the
-	// monotonic clock, so a wall-clock correction mid-call cannot report a
+	// monotonic clock (time.Now's, unless a caller hands the loop its own:
+	// [Config.Now]), so a wall-clock correction mid-call cannot report a
 	// negative or inflated one.
 	//
 	// Measured HERE, around the [Admitted] call, because the question a reader
@@ -440,7 +442,8 @@ type Round struct {
 
 	// StartedAt is when the request was made — when its harness had everything
 	// it needed to ask — in UTC, and Duration how long it took to answer,
-	// on the monotonic clock.
+	// on the monotonic clock (time.Now's, unless a caller hands the loop its
+	// own: [Config.Now]).
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -1209,7 +1212,8 @@ type Config struct {
 
 	// Now is the clock the loop's record reads: each harness run's, each
 	// round's and each tool call's start and span ([Invocation], [Round],
-	// [Execution]), and the run and the round in flight on the live view
+	// [Execution]), the start of the call in flight ([RunningCall.StartedAt]),
+	// and the run and the round in flight on the live view
 	// ([Result.RunStartedAt], [Result.RoundStartedAt]). Nil takes time.Now,
 	// whose monotonic reading every span is measured on.
 	//
@@ -1217,11 +1221,16 @@ type Config struct {
 	// moves only as its scripted model and tools say makes the model's half
 	// of a round exactly what the model was scripted to take, where the wall
 	// clock adds whatever a loaded runner spends scheduling the harness and
-	// its socket. The loop's bounded waits are not on it — the park ahead of
-	// a harness's own tool timeout, the wait for the record to show a call's
-	// response, the wait for a response's other calls to arrive, the live
-	// text's pace — because each bounds how long the loop waits on another
-	// process, which no caller's clock moves.
+	// its socket. It is called from several goroutines at once, some holding
+	// the loop's own lock, so it must be safe for concurrent use, must not
+	// block, and must not call into the loop.
+	//
+	// The loop's bounded waits are not on it — the park ahead of a harness's
+	// own tool timeout, the wait for the record to show a call's response,
+	// the wait for a response's other calls to arrive — because each bounds
+	// how long the loop waits on another process, which no caller's clock
+	// moves. Nor is the live text's pace, which spaces frames for a reader
+	// watching in real time.
 	Now func() time.Time
 
 	// StreamPartials asks the provider to stream, so a response's text
