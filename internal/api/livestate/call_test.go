@@ -411,6 +411,37 @@ func TestAFrozenFailedCallSaysWhatItsRecordsListLeftOut(t *testing.T) {
 	}
 }
 
+// A RUNNING CALL SAYS WHAT ITS FRAME LEFT OUT. A running phase's frame holds
+// its calls, its rounds and its calls in flight to their live shares and counts
+// the rest, and the live call carries those counts beside its lists, so a tab
+// reading a long phase does not take the frame's newest calls for all it made.
+//
+// Mutation: read the frame's lists without their counts, and the live card says
+// nothing was left out.
+func TestARunningCallSaysWhatItsFrameLeftOut(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num":            3,
+		"tool_executions":      []any{map[string]any{"name": "read_file", "success": true}},
+		"calls_elided":         float64(120),
+		"elided_calls":         []any{map[string]any{"name": "read_file", "calls": float64(120)}},
+		"rounds_elided":        float64(9),
+		"running_calls":        []any{map[string]any{"id": "c1", "name": "read_file"}},
+		"running_calls_elided": float64(4),
+	}), streamOnly, at("2026-06-14T12:00:04+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("no live call")
+	}
+	if call.CallsElided != 120 || len(call.ElidedCalls) != 1 || call.RoundsElided != 9 || call.RunningElided != 4 {
+		t.Errorf("the running call says it left out %d calls (%v), %d rounds and %d calls in flight; want the "+
+			"frame's 120, 9 and 4", call.CallsElided, call.ElidedCalls, call.RoundsElided, call.RunningElided)
+	}
+}
+
 func TestAProgressRoundForAnotherCallLosesToANewerOne(t *testing.T) {
 	t.Parallel()
 	// Not the same call, and the one held is newer: a delivery that

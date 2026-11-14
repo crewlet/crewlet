@@ -251,6 +251,7 @@ const NOTHING_HELD: Record<string, unknown> = {
   calls_elided: 0,
   elided_calls: null,
   rounds: null,
+  rounds_elided: 0,
   invocations: null,
 };
 

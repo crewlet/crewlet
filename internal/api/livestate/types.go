@@ -201,6 +201,11 @@ type LiveCall struct {
 	// and for the whole of an executor, whose rounds run inside its coding
 	// harness's run.
 	Rounds []any `json:"rounds"`
+	// RoundsElided is how many of the phase's rounds Rounds, and the lists
+	// beside it, do not carry: past the most rounds a record lists, a frame
+	// and a record keep the first half and the newest half. Versioned with
+	// Rounds, and on the wire when zero, as CallsElided is with its list.
+	RoundsElided int `json:"rounds_elided"`
 
 	// Invocations is the phase's harness runs that have ENDED — when each was
 	// launched and how long it lived, who served it, how it ended, the
@@ -238,6 +243,10 @@ type LiveCall struct {
 	// one that returned nothing — and `id` is what the answered row's
 	// `call_id` carries, so a reader can tell which one did.
 	RunningCalls []any `json:"running_calls,omitempty"`
+	// RunningElided is how many more calls were in flight than RunningCalls
+	// lists, which a frame holds to its share; carried as the frame states
+	// it, as RunningCalls is.
+	RunningElided int `json:"running_calls_elided,omitempty"`
 
 	// Steers is every person's note the phase has read so far —
 	// `{round, note_id}`, the round whose provider call first saw it — as
