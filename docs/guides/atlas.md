@@ -139,9 +139,12 @@ its name.
 
 **The map opens with all of it in view**, centred and zoomed to fit the space
 it has, so a large company opens zoomed out and a phone shows the whole map
-small. It fits again when its space changes size (a sheet opening beside the
-page, fullscreen) while you have not moved it. Once you zoom or pan, the map
-keeps your view as it refreshes.
+small. It fits again when a filter changes what it draws, and when its space
+changes size (a sheet opening beside the page, fullscreen) while you have not
+moved it. Once you zoom or pan, the map keeps your view as it refreshes. A
+link to one entry (**Show it on the map** from its page or its sheet, or an
+address with the entry selected) opens the map on that entry instead, in the
+middle, at a size its card reads.
 
 Drag to pan, scroll or use the zoom bar to zoom, press `0` to fit the whole
 map, and use the fullscreen button in the zoom bar to give the map the screen.
