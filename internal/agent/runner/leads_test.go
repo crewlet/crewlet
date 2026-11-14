@@ -470,6 +470,146 @@ func TestASendBacksLeadIsToldAgainFromItsRound(t *testing.T) {
 	}
 }
 
+// A LEAD OF ANOTHER SESSION IS TOLD IN WORDS TRUE OF ANY SESSION. A copy that
+// may be a summary is told every lead the run keeps, those its job's record
+// never marked among them: the task of a base continuation whose box started a
+// session of its own in its place, or of one a later launch of the turn gave up
+// for a fresh run, and a review whose send-back continued another session. And
+// it marks them told in turn, so a later brief's record says no more of which
+// session a lead's brief went to. Told in the words their briefs were told in,
+// a session that began with a fresh brief read that it began as the
+// conversation's last turn left it, its own opening as another turn's, and
+// that it was the session the review sent back, its earlier rounds' calls in
+// it. So the task says what it says of that session only of a session that
+// began as that one, and the review never says the session above is the same
+// session, nor that the earlier rounds' calls are in it. That session was cut
+// off when it was kept, here, and that is said under the same condition alone:
+// of this session, whose record says its harness ended its own run, nothing
+// says it was cut off.
+//
+// Mutation: tell the task again in the words that the session above began as
+// the conversation's last turn left it, or the review in the send-back's own
+// words, or say the base was cut off ahead of the condition, and a check goes
+// red.
+func TestALeadOfAnotherSessionIsToldInWordsTrueOfAnySession(t *testing.T) {
+	t.Parallel()
+	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-1", Seq: 1, Round: 1, Task: &sandbox.LeadTask{}}
+	review := sandbox.Lead{Kind: sandbox.LeadKindReview, Job: "job-2", Seq: 2, Round: 1}
+	history := []ledger.Iteration{{Iteration: 1, ReviewNotes: "the issue needs a label"}}
+	base := *baseTurn
+	base.Interrupted = true
+	brief := relaunchedInBox(t, inBoxCarryNamed(t, "a person's answer"), sandbox.HarnessEndOwnRun, history,
+		func(r *runner.Resume) {
+			// A Claude Code copy whose collection counted nothing: it may be
+			// a summary, so every lead the run keeps is told, marked or not.
+			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Leads, r.Base = []runner.ResumeLead{keptLead(task), keptLead(review)}, &base
+		}).Continue.Brief
+	section := leadsSection(brief)
+	if !strings.Contains(brief, prompts.MayCompactSession) ||
+		!strings.Contains(section, "### A new turn of this conversation began here") ||
+		!strings.Contains(section, "the issue needs a label") {
+		t.Fatalf("the copy that may be a summary is not told the task and the review it never marked:\n%s", brief)
+	}
+	for _, says := range []string{"through turn `t-before`",
+		"Where the session above began as the one your earlier turns left, in full or in a summary:",
+		"A review of this turn's work sent it back.",
+		"Every call your earlier rounds of this turn made that succeeded ALREADY RAN, whether or not the " +
+			"session above shows it:"} {
+		if !strings.Contains(section, says) {
+			t.Errorf("the leads of another session are not told %q:\n%s", says, section)
+		}
+	}
+	for _, never := range []string{"The session above began as", "the same session", "in this session above"} {
+		if strings.Contains(brief, never) {
+			t.Errorf("a lead its session may never have held is told %q, true only of the session its brief "+
+				"went to:\n%s", never, brief)
+		}
+	}
+	if !strings.Contains(section, "**It was cut off when it was kept,**") {
+		t.Errorf("the task told again does not say the session it began after was cut off when kept:\n%s",
+			section)
+	}
+	for _, line := range outsideTheBase(brief) {
+		if strings.Contains(strings.ToLower(line), "cut off") {
+			t.Errorf("a session its record has end its own run is told %q, outside what is said of the "+
+				"session its turn began after:\n%s", line, brief)
+		}
+	}
+}
+
+// AN ANSWER BEFORE A TASK THAT DOES NOT OPEN IS TOLD ON ITS OWN. Where every lead
+// the run keeps is told, an answer a task carries is told inside that task
+// alone; but a task whose seal does not open on this node is said as a message
+// that cannot be read here, which carries nothing. So the answer before it is
+// told at its own level, once, and the task is said after it: counted as
+// carrying it, the answer was told nowhere, and the held call one such answer
+// approved was left in no telling and out of every list.
+//
+// Mutation: count a task that did not open as one that carries the answers
+// before it, and a check goes red.
+func TestAnAnswerBeforeATaskThatDoesNotOpenIsToldOnItsOwn(t *testing.T) {
+	t.Parallel()
+	unread := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-2", Seq: 2, Round: 1,
+		Unread: "sandbox: the lead is sealed under a key this node does not hold"}
+	brief := relaunchedInBox(t, inBoxCarryNamed(t, "a person's answer"), sandbox.HarnessEndOwnRun, nil,
+		func(r *runner.Resume) {
+			// A Claude Code copy whose collection counted nothing: it may be
+			// a summary, so every lead the run keeps is told.
+			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Leads = []runner.ResumeLead{keptLead(answerOf("job-1", 1, 1, "use the release branch")),
+				keptLead(unread)}
+			r.Base = baseTurn
+		}).Continue.Brief
+	if !strings.Contains(brief, prompts.MayCompactSession) {
+		t.Fatalf("the copy is not told as one that may be a summary:\n%s", brief)
+	}
+	section := leadsSection(brief)
+	answer, said := strings.Index(section, "use the release branch"), strings.Index(section, prompts.LeadUnread)
+	if n := strings.Count(brief, "use the release branch"); n != 1 || answer < 0 || said < answer {
+		t.Fatalf("the answer before a task that does not open is told %d times, at %d, the task said at %d: "+
+			"want it once, then the task as a message that cannot be read here:\n%s", n, answer, said, section)
+	}
+	if own := strings.LastIndex(section[:answer], "\n### "); own < 0 ||
+		!strings.HasPrefix(section[own:], "\n### An answer to a question this work asked\n") {
+		t.Errorf("the answer before a task that does not open is not told under a heading of its own:\n%s",
+			section)
+	}
+}
+
+// AN ANSWER TOLD INSIDE A TASK IS HANDED ON TOLD. A copy that may be a summary is
+// told every lead the run keeps, and an answer a task carries is told inside
+// that task alone; its brief hands the answer's ref on all the same, so a later
+// brief whose task does not open on its node, and which tells the leads its
+// job's record marks, tells that answer on its own. Its ref left out, that
+// later brief told the answer nowhere: unmarked, and carried only by a task it
+// cannot read.
+//
+// Mutation: hand on no ref of an answer told inside a task, and a check goes
+// red.
+func TestAnAnswerToldInsideATaskIsHandedOnTold(t *testing.T) {
+	t.Parallel()
+	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-2", Seq: 2, Round: 1, Task: &sandbox.LeadTask{}}
+	again := relaunchedInBox(t, inBoxCarryNamed(t, "a person's answer"), sandbox.HarnessEndOwnRun, nil,
+		func(r *runner.Resume) {
+			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Leads = []runner.ResumeLead{keptLead(answerOf("job-1", 1, 1, "use the release branch")),
+				keptLead(task)}
+			r.Base = baseTurn
+		})
+	section := leadsSection(again.Continue.Brief)
+	nested := strings.Index(section, "### Earlier answers that carried this work on")
+	if n := strings.Count(again.Continue.Brief, "use the release branch"); n != 1 || nested < 0 ||
+		strings.Index(section, "use the release branch") < nested {
+		t.Fatalf("the answer is not told once, inside the task:\n%s", section)
+	}
+	want := []sandbox.LeadRef{{Job: "job-1", Kind: sandbox.LeadKindAnswer}, {Job: "job-2", Kind: sandbox.LeadKindTask}}
+	if told := again.Continue.Told.Told; !slices.Equal(told, want) {
+		t.Errorf("the brief hands on %+v told again, want %+v: the answer told inside the task among them",
+			told, want)
+	}
+}
+
 // heldAnswer is a held call's lead: founder allowed `vendor_post` once, and the
 // call was made.
 func heldAnswer() sandbox.Lead {
