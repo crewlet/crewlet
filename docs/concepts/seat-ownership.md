@@ -572,7 +572,7 @@ stamps hundreds of notes again after a change of embedding model: a crash
 before the cycles have carried the burst loses what the seat wrote after it,
 and so does a release once the burst is larger than five seconds of round
 trips carry ([#1041](https://github.com/crewlet/crewlet/issues/1041)). Every
-pass sends a seat's counterparty profiles and skills whole: when they alone
+turn of a seat sends its counterparty profiles and skills whole: when they alone
 outlast the five seconds, the flush is cut inside them and reaches neither the
 rest of them nor the onboarding marker and the seat's backlog after them, and
 when they outlast a whole thirty-second cycle, the marker is never carried at
