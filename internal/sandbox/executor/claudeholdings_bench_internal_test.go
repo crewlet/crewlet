@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -51,13 +52,15 @@ import (
 //   - lines at the line's bound, [threadLineMax], each a user record of text,
 //     to the plaintext's bound;
 //   - one line at the line's bound of the smallest results a message holds, all
-//     of which [threadLine.Message] keeps, and one of the smallest blocks of a
-//     kind no reader names, each of which it keeps a kind of;
+//     of which [threadLine.Message] keeps, more call ids than the model of
+//     Claude Code's resume files ([threadChainMaxCalls]), so its reading is
+//     no reading, reported as its read metric 0; and one of the smallest
+//     blocks of a kind no reader names, each of which it keeps a kind of;
 //   - the soundness critic's two shapes of ids the call-id rule refuses: 96
 //     Agent calls each under an id of a mebibyte, and [holdingsMaxAgents]
 //     metadata each naming its call by an id of 65,000 bytes;
-//   - a main thread at [holdingsMaxRecords], each record at its worst for what
-//     the chain's walk holds ([benchRecords]).
+//   - a main thread at [threadChainMaxRecords], each record at its worst for
+//     what the model of Claude Code's resume holds ([benchRecords]).
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	const (
 		line     = 2053           // a real main thread's average line, probe P6
@@ -69,17 +72,20 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	for _, bc := range []struct {
 		name  string
 		write func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk
+		// past is whether the case passes a bound of the model of Claude
+		// Code's resume, so its reading is no reading.
+		past bool
 	}{
-		{"an_ordinary_session", benchLines(ordinary, line, measured)},
-		{"a_session_at_the_archives_bound", benchLines(atBound, line, measured)},
-		{"lines_to_the_plaintexts_bound", benchLines(threadPlainMax-benchSlack, line, bound)},
-		{"subagents_at_their_bound", benchSubagents},
-		{"lines_at_the_lines_bound", benchLines(threadPlainMax-benchSlack, threadLineMax, bound)},
-		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`)},
-		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`)},
-		{"legs_of_ids_a_mebibyte_long", benchLongLegs},
-		{"metadata_of_ids_most_of_their_bound", benchLongMetas},
-		{"a_thread_at_its_records_bound", benchRecords},
+		{"an_ordinary_session", benchLines(ordinary, line, measured), false},
+		{"a_session_at_the_archives_bound", benchLines(atBound, line, measured), false},
+		{"lines_to_the_plaintexts_bound", benchLines(threadPlainMax-benchSlack, line, bound), false},
+		{"subagents_at_their_bound", benchSubagents, false},
+		{"lines_at_the_lines_bound", benchLines(threadPlainMax-benchSlack, threadLineMax, bound), false},
+		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`), true},
+		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`), false},
+		{"legs_of_ids_a_mebibyte_long", benchLongLegs, false},
+		{"metadata_of_ids_most_of_their_bound", benchLongMetas, false},
+		{"a_thread_at_its_records_bound", benchRecords, false},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "archive.tar.gz")
@@ -102,8 +108,14 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 				got, err := ClaudeCode{}.readHoldings(b.Context(), bufio.NewReader(f), archive, ask,
 					boundsFor(executorkeep.SessionMaxBytes))
 				_ = f.Close()
-				if err != nil || !got.Read {
+				var own *holdingsError
+				switch {
+				case bc.past && errors.As(err, &own):
+					b.ReportMetric(0, "read")
+				case err != nil || !got.Read:
 					b.Fatalf("a reading = %+v, %v; want one", got.Read, err)
+				default:
+					b.ReportMetric(1, "read")
 				}
 			}
 		})
@@ -300,17 +312,16 @@ func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
-// benchRecords writes a main thread of [holdingsMaxRecords] records, the most
-// a reading walks the chain of, at their worst for what the walk holds: each a
-// reply of its own id, so each is a reply the walk keeps a digest of, all of
-// them on the chain from the thread's last record, so the walk keeps every
-// digest as handed, and all but the brief and the last naming as their parent
-// a record that comes later, so the walk keeps each one's parent to look up
-// once the thread is read whole. The brief roots the chain; the last record
-// names the first reply; each reply names the next, the last of them the
-// brief.
+// benchRecords writes a main thread of [threadChainMaxRecords] records, the
+// most the model of Claude Code's resume files of one thread, at their worst
+// for what it holds: each a reply of its own id, so each is a reply it interns,
+// all of them on the walk from the thread's last record, and all but the brief
+// and the last naming as their parent a record that comes later, so it keeps
+// each one's parent to look up once the thread is read whole. The brief roots
+// the chain; the last record names the first reply; each reply names the
+// next, the last of them the brief.
 func benchRecords(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
-	replies := holdingsMaxRecords - 2
+	replies := threadChainMaxRecords - 2
 	record := func(parent, uuid, i int) string {
 		return `{"parentUuid":"` + ctUUID(parent) + `","isSidechain":false,"message":{"id":"msg_` +
 			fmt.Sprintf("%08d", i) + `","type":"message","role":"assistant","model":"claude-sonnet-4-5",` +

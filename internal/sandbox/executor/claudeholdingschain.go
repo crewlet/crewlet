@@ -9,9 +9,12 @@ import (
 	"slices"
 )
 
-// WHICH RECORDS OF A THREAD CLAUDE CODE'S RESUME HANDS ITS MODEL, as the
-// reading of a kept session walks them ([holdingsChain]): its own rule, read in
-// 2.1.310's and 2.1.322's shipped code, never a rule of the reading's.
+// WHICH RECORDS OF A SUBAGENT'S THREAD ITS RESUME HANDED ITS MODEL, as the
+// reading of a kept session walks them ([holdingsChain]): the walk rule 2
+// reads a subagent's thread by, its own, read in 2.1.310's and 2.1.322's
+// shipped code. The session's main thread is read by the model of Claude
+// Code's resume itself ([threadChain]) and paired by the request's pairing
+// rule ([holdingsPairing]).
 //
 // A RESUME HANDS ITS MODEL A CHAIN, never the file. It walks from one record,
 // the LEAF, to the record its `parentUuid` names, and on, until a parent that
@@ -23,113 +26,40 @@ import (
 // each chained to its own call, reach the model though the thread's last
 // record descends from one of them alone (probe T's trees, both releases). The
 // resume recovers more, and every record it recovers so the reading leaves
-// told, the safe direction: a reply's tails (the attachments, system records
-// and meta user records hanging off its records), and, behind a flag on by
-// default, a result through the call its id names where that call's record is
-// not its parent. None of them reaches a record of another reply: so an
-// attempt the harness withdrew and failed to remove from the file, which no
-// later record descends from, holds a call no continuation hands over, and the
-// reading holds none of its calls.
+// told, the safe direction. None of them reaches a record of another reply: so
+// an attempt the harness withdrew and failed to remove from the file, which no
+// later record descends from, holds a call no continuation hands over, and
+// the reading holds none of its calls.
 //
-// A RECORD IS HANDED ([holdingsChain.handed]) where it lies past its thread's
-// last restart and is on the chain from the leaf, or is a reply's record whose
-// id is that of a reply on the chain past the last restart, or is a user
-// record of results whose parent is such a record. Past the last restart,
-// since a compaction that kept a segment deletes every record before its
-// boundary from what the resume walks, so nothing reached through one is sure
-// to be handed; and the walk stops at the last restart for that reason.
-//
-// AND NO RECORD A RETRACTION NAMES IS HANDED ([threadLine.Retracted]): once it
-// has walked the chain and recovered what it recovers, the resume drops every
-// record but a system one whose uuid's first 24 characters are those of a
-// uuid a record names as taken back (a refused reply's fallback, a malformed
-// reply's retry), on the chain or beside it. The reading reads those names
-// off every record of the thread ([holdingsChain.retract]), where the resume
-// reads them off the records it hands over alone, so it takes away no less
-// than the resume does.
+// A RECORD IS HANDED ([holdingsChain.handed]) where it is on the chain from
+// the leaf, or is a reply's record whose id is that of a reply on the chain,
+// or is a user record of results whose parent is such a record; AND NO RECORD
+// A RETRACTION NAMES ([threadLine.Retracted]), whose uuid's first 24
+// characters are those of a uuid a record names as taken back, wherever it
+// lies: the reading reads those names off every record of the thread
+// ([holdingsChain.retract]), so it takes away no less than the resume does.
 //
 // A CALL IS ANSWERED ([holdingsChain.answers]) only where the resume hands its
-// model the call's use and then its result, since the API takes a result only
-// after its call, and a result the harness's own repair finds before its call
-// it drops: both on the chain, in the chain's order, which is the file's
-// below the walk's first step to a parent written after its record; or the
-// result recovered beside the use's own reply, which the resume places after
-// every record of that reply on the chain. It places a recovered record after
-// its reply's records and after the results and the bookkeeping that follow
-// them there, so a use it recovers can come after its own result on the
-// chain, and the reading holds no call of that shape (no harness writes one:
-// a result's parent is its call's own record).
+// model the call's use and then its result: both on the chain, in the chain's
+// order, or the result recovered beside the use's own reply.
 //
-// THE LEAF of a main thread is the nearest user or assistant record up from
-// its last record, the leaf Claude Code's resume starts from wherever nothing
-// else moves it, which the reading holds to be so ([holdingsWalk.mainEnd]):
-//
-//   - a checkpoint (a last-prompt record) the session's last record does not
-//     descend from moves it there, and one a rewind, a withdrawal or a fork
-//     marked moves it wherever it names, or to nothing: each is no reading;
-//   - where a compaction kept a stretch of the conversation, a resume RELINKS
-//     the thread by its last boundary ([threadLine.Preserved],
-//     [holdingsChain.relinks]): it chains the kept records after the summary
-//     they hang from (the anchor), hangs the anchor's other children from the
-//     last of them, and drops every other record before that boundary; and
-//     then picks its leaf among the user and assistant records no other such
-//     record names as its parent, the checkpoint first where it is one. So a
-//     checkpoint that is a user or assistant record other than the leaf is
-//     taken for the leaf, the earlier of the two the pick can land on,
-//     wherever it can be one of those ([holdingsChain.mayLead]): where the
-//     thread relinks and the checkpoint lies before the boundary, is the
-//     anchor, or is named as its parent by no user or assistant record after
-//     the boundary, which keeps naming it through the relink. Elsewhere the
-//     resume starts from the leaf, which descends from the checkpoint through
-//     records no compaction drops. Every checkpoint of a session cut off
-//     mid-turn lags its last record, naming a record its next turn descends
-//     from: taken for the leaf wherever the thread holds a boundary, it told
-//     every call of that turn (the chain critique's C2). A relink that keeps a
-//     record at or after its boundary is no reading;
-//   - a record the resume keeps out of a session's last record's place (a
-//     sidechain's, a fork's briefing, a file's snapshot), an assistant record
-//     whose content is a string, which its load drops where it is blank and
-//     rewrites where it is not, and a user or assistant record whose message
-//     does not decode, which its load drops, are each no reading. No main
-//     thread the probes kept holds any of them.
-//
-// A SUBAGENT'S THREAD is walked from its last record of its own in the file
+// THE LEAF is the thread's last record of its own in the file
 // ([holdingsWalk.subagentEnd]): rule 2 asks what its model had seen when it
 // wrote the reply its answer carries, which is the conversation its last
-// record continues. Its walk must reach the thread's root; one that breaks
-// leaves the thread not whole.
-//
-// WHERE THE WALK CANNOT BE READ, THE READING TELLS. A parent naming no record
-// ends a main thread's walk, and what lies past it is told: the harness takes
-// a parent by timestamp there, which only lengthens its chain, so the records
-// walked to the break are handed either way. A parent written after its
-// record, and a record naming itself, on a main thread's walk are no reading:
-// past the first, the chain's order would no longer be the file's, which the
-// reading compares a call's use and its result by; and a resume that relinks
-// a compacted thread picks its leaf among the user and assistant records no
-// such record names as its parent, which a record naming itself is not, so it
-// may start from none at all. In a subagent's thread a parent naming no
-// record, or a record the walk already took, leaves the thread not whole. A
-// record of
-// no lowercase canonical uuid, a uuid held twice, or more records than
-// [holdingsMaxRecords] is no reading of a main thread and leaves a subagent's
-// not whole; and so is a progress record, a legacy shape, which the
-// harness's load drops, handing each record after it that names its uuid to
-// the progress record's own parent ([recordProgress]): followed as written, a
-// record naming one could read as the child of a record carrying the same
-// uuid, which that load skips. And recovery is read only through a result's
-// parent: the harness also recovers a result through the call its id names,
-// behind a flag, which the reading leaves told.
+// record continues. Its walk must reach the thread's root; one that breaks, at
+// a parent naming no record or a record the walk already took, leaves the
+// thread not whole. So does a record of no lowercase canonical uuid, a uuid
+// held twice, more records than [holdingsMaxRecords], and a progress record, a
+// legacy shape, which the harness's load drops, handing each record after it
+// that names its uuid to the progress record's own parent ([recordProgress]).
 //
 // A subagent's thread can name a parent that comes later in the file (the
 // attachments of its start: 74 of the 89 subagent threads the probes kept),
-// so a parent is looked up once the thread is read whole, in a main thread
-// too, where such a parent off its walk costs nothing.
+// so a parent is looked up once the thread is read whole.
 
 // holdingsMaxRecords is the most user, assistant, attachment and system
-// records of one thread a reading walks the chain of, and of the uuids those
-// records retract or its last compaction keeps that no record before that
-// compaction's boundary carries, counted together ([holdingsChain.room]).
+// records of one subagent's thread a reading walks the chain of, and of the
+// uuids those records retract, counted together ([holdingsChain.room]).
 //
 // 262,144, TWICE THE LINES A THREAD AT THE PLAINTEXT'S BOUND HOLDS: 256 MiB
 // ([threadPlainMax]) of lines of 2,053 bytes, a real main thread's average
@@ -138,11 +68,11 @@ import (
 // in a map, a parent and its marks, the uuid of a parent that came later, and
 // each reply's id as a digest: at the bound, every record a reply of its own
 // id naming a parent that comes later, 35 MiB live, its heap peaking at 69 MiB
-// (BenchmarkAReadingAtItsBounds, on two cores). A uuid a record retracts is
-// held as its first ten bytes in a set, and one a compaction keeps as its 16
-// in another, each less than any record costs, so a thread at the bound that
-// holds either holds no more than that (computed, not measured). Past it, a
-// main thread is no reading and a subagent's thread not whole.
+// (BenchmarkAReadingAtItsBounds, on two cores, measured of a main thread when
+// this walk read one). A uuid a record retracts is held as its first ten
+// bytes in a set, less than any record costs, so a thread at the bound that
+// holds one holds no more than that (computed, not measured). Past it, a
+// subagent's thread is not whole.
 const holdingsMaxRecords = 1 << 18
 
 // What a record's parent is, where it is no record of the thread
@@ -160,27 +90,15 @@ const (
 
 // What a record is to the walk ([holdingsChain.marks]).
 const (
-	// markUserOrAssistant is a user or assistant record: the leaf of a main
-	// thread is the nearest one up from its last record.
-	markUserOrAssistant uint8 = 1 << iota
 	// markReply is a counted assistant record whose reply's id was read
 	// ([holdingsChain.replies]).
-	markReply
+	markReply uint8 = 1 << iota
 	// markResults is a user record holding a call's result.
 	markResults
 	// markRetracted is a record whose uuid a retraction names
 	// ([holdingsChain.retract]): handed to no model, wherever it lies.
 	markRetracted
-	// markTurnParent is a record a user or assistant record written after
-	// the thread's last compaction's boundary names as its parent: no leaf a
-	// resume that relinks the thread can pick ([holdingsChain.mayLead]).
-	markTurnParent
 )
-
-// errRelinkLater is a compaction's boundary whose relink keeps a record
-// written at or after it ([holdingsChain.relinks]).
-var errRelinkLater = errors.New("its last compaction's boundary keeps a record written at or after it, which a " +
-	"resume's relink would chain under the records the reading walks")
 
 // errChainBound is a thread holding more records than a reading walks the
 // chain of ([holdingsMaxRecords]).
@@ -204,18 +122,12 @@ type holdingsChain struct {
 	// they write ([holdingsChain.retract]), kept until the thread is read
 	// whole and its records marked by them.
 	retracted map[[10]byte]struct{}
-	// relink is what the thread's last compaction's boundary says a resume
-	// relinks it by ([threadLine.Preserved]), filed as its line is read and
-	// decided once the thread is read whole ([holdingsChain.relinks]).
-	relink chainRelink
 	// replies are the counted replies' records and their ids' SHA-256, in
 	// record order; a reply's id is the box's word, as long as a line, and two
 	// ids are the same reply only where the harness compares them equal, which
 	// holds of every id filed: [threadLine.MessageID] hands out none holding
 	// the replacement character the decode makes of a lone surrogate.
 	replies []chainReply
-	// scopeFrom is the first record past the thread's last restart.
-	scopeFrom int32
 	// lastOwn is the thread's last record of its own, -1 where none.
 	lastOwn int32
 	// broken is whether a record could not be filed ([holdingsChain.add]):
@@ -224,7 +136,7 @@ type holdingsChain struct {
 	// onChain marks the records walked from the leaf; ordered those of them
 	// below the walk's first parent written after its record, where the
 	// chain's order is the file's ([holdingsChain.walk]); and handedReplies the
-	// ids of the replies among them past the last restart.
+	// ids of the replies among them.
 	onChain, ordered []uint64
 	handedReplies    map[[32]byte]struct{}
 }
@@ -233,28 +145,6 @@ type holdingsChain struct {
 type chainLaterParent struct {
 	record int32
 	parent [16]byte
-}
-
-// chainRelink is what a thread's last compaction's boundary says a resume
-// relinks the thread by ([threadLine.Preserved]).
-type chainRelink struct {
-	// boundary is the boundary's record, -1 where the thread holds none.
-	boundary int32
-	// kept is whether it keeps records; anchor the uuid of the record they
-	// hang from, where named it is a lowercase canonical one.
-	kept   bool
-	anchor [16]byte
-	named  bool
-	// segment is whether it names them as a segment, from tail up to head by
-	// parent, both lowercase canonical uuids where ends; else it lists them,
-	// absent where one it lists is no uuid a record of the thread carries,
-	// and later holds each it lists that no record before the boundary
-	// carries ([holdingsChain.keep]).
-	segment    bool
-	head, tail [16]byte
-	ends       bool
-	absent     bool
-	later      map[[16]byte]struct{}
 }
 
 // chainReply is a counted reply's record and its id's digest.
@@ -267,14 +157,14 @@ type chainReply struct {
 // records.
 func newHoldingsChain(bound int) *holdingsChain {
 	return &holdingsChain{bound: bound, index: map[[16]byte]int32{}, retracted: map[[10]byte]struct{}{},
-		relink: chainRelink{boundary: -1}, lastOwn: -1}
+		lastOwn: -1}
 }
 
 // add files line, a user, assistant, attachment or system record of the
-// thread, its own where own, with marks, and answers its place: an error
+// thread, its own where own, and answers its place: an error
 // where its uuid is no lowercase canonical UUID or is another record's, or
 // where the thread has no room left for it ([holdingsChain.room]).
-func (c *holdingsChain) add(line threadLine, own bool, marks uint8) (int32, error) {
+func (c *holdingsChain) add(line threadLine, own bool) (int32, error) {
 	uuid, err := line.UUID()
 	if err != nil {
 		return -1, err
@@ -301,7 +191,7 @@ func (c *holdingsChain) add(line threadLine, own bool, marks uint8) (int32, erro
 	}
 	c.index[id] = record
 	c.parent = append(c.parent, parent)
-	c.marks = append(c.marks, marks)
+	c.marks = append(c.marks, 0)
 	if own {
 		c.lastOwn = record
 	}
@@ -331,157 +221,15 @@ func chainParent(head threadHead) (int32, [16]byte) {
 }
 
 // room says whether the thread has room for one more thing it files: its
-// records ([holdingsChain.add]), what its records retract
-// ([holdingsChain.retract]) and the records its last compaction keeps that no
-// record before it carries ([holdingsChain.keep]) count toward one bound,
-// c.bound, since each is kept until the thread is read whole, and each of the
-// last two costs no more of it than a record does.
+// records ([holdingsChain.add]) and what its records retract
+// ([holdingsChain.retract]) count toward one bound, c.bound, since each is
+// kept until the thread is read whole, and the second costs no more of it
+// than a record does.
 func (c *holdingsChain) room() error {
-	if len(c.parent)+len(c.retracted)+len(c.relink.later) >= c.bound {
+	if len(c.parent)+len(c.retracted) >= c.bound {
 		return fmt.Errorf("%w, %d", errChainBound, c.bound)
 	}
 	return nil
-}
-
-// boundaryAt starts what a compaction's boundary, record, the thread's latest,
-// says a resume relinks the thread by: nothing, until [holdingsChain.keep]
-// files each record it lists and [holdingsChain.preserved] the rest.
-func (c *holdingsChain) boundaryAt(record int32) {
-	c.relink = chainRelink{boundary: record}
-}
-
-// keep files uuid, a record the boundary lists as kept
-// ([threadLine.Preserved]): nothing where a record before the boundary
-// carries it, as each record the boundaries the probes kept list does; the
-// list absent where uuid is no lowercase canonical one, since no record the
-// reading files carries it, so no resume relinks by the list; and else uuid
-// itself, counted toward the thread's bound ([holdingsChain.room]), for
-// [holdingsChain.relinks] to ask once the thread is read whole whether a
-// record after the boundary carries it.
-func (c *holdingsChain) keep(uuid string) error {
-	id, ok := canonicalUUID(uuid)
-	if !ok {
-		c.relink.absent = true
-		return nil
-	}
-	if record, held := c.index[id]; held && record < c.relink.boundary {
-		return nil
-	}
-	if _, held := c.relink.later[id]; held {
-		return nil
-	}
-	if err := c.room(); err != nil {
-		return err
-	}
-	if c.relink.later == nil {
-		c.relink.later = map[[16]byte]struct{}{}
-	}
-	c.relink.later[id] = struct{}{}
-	return nil
-}
-
-// preserved files what the boundary [holdingsChain.boundaryAt] started says it
-// keeps, but for the records it lists: whether it keeps any, its anchor, and
-// its segment's ends where it names one.
-func (c *holdingsChain) preserved(p threadPreserved) {
-	r := &c.relink
-	r.kept, r.segment = p.Kept, p.Segment
-	r.anchor, r.named = canonicalUUID(p.Anchor)
-	if p.Segment {
-		head, headOK := canonicalUUID(p.Head)
-		tail, tailOK := canonicalUUID(p.Tail)
-		r.head, r.tail, r.ends = head, tail, headOK && tailOK
-	}
-}
-
-// relinks reports whether a resume relinks the thread by its last
-// compaction's boundary, as 2.1.310 and 2.1.322 do ([threadLine.Preserved]):
-// where the boundary keeps records, and every record it lists, or every one
-// its segment's walk from its tail up by parent to its head meets, is a
-// record of the thread. It is the thread read whole: the records the walk
-// filed, and their parents resolved.
-//
-// A RELINK THAT KEEPS A RECORD AT OR AFTER THE BOUNDARY IS errRelinkLater,
-// which its reader takes for no reading: the relink chains each kept record
-// after the one before it, the first after the anchor, so a kept record past
-// the boundary moves the chain under the records the reading walks, which it
-// does not follow. Every record a boundary the probes kept keeps lies before
-// it.
-func (c *holdingsChain) relinks() (bool, error) {
-	r := c.relink
-	if r.boundary < 0 || !r.kept {
-		return false, nil
-	}
-	if !r.segment {
-		if r.absent {
-			return false, nil
-		}
-		for id := range r.later {
-			if _, held := c.index[id]; !held {
-				return false, nil
-			}
-		}
-		if len(r.later) > 0 {
-			return false, errRelinkLater
-		}
-		return true, nil
-	}
-	if !r.ends {
-		return false, nil
-	}
-	record, tailHeld := c.index[r.tail]
-	head, headHeld := c.index[r.head]
-	if !tailHeld || !headHeld {
-		return false, nil
-	}
-	// BOUNDED BY THE THREAD'S RECORDS, as the harness's own walk stops at a
-	// record it already met: a segment's walk that meets one fails, and no
-	// resume relinks by it.
-	after := false
-	for range len(c.parent) {
-		after = after || record >= r.boundary
-		if record == head {
-			if after {
-				return false, errRelinkLater
-			}
-			return true, nil
-		}
-		if record = c.parent[record]; record < 0 {
-			return false, nil
-		}
-	}
-	return false, nil
-}
-
-// mayLead reports whether a resume of the thread may start from checkpoint,
-// a user or assistant record its last record descends from, rather than
-// from the nearest user or assistant record up from that last record (the
-// file comment's THE LEAF), where the thread holds a compaction's boundary
-// and relinks says whether a resume relinks it ([holdingsChain.relinks]).
-//
-// NEVER WHERE NO RESUME RELINKS IT: the resume then starts from the
-// checkpoint only where the last record does not descend from it, which the
-// reading's walk would have found, or where what it drops of a compacted
-// thread breaks that descent, which drops the checkpoint too.
-//
-// WHERE ONE DOES, it picks among the user and assistant records no other such
-// record names as its parent, the checkpoint first where it is one of them;
-// so the resume may start from the checkpoint where it lies before the
-// boundary, whatever the relink makes of it; where it is the anchor, whose
-// other children the relink hangs elsewhere; and where no user or assistant
-// record after the boundary names it as its parent (markTurnParent), which
-// keeps naming it through a relink that keeps no record after the boundary.
-func (c *holdingsChain) mayLead(checkpoint int32, relinks bool) bool {
-	switch {
-	case !relinks:
-		return false
-	case checkpoint < c.relink.boundary:
-		return true
-	}
-	if anchor, held := c.index[c.relink.anchor]; c.relink.named && held && anchor == checkpoint {
-		return true
-	}
-	return c.marks[checkpoint]&markTurnParent == 0
 }
 
 // retract files uuid, an entry of a record's `retractedMessageUuids`
@@ -582,17 +330,11 @@ func (c *holdingsChain) reply(record int32, id string) {
 	c.mark(record, markReply)
 }
 
-// restart says the record filed last is at or before the thread's last
-// restart.
-func (c *holdingsChain) restart() { c.scopeFrom = int32(len(c.parent)) }
-
 // resolve looks up the parents not read when their children were, now the
-// thread is read whole: each the record it names, or chainNowhere; marks
-// each record a user or assistant record after the thread's last
-// compaction's boundary names as its parent (markTurnParent); and marks each
-// record whose uuid begins with a uuid's first 24 characters that a record of
-// the thread retracts ([holdingsChain.retract]), wherever the record lies,
-// since the resume drops it from what it walked.
+// thread is read whole: each the record it names, or chainNowhere; and marks
+// each record whose uuid begins with a uuid's first 24 characters that a
+// record of the thread retracts ([holdingsChain.retract]), wherever the
+// record lies, since the resume drops it from what it walked.
 func (c *holdingsChain) resolve() {
 	for _, l := range c.later {
 		parent, held := c.index[l.parent]
@@ -602,13 +344,6 @@ func (c *holdingsChain) resolve() {
 		c.parent[l.record] = parent
 	}
 	c.later = nil
-	if c.relink.boundary >= 0 {
-		for record := c.relink.boundary + 1; int(record) < len(c.parent); record++ {
-			if parent := c.parent[record]; parent >= 0 && c.marks[record]&markUserOrAssistant != 0 {
-				c.mark(parent, markTurnParent)
-			}
-		}
-	}
 	if len(c.retracted) > 0 {
 		for id, record := range c.index {
 			if _, gone := c.retracted[[10]byte(id[:10])]; gone {
@@ -632,11 +367,6 @@ const (
 	endNowhere
 	// endTaken is a record the walk had already taken.
 	endTaken
-	// endRestart is a record at or before the thread's last restart.
-	endRestart
-	// endForward is a parent written after its record, which a main
-	// thread's walk does not follow ([holdingsChain.walk]).
-	endForward
 )
 
 // String is what ended a walk, in words for an error.
@@ -646,72 +376,26 @@ func (e chainEnd) String() string {
 		return "a parent naming no record"
 	case endTaken:
 		return "a record it had already taken"
-	case endRestart:
-		return "its last restart"
-	case endForward:
-		return "a parent written after its record"
 	}
 	return "a root"
 }
 
-// up walks a main thread's records from record to their parents until stop
-// holds of one, answering that one, or until the walk ends, answering -1 and
-// what ended it: a root, a parent naming no record, a record naming itself (a
-// record already taken), a parent written after its record, which a main
-// thread's walk does not follow ([holdingsChain.walk]), or, where scoped, a
-// record at or before the last restart. Each step goes to a record written
-// before the last, so the walk ends within as many steps as the thread holds
-// records.
-func (c *holdingsChain) up(record int32, scoped bool, stop func(int32) bool) (int32, chainEnd) {
-	for {
-		if scoped && record < c.scopeFrom {
-			return -1, endRestart
-		}
-		if stop(record) {
-			return record, endRoot
-		}
-		switch parent := c.parent[record]; {
-		case parent == chainRoot:
-			return -1, endRoot
-		case parent < 0:
-			return -1, endNowhere
-		case parent == record:
-			return -1, endTaken
-		case parent > record:
-			return -1, endForward
-		default:
-			record = parent
-		}
-	}
-}
-
-// walk marks the chain from leaf, as far as it can be read, and the ids of
-// the replies on it past the last restart, and answers what ended it.
+// walk marks the chain from leaf, a subagent's thread's last record of its
+// own, as far as it can be read, and the ids of the replies on it, and
+// answers what ended it.
 //
-// A MAIN THREAD'S (main) stops at its last restart and at a parent written
-// after its record (endForward), which its reader takes for no reading
-// ([holdingsWalk.mainEnd]): every step then goes to a record written before
-// the last, so the chain's order is the file's, which the reading compares a
-// call's use and its result by ([holdingsChain.answers]), and the walk meets no
-// record twice. No main thread the probes kept names a parent written after
-// it.
-//
-// A SUBAGENT'S follows such a parent, as its harness does: the attachments a
-// subagent's start writes name parents written after them (74 of the 89
-// subagent threads the probes kept), and so does a reply that names the
-// environment its harness wrote after it (3 of them). So the walk marks
+// IT FOLLOWS A PARENT WRITTEN AFTER ITS RECORD, as the harness does: the
+// attachments a subagent's start writes name parents written after them (74
+// of the 89 subagent threads the probes kept), and so does a reply that names
+// the environment its harness wrote after it (3 of them). So the walk marks
 // ordered only the records below its first step to a parent written after
 // its record, among which the chain's order is the file's; every record the
 // probes kept that holds a call or its result lies among them.
-func (c *holdingsChain) walk(leaf int32, main bool) chainEnd {
+func (c *holdingsChain) walk(leaf int32) chainEnd {
 	c.onChain = make([]uint64, (len(c.parent)+63)/64)
 	c.ordered = make([]uint64, len(c.onChain))
 	end, ordered := endTaken, true
 	for record := leaf; ; {
-		if main && record < c.scopeFrom {
-			end = endRestart
-			break
-		}
 		if c.on(record) {
 			break
 		}
@@ -729,17 +413,13 @@ func (c *holdingsChain) walk(leaf int32, main bool) chainEnd {
 			break
 		}
 		if parent > record {
-			if main {
-				end = endForward
-				break
-			}
 			ordered = false
 		}
 		record = parent
 	}
 	c.handedReplies = map[[32]byte]struct{}{}
 	for _, r := range c.replies {
-		if r.record >= c.scopeFrom && c.on(r.record) {
+		if c.on(r.record) {
 			c.handedReplies[r.id] = struct{}{}
 		}
 	}
@@ -752,12 +432,11 @@ func (c *holdingsChain) on(record int32) bool {
 }
 
 // handed reports whether the resume hands its model record (the file
-// comment): past the last restart, retracted by no record of the thread, and
-// on the chain, or a reply's record of an id a reply on the chain carries, or
-// a user record of results whose parent is one. False for -1, no record of the
-// thread.
+// comment): retracted by no record of the thread, and on the chain, or a
+// reply's record of an id a reply on the chain carries, or a user record of
+// results whose parent is one. False for -1, no record of the thread.
 func (c *holdingsChain) handed(record int32) bool {
-	if record < c.scopeFrom || int(record) >= len(c.parent) || c.marks[record]&markRetracted != 0 {
+	if record < 0 || int(record) >= len(c.parent) || c.marks[record]&markRetracted != 0 {
 		return false
 	}
 	if c.on(record) {
@@ -768,13 +447,13 @@ func (c *holdingsChain) handed(record int32) bool {
 		return c.replyHanded(record)
 	case marks&markResults != 0:
 		parent := c.parent[record]
-		return parent >= c.scopeFrom && c.marks[parent]&markReply != 0 && c.replyHanded(parent)
+		return parent >= 0 && c.marks[parent]&markReply != 0 && c.replyHanded(parent)
 	}
 	return false
 }
 
-// replyHanded reports whether a reply on the chain past the last restart
-// carries the id of record's reply.
+// replyHanded reports whether a reply on the chain carries the id of record's
+// reply.
 func (c *holdingsChain) replyHanded(record int32) bool {
 	id, filed := c.replyOf(record)
 	if !filed {

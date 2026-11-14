@@ -58,9 +58,12 @@ import (
 //     ([threadLine.Message]): in the main thread a user or assistant record,
 //     chained and the main thread's own ([threadHead.Main]); in subagent A's
 //     thread one chained, of A's `agentId` and `isSidechain` true. Every other
-//     line counts for nothing, but its user, assistant, attachment and system
-//     records are filed by their uuid for the walk of the thread's chain
-//     ([holdingsChain]), which is decided once the thread is read whole;
+//     line counts for nothing; but every line of the main thread is handed to
+//     the model of Claude Code's resume ([threadChain]), which decides once
+//     the thread is read whole which records the resume hands its model and
+//     in what orders, and a subagent's user, assistant, attachment and system
+//     records are filed by their uuid for the walk of its chain
+//     ([holdingsChain]);
 //   - a subagent's metadata is one JSON document, read whole within
 //     [holdingsMetaMaxBytes] and decoded by the reading itself
 //     ([subagentMetaOf]).
@@ -95,31 +98,28 @@ import (
 // because the store's stream latches its error. The gzip trailer is not
 // checked: every byte under it came from a chunk the store authenticated.
 //
-// LIVE ONLY WHERE THE RESUME HANDS IT ITS MODEL (claudeholdingschain.go): a call's use
-// and its result, and a leg's answer, count only where Claude Code's resume
-// hands the record over, on the chain it walks from its leaf or recovered off
-// it through the id of a reply on it, as 2.1.310 and 2.1.322 build what a
-// resumed session's model is handed ([holdingsChain.handed]); never by where a
-// record lies in the file, since an attempt the harness withdrew can lie past
-// every restart and be handed to no model. And only past the thread's last
-// restart: a result before one is told, the safe direction, a compaction's
-// preserved segment included. Measured (probe T, both releases): a
-// continuation hands its model each whole-line result of its main thread the
-// chain or its recovery holds after its last restart, verbatim and with its
-// call, the results of parallel calls off the chain among them. In a
-// subagent's thread a result is live where the thread has no restart at all
-// and lies on the chain from its last record of its own, or is recovered
-// beside it: a restart there leaves the subagent unreported (rule 2).
-//
-// AND A RESULT IS LIVE ONLY WHERE THE RESUME HANDS IT AFTER ITS CALL'S USE, IN
-// ITS OWN THREAD ([holdingsChain.answers]): what a continuation sends pairs a
-// result with the call before it in the one conversation, and the API refuses
-// a result no call of its own precedes, so a result handed before its call's
-// use, or in another thread, is handed to no model with that call. The order
-// read is the resume's, never the file's alone: the chain's, which is the
-// file's below the walk's first step to a parent written after its record,
-// and a recovered result's place after the records of its reply on the chain.
-// No harness writes a result before its use.
+// LIVE ONLY WHERE THE REQUEST A RESUMED SESSION SENDS PAIRS IT WITH ITS CALL.
+// In the main thread, Claude Code's resume hands its model what the model of
+// it says ([threadChain]: the walk from its leaf, what it recovers and hangs
+// off the replies on it, its tails, less what its retraction filter and its
+// drop of malformed attachments take, under every variant the reading cannot
+// see, as 2.1.310 and 2.1.322 build it), and its request pairs a call's use
+// with its result only where the pairing rule holds of the orders that model
+// hands ([holdingsPairing]): never by where a record lies in the file, since
+// an attempt the harness withdrew can lie past every restart and be handed to
+// no model, and a result handed after another reply is handed with no call.
+// A leg's own answer is paired the same way, and a task notification counts
+// only where the resume hands its record under every variant. And each only
+// past the main thread's last restart, the reading's own forward guard: a
+// result before one is told, the safe direction. Measured (probe T, both
+// releases): a continuation hands its model each whole-line result of its
+// main thread the chain or its recovery holds after its last restart,
+// verbatim and with its call, the results of parallel calls off the chain
+// among them. In a subagent's thread a result is live where the thread has no
+// restart at all and the resume hands it after its call's use, in the use's
+// own thread ([holdingsChain.answers]): on the chain from its last record of
+// its own, or recovered beside it; a restart there leaves the subagent
+// unreported (rule 2).
 //
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE, in whichever thread: behind a
 // flag Anthropic's servers set, Claude Code hands its model a preview in
@@ -136,7 +136,8 @@ import (
 // Claude Code moves the request to another model, or it retries a reply whose
 // call it could not parse, it takes that attempt's records back out of the
 // conversation and names them, and a resume drops every record so named,
-// whatever chain it lies on (claudeholdingschain.go). The live run dropped it too
+// whatever chain it lies on ([threadChain]'s retraction filter in the main
+// thread, [holdingsChain.retract] in a subagent's). The live run dropped it too
 // before it went on, so a subagent's model had not seen it either. A record
 // that retracts in no shape Claude Code writes is no reading in the main
 // thread, and leaves a subagent's thread not whole.
@@ -174,10 +175,10 @@ import (
 //     keeps none of is a leg nothing can answer ([holdingsWalk.leg]). The
 //     call that started it is answered by its own result's record (`status`
 //     "completed" naming it, no error, of a subagent its metadata says the
-//     call waited for), the resume handing its model the call's record and
-//     then that one ([holdingsChain.answers]), or by a task notification of it
-//     on the main thread's chain; a SendMessage only by a task notification
-//     of it on that chain.
+//     call waited for), the request a resumed session sends pairing the
+//     call's use with that one ([holdingsPairing]), or by a task notification
+//     of it the resume hands its model; a SendMessage only by a task
+//     notification of it so handed.
 //     A NOTIFICATION IS AN ANSWER: a continuation hands its model the
 //     notification's record verbatim (probe T, T10, on 2.1.310 and 2.1.322),
 //     and its lines name the subagent and the leg ([taskNotification]). An
@@ -221,20 +222,15 @@ import (
 // not open, is no gzip or no tar, or inflates past its bound; a member is named
 // absolutely or through `..`; a member it reads is held twice; the main thread
 // is no regular file, or is not there; a line of it is past its bound or is no
-// record, a user or assistant record's message does not decode, a record
-// replaces results or retracts records in no shape Claude Code writes, or a
-// progress record, which Claude Code's load drops and links the records after
-// it past ([recordProgress]), is among them; the main thread's leaf may
-// not be the one the reading walks from (a checkpoint a rewind, a withdrawal
-// or a fork marked, or that names its leaf in no shape Claude Code writes, or
-// that names a record its last record does not descend from; a sidechain's
-// record, a fork's briefing, a file's snapshot or a reply whose content is a
-// string in it), or its chain cannot be walked as the resume walks it (a
-// record of no lowercase canonical uuid, a uuid held twice, more than
-// [holdingsMaxRecords] records, a walk that meets a parent written after its
-// record or a record naming itself, or a last compaction that keeps a record
-// written at or after its boundary, or says what it kept in no shape Claude
-// Code writes); a subagent's thread is past its bound, or its
+// record, a user or assistant record's message does not decode, or a record
+// replaces results or lists a batch's calls in no shape Claude Code writes;
+// the model of Claude Code's resume cannot place the main thread, whatever
+// shape it met first ([threadChain.Unknown]: among them a progress record, a
+// marked checkpoint, a sidechain's record, a record of no lowercase canonical
+// uuid, a retraction list or a compaction's metadata in no shape Claude Code
+// writes, a result the resume may hang under another record than its parent,
+// a thread past 5,242,880 bytes a large-file reader may read otherwise, and a
+// thread past the model's bounds); a subagent's thread is past its bound, or its
 // metadata past the archive's budget; more subagents than [holdingsMaxAgents],
 // or more legs than [holdingsMaxLegs]; or the stream does not end at io.EOF.
 // The error says which, in words a relaunch logs ([holdingsError]). WHY A
@@ -244,17 +240,21 @@ import (
 //
 // THE BOUNDS, AND WHAT A READING HOLDS. The archive's plaintext at
 // [threadPlainMax], what its read members hand out at the same budget, a line
-// at [threadLineMax], a thread's records at [holdingsMaxRecords], a metadata
+// at [threadLineMax], the main thread at the bounds of the model of Claude
+// Code's resume ([threadChainMaxRecords], [threadChainMaxCalls]), a
+// subagent's records at [holdingsMaxRecords], a metadata
 // at [holdingsMetaMaxBytes], the asked calls at [sandbox.MaxBridgeCalls],
 // subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and the writer
 // at its floor. At its worst a reading holds the line reader's buffer; one
 // line and the slice that gathered it; the line's raw keys and its message's
 // decode, each at most a line; what the message's calls keep (a line of the
 // smallest results keeps about three times the line); one result's text; a
-// metadata; the chain of the thread it reads, one thread's at a time (each
-// record's uuid filed in a map, its parent and its marks, the uuid of a parent
-// that came later, each reply's id as a digest, and the first ten bytes of
-// each uuid its records retract: [holdingsChain]); and its
+// metadata; the model of the main thread ([threadChain], THE BOUNDS) and the
+// pairing rule's mark of each of its records ([holdingsPairing]), or the chain
+// of a subagent's thread (each record's uuid filed in a map, its parent and
+// its marks, the uuid of a parent that came later, each reply's id as a
+// digest, and the first ten bytes of each uuid its records retract:
+// [holdingsChain]), one thread's at a time; and its
 // facts: a few words and an id of at most [sandbox.MaxBridgeCallIDBytes] for
 // each asked call, each leg and each notification, and for each subagent a few
 // more and a description of at most [holdingsDescriptionBytes], about 2 MiB
@@ -265,9 +265,12 @@ import (
 // two cores (BenchmarkAReadingAtItsBounds): its worst for one line is a line
 // at the line's bound of the smallest results a message holds, 88 MiB live,
 // its heap peaking at 94 MiB, read in a fifth of a second; its worst for the
-// chain is a thread at [holdingsMaxRecords], each record a reply of its own id
-// naming a parent that comes later, 35 MiB live, its heap peaking at 69 MiB,
-// read in 1.4 s; so a thread that held both would hold about 120 MiB by their
+// chain was a main thread at [holdingsMaxRecords], each record a reply of its
+// own id naming a parent that comes later, 35 MiB live, its heap peaking at
+// 69 MiB, read in 1.4 s, measured of the walk the main thread was read by
+// before the model of the resume, which at its own bounds holds no more
+// ([threadChain], THE BOUNDS); so a thread that held both would hold about
+// 120 MiB by their
 // sum (computed, not measured), within what a seat's read for words, the other
 // taker of the seats' one slot, holds at its worst
 // ([SeatTranscriptReadsAtOnce]). 255 MiB of ordinary lines, the plaintext's
@@ -458,7 +461,8 @@ type holdingsWalk struct {
 	session, main string
 	// bounds is what the reading is held to, and handed what the members it
 	// read have handed out of bounds.plain between them; records is the most
-	// records of one thread it walks the chain of ([holdingsMaxRecords]).
+	// records of one subagent's thread it walks the chain of
+	// ([holdingsMaxRecords]).
 	bounds  scrubBounds
 	handed  int64
 	records int
@@ -471,11 +475,12 @@ type holdingsWalk struct {
 	// of its last restart, 0 where it has none.
 	restarts    threadRestarts
 	lastRestart int
-	// checkpoint is the uuid the main thread's checkpoint names, where
-	// checkpointed: the leaf of its last last-prompt record naming one since
-	// its last compaction's boundary ([holdingsWalk.checkpointOf]).
-	checkpoint   [16]byte
-	checkpointed bool
+	// batched is whether a record of the main thread carries a batch's calls
+	// ([threadLine.BatchToolUses]), and splitResults whether one holds a
+	// result whose id is a batch's split one ([splitBase]): the request may
+	// fold a call another record names into another, so no leg is answered
+	// ([holdingsWalk.idsFold]).
+	batched, splitResults bool
 	// agents are the subagents whose members the reading read, by agent id.
 	agents map[string]*subagentFacts
 	// legs are the main thread's legs of subagents' work, by the id of the
@@ -512,8 +517,14 @@ type callFacts struct {
 	textBytes    int
 	opening      [32]byte
 	whole        [32]byte
-	// answered is whether the resume hands its model the first use's record
-	// and then the first result's, both of one thread ([holdingsChain.answers]),
+	// poll is whether its first use calls the Poll tool, and folds whether a
+	// record of the main thread names it where the request may fold it into
+	// another call, or another into it ([holdingsWalk.idsFold]).
+	poll, folds bool
+	// answered is whether the request a resumed session sends pairs the first
+	// use with the first result: in the main thread by the pairing rule
+	// ([holdingsPairing]), and in a subagent's where the resume hands its
+	// model the use's record and then the result's ([holdingsChain.answers]);
 	// filed once that thread was read whole.
 	answered bool
 	// replaced is whether a content-replacement record of a thread read
@@ -568,19 +579,21 @@ type legFact struct {
 	spawns, sends int
 	to            string
 	callRec       int32
-	// results is how many counted results name it; resultRec, failed,
-	// completed, agent and refused are the first's: its record, its is_error,
-	// and what its record's own toolUseResult says where the record holds that
-	// one result alone ([agentAnswer]).
-	results   int
-	resultRec int32
-	failed    bool
-	completed bool
-	agent     string
-	refused   bool
-	// answered is whether the resume hands its model the first call's record
-	// and then the first result's ([holdingsChain.answers]), filed once the
-	// main thread was read whole.
+	// results is how many counted results name it; resultRec, resultLine,
+	// failed, completed, agent and refused are the first's: its record, its
+	// line, its is_error, and what its record's own toolUseResult says where
+	// the record holds that one result alone ([agentAnswer]).
+	results    int
+	resultRec  int32
+	resultLine int
+	failed     bool
+	completed  bool
+	agent      string
+	refused    bool
+	// answered is whether the request a resumed session sends pairs the
+	// first call with the first result, by the pairing rule
+	// ([holdingsPairing]), past the main thread's last restart, filed once
+	// the main thread was read whole.
 	answered bool
 }
 
@@ -588,10 +601,12 @@ type legFact struct {
 type legNotice struct{ agent, leg string }
 
 // noticeFact is a task notification as the main thread holds it: its record
-// in the main thread's chain, and live, whether the resume hands its model
-// that record, filed once the main thread was read whole.
+// in the main thread's chain and its line, and live, whether the resume hands
+// its model that record under every variant, past the main thread's last
+// restart, filed once the main thread was read whole.
 type noticeFact struct {
 	record int32
+	line   int
 	live   bool
 }
 
@@ -685,11 +700,17 @@ func outsideArchive(name string) bool {
 }
 
 // mainThread reads the session's main thread, whose bytes member hands out, a
-// whole line at a time, and once it is read whole, which of its records the
-// resume hands its model ([holdingsWalk.mainEnd]).
+// whole line at a time, into Claude Code's resume's model ([threadChain]) and
+// the pairing rule's marks ([holdingsPairing]), and once it is read whole,
+// which of its calls the request a resumed session sends pairs
+// ([holdingsWalk.mainEnd]). No reading at once where a line is no record, a
+// user or assistant record's message does not decode, a record replaces
+// results or carries a batch in no shape Claude Code writes, or the model
+// cannot place the thread ([threadChain.Unknown]): read on, the reading
+// would vouch for a thread no model says the resume hands its model.
 func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 	lines := newThreadReader(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed)
-	chain := newHoldingsChain(w.records)
+	chain, pairing := newThreadChain(""), &holdingsPairing{}
 	for {
 		// BETWEEN LINES, since a line's read takes no context: a reading
 		// overruns its caller's wait by one line's read and decode at most.
@@ -699,229 +720,174 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		line, err := lines.Next()
 		switch {
 		case errors.Is(err, io.EOF):
-			return w.mainEnd(chain)
+			return w.mainEnd(ctx, chain, pairing)
 		case err != nil:
 			return &holdingsError{why: "the session's main thread was not read whole", cause: err}
+		}
+		record, message, err := chain.See(line)
+		if err != nil {
+			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is no record", line.N),
+				cause: err}
+		}
+		if why, unknown := chain.Unknown(); unknown {
+			return unplaced(fmt.Sprintf("line %d of the session's main thread", line.N), why)
 		}
 		restart := w.restarts.See(line.Head)
 		if err = line.ReplacedResults(w.replaced); err != nil {
 			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread replaces results in no "+
 				"shape Claude Code writes", line.N), cause: err}
 		}
-		if err = line.Retracted(chain.retract); errors.Is(err, errChainBound) {
-			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is a record the reading "+
-				"cannot walk to as the resume does", line.N), cause: err}
-		} else if err != nil {
-			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread retracts records in no "+
-				"shape Claude Code writes", line.N), cause: err}
-		}
-		if err = w.checkpointOf(line); err != nil {
-			return err
-		}
-		message, record, err := w.mainLine(chain, line)
-		if err != nil {
-			return err
-		}
-		if err = preservedOf(chain, line, record); err != nil {
-			return err
-		}
 		if restart {
 			w.lastRestart = line.N
-			chain.restart()
 		}
-		if head := line.Head; (head.Type != recordUser && head.Type != recordAssistant) || !head.Chained() ||
-			!head.Main() {
+		head := line.Head
+		turn := head.Type == recordUser || head.Type == recordAssistant
+		counted := turn && head.Chained() && head.Main()
+		pairing.see(record, line, message, counted)
+		if !turn {
 			continue
 		}
-		if err = w.mainRecord(line, message, record); err != nil {
+		if err = w.idsFold(line, message); err != nil {
 			return err
 		}
+		if counted {
+			if err = w.mainRecord(line, message, int32(record)); err != nil {
+				return err
+			}
+		}
 	}
 }
 
-// mainLine files line, one of the main thread's, in chain where it is a user,
-// assistant, attachment or system record, and answers its record there, -1
-// where it is none, and a user or assistant record's message. No reading
-// where it is a record Claude Code's resume keeps out of a session's last
-// record's place (a sidechain's, a fork's briefing, a file's snapshot), a
-// user or assistant record whose message does not decode, which its load
-// drops, or a reply whose content is a string, which its load drops where it
-// is blank and rewrites where it is not; where it is a progress record, whose
-// uuid that load hands each record after it that names it to the progress
-// record's own parent, a link the reading does not follow
-// ([recordProgress]); or where chain cannot walk to it ([holdingsChain.add]). No
-// main thread the probes kept holds any of these.
-func (w *holdingsWalk) mainLine(chain *holdingsChain, line threadLine) (threadMessage, int32, error) {
-	refused := func(what string, cause error) error {
-		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread %s", line.N, what), cause: cause}
+// unplaced is no reading of a main thread where Claude Code's resume's model
+// cannot place it, for why ([threadChain.Unknown]), what words where.
+func unplaced(where string, why chainWhy) error {
+	return &holdingsError{why: fmt.Sprintf("%s holds a shape the model of Claude Code's resume cannot place "+
+		"(%s), so what its resume hands its model is unknown", where, why)}
+}
+
+// idsFold files what line, a user or assistant record of the main thread whose
+// message is message, says of the ids the request may fold into another
+// call's (the pairing rule's C1, [holdingsPairing]), wherever the record lies
+// and whoever's it is: each batch's call it lists, every one of which its
+// request folds the split calls of that batch into (2.1.322's GWi
+// @291388775, 2.1.310's x2s @244965716), and each result of a batch's split
+// id, which it folds into the result of the call that id was split from
+// (2.1.322's zWi @291389478, 2.1.310's P2s @244966419). Each such id that is
+// asked is told; and since a leg's id is known only once its call is read, a
+// main thread holding either at all answers no leg ([holdingsWalk.mainEnd]).
+// No reading where a batch's list is in no shape Claude Code writes: its
+// request throws on one.
+func (w *holdingsWalk) idsFold(line threadLine, message threadMessage) error {
+	batch, err := line.BatchToolUses(func(id string) {
+		if f := w.calls[id]; f != nil {
+			f.folds = true
+		}
+	})
+	if err != nil {
+		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread lists a batch's calls in no "+
+			"shape Claude Code writes", line.N), cause: err}
 	}
-	head := line.Head
+	w.batched = w.batched || batch
+	if line.Head.Type != recordUser {
+		return nil
+	}
+	for _, call := range message.Calls() {
+		base, split := splitBase(call.ID)
+		if !split {
+			continue
+		}
+		w.splitResults = true
+		if f := w.calls[base]; f != nil {
+			f.folds = true
+		}
+	}
+	return nil
+}
+
+// folded reports whether the request may fold id's call into another, or
+// another into it, by what the whole thread holds, chain's once End decided
+// it: an id a batch's split call or result reads as split from another
+// call's carried by a block of the thread ([splitBase]), and one Claude Code
+// writes of its own ([harnessID]).
+func folded(chain *threadChain, id string) bool {
+	if base, split := splitBase(id); split {
+		if _, carried := chain.CallKey(base); carried {
+			return true
+		}
+	}
+	return harnessID(id)
+}
+
+// mainEnd decides, once the main thread is read whole into chain and pairing,
+// which of its calls the request a resumed session sends pairs, and files it
+// on each fact of the main thread: each asked call's and each leg's first use
+// and first result paired by the pairing rule ([holdingsPairing]); a leg's
+// own answer, and each task notification, only where its line follows the
+// main thread's last restart, as a result's is ([holdingsWalk.live]); and a
+// notification only where the resume hands its model its record under every
+// variant. No reading where End's context ended, or where the model cannot
+// place the thread ([threadChain.Unknown]).
+//
+// THE LAST RESTART IS THE READING'S OWN FORWARD GUARD, beside the model's
+// truth: the model says what 2.1.310 and 2.1.322 hand, and a release after
+// them that cut the thread at a microcompaction's boundary, a span replaced
+// or a later root would hand less than lies before one.
+func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing *holdingsPairing) error {
+	if err := chain.End(ctx); err != nil {
+		return err
+	}
+	if why, unknown := chain.Unknown(); unknown {
+		return unplaced("the session's main thread", why)
+	}
 	var (
-		message threadMessage
-		marks   uint8
-		err     error
+		asks  []*pairAsk
+		calls []*callFacts
+		legs  []*legFact
+		ids   []string
 	)
-	switch {
-	case head.Type == recordProgress:
-		return threadMessage{}, -1, refused("is a progress record, which Claude Code's load drops, handing each "+
-			"record after it that names it to its parent, a link the reading does not follow", nil)
-	case head.Type != recordUser && head.Type != recordAssistant && head.Type != recordAttachment &&
-		head.Type != recordSystem:
-		return threadMessage{}, -1, nil
-	case head.Sidechain != nil && *head.Sidechain:
-		return threadMessage{}, -1, refused("is a sidechain's record, which the resume keeps out of a session's "+
-			"last record's place", nil)
-	case head.Type == recordSystem && head.Subtype == subtypeFileSnapshot:
-		return threadMessage{}, -1, refused("is a file's snapshot, which the resume keeps out of a session's "+
-			"last record's place", nil)
-	case head.Type == recordAttachment:
-		// AN ATTACHMENT IN NO SHAPE IS NO BRIEFING, as the harness's own test
-		// of one reads it ([threadLine.AttachmentType]).
-		if kind, kindErr := line.AttachmentType(); kindErr == nil && kind == attachmentForkBriefing {
-			return threadMessage{}, -1, refused("is a fork's briefing, which the resume keeps out of a "+
-				"session's last record's place", nil)
-		}
-	case head.Type == recordSystem:
-		// A SYSTEM RECORD IS NO USER OR ASSISTANT RECORD, though a checkpoint
-		// can name one (a stop hook's summary, which the harness writes
-		// last): no leaf the resume starts from is one, and it holds no
-		// message the reading reads.
-	default:
-		if message, err = line.Message(); err != nil {
-			return threadMessage{}, -1, refused("is no record", err)
-		}
-		if _, text := message.Text(); text && head.Type == recordAssistant {
-			return threadMessage{}, -1, refused("is a reply whose content is a string, which the resume drops "+
-				"or rewrites", nil)
-		}
-		marks = markUserOrAssistant
-		if head.Type == recordUser && len(message.Calls()) > 0 {
-			marks |= markResults
-		}
-	}
-	record, err := chain.add(line, false, marks)
-	if err != nil {
-		return threadMessage{}, -1, refused("is a record the reading cannot walk to as the resume does", err)
-	}
-	// A REPLY'S ID THAT DOES NOT DECODE costs only what it could recover: the
-	// reply recovers no record off the chain, and none recovers it.
-	if head.Type == recordAssistant && head.Chained() && head.Main() {
-		if id, idErr := line.MessageID(); idErr == nil && id != "" {
-			chain.reply(record, id)
-		}
-	}
-	return message, record, nil
-}
-
-// checkpointOf follows the main thread's checkpoint as Claude Code's load
-// follows it ([threadLine.Checkpoint]): a compaction's boundary clears it,
-// and the last last-prompt record since that names a leaf sets it, one
-// naming no lowercase canonical UUID setting it to name no record. No reading
-// where one is marked by a rewind, a withdrawal or a fork, or names its leaf
-// in no shape Claude Code writes: each can move the leaf the resume starts
-// from wherever it names, or to nothing.
-func (w *holdingsWalk) checkpointOf(line threadLine) error {
-	if line.Head.Type == recordSystem && line.Head.Subtype == subtypeCompactBoundary {
-		w.checkpoint, w.checkpointed = [16]byte{}, false
-		return nil
-	}
-	leaf, marked, err := line.Checkpoint()
-	switch {
-	case err != nil:
-		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread names the leaf its resume "+
-			"starts from in no shape Claude Code writes", line.N), cause: err}
-	case marked:
-		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is a checkpoint a rewind, a "+
-			"withdrawal or a fork marked, which can move the leaf its resume starts from", line.N)}
-	case leaf != "":
-		w.checkpoint, w.checkpointed = canonicalUUID(leaf)
-	}
-	return nil
-}
-
-// preservedOf files in chain what line, one of the main thread's, record in
-// chain, says its compaction kept, where it is a compaction's boundary: the
-// latest boundary's says what a resume relinks the thread by
-// ([holdingsChain.relinks]). No reading where it says so in no shape Claude
-// Code writes, or keeps more records no record before it carries than the
-// thread has room for.
-func preservedOf(chain *holdingsChain, line threadLine, record int32) error {
-	if line.Head.Type != recordSystem || line.Head.Subtype != subtypeCompactBoundary {
-		return nil
-	}
-	chain.boundaryAt(record)
-	p, err := line.Preserved(chain.keep)
-	switch {
-	case errors.Is(err, errChainBound):
-		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is a record the reading "+
-			"cannot walk to as the resume does", line.N), cause: err}
-	case err != nil:
-		return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread names what its compaction "+
-			"kept in no shape Claude Code writes", line.N), cause: err}
-	}
-	chain.preserved(p)
-	return nil
-}
-
-// mainEnd decides, once the main thread is read whole, which of its records
-// the resume hands its model, and in what order, and files it on each fact of
-// the main thread (claudeholdingschain.go's file comment): the chain from the leaf,
-// the nearest user or assistant record up from the thread's last record, past
-// its last restart. No reading where the checkpoint names a record the last
-// record does not descend from, since the resume then starts from the
-// checkpoint; where a walk meets a parent written after its record, or a
-// record naming itself; or where the thread's last compaction keeps a record
-// written at or after its boundary ([holdingsChain.relinks]). The checkpoint is
-// the leaf where it is a user or assistant record other than that one that a
-// resume may start from instead ([holdingsChain.mayLead]); and nothing is
-// handed where no user or assistant record up from the last record lies past
-// the last restart.
-func (w *holdingsWalk) mainEnd(chain *holdingsChain) error {
-	unread := func(end chainEnd) error {
-		return &holdingsError{why: "the session's main thread holds a record whose walk to its root meets " +
-			end.String() + ", which its resume can hand its model in another order than the file's, or none"}
-	}
-	chain.resolve()
-	relinks, err := chain.relinks()
-	if err != nil {
-		return &holdingsError{why: "the session's main thread cannot be walked as a resume that relinks it walks it",
-			cause: err}
-	}
-	if last := int32(len(chain.parent)) - 1; last >= 0 {
-		userOrAssistant := func(record int32) bool { return chain.marks[record]&markUserOrAssistant != 0 }
-		leaf, end := chain.up(last, true, userOrAssistant)
-		if end == endForward || end == endTaken {
-			return unread(end)
-		}
-		if checkpoint, named := chain.index[w.checkpoint]; leaf >= 0 && w.checkpointed && named {
-			// THE WHOLE WALK, past the last restart too, as the harness's own
-			// test of a last record that descends from its checkpoint walks.
-			if found, ended := chain.up(last, false, func(record int32) bool { return record == checkpoint }); found < 0 {
-				return &holdingsError{why: "the session's main thread holds a checkpoint its last record does not " +
-					"descend from, its walk up ending at " + ended.String() + ", so its resume starts there"}
-			}
-			if userOrAssistant(checkpoint) && checkpoint != leaf && chain.mayLead(checkpoint, relinks) {
-				leaf = checkpoint
-			}
-		}
-		chain.done()
-		if leaf >= 0 {
-			if end = chain.walk(leaf, true); end == endForward || end == endTaken {
-				return unread(end)
-			}
-		}
-	}
-	chain.done()
-	for _, f := range w.calls {
+	for id, f := range w.calls {
 		if f.uses > 0 && f.results > 0 && f.useThread == "" && f.resultThread == "" {
-			f.answered = chain.answers(f.useRec, f.resultRec)
+			asks = append(asks, &pairAsk{use: chainHandle(f.useRec), result: chainHandle(f.resultRec), poll: f.poll})
+			calls = append(calls, f)
+			ids = append(ids, id)
 		}
 	}
-	for _, leg := range w.legs {
-		leg.answered = leg.results > 0 && chain.answers(leg.callRec, leg.resultRec)
+	// A LEG'S CALL IS ONE USE AND ONE RESULT OF ITS ID over the records the
+	// reading counts, whatever tool another use of the id names and wherever
+	// a result of it lies: the request keeps the first use of an id and the
+	// first result of it in the message after it (C1).
+	type keyCount struct{ uses, results int }
+	counts := map[chainCallID]*keyCount{}
+	legIDs := make([]string, 0, len(w.legs))
+	for id, leg := range w.legs {
+		if leg.results == 0 {
+			continue
+		}
+		asks = append(asks, &pairAsk{use: chainHandle(leg.callRec), result: chainHandle(leg.resultRec)})
+		legs, legIDs = append(legs, leg), append(legIDs, id)
+		if key, carried := chain.CallKey(id); carried && counts[key] == nil {
+			counts[key] = &keyCount{}
+		}
+	}
+	pairing.counts(chain, func(key chainCallID, use bool) {
+		if c := counts[key]; c != nil && use {
+			c.uses++
+		} else if c != nil {
+			c.results++
+		}
+	})
+	pairing.pairs(chain, asks)
+	for i, f := range calls {
+		f.answered = asks[i].paired && !f.folds && !folded(chain, ids[i])
+	}
+	for i, leg := range legs {
+		key, _ := chain.CallKey(legIDs[i])
+		c := counts[key]
+		leg.answered = asks[len(calls)+i].paired && c != nil && c.uses == 1 && c.results == 1 &&
+			!w.batched && !w.splitResults && !folded(chain, legIDs[i]) && leg.resultLine > w.lastRestart
 	}
 	for key, notice := range w.notices {
-		notice.live = chain.handed(notice.record)
+		notice.live = chain.Handed(chainHandle(notice.record)) == handedYes && notice.line > w.lastRestart
 		w.notices[key] = notice
 	}
 	return nil
@@ -976,7 +942,7 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 	case blockToolUse:
 		facts.uses++
 		if facts.uses == 1 {
-			facts.useThread, facts.useRec = thread, record
+			facts.useThread, facts.useRec, facts.poll = thread, record, call.Name == claudeToolPoll
 		}
 	case blockToolResult:
 		facts.results++
@@ -1082,7 +1048,7 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 	if leg.results > 1 {
 		return
 	}
-	leg.resultRec, leg.failed = record, call.IsError != nil && *call.IsError
+	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.IsError != nil && *call.IsError
 	if alone {
 		leg.completed, leg.agent, leg.refused = agentAnswer(line.ToolUseResult())
 	}
@@ -1112,7 +1078,7 @@ func (w *holdingsWalk) notification(line threadLine, message threadMessage, reco
 			return err
 		}
 	}
-	w.notices[key] = noticeFact{record: record}
+	w.notices[key] = noticeFact{record: record, line: line.N}
 	return nil
 }
 
@@ -1175,11 +1141,7 @@ func (w *holdingsWalk) subagentRecord(agent string, a *subagentFacts, chain *hol
 		head.Type != recordSystem:
 		return -1
 	}
-	marks := uint8(0)
-	if head.Type == recordUser || head.Type == recordAssistant {
-		marks = markUserOrAssistant
-	}
-	record, err := chain.add(line, head.AgentID == agent && head.Sidechain != nil && *head.Sidechain, marks)
+	record, err := chain.add(line, head.AgentID == agent && head.Sidechain != nil && *head.Sidechain)
 	if err != nil {
 		chain.broken = true
 		a.notWhole(fmt.Sprintf("line %d of its thread is a record the reading cannot walk to as the resume does",
@@ -1201,7 +1163,7 @@ func (w *holdingsWalk) subagentEnd(agent string, a *subagentFacts, chain *holdin
 		case chain.lastOwn < 0:
 			a.notWhole("its thread holds no record of its own", nil)
 		default:
-			if end := chain.walk(chain.lastOwn, false); end != endRoot {
+			if end := chain.walk(chain.lastOwn); end != endRoot {
 				a.notWhole(fmt.Sprintf("its chain from its last record ends at %s, short of its root", end), nil)
 			}
 		}
@@ -1666,8 +1628,8 @@ func (w *holdingsWalk) unreported(agent string, a *subagentFacts, sends []string
 }
 
 // noticed reports whether the main thread holds a live task notification of
-// subagent agent's leg: one the resume hands its model, on its chain past its
-// last restart ([holdingsChain.handed]).
+// subagent agent's leg: one the resume hands its model under every variant,
+// past its last restart ([holdingsWalk.mainEnd]).
 func (w *holdingsWalk) noticed(agent, leg string) bool {
 	return w.notices[legNotice{agent: agent, leg: leg}].live
 }

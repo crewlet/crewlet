@@ -32,20 +32,25 @@ func rhSession(version string) sandbox.SessionArchive {
 }
 
 // rhArchive is the session's archive: a main thread whose brief is followed
-// by a call to id answered with output, tarred and gzipped as the take's
-// scrub writes one.
+// by a call to id answered with output, the call's reply carrying its id and
+// each record its time, as Claude Code writes them (the resume walks from a
+// leaf of a time, and pairs a call by its reply's id), tarred and gzipped as
+// the take's scrub writes one.
 func rhArchive(t *testing.T, id, output string) []byte {
 	t.Helper()
 	uuid := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
 	thread := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":` +
-		`"the brief"},"uuid":"` + uuid(1) + `","sessionId":"` + rhSessionID + `","version":"2.1.310"}` + "\n" +
-		`{"parentUuid":"` + uuid(1) + `","isSidechain":false,"message":{"role":"assistant","content":` +
+		`"the brief"},"uuid":"` + uuid(1) + `","timestamp":"2026-01-02T03:04:05.000Z","sessionId":"` + rhSessionID +
+		`","version":"2.1.310"}` + "\n" +
+		`{"parentUuid":"` + uuid(1) + `","isSidechain":false,"message":{"id":"msg_rh","role":"assistant","content":` +
 		`[{"type":"tool_use","id":"` + id + `","name":"mcp__crewlet__slow","input":{}}],` +
-		`"stop_reason":"tool_use"},"type":"assistant","uuid":"` + uuid(2) + `","sessionId":"` + rhSessionID +
+		`"stop_reason":"tool_use"},"type":"assistant","uuid":"` + uuid(2) + `","timestamp":"2026-01-02T03:04:06.000Z",` +
+		`"sessionId":"` + rhSessionID +
 		`","version":"2.1.310"}` + "\n" +
 		`{"parentUuid":"` + uuid(2) + `","isSidechain":false,"type":"user","message":{"role":"user","content":` +
 		`[{"tool_use_id":"` + id + `","type":"tool_result","content":[{"type":"text","text":"` + output + `"}]}]},` +
-		`"uuid":"` + uuid(3) + `","sessionId":"` + rhSessionID + `","version":"2.1.310"}` + "\n"
+		`"uuid":"` + uuid(3) + `","timestamp":"2026-01-02T03:04:07.000Z","sessionId":"` + rhSessionID +
+		`","version":"2.1.310"}` + "\n"
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
