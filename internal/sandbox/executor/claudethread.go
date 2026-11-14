@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
@@ -10,7 +11,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -417,7 +422,93 @@ type threadLineError struct {
 	N int
 	// Err is what the line's decode met.
 	Err error
+	// Fault is how Claude Code's load reads the line ([lineFault]).
+	Fault lineFault
+	// Type is the kind of record the line holds where it is one object whose
+	// head the decode refused (faultHead) and its `type` is a kind Claude
+	// Code's load reads ([recordKind]); its zero value otherwise, so no
+	// string the box wrote is held.
+	Type recordKind
+	// Size is how many bytes of the member the line takes, its break
+	// included, so a reader that sums them with its records' sums the bytes
+	// the load reads.
+	Size int
+	// Raw is the line, its break dropped, valid until the reader's next Next,
+	// as a record's line is ([threadLine]): the bytes a reader judges a line
+	// by where it reads lines by their bytes as Claude Code's large-file
+	// readers do, whether the load reads a record off the line or not
+	// ([threadChain.Unread]). Error does not say it.
+	Raw []byte
 }
+
+// lineFault is how Claude Code's load reads a whole line this layer reads as
+// no record ([threadLineError]). Its load parses a thread a chunk at a time
+// (2.1.322's $1t through Bun.JSONL.parseChunk, 2.1.310's $Pt the same):
+// where a value fails, it keeps every value it read before the failure and
+// resumes after the first line break at or after it. So a line whose JSON
+// fails before any whole value yields the load nothing, as this layer reads
+// it, and every other kind of line the layer refuses can yield the load more
+// than nothing. Its zero value is no fault: a reader takes a line whose
+// fault is not [lineFault.Valid] for one whose load no reader can say.
+type lineFault string
+
+const (
+	// faultSyntax is a line that yields the load no value: its JSON fails at
+	// a byte inside it before any whole value, or it holds white space alone.
+	faultSyntax lineFault = "syntax"
+	// faultNotObject is one whole value that is no object: the load reads it
+	// and passes it over at its test of a record (2.1.322's iVe, 2.1.310's
+	// oMt).
+	faultNotObject lineFault = "not_object"
+	// faultHead is one object whose head key is of the wrong type
+	// ([threadWire.head]): the load reads it, and keeps it under its own
+	// reading of that key where it is a kind the load reads
+	// ([threadLineError.Type]).
+	faultHead lineFault = "head"
+	// faultPrefix is a line that holds the beginning of a value its break
+	// cuts: the load reads on past the break into the next line, as JSON
+	// allows a break inside a value.
+	faultPrefix lineFault = "prefix"
+	// faultTrailing is one whole value followed by more than white space: the
+	// load keeps the value, and fails at what follows it.
+	faultTrailing lineFault = "trailing"
+	// faultLead is a line that begins with a NUL or a UTF-8 byte order mark,
+	// which the load's large-file reader takes off a line where its small one
+	// does not.
+	faultLead lineFault = "lead"
+	// faultDepth is a value nested deeper than the layer's decode reads
+	// (10,000 levels, encoding/json/jsontext's own bound): the load may read
+	// it whole, with no such bound of the layer's.
+	faultDepth lineFault = "depth"
+)
+
+// Valid reports whether f is one of the faults a refused line is read as.
+func (f lineFault) Valid() bool {
+	switch f {
+	case faultSyntax, faultNotObject, faultHead, faultPrefix, faultTrailing, faultLead, faultDepth:
+		return true
+	}
+	return false
+}
+
+// recordKind is the type of a record Claude Code's load reads, one of eight:
+// the four its resume keeps in the map it walks (user, assistant, attachment
+// and system), the checkpoint of the leaf it starts from (last-prompt), the
+// progress record it bridges past (progress), a subagent's reference to the
+// thread it forked from (fork-context-ref), and the record of the tool
+// results it hands replaced (content-replacement), whose list 2.1.310's load
+// spreads into the session's, failing the resume where that is no list
+// ([threadLine.ReplacementCount]). Its zero value is none of them: a line of
+// another type, or one whose type is no string, which the load passes over or
+// files where no reader of a thread looks.
+type recordKind string
+
+// recordKinds is the eight kinds, as the layer's own strings ([kindOf]).
+var recordKinds = [...]recordKind{recordUser, recordAssistant, recordAttachment, recordSystem, recordLastPrompt,
+	recordProgress, recordForkContextRef, recordContentReplacement}
+
+// Valid reports whether k is one of the eight kinds.
+func (k recordKind) Valid() bool { return slices.Contains(recordKinds[:], k) }
 
 // Error says which line is no record, and why.
 func (e *threadLineError) Error() string {
@@ -433,8 +524,9 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
 // the line's Raw, a hook's Content and Stdout, a call's Input and Content, and
-// ToolUseResult. A reader that keeps any of them past that copies it, since
-// the layer may hand out a line's own bytes rather than a copy of them.
+// ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
+// keeps any of them past that copies it, since the layer may hand out a
+// line's own bytes rather than a copy of them.
 //
 // AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
 // the shape that reader reads (a SendMessage's `input.to`, a result's text, a
@@ -459,6 +551,11 @@ type threadLine struct {
 	Head threadHead
 
 	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
+	apiError, replacements, leafUUID, explicit, rewound         json.RawMessage
+	compactMetadata, retracted                                  json.RawMessage
+	isVirtual, interruptedByShutdown, isCompactSummary          json.RawMessage
+	taskDelivery, batchToolUses                                 json.RawMessage
+	timestamp, isMeta, sourceToolAssistantUUID                  json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -479,6 +576,21 @@ type threadWire struct {
 	Origin        json.RawMessage `json:"origin"`
 	ToolUseID     json.RawMessage `json:"toolUseID"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	APIError      json.RawMessage `json:"isApiErrorMessage"`
+	LeafUUID      json.RawMessage `json:"leafUuid"`
+	Explicit      json.RawMessage `json:"explicit"`
+	Rewound       json.RawMessage `json:"rewound"`
+	Compacted     json.RawMessage `json:"compactMetadata"`
+	Retracted     json.RawMessage `json:"retractedMessageUuids"`
+	Replacements  json.RawMessage `json:"replacements"`
+	IsVirtual     json.RawMessage `json:"isVirtual"`
+	Shutdown      json.RawMessage `json:"interruptedByShutdown"`
+	Summary       json.RawMessage `json:"isCompactSummary"`
+	TaskDelivery  json.RawMessage `json:"taskDelivery"`
+	Batch         json.RawMessage `json:"batchToolUses"`
+	Timestamp     json.RawMessage `json:"timestamp"`
+	IsMeta        json.RawMessage `json:"isMeta"`
+	Source        json.RawMessage `json:"sourceToolAssistantUUID"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -492,21 +604,94 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
 	// as nothing at all, with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
-		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord}
+		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1,
+			Raw: raw}
 	}
 	var w threadWire
 	if err := wireDecode(raw, &w); err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err}
+		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1, Raw: raw}
 	}
 	head, err := w.head()
 	if err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err}
+		return threadLine{}, &threadLineError{N: n, Err: err, Fault: faultHead, Type: kindOf(w.Type),
+			Size: len(raw) + 1, Raw: raw}
 	}
 	return threadLine{
 		N: n, Raw: raw, Head: head,
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult,
+		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
+		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, compactMetadata: w.Compacted,
+		retracted: w.Retracted, replacements: w.Replacements,
+		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
+		taskDelivery: w.TaskDelivery, batchToolUses: w.Batch,
+		timestamp: w.Timestamp, isMeta: w.IsMeta, sourceToolAssistantUUID: w.Source,
 	}, nil
+}
+
+// refusedFault is how Claude Code's load reads raw, a whole line its decode
+// refused before it read the line's head ([lineFault]), with ONE
+// jsontext.Decoder over the line, under the layer's own options, in this
+// order: a leading NUL or byte order mark; a value cut at the line's end; a
+// value nested past the decoder's bound; any other failure before a whole
+// value; a whole value followed by more; and a whole value that is no object.
+//
+// ONLY A REFUSED LINE IS READ AGAIN, and only here: [decodeThreadLine] calls
+// this from its refusals alone, so a line it takes is decoded once, and what
+// it takes and refuses is what it took and refused before lines said how the
+// load reads them. The decoder reads the line where it lies, from a
+// bytes.Buffer, which jsontext reads with no copy, so a refused line costs
+// what its decoder's state costs and never a copy of the line.
+func refusedFault(raw []byte) lineFault {
+	if len(raw) > 0 && raw[0] == 0 || bytes.HasPrefix(raw, utf8ByteOrderMark) {
+		return faultLead
+	}
+	dec := jsontext.NewDecoder(bytes.NewBuffer(raw), threadDecoding)
+	value, err := dec.ReadValue()
+	var syntax *jsontext.SyntacticError
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return faultPrefix
+	case errors.As(err, &syntax) && syntax.Err != nil && syntax.Err.Error() == jsontextMaxDepth:
+		return faultDepth
+	case err != nil:
+		return faultSyntax
+	}
+	if _, err = dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return faultTrailing
+	}
+	if value.Kind() != '{' {
+		return faultNotObject
+	}
+	// One object the decode refused, which no decode under these options
+	// does: no fault, which every reader reads as a line whose load it cannot
+	// say, never as one that yields the load nothing.
+	return ""
+}
+
+// utf8ByteOrderMark is the byte order mark UTF-8 writes ([refusedFault]).
+var utf8ByteOrderMark = []byte{0xef, 0xbb, 0xbf}
+
+// jsontextMaxDepth is what encoding/json/jsontext says of a value nested past
+// its bound ([faultDepth]), an error it does not export: held to it by
+// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt], which fails where a release
+// of Go says it otherwise.
+const jsontextMaxDepth = "exceeded max depth"
+
+// kindOf is raw, a refused record's `type`, as the kind of record Claude
+// Code's load reads where it is a string naming one ([recordKind]), the
+// layer's own string; the zero kind for anything else, so no string the box
+// wrote is held.
+func kindOf(raw json.RawMessage) recordKind {
+	kind, err := wireRequiredString("type", raw)
+	if err != nil {
+		return ""
+	}
+	for _, k := range recordKinds {
+		if string(k) == kind {
+			return k
+		}
+	}
+	return ""
 }
 
 // head holds the head's keys to their types: `type`, `subtype` and `agentId`
@@ -593,9 +778,23 @@ type threadHead struct {
 // null or not.
 func (h threadHead) Chained() bool { return h.Parent != nil }
 
-// Root reports whether the record roots a chain: `parentUuid` present and
-// literally null.
-func (h threadHead) Root() bool { return bytes.Equal(h.Parent, jsonNull) }
+// Parentless reports whether the record names no parent AS CLAUDE CODE'S
+// RESUME READS ONE: its `parentUuid` absent, null or the empty string, each
+// falsy to JavaScript, where every walk the resume makes up a thread's chain
+// stops, as at a root (2.1.310's w$t and 2.1.322's A7t, `if(!H)break`, and the
+// walk to a turn record behind 2.1.322's leaf set, Cjt, alike). Any other
+// `parentUuid` is a string that names the record's parent, whichever record
+// that is.
+//
+// IT SAYS NOTHING OF WHETHER THE RECORD IS IN A CHAIN: the harness's
+// bookkeeping carries no `parentUuid` and is parentless, and is in no chain
+// ([threadHead.Chained], [threadRestarts.See]). Its readers: the restart rule
+// ([threadRestarts.See]), and the model of which records Claude Code's resume
+// hands its model, which reads a parent by this one rule, so the two never
+// part.
+func (h threadHead) Parentless() bool {
+	return h.Parent == nil || bytes.Equal(h.Parent, jsonNull) || string(h.Parent) == `""`
+}
 
 // Main reports whether the record is the main thread's own: `isSidechain`
 // present and false, and no `agentId`. A record that says neither is no main
@@ -662,14 +861,19 @@ func wireDecode(raw []byte, v any) error {
 // anything refused the first. Its readers: a message's content
 // ([threadLine.Message]), a reply's applied context edits
 // ([threadLine.ToolResultsCleared]) and its usage's iterations
-// ([threadLine.Usage]), the lists a run's event stream and a person's
-// transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
-// tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
-// a run's result's errors, [claudeResult.errorsSaid]), a call's result
-// content, which the reader that tells a relaunch which of its calls a kept
-// session holds (exact telling) reads no further than its second element, and
-// a loaded-tools record's list, which the scrub cuts a definition out of where
-// it sits in the line ([withoutDefinitions]).
+// ([threadLine.Usage]), the results a content-replacement record replaces
+// ([threadLine.ReplacedResults]) and how many entries it lists
+// ([threadLine.ReplacementCount]), the calls a batch's reply was split into
+// ([threadLine.BatchToolUses]), the records a compaction's boundary says it
+// kept ([threadLine.Preserved]) and those a refused or malformed reply's
+// retry takes back ([threadLine.Retracted]), the lists a run's event stream
+// and a person's transcript of a session decode (a message's blocks,
+// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
+// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]), a
+// call's result content, which the reader that tells a relaunch which of its
+// calls a kept session holds (exact telling) reads no further than its second
+// element, and a loaded-tools record's list, which the scrub cuts a definition
+// out of where it sits in the line ([withoutDefinitions]).
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -947,6 +1151,41 @@ const (
 	recordAttachment = "attachment"
 	recordSystem     = "system"
 
+	// recordProgress is a record of a tool's progress, a legacy shape that
+	// Claude Code's load keeps out of the map it walks, re-parenting every
+	// record after it that names its uuid as a parent to the progress
+	// record's own parent instead (2.1.322's L_e and 2.1.310's YBe, the
+	// load's legacy progress bridge). No release the probes ran writes one:
+	// none of the 521 thread files they kept holds one.
+	recordProgress = "progress"
+	// recordContentReplacement is the record of the results a reply's calls
+	// returned that the harness hands its model replaced
+	// ([threadLine.ReplacedResults]), and replacementToolResult the kind of
+	// its entry that replaces a tool's result.
+	recordContentReplacement = "content-replacement"
+	replacementToolResult    = "tool-result"
+	// recordLastPrompt is the record of the leaf Claude Code's resume starts
+	// from ([threadLine.Checkpoint]).
+	recordLastPrompt = "last-prompt"
+	// recordForkContextRef is the record a forked subagent's thread carries
+	// to refer its load to the thread it forked from, whose walk 2.1.322's
+	// subagent load (Rye) sets before its own.
+	recordForkContextRef = "fork-context-ref"
+	// attachmentForkBriefing is the attachment a fork's copy of a session
+	// carries ([threadLine.AttachmentType]), and subtypeFileSnapshot the
+	// system record of a file's snapshot. Claude Code's resume takes neither
+	// for the last record a session wrote where 2.1.322 chooses the leaf it
+	// starts from; 2.1.310 takes a file's snapshot for one. No thread the
+	// probes kept holds either.
+	attachmentForkBriefing = "fork_briefing"
+	subtypeFileSnapshot    = "file_snapshot"
+
+	// subtypeRefusalFallback is the system record Claude Code writes where a
+	// model refused a reply and it moved the request to another model,
+	// naming the records it took back out of the conversation
+	// ([threadLine.Retracted]).
+	subtypeRefusalFallback = "model_refusal_fallback"
+
 	// subtypeCompactBoundary is a compaction's boundary ([threadRestarts]).
 	subtypeCompactBoundary = "compact_boundary"
 	// subtypeMicrocompactBoundary is a microcompaction's boundary, which no
@@ -967,6 +1206,28 @@ const (
 	hookSystemMessage     = "hook_system_message"
 	hookAdditionalContext = "hook_additional_context"
 	hookCancelled         = "hook_cancelled"
+)
+
+// The other attachments whose payloads Claude Code's resume holds to a shape
+// ([threadLine.AttachmentWellFormed]), beside a hook's success and its
+// additional context.
+const (
+	attachmentInvokedSkills  = "invoked_skills"
+	attachmentSkillListing   = "skill_listing"
+	attachmentTaskReminder   = "task_reminder"
+	attachmentTodoReminder   = "todo_reminder"
+	attachmentFile           = "file"
+	attachmentAlreadyRead    = "already_read_file"
+	attachmentWithheldMemory = "withheld_memory"
+)
+
+// skillListingMaxNames and skillListingMaxNameUnits are the most names a skill
+// listing's resume keeps it with, and the most UTF-16 code units each may
+// take (2.1.322's bCr and TCr, 2.1.310's fJo and pJo): Claude Code's own
+// bounds, which [threadLine.AttachmentWellFormed] reads them by.
+const (
+	skillListingMaxNames     = 4096
+	skillListingMaxNameUnits = 512
 )
 
 // threadHook is what a hook's record says of the firing it records.
@@ -1124,6 +1385,8 @@ type threadMessage struct {
 	isText bool
 	kinds  []string
 	calls  []threadCall
+	// saysText and saysAny are [threadMessage.Says]'s.
+	saysText, saysAny bool
 }
 
 // threadCall is one call block of a message: a model's call, or the result it
@@ -1243,7 +1506,7 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		if err := wireDecode(content, &text); err != nil {
 			return threadMessage{}, fmt.Errorf("content: %w", err)
 		}
-		return threadMessage{text: text, isText: true}, nil
+		return threadMessage{text: text, isText: true, saysAny: strings.ContainsFunc(text, jsTrimKeeps)}, nil
 	}
 	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
 	// from what was accepted, never sized from the list's length, which only
@@ -1251,14 +1514,27 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 	// block. An empty list's kinds are empty, never nil, which only a content
 	// that is no list reads as.
 	m := threadMessage{kinds: []string{}}
+	// said is the block's text, unquoted into the one buffer every block
+	// reuses, where a block's text may still change what the message says.
+	var said []byte
 	if err := eachElement(content, func(raw json.RawMessage, _ int) error {
-		b, err := contentBlock(raw)
+		b, text, err := contentBlock(raw)
 		if err != nil {
 			return fmt.Errorf("content block %d: %w", len(m.kinds)+1, err)
 		}
 		m.kinds = append(m.kinds, b.Kind)
 		if b.Kind == call {
 			m.calls = append(m.calls, b)
+		}
+		if !m.saysText && (b.Kind == blockText || !m.saysAny) && len(text) > 0 && text[0] == '"' {
+			// The block's text was read whole with its line, so unquoting it
+			// meets no error but a lone surrogate's or invalid UTF-8's, each
+			// written as U+FFFD, as the layer's decode reads it.
+			said, _ = jsontext.AppendUnquote(said[:0], text)
+			if bytes.ContainsFunc(said, jsTrimKeeps) {
+				m.saysAny = true
+				m.saysText = b.Kind == blockText
+			}
 		}
 		return nil
 	}); err != nil {
@@ -1268,10 +1544,12 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 }
 
 // contentBlock is one block of a message's content, its kind and, for a call
-// block, its call: held to the types [threadLine.Message] names.
-func contentBlock(raw json.RawMessage) (threadCall, error) {
+// block, its call: held to the types [threadLine.Message] names; and the
+// block's `text`, raw, which [threadMessage.Says] reads of every block whatever
+// its type, valid only while the block's walk runs.
+func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 	if !wireObject(raw) {
-		return threadCall{}, fmt.Errorf("is %s, not an object", wireKind(raw))
+		return threadCall{}, nil, fmt.Errorf("is %s, not an object", wireKind(raw))
 	}
 	var b struct {
 		Type      json.RawMessage `json:"type"`
@@ -1281,38 +1559,39 @@ func contentBlock(raw json.RawMessage) (threadCall, error) {
 		ToolUseID json.RawMessage `json:"tool_use_id"`
 		IsError   json.RawMessage `json:"is_error"`
 		Content   json.RawMessage `json:"content"`
+		Text      json.RawMessage `json:"text"`
 	}
 	if err := wireDecode(raw, &b); err != nil {
-		return threadCall{}, err
+		return threadCall{}, nil, err
 	}
 	kind, err := wireRequiredString("type", b.Type)
 	if err != nil {
-		return threadCall{}, err
+		return threadCall{}, nil, err
 	}
 	c := threadCall{Kind: knownKind(kind)}
 	switch kind {
 	case blockToolUse:
 		if c.ID, err = callID("id", b.ID); err != nil {
-			return threadCall{}, err
+			return threadCall{}, nil, err
 		}
 		if c.Name, err = wireRequiredString("name", b.Name); err != nil {
-			return threadCall{}, err
+			return threadCall{}, nil, err
 		}
 		c.Input = b.Input
 	case blockToolResult:
 		if c.ID, err = callID("tool_use_id", b.ToolUseID); err != nil {
-			return threadCall{}, err
+			return threadCall{}, nil, err
 		}
 		if b.IsError != nil {
 			var failed bool
 			if failed, err = wireBool("is_error", b.IsError); err != nil {
-				return threadCall{}, err
+				return threadCall{}, nil, err
 			}
 			c.IsError = &failed
 		}
 		c.Content = b.Content
 	}
-	return c, nil
+	return c, b.Text, nil
 }
 
 // callID is raw, a call block's key named key, held to a string that names a
@@ -1347,6 +1626,51 @@ func (m threadMessage) Kinds() []string { return m.kinds }
 // ([threadHook.Firing]).
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
+// Says reports whether the message SAYS ANYTHING, as Claude Code reads a
+// message's text: text, whether a block of the type "text" holds a string
+// `text` that JavaScript's trim() leaves something of (2.1.322's t5t); any,
+// whether the content is one such string, or any block, of whatever type,
+// holds a string `text` trim() leaves something of (2.1.322's SUo). Both false
+// on the zero message.
+//
+// WHAT IT SAYS. A subagent answers the call that started it with the text of
+// its last reply that says something (2.1.322's pkn, through t5t), so a leg
+// whose last reply says nothing answers with an earlier reply's text; and the
+// resume classes a reply that makes no call by whether it says anything
+// (2.1.322's LE, through SUo: a reply of text, or a thinking or a blank one),
+// where that class decides the leaf an unseen flag may move a resume to.
+//
+// JAVASCRIPT'S trim(), NOT strings.TrimSpace: trim() takes U+0009, U+000B,
+// U+000C, U+0020, U+00A0, U+FEFF, the category Zs, U+000A, U+000D, U+2028 and
+// U+2029 off a string's ends ([jsTrimKeeps]), where strings.TrimSpace takes
+// U+0085 too and leaves U+FEFF, so a text of U+FEFF alone says nothing to the
+// harness and a text of U+0085 alone says something.
+//
+// ITS READERS: the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which takes a subagent's leg for finished
+// only on a reply whose text says something, and the model of which records
+// Claude Code's resume hands its model, which classes a reply as its resume
+// does.
+//
+// Read as [threadLine.Message] walks the message's blocks, off the one decode
+// of each block it makes, never a second read of the content.
+func (m threadMessage) Says() (text, any bool) { return m.saysText, m.saysAny }
+
+// jsTrimKeeps reports whether JavaScript's String.prototype.trim keeps r on a
+// string's end: whether r is neither its white space (U+0009, U+000B, U+000C,
+// U+0020, U+00A0, U+FEFF and the category Zs) nor its line terminator
+// (U+000A, U+000D, U+2028, U+2029). Not unicode.IsSpace, which
+// strings.TrimSpace reads, and which holds U+0085 for space and U+FEFF for
+// none. So a text says something to the harness exactly where it holds a rune
+// this keeps ([threadMessage.Says]).
+func jsTrimKeeps(r rune) bool {
+	switch r {
+	case '\t', '\v', '\f', ' ', '\u00a0', '\ufeff', '\n', '\r', '\u2028', '\u2029':
+		return false
+	}
+	return !unicode.Is(unicode.Zs, r)
+}
+
 // StopReason is why the model's reply an assistant record holds stopped, its
 // message's `stop_reason`: "end_turn" where the model ended its turn,
 // "tool_use" where it stopped for the calls it made, "stop_sequence", or
@@ -1360,7 +1684,14 @@ func (m threadMessage) Calls() []threadCall { return m.calls }
 // the text's first: a thread cut between them ends on a record of text alone,
 // which reads as a finished leg. Only the stop_reason tells the two apart:
 // "tool_use" on every such text record measured, as on its call's, and
-// "end_turn" or "stop_sequence" on every other record of text alone.
+// "end_turn" or "stop_sequence" on every other record of text alone. Its
+// reader takes a leg for finished on "end_turn" alone, with no API error and
+// a model other than "<synthetic>" ([threadLine.APIError],
+// [threadLine.Model]), as Claude Code itself tests a reply with which its
+// model ended its turn: every reply the harness writes itself in place of a
+// model's, as 2.1.310 and 2.1.322 build one, is of the model "<synthetic>" and
+// stops at "stop_sequence" (a resume's "No response requested.", a failed
+// request's error) or, where it calls a tool, at "tool_use".
 //
 // HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // string where present. Any other type is this accessor's error, never "",
@@ -1383,6 +1714,1209 @@ func (l threadLine) StopReason() (string, error) {
 		return "", fmt.Errorf("an assistant record's message: %w", err)
 	}
 	return wireString("stop_reason", message.StopReason)
+}
+
+// APIError reports whether an assistant record is the reply Claude Code wrote
+// itself where its request failed for good, in place of a model's: its
+// `isApiErrorMessage`, true where it says so; false where it is absent or
+// false, and on every record that is no assistant's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. A request that
+// fails for good (an overload past its retries, a prompt past its window, a
+// credential refused) leaves a reply of the harness's own in its thread, its
+// text the error's ("API Error: ..."), its model "<synthetic>"
+// ([threadLine.Model]), stopped at "stop_sequence", and marked true; the reply
+// a resume writes for a turn it found unanswered is marked false. The
+// harness's request skips a reply marked true and of that model (2.1.322's A8,
+// 2.1.310's mee: `isApiErrorMessage===!0`), and its resume classes a reply
+// marked anything JavaScript reads as true, or of that model, as one its
+// harness wrote (2.1.322's LE). A subagent answers the call that started it
+// with its last reply that says something (2.1.322's pkn), and a failed
+// request's reply says its error, so a subagent whose last request failed so
+// answers with that text, though no model read what the request carried.
+// Every reply the probes kept that carries the mark is of the model
+// "<synthetic>": 40 a resume wrote, false, and 2 a failed request left, true.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which reads a reply its harness wrote as the resume classes one,
+// where that class decides the leaf an unseen flag of its may move to; and
+// the reading that tells a relaunch which of its calls a kept session holds
+// (exact telling), which pairs a call only within its reply's own records
+// none of which its harness wrote, and takes a subagent's leg for finished
+// only on a reply its model wrote ([threadLine.StopReason]).
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never the line's, so a reshaped mark costs only the readers that ask
+// for it, and never false, which its readers would take for a model's reply:
+// the harness reads the one mark as JavaScript's truth where its resume
+// classes a reply and as the JSON true alone where its request skips one, and
+// only a boolean reads alike to both.
+//
+// Read off the line's one decode, its raw `isApiErrorMessage`, never a second
+// read of the line.
+func (l threadLine) APIError() (bool, error) {
+	if l.Head.Type != recordAssistant || l.apiError == nil {
+		return false, nil
+	}
+	return wireBool("isApiErrorMessage", l.apiError)
+}
+
+// Model is the model that wrote the reply an assistant record holds, its
+// message's `model` as written: "<synthetic>" where Claude Code wrote the
+// reply itself in place of a model's (a resume's "No response requested.", a
+// failed request's error); "" where the key is absent, and on every record
+// that is no assistant's, whatever its `message` carries.
+//
+// ITS READERS are [threadLine.APIError]'s, each of which asks both, as the
+// harness does: its resume classes a reply of the model "<synthetic>" as its
+// harness's own whatever its mark says (2.1.322's LE: `message.model===$i`),
+// and its request skips a reply only where both say so (2.1.322's A8,
+// 2.1.310's mee).
+//
+// HELD TO ITS TYPE HERE, for these readers, as [threadLine.Usage] holds the
+// same key for its own: a string where present. Any other type, null among
+// it, is this accessor's error, never "", which its readers would take for a
+// model's reply, and never Message's, so a reshaped model costs only the
+// readers that ask for it.
+//
+// Decoded from the line's raw `message` on each call, as
+// [threadLine.StopReason] reads its key: nothing keeps it.
+func (l threadLine) Model() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no model.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	return wireString("model", message.Model)
+}
+
+// MessageID is the id of the reply an assistant record holds, its message's
+// `id`, which every record of one reply carries, since the harness writes a
+// reply a record a block ([threadLine.StopReason]): "" where the key is
+// absent, and on every record that is no assistant's, whatever its `message`
+// carries.
+//
+// WHAT THE ID SAYS, as 2.1.310 and 2.1.322 read it. Once Claude Code's resume
+// has walked a thread's chain from its leaf, it hands its model, beside each
+// reply on that chain, the reply's other records, found by this id wherever
+// they lie, and the results whose parent is one of them (2.1.322's fWo,
+// 2.1.310's Rpo, each grouping every assistant record whose `message.id` is
+// truthy); and its request folds the records of one id into one message.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which groups a reply's records by it as the resume does, and through
+// that model the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which pairs a call by the reply its use
+// belongs to, and the one that confirms a hook's note reached the model.
+//
+// HELD TO ITS TYPE HERE, as [threadLine.Usage] holds the same key for its
+// own reader: a string where present. Any other type, null among it, is this
+// accessor's error, never "", and never Message's, so a reshaped id costs
+// only the readers that ask for it.
+//
+// AND TO A TEXT ITS READERS COMPARE AS THE HARNESS DOES: an id holding the
+// replacement character, U+FFFD, is this accessor's error too. A lone
+// surrogate reads alike to both: the layer's decode reads it as U+FFFD
+// ([threadDecoding]), and the resume's load makes every string of each record
+// it keeps well-formed the same way before it compares one (2.1.322's tIe,
+// 2.1.310's hYe, JavaScript's toWellFormed), so `msg_\ud800` and `msg_\ud801`
+// are one id to it too. A byte that is no UTF-8 need not read alike: the
+// layer's decode reads each such byte as one U+FFFD, where the harness's read
+// of its file can read a run of them as one, so two ids it holds apart (one
+// ending in the two bytes of a sequence cut short, E2 82, which it reads as
+// one U+FFFD, and one ending in FF FF, two) would decode as one and recover
+// each other's records, which no resume does. A U+FFFD read off an id cannot
+// say which it came from, so every id holding one is refused. Refused, such an
+// id costs its readers their reading of the thread, the direction that tells,
+// never a record recovered under another reply's id. Every one of the 2,239
+// assistant records of the 521 thread files the probes kept carries an ASCII
+// id of at most 36 bytes; only a box rewriting its own file writes another.
+//
+// Decoded from the line's raw `message` on each call, as
+// [threadLine.StopReason] reads its key: nothing keeps it.
+func (l threadLine) MessageID() (string, error) {
+	if l.Head.Type != recordAssistant {
+		return "", nil
+	}
+	// HELD TO AN OBJECT BEFORE IT IS DECODED: a null decodes into a struct as
+	// nothing at all, and would read as a reply that names no id.
+	if !wireObject(l.message) {
+		return "", fmt.Errorf("an assistant record's message is %s, not an object", wireKind(l.message))
+	}
+	var message struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := wireDecode(l.message, &message); err != nil {
+		return "", fmt.Errorf("an assistant record's message: %w", err)
+	}
+	id, err := wireString("id", message.ID)
+	if err != nil {
+		return "", err
+	}
+	if strings.ContainsRune(id, utf8.RuneError) {
+		return "", errors.New("id holds the replacement character, which a lone surrogate or a byte that is " +
+			"no UTF-8 decodes as, so two ids the harness holds apart can read as one")
+	}
+	return id, nil
+}
+
+// threadTime is the form Claude Code writes a record's time in, JavaScript's
+// toISOString (YYYY-MM-DDTHH:MM:SS.sssZ), as a layout of package time
+// ([threadLine.Timestamp]).
+const threadTime = "2006-01-02T15:04:05.000Z"
+
+// Timestamp is when a record says it was written, its `timestamp`: ms, the
+// milliseconds since the Unix epoch, where it is the form Claude Code writes
+// (`YYYY-MM-DDTHH:MM:SS.sssZ`, JavaScript's toISOString) of a real time, and
+// present true; present false where the key is absent.
+//
+// WHAT THE TIME SAYS, as 2.1.310 and 2.1.322 read it. Claude Code's resume
+// compares two records' times both ways: as strings, where it takes a
+// session's newest record (its load's `timestamp>co`, 2.1.322's Szt and
+// 2.1.310's GMt) and the newest record under the last (2.1.322's Gr); and as
+// Date.parse's milliseconds, where it takes the latest of a set of leaves
+// (2.1.322's cj, 2.1.310's p0) and walks on past a parent it cannot find to
+// the record of the nearest earlier time (2.1.322's vjt, 2.1.310's Epo, at
+// most 5,000 ms before). On that one form the two orders are one, and
+// Date.parse is exact to the millisecond. Every one of the 11,727 user,
+// assistant, attachment and system records of the 521 thread files the
+// probes kept carries one in that form.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which orders records by these milliseconds wherever the resume
+// orders them by either reading.
+//
+// MILLISECONDS, NOT A time.Time, as CLAUDE.md would have a time held: on the
+// one form this admits, the resume's two orders are the milliseconds' order,
+// exact, so a time.Time would add nothing its reader compares, and its reader
+// keeps one a record at its bound, in 8 bytes rather than a time.Time's 24.
+//
+// HELD TO THAT ONE FORM HERE, AND HERE ALONE, as a key one reader reads is:
+// anything else is this accessor's error, never the line's. That is a value
+// that is no string, and a string of another form or of no real time, such
+// as an offset in place of the Z, no milliseconds, 2026-02-29, an hour of 24
+// or a second of 60: on another form the string order and the time order can
+// part, and Date.parse reads it by rules no reader can be sure of, so no
+// reader can say which record the resume takes for the newest.
+//
+// Read off the line's one decode, its raw `timestamp`, never a second read of
+// the line.
+func (l threadLine) Timestamp() (ms int64, present bool, err error) {
+	if l.timestamp == nil {
+		return 0, false, nil
+	}
+	text, err := wireRequiredString("timestamp", l.timestamp)
+	if err != nil {
+		return 0, false, err
+	}
+	// Parsed by the layout, then held to it: time.Parse takes some text the
+	// layout would not write, which formatting it again tells apart.
+	t, err := time.Parse(threadTime, text)
+	if err != nil || t.Format(threadTime) != text {
+		return 0, false, errors.New("timestamp is not a real time in the form YYYY-MM-DDTHH:MM:SS.sssZ")
+	}
+	return t.UnixMilli(), true, nil
+}
+
+// IsMeta reports whether a user record is META, written by its harness rather
+// than said by a person or returned by a call: its `isMeta` the JSON true;
+// false where it is absent or false, and on every record that is no user's,
+// whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 read it. Claude Code's resume reads
+// a user record marked so that holds no tool_result as one hanging off the
+// reply before it, which it hands on with that reply (2.1.322's UF,
+// `isMeta===!0`), and walks on through it where it gathers a reply's records
+// (2.1.322's X_e, 2.1.310's Yce, the same test); its request reads the mark as
+// JavaScript's truth where it classes a turn (2.1.322's LE). The harness
+// writes it on a skill's text, a coordinator's message, a malformed reply's
+// retry and the like: 38 user records of the 521 thread files the probes kept
+// carry it, each true.
+//
+// ITS READERS read its error each its own way: the model of which records
+// Claude Code's resume hands its model reads only the JSON true as the mark,
+// as the resume does, and so its error as no mark; the reading that tells a
+// relaunch which of its calls a kept session holds (exact telling) takes a
+// record for plain only where the mark is false or absent, and so its error
+// as the mark.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never the line's.
+//
+// Read off the line's one decode, its raw `isMeta`, never a second read of the
+// line.
+func (l threadLine) IsMeta() (bool, error) {
+	if l.Head.Type != recordUser || l.isMeta == nil {
+		return false, nil
+	}
+	return wireBool("isMeta", l.isMeta)
+}
+
+// SourceToolAssistantUUID is the record a user record says its results answer,
+// its `sourceToolAssistantUUID`, as the 16 bytes of the lowercase canonical
+// uuid it holds ([uuidBytes]), and true; false where the key is absent, holds
+// no such uuid, or the record is no user's.
+//
+// WHAT IT SAYS, as 2.1.310 and 2.1.322 read it. Claude Code writes it on a
+// call's result, naming the reply that made the call. Its resume reads it in
+// one place: where a result's ids are not all of calls its parent made, a
+// resume with the flag tengu_foamy_spring on hangs the result off the record
+// this names, where that is another record than its parent and one of the
+// thread, and of its side (2.1.322's fWo, 2.1.310's Rpo). Each of the 1,068
+// results of the 521 thread files the probes kept names its parent.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which reads a result a resume could hang elsewhere as one it cannot
+// place.
+//
+// A UUID OF ANOTHER FORM NAMES NO RECORD, and reads as none: the resume finds a
+// record by its uuid as written, and the records of a thread its reader
+// models each carry a lowercase canonical one, the one form a uuid's 16 bytes
+// are written in one to one.
+//
+// Read off the line's one decode, its raw `sourceToolAssistantUUID`, never a
+// second read of the line.
+func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
+	if l.Head.Type != recordUser || l.sourceToolAssistantUUID == nil {
+		return [16]byte{}, false
+	}
+	source, err := wireRequiredString("sourceToolAssistantUUID", l.sourceToolAssistantUUID)
+	if err != nil {
+		return [16]byte{}, false
+	}
+	return uuidBytes(source)
+}
+
+// uuidBytes is s as the 16 bytes of a LOWERCASE CANONICAL UUID, and true: 36
+// characters, a hyphen at 8, 13, 18 and 23 and a lowercase hex digit at every
+// other place, whatever its version and variant. False for every other
+// string, one of an uppercase digit among them: Claude Code keys a thread's
+// records by their uuids as written, so only this form maps a uuid's 16 bytes
+// to one string and back.
+//
+// BYTES, NOT CLAUDE.md'S uuid.UUID, though they are as wide: uuid.Parse also
+// reads a uuid of uppercase digits, of no hyphens, in braces or behind a
+// urn:uuid: prefix, each a string Claude Code's load holds apart from the
+// lowercase one, so a type whose parse its readers would reach for would
+// merge records the load keeps apart.
+func uuidBytes(s string) ([16]byte, bool) {
+	var u [16]byte
+	if len(s) != 36 {
+		return [16]byte{}, false
+	}
+	n := 0
+	for i := 0; i < len(s); {
+		switch i {
+		case 8, 13, 18, 23:
+			if s[i] != '-' {
+				return [16]byte{}, false
+			}
+			i++
+			continue
+		}
+		hi, lo := lowercaseHexDigit(s[i]), lowercaseHexDigit(s[i+1])
+		if hi < 0 || lo < 0 {
+			return [16]byte{}, false
+		}
+		u[n] = byte(hi<<4 | lo)
+		n, i = n+1, i+2
+	}
+	return u, true
+}
+
+// lowercaseHexDigit is the value of c as a lowercase hex digit, and -1 where
+// it is none ([uuidBytes]).
+func lowercaseHexDigit(c byte) int {
+	switch {
+	case '0' <= c && c <= '9':
+		return int(c - '0')
+	case 'a' <= c && c <= 'f':
+		return int(c-'a') + 10
+	}
+	return -1
+}
+
+// AttachmentToolUseID is the call an attachment record says it followed, as a
+// key: the SHA-256 of its attachment's `toolUseID` as the layer's decode reads
+// that string, and true; false where the attachment is no object (a list
+// among them) or holds no `toolUseID`, or one that is no string, and on every
+// record that is no attachment.
+//
+// WHAT IT SAYS, as 2.1.322 reads it. Where the last record a session wrote
+// descends from the record its checkpoint names through a batch's hook
+// records, the resume asks which call that batch followed by the `toolUseID`
+// of the last of them, where that is an attachment of an object holding a
+// string there (2.1.322's Y1t: `D(attachment)&&"toolUseID"in attachment`),
+// and keeps the last record for the leaf it starts from where that call is
+// one the reply above it made. Every one of the 825 attachments of the 521
+// thread files the probes kept that carries the key carries a string.
+//
+// A HOOK'S FIRING IS NEVER A CALL'S ID: this hands no id out at all, only a key
+// its reader compares with keys it makes of a reply's calls' ids the same
+// way, so no hook's firing reaches a reader of calls through it. A PostToolUse
+// hook's firing is the id of the call it followed, and a batch's an id of its
+// own (`hook-<uuid>`), which no call carries.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model.
+//
+// Decoded from the line's raw `attachment` on each call: nothing keeps it.
+func (l threadLine) AttachmentToolUseID() (key [32]byte, isString bool) {
+	if l.Head.Type != recordAttachment || !wireObject(l.attachment) {
+		return [32]byte{}, false
+	}
+	var a struct {
+		ToolUseID json.RawMessage `json:"toolUseID"`
+	}
+	if wireDecode(l.attachment, &a) != nil {
+		return [32]byte{}, false
+	}
+	id, err := wireRequiredString("toolUseID", a.ToolUseID)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(id)), true
+}
+
+// IsVirtual reports whether a user or assistant record is VIRTUAL: its
+// `isVirtual` the JSON true; false where it is absent or false, and on every
+// record of another type, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 read it. A virtual record is kept
+// in its thread and handed to no model: the request's fold passes over every
+// user or assistant record marked so (2.1.322's nS, 2.1.310's Vw:
+// `isVirtual===!0`), as it passes over a failed request's reply
+// ([threadLine.APIError]). No thread the probes kept holds one.
+//
+// ITS READER is the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which pairs a call only across a stretch of
+// PLAIN records, its reply's own and its results', so that the request the
+// continued session makes holds the call's use and its result in one
+// exchange: a virtual record is no plain one, and nor is one whose mark this
+// accessor cannot read. [threadLine.InterruptedByShutdown],
+// [threadLine.IsCompactSummary], [threadLine.TaskDelivery] and
+// [threadLine.BatchToolUses] each mark a record no plain one for it too.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// boolean where present. Any other type, null among it, is this accessor's
+// error, never false: the harness reads the mark as the JSON true where its
+// request passes a record over and as JavaScript's truth in other passes, and
+// only a boolean reads alike to both.
+//
+// Read off the line's one decode, its raw `isVirtual`, never a second read of
+// the line.
+func (l threadLine) IsVirtual() (bool, error) {
+	if (l.Head.Type != recordUser && l.Head.Type != recordAssistant) || l.isVirtual == nil {
+		return false, nil
+	}
+	return wireBool("isVirtual", l.isVirtual)
+}
+
+// InterruptedByShutdown reports whether a user record says a SHUTDOWN
+// INTERRUPTED the calls its results answer: its `interruptedByShutdown` the
+// JSON true; false where it is absent or false, and on every record that is
+// no user's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. Where the
+// harness is stopped while a call runs, it writes that call's result marked
+// so, and a resume's request reads a results record marked so apart from the
+// rest (2.1.322's H3, 2.1.310's Xue: `interruptedByShutdown===!0` on a user
+// record holding a tool_result): it drops one whose results other records
+// carry (2.1.322's Iot), rewrites one whose calls nothing else answers to the
+// interrupted mark (2.1.322's Dyn), and merges none into the user message
+// beside it (2.1.322's pCo, which reads the mark as JavaScript's truth). No
+// thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record marked so is no
+// plain one, and nor is one whose mark this accessor cannot read.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as [threadLine.IsVirtual]'s mark is,
+// for its reason: a boolean where present, and any other type, null among it,
+// this accessor's error, never false.
+//
+// Read off the line's one decode, its raw `interruptedByShutdown`, never a
+// second read of the line.
+func (l threadLine) InterruptedByShutdown() (bool, error) {
+	if l.Head.Type != recordUser || l.interruptedByShutdown == nil {
+		return false, nil
+	}
+	return wireBool("interruptedByShutdown", l.interruptedByShutdown)
+}
+
+// IsCompactSummary reports whether a user record is a COMPACTION'S SUMMARY:
+// its `isCompactSummary` the JSON true; false where it is absent or false,
+// and on every record that is no user's, whatever it carries.
+//
+// WHAT THE MARK SAYS, as 2.1.310 and 2.1.322 write and read it. A compaction
+// hands its model the conversation so far as one user record marked so,
+// chained to its boundary, and the harness reads such a record apart from the
+// prompts and results around it wherever it weighs a turn (2.1.322's LE
+// classes one that holds no result `user_summary`, before any meta mark),
+// reading the mark as the JSON true in some passes and as JavaScript's truth
+// in others. Each of the 22 compactions' summaries the probes kept carries
+// it, true.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record marked so is no
+// plain one, and nor is one whose mark this accessor cannot read.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as [threadLine.IsVirtual]'s mark is,
+// for its reason: a boolean where present, and any other type, null among it,
+// this accessor's error, never false.
+//
+// Read off the line's one decode, its raw `isCompactSummary`, never a second
+// read of the line.
+func (l threadLine) IsCompactSummary() (bool, error) {
+	if l.Head.Type != recordUser || l.isCompactSummary == nil {
+		return false, nil
+	}
+	return wireBool("isCompactSummary", l.isCompactSummary)
+}
+
+// TaskDelivery reports whether a user record carries `taskDelivery`, a
+// background task's result the harness delivers in it, whatever the key
+// holds, null among it. False where it is absent, and on every record that is
+// no user's.
+//
+// WHAT THE KEY SAYS, as 2.1.310 and 2.1.322 read it. The request's fold
+// renders a user record that carries one, by its truth, as a delivered task's
+// round (2.1.322's Fu, 2.1.310's _i): a call and its result of the harness's
+// own, spliced after the last assistant message or pushed at the end, which
+// can part a reply's message from the results that answer it; and the pass
+// that orders attachments before the fold reads the key by its presence
+// (`taskDelivery!==void 0`). No thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a results record that carries one is
+// no plain one. ITS PRESENCE IS THE WHOLE READING, the widest the harness
+// makes of the key, so whatever it holds this accessor has no error.
+//
+// Read off the line's one decode, its raw `taskDelivery`, never a second read
+// of the line.
+func (l threadLine) TaskDelivery() bool {
+	return l.Head.Type == recordUser && l.taskDelivery != nil
+}
+
+// BatchToolUses reports whether an assistant record carries `batchToolUses`,
+// the calls of a batch its harness split one call of the model's into, and
+// hands the `id` of each entry to each, in order. False, and nothing handed,
+// where the key is absent, and on every record that is no assistant's.
+//
+// WHAT THE KEY SAYS, as 2.1.310 and 2.1.322 write and read it. Where a model's
+// call to a tool that takes a batch of entries is split into a call an entry,
+// the harness writes the reply with the split calls, each id the batch's own
+// and a `_<n>`, and lists the batch's own calls here, `{id, name}` each
+// (2.1.322's Q0n); its request folds the split calls back into one by this
+// list (2.1.322's GWi, 2.1.310's x2s, in the fold of an assistant record),
+// and their results the same way by the digits their ids end in (2.1.322's
+// zWi). No thread the probes kept holds one.
+//
+// ITS READER is [threadLine.IsVirtual]'s: a reply that carries one is no plain
+// one, and a call an entry names is one the request may fold into another,
+// which that reader reads as told.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a list
+// where present, walked an element at a time ([eachElement]), each entry an
+// object whose `id` is a string. Anything else, null among it, is this
+// accessor's error: the harness's fold matches an entry of no string id to
+// calls no batch split, and a list of no shape throws in its request. An
+// error ends the walk, and the entries before it have been handed.
+//
+// Read off the line's one decode, its raw `batchToolUses`, never a second
+// read of the line.
+func (l threadLine) BatchToolUses(each func(id string)) (bool, error) {
+	if l.Head.Type != recordAssistant || l.batchToolUses == nil {
+		return false, nil
+	}
+	if err := eachElement(l.batchToolUses, func(raw json.RawMessage, _ int) error {
+		if !wireObject(raw) {
+			return fmt.Errorf("an entry is %s, not an object", wireKind(raw))
+		}
+		var entry struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := wireDecode(raw, &entry); err != nil {
+			return fmt.Errorf("an entry: %w", err)
+		}
+		id, err := wireRequiredString("id", entry.ID)
+		if err != nil {
+			return err
+		}
+		each(id)
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("batchToolUses: %w", err)
+	}
+	return true, nil
+}
+
+// Checkpoint is what a last-prompt record says of the leaf Claude Code's
+// resume starts from: leaf, its `leafUuid` where that is a string, "" where
+// it is absent, null or the empty string, each of which names no leaf to the
+// harness; and marked, whether its `explicit` or its `rewound` is the JSON
+// true. Nothing, and no error, on every record of another type.
+//
+// WHAT THE RECORD SAYS, as 2.1.310 and 2.1.322 write and read it. The harness
+// writes one as a session's metadata, naming the record it last wrote, and a
+// resume takes the newest one that names a leaf (`if(leafUuid)`), since the
+// last compaction, for the leaf it starts from wherever the session's last
+// record does not descend from it (2.1.322's Szt and 2.1.310's GMt, the
+// last-prompt branch of the load). A MARKED one is written by a rewind
+// (`explicit` and `rewound`, naming where the conversation was cut), a
+// withdrawal (`explicit`, naming none) and a fork's copy: each makes the
+// resume start from it whatever came after, or from nothing at all. All 837
+// the probes kept name a leaf, and none is marked.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which takes the leaf a record names as the resume does, and reads no
+// thread a marked record may have moved; through it, the reading that tells
+// a relaunch which of its calls a kept session holds (exact telling) and the
+// one that confirms a hook's note reached the model.
+//
+// HELD TO ITS TYPE HERE, AND HERE ALONE, as a key one reader reads is:
+// `leafUuid` a string or null where present. Any other type is this
+// accessor's error, never the line's: the harness itself takes any value its
+// JavaScript reads as true for a leaf, so a reader that passed a number or an
+// object by would keep a leaf the harness had replaced. A mark is the JSON
+// true alone, as the harness tests it (`===!0`), whatever else it holds: a
+// mark of another value marks nothing.
+//
+// Read off the line's one decode, its raw `leafUuid`, `explicit` and
+// `rewound`, never a second read of the line. The raw value the line's
+// decode hands a key is the value as written, but for the whitespace around
+// it, so a mark is the bytes `true` exactly.
+func (l threadLine) Checkpoint() (leaf string, marked bool, err error) {
+	if l.Head.Type != recordLastPrompt {
+		return "", false, nil
+	}
+	marked = bytes.Equal(l.explicit, jsonTrue) || bytes.Equal(l.rewound, jsonTrue)
+	if l.leafUUID == nil || bytes.Equal(l.leafUUID, jsonNull) {
+		return "", marked, nil
+	}
+	leaf, err = wireRequiredString("leafUuid", l.leafUUID)
+	return leaf, marked, err
+}
+
+// jsonTrue is JSON's true, the one value a checkpoint's mark is read as set by
+// ([threadLine.Checkpoint]).
+var jsonTrue = []byte("true")
+
+// LeafKeyed reports whether a last-prompt record carries `leafUuid` at all,
+// whatever it holds, null among it. False where the key is absent, and on
+// every record of another type.
+//
+// WHAT IT SAYS, as 2.1.310 and 2.1.322 read it. Where a session's newest record
+// is not its last one, a resume starts from the newest that descends from the
+// last, but only where no last-prompt record carries the key with any value
+// (2.1.322's Szt, `leafUuid!==void 0`; 2.1.310's GMt the same), so a record
+// whose `leafUuid` is null, which names no leaf ([threadLine.Checkpoint]),
+// still turns that rule off.
+//
+// ITS READER is [threadLine.Checkpoint]'s, the model of which records Claude
+// Code's resume hands its model, which applies that rule only where no
+// record carries the key.
+//
+// HELD TO [threadLine.Checkpoint]'s TYPE: `leafUuid` a string or null where
+// present, and anything else this accessor's error, as it is Checkpoint's, so
+// the one key reads alike through both.
+func (l threadLine) LeafKeyed() (bool, error) {
+	if l.Head.Type != recordLastPrompt || l.leafUUID == nil {
+		return false, nil
+	}
+	if !bytes.Equal(l.leafUUID, jsonNull) && l.leafUUID[0] != '"' {
+		return false, fmt.Errorf("leafUuid is %s, neither a string nor null", wireKind(l.leafUUID))
+	}
+	return true, nil
+}
+
+// AttachmentType is an attachment record's `attachment.type`: "" where the
+// attachment or its type is absent, and on every record that is no
+// attachment.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which reads no main thread holding a fork's briefing
+// ([attachmentForkBriefing]): the resume takes no such record for the last a
+// session wrote, as 2.1.310 and 2.1.322 choose the leaf it starts from
+// (2.1.322's jWo, 2.1.310's Ypo).
+//
+// HELD TO ITS TYPE HERE: `attachment` an object and its `type` a string,
+// where present. Any other shape is this accessor's error, never the line's.
+// The harness's own test of a fork's briefing (`attachment?.type ===
+// "fork_briefing"`) reads every such attachment as none, and so may its
+// reader.
+//
+// Decoded from the line's raw `attachment` on each call: nothing keeps it.
+func (l threadLine) AttachmentType() (string, error) {
+	if l.Head.Type != recordAttachment || l.attachment == nil {
+		return "", nil
+	}
+	if !wireObject(l.attachment) {
+		return "", fmt.Errorf("an attachment record's attachment is %s, not an object", wireKind(l.attachment))
+	}
+	var a struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if err := wireDecode(l.attachment, &a); err != nil {
+		return "", fmt.Errorf("an attachment: %w", err)
+	}
+	return wireString("attachment.type", a.Type)
+}
+
+// ReplacedResults hands each, in order, the id of every tool result a
+// content-replacement record says its harness hands its model replaced: each
+// entry of the record's `replacements` whose `kind` is "tool-result", by its
+// `toolUseId`. Nothing, and no error, on every record of another type.
+//
+// WHAT THE RECORD SAYS. Behind a flag Anthropic's servers set
+// (tengu_hawthorn_steeple, off where no server says), Claude Code holds the
+// tool results a reply's calls returned to a budget of 200,000 characters a
+// message, and past it saves the largest to a file and hands its model a
+// preview in each one's place. The result's own record keeps the whole
+// output; the replacement is recorded beside it as this record, in the thread
+// whose result it replaces (no `agentId` in the main thread's file, the
+// subagent's in a subagent's), as 2.1.310 and 2.1.322 write it, and a resume
+// hands its model the recorded preview again wherever the flag is on
+// (2.1.322's b1i and aho, by each tool-result entry's toolUseId). So a result
+// such a record names is one its session's model was not handed whole,
+// whatever its own record holds.
+//
+// ITS READER is the reading that tells a relaunch which of its calls a kept
+// session holds (exact telling), which reads every result such a record names
+// as not handed whole to the continued session's model, whether or not the
+// flag is on there.
+//
+// HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
+// `replacements` a list that is there, walked an element at a time
+// ([eachElement]); each element an object whose `kind` is a string and,
+// where that is "tool-result", whose `toolUseId` is a string. Anything else
+// is this accessor's error, never the line's. An entry of another kind is
+// passed over, as the harness's resume passes it over, and the preview itself
+// is never read.
+//
+// Read off the line's one decode, its raw `replacements`, never a second read
+// of the line.
+func (l threadLine) ReplacedResults(each func(id string)) error {
+	if l.Head.Type != recordContentReplacement {
+		return nil
+	}
+	return eachElement(l.replacements, func(raw json.RawMessage, _ int) error {
+		if !wireObject(raw) {
+			return fmt.Errorf("a replacement is %s, not an object", wireKind(raw))
+		}
+		var entry struct {
+			Kind      json.RawMessage `json:"kind"`
+			ToolUseID json.RawMessage `json:"toolUseId"`
+		}
+		if err := wireDecode(raw, &entry); err != nil {
+			return fmt.Errorf("a replacement: %w", err)
+		}
+		kind, err := wireRequiredString("replacements.kind", entry.Kind)
+		if err != nil || kind != replacementToolResult {
+			return err
+		}
+		id, err := wireRequiredString("replacements.toolUseId", entry.ToolUseID)
+		if err != nil {
+			return err
+		}
+		each(id)
+		return nil
+	})
+}
+
+// ReplacementCount is how many entries a content-replacement record's
+// `replacements` lists, of every kind and shape. 0, and no error, on every
+// record of another type.
+//
+// WHAT THE LOAD DOES WITH THEM, as 2.1.310 and 2.1.322 read the record (the
+// content-replacement branch of 2.1.310's load, GMt, and of 2.1.322's, Szt).
+// Each passes the list into one call's arguments whole, to add it to the
+// session's (2.1.310's `push(...replacements)`; 2.1.322's the same of the
+// entries that are objects, once it has found a list), and a call takes no
+// more arguments than its engine allows: past that, the spread throws, and
+// with it the load, and the resume fails. And 2.1.310 spreads whatever the
+// key holds, which throws where it is no list (absent, null, a number, a
+// boolean, an object), where 2.1.322 passes such a record over. No thread the
+// probes kept holds such a record.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which reads no thread whose load may fail at one.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// list that is there, walked an element at a time ([eachElement]), each
+// element counted whatever it is. Anything else, a string among it, is this
+// accessor's error, never the line's.
+//
+// Read off the line's one decode, its raw `replacements`, never a second read
+// of the line.
+func (l threadLine) ReplacementCount() (int, error) {
+	if l.Head.Type != recordContentReplacement {
+		return 0, nil
+	}
+	n := 0
+	if err := eachElement(l.replacements, func(json.RawMessage, int) error {
+		n++
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("replacements: %w", err)
+	}
+	return n, nil
+}
+
+// Retracted hands each, in order and as written, every entry of a record's
+// `retractedMessageUuids`, the uuids it says its harness took back out of the
+// conversation: on a user or assistant record and on a system record of
+// subtype model_refusal_fallback, the records 2.1.322 reads the key on,
+// 2.1.310 the last alone. Nothing, and no error, where the key is absent,
+// and on every record of another type or subtype, whatever it carries.
+//
+// WHAT THE RECORDS SAY, as 2.1.310 and 2.1.322 write and read them. Where a
+// model's reply is refused as it streams and the harness moves the request to
+// another model, or it retries a reply whose call it could not parse, it
+// takes the records that attempt wrote back out of the conversation, and
+// names them: a refusal's fallback on a system record of its own, a retry on
+// the meta user record it sends in their place, a reply it gives up with on
+// itself, naming none. THE SESSION'S OWN RESUME, once it has walked the
+// chain, drops every record but a system one whose uuid's first 24
+// characters are those of an entry any such record names, wherever on the
+// chain or beside it the record lies (2.1.322's eGe and 2.1.310's qGn, each
+// cutting an entry at 24 characters, cE and Gb): the first 24, since the
+// harness derives the uuids of the records it splits one message into from
+// that message's own, alike in those (2.1.322's cMn). So an entry of 24
+// characters or more drops by its first 24 alone, and one of fewer is no
+// uuid's first 24 and drops nothing; this accessor hands each as written,
+// whatever its length, for its reader to cut.
+//
+// NO SUBAGENT'S LOAD OR CONTINUATION RUNS THAT FILTER: a subagent's own load
+// hands its conversation as it walks it (2.1.322's Rye, 2.1.310's FBe), and a
+// SendMessage continuation runs its request's passes on that with no
+// retraction filter among them, so what a subagent's own records name is
+// handed on there. No thread the probes kept holds such a list.
+//
+// ITS READERS: the model of which records Claude Code's resume hands its
+// model, which drops what a main thread's records name as each release does,
+// and the reading that tells a relaunch which of its calls a kept session
+// holds (exact telling), which reads a subagent's thread holding such a list
+// as not whole, since what the subagent's model was handed there is not what
+// its file holds.
+//
+// HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
+// list of strings where present, walked an element at a time ([eachElement]).
+// Anything else, null and an entry that is no string among it, is this
+// accessor's error, never the line's. No release's resume throws on such a
+// list: each one's load repairs a refusal's fallback before its filter reads
+// it, keeping a list's strings and dropping a value that is no list (2.1.322's
+// UWt @293630140 through M2 @293633304, 2.1.310's cPt @247026592 through m1
+// @247029756), and 2.1.322's filter reads a user's or an assistant's list for
+// its strings alone, and a value that is no list as none (eGe @295286851).
+// The error is conservative: its readers refuse a list the harness wrote in
+// no shape it writes rather than follow it through those repairs, and no
+// thread the probes kept holds one. An error each returns ends the walk and
+// is returned as it is.
+//
+// Read off the line's one decode, its raw `retractedMessageUuids`, never a
+// second read of the line.
+func (l threadLine) Retracted(each func(uuid string) error) error {
+	switch {
+	case l.retracted == nil:
+		return nil
+	case l.Head.Type == recordUser, l.Head.Type == recordAssistant:
+	case l.Head.Type == recordSystem && l.Head.Subtype == subtypeRefusalFallback:
+	default:
+		return nil
+	}
+	var refused error
+	err := eachElement(l.retracted, func(raw json.RawMessage, _ int) error {
+		uuid, err := wireRequiredString("an entry", raw)
+		if err != nil {
+			return err
+		}
+		refused = each(uuid)
+		return refused
+	})
+	switch {
+	case err == nil:
+		return nil
+	case refused != nil:
+		return refused
+	}
+	return fmt.Errorf("retractedMessageUuids: %w", err)
+}
+
+// AttachmentWellFormed reports whether Claude Code's resume keeps an
+// attachment record past its drop of the attachments whose payload is not of
+// their type's shape (2.1.322's Fce through SCr, 2.1.310's dne through cJo,
+// the same rules and bounds), which both releases apply to a resumed main
+// thread's records right after their retraction filter. True on every record
+// that is no attachment, as the drop passes it.
+//
+// THE RULES, the payload being the record's `attachment`, and an object
+// meaning a JSON object, never null or a list (2.1.322's D, 2.1.310's H):
+// the payload an object whose `type` is a string, or the drop takes it; then
+// by that type:
+//
+//   - invoked_skills: `skills` a list whose every element is an object or a
+//     list;
+//   - hook_success: `content` a string;
+//   - skill_listing: `names` absent, or a list of at most 4,096 strings, each
+//     at most 512 UTF-16 code units long, as JavaScript counts a string;
+//   - hook_additional_context: `content` a list of strings;
+//   - task_reminder and todo_reminder: `content` a list of objects;
+//   - file and already_read_file: `content` an object;
+//   - withheld_memory: `by` a string that is not empty, and `entries` a list
+//     of objects, each with a string `path`, a string `displayPath` and a
+//     `why` that is one of denied, outside, unjudged and unsettled, the own
+//     keys of the reasons the harness names (2.1.322's vY, 2.1.310's kq);
+//   - every other type: kept.
+//
+// Every one of the 7,519 attachments of the 521 thread files the probes kept
+// is kept by them.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which hands no attachment the drop takes; through it, the one that
+// confirms a hook's note reached the model reads a hook's success or
+// additional context the drop took as handed to no model, by no rule of its
+// own.
+//
+// AN ERROR WHERE THE LAYER CANNOT COUNT AS THE HARNESS DOES: a skill's name
+// past 512 units as the layer's decode reads it, holding a byte that is no
+// UTF-8. The decode reads each such byte as one U+FFFD, where the harness's
+// read of its file can read several as one, so the name may be under the
+// bound to the harness, and no reader can say whether the record is kept.
+// Read the same way, a name the layer counts at or under the bound is under
+// it to the harness too.
+//
+// Decoded from the line's raw `attachment` on each call, each list walked an
+// element at a time ([eachElement]): nothing keeps it.
+func (l threadLine) AttachmentWellFormed() (bool, error) {
+	if l.Head.Type != recordAttachment {
+		return true, nil
+	}
+	if !wireObject(l.attachment) {
+		return false, nil
+	}
+	var a struct {
+		Type    json.RawMessage `json:"type"`
+		Skills  json.RawMessage `json:"skills"`
+		Content json.RawMessage `json:"content"`
+		Names   json.RawMessage `json:"names"`
+		By      json.RawMessage `json:"by"`
+		Entries json.RawMessage `json:"entries"`
+	}
+	if err := wireDecode(l.attachment, &a); err != nil {
+		return false, fmt.Errorf("an attachment: %w", err)
+	}
+	// A payload of no type, or of one that is no string, is one the drop
+	// takes: an answer, never an error. A string the decode cannot read is the
+	// layer's own failure, and its error.
+	if len(a.Type) == 0 || a.Type[0] != '"' {
+		return false, nil
+	}
+	kind, err := wireRequiredString("type", a.Type)
+	if err != nil {
+		return false, fmt.Errorf("an attachment: %w", err)
+	}
+	switch kind {
+	case attachmentInvokedSkills:
+		return everyElement(a.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' }), nil
+	case hookSuccess:
+		return len(a.Content) > 0 && a.Content[0] == '"', nil
+	case attachmentSkillListing:
+		return skillNamesKept(a.Names)
+	case hookAdditionalContext:
+		return everyElement(a.Content, func(raw json.RawMessage) bool { return raw[0] == '"' }), nil
+	case attachmentTaskReminder, attachmentTodoReminder:
+		return everyElement(a.Content, wireObject), nil
+	case attachmentFile, attachmentAlreadyRead:
+		return wireObject(a.Content), nil
+	case attachmentWithheldMemory:
+		by, byErr := wireRequiredString("by", a.By)
+		return byErr == nil && by != "" && everyElement(a.Entries, withheldEntryKept), nil
+	}
+	return true, nil
+}
+
+// errNotEvery stops a walk of a list at its first element a test refuses
+// ([everyElement]).
+var errNotEvery = errors.New("an element fails its test")
+
+// everyElement reports whether raw is a list, and every element of it passes
+// keep, as JavaScript's Array.isArray and every() read one: a list of none
+// passes. Walked an element at a time ([eachElement]), stopping at the
+// first that fails, so a long list costs its reader one element at a time.
+func everyElement(raw json.RawMessage, keep func(element json.RawMessage) bool) bool {
+	if len(raw) == 0 || raw[0] != '[' {
+		return false
+	}
+	return eachElement(raw, func(element json.RawMessage, _ int) error {
+		if !keep(element) {
+			return errNotEvery
+		}
+		return nil
+	}) == nil
+}
+
+// withheldEntryKept reports whether entry, one of a withheld_memory
+// attachment's entries, is of the shape Claude Code's resume keeps the
+// attachment with ([threadLine.AttachmentWellFormed]).
+func withheldEntryKept(entry json.RawMessage) bool {
+	if !wireObject(entry) {
+		return false
+	}
+	var e struct {
+		Path        json.RawMessage `json:"path"`
+		Why         json.RawMessage `json:"why"`
+		DisplayPath json.RawMessage `json:"displayPath"`
+	}
+	if wireDecode(entry, &e) != nil {
+		return false
+	}
+	why, err := wireRequiredString("why", e.Why)
+	if err != nil {
+		return false
+	}
+	switch why {
+	case "denied", "outside", "unjudged", "unsettled":
+	default:
+		return false
+	}
+	return len(e.Path) > 0 && e.Path[0] == '"' && len(e.DisplayPath) > 0 && e.DisplayPath[0] == '"'
+}
+
+// skillNamesKept reports whether names, a skill_listing attachment's raw
+// `names`, is of the shape Claude Code's resume keeps the attachment with:
+// absent, or a list of at most [skillListingMaxNames] strings, each at most
+// [skillListingMaxNameUnits] UTF-16 code units long, its length checked
+// before its names, as the harness checks them. An error where the answer
+// turns on a name the layer cannot count as the harness does
+// ([threadLine.AttachmentWellFormed]).
+func skillNamesKept(names json.RawMessage) (bool, error) {
+	if names == nil {
+		return true, nil
+	}
+	if names[0] != '[' {
+		return false, nil
+	}
+	var (
+		count      int
+		unreadable bool
+		unquoted   []byte
+	)
+	kept := eachElement(names, func(name json.RawMessage, _ int) error {
+		count++
+		if count > skillListingMaxNames || name[0] != '"' {
+			return errNotEvery
+		}
+		// Read whole with its line, the name unquotes with no error but a lone
+		// surrogate's or invalid UTF-8's, each written as U+FFFD, as the
+		// layer's decode reads it.
+		unquoted, _ = jsontext.AppendUnquote(unquoted[:0], name)
+		if utf16Units(unquoted) <= skillListingMaxNameUnits {
+			return nil
+		}
+		if !utf8.Valid(name) {
+			unreadable = true
+			return nil
+		}
+		return errNotEvery
+	}) == nil
+	if !kept {
+		return false, nil
+	}
+	if unreadable {
+		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
+			"is not one the layer can count as Claude Code does")
+	}
+	return true, nil
+}
+
+// utf16Units is how many UTF-16 code units JavaScript counts the string text,
+// UTF-8 as the layer's decode leaves it, as long: two for a rune past the
+// basic plane, one for every other.
+func utf16Units(text []byte) int {
+	units := 0
+	for len(text) > 0 {
+		r, size := utf8.DecodeRune(text)
+		units++
+		if r > 0xffff {
+			units++
+		}
+		text = text[size:]
+	}
+	return units
+}
+
+// threadPreserved is what a compaction's boundary says it kept of the thread
+// before it ([threadLine.Preserved]).
+type threadPreserved struct {
+	// Named is whether the boundary names what it kept at all: a list, even
+	// one of none, or a segment. A resume acts on every boundary that does,
+	// the newest of them: it relinks the thread by the records one names, and
+	// where it names none, or is not the last boundary, it drops every record
+	// written before the last boundary all the same (2.1.322's iWo, 2.1.310's
+	// ypo, each taking the boundary whose `preservedMessages` or
+	// `preservedSegment` JavaScript reads as true). So a list of none, whose
+	// anchor may be empty too, is never read as a boundary that names
+	// nothing.
+	Named bool
+	// Kept is whether it says it kept records, and Anchor names the record
+	// they hang from. Segment is whether it names them as a segment, from
+	// Tail up to Head by parent; else it lists them, each handed to
+	// Preserved's each.
+	Kept       bool
+	Anchor     string
+	Segment    bool
+	Head, Tail string
+}
+
+// Preserved is what a compact_boundary record says its compaction kept of the
+// thread before it, handing each record it lists, by uuid and in order, to
+// each. Nothing, and no error, where the record carries no
+// `compactMetadata`, or null, or keeps nothing, and on every record of
+// another type or subtype.
+//
+// WHAT THE RECORD SAYS, as 2.1.310 and 2.1.322 write and read it. A
+// compaction that kept the last stretch of the conversation before it names
+// that stretch on its boundary: `preservedMessages`, the kept records' uuids
+// in order and the record they hang from (`anchorUuid`, the summary after the
+// boundary), and `preservedSegment`, the stretch's two ends and the same
+// anchor. A resume reads the newest boundary that names either, the list
+// where there is one and else the segment, walked from its tail up by parent
+// to its head (2.1.322's iWo and aWo, 2.1.310's ypo and _po); and where that
+// is the last boundary and every record it names is in the thread, it
+// RELINKS the thread: it chains the kept records after the anchor, hangs the
+// anchor's other children from the last of them, and drops every other
+// record before that boundary. A boundary that names either acts though it
+// keeps nothing: where it lists none, or is not the last boundary, the resume
+// relinks nothing and drops every record before the last boundary all the
+// same ([threadPreserved.Named]). Each of the 22 boundaries the probes kept
+// names both, alike.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which reads what a relink moves under the records it walks, and
+// where a relinked resume may start; through it, the reading that tells a
+// relaunch which of its calls a kept session holds (exact telling) and the
+// one that confirms a hook's note reached the model.
+//
+// HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
+// `compactMetadata` an object; its `preservedMessages`, where present and not
+// null, an object of a string `anchorUuid` and a list `uuids` of strings,
+// walked an element at a time ([eachElement]); else its `preservedSegment`,
+// where present and not null, an object of the strings `headUuid`,
+// `anchorUuid` and `tailUuid`. Anything else is this accessor's error, never
+// the line's. No such shape makes a resume throw: each release's load
+// repairs a boundary's metadata before its relink reads it, putting an object
+// in place of a value that is none and dropping a `preservedMessages` that is
+// no object holding a list of `uuids` (2.1.322's pjo @293631807 with mjo
+// @293632499, 2.1.310's xfo @247028259 with Afo @247028951), and the relink
+// reads a segment of any shape without throwing (2.1.322's aWo @293744710,
+// 2.1.310's _po @247129357). The error is conservative: its readers refuse a
+// boundary the harness wrote in no shape it writes rather than follow it
+// through those repairs, and each boundary the probes kept is of its shape.
+// An error each returns ends the walk and is returned as it is.
+//
+// Read off the line's one decode, its raw `compactMetadata`, never a second
+// read of the line.
+func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, error) {
+	if l.Head.Type != recordSystem || l.Head.Subtype != subtypeCompactBoundary || l.compactMetadata == nil ||
+		bytes.Equal(l.compactMetadata, jsonNull) {
+		return threadPreserved{}, nil
+	}
+	if !wireObject(l.compactMetadata) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata is %s, not an object", wireKind(l.compactMetadata))
+	}
+	var meta struct {
+		Messages json.RawMessage `json:"preservedMessages"`
+		Segment  json.RawMessage `json:"preservedSegment"`
+	}
+	if err := wireDecode(l.compactMetadata, &meta); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata: %w", err)
+	}
+	switch {
+	case meta.Messages != nil && !bytes.Equal(meta.Messages, jsonNull):
+		return preservedList(meta.Messages, each)
+	case meta.Segment != nil && !bytes.Equal(meta.Segment, jsonNull):
+		return preservedSegment(meta.Segment)
+	}
+	return threadPreserved{}, nil
+}
+
+// preservedList is what a compaction's `preservedMessages`, raw, says it kept
+// ([threadLine.Preserved]), each listed uuid handed to each: named whatever it
+// lists, and kept where it lists any, since a resume relinks by a list of none
+// no record, and still drops by it every record before the last boundary.
+func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPreserved, error) {
+	if !wireObject(raw) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
+	}
+	var list struct {
+		Anchor json.RawMessage `json:"anchorUuid"`
+		UUIDs  json.RawMessage `json:"uuids"`
+	}
+	if err := wireDecode(raw, &list); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages: %w", err)
+	}
+	anchor, err := wireRequiredString("preservedMessages.anchorUuid", list.Anchor)
+	if err != nil {
+		return threadPreserved{}, err
+	}
+	var (
+		listed  int
+		refused error
+	)
+	err = eachElement(list.UUIDs, func(element json.RawMessage, _ int) error {
+		uuid, entryErr := wireRequiredString("an entry", element)
+		if entryErr != nil {
+			return entryErr
+		}
+		listed++
+		refused = each(uuid)
+		return refused
+	})
+	switch {
+	case err == nil:
+		return threadPreserved{Named: true, Kept: listed > 0, Anchor: anchor}, nil
+	case refused != nil:
+		return threadPreserved{}, refused
+	}
+	return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages.uuids: %w", err)
+}
+
+// preservedSegment is what a compaction's `preservedSegment`, raw, says it
+// kept ([threadLine.Preserved]): the segment from its tail up by parent to
+// its head, which a resume relinks wherever that walk reaches its head.
+func preservedSegment(raw json.RawMessage) (threadPreserved, error) {
+	if !wireObject(raw) {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedSegment is %s, not an object", wireKind(raw))
+	}
+	var segment struct {
+		Head   json.RawMessage `json:"headUuid"`
+		Anchor json.RawMessage `json:"anchorUuid"`
+		Tail   json.RawMessage `json:"tailUuid"`
+	}
+	if err := wireDecode(raw, &segment); err != nil {
+		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedSegment: %w", err)
+	}
+	p := threadPreserved{Named: true, Kept: true, Segment: true}
+	var err error
+	if p.Head, err = wireRequiredString("preservedSegment.headUuid", segment.Head); err != nil {
+		return threadPreserved{}, err
+	}
+	if p.Anchor, err = wireRequiredString("preservedSegment.anchorUuid", segment.Anchor); err != nil {
+		return threadPreserved{}, err
+	}
+	if p.Tail, err = wireRequiredString("preservedSegment.tailUuid", segment.Tail); err != nil {
+		return threadPreserved{}, err
+	}
+	return p, nil
 }
 
 // threadUsage is what a model's reply says of the request it answered
@@ -1764,9 +3298,8 @@ type threadRestarts struct {
 // See reports whether the record with head h, the thread's next, is a
 // RESTART: a record of subtype compact_boundary; a system record of subtype
 // microcompact_boundary; a user record whose `replacesSpan` is true; one
-// rooting a chain (`parentUuid` literally null) that is not the thread's
-// first chained record; or the thread's first chained record where it roots
-// no chain.
+// rooting a chain (below) that is not the thread's first chained record; or
+// the thread's first chained record where it roots no chain.
 //
 // THE FIRST CHAINED RECORD, never the first record or the first root: a
 // thread's bookkeeping before its brief is no chain's, and its brief roots the
@@ -1799,11 +3332,46 @@ type threadRestarts struct {
 // alone, never a Stop's note, so each reader it concerns asks
 // [threadLine.ToolResultsCleared] of the records it reads.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE. Its resume loads every user,
+// assistant, attachment and system record of a thread into the one map it
+// walks, whatever `parentUuid` the record carries (2.1.310's and 2.1.322's
+// test of a record is its type alone), and walks a chain back from a record,
+// parent by parent, to the first that is parentless ([threadHead.Parentless]):
+// its `parentUuid` null, the empty string or absent, each falsy to it alike.
+// So such a record is in a chain, and roots one, whichever of the three it
+// carries, and what lies before it is in no chain a resume walks through it. A
+// record of another type is the harness's bookkeeping, in no chain, where it
+// carries no `parentUuid` (every kind measured, at [threadHead.Parent]); one
+// that carries one is read by it as written, null and the empty string a
+// root. No release measured writes a user, assistant, attachment or system
+// record with no `parentUuid` or an empty one (none of the 11,727 such records
+// of the 521 thread files the probes kept), so the rule moves nothing
+// measured; a later release, or a box that rewrote its file, that writes one
+// restarts the thread there, where read by the literal null alone, what lies
+// before it would be counted as handed on.
+//
+// ITS READERS: the resumed count, which bounds what a continued session's
+// harness counts before its first request and reads a restart as where the
+// job may have started its context over; the reading that tells a relaunch
+// which of its calls a kept session holds (exact telling), which counts a
+// result, a subagent's answer and its notice only past the main thread's last
+// restart, and reads a subagent's thread that restarts anywhere as not whole;
+// and the one that confirms a hook's note reached the model, which holds a
+// note only where no restart follows it. The model of which records Claude
+// Code's resume hands its model reads a root by the same rule, through
+// [threadHead.Parentless].
+//
 // A thread with no chained record restarts nowhere: it holds no chain to
 // start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
-	first := h.Chained() && !r.chained
-	r.chained = r.chained || h.Chained()
+	chained := h.Chained()
+	switch h.Type {
+	case recordUser, recordAssistant, recordAttachment, recordSystem:
+		chained = true
+	}
+	root := chained && h.Parentless()
+	first := chained && !r.chained
+	r.chained = r.chained || chained
 	switch {
 	case h.Subtype == subtypeCompactBoundary:
 		return true
@@ -1812,7 +3380,7 @@ func (r *threadRestarts) See(h threadHead) bool {
 	case h.ReplacesSpan:
 		return true
 	case first:
-		return !h.Root()
+		return !root
 	}
-	return h.Root()
+	return root
 }
