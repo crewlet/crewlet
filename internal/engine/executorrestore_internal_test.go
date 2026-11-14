@@ -104,7 +104,7 @@ func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLa
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: 1, Launch: row.LaunchID,
 		State: sandbox.CaptureLanded, Final: true, Interrupted: true,
-		Through: new(2), NoteCursor: 4, ContextTokens: contextTokens,
+		Through: new(2), Omitted: []int{1}, NoteCursor: 4, ContextTokens: contextTokens,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
 		ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
 		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/4f2a/home"}
@@ -178,8 +178,9 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // ACCOUNTS FOR IT. The engine's launcher answers the runner's question from the
 // coordinator's choice and the turn's row on the executor log: the session, its
 // place, the calls it had been answered — its save point, how many of the
-// round's calls the log had taken when its capture read it — the notes it had
-// read, whether its harness was cut off, where it was last worked, what its
+// round's calls the log had taken when its capture read it, and the reads at
+// or below it that its job's brief counted without listing them — the notes it
+// had read, whether its harness was cut off, where it was last worked, what its
 // last request carried, which the launch's floor is made of, the harness that
 // wrote it, which the member the launch picks must run, and the turn whose
 // session it is, which a run that starts one of its own instead is told it may
@@ -194,7 +195,7 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	k := newKeptLaunch(t, 40000, 0, 0)
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
-		Harness: "claude-code", Through: 2, NoteCursor: 4, Interrupted: true,
+		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
 		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
@@ -236,7 +237,7 @@ func TestARelaunchContinuesItsSessionInTheBoxItGetsWithTheBriefForIt(t *testing.
 // its launch needs that much room: below it the launch is refused as a budget
 // refusal carrying that floor — the turn's kept session's, or the job's own in
 // its box — and the resume is held on a window with room for it, never released
-// into the same refusal by the static floor a fresh launch needs.
+// into the same refusal by a window with room for a fresh launch alone.
 //
 // Mutation: hold the launch to the static floor, leave the session's context out
 // of the floor, or hold the resume on the static floor, and a case goes red.
@@ -245,8 +246,9 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 	for name, inPlace := range map[string]bool{"the turn's kept session": false, "its own in its box": true} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// A DAY OF 100000 WITH 70000 SPENT: room for the static floor
-			// (25000), and none for a session that sends 40000 first.
+			// A DAY OF 100000 WITH 70000 SPENT: room for a fresh launch (the
+			// static floor, 25000, beside its short brief), and none for a
+			// session that sends 40000 first.
 			k := newKeptLaunch(t, 40000, 100000, 70000)
 			basis := k.l.ProbeSession(k.ctx)
 			var continued *runner.Continuation
@@ -272,11 +274,13 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 
 // A SESSION NO WINDOW CAN CARRY STARTS FRESH; ONE ANY WINDOW CAN, OR NONE CAPS,
 // IS CONTINUED. The launch weighs the session's context with the brief that
-// continues it against the smallest ceiling of the seat's capped windows: past
-// it, no window turning over ever leaves room, so the session is not continued
-// — the run starts one of its own on the static floor, told so before it
-// starts — where a session within it is continued whatever its size, and a seat
-// with no capped window continues any: no budget is protected by refusing it.
+// continues it against the most room the seat's and the company's capped
+// windows can leave the launch, each ceiling less what its own turn spent
+// there: past it, no window turning over ever leaves room, so the session is
+// not continued: the run starts one of its own on its fresh brief's floor,
+// told so before it starts, where a session within it is continued whatever
+// its size, and a seat with no capped window continues any: no budget is
+// protected by refusing it.
 //
 // Mutation: refuse a session for its size alone, wait for a floor no window can
 // meet, or decide by the size of the session without its brief, and a case goes
@@ -428,7 +432,7 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 		"":                            false,
 	} {
 		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{SessionStart: start}}}
-		if got := runnerResume(in, nil, nil).Continued; got != want {
+		if got := runnerResume(in, nil, nil, nil).Continued; got != want {
 			t.Errorf("a job whose box said %q resumes continued %v, want %v", start, got, want)
 		}
 	}
@@ -455,7 +459,7 @@ func TestAResumeReadsHowTheJobsHarnessEnded(t *testing.T) {
 		"saved":                  false,
 	} {
 		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{HarnessEnd: end}}}
-		got := runnerResume(in, nil, nil).HarnessEnd
+		got := runnerResume(in, nil, nil, nil).HarnessEnd
 		if got != end {
 			t.Errorf("a job whose record says its harness ended %q resumes with %q", end, got)
 		}
@@ -694,8 +698,8 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 // picks its member once, as it launches, and where that member runs another
 // harness than the one that wrote the session — its plan spent, or another's
 // back, since the probe — it continues none: the launch starts the run fresh,
-// held to the static floor rather than to a session it will not send, and
-// refused only where that floor does not fit. So with the job before's own
+// held to its fresh brief's floor rather than to a session it will not send,
+// and refused only where that floor does not fit. So with the job before's own
 // session in its box, which a member whose run lands in another cell cannot
 // continue there.
 //
@@ -713,7 +717,7 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	decided, err := k.relaunch(t, basis, nil)
 	if err != nil {
 		t.Fatalf("a launch whose member runs another harness than the session's: %v, want it launched on "+
-			"the static floor", err)
+			"its fresh brief's floor", err)
 	}
 	if len(decided) != 1 || decided[0].Continues {
 		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
@@ -734,8 +738,8 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	decided, err = inBox.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept",
 		ContextTokens: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
-		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on the static "+
-			"floor", err)
+		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on its fresh "+
+			"brief's floor", err)
 	}
 	if len(decided) != 1 || decided[0].Continues {
 		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
@@ -747,15 +751,16 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 // the launch can continue in that box, and a box in a cell on an engine host is
 // continued in by the node that launched it and no other: a seat that moved
 // since leaves the box to that node, and its relaunch here starts a session of
-// its own in a fresh box. So the relaunch is held to the static floor, and is
-// launched, fresh, where the box's session would not have fit.
+// its own in a fresh box. So the relaunch is held to its fresh brief's floor,
+// and is launched, fresh, where the box's session would not have fit.
 //
 // Mutation: drop the host test from the floor's reckoning of the job's box, and
 // the relaunch is refused below a floor its run never needs.
 func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Parallel()
-	// A DAY OF 100000 WITH 70000 SPENT: room for the static floor (25000),
-	// and none for the box's session, which sends 40000 first.
+	// A DAY OF 100000 WITH 70000 SPENT: room for a fresh launch (the static
+	// floor, 25000, beside its short brief), and none for the box's session,
+	// which sends 40000 first.
 	k := newKeptLaunch(t, 40000, 100000, 70000)
 	k.claimed(t)
 	// THE SEAT MOVED: this node is node-b, whose coordinator launches here,
@@ -775,7 +780,8 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
-		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on the static floor", err)
+		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on its fresh brief's "+
+			"floor", err)
 	}
 	if len(decided) != 1 || decided[0].Continues {
 		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
@@ -802,7 +808,7 @@ func (unreadRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error)
 // it may not need, never one started that its budget cannot carry.
 //
 // Mutation: read an unreadable record as a box the launch cannot continue in,
-// and the launch goes out on the static floor.
+// and the launch goes out on its fresh brief's floor.
 func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 100000, 70000)

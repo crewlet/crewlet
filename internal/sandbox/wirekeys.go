@@ -36,7 +36,10 @@ import (
 // writes its own whole, but every token the completion poll renews in the
 // job's box is a read of the part, an open of the set, a change and a write
 // back of both ([CoordStore.AddHanded], [Coordinator.addHanded]), on whichever
-// node polls the box, every few minutes of a long run.
+// node polls the box, every few minutes of a long run. And the leads kept
+// beside the record ([leadsPart]), with each [KeptLead] it keeps: every take of
+// a job's leads rewrites the part whole, so each carries an Extra of its own,
+// under the same rule.
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept

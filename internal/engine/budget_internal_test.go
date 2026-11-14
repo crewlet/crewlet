@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -1129,4 +1130,55 @@ func (d deadContextRefused) Used(ctx context.Context, scope string, w coord.Wind
 		return coord.Usage{}, err
 	}
 	return d.budgets.Used(ctx, scope, w)
+}
+
+// A METER KNOWS WHAT ITS TURN SPENT, WINDOW BY WINDOW. An executor launch's
+// floor is measured against the most room a window can leave it, each ceiling
+// less what the launch's own turn charged there first ([windowRoom]), so the
+// meter the turn charges through answers that spend: every round it charged, a
+// refused one too, since the counter counts it, and every auxiliary call it
+// posted, each in the window it was charged in and never in the one current
+// after a turnover.
+//
+// Mutation: tally no round, no refused round or no auxiliary call, or tally a
+// charge by its period alone, and the case goes red.
+func TestAMeterKnowsWhatItsTurnSpentInEachWindow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	// THE LAST HOUR OF A WEDNESDAY: two hours on is the next day, in the same
+	// week and the same month.
+	var mu sync.Mutex
+	at := time.Date(2026, time.September, 23, 23, 0, 0, 0, time.UTC)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	e := &Engine{backends: &Backends{Fleet: coordmem.NewFleet()}, clock: clock}
+	m := e.meterFor(c, lead.Handle())
+
+	if got, err := m.Spend(ctx, 30); err != nil || !got.OK {
+		t.Fatalf("Spend(30) = (%+v, %v), want admitted", got, err)
+	}
+	if got, err := m.Spend(ctx, 80); err != nil || got.OK {
+		t.Fatalf("Spend(80) at 30 of a 100-token day = (%+v, %v), want refused", got, err)
+	}
+	if err := m.Record(ctx, 20, clock()); err != nil {
+		t.Fatalf("Record(20): %v", err)
+	}
+	all := map[period.Period]int{period.Day: 130, period.Week: 130, period.Month: 130}
+	if got := m.chargedIn(coord.WindowsAt(clock(), c.Config.Location())); !maps.Equal(got, all) {
+		t.Errorf("the turn charged %v in the windows it charged in, want %v: the admitted round, the refused "+
+			"one and the auxiliary call", got, all)
+	}
+	mu.Lock()
+	at = at.Add(2 * time.Hour)
+	mu.Unlock()
+	next := map[period.Period]int{period.Week: 130, period.Month: 130}
+	if got := m.chargedIn(coord.WindowsAt(clock(), c.Config.Location())); !maps.Equal(got, next) {
+		t.Errorf("the turn charged %v in the windows of the next day, want %v: the day before's spend is not "+
+			"the new day's", got, next)
+	}
 }

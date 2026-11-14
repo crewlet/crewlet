@@ -654,6 +654,51 @@ func (s *CallSeal) SealResult(turnID string, h HeldCall, result HeldResult) (str
 	return s.cipher.Encrypt(string(body), heldAAD("result", turnID, h))
 }
 
+// HeldKept is what a held call returned as its run's row sealed it
+// ([HeldCall.Result]), beside the fields of the call its seal binds
+// ([heldAAD]): what a lead that told the result keeps of it
+// ([LeadHeld.Result]), once the reset that opens the next job has cleared the
+// held call from the row.
+//
+// KEPT SEALED, NEVER IN THE CLEAR: the result is words the row must not show,
+// sealed under the fleet keyring's AEAD by the node that made the call, and a
+// lead is signed, not encrypted ([LeadSeal]). Kept with the fields its seal is
+// bound to, so a later node opens it as that call's result alone
+// ([CallSeal.OpenKept]), or tells it as one it cannot read.
+type HeldKept struct {
+	Result   string `json:"result"`
+	LaunchID string `json:"launch_id"`
+	ID       string `json:"id"`
+	Server   string `json:"server"`
+	Raw      string `json:"raw"`
+	Digest   string `json:"digest"`
+}
+
+// Kept is h's result as its row seals it, with the fields its seal binds, nil
+// where none is recorded: a call not made, or one whose node stopped first.
+func (h HeldCall) Kept() *HeldKept {
+	if h.Result == "" {
+		return nil
+	}
+	return &HeldKept{Result: h.Result, LaunchID: h.LaunchID, ID: h.ID, Server: h.Server, Raw: h.Raw,
+		Digest: h.Digest}
+}
+
+// KeptAs is result, as [CallSeal.SealResult] sealed it for held call h, kept
+// with the fields its seal binds ([HeldKept]).
+func KeptAs(h HeldCall, result string) HeldKept {
+	return HeldKept{Result: result, LaunchID: h.LaunchID, ID: h.ID, Server: h.Server, Raw: h.Raw,
+		Digest: h.Digest}
+}
+
+// OpenKept opens what a held call of run turnID returned, as a lead kept it
+// ([HeldKept]): under the very binding [CallSeal.SealResult] sealed it with, so
+// a result kept for one call never opens as another's.
+func (s *CallSeal) OpenKept(turnID string, kept HeldKept) (HeldResult, error) {
+	return s.OpenResult(turnID, HeldCall{ID: kept.ID, LaunchID: kept.LaunchID, Server: kept.Server,
+		Raw: kept.Raw, Digest: kept.Digest, Result: kept.Result})
+}
+
 // OpenResult opens what held call h of run turnID returned.
 func (s *CallSeal) OpenResult(turnID string, h HeldCall) (HeldResult, error) {
 	if s == nil {

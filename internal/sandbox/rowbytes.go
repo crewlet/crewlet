@@ -22,18 +22,19 @@ import (
 //
 // A run is kept as values in the coordination store ([coord.SandboxRuns]): its
 // row ([PendingRun]), read and written whole by every mutation (coordstore.go),
-// and beside it the parts a job can make large — the bridged call log
-// ([BridgeLog]), read and written whole by every append, and the secrets the
-// job's box was handed. One value is held to what one key of the store holds,
-// [coord.MaxValueBytes] — the largest whose read a node without `data` takes
-// back across its leaf link, base64-encoded in its stream leader's reply — and
-// past it every write of the value is refused ([coord.ErrValueTooLarge]): for
-// the row, a lease stamped on the run, a status flip, the hold a turn takes on
-// its next scratch repository; for the log, every call's append. The bridged call log grew one call at a time with
-// nothing measuring it — two hundred builtin answers of 64 KiB are 12.8 MiB —
-// so a long run's log stopped taking writes, and its calls were the first
-// thing to go: the resumed turn's ledger, its delivery check and its
-// reviewer's evidence missed what the run did.
+// and beside it the parts a job can make large: the bridged call log
+// ([BridgeLog]), read and written whole by every append, the secrets the job's
+// box was handed, and the turn's leads ([PendingStore.Leads]). One value is
+// held to what one key of the store holds, [coord.MaxValueBytes] (the largest
+// whose read a node without `data` takes back across its leaf link,
+// base64-encoded in its stream leader's reply), and past it every write of the
+// value is refused ([coord.ErrValueTooLarge]): for the row, a lease stamped on
+// the run, a status flip, the hold a turn takes on its next scratch
+// repository; for the log, every call's append. The bridged call log grew one
+// call at a time with nothing measuring it (two hundred builtin answers of
+// 64 KiB are 12.8 MiB), so a long run's log stopped taking writes, and its
+// calls were the first thing to go: the resumed turn's ledger, its delivery
+// check and its reviewer's evidence missed what the run did.
 //
 // # The shares, in bytes as each value holds them
 //
@@ -63,7 +64,10 @@ import (
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
-// TestTheWholeRowFitsItsBudget holds it to as well.
+// TestTheWholeRowFitsItsBudget holds it to as well. And the turn's leads beside
+// them ([PendingStore.Leads]) are the fourth, held to [MaxKeptLeadBytes] and
+// [MaxKeptLeads], their own fields at their worst within [RowBytes] beside
+// them (leads.go's table, measured by TestTheWholeLeadsPartFitsItsBudget).
 //
 // THE LOG'S CALLS IN FLIGHT are held by construction too: [MaxCallsInFlight]
 // entries, each its call's identity and the id its harness gave it, held to
@@ -98,8 +102,9 @@ import (
 //
 // THE REST is every other field of the row, each at the bound its own writer
 // holds it to (TestTheWholeRowFitsItsBudget builds every one of them at that
-// bound, through the code that writes it, escaped at its worst), and the
-// shares stated here:
+// bound, through the code that writes it, escaped at its worst, and
+// TestTheWorstRowSetsEveryField holds that model to every field the row
+// carries), and the shares stated here:
 //
 //	a recorded answer ............... MaxAnswerBytes            524,288  (512 KiB)
 //	the copies one owes back ........ MaxAnswerBytes            524,288  (512 KiB)
@@ -107,27 +112,47 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... 1,705,716  (with 890,192 to spare)
+//	every other field, measured ..... measuredOtherFields     2,033,249
+//	to spare, measured .............. measuredSpare             562,659
 //
-// — the identity, status and time fields; the title a launch keeps
-// ([MaxRunTitleBytes], twice) and a colleague's question; a refused reply's
-// refusal beside its answer ([PendingRun.AnswerRefusal], a hundred delivery
-// ids at most, two figures and where it was posted, [MaxRefusalAddressBytes])
-// and the round's refusals kept for its review ([maxRoundRefusals]); the ask and its
-// decision, and the seats it is put to ([MaxAudienceHandles]); a held call's
-// sealed result and the call a person approved, on the held call and owed to
-// the log ([OwedCall]); the branch and the notes ([MaxNoteSealedBytes]); the
-// job's own record; the owed end and the captures; and what the job may do on
-// Gitlet — the holds of its turn ([MaxCodeHolds]), its
+// Every other field is the identity, status and time fields, the run its
+// turn's leads are kept for and how many leads that part has taken
+// ([PendingRun.LeadsRun], [PendingRun.LeadsAppended]); the title a
+// launch keeps ([MaxRunTitleBytes], twice) and a colleague's question; a
+// refused reply's refusal beside its answer ([PendingRun.AnswerRefusal], a
+// hundred delivery ids at most, two figures and where it was posted,
+// [MaxRefusalAddressBytes]) and the round's refusals kept for its review
+// ([maxRoundRefusals]); the ask and its decision, and the seats it is put to
+// ([MaxAudienceHandles]); a held call's sealed result and the call a person
+// approved, on the held call and owed to the log ([OwedCall]), and the
+// decision the call carries out, whose question, for one asked in words, is
+// the body of the comment that asked it, and the delegates it was put to
+// first ([HeldCall.Acting], [HeldCall.Delegation]); the branch and the notes
+// ([MaxNoteSealedBytes]); who the turn works for and the answers that woke it
+// ([PendingRun.WorkingFor], [PendingRun.Answered]); the job's own record, the
+// reads its briefs left out among it ([LaunchRecord.BriefOmitted], at most
+// [MaxBridgeCalls] places each) and which of the turn's leads its brief told,
+// by their numbers in the run's leads part ([LaunchRecord.LeadMarks], at most
+// [MaxKeptLeads]); the owed end and the captures, each with the
+// reads its session holds only as a count ([SessionCapture.Omitted]); and what
+// the job may do on Gitlet: the holds of its turn ([MaxCodeHolds]), its
 // repositories ([MaxRunRepos], each held to its grammar, its cone and its
-// change's title, [MaxChangeTitleBytes], among them) and its floors. Every one
+// change's title, [MaxChangeTitleBytes], among them), its floors and whom its
+// pushes and its change are made for ([PendingRun.CodeWorkingFor]). Every one
 // of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and a
 // box's account of its session are each held to their share by the write that
 // puts them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
 // [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
-// broker; and the turn's read of its conversation is held to its line by
+// store; and the turn's read of its conversation is held to its line by
 // construction, made of a read the executor log bounds field by field
 // ([NewConversationBase]), the largest of which a test holds under it.
+//
+// The two measured lines are the model's, and pinned ([measuredOtherFields],
+// [measuredSpare]): what every other field weighs at its worst, a held call's
+// arguments among them as none (their key, and the two quotes their share
+// counts as well), and what is left once every line above it is counted and
+// the keys a recorded answer, its copies and the turn's read are written
+// under, each with its comma, those two quotes counted once.
 //
 // [ExtraRowBytes] is the room for the keys a LATER BUILD ADDS to the row — at
 // its top and in its sections (the job's own record, [LaunchRecord], first
@@ -256,6 +281,21 @@ const (
 	// unchanged: an answer is authorized on the seat and its requester, never
 	// on this list.
 	MaxAudienceHandles = 256
+)
+
+// The two figures the table above measures rather than shares out: what every
+// other field of the row weighs at its worst, and what the rest's share leaves
+// to spare beside it and the room a later build adds fields in, each as
+// TestTheWholeRowFitsItsBudget measures its model of the worst row.
+//
+// PINNED, so they cannot go stale: that test compares both with what the model
+// weighs, exactly, and fails until a change that moves either (a field the row
+// gains, above all) restates both here and in the table. The figure the table
+// stated before them was read by nothing, and stayed what it was while the row
+// grew.
+const (
+	measuredOtherFields = 2_033_249
+	measuredSpare       = 562_659
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -427,7 +467,7 @@ const rowRecord kept.Record = "the run's record"
 
 // ErrStateTooLarge is a parked turn's state past its share of the row
 // ([ExecuteStateBytes]), refused by [PendingStore.MarkSuspended] rather than by
-// the broker: a row that big would refuse every write after it.
+// the store: a row that big would refuse every write after it.
 var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its share of the run's row")
 
 // ErrAnswerTooLarge is a reply past its share of the row ([MaxAnswerBytes]) as
@@ -499,6 +539,16 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 // takes none other, and the log holds every writer to the same rule, so a
 // call's share holds by construction whatever bridge, or build, handed it.
 //
+// AND NOTHING THAT WAITS FOR IT: a finished call is nobody's to wait for, so it
+// keeps neither the process that ran it nor the bound a collection would wait
+// for it until ([BridgeCall.Runner], [BridgeCall.Until]), which only its entry
+// in flight carries ([keptEntry]). Held here, whoever handed the call: the
+// bridge's update, the store's append of the call a person approved, which no
+// append over the bridge takes ([BridgeLog.withApproved]), the row's copy of
+// that call ([approvedCall]), or a later build. Left to each caller, a runner
+// on a finished call would be bounded by nothing, since only an entry's is
+// held to an incarnation's bound.
+//
 // IDEMPOTENT, so a call kept once is kept again unchanged, and a call an older
 // build recorded whole is kept within its bounds the next time this build
 // writes the log. A size already recorded is the whole's and is never replaced
@@ -506,6 +556,7 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
 	call.CallID = keptCallID(call.CallID)
+	call.Runner, call.Until = "", time.Time{}
 	if call.Withheld() {
 		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
 	}

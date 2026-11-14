@@ -34,10 +34,12 @@ import (
 //   - IN ITS INBOX, PARKED ON ITS BUDGET, until the refusing window turns over
 //     or a revision raises its ceiling (budgetpark.go).
 //   - IN ITS INBOX, HELD BY ANY PARK OF THE NODE HOLDING THE SEAT: the budget's
-//     on the larger floor a first launch that continues its conversation's
-//     session needs, which a window with room for the static floor holds back
-//     all the same, and the models' limit (providerpark.go), which no counter
-//     records.
+//     on the floor a first launch was refused below (its brief beside the
+//     static floor, the context of the conversation's session it continues
+//     beside its brief, or, where its fresh brief's floor is held, the static
+//     floor or the room below it), a larger one of which a window with room
+//     for the static floor alone holds back all the same, and the models'
+//     limit (providerpark.go), which no counter records.
 //
 // None of those has an end the timeout could be sized to, and each is a fact
 // this engine can read on any node — which it has to be, since the sweep runs
@@ -143,15 +145,17 @@ func holdsInbox(run sandbox.PendingRun) bool {
 }
 
 // budgetParked reports whether handle's seat's mail waits on its budget — the
-// conditions the budget stage parks it on ([meter.parks]), on the static floor
-// any delivery's launch needs. A seat with no counter, or nothing capped, is
-// never parked.
+// conditions the budget stage parks it on ([meter.parks]), on the static floor,
+// which a delivery no launch has been refused for yet is parked on
+// ([floorOf]). A seat with no counter, or nothing capped, is never parked.
 //
 // A RECOUNT OF THE SHARED COUNTERS, which any node reads alike: it answers for
 // the park a seat's next delivery takes wherever it lands — after a restart, or
 // the seat moving, no node holds one until that delivery arrives. A park taken
-// on a larger floor, which a first launch that continues its conversation's
-// session needs, is no recount of anything shared: its floor is the refused
+// on the floor a first launch was refused below (its brief beside the static
+// floor, the context of the conversation's session it continues beside its
+// brief, or, where its fresh brief's floor is held, the static floor or the
+// room below it) is no recount of anything shared: its floor is the refused
 // launch's, which only the node that parked the seat knows, so it is asked of
 // that node ([colleagueOwed.heldByPark]).
 func (e *Engine) budgetParked(ctx context.Context, c *Company, handle string) (bool, error) {

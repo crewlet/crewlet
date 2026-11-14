@@ -29,7 +29,7 @@ import (
 // run is told nothing of a call it holds as timed out.
 func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	for name, end := range map[string]sandbox.HarnessEnd{
 		"its harness having ended its own run": sandbox.HarnessEndOwnRun,
 		"its harness cut off":                  sandbox.HarnessEndCutOff,
@@ -70,7 +70,7 @@ func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 			brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
 				BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
-					SessionID: "sess-ask", BoxKept: true}}, nil, nil))
+					SessionID: "sess-ask", BoxKept: true}}, nil, nil, nil))
 			at := strings.Index(brief, lateHeading)
 			if at < 0 || strings.Count(brief, "- delegate(") != 1 || !strings.Contains(brief[at:], "- delegate(") {
 				t.Errorf("the copy in its box is not told the call nobody waited for once, under the late "+

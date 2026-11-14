@@ -43,12 +43,30 @@ delivery are refused against it until the window turns over. What admits a run
 is the floor at its launch.
 
 **A ceiling has room for one executor run, or it is refused.** Every executor
-launch needs `turn_engine.executor_min_budget_tokens` (default 25 000 — one
-run's opening request) left in every capped window of its seat and of the
-company, and a seat short of it is parked until the window turns over. That
-holds for a launch in the middle of a turn too. A reviewer sending the work
-back for another run on a window that cannot pay for it **holds** the job the
-turn just collected: it waits collected in its paused box, with its seat held
+launch needs `turn_engine.executor_min_budget_tokens` (default 25 000: the fixed
+part of one run's opening request) with the brief the run is handed beside it
+left in every capped window of its seat and of the company, the brief counted
+at a token for every four bytes, and a seat short of it is parked until the
+window turns over. That holds for a launch in the middle of a turn too. A
+launch whose fresh brief takes that past the most room the seat's or the
+company's capped windows can leave it is held instead (`executor_floor_held`),
+at the floor alone where the floor fits in that room. The room is each window's
+ceiling less what the launch's own turn spent there before it, the context it
+gathered and the rewrites it made, since every turn spends that before its
+launch reads the window. Held at the floor alone, the launch goes out once a
+window has the floor left, whatever other seats spent there first, so a busy
+company never keeps it waiting for a window nobody else has touched, and its
+opening request may take that window past its ceiling
+(`sandbox_spend_over_budget` reports what the run took). Only where the turn's own spend
+left less than the floor is the launch held at the room, and then it waits for
+a window that holds nothing but its own turn's spend. And **a launch refused
+below the floor with its brief, or with a session's context, waits one turnover
+at most**: in a busy company the other seats spend in the window first after
+every turnover, so a figure within that room can be past what every window
+leaves the launch when it reads it. In the window after the one it was refused
+in, the launch is held at the floor alone, as above, and continues a session
+only where that window leaves room for it. A reviewer sending the work back for another run
+on a window that cannot pay for it **holds** the job the turn just collected: it waits collected in its paused box, with its seat held
 behind it, and the turn resumes once the window turns over or a revision raises
 the ceiling (`sandbox_resume_held` in the log), rather than reviewing it again
 on every retry into the same refusal. A run that finishes while its window is
@@ -60,7 +78,8 @@ in its own series of attempts (`sandbox_resume_refused`), until the window turns
 over or a revision raises the ceiling (see [Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)). A
 ceiling below that floor never has it left, so on a seat that runs an executor,
 or on a company that has one, it is refused when the document is validated,
-at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
+at the ceiling: raise it to the floor, or lower the floor (`0` turns it off for
+every launch whose session's context is not known).
 
 **A launch that continues a session needs room for that session.** Within a
 turn, a send-back, a person's answer, a lost job or a replaced sign-in
@@ -70,24 +89,30 @@ where it can; a conversation's next turn
 and a schedule's next fire
 [the session its last fire left](../concepts/scheduling.md#each-fire-continues-the-last-fires-session);
 and a continued run sends the session's whole context again before it reads a
-word of its brief. So its launch needs the larger of the floor
-and that context with the brief that continues it: the whole input of the
-session's last request, cache included, recorded when the session was captured,
-and the estimate of the brief it is handed — a 60 000-token session handed a
-2 000-token continuation needs 62 000 left in every capped window. That holds
+word of its brief. So its launch needs the larger of the floor and that context
+with the brief that continues it: the whole input of the session's last
+request, cache included, recorded when the session was captured, and the
+estimate of the brief it is handed — a 60 000-token session handed a 2 000-token
+continuation needs 62 000 left in every capped window. It never needs less than
+the floor with its fresh brief beside it, held as above where that is past the
+room, since its box starts a session of its own on that brief wherever it
+cannot take the session up. That holds
 for a run continued in its own box as much as for one restored into another,
 and for the session a conversation's last turn left, whose context is what that
 turn's capture recorded; a session no capture measured (keeping switched off)
-has no known context, and its launch needs the floor alone. A relaunch below
-its figure is held, or for an answer turned back, exactly as above. A turn's
+has no known context, and its launch needs the floor with the brief that
+continues it beside it. A relaunch below its figure is held, or for an answer
+turned back, exactly as above, for one turnover at most. A turn's
 first launch below its figure **parks the seat's mail on that figure**, never on
 the floor alone: a window with room for a fresh run and not for the session
 would read as having room, and hand the delivery straight back into the same
 refusal. A colleague's ask waiting behind such a park is still owed its answer.
 Either way the reason names what the figure is made of. A session whose figure
-is past the smallest ceiling of the seat's or the company's capped windows,
-which no window turning over ever leaves room for, is not continued: the launch
-starts a session of its own on the floor. A seat
+is past the most room the seat's or the company's capped windows can leave its
+launch, each ceiling less what the launch's own turn spent there first, which no
+window turning over ever leaves, is not continued: the launch
+starts a session of its own, on the floor with its fresh brief beside it, held
+as above where that is past the room. A seat
 with no capped window continues a session of any size.
 
 **And it pays for its context on every request.** Every request a harness makes

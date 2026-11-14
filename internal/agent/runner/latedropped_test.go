@@ -24,7 +24,7 @@ import (
 // or count them among the calls dropped after the save, and a case goes red.
 func TestADroppedLateCallIsToldPastEverySavePoint(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	var bridged []runner.BridgedCall
 	for n := 1; n <= 300; n++ {
 		if n > 100 && n <= 200 {

@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,6 +36,12 @@ const cutOffHeader = "## Calls this run made that the session above may not show
 // notesAgainHeader opens the notes a session cut off is told again.
 const notesAgainHeader = "## Notes this turn read that the session above may not show"
 
+// heldSubmissionLine is what a continuation says first where the session it
+// continues holds a successful `submit_work` of its round.
+const heldSubmissionLine = "A `" + toolname.SubmitWork + "` the session above shows does NOT stand as this" +
+	" work's submission: the work was carried on after it. When your work is done, call `" +
+	toolname.SubmitWork + "` yourself."
+
 // inBoxCarry is what carries a round on in its job's own box: name says which,
 // set puts it on the resume, its job's box kept or gone, and lead is what the
 // brief it is carried on with opens with.
@@ -42,6 +49,19 @@ type inBoxCarry struct {
 	name string
 	set  func(r *runner.Resume, boxKept bool)
 	lead string
+}
+
+// inBoxCarryNamed is the one of [inBoxCarries] called name, failing t where
+// none is: a case that picked none would read no brief, and pass.
+func inBoxCarryNamed(t *testing.T, name string) inBoxCarry {
+	t.Helper()
+	for _, carry := range inBoxCarries {
+		if carry.name == name {
+			return carry
+		}
+	}
+	t.Fatalf("no carry named %q", name)
+	return inBoxCarry{}
 }
 
 // inBoxCarries are both: a replaced sign-in, and a person's answer.
@@ -415,7 +435,10 @@ func TestARunCarriedOnInItsBoxArmsItsJobsLoadsOnlyWhereItsHarnessEndedItsOwnRun(
 // rewrite left no room for is never launched and paid for whole past the
 // ceiling. Where the job's box is gone no launch continues in it, so its calls
 // are neither rewritten nor charged, and the relaunch is not refused for a brief
-// nothing would send.
+// nothing would send. The copy's harness ended its own run, and the call it
+// lacks is a read its job's brief counted without listing it: the fresh brief
+// beside it, which tells the round from its start, counts that read past its
+// own read cap too, so the rewrite is the copy's brief's alone.
 //
 // Mutation: build the calls the copy may lack after the relaunch asks the meter,
 // and the run whose box is kept is launched; build them whether or not the box
@@ -436,15 +459,23 @@ func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWi
 			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
-			// ONE CALL OF THE ROUND, its body past the ledger's value budget.
-			bridged := []runner.BridgedCall{numbered("jira_create",
-				map[string]any{"summary": "before the refusal", "body": strings.Repeat("b", 2000)}, 1, 1)}
+			// TWELVE READS THE COPY HOLDS, and ONE ITS JOB'S BRIEF COUNTED
+			// WITHOUT LISTING IT, its argument past the ledger's value budget.
+			var bridged []runner.BridgedCall
+			for n := 1; n <= ledger.MaxReadCalls; n++ {
+				bridged = append(bridged, numbered("slack_history", map[string]any{"channel": fmt.Sprintf("C%d", n)},
+					n, n))
+			}
+			owed := ledger.MaxReadCalls + 1
+			bridged = append(bridged, numbered("slack_history", map[string]any{"channel": strings.Repeat("b", 2000)},
+				owed, owed))
 			meter := &ceilingMeter{ceiling: 100}
 			relauncher := &playLauncher{}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 				budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
 					For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
 				resume: &runner.Resume{State: parked.State, Bridged: bridged,
+					HarnessEnd: sandbox.HarnessEndOwnRun, Owed: []int{owed},
 					Rotated: &runner.Rotated{SessionID: "sess-1", BoxKept: tc.boxKept}}})
 
 			_, _, err := collector.Resume(t.Context(), nil)
@@ -524,4 +555,208 @@ func TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadySho
 			})
 		}
 	}
+}
+
+// A CUT-OFF COPY IS TOLD ITS EARLIER SUBMIT_WORK DOES NOT STAND. A run may
+// submit and then ask, since its gate refuses a submission after its question
+// and never a question after a submission, and every call a brief tells was
+// made before the relaunch it opens: the asking job's own calls fall below the
+// cut its answer's opening takes, and a round refused on a replaced sign-in
+// whose calls since its last answer hold a submission is collected on it
+// rather than carried on, so the one such a carry tells was made before an
+// earlier answer. Neither is the submission of the work the relaunch carries
+// on. The copy a job's own box holds, its harness cut off, is told every call
+// of the round, the submission among them as `→ success`; so right after those
+// calls it is told, once, that the submission does not stand and that it makes
+// its own, under a person's answer and a replaced sign-in alike. A submission
+// the bridge refused is told as any failed call, without the line.
+//
+// Mutation: never say a successful submission is among the calls, or say it
+// of a refused one too, and a case goes red.
+func TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand(t *testing.T) {
+	t.Parallel()
+	const notStanding = "does NOT stand as this work's submission: the work was carried on after it."
+	submission := func(failed bool) runner.BridgedCall {
+		return runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+			Args:   map[string]any{"outcome": "delivered", "summary": "the asking job's submission"},
+			Result: "submitted", Failed: failed}, Seq: 1, Appended: 1}
+	}
+	asked := numbered(toolname.AskAndWait, map[string]any{"question": "the job's own question"}, 2, 2)
+	posted := numbered("slack_post", map[string]any{"text": "a post after the answer"}, 3, 3)
+	// EACH CARRY'S OWN ROUND: a person's answer to the job that submitted and
+	// then asked; and a replaced sign-in refusing the job that answer opened,
+	// whose own call is a post, the submission before the answer's cut.
+	rounds := map[string]struct {
+		from, answered int
+		after          []runner.BridgedCall
+		last           string
+	}{
+		"a person's answer": {from: 0, after: []runner.BridgedCall{asked}, last: "the job's own question"},
+		"a replaced sign-in": {from: 2, answered: 2, after: []runner.BridgedCall{asked, posted},
+			last: "a post after the answer"},
+	}
+	for _, carry := range inBoxCarries {
+		round, ok := rounds[carry.name]
+		if !ok {
+			t.Fatalf("no round for %s", carry.name)
+		}
+		for _, failed := range []bool{false, true} {
+			name := carry.name + ", its submission made"
+			if failed {
+				name = carry.name + ", its submission refused"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				brief := inPlaceBrief(t, carry, true, round.from, nil, func(r *runner.Resume) {
+					r.Bridged = append([]runner.BridgedCall{submission(failed)}, round.after...)
+					r.Answered, r.HarnessEnd = round.answered, sandbox.HarnessEndCutOff
+				})
+				calls, listed := strings.Index(brief, cutOffHeader), strings.Index(brief, "the asking job's submission")
+				if calls < 0 || listed < calls {
+					t.Fatalf("the copy is not told the submission among the calls it may not show:\n%s", brief)
+				}
+				said := strings.Index(brief, notStanding)
+				if failed {
+					if said >= 0 {
+						t.Errorf("a refused submission is told %q:\n%s", notStanding, brief)
+					}
+					return
+				}
+				if said < strings.Index(brief, round.last) || strings.Count(brief, notStanding) != 1 {
+					t.Errorf("the copy is not told once, after the calls it may not show, that the submission among "+
+						"them does not stand:\n%s", brief)
+				}
+				if !strings.Contains(brief[said:], "call `"+toolname.SubmitWork+"` yourself") {
+					t.Errorf("the copy is not told to make its own submission:\n%s", brief)
+				}
+			})
+		}
+	}
+}
+
+// A COPY HOLDING ITS EARLIER SUBMIT_WORK IS TOLD IT DOES NOT STAND. A run may
+// submit and then ask, or call a tool that waits for a person's approval, its
+// harness then ending its own run as the result parking it tells it to; and a
+// job its answer opened in that session may have its sign-in replaced. The
+// copy in the box then shows the submission answered "submitted", while the
+// cut the answer's opening takes falls past it, so it is no submission of the
+// work the relaunch carries on. That copy holds every call of the round and is
+// told none of them, so its brief was what carries it on alone, which says to
+// finish the task as it asks. It is told FIRST, right after that lead and
+// before any late call, once, that the submission the session shows does not
+// stand and that it makes its own: under a person's answer, a held call's
+// answer and a replaced sign-in alike. A submission the bridge refused is no
+// submission, and nothing is said of it. A late one, or one nobody waited for,
+// is held at no point: it is told in the late calls' section under the line on
+// a late submission, and never under this one.
+//
+// Mutation: never say a held submission does not stand, say it of a refused,
+// a late or an abandoned one, or say it after the late calls, and a case goes
+// red.
+func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
+	t.Parallel()
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
+	submission := func(failed bool) runner.BridgedCall {
+		return runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+			Args:   map[string]any{"outcome": "delivered", "summary": "the asking job's submission"},
+			Result: "submitted", Failed: failed}, Seq: 1, Appended: 1}
+	}
+	asked := numbered(toolname.AskAndWait, map[string]any{"question": "the job's own question"}, 2, 2)
+	posted := numbered("slack_post", map[string]any{"text": "a post after the answer"}, 3, 3)
+	answer := inBoxCarryNamed(t, "a person's answer")
+	// saysHeld fails t unless brief, the copy's whole brief, lists no call of
+	// the round and, where said, ends with the line that the submission the
+	// session shows does not stand, said once after what carries it on; where
+	// not said, nothing of a submission.
+	saysHeld := func(t *testing.T, brief string, said bool) {
+		t.Helper()
+		if strings.Contains(brief, "the asking job's submission") || strings.Contains(brief, cutOffHeader) {
+			t.Fatalf("a copy holding every call of the round is told one of them:\n%s", brief)
+		}
+		if !said {
+			if strings.Contains(brief, "does NOT stand") {
+				t.Errorf("a copy whose submission the bridge refused is told one does not stand:\n%s", brief)
+			}
+			return
+		}
+		if !strings.HasSuffix(brief, "\n\n"+heldSubmissionLine) || strings.Count(brief, heldSubmissionLine) != 1 {
+			t.Errorf("the copy is not told once, after what carries it on, that the submission it shows does not "+
+				"stand:\n%s", brief)
+		}
+	}
+	// EACH CARRY'S OWN ROUND: a person's answer to the job that submitted and
+	// then asked; and a replaced sign-in refusing the job that answer opened in
+	// the same session, whose own call is a post.
+	rounds := map[string]struct {
+		from, answered int
+		after          []runner.BridgedCall
+	}{
+		"a person's answer":  {after: []runner.BridgedCall{asked}},
+		"a replaced sign-in": {from: 2, answered: 2, after: []runner.BridgedCall{asked, posted}},
+	}
+	for _, failed := range []bool{false, true} {
+		made := ", its submission made"
+		if failed {
+			made = ", its submission refused"
+		}
+		for _, carry := range inBoxCarries {
+			round, ok := rounds[carry.name]
+			if !ok {
+				t.Fatalf("no round for %s", carry.name)
+			}
+			t.Run(carry.name+made, func(t *testing.T) {
+				t.Parallel()
+				brief := inPlaceBrief(t, carry, true, round.from, nil, func(r *runner.Resume) {
+					r.Bridged = append([]runner.BridgedCall{submission(failed)}, round.after...)
+					r.Answered, r.HarnessEnd = round.answered, sandbox.HarnessEndOwnRun
+				})
+				saysHeld(t, brief, !failed)
+			})
+		}
+		t.Run("a held call's answer"+made, func(t *testing.T) {
+			t.Parallel()
+			// THE JOB SUBMITTED, THEN CALLED A TOOL THAT WAITS FOR A PERSON'S
+			// APPROVAL, which an attempt at the answer made.
+			brief := laterAttemptBrief(t, runner.SessionBasis{}, sandbox.HarnessEndOwnRun, []runner.BridgedCall{
+				submission(failed), heldFor("tr_close_issue", 2, 2), approvedFor("tr_close_issue", "held-1", 3, 3),
+			}, nil)
+			saysHeld(t, brief, !failed)
+		})
+	}
+	// A LATE SUBMISSION, AND ONE NOBODY WAITED FOR, ARE HELD AT NO POINT.
+	for name, mark := range map[string]func(*runner.BridgedCall){
+		"a late submission":              func(c *runner.BridgedCall) { c.Late = true },
+		"a submission nobody waited for": func(c *runner.BridgedCall) { c.Abandoned = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			late := submission(false)
+			mark(&late)
+			brief := inPlaceBrief(t, answer, true, 0, nil, func(r *runner.Resume) {
+				r.Bridged, r.HarnessEnd = []runner.BridgedCall{late, asked}, sandbox.HarnessEndOwnRun
+			})
+			at := strings.Index(brief, lateHeading)
+			if at < 0 || !strings.Contains(brief[at:], "the asking job's submission") ||
+				!strings.Contains(brief[at:], "the run that made it had stopped waiting for it") {
+				t.Fatalf("the submission is not told in the late calls' section, under its own line:\n%s", brief)
+			}
+			if strings.Contains(brief, heldSubmissionLine) {
+				t.Errorf("a submission the copy is not known to hold is told as one it shows:\n%s", brief)
+			}
+		})
+	}
+	t.Run("a held submission beside a late call", func(t *testing.T) {
+		t.Parallel()
+		landed := numbered("slack_post", map[string]any{"text": "a post that landed late"}, 3, 3)
+		landed.Late = true
+		brief := inPlaceBrief(t, answer, true, 0, nil, func(r *runner.Resume) {
+			r.Bridged, r.HarnessEnd = []runner.BridgedCall{submission(false), asked, landed}, sandbox.HarnessEndOwnRun
+		})
+		said, at := strings.Index(brief, heldSubmissionLine), strings.Index(brief, lateHeading)
+		if said < 0 || at < said || strings.Count(brief, heldSubmissionLine) != 1 ||
+			!strings.Contains(brief[at:], "a post that landed late") {
+			t.Errorf("the copy is not told once, before the late calls, that the submission it shows does not "+
+				"stand:\n%s", brief)
+		}
+	})
 }

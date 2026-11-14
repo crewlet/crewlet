@@ -1377,7 +1377,7 @@ func TestAPolledNoteIsServedOnItsRecordBeforeItIsAnswered(t *testing.T) {
 	if n := row.Steer.Notes[0]; n.Served != launch || !n.Waiting() {
 		t.Fatalf("the note answered is %+v on its record, want it waiting, served to job %s", n, launch)
 	}
-	if got := runnerResume(resumeInput{Run: row}, nil, nil).Served; !slices.Equal(got, []string{"n-1", "n-2"}) {
+	if got := runnerResume(resumeInput{Run: row}, nil, nil, nil).Served; !slices.Equal(got, []string{"n-1", "n-2"}) {
 		t.Errorf("the resume carries the served notes %v, want n-1 and n-2", got)
 	}
 	// CONFIRMED: read by the job, still served.

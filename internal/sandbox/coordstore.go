@@ -179,6 +179,12 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// A CREATED ROW OPENS A ROUND, named by its first job, which no answer
 	// has cut yet ([PendingRun.Round]).
 	created.Round, created.AnsweredJob = run.LaunchID, ""
+	// A CREATED ROW NAMES ITS RUN FOR ITS LEADS, by the job that created it
+	// ([PendingRun.LeadsRun]): never the caller's, nor the count, since
+	// whatever a key of the turn's leads part held is no lead of this run's.
+	// The create writes NO part: a run with no lead has none, and its readers
+	// tell another run's part from this one's by the name.
+	created.LeadsRun, created.LeadsAppended = run.LaunchID, 0
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
 	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
@@ -336,6 +342,16 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// launch's ordinal and its name are never apart: a row an older build
 		// wrote holds none, and this launch is its 1.
 		existing.LaunchSeq++
+		// A ROW AN OLDER BUILD CREATED NAMES NO RUN FOR ITS LEADS: the first
+		// relaunch this build opens on it names the run by its own job,
+		// before any attach of this build takes a lead, and nothing renames
+		// it ([PendingRun.LeadsRun]). The turn's leads themselves stay beside
+		// the row as they are, and the count of them ([PendingRun.LeadsAppended])
+		// on it: they outlive every relaunch as the row does, while the job's
+		// marks of them go with the rest of its record, just below.
+		if existing.LeadsRun == "" {
+			existing.LeadsRun = run.LaunchID
+		}
 		existing.Launch = run.Launch
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
@@ -1033,6 +1049,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		if hold := release.Hold; hold != nil {
 			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
 		}
+		// THE WINDOW ITS RELAUNCH WAS REFUSED IN, unlike the hold, is KEPT by
+		// a release that names none: it is what the turn's next relaunch
+		// reads, and a resume that failed in between for some other reason
+		// has not tried that relaunch yet ([LaunchRecord.RelaunchRefusedIn]).
+		// A window that is no window is never written.
+		if w := release.RelaunchRefusedIn; w.Valid() {
+			run.Launch.RelaunchRefusedIn = w
+		}
 		return true
 	})
 	return released, err
@@ -1432,10 +1456,20 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // OF A HARNESS'S ([BridgeCall.CallID]), which the bridge gives the calls a box
 // makes: no harness named this one, and what the box's session holds is the
 // HELD call's, under the held call's own id.
+//
+// AND NO SIZE OF THE OUTPUT IT DROPS ([BridgeCall.OutputBytes]), whatever it
+// was handed: a size beside no output reads as a whole output cut to nothing,
+// and the result is the held call's, sealed, as a withheld call's arguments
+// are, whose size the log keeps none of either ([keptCall]). Nor a runner or a
+// bound to wait for it until, which no finished call keeps ([keptCall]). So
+// every field of the call is one this writer keeps or leaves out, never one
+// left to what its caller happens to hand it: the engine's resume hands a
+// name, a failure, who answered and a refusal alone (internal/engine's
+// heldCommit.Record), and the row's budget holds whatever a later one hands.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
-	made.Args, made.Output, made.Held, made.Seq, made.Appended, made.Digest = "", "", false, 0, 0, ""
-	made.Late, made.Abandoned, made.CallID = false, false, ""
+	made.Args, made.Output, made.OutputBytes, made.Digest = "", "", 0, ""
+	made.Held, made.Seq, made.Appended, made.Late, made.Abandoned, made.CallID = false, 0, 0, false, false, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }
 
@@ -1745,6 +1779,20 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 // the ending, or as no record at all, rather than as a newer lease.
 func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) (err error) {
 	defer origin.Stamp(&err)
+	// THE LEADS ITS BRIEF OPENED WITH ARE TAKEN INTO THE RUN'S LEADS FIRST,
+	// beside the row ([CoordStore.takeLeads]), and marked on the job's record
+	// by the write below: a take that lands beside an attach that does not
+	// leaves leads that no job marks, which no brief a recorded job ran told,
+	// and never a job marked with leads the part does not keep. A take
+	// refused, or one the store could not write, refuses the attach before it
+	// writes anything: the launch then abandons its box, as for any refused
+	// attach.
+	var took leadsTaken
+	if box.CommandID != "" && (len(box.Leads.Own) > 0 || len(box.Leads.Told) > 0 || len(box.Leads.ToldUnread) > 0) {
+		if took, err = s.takeLeads(ctx, turnID, box.Leads, fence); err != nil {
+			return fmt.Errorf("sandbox: attach box %s to run %s: %w", box.SandboxID, turnID, err)
+		}
+	}
 	var job handedSet
 	_, attached, err := s.mutateFenced(ctx, turnID, fence, func(run *PendingRun) bool {
 		job = handedSet{}
@@ -1769,8 +1817,21 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			if box.Handed != "" {
 				job = handedSet{Launch: run.LaunchID, LaunchSeq: run.LaunchSeq, Sealed: box.Handed}
 			}
-			// And which brief ([LaunchRecord.Brief]).
+			// And which brief ([LaunchRecord.Brief]), and what it and the
+			// fresh one beside it left out of the round the launch carried on
+			// ([LaunchRecord.BriefOmitted]).
 			run.Launch.Brief = box.Brief
+			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
+			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
+			// AND WHICH LEADS ITS BRIEF TOLD, by their numbers in the run's
+			// leads part, which took the brief's own before this write
+			// ([LaunchRecord.LeadMarks]): only where the row still names the
+			// job and the run they were kept for, so no job is marked with
+			// another's leads, and a count that only grows.
+			if took.landed && run.LaunchID == box.Leads.Job && run.LeadsRun == box.Leads.Run {
+				run.Launch.LeadMarks = slices.Clone(took.marks)
+				run.LeadsAppended = max(run.LeadsAppended, took.appends)
+			}
 			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in a continued
 			// one's place, for which of the two its box said it ran
 			// ([PendingRun.SessionRan]).
@@ -1806,6 +1867,142 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		s.writeHanded(ctx, turnID, job)
 	}
 	return nil
+}
+
+// leadsTaken is what [CoordStore.takeLeads] answers the attach that marks the
+// job's record: the numbers of the leads the brief told that the run's leads
+// part keeps, how many leads the part has taken in all, and whether the part
+// stands as the take decided it.
+type leadsTaken struct {
+	marks   []int
+	appends int
+	landed  bool
+}
+
+// leadsSeen is a leads part a take found and may not take into: another run's,
+// by its name, or one that does not decode.
+type leadsSeen struct {
+	run       string
+	undecoded bool
+}
+
+// takeLeads takes the leads a brief opened with of its own into the turn's
+// leads part ([leadsPart.took]), BEFORE the write of the row that names the
+// job's command ([CoordStore.AttachSandbox]), answering what that write marks
+// on the job's record. See the contract on [PendingStore].
+//
+// ONE COMPARE-AND-SWAP OF THE PART decides it, on the part as it stands: none,
+// started for b's run; b's run's own, taken into; and any other, another run's
+// or one that does not decode, written over by nothing until the ROW says whose
+// it is, read outside the part's decision. A row gone is a run gone: nothing is
+// taken, and the row's write answers that. A row naming b's run names the run
+// the part should be of: the part is an earlier run's of the turn, left beside
+// the row (coord's removeRunPart leaves a part beside a record created again),
+// or one nothing can read, and the take decides once more, cleared to replace
+// exactly that part. A row naming another run makes this a launch of a run
+// that ended, refused with the contract's two answers in its order; and so is
+// a second decision that finds a part other than the one it was cleared to
+// replace, the turn's runs having moved under the launch.
+//
+// A PART STARTED ANEW numbers its first lead past every lead the row counts for
+// the run ([BriefLeads.Counted]), and so does one that holds fewer than the row
+// counts: a part the store lost, or one replaced as unreadable, never has its
+// leads numbered over, and a reader counts every one of them as not kept
+// ([PendingStore.Leads]).
+func (s *CoordStore) takeLeads(ctx context.Context, turnID string, b BriefLeads, fence Fence) (leadsTaken, error) {
+	if b.Run == "" || b.Job == "" {
+		return leadsTaken{}, errors.New("the leads of its brief name no run or no job: a launch names both " +
+			"from the row it opened")
+	}
+	taken, foreign, err := s.takeLeadsOnce(ctx, turnID, b, nil)
+	if err != nil || foreign == nil {
+		return taken, err
+	}
+	row, found, err := s.Get(ctx, turnID)
+	switch {
+	case err != nil:
+		return leadsTaken{}, fmt.Errorf("reading the record a leads part of another run is beside: %w", err)
+	case !found:
+		// THE RUN IS GONE: nothing is taken, and the row's write says so.
+		return leadsTaken{}, nil
+	case row.LeadsRun != b.Run:
+		refusal := ErrRunEnding
+		if outranked(row, fence) {
+			refusal = ErrSeatNotHeld
+		}
+		return leadsTaken{}, fmt.Errorf("the leads of its brief are run %s's, and the record names run %s: the "+
+			"launch is of a run that ended: %w", b.Run, row.LeadsRun, refusal)
+	}
+	taken, again, err := s.takeLeadsOnce(ctx, turnID, b, foreign)
+	if err != nil || again == nil {
+		// REPLACED where the take had a lead of its own to start the run's
+		// part with and the store kept it; a take that only tells earlier
+		// leads again writes nothing, and leaves the other run's part to the
+		// next take that has one.
+		if err == nil && taken.landed && len(b.Own) > 0 {
+			log.InfoContext(ctx, "sandbox_leads_part_replaced", "turn_id", turnID, "run", b.Run,
+				"replaced_run", foreign.run, "undecoded", foreign.undecoded)
+		}
+		return taken, err
+	}
+	return leadsTaken{}, fmt.Errorf("the leads of its brief are run %s's, and beside the record is a part of "+
+		"another run than the one the record cleared it to replace: the turn's runs moved under the launch: %w",
+		b.Run, ErrRunEnding)
+}
+
+// takeLeadsOnce is one decision of [CoordStore.takeLeads] on the part as it
+// stands, cleared to replace the part replacing names (nil for none): what it
+// took, or the part it found and may not take into.
+//
+// LANDED is what the attach marks by: true where the decision wrote nothing,
+// the part keeping every lead the brief opened with already, or wrote and the
+// store kept it; false where the store undid the write, the run having ended
+// under it, and the row's write then refuses the attach.
+func (s *CoordStore) takeLeadsOnce(ctx context.Context, turnID string, b BriefLeads,
+	replacing *leadsSeen) (leadsTaken, *leadsSeen, error) {
+
+	// SET ON EVERY ASK OF decide, which runs again on a lost race.
+	var (
+		taken   leadsTaken
+		foreign *leadsSeen
+		wrote   bool
+	)
+	_, changed, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLeads,
+		func(current coord.Record, found bool) ([]byte, error) {
+			taken, foreign, wrote = leadsTaken{}, nil, false
+			part := leadsPart{Run: b.Run}
+			if found {
+				var held leadsPart
+				undecoded := json.Unmarshal(current.Value, &held) != nil
+				seen := leadsSeen{run: held.Run, undecoded: undecoded}
+				switch {
+				case !undecoded && held.Run == b.Run:
+					part = held
+				case replacing != nil && *replacing == seen:
+					// THE PART THE RECORD CLEARED THIS TAKE TO REPLACE, an
+					// earlier run's or one nothing can read: started anew.
+				default:
+					foreign = &seen
+					return nil, nil
+				}
+			}
+			part.Appends = max(part.Appends, b.Counted)
+			next, marks, grew := part.took(b.Own, b.Told, b.ToldUnread)
+			taken = leadsTaken{marks: marks, appends: next.Appends}
+			if !grew {
+				return nil, nil
+			}
+			wrote = true
+			return json.Marshal(next)
+		})
+	switch {
+	case err != nil:
+		return leadsTaken{}, nil, fmt.Errorf("keeping the leads its brief opened with: %w", err)
+	case foreign != nil:
+		return leadsTaken{}, foreign, nil
+	}
+	taken.landed = !wrote || changed
+	return taken, nil, nil
 }
 
 // handedSet is the part kept beside a run's row holding what its job's box
@@ -1934,6 +2131,33 @@ func (s *CoordStore) Handed(ctx context.Context, run PendingRun) (string, error)
 		return "", fmt.Errorf("%w: %s", ErrHandedIncomplete, why)
 	}
 	return held.of(run.LaunchID), nil
+}
+
+// Leads reads the turn's leads kept beside run's row. See the contract on
+// [PendingStore].
+//
+// THE ROW SAYS WHAT THE PART SHOULD HOLD: the run the leads are of
+// ([PendingRun.LeadsRun]) and how many it has taken ([PendingRun.LeadsAppended]),
+// so a part of another run, or none, reads as none of this run's with every
+// lead the row counts not kept, and a part that took more than the row counts
+// (an attach that took its leads and did not land) is read whole. A cut is
+// never below none, whatever another writer numbered.
+func (s *CoordStore) Leads(ctx context.Context, run PendingRun) (TurnLeads, error) {
+	record, found, err := s.runs.SandboxRunPart(ctx, run.TurnID, coord.RunLeads)
+	switch {
+	case err != nil:
+		return TurnLeads{}, fmt.Errorf("sandbox: read the leads of run %s: %w", run.TurnID, err)
+	case !found:
+		return TurnLeads{Cut: run.LeadsAppended}, nil
+	}
+	var part leadsPart
+	if err := json.Unmarshal(record.Value, &part); err != nil {
+		return TurnLeads{}, fmt.Errorf("sandbox: decode the leads of run %s: %w", run.TurnID, err)
+	}
+	if run.LeadsRun == "" || part.Run != run.LeadsRun {
+		return TurnLeads{Cut: run.LeadsAppended}, nil
+	}
+	return TurnLeads{Kept: part.Leads, Cut: max(0, max(part.Appends, run.LeadsAppended)-len(part.Leads))}, nil
 }
 
 // AddHanded hands run's job's sealed set to add before a refresh writes a
@@ -2243,8 +2467,8 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 	if !listed {
 		call := a.Call
 		call.Late = taken == takeLate
-		// A FINISHED CALL IS NOBODY'S TO WAIT FOR: it carries neither.
-		call.Runner, call.Until = "", time.Time{}
+		// A FINISHED CALL IS NOBODY'S TO WAIT FOR: the append keeps it with
+		// neither the runner nor the bound its entry carried ([keptCall]).
 		l.appendCall(stamp(call), a.Absorbed)
 	}
 	return taken, true, nil

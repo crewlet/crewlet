@@ -316,9 +316,10 @@ func (h *CallHold) sealArgs(ctx context.Context, runID string, held *sandbox.Hel
 		// PAST WHAT THE RUN'S ROW CARRIES OF A HELD CALL (sandbox's
 		// MaxHeldArgsBytes): a call held for approval never reaches its
 		// server, so nothing else bounds its arguments, and the row that
-		// carries them is one broker message. Refused while the run can
-		// still act on it, with the size named — never recorded and refused
-		// at the broker, which no call made again would get past.
+		// carries them is one value of the coordination store, held to what a
+		// key holds. Refused while the run can still act on it, with the size
+		// named — never recorded and refused by the store, which no call made
+		// again would get past.
 		return refused(tools.RefusalInvalid, fmt.Sprintf("%s was not called, and nothing was asked: "+
 			"a call that waits for a person's approval may carry at most %d KiB of arguments, "+
 			"sealed, and this one carries %d KiB. Split it into smaller calls, or shorten what it "+

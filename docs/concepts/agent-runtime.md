@@ -478,11 +478,16 @@ stateDiagram-v2
   refused round is counted past its ceiling. The refusal stamp is not asked:
   after a ceiling is raised it stays until an admitted charge clears it, and a
   park taken on it would hold the seat back from the very charge that could.
-  A window is **too short** when it has room but less than
-  `turn_engine.executor_min_budget_tokens` (25000 by default): every turn
-  launches an executor, and the launch would be refused, so the seat is parked
-  on it too. A counter that cannot be read parks nothing: the turn runs and its
-  own meter, which fails closed, is the gate.
+  A window is **too short** when it has room but less than the floor of the
+  delivery's launch: `turn_engine.executor_min_budget_tokens` (25000 by
+  default) before any launch of it was refused, and after one was, the floor
+  that launch was refused below: its brief beside the static one, a continued
+  session's context with its brief, or, held where its brief takes it past the
+  most room a window can leave the launch, the static one or the room below it
+  ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
+  Every turn launches an executor, and the launch would be refused, so the
+  seat is parked on it too. A counter that cannot be read parks nothing: the
+  turn runs and its own meter, which fails closed, is the gate.
 - **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
   delivery is **deferred** — handed back unacked, for one of its deliveries,
   with a reason naming the window: `budget: day window 2026-09-23 resets
@@ -504,18 +509,30 @@ stateDiagram-v2
   stamps only a window with none. A resumed segment — a collected run whose
   relaunch the floor refuses, or a person's answer waiting to carry a run on —
   has no delivery to park, and is held on the same window instead: on the
-  floor its launch was refused below, which for a relaunch that [continues the
-  turn's session](code-sandbox.md#what-a-continued-launch-costs) is the
-  session's context with its brief where that is the larger, its reason
-  then reading `… below the 62000 an executor launch that continues its session
-  needs (its last request carried 60000 tokens and its brief about 2000;
+  floor its launch was refused below, its brief beside
+  `turn_engine.executor_min_budget_tokens`, its reason then reading `… below
+  the 27000 an executor launch needs (its brief about 2000 beside
+  turn_engine.executor_min_budget_tokens, 25000); resets …`, and for a
+  relaunch that [continues the turn's
+  session](code-sandbox.md#what-a-continued-launch-costs) the session's context
+  with its brief where that is the larger, its reason then reading `… below
+  the 62000 an executor launch that continues its session needs (its last
+  request carried 60000 tokens and its brief about 2000;
   turn_engine.executor_min_budget_tokens is 25000); resets …`.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
   delivered again in order and asked again. A change that lowers a ceiling
-  parks it again at the cost of one delivery.
+  parks it again at the cost of one delivery. A seat parked because its
+  launch was refused below a floor above the static one waits one turnover
+  for that floor at most: the park keeps the window it waited on, on this
+  node, and the seat's next launch, in a later window, is held at the static
+  floor, or the room below it, and drops a session that window still leaves
+  no room for ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
+  A busy company's other seats spend in the window first after every
+  turnover, so a floor within the room a window can leave the launch could be
+  short in every window; waited for in each, the delivery never ran.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
   can run out during the turn. That turn stops with `budget_exhausted` and makes
   no model call after the refusal — its meter holds it, so the next phase, the

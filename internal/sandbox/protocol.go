@@ -134,10 +134,10 @@
 // ([PendingStore.MarkHeldCall]). See heldcall.go.
 //
 // AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
-// store is one broker message, so the run's row and the log beside it are each
-// held to [RowBytes], in the bytes their encoder writes, and every field has a
-// share of its value's. The log's calls have theirs ([BridgeLogBytes]), each
-// call held to its own and the calls it counts without listing kept as
+// store is held to what a key holds, so the run's row and the log beside it are
+// each held to [RowBytes], in the bytes their encoder writes, and every field
+// has a share of its value's. The log's calls have theirs ([BridgeLogBytes]),
+// each call held to its own and the calls it counts without listing kept as
 // identities ([ElidedCall]); on the row, the parked state has its own
 // ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
 // past, and the rest is every other field held by the write that puts it there

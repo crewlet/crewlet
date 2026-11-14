@@ -450,11 +450,11 @@ func (f *FleetStore) MutateSandboxRunPart(ctx context.Context, turnID string, pa
 // removed.
 //
 // ASKED FIRST, of the leader: a run that never opened a job has no log, nor a
-// handed set, and a purge of a key holding nothing leaves a marker behind for
-// every such run, which the marker sweep and every walk of the bucket would
-// then read. Asking first loses nothing to a create racing it: a create that
-// lands after this read finds the record already gone and removes itself
-// ([FleetStore.MutateSandboxRunPart]).
+// handed set, nor leads, and a purge of a key holding nothing leaves a marker
+// behind for every such run, which the marker sweep and every walk of the
+// bucket would then read. Asking first loses nothing to a create racing it: a
+// create that lands after this read finds the record already gone and removes
+// itself ([FleetStore.MutateSandboxRunPart]).
 //
 // NEVER A PART BESIDE A RECORD: the run's turn may have been launched again
 // between the record's removal and this call, its new record created and the

@@ -593,6 +593,20 @@ type SessionCapture struct {
 	// one no read places, which reads no log.
 	Through *int `json:"bridge_through,omitempty"`
 
+	// Omitted is the reads at or below Through that the session holds only as
+	// a count, by their places in the round's log ([BridgeCall.Appended]):
+	// the reads the brief its job's run read counted without listing them, its
+	// read cap spent ([BriefTold], [LaunchRecord.OmittedCalls]). A capture
+	// placed by its own read states its job's; one placed at an earlier
+	// capture's point states that capture's, with the point
+	// ([SessionCapture.placeAtNewest]). A launch that continues the session
+	// tells each of them (internal/agent/runner's keptSession): placed by its
+	// read, the session counts every call the log had taken as held, and
+	// without this would never be told a read its brief only counted. Nil
+	// where its brief left none out, and on a stamp an older build wrote.
+	// Held to [MaxBridgeCalls] ([SessionCapture.Bounded]).
+	Omitted []int `json:"bridge_omitted,omitempty"`
+
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
 	// READS IT — copied off the capture whose save point Through takes, where
 	// the capture is placed by an earlier read — written for a fleet
@@ -758,6 +772,10 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
 	}
+	if len(c.Omitted) > MaxBridgeCalls {
+		return fmt.Errorf("sandbox: it names %d reads its brief left out, past the %d a round's log lists: %w",
+			len(c.Omitted), MaxBridgeCalls, ErrCaptureUnbounded)
+	}
 	return nil
 }
 
@@ -781,11 +799,14 @@ const maxIncarnationBytes = 128
 // placeAt places c's session in its round's calls as read — one read of the
 // run's log, made before the take — holds them: its save point
 // ([SessionCapture.Through]) and, off the same read, the places an older build
-// reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]).
-func (c *SessionCapture) placeAt(read BridgeLog) {
+// reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]); and
+// omitted, the reads at or below that point its session holds only as its
+// job's brief's count ([SessionCapture.Omitted], [LaunchRecord.OmittedCalls]).
+func (c *SessionCapture) placeAt(read BridgeLog, omitted []int) {
 	c.Through = new(read.Appends())
 	c.BridgeSeq = read.LastSeq()
 	c.BridgeOpen = openPlaces(read, c.BridgeSeq)
+	c.Omitted = slices.Clone(omitted)
 }
 
 // SavePoint is the save point c states ([SessionCapture.Through]), and whether
@@ -1449,8 +1470,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// written. So the calls the log had taken before the pack are no measure of
 	// what such an archive holds, and a continuation told only the calls after
 	// them was never told those (savepoint.go).
+	// AND THE READS ITS JOB'S BRIEF COUNTED WITHOUT LISTING THEM, off the job's
+	// record by the brief its run read ([LaunchRecord.OmittedCalls]): placed by
+	// its read, the session holds every call the log had taken but those.
 	if calls != nil {
-		stamp.placeAt(*calls)
+		stamp.placeAt(*calls, current.Launch.OmittedCalls())
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})
 	}
@@ -2244,7 +2268,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
-		stamp.placeAt(*calls)
+		stamp.placeAt(*calls, current.Launch.OmittedCalls())
 	}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)

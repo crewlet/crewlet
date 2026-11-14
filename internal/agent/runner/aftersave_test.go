@@ -258,7 +258,10 @@ func TestTheCallsAfterASaveAreHeldToTheLedgersBudgets(t *testing.T) {
 // in all, every late read and the first three after the save, whose heading
 // counts the six it leaves out. Only what the brief shows is rewritten: a read
 // after the save past the cap costs no rewrite of its long argument, and a late
-// write's long body costs one.
+// write's long body costs one. On a compactor that remembers its rewrites for
+// the turn, as the engine's does, so the fresh brief beside the continuation,
+// which tells the same calls from the round's start, rewrites none of them
+// again.
 //
 // Mutation: render the two lists with a cap each, and eighteen reads are told;
 // spend the cap on the calls after the save first, and three late reads are;
@@ -295,7 +298,7 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	relauncher := &probingLauncher{basis: basis}
 	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: rewrite}, nil).
+		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: rewrite}, compact.NewCache()).
 			For(nil, auxspend.Use{Stage: types.AuxStageTurn}),
 		resume: &runner.Resume{State: parked.State, Bridged: bridged, Lost: &lost}})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
@@ -311,7 +314,7 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 		t.Errorf("the continuation lists %d reads, want the one cap of %d:\n%s", reads, ledger.MaxReadCalls, brief)
 	}
 	afterAt := strings.Index(brief, "## Calls made after the session above was saved")
-	lateAt := strings.Index(brief, "## Calls that finished after the run that made them stopped waiting for them")
+	lateAt := strings.Index(brief, "## Calls the run that made them stopped waiting for, or whose outcome is unknown")
 	if afterAt < 0 || lateAt < afterAt {
 		t.Fatalf("the continuation is not told the calls after its save, then its late calls:\n%s", brief)
 	}
@@ -345,21 +348,32 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 // relaunch that carries a lost job's round on asks the meter once every
 // rewrite its briefs make is spent — before anything is launched, and before
 // the call a person approved would be made — so a run the rewrite left no room
-// for is never launched and paid for whole past the ceiling.
+// for is never launched and paid for whole past the ceiling. The read after the
+// save is one the fresh brief beside the continuation counts past its read cap
+// rather than lists, so its rewrite is the continuation's alone.
 //
 // Mutation: build the continued session's brief after the relaunch asks the
-// meter, as it was built beside its lead, and the run is launched.
+// meter, as it was built beside its lead, and the run is launched; rewrite a
+// read the fresh brief counts without listing, and it is charged twice.
 func TestACarriedOnRelaunchLaunchesNothingWhenTheCallsAfterItsSaveFillTheWindow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
-	// ONE WRITE AFTER THE SAVE, its body past the ledger's value budget.
-	bridged := []runner.BridgedCall{numbered("jira_create",
-		map[string]any{"summary": "after the save", "body": strings.Repeat("b", 2000)}, 2, 2)}
+	// TWELVE READS THE SESSION HOLDS, and ONE AFTER THE SAVE, its argument past
+	// the ledger's value budget.
+	var bridged []runner.BridgedCall
+	for n := 1; n <= ledger.MaxReadCalls; n++ {
+		bridged = append(bridged, numbered("slack_history", map[string]any{"channel": fmt.Sprintf("C%d", n)}, n,
+			n))
+	}
+	bridged = append(bridged, numbered("slack_history", map[string]any{"channel": strings.Repeat("b", 2000)},
+		ledger.MaxReadCalls+1, ledger.MaxReadCalls+1))
 	meter := &ceilingMeter{ceiling: 100}
-	relauncher := &probingLauncher{basis: keptBasis}
+	saved := keptBasis
+	saved.Through = ledger.MaxReadCalls
+	relauncher := &probingLauncher{basis: saved}
 	lost := runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 		budget: meter, compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
@@ -426,4 +440,184 @@ func TestAGuardArmsOnlyTheLoadsThroughItsSavePoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A KEPT SESSION IS TOLD AN EARLIER SUBMIT_WORK DOES NOT STAND. A continuation
+// of a kept capture tells the calls the log took after its save point, and
+// every one was made before the relaunch it opens, so a successful
+// `submit_work` among them is no submission of the work that relaunch carries
+// on: a lost round whose calls since its last answer hold one is collected on
+// it rather than carried on, so the one a loss's continuation tells was made
+// before an earlier answer, by the job that then asked; and a send-back's
+// continuation can tell the submission its review sent back, as it does where
+// the capture was saved before it. Each is told, right after the calls and
+// once, that the submission does not stand and that the run makes its own.
+//
+// AND OF ONE THE SESSION HOLDS, FIRST, IN WORDS OF THE SESSION RATHER THAN OF A
+// LIST: a capture saved once the asking job's submission was answered holds it,
+// and so does a capture of the collected job saved past its submission, which
+// a send-back continues. Neither lists it, and it stands no more than a listed
+// one, so each is told, once and before the calls after its save, that the
+// submission the session shows does not stand; and no line says one among
+// those calls does not stand, which hold none. Said under them, it would tell
+// the run a call it reads nowhere in that list is there.
+//
+// Mutation: never say a successful submission among the calls does not stand,
+// and the first two cases go red; never say one the session holds does not
+// stand, or say it of the calls after the save, and the last two do.
+func TestAKeptSessionIsToldAnEarlierSubmitWorkDoesNotStand(t *testing.T) {
+	t.Parallel()
+	const (
+		notStanding  = "does NOT stand as this work's submission: the work was carried on after it."
+		afterHeading = "## Calls made after the session above was saved"
+	)
+	// asking is the asking job's submission, the first call its round's log
+	// took, made before its question.
+	asking := func() runner.BridgedCall {
+		return runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+			Args:   map[string]any{"outcome": "delivered", "summary": "the asking job's submission"},
+			Result: "submitted"}, Seq: 1, Appended: 1}
+	}
+	// lostAfterAnswer is the round a loss carries on after an answer: the
+	// asking job's submission and question, then the post the job the answer
+	// opened made before it was lost.
+	lostAfterAnswer := func() runner.Resume {
+		return runner.Resume{Answered: 2, Bridged: []runner.BridgedCall{asking(),
+			numbered("ask_and_wait", map[string]any{"question": "the asking job's question"}, 2, 2),
+			numbered("slack_post", map[string]any{"text": "a post after the answer"}, 3, 3),
+		}}
+	}
+	told := func(t *testing.T, brief, submission, last string) {
+		t.Helper()
+		listed := strings.Index(brief, submission)
+		if listed < 0 || strings.Index(brief, last) < listed {
+			t.Fatalf("the session is not told the submission, then the calls after it:\n%s", brief)
+		}
+		said := strings.Index(brief, notStanding)
+		if said < strings.Index(brief, last) || strings.Count(brief, notStanding) != 1 {
+			t.Errorf("the session is not told once, after the calls, that the submission among them does not "+
+				"stand:\n%s", brief)
+		}
+	}
+	// heldFirst fails t unless brief, continuing a session that holds
+	// submission, lists it nowhere, tells the calls after the save down to
+	// last, and says once, before them, that the submission the session shows
+	// does not stand, and never that one among them does not.
+	heldFirst := func(t *testing.T, brief, submission, last string) {
+		t.Helper()
+		after := strings.Index(brief, afterHeading)
+		if after < 0 || !strings.Contains(brief[after:], last) || strings.Contains(brief, submission) {
+			t.Fatalf("the session is not told the calls after its save alone:\n%s", brief)
+		}
+		said := strings.Index(brief, heldSubmissionLine)
+		if said < 0 || said > after || strings.Count(brief, heldSubmissionLine) != 1 {
+			t.Errorf("the session is not told once, before the calls after its save, that the submission it "+
+				"shows does not stand:\n%s", brief)
+		}
+		if strings.Contains(brief, "among them "+notStanding) {
+			t.Errorf("the calls after the save, which hold no submission, are told one among them does not "+
+				"stand:\n%s", brief)
+		}
+	}
+	// sentBack is the brief a send-back continues the collected job's capture,
+	// saved as basis says, with: the job posted, submitted, then filed an issue.
+	sentBack := func(t *testing.T, basis runner.SessionBasis) string {
+		t.Helper()
+		entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+		launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+		bridged := play(t, req, run{calls: []llm.ToolCall{
+			call(t, "slack_post", `{"text":"the first pass"}`),
+			call(t, runner.SubmitWorkTool,
+				`{"outcome":"delivered","summary":"the reviewed submission","deliveries":["slack_post"]}`),
+			call(t, "jira_create", `{"summary":"a call after the submission"}`),
+		}})
+		parked, _ := launched.Suspended()
+		relauncher := &probingLauncher{basis: basis}
+		collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+			resume: &runner.Resume{State: parked.State, Bridged: bridged, Answer: "the first pass is done"}})
+		if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		history := []ledger.Iteration{{Iteration: 1, Calls: ledgerOf(bridged)}}
+		if _, _, err := collector.Execute(t.Context(), 2, "the summary leaves the release out", history); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		again := relauncher.last(t)
+		if again.Session == nil {
+			t.Fatal("the send-back continues no kept session")
+		}
+		return again.Session.Brief
+	}
+	t.Run("a loss after an earlier answer", func(t *testing.T) {
+		t.Parallel()
+		// THE JOB AN ANSWER OPENED, captured cut off at the round's start, and
+		// lost: the job before it submitted and then asked.
+		basis := keptBasis
+		basis.Through, basis.Interrupted = 0, true
+		brief := lostRelaunch(t, basis, lostAfterAnswer()).Session.Brief
+		told(t, brief, "the asking job's submission", "a post after the answer")
+	})
+	t.Run("a send-back", func(t *testing.T) {
+		t.Parallel()
+		// THE COLLECTED JOB, captured cut off once its first call was
+		// answered: its submission came after the save.
+		basis := keptBasis
+		basis.Interrupted = true
+		told(t, sentBack(t, basis), "the reviewed submission", "a call after the submission")
+	})
+	t.Run("a loss whose session holds the submission", func(t *testing.T) {
+		t.Parallel()
+		// THE ASKING JOB, captured once its submission was answered
+		// (keptBasis, at the log's first call), and the job the answer opened
+		// lost without a capture of its own.
+		brief := lostRelaunch(t, keptBasis, lostAfterAnswer()).Session.Brief
+		heldFirst(t, brief, "the asking job's submission", "a post after the answer")
+	})
+	t.Run("a send-back whose session holds the submission", func(t *testing.T) {
+		t.Parallel()
+		// THE COLLECTED JOB, captured once its submission was answered: the
+		// issue it filed after it came after the save.
+		basis := keptBasis
+		basis.Through = 2
+		heldFirst(t, sentBack(t, basis), "the reviewed submission", "a call after the submission")
+	})
+}
+
+// A SESSION HOLDING AN EARLIER TURN'S SUBMIT_WORK IS TOLD NOTHING OF IT. A
+// turn's job may continue the session its conversation's last turn left, which
+// holds that turn's `submit_work`, and then the copy in the job's box holds it
+// too, and so does a capture of the job. It is no call of this round, and only
+// the round's own calls say that a submission the session shows does not
+// stand, so a session whose round holds no submission is told nothing of one:
+// the lead that began this turn said where the earlier turn ended, and a run
+// told that a submission it shows does not stand would look for one of this
+// round's that was never made.
+//
+// Mutation: say it wherever the copy in the box holds every call of the round,
+// or of any successful call the session holds, and a case goes red.
+func TestASessionHoldingAnEarlierTurnsSubmitWorkIsToldNothingOfIt(t *testing.T) {
+	t.Parallel()
+	posted := numbered("slack_post", map[string]any{"text": "the job's own post"}, 1, 1)
+	t.Run("the copy in its job's box, its harness having ended its own run", func(t *testing.T) {
+		t.Parallel()
+		brief := inPlaceBrief(t, inBoxCarryNamed(t, "a person's answer"), true, 0, nil, func(r *runner.Resume) {
+			r.Bridged = []runner.BridgedCall{posted,
+				numbered("ask_and_wait", map[string]any{"question": "the job's own question"}, 2, 2)}
+			r.HarnessEnd = sandbox.HarnessEndOwnRun
+		})
+		if strings.Contains(brief, "does NOT stand") {
+			t.Errorf("a copy whose round holds no submission is told one does not stand:\n%s", brief)
+		}
+	})
+	t.Run("a capture of the job, lost", func(t *testing.T) {
+		t.Parallel()
+		brief := lostRelaunch(t, keptBasis, runner.Resume{Bridged: []runner.BridgedCall{posted,
+			numbered("jira_create", map[string]any{"summary": "an issue after the save"}, 2, 2)}}).Session.Brief
+		if !strings.Contains(brief, "an issue after the save") {
+			t.Fatalf("the session is not told the call after its save:\n%s", brief)
+		}
+		if strings.Contains(brief, "does NOT stand") {
+			t.Errorf("a session whose round holds no submission is told one does not stand:\n%s", brief)
+		}
+	})
 }

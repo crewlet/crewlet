@@ -203,7 +203,7 @@ The block rides the **user** message for the executor, never its system prompt: 
 
 **A delivery the ledger records still counts.** The engine's delivery checks read the whole turn's record, closed rounds included (see [Three checks](#three-checks-in-increasing-cost)), so a round that is told not to repeat an earlier round's comment may — and should — name it in `submit_work`'s `deliveries`; the executor's header says so. Before, the ledger forbade the write and the check demanded it, and a round sent back for a re-read could satisfy neither.
 
-**Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across rounds, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried. Only the reads the round actually CALLED are recorded, not the whole surface's annotation set: the row is persisted across the executor's park, and carrying every read-only tool on a large MCP surface makes it grow with the catalogue rather than with what the round did.
+**Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across rounds, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried, but for one whose line says its outcome is unknown, a call still in flight as its round was read ([The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)), listed failed so no delivery check takes it for a delivery. What it did may have taken effect, so every rule a failed call is read by, the executor's `## Already done earlier in this turn` (with the list or without it) and the reviewer's, excepts it in those terms, the executor's adding that it is checked before it is made again: told that every failed call did not take effect, a reviewer would send the round back to make such a call again, and a run would make it again, a second post or delegation. Only the reads the round actually CALLED are recorded, not the whole surface's annotation set: the row is persisted across the executor's park, and carrying every read-only tool on a large MCP surface makes it grow with the catalogue rather than with what the round did.
 
 ### What the ledger budgets, and why
 
@@ -856,7 +856,12 @@ sequenceDiagram
   harness, below — since it lacks that note and holds the answered ones after
   it. And a note the run's bridge served its harness — OpenCode's, below, which
   may have delivered it with its confirmation lost — is told to a continued
-  session the same way, among the new ones as much as among the read.
+  session the same way, among the new ones as much as among the read. Such a
+  session is told again, apart and before its calls, the messages its job's
+  brief opened with as well, the answer, review or turn's task that carried it
+  on, which the engine keeps beside the run's record for it ([A relaunch
+  continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session));
+  a note is never among them, each note being told by the rule above.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
   that takes them there reads a note after its current step; the take is
@@ -1605,7 +1610,8 @@ turn_engine:
     call_timeout_seconds: 900            # wall-clock cap on the whole call, waves included;
                                          #   also counts toward an executor box's wait for a call
   executor_min_budget_tokens: 25000      # refuse an executor launch below this remaining
-                                         #   budget; a ceiling below it is refused
+                                         #   budget with the launch's brief beside it; a
+                                         #   ceiling below it is refused
   delegation_depth_limit: 3
   extension_enabled: true                # round-cap extension judge (onboarding)
   onboarding_max_tool_rounds_ceiling: 20 # hard cap on total onboarding rounds with extensions

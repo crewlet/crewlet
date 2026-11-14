@@ -1,6 +1,9 @@
 package runner
 
 import (
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -73,5 +76,50 @@ func TestTheDroppedCallsAfterASaveAreNeverUnderCounted(t *testing.T) {
 					tc.through, got, tc.want)
 			}
 		})
+	}
+}
+
+// THE CALLS A BRIEF LEFT OUT ARE THE ONES ITS RENDER COUNTED. The reads a brief
+// counts without listing them are what its launch records it left out, for the
+// next brief to tell, so they are read off the render's own walk
+// ([ledger.ShownCallGroups]), never off a rule of the runner's: two identical
+// reads side by side either side of the read cap are told apart by their
+// places, the earlier shown and the later left out, a write is never named, and
+// as many are named as the render's omitted line counts.
+//
+// Mutation: match a shown call to the last equal call of the group rather than
+// the next, walking it from its end, and the earlier read is named in the later
+// one's place.
+func TestTheCallsABriefLeftOutAreTheOnesItsRenderCounted(t *testing.T) {
+	t.Parallel()
+	read := func(channel string, appended int) BridgedCall {
+		return BridgedCall{Call: ledger.Call{Name: "slack_history", Args: map[string]any{"channel": channel}},
+			Seq: appended, Appended: appended}
+	}
+	var group []BridgedCall
+	for n := 1; n < ledger.MaxReadCalls; n++ {
+		group = append(group, read(fmt.Sprintf("C%d", n), n))
+	}
+	// THE CAP'S LAST READ AND THE FIRST PAST IT, side by side and alike in
+	// everything but their places; then a write, and a read after.
+	group = append(group, read("same", ledger.MaxReadCalls), read("same", 13),
+		BridgedCall{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"text": "a write"}},
+			Seq: 14, Appended: 14},
+		read("C15", 15))
+	opts := ledger.Format(nil, []string{"slack_history"})
+	calls := bridgedLedger(group)
+	shown := ledger.ShownCallGroups([][]ledger.Call{calls}, opts)[0]
+	var places []int
+	for _, call := range leftOut(group, shown) {
+		places = append(places, call.Appended)
+	}
+	if !slices.Equal(places, []int{13, 15}) {
+		t.Errorf("the brief left out the calls at %v, want the later of the two alike and the read after the "+
+			"write, [13 15]", places)
+	}
+	told := ledger.FormatCalls(calls, opts)
+	if omitted := fmt.Sprintf("(+%d further read call(s) omitted)", len(places)); !strings.Contains(told,
+		omitted) {
+		t.Errorf("the render counts other than the %d calls named left out:\n%s", len(places), told)
 	}
 }

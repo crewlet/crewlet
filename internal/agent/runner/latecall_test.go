@@ -158,7 +158,7 @@ func TestALateSubmissionIsNeverTheRounds(t *testing.T) {
 // under words that say the session lacks it.
 func TestALateCallIsToldApartUnderWordsOfItsOwn(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	late := numbered("jira_create", map[string]any{"summary": "the late one"}, 2, 2)
 	late.Late = true
 	bridged := []runner.BridgedCall{
@@ -232,7 +232,7 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 // of the round, the late ones apart from the rest. Where the job's box is gone,
 // which no launch continues in, nothing of it is built, whatever its harness's
 // end. All of it is in the brief the launch continues the copy with, which the
-// floor of that launch counts where a capture measured the copy.
+// floor of that launch counts, whether or not a capture measured the copy.
 //
 // Mutation: tell an own run's copy nothing, read a late call as one it holds,
 // tell a cut-off copy's late calls among the round's other calls, leave the
@@ -242,7 +242,7 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 // build an own run's telling where its box is gone, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	own := numbered("slack_post", map[string]any{"text": "the job's own post"}, 2, 2)
 	late := numbered("jira_create", map[string]any{"summary": "an earlier job's late issue"}, 1, 3)
 	late.Late = true
@@ -311,5 +311,51 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A LATE SUBMISSION IS TOLD ONCE, UNDER ITS OWN WORDS. A `submit_work` the
+// round's log took late is told in the late calls' section with the line that
+// it does not stand because the run that made it had stopped waiting for it.
+// The calls after the save beside it hold no submission, so their section
+// carries no line of its own: the session reads one line on one submission,
+// in words true of it, never a second saying the work was carried on after a
+// call that finished only once its run was replaced.
+//
+// Mutation: say a late submission among the calls after the save as well, and
+// the case goes red.
+func TestALateSubmissionIsToldOnceUnderItsOwnWords(t *testing.T) {
+	t.Parallel()
+	const (
+		lateHeading  = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
+		notStanding  = "does NOT stand as this work's submission"
+		lateWords    = "the run that made it had stopped waiting for it before it returned"
+		earlierWords = "the work was carried on after it"
+	)
+	late := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
+		Args:   map[string]any{"outcome": "delivered", "summary": "the late submission"},
+		Result: "submitted"}, Seq: 3, Appended: 3, Late: true}
+	brief := afterSaveBrief(t, 1, []runner.BridgedCall{
+		numbered("slack_post", map[string]any{"text": "held by the session"}, 1, 1),
+		numbered("jira_create", map[string]any{"summary": "the call after the save"}, 2, 2),
+		late,
+	}, nil)
+	since, apart, found := strings.Cut(brief, lateHeading)
+	if !found {
+		t.Fatalf("the late submission is not told apart, under the late calls' words:\n%s", brief)
+	}
+	if !strings.Contains(since, "the call after the save") {
+		t.Fatalf("the call after the save is not told before the late calls:\n%s", brief)
+	}
+	if strings.Contains(since, earlierWords) {
+		t.Errorf("the calls after the save, which hold no submission, are told one among them does not stand:\n%s",
+			brief)
+	}
+	if !strings.Contains(apart, "the late submission") || !strings.Contains(apart, lateWords) {
+		t.Errorf("the late submission is not told under the late calls' words, with the line that it does not "+
+			"stand:\n%s", brief)
+	}
+	if n := strings.Count(brief, notStanding); n != 1 {
+		t.Errorf("the session is told %d times that a submission does not stand, want once:\n%s", n, brief)
 	}
 }

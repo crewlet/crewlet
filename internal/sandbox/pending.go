@@ -204,6 +204,16 @@ type Release struct {
 	// release put on it.
 	Hold *Refusal
 
+	// RelaunchRefusedIn, where it names a window, is the budget window the
+	// claim's resume had its relaunch refused below its floor in
+	// ([Refusal.Window]): the release counts it onto the job's record
+	// ([LaunchRecord.RelaunchRefusedIn]) for the turn's next relaunch. A held
+	// completion's names one beside its Hold, and a recorded answer's whose
+	// relaunch its seat's budget turned back names one with no Hold, its wait
+	// being its own series'. The zero window counts nothing, and leaves one an
+	// earlier release counted.
+	RelaunchRefusedIn BudgetWindow
+
 	// Collected is whether the claim being handed back READ THE JOB'S BOX
 	// BACK — a collection that succeeded, whose park or resume then failed
 	// — and it ENDS the job's run of failed collections: the release clears
@@ -733,10 +743,11 @@ type BridgeCall struct {
 
 	// Late marks a call its round's log took AFTER ITS JOB WAS REPLACED: still
 	// running when a relaunch that carries the round on — a loss's, a person's
-	// answer's, a replaced sign-in's — was readied, and finished only after its
-	// harness died, gave up on it or was replaced. A call of the round all the
-	// same, whose effect happened: listed and numbered as every call is, but
-	// its spend is never the later job's ([PendingStore.AppendBridgeCall]).
+	// answer's, a replaced sign-in's, a refused session's — was readied, and
+	// finished only after its harness died, gave up on it or was replaced. A
+	// call of the round all the same, whose effect happened: listed and
+	// numbered as every call is, but its spend is never the later job's
+	// ([PendingStore.AppendBridgeCall]).
 	// THE LOG'S TO GIVE, as a call's number is, in two writes alone: the append
 	// that takes the call once the log is open to a later job of the round
 	// ([BridgeLog.take]), which replaces whatever a caller handed in; and that
@@ -843,8 +854,9 @@ type BridgeCall struct {
 	// appended after its result was recorded on the row
 	// ([PendingStore.RecordHeldResult], [OwedCall]). A call of its round
 	// like any other, which is what the readers of whether the turn replied
-	// need of it; its arguments and output are never here, and ride the row
-	// sealed on the held call until the next job opens.
+	// need of it; its arguments and output are never here, nor the size of
+	// either, and ride the row sealed on the held call until the next job
+	// opens ([approvedCall]).
 	Approved bool `json:"approved,omitempty"`
 
 	// HeldID names the held call an Approved call was made for
@@ -874,15 +886,17 @@ type BridgeCall struct {
 	// under (coord.TakerResource), by which a collection on ANY node reads
 	// whether that process still runs the call — a call whose process stopped
 	// will never be recorded, and is not waited for. Empty on a finished call,
-	// and on an entry whose process holds no taker lease, which is waited for
-	// by its bound alone ([BridgeCall.Until]). Additive on the wire.
+	// which the log keeps with none whoever hands it one ([keptCall]), and on
+	// an entry whose process holds no taker lease, which is waited for by its
+	// bound alone ([BridgeCall.Until]). Additive on the wire.
 	Runner string `json:"runner,omitempty"`
 
 	// Until is the instant past which no collection waits for a call whose
 	// entry is in flight: when the bridge took it, its tool's own bound and the
 	// bridge's margin after it (internal/api/mcpbridge's wait.go), stamped by
 	// the bridge, which alone knows the tool's bound, so a node that does not
-	// hold the call reads it. Zero on a finished call. Additive on the wire.
+	// hold the call reads it. Zero on a finished call, which the log keeps
+	// with none whoever hands it one ([keptCall]). Additive on the wire.
 	Until time.Time `json:"until,omitzero"`
 
 	// Extra is every key of the call this build does not know, kept verbatim
@@ -1164,6 +1178,22 @@ type PendingRun struct {
 	// under this build is 1; a job launched under 0 is never captured, since
 	// nothing could order it.
 	LaunchSeq int64 `json:"launch_seq,omitempty"`
+
+	// LeadsRun is the run its turn's leads part is of ([leadsPart.Run],
+	// [PendingStore.Leads]): the job whose launch created the row, or, for a
+	// row an older build created, the first job this build's relaunch opened
+	// on it. Written once and never again, so a part an earlier run of the
+	// turn left beside the row, which the store may leave by design
+	// (coord's removeRunPart leaves a part beside a record created again), is
+	// told from this run's own.
+	LeadsRun string `json:"leads_run,omitempty"`
+
+	// LeadsAppended is how many leads the run's leads part had taken as the
+	// newest attach that marked any left it ([leadsPart.Appends]): what a
+	// reader holds the part to, so a part that is gone, short, unreadable or
+	// another run's tells every lead it cannot give back as not kept, never
+	// as none. Only grows.
+	LeadsAppended int `json:"leads_appended,omitempty"`
 
 	// Capture is the newest capture of the turn's harness session the row
 	// records — begun, landed, refused or unresolved — and Kept the newest
@@ -1627,7 +1657,7 @@ type PendingRun struct {
 	// HELD TO [ExecuteStateBytes], its share of the row: the park condenses
 	// a state past it (internal/agent/execstate's EncodeWithin), and
 	// [PendingStore.MarkSuspended] refuses one still past it
-	// ([ErrStateTooLarge]) rather than write a row the broker refuses.
+	// ([ErrStateTooLarge]) rather than write a row the store refuses.
 	//
 	// RAW BYTES, because this package carries the conversation and never
 	// reads it. Held as a decoded map it was decoded twice on every
@@ -2561,6 +2591,14 @@ type PendingStore interface {
 	// THE CREATE ALONE and kept by every reset, whatever the reset's run
 	// carries: the turn's first launch made the read, and a relaunch
 	// continues the base that read named, never one read again.
+	//
+	// THE RUN IS NAMED FOR ITS LEADS ([PendingRun.LeadsRun]) by the create,
+	// and by the first reset of a row that names none (an older build's), and
+	// never again, whatever the run carries; and how many leads its part has
+	// taken ([PendingRun.LeadsAppended]) is kept by every reset. The reset
+	// clears the job's marks with the rest of its record
+	// ([LaunchRecord.LeadMarks]) and leaves the turn's leads beside the row
+	// as they are: they outlive every relaunch as the row does.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -2892,6 +2930,20 @@ type PendingStore interface {
 	// to write it is not the attach's, which has landed, and leaves the job
 	// with no set, so its captures are refused.
 	//
+	// And the leads the brief the job was handed opened with of its own
+	// ([BoxRef.Leads]) are taken into the turn's leads part beside the record
+	// FIRST ([PendingStore.Leads]), once each by their identity and numbered
+	// as taken, held to [MaxKeptLeadBytes] and [MaxKeptLeads], the oldest
+	// dropped first and still counted; then the write that names the command
+	// marks on the job's record every lead its brief told, its own and the
+	// earlier ones it told again, or was to and could not read
+	// ([BriefLeads.ToldUnread]), by those numbers ([LaunchRecord.LeadMarks]),
+	// where the record still names the job and the run they were kept for. A
+	// part another run of the turn left is replaced only where the record
+	// names this launch's run; where it names another, the attach is refused
+	// as below. A take the store cannot write refuses the attach. An attach
+	// that names no command takes none of it.
+	//
 	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
 	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
 	// same order: a newer lease owns the run ([ErrSeatNotHeld]), whether or
@@ -2937,7 +2989,7 @@ type PendingStore interface {
 	// [ErrStateTooLarge] before anything is written: the park condenses its
 	// state to fit (internal/agent/execstate's EncodeWithin), so a state past
 	// it is one the turn's own context will not fit, and a row that big would
-	// be refused by the broker on this write and every write after it.
+	// be refused by the store on this write and every write after it.
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall makes one step of a tool call a bridged run made
@@ -2988,13 +3040,14 @@ type PendingStore interface {
 	// ([BridgeLog.take]):
 	//
 	//   - A LATE CALL OF THE ROUND, where the log is still on that round — a
-	//     relaunch that carried it on after a loss, a person's answer or a
-	//     replaced sign-in: its entry updated, the call listed as every call of
-	//     the round is, numbered, and MARKED ([BridgeCall.Late]), since no
-	//     brief of the round told it and the session of the job that made it
-	//     may not hold it. Its spend is written nowhere: on the next job's
-	//     record that job's resume would pay it as its own, and the job it was
-	//     made in is over. Answered recorded beside [ErrJobReplaced].
+	//     relaunch that carried it on after a loss, a person's answer, a
+	//     replaced sign-in or a refused session: its entry updated, the call
+	//     listed as every call of the round is, numbered, and MARKED
+	//     ([BridgeCall.Late]), since no brief of the round told it and the
+	//     session of the job that made it may not hold it. Its spend is
+	//     written nowhere: on the next job's record that job's resume would pay
+	//     it as its own, and the job it was made in is over. Answered recorded
+	//     beside [ErrJobReplaced].
 	//   - A CALL OF ANOTHER ROUND — a relaunch that started a new round, as a
 	//     send-back does, or an append that names no round — is NOT RECORDED:
 	//     the new round numbers its own calls, and the old round's are folded
@@ -3162,6 +3215,25 @@ type PendingStore interface {
 	// recorded. Unfenced, like a code hold: what a box holds is true whoever
 	// holds the seat.
 	AddHanded(ctx context.Context, run PendingRun, add func(sealed string) (next, incomplete string)) (bool, error)
+
+	// Leads reads the turn's leads kept beside run's row, as the row expects
+	// them: every lead of the run the part keeps, oldest first, and how many
+	// earlier ones it does not, the part's own cut and every lead the row
+	// counts ([PendingRun.LeadsAppended]) that the part cannot give back. A
+	// part of another run of the turn, or none, is none of this run's, and
+	// all the row counts are not kept. An error is a part the store could not
+	// read or that does not decode, never "none": the caller tells every lead
+	// the row counts as not kept, and hands the ones the job's record marks on
+	// by their numbers for a later read to tell ([TurnLeads.Unread]).
+	//
+	// Kept BESIDE the record, never on it, as the bridged log is: up to
+	// [MaxKeptLeadBytes] of sealed leads, which every read of the record
+	// would carry though only a resume reads them ([Coordinator.leadsAt]).
+	// Taken in by the attach that names a job's command
+	// ([PendingStore.AttachSandbox]), before its write of the record, and
+	// never written by any other write: every relaunch keeps them as the
+	// record keeps itself.
+	Leads(ctx context.Context, run PendingRun) (TurnLeads, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from
@@ -4138,6 +4210,19 @@ type BoxRef struct {
 	// Brief is which brief the launch handed the job's run
 	// ([LaunchRecord.Brief]), written with the job's command as Handed is.
 	Brief BriefKind
+
+	// BriefOmitted is what that brief left out of the round the launch carries
+	// on, and FreshOmitted what the fresh one its box falls back to left out,
+	// beside a brief that continues a session ([BriefTold],
+	// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]): written with
+	// the job's command as Brief is.
+	BriefOmitted, FreshOmitted []int
+
+	// Leads is what that brief opened with of its own and the earlier leads it
+	// told again, or was to and could not read ([BriefLeads]): taken into the
+	// run's leads part by the attach that names the job's command, before its
+	// write of the row, and marked on the job's record in that write.
+	Leads BriefLeads
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4335,6 +4420,39 @@ type LaunchRecord struct {
 	// its box can say ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
 
+	// BriefOmitted is the reads of the round the launch carried on that the
+	// brief it handed the job's run counted without listing them, and
+	// FreshOmitted those the fresh brief its box falls back to counted so,
+	// written beside a brief that continues a session: by their places in the
+	// round's log ([BriefTold]), written with Brief by the attach that names
+	// the job's command, where the launch carried a round on. Read through
+	// [LaunchRecord.OmittedCalls], by the brief the job's run read.
+	//
+	// ON THE JOB'S RECORD, because what a session holds is what its briefs
+	// TOLD: the job's copy of its session in its box, and a capture of it
+	// placed by its own read, hold those reads only as a count, and a relaunch
+	// continuing either reads the record after this launch is long gone, on
+	// whichever node; the next launch replaces the record whole once it has
+	// read it. Never on the executor log, whose turn row carries no save point
+	// to read a set against.
+	BriefOmitted []int `json:"brief_omitted,omitempty"`
+	FreshOmitted []int `json:"fresh_omitted,omitempty"`
+
+	// LeadMarks is the leads the brief the job's run read told, its own and
+	// every earlier one it told again or was to and could not read
+	// ([BriefTold.ToldUnread]), by the number its run's leads part gave each
+	// ([KeptLead.Appended]), ascending: written by the attach that names
+	// the job's command, once the part has taken the brief's own
+	// ([PendingStore.AttachSandbox]), and cleared with the rest of the job's
+	// record by the reset that opens the next job. Each names a lead the part
+	// keeps, so there are at most [MaxKeptLeads].
+	//
+	// ON THE JOB'S RECORD, as the reads a brief left out are: a continuation
+	// of the job's session that may lack its brief tells again the leads that
+	// brief told ([LaunchRecord.ToldLeads]), read beside the row after the
+	// launch is long gone, on whichever node.
+	LeadMarks []int `json:"lead_marks,omitempty"`
+
 	// FreshSessionID is the session of its own the job's script starts in the
 	// continued one's place, where its launch continued one and its box
 	// neither held nor restored it ([RunHandle.FreshSessionID]); empty for a
@@ -4435,6 +4553,28 @@ type LaunchRecord struct {
 	ResumeFailures     int       `json:"resume_failures,omitempty"`
 	ResumeFailingSince time.Time `json:"resume_failing_since,omitzero"`
 
+	// RelaunchRefusedIn is the budget window the last relaunch a resume of
+	// this job's turn tried was refused below its floor in, where one was
+	// ([Refusal.Window]): what the turn's next relaunch reads to know it has
+	// waited that window out, so in a later window it is held to no more than
+	// the floor a launch with no brief needs (internal/engine's launchfloor.go)
+	// and waits for its brief's room one turnover at most. Its floor is within
+	// the most room a window can leave it and still past what a busy window
+	// leaves at the launch's read, the other seats spending there first after
+	// every turnover, so waited for again in every window, it went out in none.
+	//
+	// ON THE JOB'S RECORD, WRITTEN BY THE RELEASE ([Release.RelaunchRefusedIn]),
+	// for the reason ResumeFailures is: the next relaunch may be tried on
+	// another node or after a restart, a held completion's when its hold
+	// lifts, and a recorded answer's on its series' next attempt. Kept by a
+	// release that names none, and replaced with the job by the relaunch that
+	// goes out, which is the one it was kept for. An older build's relaunch
+	// drops it with the job's record too, and its release carries it in
+	// [LaunchRecord.Extra], so it never outlives the job it was counted onto;
+	// a record that holds none, as an older build's release writes it, reads
+	// as never refused, which costs that relaunch at most one more window.
+	RelaunchRefusedIn BudgetWindow `json:"relaunch_refused_in,omitzero"`
+
 	// Collected is whether a collection READ THIS JOB'S BOX BACK and handed
 	// what it found to the job's turn, whose resume then gave the claim back
 	// — held by the seat's budget, or to be retried ([Release.Collected]).
@@ -4524,6 +4664,41 @@ type LaunchRecord struct {
 	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
 	// record by the relaunch that replaces it whole, since it is the job's.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// OmittedCalls is the reads of the round the brief the job's run read counted
+// without listing them ([LaunchRecord.BriefOmitted], [BriefTold]), resolved by
+// which brief the launch handed it ([LaunchRecord.Brief]) and which session its
+// box said it started ([LaunchRecord.SessionStart]):
+//
+//   - a fresh brief: its own set;
+//   - a brief that continues a session, which the box took up: that brief's;
+//   - one whose box started a session of its own in that one's place, its
+//     restore having failed: the fresh brief's, which it was handed instead;
+//   - one whose box never said, or said it in a word this build does not know,
+//     and a brief this build does not know: BOTH, the union, since the run read
+//     one of the two and the record cannot say which: told again rather than
+//     never, the safe direction for every reader of it.
+//
+// Nil where the brief left none out, and on a record a build before this one
+// wrote, which names none.
+func (l LaunchRecord) OmittedCalls() []int {
+	switch {
+	case l.Brief == BriefFresh:
+		return l.BriefOmitted
+	case l.Brief.Continues() && l.SessionStart == SessionStartContinued:
+		return l.BriefOmitted
+	case l.Brief.Continues() && l.SessionStart == SessionStartFresh:
+		return l.FreshOmitted
+	}
+	union := slices.Clone(l.BriefOmitted)
+	for _, place := range l.FreshOmitted {
+		if !slices.Contains(union, place) {
+			union = append(union, place)
+		}
+	}
+	slices.Sort(union)
+	return union
 }
 
 // SessionRan is the harness session the job the row holds worked in, for a

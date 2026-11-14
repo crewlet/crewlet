@@ -26,10 +26,13 @@ import (
 // memory (seatpark.go): WHO HAS TO AGREE ON IT is that node alone, so only that
 // node can say it holds one. The sweep runs once across the fleet, under the
 // maintenance duty, on whichever node holds the duty — seldom the seat's — and
-// two parks it must see are a recount of nothing it can read: a seat parked
-// below the floor its first launch needs to continue its conversation's
-// session, whose window has room for the static floor all the while
-// (budgetpark.go), and a seat every model of whose chain is limited, which no
+// two parks it must see are a recount of nothing it can read: a seat parked on
+// a floor its first launch was refused below that is larger than the static
+// one (its brief beside the static floor, or the context of the conversation's
+// session it continues beside its brief), whose window has room for the static
+// floor all the while (budgetpark.go; a launch held at the static floor, or at
+// the room below it, was refused in a window the recount reads as short of the
+// static floor too), and a seat every model of whose chain is limited, which no
 // counter records (providerpark.go). Judged by the duty node's own parks,
 // either was no park at all on every node but its holder, and an ask waiting
 // behind it was closed under the answer still coming: a reply the asker never

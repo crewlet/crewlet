@@ -133,6 +133,13 @@ type carried interface {
 	// it is told there, by the lead of the brief the continuation opens, and
 	// in no list of the round's calls that brief tells ([Runner.calledAfter]).
 	tellsHeld() string
+	// lead is what carries the round on as the run keeps it beside its
+	// record, for a later brief to a session that may lack the one this opens
+	// to tell again (leads.go), nil where the engine's own words carry it on: a
+	// loss's and a replaced sign-in's, which the cut-off section of every
+	// later brief says as well, and a provider's refusal's, whose run did no
+	// work for a later session to lack ([Refused]).
+	lead() *sandbox.Lead
 	// keeps says the round may be carried on in the turn's kept session at
 	// all (continued.go); branch is the work-in-progress branch the run
 	// before pushed, where the engine knows it, for a box that replaced its.
@@ -186,6 +193,7 @@ func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
 func (l *Lost) tellsHeld() string                       { return "" }
+func (l *Lost) lead() *sandbox.Lead                     { return nil }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }
 func (l *Lost) what() string                            { return "carrying on the round its host lost" }

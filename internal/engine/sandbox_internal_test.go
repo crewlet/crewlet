@@ -989,7 +989,7 @@ func TestAResumedRunCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 //
 // Mutation: encode the state whole (execstate.Encode), and the store's own
 // refusal reads as a write that may have landed; skip both refusals, and three
-// MiB land on a row whose every later write the broker would refuse.
+// MiB of state land on a row whose share of it is two.
 func TestAParkPastItsShareOfTheRowIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))

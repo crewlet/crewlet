@@ -54,12 +54,14 @@ type firstCommit struct {
 	mu     sync.Mutex
 	marked bool
 	result *sandbox.HeldResult
+	// kept is the result as the row seals it, which the answer's lead keeps.
+	kept *sandbox.HeldKept
 }
 
 // prior is how the row holds the call once some attempt marked it.
 func (c *firstCommit) prior() runner.HeldPrior {
 	if c.result != nil {
-		return runner.HeldPrior{Made: true, Result: *c.result}
+		return runner.HeldPrior{Made: true, Result: *c.result, Kept: c.kept}
 	}
 	return runner.HeldPrior{}
 }
@@ -83,13 +85,16 @@ func (c *firstCommit) Begin(context.Context) (runner.HeldPrior, error) {
 	return c.prior(), nil
 }
 
-func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult, _ toolloop.ToolResult) error {
+func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult,
+	_ toolloop.ToolResult) (sandbox.HeldKept, error) {
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.result == nil {
 		c.result = &result
+		c.kept = &sandbox.HeldKept{Result: "sealed: " + result.Output, ID: "held-1"}
 	}
-	return nil
+	return *c.kept, nil
 }
 
 // heldCarry is a runner carrying on a run that parked on a call to

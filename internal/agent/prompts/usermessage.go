@@ -23,6 +23,17 @@ import (
 // the engine reads the whole turn's record (turn.Record), and a round sent
 // back for a re-read that believed otherwise submitted with no citation, or
 // went looking for some other surface to deliver on.
+//
+// NOT EVERY `→ error` FAILED. A call an executor run's log still held in
+// flight when its round was read is on the round's record failed, so no
+// delivery check or citation takes it for something done, and its line says
+// its outcome is unknown and that what it did may have taken effect
+// (internal/agent/runner's UnfinishedNote). Under a rule that every `→ error`
+// did not take effect and is to be retried, a run would make such a call
+// again: a second post or delegation, the duplicate this header exists to
+// prevent. So the rule excepts it in the line's own terms, as every rule such
+// a call is read by does ([ContinuedRoundRules], [ReviewHeader],
+// [lateCallsHeader]).
 const PriorWorkHeader = "## Already done earlier in this turn" +
 	"\nAn earlier round of this turn was sent back. Every call below marked" +
 	" `→ success` ALREADY RAN:" +
@@ -32,7 +43,8 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" issue it again — a person sees the second one as a duplicate. If it" +
 	" was the delivery, it still counts: name it in `" + toolname.SubmitWork + "`'s" +
 	" `deliveries`." +
-	"\n- **`→ error`** did not take effect: retry it, fixed." +
+	"\n- **`→ error`** did not take effect, unless it says its outcome is unknown: that one may have, so" +
+	" check whether it did before making it again. Retry any other, fixed." +
 	"\nDeliver only what is still missing. A follow-up to an earlier" +
 	" delivery ADDS to it — reply in its thread, edit the item — rather than" +
 	" re-sending it, and is not a duplicate."

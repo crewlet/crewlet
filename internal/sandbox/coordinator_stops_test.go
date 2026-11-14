@@ -1007,6 +1007,13 @@ func (s *refusingStore) AddHanded(ctx context.Context, run PendingRun,
 	return s.inner.AddHanded(ctx, run, add)
 }
 
+func (s *refusingStore) Leads(ctx context.Context, run PendingRun) (TurnLeads, error) {
+	if s.called("Leads") {
+		return TurnLeads{}, errRefusedCall
+	}
+	return s.inner.Leads(ctx, run)
+}
+
 func (s *refusingStore) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
 	if s.called("WatchLog") {
 		return nil, errRefusedCall

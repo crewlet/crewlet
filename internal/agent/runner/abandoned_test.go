@@ -21,8 +21,8 @@ import (
 // WORDS. A kept session saved past its number holds every other call at or
 // below the point, and the job's own copy in its box whose harness ended its
 // own run every call of the round: each is told the call all the same, apart,
-// under the words of calls that finished after the run that made them stopped
-// waiting for them, and nothing they hold. The copy cut off, told every call of
+// under the words of calls the run that made them stopped waiting for, and
+// nothing they hold. The copy cut off, told every call of
 // the round, tells it there too rather than among the round's other calls. Held
 // at the point, no continuation was told it, and a run shown the call as timed
 // out could make it again.
@@ -31,7 +31,7 @@ import (
 // calls after the save, and a case goes red.
 func TestACallNobodyWaitedForIsToldPastEverySavePoint(t *testing.T) {
 	t.Parallel()
-	const lateHeading = "## Calls that finished after the run that made them stopped waiting for them"
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
 	gaveUp := numbered("delegate", map[string]any{"task": "the worker it gave up on"}, 2, 2)
 	gaveUp.Abandoned = true
 	bridged := []runner.BridgedCall{

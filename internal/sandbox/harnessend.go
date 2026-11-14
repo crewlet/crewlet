@@ -120,8 +120,9 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 // and the job then reads as one whose harness may have been cut off: a relaunch
 // that reads the record later carries its round on in its box telling the
 // session there what such a copy may lack, which it may already hold, and that
-// longer brief counts toward the launch's floor where a capture measured the
-// copy's context (internal/engine's continuedFloor). The claim this read collects
+// longer brief counts toward the launch's floor, beside the copy's context
+// where a capture measured it and beside the static floor where none did
+// (internal/engine's continuedFloor). The claim this read collects
 // for is told what the read found whether or not the record landed
 // ([Coordinator.collectClaimed]).
 func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, end HarnessEnd) {

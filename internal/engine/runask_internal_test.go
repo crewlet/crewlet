@@ -64,7 +64,7 @@ func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 			{Name: builtin.AskAndWaitTool, Seq: 2},
 			{Name: runner.SubmitWorkTool, Seq: 3},
 		},
-	}}, nil, nil)
+	}}, nil, nil, nil)
 	if got.Answered != 2 || len(got.Bridged) != 3 {
 		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the log's 3",
 			got.Answered, len(got.Bridged))
@@ -87,7 +87,7 @@ func TestAResumeIsSeededWithWhatItsLogCountsWithoutListing(t *testing.T) {
 		Elided:        63,
 		ElidedCalls:   []sandbox.ElidedCall{{Name: "post_message", Digest: "d", Calls: 60, Failed: 1}},
 		AbsorbedCalls: []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w", Calls: 2}},
-	}}, nil, nil)
+	}}, nil, nil, nil)
 	wantElided := []ledger.Elided{{Calls: 3}, {Name: "post_message", Digest: "d", Calls: 60, Failed: 1}}
 	wantAbsorbed := []ledger.Elided{{Name: "leave_channel", Digest: "w", Calls: 2}}
 	if !slices.Equal(got.Elided, wantElided) || !slices.Equal(got.Absorbed, wantAbsorbed) {

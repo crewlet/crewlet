@@ -73,6 +73,24 @@ const withdrawnTail = "Carry on with the task from where you stopped, under your
 	"stands now, and finish it as the task asks. If you still need a person's answer or " +
 	"approval, ask again in words that fit your access now."
 
+// happened is what every fresh run carrying an asking run's work on is told of
+// what that run did through the seat's tools, as [Lost.Reseed] and
+// [Rotated.Reseed] tell it: it happened, and is to be checked before any of it
+// is done again. Said at the end of its account of the run before it, before
+// where the work is and what to finish it with ([Asked.freshMachine]), in every
+// branch of [Asked.Reseed]: an answer, a withdrawal, a refused reply and a held
+// call, answered or withdrawn.
+//
+// THE LIST OF THE ROUND'S CALLS BESIDE IT CANNOT SAY THIS ALONE
+// (internal/agent/prompts' CalledBefore): it tells only what the run did
+// through the seat's tools that the round's record kept one by one, so
+// neither the run's work outside them (its commits, its pushes, what its shell
+// did) nor a call its record counted only in a tally or past the read cap is
+// told by any line. Lost and rotated rounds' fresh briefs said it; an asked
+// one's alone did not, though its run had done as much before it stopped to
+// ask.
+const happened = "What it did through your tools before it stopped did happen: check before doing any of it again."
+
 // withdrew is the seat's own reason, as the run reads it, under fence token b.
 func (a Asked) withdrew(b provenance.Boundary) string {
 	return "You withdrew it before anybody answered: " + provenance.Neutralise(b, a.Answer)
@@ -230,6 +248,7 @@ func (a Asked) Reseed(b provenance.Boundary) string {
 			w.WriteString("It stopped to ask: " + a.asked(b) + "\n\n")
 		}
 		w.WriteString(a.withdrew(b) + "\n\n")
+		w.WriteString(happened + "\n\n")
 		w.WriteString(a.freshMachine("under your access as it stands now"))
 		return w.String()
 	}
@@ -239,6 +258,7 @@ func (a Asked) Reseed(b provenance.Boundary) string {
 		w.WriteString("It stopped to ask: " + a.asked(b) + "\n\n")
 	}
 	w.WriteString(a.answered(b) + "\n\n")
+	w.WriteString(happened + "\n\n")
 	w.WriteString(a.freshMachine("with this answer incorporated"))
 	return w.String()
 }
@@ -274,6 +294,7 @@ func (a Asked) refusedReseed(b provenance.Boundary) string {
 	}
 	w.WriteString("The person it asked replied, but " + a.Refused.said() + ", so the engine did " +
 		"not take it as the answer, and that run and you were given none of it. " + recorded + "\n\n")
+	w.WriteString(happened + "\n\n")
 	w.WriteString(a.freshMachine("as it asks") + "\n\n")
 	w.WriteString(a.Refused.askAgain("its"))
 	return w.String()

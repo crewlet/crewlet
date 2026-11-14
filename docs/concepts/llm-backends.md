@@ -1514,8 +1514,8 @@ a call still in flight when the turn launches its next run (a delegated worker
 outliving the harness that asked for it) cost lands on no run's record, where
 the next run's resume would pay for it as its own. The call itself is listed in
 its round's log, marked late, where the next run carries the round on — a loss's
-relaunch, a person's answer's, a replaced sign-in's — and dropped where the next
-run starts a new round ([A call that ends after its job's
+relaunch, a person's answer's, a replaced sign-in's, a refused session's — and
+dropped where the next run starts a new round ([A call that ends after its job's
 relaunch](code-sandbox.md#a-relaunch-continues-the-turns-session)). One its
 harness cancelled — Claude Code and OpenCode cancel a call at its server's
 timeout, which the box is handed as the bridge's own bound, and the model reads
