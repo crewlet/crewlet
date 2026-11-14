@@ -306,12 +306,33 @@ const (
 	// attachment's string toolUseID.
 	threadChainMaxCalls = 1 << 17
 	// threadChainMaxSpread is the longest list the chain reads the resume as
-	// passing into one call's arguments whole (whySpread). JavaScriptCore, the
-	// engine Claude Code's runtime runs on, refuses a call more arguments than
-	// its bound on them (its maxArguments, 65,536), and so does the spread
-	// that would pass them: the load spreads a content-replacement record's
-	// list, and the recovery spreads stretches of the walked chain. Half that
-	// bound, so a thread the chain models is one no such spread comes near.
+	// passing into one call's arguments whole (whySpread): the load's spread
+	// of a content-replacement record's list (2.1.322's `rr.push(...Ks)`
+	// @293820306, 2.1.310's `Kr.push(...Eo.replacements)` @247196171); the
+	// recovery's of each stretch of the walk outside its windows and of the
+	// records it hangs under one walked record (`Ot.push(...n.slice(Ct,Dt+1))`
+	// @293753056, `Ot.push(...n.slice(Ct))` @293753294,
+	// `Ot.push(...an.get(so.uuid)??[])` @293753212; 2.1.310's @247138003,
+	// @247138241, @247138159); and the tails' walk by breadth's
+	// (`n.push(...h)` @293747616, @247132204). The recovery spreads a reply's
+	// records into Math.max as well (@293751323, @247136270), only where it
+	// hangs a result by its call's id, which the chain refuses
+	// (whyResultByCall).
+	//
+	// JavaScriptCore, the engine Claude Code's runtime runs on, refuses a
+	// call more than 65,536 arguments (its maxArguments, 0x10000, read off
+	// its source: a constant compiled into the binaries, which no string in
+	// them states), throwing its stack's overflow, the RangeError "Maximum
+	// call stack size exceeded." (2.1.322 @14459602, beside its other error
+	// in sizing a call's arguments, "second argument to
+	// Function.prototype.apply must be an Array-like object", @14459636;
+	// 2.1.310 @3746582, @3010140). Half that bound, so a thread the chain
+	// models is one no such spread comes near. And the most the code both
+	// binaries ship passes into one call where it cuts a list to pass it:
+	// each helper that hands a long list to String.fromCharCode.apply cuts it
+	// into 32,768 elements or fewer (2.1.322 @306148813, @315444399 and
+	// @330630853, 16,384 @309815132, 8,192 @329652122; 2.1.310 @259142857,
+	// @265881921 and @279618288, 16,384 @262021569, 8,192 @280205435).
 	threadChainMaxSpread = 1 << 15
 )
 
@@ -862,6 +883,34 @@ const chainPrefixBytes = 10
 // fills each about halfway. Past either, See files nothing more, the thread
 // is whyBound and the chain drops what it filed, and See still decodes and
 // hands back each user and assistant message, with pastChainBound.
+//
+// MEASURED on two cores, one case a process (BenchmarkAThreadChainAtItsBounds;
+// the heap off the runtime's GC trace, what is held sampled at every tenth of
+// its growth):
+//
+//   - at both bounds, 2^17 replies each of its own id making a call of its
+//     own and naming a parent written after it: read in 1.3 s, End's 32 ms of
+//     it; the chain holds 35 MiB as End starts, End allocates 12 MiB more, and
+//     18 MiB stay once it decided: 43 MiB held at most;
+//   - a node's collection's read of a thread at the plaintext's bound,
+//     130,242 lines of a call and its result in turn: 2.1 s, End's 29 ms,
+//     33 MiB held at most;
+//   - END'S WORST, a walk of [threadChainMaxSpread] records whose 10,922
+//     replies' windows each open before the one before ends: 1.4 s, nearly
+//     all of it the recovery's rescan of each window's walked records, which
+//     the resume makes as well; End took every other case at a bound in
+//     32 ms or less;
+//   - THE COINCIDENT WORST, the reading's worst line (one at [threadLineMax]
+//     of the smallest results a message holds) decoded by See beside the
+//     chain at both bounds, before it passes them: 101 MiB held at most. By
+//     sum, exact telling's reading measured 88 MiB for that line, its own
+//     decode of it among them, which beside the 35 MiB the chain holds while
+//     it files is 123 MiB; End's 43 MiB comes after the last line, beside
+//     only what a reading keeps of the thread. Each is within the about
+//     133 MiB a seat's read for words holds at its worst in the one slot
+//     both take ([SeatTranscriptReadsAtOnce]), so both bounds stay at 2^17.
+//     The heap peaks over what is held by the collector's headroom: at its
+//     default, 157 MiB for that line and 63 MiB at both bounds.
 //
 // MISUSE IS ANSWERED, NEVER A PANIC, where a node's collection could reach
 // it: a line handed out of turn is whyLineGap; a question asked before End, or
@@ -2085,10 +2134,12 @@ type chainSide struct {
 // on once its caller gives it up: a step is a few reads of the chain's
 // arrays, so 4,096 of them take well under a millisecond. And it bounds what
 // the looks cost: each is a call through every context the caller wrapped,
-// and one in 4,096 steps is nothing End could measure. End's time at the
-// chain's bounds is what the facility's benchmark measures (`test(executor):
-// measure the chain facility at its bounds`), which restates this value
-// where it finds a step dearer than that.
+// and one in 4,096 steps is nothing End could measure. MEASURED at the
+// chain's bounds (BenchmarkAThreadChainAtItsBounds), End never ran 13 ms
+// without a look, its longest stretches each a pass that counts no step,
+// one pass over the records or one sort of them (resolving every parent,
+// sorting the fallback's candidates), and through its worst case, 1.4 s of
+// steps, it looked at least every 11 ms; so the count stands.
 const chainCheckEvery = 1 << 12
 
 // tick counts a step, and answers ctx's error every chainCheckEvery steps.
@@ -3404,8 +3455,9 @@ type chainAnchored struct {
 // window's hands the same order, where a sort at each merge costs a run of
 // windows, each opening before the one before it ends, the square of the
 // run's length, in a pass that counts no step. Measured at the chain's
-// bounds, End ran 3.3 s so, 1.9 s of it without a look at its context; with
-// one sort, 1.4 s, looking at it at least every 10 ms.
+// bounds (BenchmarkAThreadChainAtItsBounds, windows_merging_at_the_bound),
+// End ran 3.3 s so, 1.9 s of it without a look at its context; with one
+// sort, 1.4 s, looking at it at least every 11 ms.
 func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHandle, how []uint8) ([]chainHandle, error) {
 	for i := range w.pos {
 		w.pos[i] = -1
