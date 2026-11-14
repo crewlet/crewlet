@@ -1034,6 +1034,11 @@ func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWo
 	if err != nil {
 		return PendingRun{}, false, err
 	}
+	// OUT OF THE QUESTION SET, once, as the record's answer is taken: nobody is
+	// waited on, and the screening offers this seat's mail to no question that
+	// already has its answer. Recorded before the write, so a recount meanwhile
+	// counts the run as the question it is still counted as (countwrite.go).
+	write := c.writingCount(run, run.Status, StatusAnswered)
 	var recorded PendingRun
 	var won bool
 	if words.Refusal != nil {
@@ -1041,23 +1046,23 @@ func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWo
 	} else {
 		recorded, won, err = c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer, fence)
 	}
-	if err != nil || !won {
-		return PendingRun{}, won, err
-	}
+	landed := err == nil && won
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, landed)
 	// A NEW ANSWER IS A NEW SERIES. The run's series can still be alive when
 	// this lands — kept to publish what an earlier answer's decline owes the
 	// seat — and its count is that earlier answer's: carried over, it spent
 	// this answer's attempts before this answer had one, and let it go after
 	// a single failed resume.
-	c.mu.Lock()
-	if r := c.retries[recorded.TurnID]; r != nil {
+	if r := c.retries[recorded.TurnID]; landed && r != nil {
 		r.launch, r.failures, r.first = recorded.LaunchID, 0, c.now()
 		r.window = answerWindow(recorded)
 	}
 	c.mu.Unlock()
-	// Out of the question set: nobody is waited on, and the screening
-	// offers this seat's mail to no question that already has its answer.
-	c.moveRun(recorded.AgentHandle, run.Status, StatusAnswered)
+	moved()
+	if !landed {
+		return PendingRun{}, won, err
+	}
 	return recorded, true, nil
 }
 
@@ -1174,7 +1179,15 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	words AnswerWords, fence Fence, seen map[signal]uint64,
 ) (kept bool) {
 	ctx := adm.ctx
+	// INTO THE HOLDING SET, once, as the claim's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, StatusResumed)
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && won)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
 		// this node drives: no resume holds it, and no recovery pass comes
@@ -1196,7 +1209,6 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return false
 	}
-	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
 	// RAISED WHERE THE REPLY WAS POSTED: an answer's trigger is the newest of
 	// the deliveries it carries, and a refusal's is rebuilt from the address
 	// it kept, with none of the reply's words ([AnswerRefusal.trigger]).
@@ -1312,7 +1324,15 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 		return
 	}
 	refusal, refused := run.Refused()
+	// BACK ON ITS QUESTION, once, as the decline's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
 	_, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID, answer.EventIDs, nil, fenceOf(run))
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && let)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE WRITE MAY HAVE LANDED: the retry reads the row again, and finds
 		// the run waiting on its question or this answer still on it.
@@ -1327,14 +1347,11 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 		c.scheduleOwed(run.TurnID, answerRetryCeiling)
 		return
 	}
-	if let {
-		c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
-		if refused {
-			// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and it is
-			// waiting on its question again: said, with nobody named, since
-			// nothing on the row about the reply can be attributed.
-			c.announceRefusalLetGo(ctx, run, refusal, answerer{})
-		}
+	if let && refused {
+		// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and it is waiting
+		// on its question again: said, with nobody named, since nothing on
+		// the row about the reply can be attributed.
+		c.announceRefusalLetGo(ctx, run, refusal, answerer{})
 	}
 	c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 }
@@ -2181,8 +2198,16 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 	// seat's inbox kept is the reply, and it comes round as the ordinary
 	// message it is once the hold lifts ([AnswerRefused]).
 	c.spend(ctx, run.AgentHandle, *answer)
+	// BACK ON ITS QUESTION, once, as the decline's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
 	declined, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID,
 		answer.EventIDs, handBackOf(*answer), fenceOf(run))
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && let)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE WRITE MAY HAVE LANDED, and either way nothing has been
 		// published: the retry reads the row and finds the copies owed, or
@@ -2198,7 +2223,6 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return
 	}
-	c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
 	if refusal, refused := run.Refused(); refused {
 		// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and no turn told
 		// it: the let-go is said, by whom the seal names where it opens

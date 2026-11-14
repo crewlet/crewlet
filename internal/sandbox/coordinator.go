@@ -1075,13 +1075,13 @@ type Coordinator struct {
 	// (claimrelease.go). Under mu.
 	releases map[string]*claimRelease
 	claiming map[string]int
-	// parking are the parks this node is writing, by turn id, each the
-	// launch of the job it parks: recorded before the question is written
-	// onto the row and dropped, with the seat's count moved where the write
-	// landed, in one step once it is answered ([Coordinator.park]). A recount
-	// counts such a run as the claim it still is ([Coordinator.syncSeat]).
-	// Under mu.
-	parking map[string]string
+	// writing are the writes this node has out that move a run between its
+	// seat's sets, by the run's job, each recorded before it is sent and
+	// dropped, with its move made, in the step that takes its answer: a park's
+	// question, and an answer's record, claim and decline (countwrite.go). A
+	// recount counts a run with a write out where the moves made so far leave
+	// it ([Coordinator.syncSeat]). Under mu.
+	writing map[jobKey]*runWrites
 	// unsettled is the clock on each job's host that answered this node's
 	// collections that its own coordination store did not answer, by turn
 	// id, kept until the job's collection settles ([hostUnsettled]). Under
@@ -1244,7 +1244,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		retries:      map[string]*answerRetry{},
 		releases:     map[string]*claimRelease{},
 		claiming:     map[string]int{},
-		parking:      map[string]string{},
+		writing:      map[jobKey]*runWrites{},
 		unsettled:    map[string]hostUnsettled{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
@@ -1484,10 +1484,11 @@ func (c *Coordinator) adjustLocked(handle string, holding, awaiting int) (was, r
 
 // moveRunLocked is [Coordinator.moveRun] for a caller holding c.mu, made in the
 // same step as whatever else that caller decides under the lock: the move a
-// release or a park makes as its write's answer is taken ([Coordinator.unclaimOwing],
-// [Coordinator.park]), in the step that ends its counting as the claim
-// ([Coordinator.syncSeat]). The caller runs what it returns once it has let go
-// of the lock, which frees the seat and has its inbox hold follow the move.
+// release makes as its answer is taken ([Coordinator.unclaimOwing],
+// [Coordinator.claimCompletion]), in the step that ends its counting as the
+// claim ([Coordinator.syncSeat]). The caller runs what it returns once it has
+// let go of the lock, which frees the seat and has its inbox hold follow the
+// move.
 func (c *Coordinator) moveRunLocked(handle, from, to string) func() {
 	if handle == "" {
 		return func() {}
@@ -1611,21 +1612,25 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) 
 // settle within [seatRecountRounds] reads leaves the counts alone, which is the
 // same answer a listing that failed gets.
 //
-// AND NEVER A WRITE TWICE. A claim this node gives back, or parks on its job's
-// question, moves the seat's count where the write put the run once that
-// write's answer is taken, not as the write lands on the store: a release the
-// store does not answer keeps the claim, which holds the seat
-// ([Coordinator.unclaimOwing]), and a park frees the seat only with its
-// question on the row ([Coordinator.park]). A recount whose listing was read
-// after such a write landed, and written before its answer was taken, counted
-// the run where the write put it, and the answer's move then counted it there
-// again: an answer's release took the seat's holding count down twice, freeing
-// a seat that held another run beside it, and a park counted its one question
-// twice, the seat offering its mail to an answer match with nothing left to
-// answer. So a run whose release is out or whose park is being written is
-// counted as the claim it still is, whatever the listing found it in
-// ([Coordinator.countedLocked]), and the write's answer moves that count, once,
-// under the lock that ends the write's counting as the claim.
+// AND NEVER A WRITE TWICE. A write of this node's that moves a run between the
+// seat's sets moves the seat's count where the write put the run once that
+// write's answer is taken, not as the write lands on the store: a claim it
+// gives back (claimrelease.go), a park of its job's question, and an answer's
+// record, the claim that resumes it and a decline that lets it go
+// (countwrite.go). A release the store does not answer keeps the claim, which
+// holds the seat ([Coordinator.unclaimOwing]), and a park frees the seat only
+// with its question on the row ([Coordinator.park]). A recount whose listing
+// was read after such a write landed, and written before its answer was taken,
+// counted the run where the write put it, and the answer's move then counted it
+// there again: an answer's release took the seat's holding count down twice,
+// freeing a seat that held another run beside it; a park counted its one
+// question twice, the seat offering its mail to an answer match with nothing
+// left to answer; and an answer's record took a seat holding a second question
+// out of the question set altogether, that question's answer then run as an
+// unrelated turn. So a run whose release is out, or with another such write
+// out, is counted where the moves made so far leave it, whatever the listing
+// found it in ([Coordinator.countedLocked]), and the write's answer moves that
+// count, once, under the lock that ends that counting.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	for range seatRecountRounds {
 		c.mu.Lock()
@@ -1641,9 +1646,10 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.mu.Unlock()
 			continue
 		}
-		// COUNTED UNDER THE LOCK that a release or a park this node is
-		// writing moves the count under once its answer is taken: a run it
-		// is moving off its claim is counted as the claim until then.
+		// COUNTED UNDER THE LOCK that a write this node is making moves the
+		// count under once its answer is taken: a run it is moving between
+		// the seat's sets is counted where the moves made so far leave it
+		// until then.
 		counts := c.countedLocked(runs)
 		// THIS RECOUNT MOVES THE SEAT TOO, for a recount whose listing is
 		// older than this one's and is still on its way here.
@@ -1665,34 +1671,19 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			"already kept stand")
 }
 
-// countedLocked is a seat's counts from a listing of its runs: each in the set
-// its status names, but a run this node is moving off its claim counted as the
-// claim, whatever set the listing found it in ([Coordinator.leavingLocked]). See
-// [Coordinator.syncSeat]. Under mu.
+// countedLocked is a seat's counts from a listing of its runs, each counted as
+// [Coordinator.countOfLocked] reads it: in the set its status names, but a run
+// this node is moving between the seat's sets where the moves made so far leave
+// it, whatever set the listing found it in. See [Coordinator.syncSeat]. Under
+// mu.
 func (c *Coordinator) countedLocked(runs []PendingRun) seatRuns {
 	var counts seatRuns
 	for _, run := range runs {
-		status := run.Status
-		if c.leavingLocked(run) {
-			status = StatusResumed
-		}
-		holding, awaiting := setOf(status)
-		counts.holding += holding
-		counts.awaiting += awaiting
+		part := c.countOfLocked(run)
+		counts.holding += part.holding
+		counts.awaiting += part.awaiting
 	}
 	return counts
-}
-
-// leavingLocked reports whether run is a claim of this node's that it is moving
-// off the claim, with that write's answer not yet taken: a release of the job
-// out ([Coordinator.releases]), owed included, or its park being written
-// ([Coordinator.parking]). Under mu.
-func (c *Coordinator) leavingLocked(run PendingRun) bool {
-	if c.releasingLocked(run.TurnID, run.LaunchID) {
-		return true
-	}
-	launch, parking := c.parking[run.TurnID]
-	return parking && launch == run.LaunchID
 }
 
 // seatRecountRounds bounds [Coordinator.syncSeat]'s listings.
@@ -2987,10 +2978,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	}
 
 	// BEING WRITTEN FROM HERE, so a recount counts the run as the claim it
-	// still is until the write's answer moves it ([Coordinator.syncSeat]).
-	c.mu.Lock()
-	c.parking[run.TurnID] = run.LaunchID
-	c.mu.Unlock()
+	// still is until the write's answer moves it (countwrite.go).
+	write := c.writingCount(run, StatusResumed, StatusAwaiting)
 	err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
@@ -3012,12 +3001,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// AND IN THE STEP THAT ENDS THE WRITE'S COUNTING AS THE CLAIM: made after
 	// it, a recount that read the parked row in between counted the question
 	// already, and the move counted it a second time.
-	moved := func() {}
 	c.mu.Lock()
-	delete(c.parking, run.TurnID)
-	if err == nil {
-		moved = c.moveRunLocked(run.AgentHandle, StatusResumed, StatusAwaiting)
-	}
+	moved := c.wroteCountLocked(write, err == nil)
 	c.mu.Unlock()
 	moved()
 	if err != nil {

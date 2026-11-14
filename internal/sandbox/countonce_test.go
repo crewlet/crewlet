@@ -112,3 +112,260 @@ func TestAWriteThatMovesARunOffItsClaimMovesItsSeatsCountOnce(t *testing.T) {
 		}
 	})
 }
+
+// recountOnAnswerWrite is a run store that, once one of a recorded answer's
+// writes has landed on it, has the seat recounted before the write's answer is
+// returned, as [recountOnLanding] does for a release and a park: the answer's
+// record, the claim that resumes it, or a decline that lets it go, as which
+// names.
+type recountOnAnswerWrite struct {
+	PendingStore
+	which   answerWrite
+	recount func(ctx context.Context)
+}
+
+// answerWrite names one of the writes a recorded answer moves its run's count
+// by.
+type answerWrite string
+
+const (
+	answerRecorded answerWrite = "record"
+	answerClaimed  answerWrite = "claim"
+	answerDeclined answerWrite = "decline"
+)
+
+func (s *recountOnAnswerWrite) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.RecordAnswer(ctx, turnID, launch, answer, fence)
+	if err == nil && won && s.which == answerRecorded {
+		s.recount(ctx)
+	}
+	return run, won, err
+}
+
+func (s *recountOnAnswerWrite) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+	if err == nil && won && run.ClaimedFrom == StatusAnswered && s.which == answerClaimed {
+		s.recount(ctx)
+	}
+	return run, won, err
+}
+
+func (s *recountOnAnswerWrite) DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+	handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	run, let, err := s.PendingStore.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
+	if err == nil && let && s.which == answerDeclined {
+		s.recount(ctx)
+	}
+	return run, let, err
+}
+
+// recountsOn has the rig's seat recounted once which has landed, before the
+// coordinator takes its answer.
+func recountsOn(rig *coordRig, which answerWrite) {
+	rig.coordinator.pending = &recountOnAnswerWrite{PendingStore: rig.coordinator.pending, which: which,
+		recount: func(ctx context.Context) { rig.coordinator.syncSeat(ctx, "swe") }}
+}
+
+// parkElsewhere parks turnID on a question of its own, asked in a conversation
+// that [answerOnTheDM] does not reply in.
+func parkElsewhere(t *testing.T, rig *coordRig, turnID string) {
+	t.Helper()
+	rig.launchWith(turnID, func(run *PendingRun) {
+		run.ConversationKey, run.PartitionKey = "chat:D3", "chat:D3:root-1"
+	})
+	rig.ask(turnID, whichBranch())
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion(turnID)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted %s: %v", turnID, err)
+	}
+	if got := rig.get(turnID); got.Status != StatusAwaiting {
+		t.Fatalf("status of %s = %q, want it parked on its question", turnID, got.Status)
+	}
+}
+
+// AN ANSWER'S WRITE MOVES ITS SEAT'S COUNT ONCE, as a release and a park do
+// ([TestAWriteThatMovesARunOffItsClaimMovesItsSeatsCountOnce]). The writes a
+// person's answer moves its run by are the record that takes the run out of the
+// question set, the claim that resumes it, and a decline that puts it back on
+// its question. Each moves its seat's count where the write put the run as its
+// answer is taken, and a recount whose listing was read after the write landed,
+// and written before that, counts the run where it was. Moved after the write
+// and outside the lock, the move counted the run where the write put it a
+// second time: the record took a seat holding a second question out of the
+// question set altogether, so that question's answer was run as an unrelated
+// turn ([seatRuns.awaiting]: erring low is the harmful way); the claim counted
+// its run holding twice; and each decline counted the question it put the run
+// back on twice.
+//
+// Mutation: drop any one write's record before it is sent, or have a recount
+// count a run with a write out where the store's row says it is; each counts a
+// run twice.
+func TestAnAnswersWriteMovesItsSeatsCountOnce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the record of an answer to one of two questions", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		parkElsewhere(t, rig, "t3")
+		rig.coordinator.syncSeat(t.Context(), "swe")
+		if got := seatCounts(rig); got.holding != 0 || got.awaiting != 2 {
+			t.Fatalf("the premise: the seat counts %d holding and %d awaiting; want t1's question and "+
+				"t3's awaiting", got.holding, got.awaiting)
+		}
+		recountsOn(rig, answerRecorded)
+		var during seatRuns
+		var awaits bool
+		rig.resumer.during = func(context.Context, PendingRun) {
+			during = seatCounts(rig)
+			_, awaits = rig.coordinator.SeatRuns("swe")
+		}
+		asked := rig.get("t1").AskedAt
+		reply := chatReply(answerOnTheDM, "use main", replyAt("use main", asked.Add(time.Minute)))
+		if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil ||
+			d != AnswerConsumed {
+			t.Fatalf("the reply = %q, %v; want it recorded as t1's answer", d, err)
+		}
+		if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Run.TurnID != "t1" {
+			t.Fatalf("the premise: the answer resumed %d turns; want t1 once", len(calls))
+		}
+		if during.holding != 1 || during.awaiting != 1 || !awaits {
+			t.Fatalf("while t1's answer ran the seat counted %d holding and %d awaiting (a question open: "+
+				"%v); want t1's claim holding and t3's question still open, which t3's answer is "+
+				"offered to", during.holding, during.awaiting, awaits)
+		}
+	})
+
+	t.Run("the claim of an answer", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		rig.launch("t2")
+		rig.coordinator.syncSeat(t.Context(), "swe")
+		if got := seatCounts(rig); got.holding != 1 || got.awaiting != 1 {
+			t.Fatalf("the premise: the seat counts %d holding and %d awaiting; want t2 holding and t1 "+
+				"awaiting", got.holding, got.awaiting)
+		}
+		recountsOn(rig, answerClaimed)
+		var during seatRuns
+		rig.resumer.during = func(context.Context, PendingRun) { during = seatCounts(rig) }
+		asked := rig.get("t1").AskedAt
+		reply := chatReply(answerOnTheDM, "use main", replyAt("use main", asked.Add(time.Minute)))
+		if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil ||
+			d != AnswerConsumed {
+			t.Fatalf("the reply = %q, %v; want it recorded as t1's answer", d, err)
+		}
+		if len(rig.resumer.calls()) != 1 {
+			t.Fatalf("the premise: the answer resumed %d times; want once", len(rig.resumer.calls()))
+		}
+		if during.holding != 2 || during.awaiting != 0 {
+			t.Fatalf("while t1's answer ran the seat counted %d holding and %d awaiting; want 2 holding "+
+				"(t1's claim and t2) and none awaiting", during.holding, during.awaiting)
+		}
+	})
+
+	t.Run("the decline of an answer that does not open", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		run := rig.get("t1")
+		words, answer := chatReply(answerOnTheDM, "use main",
+			replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+		// SEALED FOR ANOTHER RUN, so it does not open as t1's answer.
+		other := run
+		other.TurnID = "t2"
+		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+			sealedOnto(t, rigAnswers(), other, words, answer), rigLease); err != nil || !won {
+			t.Fatalf("RecordAnswer = %v, %v", won, err)
+		}
+		rig.coordinator.syncSeat(t.Context(), "swe")
+		if got := seatCounts(rig); got.holding != 0 || got.awaiting != 0 {
+			t.Fatalf("the premise: the seat counts %d holding and %d awaiting; want t1's answered run in "+
+				"neither set", got.holding, got.awaiting)
+		}
+		recountsOn(rig, answerDeclined)
+		rig.coordinator.queueOwed(t.Context(), rig.get("t1"))
+		rig.fireRetries()
+		if got := rig.get("t1"); got.Status != StatusAwaiting || len(rig.resumer.calls()) != 0 {
+			t.Fatalf("the premise: the answer left t1 %s after %d resumes; want it let go of unresumed",
+				got.Status, len(rig.resumer.calls()))
+		}
+		if got := seatCounts(rig); got.holding != 0 || got.awaiting != 1 {
+			t.Fatalf("the seat counts %d holding and %d awaiting; want t1's one question awaiting",
+				got.holding, got.awaiting)
+		}
+	})
+
+	t.Run("the decline of an answer whose attempts are spent", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		owedAnAnswerItCannotResume(t, rig)
+		recountsOn(rig, answerDeclined)
+		rig.fireRetries() // the last attempt fails, and the answer is let go of
+		if got := rig.get("t1"); got.Status != StatusAwaiting {
+			t.Fatalf("the premise: the spent answer left t1 %s; want it let go of", got.Status)
+		}
+		if got := seatCounts(rig); got.holding != 0 || got.awaiting != 1 {
+			t.Fatalf("the seat counts %d holding and %d awaiting; want t1's one question awaiting",
+				got.holding, got.awaiting)
+		}
+	})
+}
+
+// TWO WRITES OUT ON ONE RUN MOVE ITS SEAT'S COUNT IN THE ORDER THEY WERE
+// RECORDED, whatever order their answers come back in (countwrite.go). Here a
+// park's question has landed, and an answer by turn has been recorded to it,
+// before the park took its answer, and the record's answer is taken first. Its
+// move waits for the park's, a recount meanwhile counts the run as the claim it
+// was before either write, and the park's answer then makes both moves: out of
+// the claim, through the question, to the answer, which is in neither set. Made
+// at once, the record's move took the run out of a question set it was not yet
+// counted in, and the park's then counted the answered run as a question.
+//
+// Mutation: make each write's move as its own answer is taken, whatever was
+// recorded before it.
+func TestTwoWritesOutOnOneRunMoveItsSeatsCountInTheOrderTheyWereRecorded(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	run := rig.get("t1")
+	// BOTH WRITES HAVE LANDED: the question is on the row, and its answer.
+	words, answer := chatReply(answerOnTheDM, "use main",
+		replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+		sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
+		t.Fatalf("RecordAnswer = %v, %v", won, err)
+	}
+	park := rig.coordinator.writingCount(run, StatusResumed, StatusAwaiting)
+	record := rig.coordinator.writingCount(run, StatusAwaiting, StatusAnswered)
+	answered := func(w *countWrite) {
+		rig.coordinator.mu.Lock()
+		moved := rig.coordinator.wroteCountLocked(w, true)
+		rig.coordinator.mu.Unlock()
+		moved()
+	}
+	counts := func(when, want string, holding, awaiting int) {
+		t.Helper()
+		if got := seatCounts(rig); got.holding != holding || got.awaiting != awaiting {
+			t.Fatalf("%s the seat counts %d holding and %d awaiting; want %s", when, got.holding,
+				got.awaiting, want)
+		}
+	}
+
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	counts("recounted with both writes out,", "the run as the claim it was before either", 1, 0)
+	answered(record)
+	counts("with the record's answer taken first,", "the run still the claim, its move waiting for the park's",
+		1, 0)
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	counts("recounted with the park still out,", "the run still the claim", 1, 0)
+	answered(park)
+	counts("with both answers taken,", "the answered run in neither set", 0, 0)
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	counts("recounted once both are answered,", "the answered run in neither set", 0, 0)
+}
