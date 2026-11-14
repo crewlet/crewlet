@@ -242,6 +242,18 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  run_schedule: {
+    // A SCHEDULE'S RUN NOW, on its page and its peek: one fire off its cron,
+    // for every seat it wakes. It writes no log a question reads (the claim
+    // is the coordination store's and the fire a seat's inbox), so it raises
+    // no floor; the schedule's runs show it once the node that sent it
+    // publishes its day, and the screen asks them again.
+    args: ["scope_type", "scope", "name"],
+    domain: null,
+    apps: [],
+    refreshes: ["schedules", "schedule_runs"],
+    scope: "person",
+  },
   steer_turn: {
     // STEER ON THE TURN TRACE: a note to a turn running now, read at its
     // next step — a round of the engine's loop, or a step of its executor in

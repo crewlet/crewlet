@@ -1969,7 +1969,8 @@ export interface ScheduleRow {
 /** One fire, from the schedules' replicated history: every data node's fires,
  *  each with what became of it.
  *
- *  `outcome` is what the scheduler recorded (`fired`, `skipped_catchup`, or
+ *  `outcome` is what the scheduler recorded (`fired`, `fired_manually` for a
+ *  run a person asked for now, off the cron, `skipped_catchup`, or
  *  `skipped_paused` for a runner seat that was paused when the fire came due),
  *  or `skipped_superseded` for a fire its seat did not run because a later
  *  fire of the same schedule ran in its place. None of them is a turn's
@@ -1988,7 +1989,8 @@ export interface ScheduleRunRow {
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
+  outcome:
+    "fired" | "fired_manually" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
   trace_id: string;
 }
 
