@@ -18,8 +18,9 @@ import (
 // Cloudflare's half of the atlas (ADR-0129): what the account holds, read
 // whole under the provisioner token the company already gave the engine. The
 // token holds every Read group on every zone (levels.go), so nothing here
-// needs a raise; what would (Workers, Pages, R2, Tunnels, load balancers) is
-// not read.
+// needs a raise. Workers, Pages, R2 and Tunnels are read as well where the
+// token holds their optional read groups (ADR-0145, atlasoptional.go); load
+// balancers are not read.
 
 func init() { collect.Register(atlasSource{}) }
 
@@ -120,6 +121,9 @@ func readAtlas(ctx context.Context, client *Client, now time.Time) (collect.Read
 		}
 		readPacks(b, where, account, zone, names, packs)
 	}
+	if err := readOptional(ctx, b, client, account); err != nil {
+		return collect.Read{}, err
+	}
 	b.Calls(client.Calls())
 	return b.Read(), nil
 }
@@ -131,23 +135,14 @@ func readRecords(b *collect.Builder, where string, account, zone atlas.Ref, zone
 
 	var names []atlas.Ref
 	for _, r := range records {
-		if !slices.Contains([]string{RecordA, RecordAAAA, RecordCNAME}, r.Type) {
-			continue
-		}
 		at := where + ".dns_records[" + r.ID + "]"
-		host, ok := b.Ref(at+".name", atlas.KindHostname, r.Name)
+		host, ok := b.Name(at, zone, zones, collect.Record{Type: r.Type, Name: r.Name, Content: r.Content})
 		if !ok {
 			continue
 		}
 		names = append(names, host)
-		b.Relates(at+".name", host, atlas.RelationInZone, zone)
 		if r.Proxied {
 			b.Relates(at+".proxied", host, atlas.RelationFrontedBy, account)
-		}
-		if r.Type == RecordCNAME {
-			b.PointsAtName(at+".content", host, r.Content, zones)
-		} else {
-			b.PointsAtAddress(at+".content", host, r.Content)
 		}
 	}
 	return names

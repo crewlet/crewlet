@@ -226,6 +226,30 @@ test("the trash says when each went in and when it goes for good, and offers a r
   expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeTruthy();
 });
 
+// A ROW OPENS ON A PAGE OF ITS OWN in a new tab, with no opener; the trash's rows do not.
+test("a row's More opens the artifact's standalone page in a new tab", () => {
+  asList();
+  const id = "0192f2c4-7777-7000-8000-000000000007";
+  items = [row({ id, title: "Launch plan" })];
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  mount("all");
+  fireEvent.click(screen.getByRole("button", { name: "More for “Launch plan”" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open in new tab" }));
+  expect(open).toHaveBeenCalledWith(
+    `${location.origin}${location.pathname}#/artifacts/${id}/standalone`,
+    "_blank",
+    "noopener",
+  );
+  open.mockRestore();
+  cleanup();
+  items = [
+    row({ id, title: "Launch plan", status: "trashed", trashed_at: "2026-10-18T10:00:00Z" }),
+  ];
+  mount("yours", "#/artifacts/yours?status=trashed");
+  fireEvent.click(screen.getByRole("button", { name: "More for “Launch plan”" }));
+  expect(screen.queryByRole("menuitem", { name: "Open in new tab" })).toBeNull();
+});
+
 // THE TOGGLE SAYS IT IS ONE: the kit's Button takes `pressed`, and an
 // `aria-pressed` passed beside it was overwritten with nothing.
 test("the type, the order, the trash and the shape are the toolbar's, and the bar keeps the field and New", () => {

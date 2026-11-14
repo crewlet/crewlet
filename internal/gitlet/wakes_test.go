@@ -1,6 +1,7 @@
 package gitlet_test
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -147,6 +149,77 @@ func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 		if routings := routingAt(t, n, p); len(routings) != 0 {
 			t.Fatalf("%s carries %+v, want no routing: it tells nobody", name, routings)
 		}
+	}
+}
+
+// A FAILED CHECK WAKES FOR WHOM ITS HEAD WAS PUSHED (ADR-0109): a failed check
+// of a change's head is news about the push that made the head, whose pusher
+// the routing names (TestAFailedCheckWakesItsAuthorsAndItsActor), so where a
+// seat pushed that head in a turn it worked for somebody, the failure is that
+// somebody's errand. The seat cto moves dev's change's head to B2, its
+// revision 2, in a turn founder woke: a check of B2 that fails tells the
+// change's authors — dev, and cto, who pushed the head and hears of it as its
+// actor — through a routing carrying founder beside cto, at version 2, and
+// both wakes are written by cto for founder, cto's own included. The same
+// failure reported by founder's CI is the person's own act, made for nobody
+// but themselves: its routing carries nobody, at version 1, whatever the head
+// was pushed for.
+//
+// Mutation: revisionPusher reading no carrier — the failure's routing carries
+// nobody and its wakes are written for nobody, red.
+func TestAFailedCheckWakesForWhomItsHeadWasPushed(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	c, _ := committerOn(t, n, n.pub)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	moved := proposal(repo, update(featureRef, oidOf("B"), oidOf("B2")))
+	moved.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "cto",
+		Run: gitlet.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String()}}
+	moved.Via, moved.WrittenFor = gitlet.ViaEngine, types.ForTurn(founder)
+	res, err := c.Propose(t.Context(), moved)
+	requireOK(t, answer{res, err})
+	w, _, _, _ := checksWriterOn(t, n)
+	key := gitlet.CheckKey{RepoID: repo, OID: oidOf("B2"), Target: mainRef, Name: "unit", Attempt: 1}
+
+	failed := runCheck(t, w, key, change, 2, gitlet.CheckStateFailed, gitlet.CheckReasonExit)
+	routings := routingAt(t, n, failed)
+	if len(routings) != 1 || routings[0].Actor != "cto" || !routings[0].ChecksFailed {
+		t.Fatalf("the failed check's record carries %+v, want web!1's checks failed, its actor cto", routings)
+	}
+	if f, v := routings[0].WorkingFor, n.recordAt(failed).V; !reflect.DeepEqual(f, founder) ||
+		v != gitlet.WorkingForVersion {
+		t.Errorf("the failed check's routing carries %+v at version %d, want founder, for whom cto pushed the "+
+			"head, at %d", f, v, gitlet.WorkingForVersion)
+	}
+	_, relayed, routed := wakesOf(t, feedRecord(t, n, failed))
+	if got := woken(routed); !relayed || !slices.Equal(slices.Sorted(slices.Values(got)),
+		[]string{"cto:checks_failed", "dev:checks_failed"}) {
+		t.Fatalf("the failed check wakes %v (relayed %v), want dev, its owner, and cto, who pushed its head",
+			got, relayed)
+	}
+	byCTOForFounder := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto", WorkingFor: founder}
+	for _, r := range routed {
+		if r.Writer == nil || !reflect.DeepEqual(*r.Writer, byCTOForFounder) {
+			t.Errorf("%s's wake is written by %s, want %s: the head failing is founder's errand", r.To.Handle,
+				writtenBy(r.Writer), writtenBy(&byCTOForFounder))
+		}
+	}
+
+	// THE SAME FAILURE FOUNDER'S CI REPORTS: a person's own act.
+	reportKey := key
+	reportKey.Name = "ci"
+	reported, err := w.Publish(t.Context(), reporting(reportKey, gitlet.CheckStateFailed, "https://ci.example.com/1"))
+	requireChecked(t, "ci reported failed", reported, err)
+	routings = routingAt(t, n, reported.Position)
+	switch {
+	case len(routings) != 1 || routings[0].Actor != "founder" || !routings[0].ChecksFailed:
+		t.Fatalf("the failure founder's CI reported carries %+v, want web!1's checks failed, its actor founder",
+			routings)
+	case routings[0].WorkingFor != nil || n.recordAt(reported.Position).V != 1:
+		t.Errorf("the failure founder's CI reported carries %+v at version %d, want nobody at 1: a person "+
+			"reports for nobody but themselves", routings[0].WorkingFor, n.recordAt(reported.Position).V)
 	}
 }
 

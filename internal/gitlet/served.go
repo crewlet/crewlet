@@ -215,6 +215,15 @@ func (s Served) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	return s.Reader.Read(ctx, q)
 }
 
+// QueueDue answers one page of the queue work a repository's home owes — see
+// [Reader.QueueDue].
+func (s Served) QueueDue(ctx context.Context, q QueueDueQuery) (QueueDueAnswer, error) {
+	if s.Reader == nil {
+		return QueueDueAnswer{}, errNoReader
+	}
+	return s.Reader.QueueDue(ctx, q)
+}
+
 // TurnsMovedCode answers which of a set of turns moved work in code: see
 // [Reader.TurnsMovedCode].
 func (s Served) TurnsMovedCode(ctx context.Context, q TurnsMovedQuery) (map[string]bool, error) {

@@ -28,7 +28,7 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	e, err := New(t.Context(), Options{Bootstrap: &b})
 	if err != nil {
 		t.Fatalf("New: %v", err)

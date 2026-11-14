@@ -298,7 +298,7 @@ func Decide(live []atlas.Claim, read Read, status Status, now time.Time) Plan {
 	status.Missing, status.MissingOverflow = groupMissed(missing), overflow
 	status.Entries, status.Calls, status.Withheld = len(seen), read.Calls, len(read.Withheld)
 	status.Digest = digest(read.Claims)
-	status.Unread, status.UnreadOverflow = findings(read.Unread)
+	status.Unread, status.UnreadOverflow = findings(refused(read.Unread, held))
 	status.Scopes = scopes(status.Scopes, read, now)
 	status.Recorded, status.Retired = len(records), retired
 	return Plan{Records: records, Status: status}
@@ -369,6 +369,38 @@ func carry(held, seen map[atlas.Ref]map[string]atlas.Claim, unread []Unread) map
 		}
 	}
 	return carried
+}
+
+// refused is the unread parts a standing names: every part the credential
+// was expected to read, and an optional one ([Unread.Optional]) only where
+// the voice holds an entry the part said exists. An optional part no entry
+// was ever read from is a permission the company never gave, which is no
+// refusal.
+func refused(unread []Unread, held map[atlas.Ref]map[string]atlas.Claim) []Unread {
+	var out []Unread
+	for _, u := range unread {
+		if !u.Optional || holdsEntry(u, held) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// holdsEntry reports whether the voice holds a live exists claim from the
+// part. ONLY AN ENTRY COUNTS: a fact the part shares with another part (what
+// an account is used for) would name a part nothing was ever read from.
+func holdsEntry(u Unread, held map[atlas.Ref]map[string]atlas.Claim) bool {
+	if u.Holds == nil {
+		return false
+	}
+	for _, slots := range held {
+		for _, c := range slots {
+			if c.Facet.Kind == atlas.FacetExists && !c.Denied && u.Holds(c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findings is the refused parts as a standing keeps them: bounded, in a fixed

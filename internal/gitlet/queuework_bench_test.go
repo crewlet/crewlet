@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkTheHomesQueueWork times ONE PAGE of a `queue_due` read — what a
+// BenchmarkTheHomesQueueWork times ONE PAGE of a due-queue read — what a
 // repository's home reads every turn of its queue worker, and a turn runs on
 // every record of the repository's subject and its checks subject, so on
 // every queued, claimed and finished check of a train — over a target holding
@@ -38,11 +38,11 @@ func BenchmarkTheHomesQueueWork(b *testing.B) {
 			b.Run(fmt.Sprintf("D=%d/B=%d/%s", gate.depth, gate.batch, shape), func(b *testing.B) {
 				n := newNode(b)
 				repo := seedQueueWork(b, n, gate.depth, gate.batch, shape == "test")
-				q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: repo}}
-				var answer gitlet.ReadAnswer
+				q := gitlet.QueueDueQuery{RepoID: repo}
+				var answer gitlet.QueueDueAnswer
 				for b.Loop() {
 					var err error
-					if answer, err = n.reader.Read(context.Background(), q); err != nil || answer.DueQueue == nil {
+					if answer, err = n.reader.QueueDue(context.Background(), q); err != nil || answer.DueQueue == nil {
 						b.Fatalf("the queue work reads %+v (%v), want main's", answer.DueQueue, err)
 					}
 				}
@@ -154,7 +154,7 @@ func seedQueueWork(b *testing.B, n *node, depth, batch int, standing bool) strin
 }
 
 // BenchmarkQueueDuePage times ONE PAGE of the home's queue work — the
-// `queue_due` read a queue turn makes for every target, on every nudge of its
+// due-queue read a queue turn makes for every target, on every nudge of its
 // repository — that counts its target's enqueues within gitlet.MergeRateWindow,
 // on a repository whose queues have each landed a full hour at the queue's
 // bound: four targets, main among them, each with 3 840 entries enqueued and
@@ -197,9 +197,9 @@ func BenchmarkQueueDuePage(b *testing.B) {
 	}); err != nil {
 		b.Fatalf("seed four targets' hour of landings: %v", err)
 	}
-	q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: repo, EnqueuedSince: since}}
+	q := gitlet.QueueDueQuery{RepoID: repo, EnqueuedSince: since}
 	for b.Loop() {
-		answer, err := n.reader.Read(ctx, q)
+		answer, err := n.reader.QueueDue(ctx, q)
 		if err != nil || answer.DueQueue == nil || answer.DueQueue.Enqueued != landedPerTarget+1 {
 			b.Fatalf("the page reads %+v (%v), want main's %d enqueues", answer.DueQueue, err, landedPerTarget+1)
 		}

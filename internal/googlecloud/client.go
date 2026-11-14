@@ -32,6 +32,7 @@ const (
 	resourceManagerV1 = "https://cloudresourcemanager.googleapis.com/v1"
 	resourceManagerV3 = "https://cloudresourcemanager.googleapis.com/v3"
 	serviceUsageAPI   = "https://serviceusage.googleapis.com/v1"
+	cloudAssetAPI     = "https://cloudasset.googleapis.com/v1"
 )
 
 // ClientTimeout bounds one call. Every call runs inside a pass with its own
@@ -251,6 +252,10 @@ func NewClient(opts ClientOptions) (*Client, error) {
 // Provisioner is the provisioner's email.
 func (c *Client) Provisioner() string { return c.provisioner }
 
+// AtlasAccount is the atlas's service account: crewlet-atlas in the identity
+// project, which the identity block makes where the company asks for it.
+func (c *Client) AtlasAccount() string { return AtlasAccountIn(c.identity) }
+
 // IdentityProject is the project the agents' accounts are made in: the
 // provisioner's own, which holds nothing else.
 func (c *Client) IdentityProject() string { return c.identity }
@@ -258,8 +263,9 @@ func (c *Client) IdentityProject() string { return c.identity }
 // member is a service account as a policy binding names it.
 func member(email string) string { return "serviceAccount:" + email }
 
-// provisionerTokens is the provisioner's token, one per process and identity,
-// renewed with provisionerRenew to spare. Its map is made at the first
+// provisionerTokens is each account's token the engine reaches through the
+// federation (the provisioner's, and the atlas's), one per process, connection
+// and account, renewed with provisionerRenew to spare. Its map is made at the first
 // client's first token, never at init, which Gitlet's push hook pays
 // (cmd/crewlet's hookinit_test.go).
 //
@@ -284,9 +290,9 @@ func (c *Client) connection() string {
 	return strings.Join([]string{c.provider, c.provisioner, c.subject, c.kid}, "|")
 }
 
-// held is this client's cache entry for the provisioner's own token.
-func (c *Client) held() *heldToken {
-	id := c.connection()
+// held is this client's cache entry for account's token.
+func (c *Client) held(account string) *heldToken {
+	id := c.connection() + "|" + account
 	provisionerTokens.Lock()
 	defer provisionerTokens.Unlock()
 	h, ok := provisionerTokens.held[id]
@@ -300,10 +306,11 @@ func (c *Client) held() *heldToken {
 	return h
 }
 
-// token is the provisioner's token, minted through federation where the cached
-// one is missing or due for renewal.
-func (c *Client) token(ctx context.Context) (string, error) {
-	h := c.held()
+// token is account's token, minted through federation where the cached one is
+// missing or due for renewal. Account is the provisioner or the atlas: each is
+// impersonated with the federated token itself, so neither reaches the other.
+func (c *Client) token(ctx context.Context, account string) (string, error) {
+	h := c.held(account)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.value != "" && h.expires.Sub(c.clock.now()) > provisionerRenew {
@@ -313,7 +320,7 @@ func (c *Client) token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", &stageError{stage: stageFederation, err: err}
 	}
-	value, expires, err := c.impersonate(ctx, fed, c.provisioner, MaxTokenLifetime)
+	value, expires, err := c.impersonate(ctx, fed, account, MaxTokenLifetime)
 	if err != nil {
 		return "", &stageError{stage: stageImpersonation, err: err}
 	}
@@ -321,9 +328,10 @@ func (c *Client) token(ctx context.Context) (string, error) {
 	return value, nil
 }
 
-// forget drops a cached token Google refused, so the next call mints afresh.
-func (c *Client) forget(refused string) {
-	h := c.held()
+// forget drops a cached token of account's Google refused, so the next call
+// mints afresh.
+func (c *Client) forget(account, refused string) {
+	h := c.held(account)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.value == refused {
@@ -400,10 +408,15 @@ func (c *Client) SeatToken(ctx context.Context, account string, life time.Durati
 	return value, expires, err
 }
 
-// authorized runs call with the provisioner's token, and once more with a
-// fresh one where Google refused the cached token as unauthenticated.
+// authorized runs call with the provisioner's token ([Client.authorizedAs]).
 func (c *Client) authorized(ctx context.Context, call func(bearer string) error) error {
-	bearer, err := c.token(ctx)
+	return c.authorizedAs(ctx, c.provisioner, call)
+}
+
+// authorizedAs runs call with account's token, and once more with a fresh one
+// where Google refused the cached token as unauthenticated.
+func (c *Client) authorizedAs(ctx context.Context, account string, call func(bearer string) error) error {
+	bearer, err := c.token(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -411,16 +424,22 @@ func (c *Client) authorized(ctx context.Context, call func(bearer string) error)
 	if Status(err) != http.StatusUnauthorized {
 		return err
 	}
-	c.forget(bearer)
-	if bearer, err = c.token(ctx); err != nil {
+	c.forget(account, bearer)
+	if bearer, err = c.token(ctx, account); err != nil {
 		return err
 	}
 	return call(bearer)
 }
 
-// call is one authorized request.
+// call is one request as the provisioner.
 func (c *Client) call(ctx context.Context, method, address string, body, out any) error {
-	return c.authorized(ctx, func(bearer string) error { return c.do(ctx, method, address, bearer, body, out) })
+	return c.callAs(ctx, c.provisioner, method, address, body, out)
+}
+
+// callAs is one request as account.
+func (c *Client) callAs(ctx context.Context, account, method, address string, body, out any) error {
+	return c.authorizedAs(ctx, account,
+		func(bearer string) error { return c.do(ctx, method, address, bearer, body, out) })
 }
 
 // do makes one call, waiting out a short 429 on a read as Google asks. A
@@ -785,10 +804,77 @@ func (c *Client) EnabledServices(ctx context.Context, project string) (map[strin
 	return out, nil
 }
 
+// Asset is one resource Cloud Asset Inventory lists, as the atlas keeps it:
+// its full resource name, its type, its name, where it is, its state, and
+// for an instance its addresses. Nothing else of the answer is decoded.
+type Asset struct {
+	Name        string
+	Type        string
+	DisplayName string
+	Location    string
+	State       string
+	Addresses   []string
+}
+
+// assetReadMask is every field a search asks for. THE MASK IS EXPLICIT AND
+// CLOSED: unset, Google answers labels, tags and descriptions, and with
+// versionedResources a resource's whole configuration, which for a function
+// or a service holds its environment.
+const assetReadMask = "name,assetType,displayName,location,state,additionalAttributes"
+
+// assetPageSize is the most results Google answers a search page with.
+const assetPageSize = 500
+
+// SearchAssets is every resource of assetTypes in project, searched as the
+// atlas's account. A project the account may not search is a 403.
+func (c *Client) SearchAssets(ctx context.Context, project string, assetTypes []string) ([]Asset, error) {
+	query := url.Values{"assetTypes": assetTypes, "readMask": {assetReadMask}}
+	return pagesAs(ctx, c, c.AtlasAccount(), cloudAssetAPI+"/projects/"+url.PathEscape(project)+":searchAllResources",
+		query, assetPageSize, func(page json.RawMessage) ([]Asset, string, error) {
+			var resp struct {
+				Results []struct {
+					Name        string `json:"name"`
+					AssetType   string `json:"assetType"`
+					DisplayName string `json:"displayName"`
+					Location    string `json:"location"`
+					State       string `json:"state"`
+					// ONLY TWO ATTRIBUTES ARE DECODED, and only as lists of
+					// text: an instance's internal and external addresses.
+					Attributes struct {
+						InternalIPs []string `json:"internalIPs"`
+						ExternalIPs []string `json:"externalIPs"`
+					} `json:"additionalAttributes"`
+				} `json:"results"`
+				Next string `json:"nextPageToken"`
+			}
+			if err := json.Unmarshal(page, &resp); err != nil {
+				return nil, "", err
+			}
+			out := make([]Asset, 0, len(resp.Results))
+			for _, r := range resp.Results {
+				a := Asset{Name: r.Name, Type: r.AssetType, DisplayName: r.DisplayName, Location: r.Location,
+					State: r.State}
+				if r.AssetType == AssetInstance {
+					a.Addresses = append(append(a.Addresses, r.Attributes.InternalIPs...), r.Attributes.ExternalIPs...)
+				}
+				out = append(out, a)
+			}
+			return out, resp.Next, nil
+		})
+}
+
 // pages reads a paged listing to its end, each page decoded by decode into its
 // rows and the next page's token.
 func pages[T any](
 	ctx context.Context, c *Client, base string, query url.Values,
+	decode func(json.RawMessage) ([]T, string, error),
+) ([]T, error) {
+	return pagesAs(ctx, c, c.provisioner, base, query, pageSize, decode)
+}
+
+// pagesAs is [pages] as account, size rows a page.
+func pagesAs[T any](
+	ctx context.Context, c *Client, account, base string, query url.Values, size int,
 	decode func(json.RawMessage) ([]T, string, error),
 ) ([]T, error) {
 	var out []T
@@ -801,12 +887,12 @@ func pages[T any](
 		for k, v := range query {
 			q[k] = v
 		}
-		q.Set("pageSize", strconv.Itoa(pageSize))
+		q.Set("pageSize", strconv.Itoa(size))
 		if next != "" {
 			q.Set("pageToken", next)
 		}
 		var raw json.RawMessage
-		if err := c.call(ctx, http.MethodGet, base+"?"+q.Encode(), nil, &raw); err != nil {
+		if err := c.callAs(ctx, account, http.MethodGet, base+"?"+q.Encode(), nil, &raw); err != nil {
 			return nil, err
 		}
 		if len(raw) == 0 {

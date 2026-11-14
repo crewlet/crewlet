@@ -97,7 +97,8 @@ import (
 // and the decide holds the push it names to the rows ([landingPusher]): a
 // move of the target, applied, between the record of the change's head
 // revision and the record that last moved the target; its pusher is the
-// landing's actor, and a push that is none of those names nobody.
+// landing's actor, and its routing carries whom the push's row says it was
+// made for. A push that is none of those names nobody.
 //
 // A write that asks for what the change already says — an edit to its own
 // values, a draft's state it is in, the target it has, a close of a closed
@@ -627,9 +628,11 @@ type changeDecision struct {
 	// actor and actorKind are who made the change a landing records — the
 	// home's own write, which names no asker — as its decide found them: the
 	// pusher of the push the home found bringing the head into the target
-	// ([landingPusher]).
-	actor     string
-	actorKind PartyKind
+	// ([landingPusher]); and workingFor whom they made that push for, as the
+	// push's row keeps it, nil for nobody.
+	actor      string
+	actorKind  PartyKind
+	workingFor *types.WorkingFor
 }
 
 // routeChange stamps the routing of the record d forms ([routingFor]) for p, its
@@ -650,12 +653,14 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	// merged the change, so its pusher hears nothing of a merge they made,
 	// and a person who made it is named among the routing's persons, as a
 	// push's own merge names its pusher. AND FOR WHOM: the asker's write was
-	// made for whom its request states; the landing carries nobody yet
+	// made for whom its request states, and the landing for whom that push
+	// was made, as its row keeps it — the change's other authors told it
+	// merged read for them, as the push's own merge would have told them
 	// (concerns.go's head, "Whom the actor acted for").
 	actor, actorKind := p.Asker.party()
 	workingFor := p.WrittenFor.Carrier()
 	if p.Landed != nil {
-		actor, actorKind, workingFor = d.actor, d.actorKind, nil
+		actor, actorKind, workingFor = d.actor, d.actorKind, d.workingFor
 	}
 	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, workingFor: workingFor,
 		roster: seats.Roster}
@@ -999,11 +1004,13 @@ func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 	// target — an author's push of a merge commit onto it, most often — and
 	// never the push that last moved it, which may be somebody's push on top
 	// that merged nothing. Its pusher is the landing's actor, as a push that
-	// sets the target to exactly the head names its own. Named as nobody, the
-	// pusher would be told `merged` of their own merge: a seat woken for a
-	// turn, a person sent a notice.
+	// sets the target to exactly the head names its own, and whom they made
+	// it for is whom the landing was made for. Named as nobody, the pusher
+	// would be told `merged` of their own merge: a seat woken for a turn, a
+	// person sent a notice.
 	var err error
-	if d.actor, d.actorKind, err = landingPusher(ctx, tx, p.RepoID(), row.id, *l, moved); err != nil {
+	if d.actor, d.actorKind, d.workingFor, err = landingPusher(ctx, tx, p.RepoID(), row.id, *l,
+		moved); err != nil {
 		return changeDecision{}, err
 	}
 	_, d.payload = p.stamped("")

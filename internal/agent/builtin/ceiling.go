@@ -46,11 +46,15 @@ import (
 // writes for ([writtenForTurn], from the same binding), and so does every
 // request a code tool forms from its caller's actor; the store, or the node
 // deciding a code write, refuses an agent's write that states nothing
-// (types.WrittenFor), and the record carries it to the turn its wake starts.
-// The ceiling's edges are what carries no requester: a vendor's surface,
-// whose wake comes back by webhook, and, until crewlet#798's piece 4c-ii,
-// what the engine records on Gitlet about an earlier write and the merge
-// queue's close of a landed change's item; the docs say where the bound ends
+// (types.WrittenFor), and the record carries it to the turn its wake starts,
+// as do the engine's records about a seat's earlier push on Gitlet (a
+// revision's facts, a failed check of its head, a landing its home found),
+// read back from the push's rows, and what Gitlet's merge queue records about
+// a seat's earlier enqueue (its landing, an ejection and a close it could not
+// make), read back from the entry's row — whose close of a landed change's
+// item is decided within the same ceiling, composed by [WorkingForCeiling].
+// The ceiling's edge is what carries no requester: a vendor's surface, whose
+// wake comes back by webhook; the docs say where the bound ends
 // (docs/concepts/gitlet.md, "Reads made for somebody else").
 
 // Requesters composes the principal a seat's turn is acting for.
@@ -216,7 +220,7 @@ func composeCeiling(ctx context.Context, turn *turnctx.Turn, seat string, r Requ
 	// through every colleague it passes, and never for the seat that asked
 	// or answered.
 	if w := turn.WorkingFor; w != nil {
-		return workingForCeiling(ctx, *w, seat, r)
+		return WorkingForCeiling(ctx, *w, seat, r)
 	}
 	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != seat {
 		if r == nil {
@@ -248,14 +252,23 @@ func unknownSender(turn *turnctx.Turn, seat string) bool {
 	})
 }
 
-// workingForCeiling is the ceiling of a turn a hand-on woke, from whoever it
+// WorkingForCeiling is the ceiling of a turn a hand-on woke, from whoever it
 // carried ([types.WorkingFor]), composed again on this node: a seat requester
 // as this node's directory holds them now, so a revocation since the hand-on
 // applies (and the seat itself, carried back to it, is its own work); a
 // credential narrowed again by this node's resolution ([credentialCeiling]),
 // never widened; a stranger as one. A kind this build does not know is a
 // stranger's, the closed end.
-func workingForCeiling(ctx context.Context, w types.WorkingFor, seat string, r Requesters) (authz.Ceiling,
+//
+// EXPORTED FOR THE ONE WRITE THE ENGINE MAKES FOR A TURN AFTER IT ENDED: the
+// merge queue's close of a landed change's work item, the enqueuing turn's
+// write made late, which internal/engine decides within the ceiling whom the
+// enqueue was made for composes now — this composition, never a second one,
+// so the close and every call of a turn read one requester from one carrier
+// alike. A requester whose seat the organisation no longer holds fails here
+// with the composer's own error wrapped (%w), which that caller tells from a
+// read that failed.
+func WorkingForCeiling(ctx context.Context, w types.WorkingFor, seat string, r Requesters) (authz.Ceiling,
 	error) {
 
 	switch w.Kind {

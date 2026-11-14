@@ -1,13 +1,18 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -130,5 +135,55 @@ func TestTheScalewayPassNamesWhatItLacks(t *testing.T) {
 	company.Config.Integrations.Scaleway.Enabled = false
 	if _, err := (&scalewayPass{engine: e}).run(t.Context(), setup.PassInput{}); !errors.Is(err, integration.ErrNotConfigured) {
 		t.Errorf("a block switched off = %v, want not configured", err)
+	}
+}
+
+// AN ATLAS APPLICATION THAT CANNOT BE CONVERGED IS A FINDING, NEVER A FAILED
+// PASS: the atlas is optional reading, so Scaleway failing the engine over it
+// leaves the connection ready with one advisory, and only a pass that was
+// cancelled answers an error. A disconnect with nothing sealed for the atlas
+// calls nothing and forgets nothing.
+//
+// Mutation: return the convergence's error from the pass, and a Scaleway
+// outage on an optional read reports every agent's access broken.
+func TestAnAtlasApplicationThatCannotBeConvergedIsAFindingNeverAFailedPass(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, scalewayRunDoc)
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
+	e.epoch.current.Store(company)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := scaleway.NewClient(scaleway.ClientOptions{
+		OrganizationID: "11111111-2222-4333-8444-555555555555", SecretKey: "00000000-0000-4000-8000-00000000c0de",
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, srv)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := &scalewayPass{engine: e}
+	findings, err := pass.atlas(t.Context(), setup.PassInput{}, client, "Acme", true)
+	if err != nil || len(findings) != 1 || findings[0].Kind != integration.FindingCoveragePartial ||
+		findings[0].Subject != "integrations.scaleway.atlas" {
+		t.Fatalf("a failed convergence = %+v, %v: want one advisory", findings, err)
+	}
+	if phase, _ := findings[0].Kind.Verdict(); phase != integration.PhaseReady {
+		t.Errorf("the advisory is %s, want a ready integration", phase)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := pass.atlas(cancelled, setup.PassInput{}, client, "Acme", true); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled pass = %v, want its cancellation", err)
+	}
+	// Off, with nothing sealed, is no call at all.
+	before := calls
+	if findings, err := pass.atlas(t.Context(), setup.PassInput{}, client, "Acme", false); err != nil || len(findings) != 0 || calls != before {
+		t.Errorf("off with nothing sealed = %+v, %v, %d calls", findings, err, calls-before)
+	}
+	if removed, err := pass.Teardown(t.Context(), setup.TeardownInput{}); err != nil || len(removed.Accounts) != 0 || calls != before {
+		t.Errorf("a teardown with nothing sealed = %+v, %v, %d calls", removed, err, calls-before)
 	}
 }

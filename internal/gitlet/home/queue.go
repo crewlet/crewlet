@@ -30,7 +30,10 @@ type Chains interface {
 // Tasks closes a landed change's work item AS THE ENTRY'S ENQUEUER — step 2
 // of a queued merge that asked it (M5-D27): the engine wires the company's
 // tracker, which decides the close as that principal, as it decides every
-// write of theirs. The queue never closes a work item on its own account.
+// write of theirs, and, where an agent's enqueue was made for somebody, for
+// them: written for them and decided within what they may use, as the
+// enqueuing turn's own write made late (ADR-0109). The queue never closes a
+// work item on its own account.
 //
 // CloseWorkItem answers nil for an item closed, or finished already; a
 // [*NotClosed] for a close that will not be made however often it is asked,
@@ -60,14 +63,20 @@ func (n *NotClosed) Unwrap() error { return n.Err }
 
 // TaskClose is one landed change's work item to close: the step's operation
 // id — derived from its landing's, so the step asked again is the same write,
-// which the tracker's ledger collapses — the change, its work item and who
-// closes it.
+// which the tracker's ledger collapses — the change, its work item, who closes
+// it and for whom.
 type TaskClose struct {
 	OpID     string
 	RepoID   string
 	Change   gitlet.ChainChange
 	WorkItem types.WorkItem
 	As       gitlet.Principal
+	// WorkingFor is whom As's enqueue was made for, as the entry's row keeps
+	// it (gitlet.QueueWorkEntry.WorkingFor), nil for nobody: the close is
+	// written for them and decided within what they may use, on whichever
+	// path the home closes it — the landing's own turn, from the entries it
+	// read, or a later turn's owed close.
+	WorkingFor *types.WorkingFor
 }
 
 // queue is the home's MERGE QUEUE (M5-D12, M5-D13): for each queue target of
@@ -161,11 +170,11 @@ func (w *queue) AlarmReading(out *statelog.Reading) {
 // Name is [WorkerQueue].
 func (w *queue) Name() string { return WorkerQueue }
 
-// Due is a page of the repositories holding a live entry: the `queue_due`
-// listing (internal/gitlet's ReadQueueDue).
+// Due is a page of the repositories owing queue work — holding a live entry, a
+// given-up train's attempt or a landed change's close — the due-queue listing
+// (internal/gitlet's QueueDueQuery naming no repository).
 func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
-	a, err := w.estate.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Cursor: cursor, Fresh: freshAt(floor),
-		QueueDue: &gitlet.QueueDueQuery{}})
+	a, err := w.estate.QueueDue(ctx, gitlet.QueueDueQuery{Cursor: cursor, Fresh: freshAt(floor)})
 	if err != nil {
 		return nil, "", err
 	}
@@ -193,9 +202,17 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 // answer (M5-D27) — are closed and settled last ([queue.closeOwed]), so a
 // close no turn could make is asked again by every turn after, on whichever
 // home, until it ends.
+//
+// EVERY PAGE IS READ WHOLE OR REFUSED (gitlet.QueueDueAnswer): each entry it
+// answers is landed, ejected, closed or settled as the entry read, so a page a
+// newer data node answers with a member this build does not declare fails the
+// turn, stepping on nothing of what is left of it, and the queue waits until
+// this home runs a build that declares the member; and a data node of a build
+// that predates the read answers it unserved, so the queue waits for a data
+// node that serves it.
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
-	q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &gitlet.QueueDueQuery{
-		RepoID: repoID, EnqueuedSince: w.now().Add(-gitlet.MergeRateWindow)}}
+	q := gitlet.QueueDueQuery{RepoID: repoID, EnqueuedSince: w.now().Add(-gitlet.MergeRateWindow),
+		Fresh: freshAt(floor)}
 	memo := newDefsMemo()
 	var (
 		failed    []error
@@ -206,7 +223,7 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 		built     bool
 	)
 	for {
-		a, err := w.estate.Read(ctx, q)
+		a, err := w.estate.QueueDue(ctx, q)
 		if err != nil {
 			return errors.Join(append(failed, fmt.Errorf("home: read repository %s's queue work: %w", repoID,
 				err))...)
@@ -622,16 +639,18 @@ func (w *queue) land(ctx context.Context, repoID string, d gitlet.QueueDue, gree
 }
 
 // closeOwed closes the work item each of owed — a landed entry still owing
-// its close (gitlet.ReadAnswer.QueueOwedCloses) — asked closed, AS ITS
-// ENQUEUER under the operation its landing named (gitlet.CloseWorkItemOpID,
-// so a close a home asked before it stopped is the same tracker write
-// asked again, which the tracker's ledger answers once), and settles every
-// close that ENDED in ONE close_settled record: closed, or not_closed with
-// the sentence its change's authors and enqueuer read. A close whose end is
-// not known yet is left owed, for the next turn on whichever home holds the
-// repository, and is this turn's failure — as is every close this turn
-// ended whose settle did not append, each asked again under its landing's
-// operation by the next turn, which the tracker answers done.
+// its close (gitlet.QueueDueAnswer.QueueOwedCloses) — asked closed, AS ITS
+// ENQUEUER, for whom the enqueue was made as the entry read holds it
+// (TaskClose.WorkingFor), under the operation its landing named
+// (gitlet.CloseWorkItemOpID, so a close a home asked before it stopped is the
+// same tracker write asked again, which the tracker's ledger answers once),
+// and settles every close that ENDED in ONE close_settled record: closed, or
+// not_closed with the sentence its change's authors and enqueuer read. A
+// close whose end is not known yet is left owed, for the next turn on
+// whichever home holds the repository, and is this turn's failure — as is
+// every close this turn ended whose settle did not append, each asked again
+// under its landing's operation by the next turn, which the tracker answers
+// done.
 func (w *queue) closeOwed(ctx context.Context, repoID string, owed []gitlet.QueueWorkEntry,
 	at statelog.Position) error {
 
@@ -651,7 +670,7 @@ func (w *queue) closeOwed(ctx context.Context, repoID string, owed []gitlet.Queu
 			s.Outcome, s.Detail = gitlet.CloseNotClosed, "the change no longer names a work item to close"
 		} else {
 			err := w.tasks.CloseWorkItem(ctx, TaskClose{OpID: e.CloseOp, RepoID: repoID, Change: e.Change,
-				WorkItem: *e.WorkItem, As: e.EnqueuedBy})
+				WorkItem: *e.WorkItem, As: e.EnqueuedBy, WorkingFor: e.WorkingFor})
 			var refused *NotClosed
 			switch {
 			case errors.As(err, &refused):

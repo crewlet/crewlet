@@ -95,7 +95,7 @@ func TestOpenStreamCountsItsBrokersRefusals(t *testing.T) {
 	}
 	b := testBootstrap(t)
 	b.Node.ID = "refusing-member"
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	b.Stream.Leaf.Host = "127.0.0.1"
 	var out *Backends
 	for attempt := 1; ; attempt++ {

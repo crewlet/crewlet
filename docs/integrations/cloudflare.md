@@ -70,6 +70,15 @@ Zone Read and Account Settings Read are granted to every level as well, which th
 
 Under **Zone resources**, include all zones from the account, or the same zones `provisioning.zones` lists. Leave **Client IP address filtering** empty: the Cloudflare API MCP server refuses a token with IP filtering, and Crewlet never sets it on an agent's token either. An expiry date is your choice; see [The provisioner token's own expiry](#the-provisioner-tokens-own-expiry).
 
+**Optional, to see more in Atlas.** Four more read permissions let the [atlas](#see-more-in-atlas) show the account's Workers, Pages projects, R2 buckets and Tunnels. Nothing else uses them, no level grants them to an agent, and a token without them is whole:
+
+| Permission group (API name) | In the dashboard | What the atlas shows with it |
+|---|---|---|
+| Workers Scripts Read | Account, Workers Scripts, Read | each Workers script, by its name |
+| Pages Read | Account, Cloudflare Pages, Read | each Pages project, by its name |
+| Workers R2 Storage Read | Account, Workers R2 Storage, Read | each R2 bucket, by its name |
+| Cloudflare Tunnel Read | Account, Cloudflare Tunnel, Read | each Tunnel, by its name |
+
 Cloudflare shows the token's value once. Paste it into the form, or seal it yourself with `crewlet secrets set CLOUDFLARE_API_TOKEN`.
 
 ### Testing the token before you save it
@@ -212,9 +221,30 @@ integrations:
 
 ## What the atlas reads
 
-The engine reads the account for the company's [atlas](../concepts/atlas.md#what-integrations-read) with the provisioner token, under the Read groups it already holds on every zone, once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise: the account's name, every zone, every A, AAAA and CNAME record (what each name points at, and whether Cloudflare proxies it) and every certificate pack (what it covers, its type and status, who issued it and when it lapses). MX and TXT records add nothing, a TXT record's content is never decoded, and record comments and tags are never read. The read changes nothing at Cloudflare and needs no permission beyond the provisioner token's own; Workers, Pages, R2, Tunnels and load balancers would, and are not read.
+The engine reads the account for the company's [atlas](../concepts/atlas.md#what-integrations-read) with the provisioner token, under the Read groups it already holds on every zone, once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise: the account's name, every zone, every A, AAAA and CNAME record (what each name points at, and whether Cloudflare proxies it) and every certificate pack (what it covers, its type and status, who issued it and when it lapses). MX and TXT records add nothing, a TXT record's content is never decoded, and record comments and tags are never read. The read changes nothing at Cloudflare and needs no permission beyond the provisioner token's own. Load balancers are not read.
 
 A read of ten thousand records in a hundred zones is about three hundred calls, a quarter of one five-minute window of the token's limit, which it shares with the reconcile loop. A read that fails part way records nothing, and a name that two complete reads at least a day apart both miss is retired from the atlas.
+
+### See more in Atlas
+
+The atlas also shows the account's Workers, Pages projects, R2 buckets and Tunnels where the provisioner token may read them. It is optional: the integration, every agent's token and the rest of the atlas work the same without it.
+
+**To turn it on**, edit the provisioner token at Cloudflare (**Manage account**, **Account API tokens**, the token, **Edit**) and add any of the four account permissions in the [optional table above](#creating-the-provisioner-token): Workers Scripts Read, Cloudflare Pages Read, Workers R2 Storage Read and Cloudflare Tunnel Read. That is the whole step. The token's value does not change, so there is nothing to paste again, and the next hourly read shows what each permission allows. Each is taken on its own: add one and the atlas shows that product.
+
+**To undo it**, remove the permissions from the token again. What the atlas already recorded stays, and the Cloudflare source on Company › Atlas says which permission to add back to keep it current; nothing is retired by a permission that was taken away.
+
+| Part | Call | Permission group | What the atlas gains |
+|---|---|---|---|
+| Workers | `GET /accounts/{account}/workers/scripts` | Workers Scripts Read | each script as a workload that runs on the account, by its name |
+| Pages | `GET /accounts/{account}/pages/projects`, 10 a page | Pages Read | each project as a workload that runs on the account, by its name |
+| R2 | `GET /accounts/{account}/r2/buckets` | Workers R2 Storage Read | each bucket, by its name |
+| Tunnels | `GET /accounts/{account}/cfd_tunnel`, deleted ones left out | Cloudflare Tunnel Read | each Tunnel as a workload that runs on the account, by its name |
+
+**A missing permission is a suggestion, never a fault.** The Test button says the token works and adds one line, "See more in Atlas", naming the permissions it could gain. The card carries the same line as a note on a ready integration, and no level, no agent and no other read waits on it. The source's standing on the atlas names a part only where an earlier read recorded something from it, which is a permission somebody took away.
+
+**What is never read.** The engine asks for no Worker's content, settings, bindings or secrets, no Pages deployment, no Tunnel's token, configuration or connections, and no R2 object. From the four listings it decodes a name or an id and nothing else: a Pages project's `deployment_configs`, where its environment variables are, its build settings, its source repository and its domains are never decoded, and neither are a Worker's routes or a Tunnel's connections. A name shaped like a credential is refused and counted.
+
+**What the permissions could reach, so you can judge them.** Each permission covers every read of its product, more than the one listing the engine makes: Workers Scripts Read can read a script's code and the names of its bindings, Pages Read a project's plain environment variables, and Workers R2 Storage Read the objects in the buckets. The engine calls none of those, and no agent's token is ever minted with these permissions. If that is more than you want the provisioner token to hold, leave them off.
 
 ## Cloudflare's limits worth knowing
 
@@ -248,6 +278,7 @@ The card's findings, and what clears each:
 | `grant_short` | The provisioner token lacks a permission group it needs itself (subject `integrations.cloudflare.provisioning.api_token`), or one the level an agent is on grants (subject `cloudflare level read`, `cloudflare level operate`, `cloudflare level configure` or `cloudflare level secure`), so that agent's token is not minted or narrowed | Add the group the finding names to the provisioner token, at Cloudflare, or move the agents at that level to one it holds |
 | `unknown_tier` | A zone in `provisioning.zones` is not in the account (subject `integrations.cloudflare.provisioning.zones`), or a permission group the level an agent is on names is not offered to the account (subject `cloudflare level read`, `cloudflare level operate`, `cloudflare level configure` or `cloudflare level secure`) | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
 | `level_unavailable` | A note, not a fault: the provisioner token lacks a permission group that a level no agent is on grants, or the account is not offered one. The integration stays ready, and the Agents tab offers that level disabled with this reason | Add the groups the note names to the provisioner token at Cloudflare to offer the level, or leave it unavailable |
+| `coverage_partial` | A note, not a fault (subject `cloudflare atlas permissions`): the provisioner token does not hold one or more of the optional read permissions the atlas would [see more](#see-more-in-atlas) with. The integration is ready, and nothing else waits on them | Add the permissions the note names to the provisioner token, or leave it as it is |
 | `registration_orphaned` | Cloudflare holds active account tokens named like this company's agent tokens (`crewlet-<company>-...`) that the engine has no record of | Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token it did not create |
 | `identity_failed` | An agent's token could not be minted, narrowed or rolled; its level names a permission group the account does not offer, so it is not minted; somebody disabled it at Cloudflare; or Cloudflare would not read it back. Cloudflare's reason, or the missing group, is in the detail | Fix what the detail names, then **Retry** on the agent's row. For a token disabled at Cloudflare, choose **Turn back on** or **Keep off** |
 | `identity_missing` | For up to about a minute after you first connect, "access migration has not finished": the one-time step every per-agent integration passes through | Nothing; it clears by itself |

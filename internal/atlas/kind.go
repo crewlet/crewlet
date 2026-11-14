@@ -34,7 +34,9 @@ const (
 	KindBucket Kind = "bucket"
 	// KindRepository is a code repository, on Gitlet or a vendor's forge.
 	KindRepository Kind = "repository"
-	// KindPipeline is a check or a workflow that builds or deploys code.
+	// KindPipeline is a check or a workflow that builds or deploys code, keyed
+	// by what it builds: its repository, or its project at a build vendor
+	// (expo.dev, the account and the project's slug).
 	KindPipeline Kind = "pipeline"
 	// KindMonitor is a monitor or an alert definition.
 	KindMonitor Kind = "monitor"

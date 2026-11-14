@@ -75,7 +75,7 @@ func newWriteRound(t *testing.T, roster chatlet.Roster,
 	// its cap from the runner's free space it takes three quarters of it,
 	// and would refuse even this log's floor on a runner with too little
 	// free, whatever the case under it does.
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

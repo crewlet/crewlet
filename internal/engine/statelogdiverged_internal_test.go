@@ -56,7 +56,7 @@ func stageDivergedBroker(t *testing.T) divergedBroker {
 // its end.
 func stageRestoredBroker(t *testing.T) divergedBroker {
 	t.Helper()
-	base := t.TempDir()
+	base := brokertest.TempDir(t)
 	d := divergedBroker{a: testBootstrap(t)}
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
@@ -206,7 +206,7 @@ func copyFile(dst, src string) error {
 // the removal ran. A restore beside that directory can meet neither.
 func restoreBroker(t *testing.T, from string, nodes ...*config.Bootstrap) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "restored")
+	dir := filepath.Join(brokertest.TempDir(t), "restored")
 	if err := os.CopyFS(dir, os.DirFS(from)); err != nil {
 		t.Fatalf("restore the broker's store from the copy: %v", err)
 	}

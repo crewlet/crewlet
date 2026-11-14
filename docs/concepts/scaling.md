@@ -954,6 +954,7 @@ or refuses them, `fleet_builds_differ` again:
 | A datastore's collections `read_artifact_data` hands a model | `set_artifact_schema`, which replaces them whole |
 | A list's parameters, expanded into a query | the read that lists the work items |
 | A page of a repository's snapshot | the next page, asked by its cursor, as a Gitlet node syncs |
+| A page of a repository's merge queue work, which its home Gitlet node reads | each landing, removal, close and settle the home asks of an entry as it read it |
 
 Where the same answer is also only shown — an artifact version a page serves or
 a tool shows, a container's views, the catalogue, a project or a datastore's
@@ -971,7 +972,8 @@ no data node refuses a request. That order has a cost of its own: once a newer
 node writes a newer field, a node not yet upgraded is refused the answers in
 the table above that hold it, and answers `fleet_builds_differ` for the
 request it would have carried them into — and a Gitlet node of the older build
-cannot sync such a repository — until it is upgraded too. Upgraded the other way round, a seats-only node's
+cannot sync such a repository, and the merge queues of the repositories it is
+home to wait, losing nothing — until it is upgraded too. Upgraded the other way round, a seats-only node's
 request that sets a field its data nodes do not declare waits — refused, never
 run short — until one of them runs the newer build. See
 [Draining and rolling upgrades](../guides/fleet.md#draining-and-rolling-upgrades).

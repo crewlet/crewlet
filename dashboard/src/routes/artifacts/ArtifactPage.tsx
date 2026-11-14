@@ -40,6 +40,14 @@
  * and, on a sheet, the collection the followed person is on, under a
  * `FollowBanner`; the reader's own scroll, wheel, press or navigation key in
  * the body stops it, as do Escape and the followed person leaving.
+ *
+ * # On a page of its own
+ *
+ * Open in new tab (a control of the bar, a row of its More and of a listed
+ * artifact's menu) opens `#/artifacts/{id}/standalone`: the same page, the
+ * same runtime, room and panels, in a frame with no sidebar (`App.tsx`), so
+ * the bar and the artifact take the whole window. Its way back is the gallery,
+ * and it offers no second Open in new tab.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -117,7 +125,7 @@ import {
   type LogRefusal,
   type QueryRefusal,
 } from "~/protocol/index.ts";
-import { Denied, artifactAddress, copyAddress, deniedReason } from "./parts.tsx";
+import { Denied, copyAddress, deniedReason, openInNewTab } from "./parts.tsx";
 import { ArtifactShare } from "./Share.tsx";
 import { ViewTab } from "./ViewTab.tsx";
 import { HistoryTab } from "./HistoryTab.tsx";
@@ -166,7 +174,7 @@ function useWayBack(folder: string | undefined) {
   return { place, back };
 }
 
-export function ArtifactPage({ id }: { id: string }) {
+export function ArtifactPage({ id, standalone = false }: { id: string; standalone?: boolean }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
   const versions = useQuery(
     "artifact_versions",
@@ -245,6 +253,7 @@ export function ArtifactPage({ id }: { id: string }) {
       store={store}
       bridgeStores={bridgeStores.current}
       refetch={detail.refetch}
+      standalone={standalone}
     />
   );
 }
@@ -323,6 +332,7 @@ function Loaded({
   store,
   bridgeStores,
   refetch,
+  standalone,
 }: {
   detail: ArtifactDetail;
   versions: ArtifactVersionSummary[];
@@ -332,11 +342,14 @@ function Loaded({
   store: ReturnType<typeof useDataStore>;
   bridgeStores: Set<ArtifactDataStore>;
   refetch: () => void;
+  /** On its standalone page: the way back is the gallery, and there is no Open in new tab. */
+  standalone: boolean;
 }) {
   // THE PAGE HAS THE WINDOW'S HEIGHT: the body scrolls inside itself and a
   // panel beside it stays in view however far the artifact is read.
   useFillScreen(true);
-  const { place: kept, back } = useWayBack(detail.folder);
+  const { place: kept, back: wayBack } = useWayBack(detail.folder);
+  const back = standalone ? BACK : wayBack;
   const people = useArtifactPeople();
   const toast = useToast();
   const connection = useConnection();
@@ -576,6 +589,15 @@ function Loaded({
     "artifact.share": () => setSharing(true),
   });
 
+  // ONE ACTION IN TWO PLACES, the bar's button and More's row, under one key,
+  // so a narrow bar folds the button into that row rather than beside it. It
+  // opens at the version on show, as the reader is looking at it.
+  const openTab: ArtifactBarTool = {
+    key: "tab",
+    label: "Open in new tab",
+    icon: <ExternalLinkGlyph size="sm" />,
+    onSelect: () => openInNewTab(detail.id, version || undefined),
+  };
   const peopleLabel =
     drawn.length === 0
       ? "People here"
@@ -618,6 +640,7 @@ function Loaded({
       ...(drawn.length > 0 ? { badge: drawn.length } : {}),
       onSelect: () => toggle("people"),
     },
+    ...(standalone ? [] : [openTab]),
     {
       key: "share",
       label: "Share",
@@ -661,21 +684,7 @@ function Loaded({
       ? [{ kind: "separator" as const, key: "sep:kind" }, ...kind.menu]
       : []),
     { kind: "separator", key: "sep:links" },
-    {
-      key: "tab",
-      label: "Open in a new tab",
-      icon: <ExternalLinkGlyph size="sm" />,
-      // THE DASHBOARD'S PAGE, never the frame's own address: a page runs
-      // only inside its sandboxed frame, under the host that answers its
-      // bridge, and a frame URL opened as a window would be neither. It opens
-      // at the version on show, as the reader is looking at it.
-      onSelect: () =>
-        void window.open(
-          artifactAddress(detail.id, version || undefined),
-          "_blank",
-          "noopener,noreferrer",
-        ),
-    },
+    ...(standalone ? [] : [openTab]),
     {
       key: "copy",
       label: "Copy link",

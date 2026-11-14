@@ -1193,7 +1193,7 @@ func TestANodeThatWasNotRunningCatchesUpOnTheRoom(t *testing.T) {
 	// survives the node, and each node's SQL is its own. AND ONE KEYRING, as
 	// for any two nodes on one log: every record on it is signed, and a node
 	// keyed differently would refuse every one its predecessor wrote.
-	stream := t.TempDir()
+	stream := brokertest.TempDir(t)
 	ring := fleetRing(t)
 	wrote, stopWriter := coldEngine(t, "node-wrote",
 		filepath.Join(t.TempDir(), "crewlet.db"), stream, ring)

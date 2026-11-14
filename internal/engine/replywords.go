@@ -44,10 +44,13 @@ func newestEvent(evs []*events.Event) *events.Event {
 // replyWorkingFor is whom a delivery offered to a parked run was written for
 // ([sandbox.Reply.WorkingFor]): the newest event's carrier, read by the rule a
 // wake is read by ([writtenForIn]), so the two cannot drift — an agent's
-// carrier, off the first constituent where the notification coalesced, and nil
-// for a writer that is no agent and for a vendor's notification. Read whether
-// or not there is a party registry: whom a write was made for is stated on the
-// write, never looked up.
+// carrier, off the first constituent where the notification coalesced, and the
+// engine's on its record about an agent's earlier act; nil for a person's or a
+// credential's writer and for a vendor's notification. The engine's delivery
+// answers no parked question whatever it carries, since it says nothing and
+// its writer holds no seat ([sandbox.Reply.Writer]). Read whether or not there
+// is a party registry: whom a write was made for is stated on the write, never
+// looked up.
 func replyWorkingFor(evs []*events.Event) *types.WorkingFor {
 	n, ok := events.DataAs[*types.ExternalNotification](newestEvent(evs))
 	if !ok || n == nil {

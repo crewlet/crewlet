@@ -589,8 +589,8 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 			Entries: []gitlet.Ejection{{EntryID: entryID, Reason: gitlet.EjectRepoMirrored}}}
 	}))
 	requireQueueRefused(t, n, before, early, err, gitlet.MergeRefusalStale, "api follows no source now")
-	if due, err := n.reader.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-		QueueDue: &gitlet.QueueDueQuery{RepoID: api}}); err != nil || due.DueQueue == nil || due.DueQueue.Mirrored {
+	if due, err := n.reader.QueueDue(ctx, gitlet.QueueDueQuery{RepoID: api, Fresh: stale}); err != nil ||
+		due.DueQueue == nil || due.DueQueue.Mirrored {
 		t.Fatalf("api's queue work before its mirror_from is %+v, %v; want it read as no pull mirror's",
 			due.DueQueue, err)
 	}
@@ -626,8 +626,7 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	}
 	// ITS HOME READS IT A PULL MIRROR off its queue work, which is what has
 	// it shed the queue rather than build a train.
-	due, err := n.reader.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-		QueueDue: &gitlet.QueueDueQuery{RepoID: api}})
+	due, err := n.reader.QueueDue(ctx, gitlet.QueueDueQuery{RepoID: api, Fresh: stale})
 	if err != nil || due.DueQueue == nil || !due.DueQueue.Mirrored || len(due.DueQueue.Entries) != 1 {
 		t.Fatalf("api's queue work is %+v, %v; want its one live entry, read as a pull mirror's", due.DueQueue,
 			err)

@@ -128,6 +128,24 @@ A refusal names the step that failed, Expo's own reason, what to do about it and
 
 Disconnecting turns every agent off and clears their tokens at once. Crewlet then stops tracking their robots, so delete them on the account's access tokens page at Expo. Builds and updates a robot made stay on the account.
 
+## Let the atlas read the account
+
+Optional. With nothing more than the account's name, the company's [atlas](../concepts/atlas.md#what-integrations-read) shows Expo as one account. To see its projects and whether their builds pass, give the atlas a view-only robot of its own. No agent needs it, nothing waits on it, and no agent's robot is ever used for it.
+
+**The one step.** On the account's **Settings › Access tokens** page at Expo, add a robot named `crewlet-atlas` with the **Viewer** role, create an access token on its row, and paste it under **Company › Integrations › Expo › Atlas robot token**. Press **Test**. Crewlet seals it as `EXPO_ATLAS_TOKEN` and reads the account within a minute, then every hour (the company's `atlas.refresh_interval_seconds`).
+
+**What the atlas gains.** Each project as a service, by its slug, with its name, belonging to the account and built from the GitHub repository linked to it; and, for each of Android and iOS the project was ever built for, a pipeline carrying the result of its latest build (queued, running, passed, failed or cancelled).
+
+**What is never read.** The read is one GraphQL query that names every field it is sent: a project's id, slug, name and linked repository, and a build's platform and status. No build credential, no secret, no environment variable, no build log or message and no artifact is asked for, so none is sent.
+
+**Only a Viewer robot is read with.** Before every read, and when you press Test, Crewlet reads who the token is and what role it holds, as it does for an agent's robot. A person's token, a robot with any other role, a robot with no role on the account, and a robot that holds a token sealed for one of the agents are each refused, and the atlas's Sources page says what to change.
+
+**What Expo shows.** The robot is an actor of its own on the account: what the atlas reads is read as `crewlet-atlas`, never as an agent's robot.
+
+**To undo it.** Delete the robot `crewlet-atlas` at Expo and clear the field (or remove `integrations.expo.atlas` from the company configuration). The atlas stops reading the account. What it recorded stays, each entry showing when it was last seen, until a person retires it.
+
+**Cost.** Two calls that prove the robot and one per fifty projects. A `429` is waited out; a listing that fails part way stops the read, which records nothing and is made again five minutes later.
+
 ## Configuration
 
 ```yaml
@@ -136,6 +154,8 @@ integrations:
     enabled: true
     provisioning:
       account_name: example-org
+    atlas:
+      token: ${EXPO_ATLAS_TOKEN}
 ```
 
 | Field | Required | Meaning |
@@ -144,7 +164,10 @@ integrations:
 | `provisioning` | yes | The account the agents' robots act for. Required when enabled: the integration receives nothing from Expo, so an enabled block without it would do nothing at all. |
 | `provisioning.account_name` | yes | The Expo account or organization, as it appears in `expo.dev/accounts/<name>`: the name alone, with no `@`, slash or space, or a `${VAR}`. Every agent's robot must hold its role on this account. |
 
-The block holds no credential. Each agent's token is its own, pasted on the Agents tab.
+| `atlas` | no | The atlas's own read of the account. Leave it out and the atlas shows the Expo account alone. |
+| `atlas.token` | no | A `${VAR}` naming the sealed access token of a robot made for the atlas, holding the Viewer role ([let the atlas read the account](#let-the-atlas-read-the-account)). The dashboard seals it as `EXPO_ATLAS_TOKEN`. A robot with any other role, and any agent's own robot, is refused. |
+
+The block holds no agent's credential. Each agent's token is its own, pasted on the Agents tab.
 
 ## Expo's plans worth knowing
 

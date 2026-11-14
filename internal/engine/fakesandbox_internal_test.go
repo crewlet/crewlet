@@ -52,7 +52,7 @@ func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	t.Parallel()
 	played := make(chan string, len(executor.Names()))
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)

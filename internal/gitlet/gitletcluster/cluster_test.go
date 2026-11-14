@@ -950,6 +950,33 @@ func (c *cluster) drained(ctx context.Context) error {
 	return nil
 }
 
+// AwaitElection reads the code log's state through every running member's own
+// client until each is answered (gitlettest.Cluster) — a member whose applier
+// a case holds among them, since its committer decides as one whose applier
+// runs does, so never through writers, which leaves it out. A read the broker
+// answers 503 or not at all while the elections a member's death caused run
+// is asked again.
+func (c *cluster) AwaitElection(ctx context.Context) error {
+	for _, m := range c.members {
+		if !m.isRunning() {
+			continue
+		}
+		for {
+			_, err := m.data.LogStats(ctx)
+			if err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("member %s's broker has answered no read of the code log's state (the last: %w): %w",
+					m.id, err, ctx.Err())
+			case <-time.After(20 * time.Millisecond): //fixedwait:liveness
+			}
+		}
+	}
+	return nil
+}
+
 func (c *cluster) Declare(t testing.TB, repos ...gitlet.Declared) {
 	t.Helper()
 	c.via(t).data.Declare(t, c.next(), repos...)

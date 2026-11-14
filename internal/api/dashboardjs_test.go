@@ -2378,7 +2378,11 @@ const (
 	// kit's shared "more on the page" link and a two-line row held to its
 	// width) added 2,283 bytes, nearly all script, and took it to 5972.7 KiB
 	// (6,116,007 bytes): 5973 KiB.
-	treeBudget = 5<<20 + 853<<10
+	// An artifact on a page of its own (the standalone route, the frame with
+	// no sidebar, Open in new tab in the bar, in its More and in a listed
+	// artifact's menu) on kit 0.125.0 added 1,048 bytes, nearly all script,
+	// and took it to 5973.7 KiB (6,117,055 bytes): 5974 KiB.
+	treeBudget = 5<<20 + 854<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

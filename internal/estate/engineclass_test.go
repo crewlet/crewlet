@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -37,11 +38,14 @@ import (
 // nobody can make of them. An engine write on any other domain would be
 // carried by a facade the other side of the gate does not read, so the class
 // would hold it to nothing. And a read is never the engine's: the engine's
-// reads are ordinary ones, which a surface may hold — save one ANSWER, the
-// turn-start thread read's (chat.turn_thread, through [TurnThreads]), which
-// hands over whom each chat message was written for and is the engine's alone,
-// so the same gate over the source tree holds the surfaces off it too
-// ([TestOnlyTheEngineReadsWhomAMessageWasWrittenFor]).
+// reads are ordinary ones, which a surface may hold — save two ANSWERS, each
+// handing over whom a write was made for and so the engine's alone: the
+// turn-start thread read's (chat.turn_thread, through [TurnThreads]), whom
+// each chat message was written for, and the home's due-queue read's
+// (code.queue_due, through [CodeSeam.QueueDue]), whom each queued change's
+// enqueue was made for; so the same gate over the source tree holds the
+// surfaces off both ([TestOnlyTheEngineReadsWhomAMessageWasWrittenFor],
+// [TestOnlyTheEngineReadsWhomAQueuedChangeWasEnqueuedFor]).
 //
 // A TURN'S BEGIN IS ONE OF THEM: the record of a turn's first read and the
 // base it holds is the engine's account of what its launch read, which nobody
@@ -218,6 +222,22 @@ var (
 	chatletImport = reflect.TypeFor[chatlet.ThreadReader]().PkgPath()
 	notifyImport  = reflect.TypeFor[notify.ThreadReaders]().PkgPath()
 )
+
+// queueReadNames are the names the home's due-queue read is reached by,
+// matched on any operand: the read itself — the router's code facade's
+// ([CodeSeam.QueueDue]), Gitlet's reader's and its server's, the home's
+// estate's — and the page of one target's queue work it answers, which share
+// one name (QueueDue); its answer (QueueDueAnswer); and an entry of that work
+// (QueueWorkEntry), which carries whom its enqueue was made for. That read
+// hands a repository's home whom each queued change's enqueue was made for,
+// so its close of the change's work item is decided within their apps, and
+// no reader of a queue may see it; a surface lists a queue through
+// code.read's `queue` kind, whose rows leave it out.
+var queueReadNames = []string{"QueueDue", "QueueDueAnswer", "QueueWorkEntry"}
+
+// gitletImport is Gitlet's package, whose types carry the due-queue read, as
+// a hand-out's results name them.
+var gitletImport = reflect.TypeFor[gitlet.QueueDueAnswer]().PkgPath()
 
 // NO SURFACE HOLDS THE ENGINE'S EXECUTOR WRITES.
 //
@@ -466,6 +486,82 @@ func TestOnlyTheEngineReadsWhomAMessageWasWrittenFor(t *testing.T) {
 	}
 }
 
+// ONLY THE ENGINE READS WHOM A QUEUED CHANGE WAS ENQUEUED FOR (ADR-0109).
+//
+// The home's due-queue read (code.queue_due) hands a repository's home whom
+// each entry's enqueue was made for (gitlet.QueueWorkEntry.WorkingFor), so
+// the queue's close of a landed change's work item is decided within their
+// apps; no reader of a queue may see it. The guard over the packages that
+// serve a person or a model ([TestNoSurfaceHoldsTheEnginesExecutorWrites])
+// holds them off that read as it holds them off the engine's writes and its
+// turn-start thread read: by name on any operand ([queueReadNames]), through
+// every engine hand-out whose results carry it, and refusing a dot-import of
+// Gitlet, which would reach its types unqualified. Each case plants files and
+// scans them: a road is one failure, and the queue listing a surface does
+// hold is none.
+//
+// Mutation: drop a name from queueReadNames, leave the read's hand-outs
+// underived, or let Gitlet be dot-imported, and the case for that road
+// changes its answer.
+func TestOnlyTheEngineReadsWhomAQueuedChangeWasEnqueuedFor(t *testing.T) {
+	t.Parallel()
+	gitletPath := strconv.Quote(gitletImport)
+	engine := strconv.Quote(path.Join(path.Dir(estateImport), "engine"))
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"the code facade's queue read, from a seat's tools": {
+			files: map[string]string{"internal/agent/builtin/road.go": "package builtin\n" +
+				"func read(c interface{ QueueDue() any }) any { return c.QueueDue() }\n"},
+			want: "internal/agent/builtin/road.go:2: QueueDue",
+		},
+		"its answer under an aliased import": {
+			files: map[string]string{"internal/api/road.go": "package api\nimport g " + gitletPath +
+				"\nvar due g.QueueDueAnswer\n"},
+			want: "internal/api/road.go:3: QueueDueAnswer",
+		},
+		"an entry of the queue work, in Ask Crewlet": {
+			files: map[string]string{"internal/assistant/road.go": "package assistant\nimport " + gitletPath +
+				"\nfunc whom(e gitlet.QueueWorkEntry) any { return e.WorkingFor }\n"},
+			want: "internal/assistant/road.go:3: QueueWorkEntry",
+		},
+		"a hand-out the engine exports under a name of its own": {
+			files: map[string]string{
+				"internal/engine/handout.go": "package engine\nimport " + gitletPath + "\ntype Engine struct{}\n" +
+					"func Owed(e *Engine) []gitlet.QueueWorkEntry { return nil }\n",
+				"cmd/crewlet/road.go": "package main\nimport " + engine +
+					"\nfunc read(e *engine.Engine) { _ = engine.Owed(e) }\n",
+			},
+			want: "cmd/crewlet/road.go:3: Owed",
+		},
+		"Gitlet dot-imported": {
+			files: map[string]string{"internal/api/road.go": "package api\nimport . " + gitletPath +
+				"\nvar due QueueDueAnswer\n"},
+			want: "internal/api/road.go:2: dot-imports",
+		},
+		"the queue listing a seat reads, which a surface may hold": {
+			files: map[string]string{"internal/agent/builtin/road.go": "package builtin\nimport " + gitletPath +
+				"\nvar kind = gitlet.ReadQueue\nfunc rows(a gitlet.ReadAnswer) any { return a.Queue }\n"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			report, err := scanEngineWrites(plantTree(t, tc.files), personSurfaces)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failures := report.failures(personSurfaces)
+			switch {
+			case tc.want == "" && len(failures) > 0:
+				t.Errorf("files that take no road failed:\n%s", strings.Join(failures, "\n"))
+			case tc.want != "" && (len(failures) != 1 || !strings.Contains(failures[0], tc.want)):
+				t.Errorf("failures %q, want exactly one naming %q", failures, tc.want)
+			}
+		})
+	}
+}
+
 // plantTree is a fresh tree holding files (a slash path below the root to its
 // source), and a quiet Go file in every surface.
 func plantTree(t *testing.T, files map[string]string) string {
@@ -513,21 +609,24 @@ func (r engineWritesReport) failures(surfaces []string) []string {
 
 // scanEngineWrites reads the non-test Go files of each surface's tree under
 // root, less testdata and hidden directories, for a road to the executor log's
-// write side, after deriving the engine's hand-outs of it.
+// write side, to the engine's turn-start thread read or to the home's
+// due-queue read, after deriving the engine's hand-outs of each.
 func scanEngineWrites(root string, surfaces []string) (engineWritesReport, error) {
 	report := engineWritesReport{read: map[string]int{}}
-	writeHandOuts, readHandOuts, files, err := engineHandOuts(
-		filepath.Join(root, filepath.FromSlash(engineDir)))
+	doors, files, err := engineHandOuts(filepath.Join(root, filepath.FromSlash(engineDir)))
 	if err != nil {
 		return report, err
 	}
 	report.engineFiles = files
-	names := roadNames{writes: map[string]bool{}, reads: map[string]bool{}}
-	for _, name := range append(slices.Clone(engineWriteNames), writeHandOuts...) {
+	names := roadNames{writes: map[string]bool{}, reads: map[string]bool{}, queue: map[string]bool{}}
+	for _, name := range append(slices.Clone(engineWriteNames), doors.writes...) {
 		names.writes[name] = true
 	}
-	for _, name := range append(slices.Clone(turnReadNames), readHandOuts...) {
+	for _, name := range append(slices.Clone(turnReadNames), doors.reads...) {
 		names.reads[name] = true
+	}
+	for _, name := range append(slices.Clone(queueReadNames), doors.queue...) {
+		names.queue[name] = true
 	}
 	fset := token.NewFileSet()
 	for _, surface := range surfaces {
@@ -565,13 +664,14 @@ func scanEngineWrites(root string, surfaces []string) (engineWritesReport, error
 }
 
 // roadNames are the names a surface may not take: writes, to the engine-class
-// logs' write side, and reads, to the engine's turn-start thread read.
+// logs' write side; reads, to the engine's turn-start thread read; and queue,
+// to the home's due-queue read.
 type roadNames struct {
-	writes, reads map[string]bool
+	writes, reads, queue map[string]bool
 }
 
-// roadsIn is every road one surface file takes to the log's write side, or to
-// the engine's turn-start thread read.
+// roadsIn is every road one surface file takes to the log's write side, to
+// the engine's turn-start thread read, or to the home's due-queue read.
 func roadsIn(fset *token.FileSet, rel string, file *ast.File, names roadNames) []string {
 	var out []string
 	at := func(n ast.Node, what string) {
@@ -579,7 +679,7 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names roadNames) [
 	}
 	for _, spec := range file.Imports {
 		if imported, err := strconv.Unquote(spec.Path.Value); err == nil &&
-			(imported == estateImport || slices.Contains(domainImports, imported)) &&
+			(imported == estateImport || imported == gitletImport || slices.Contains(domainImports, imported)) &&
 			spec.Name != nil && spec.Name.Name == "." {
 			at(spec, "dot-imports "+imported+", which reaches every name of it unqualified: "+
 				"import it by name")
@@ -604,6 +704,11 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names roadNames) [
 				"whom each chat message was written for and is the engine's alone (ADR-0109); a "+
 				"surface reads a thread through estate.Chat's Thread")
 		}
+		if names.queue[sel.Sel.Name] {
+			at(sel, sel.Sel.Name+" reaches the home's due-queue read, which hands over whom each "+
+				"queued change's enqueue was made for and is the engine's alone (ADR-0109); a surface "+
+				"lists a queue through code.read's queue kind")
+		}
 		if x, isIdent := sel.X.(*ast.Ident); isIdent && domain[x.Name] &&
 			slices.Contains(domainWriteNames, sel.Sel.Name) {
 			at(sel, x.Name+"."+sel.Sel.Name+" is an engine-class domain's write side, which "+
@@ -614,15 +719,24 @@ func roadsIn(fset *token.FileSet, rel string, file *ast.File, names roadNames) [
 	return out
 }
 
+// handOuts are the engine's exported functions and methods whose results name
+// the log's write side (writes), the turn-start thread read (reads), or the
+// home's due-queue read (queue).
+type handOuts struct {
+	writes, reads, queue []string
+}
+
 // engineHandOuts is every exported function and method in dir — the engine
-// package — whose results name the log's write side (writes), or the
-// turn-start thread read (reads), and how many files it read: a door a surface
-// could take either through without naming it.
-func engineHandOuts(dir string) (writes, reads []string, files int, err error) {
+// package — whose results name the log's write side, the turn-start thread
+// read or the home's due-queue read, and how many files it read: a door a
+// surface could take any of them through without naming it.
+func engineHandOuts(dir string) (handOuts, int, error) {
+	var out handOuts
 	matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
-		return nil, nil, 0, err
+		return out, 0, err
 	}
+	files := 0
 	fset := token.NewFileSet()
 	for _, p := range matches {
 		if strings.HasSuffix(p, "_test.go") {
@@ -630,7 +744,7 @@ func engineHandOuts(dir string) (writes, reads []string, files int, err error) {
 		}
 		parsed, err := parser.ParseFile(fset, p, nil, 0)
 		if err != nil {
-			return nil, nil, 0, err
+			return out, 0, err
 		}
 		files++
 		estateNames, domainNames := importNamesOf(parsed, estateImport), map[string]bool{}
@@ -638,20 +752,44 @@ func engineHandOuts(dir string) (writes, reads []string, files int, err error) {
 			maps.Copy(domainNames, importNamesOf(parsed, imported))
 		}
 		chatletNames, notifyNames := importNamesOf(parsed, chatletImport), importNamesOf(parsed, notifyImport)
+		gitletNames := importNamesOf(parsed, gitletImport)
 		for _, decl := range parsed.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !fn.Name.IsExported() || fn.Type.Results == nil {
 				continue
 			}
 			if namesWriteSide(fn.Type.Results, estateNames, domainNames) {
-				writes = append(writes, fn.Name.Name)
+				out.writes = append(out.writes, fn.Name.Name)
 			}
 			if namesTurnRead(fn.Type.Results, estateNames, chatletNames, notifyNames) {
-				reads = append(reads, fn.Name.Name)
+				out.reads = append(out.reads, fn.Name.Name)
+			}
+			if namesQueueRead(fn.Type.Results, gitletNames) {
+				out.queue = append(out.queue, fn.Name.Name)
 			}
 		}
 	}
-	return writes, reads, files, nil
+	return out, files, nil
+}
+
+// namesQueueRead reports whether a declaration's results name the home's
+// due-queue read: one of Gitlet's types that carry it ([queueReadNames]).
+func namesQueueRead(results *ast.FieldList, gitletNames map[string]bool) bool {
+	found := false
+	ast.Inspect(results, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if x, isIdent := sel.X.(*ast.Ident); isIdent {
+			found = gitletNames[x.Name] && slices.Contains(queueReadNames, sel.Sel.Name)
+		}
+		return !found
+	})
+	return found
 }
 
 // namesTurnRead reports whether a declaration's results name the engine's

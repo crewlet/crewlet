@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // managedBootstrap writes a Tier A naming a store in dir and `operator` as
@@ -35,7 +36,7 @@ func managedBootstrap(t *testing.T, dir string) string {
 // forward, and storing nothing. Reading it is untouched.
 func TestAManagedDocumentRefusesTheOfflineWrites(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	open := bootstrapForStore(t, dir)
 	company := companyFile(t, dir, "company.yaml", nil)
 	if _, errs, err := configCmd(t, open, "import", company); err != nil {
@@ -119,7 +120,7 @@ func firstRevisionID(t *testing.T, table string) string {
 // node that started without doing it would read as one that had.
 func TestImportCompanyIsRefusedOnAManagedDeployment(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	managed := managedBootstrap(t, dir)
 	company := companyFile(t, dir, "company.yaml", nil)
 	var out, errOut bytes.Buffer
@@ -146,7 +147,7 @@ func TestImportCompanyIsRefusedOnAManagedDeployment(t *testing.T) {
 // imported, and the ignored file is said, naming the writer.
 func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	managed := managedBootstrap(t, dir)
 	// A FILE THAT DOES NOT PARSE, at the default path: read, it would refuse
 	// the boot of a node that ignores it.
@@ -251,7 +252,7 @@ func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T)
 // remedy is never followed.
 func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	managed := managedBootstrap(t, dir)
 	id := serveStored(t, managed, storedRevisionDoc)
 	boot, err := config.LoadBootstrap(managed, config.EnvOnly())

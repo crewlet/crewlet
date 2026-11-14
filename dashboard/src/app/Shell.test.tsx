@@ -20,7 +20,15 @@ import { useSearchTarget } from "./searchTarget.ts";
 import { useFillScreen } from "./fill.tsx";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { AppAnnouncer } from "./announcer.tsx";
-import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
+import {
+  Shell,
+  usePageCoverage,
+  usePageLabels,
+  usePublishFleet,
+  useSectionCounts,
+} from "./Shell.tsx";
+import { OwnPageHeader } from "./frame/OwnHeader.tsx";
+import { recentsKey } from "~/lib/recents.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -131,6 +139,68 @@ function frame(child: ReactNode) {
       ),
   };
 }
+
+/** An artifact's page as the frame sees it: its title published, and its own head. */
+function OwnHead({ id }: { id: string }) {
+  usePageLabels({ [id]: "Q4 roadmap" });
+  return (
+    <>
+      <OwnPageHeader>
+        <div>the artifact's bar</div>
+      </OwnPageHeader>
+      <div>the artifact</div>
+    </>
+  );
+}
+
+// THE STANDALONE PAGE IS THE FRAME WITHOUT ITS SIDEBAR: the session, the
+// readings and the screen's own head stay, and the artifact it shows is
+// remembered as the artifact, so a recent never reopens the bare page.
+describe("an artifact's standalone page", () => {
+  const ID = "0192f2c4-6666-7000-8000-000000000006";
+
+  function mountAt(hash: string, standalone: boolean) {
+    location.hash = hash;
+    const store = new Store();
+    return render(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <Shell standalone={standalone}>
+            <OwnHead id={ID} />
+          </Shell>
+        </Router>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("draws no sidebar, and the screen's own head in the bar's place", async () => {
+    const { container } = mountAt(`#/artifacts/${ID}/standalone`, true);
+    expect(await screen.findByText("the artifact's bar")).toBeTruthy();
+    expect(screen.getByText("the artifact")).toBeTruthy();
+    expect(container.querySelector(".crewlet-app-shell__rail")).toBeNull();
+    expect(container.querySelector(".crewlet-app-shell--no-rail")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Navigation" })).toBeNull();
+  });
+
+  test("the same screen in the dashboard keeps its sidebar", async () => {
+    const { container } = mountAt(`#/artifacts/${ID}`, false);
+    expect(await screen.findByText("the artifact's bar")).toBeTruthy();
+    expect(container.querySelector(".crewlet-app-shell__rail")).not.toBeNull();
+  });
+
+  test("it is remembered as the artifact's own page", async () => {
+    noteReader("p-standalone");
+    localStorage.removeItem(recentsKey("p-standalone"));
+    mountAt(`#/artifacts/${ID}/standalone`, true);
+    await waitFor(() => {
+      const kept = JSON.parse(localStorage.getItem(recentsKey("p-standalone")) ?? "[]") as {
+        path: string[];
+        label: string;
+      }[];
+      expect(kept[0]).toMatchObject({ path: ["artifacts", ID], label: "Q4 roadmap" });
+    });
+  });
+});
 
 // THE FIRST DIAL IS NO RECONNECT. A tab whose socket has never been answered
 // has received nothing to show, so the bar says it is connecting, in a

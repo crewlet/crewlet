@@ -318,7 +318,12 @@
 // starts reads it (ADR-0109): beside the seat on a routing that may wake a
 // seat, so that turn works for them too, held to what they may use, and on an
 // open, a reopen, a push, a merge and an enqueue whatever they wake, kept on
-// their rows for the engine's later records (concerns.go, writtenfor.go).
+// their rows for the engine's later records, which carry it beside the actor
+// they name: a revision's facts, a failed check of a head and the home's
+// landing read it back from the push's rows, and the merge queue's landing
+// from its entry's row — which its ejection and a close it could not make
+// carry beside no actor, and for which its close of a landed change's item is
+// made (concerns.go, writtenfor.go).
 //
 // # A repository's checks are rows on their own subject
 //
@@ -1692,7 +1697,7 @@
 // written back in one upsert and its changes read in one statement, as a push
 // record's changes are ([writeEntries], [changeRowsIn]).
 //
-// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one `queue_due` page over
+// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one due-queue page over
 // a target of [MaxCandidateEntries] live entries, each change's body at
 // [MaxChangeBodyBytes]; -benchtime 20x and one count on two E-cores of a Core
 // Ultra 7 265U): a page names the gate's depth × batch entries, their changes
