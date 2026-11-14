@@ -800,6 +800,73 @@ func TestARecoveryCountsEachRunItTakesOverOnce(t *testing.T) {
 	}
 }
 
+// listedBeforeRecovery is a run store that runs meanwhile once, after it has
+// listed a seat's runs and before it returns that listing: a recount whose
+// listing was read before what meanwhile does, and whose count is written
+// after it.
+type listedBeforeRecovery struct {
+	PendingStore
+	mu        sync.Mutex
+	meanwhile func(ctx context.Context)
+}
+
+func (s *listedBeforeRecovery) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
+	runs, err := s.PendingStore.ListActiveForSeat(ctx, handle)
+	s.mu.Lock()
+	meanwhile := s.meanwhile
+	s.meanwhile = nil
+	s.mu.Unlock()
+	if meanwhile != nil {
+		meanwhile(ctx)
+	}
+	return runs, err
+}
+
+// A RECOUNT WHOSE LISTING WAS READ BEFORE A RECOVERY READS AGAIN
+// (countwrite.go). The seat's control topic is attached before its recovery
+// runs, so a recount off it can list the seat's runs before the recovery and
+// write its count after. The recovery starts the seat's counts afresh as it
+// records its takeovers, which moves the seat for such a recount, and the
+// recount reads again. Here the seat's last holder ends its one run between
+// the recount's listing and the recovery's, so the recovery takes nothing over
+// and moves no count of its own: the fresh start is the only move. Written
+// over it instead, the recount's listing counted the ended run, and the seat
+// was held for a run that was gone until a later recount.
+//
+// Mutation: start the seat's counts afresh without moving the seat.
+func TestARecountListedBeforeARecoveryReadsAgain(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	store := &listedBeforeRecovery{PendingStore: rig.coordinator.pending}
+	store.meanwhile = func(ctx context.Context) {
+		// THE SEAT'S LAST HOLDER ENDS ITS RUN, and this node takes the seat.
+		decided, ok, err := rig.pending.DecideEnding(ctx, "t1", Decision{
+			License: License{WhileIn: Active, Launch: EveryLaunch},
+			Reason:  types.ExecutorFailureSeatRemoved, Detail: "the seat left the company",
+		})
+		if err != nil || !ok {
+			t.Errorf("the premise: t1's ending by the seat's last holder = %v, %v", ok, err)
+			return
+		}
+		if _, deleted, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); err != nil || !deleted {
+			t.Errorf("the premise: t1's delete by the seat's last holder = %v, %v", deleted, err)
+			return
+		}
+		if err := rig.recoverSeat(ctx, "node-b:1", 2); err != nil {
+			t.Errorf("RecoverSeat: %v", err)
+		}
+	}
+	rig.coordinator.pending = store
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
+		AgentHandle: "swe", TurnID: "t1",
+	}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
+	}
+	wantSeatCounts(t, rig, "once the recount listed before the recovery was written,", "nothing, t1 being gone",
+		0, 0)
+}
+
 // parkLandsUnanswered is a run store whose record of a park's question lands
 // and is then reported unanswered, and which leaves a claim's release
 // unanswered, while it is silent: a park's write that landed with its answer
