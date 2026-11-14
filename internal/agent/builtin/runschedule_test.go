@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -93,6 +95,18 @@ type scheduleRig struct {
 // operation the request names, as the act transport's Idempotency-Key does.
 func newScheduleRig(t *testing.T, key string) *scheduleRig {
 	t.Helper()
+	return newScheduleRigAs(t, func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
+		a, err := builtin.PrincipalActor(ctx, turn)
+		a.WorkKey = key
+		return a, err
+	})
+}
+
+// newScheduleRigAs is [newScheduleRig] with the surface's own resolution of
+// who calls, as the operator catalogue hands it.
+func newScheduleRigAs(t *testing.T,
+	actor func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error)) *scheduleRig {
+	t.Helper()
 	o := qualityTeam()
 	runner := &manualRunner{pub: &announced{}, paused: map[uuid.UUID]bool{}}
 	m, err := schedule.NewManual(schedule.ManualOptions{
@@ -103,11 +117,6 @@ func newScheduleRig(t *testing.T, key string) *scheduleRig {
 		t.Fatal(err)
 	}
 	runner.m = m
-	actor := func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
-		a, err := builtin.PrincipalActor(ctx, turn)
-		a.WorkKey = key
-		return a, err
-	}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		ScheduleRuns: builtin.ScheduleRunDeps{
 			Runner: runner, Org: func() *org.Organization { return o }, Actor: actor,
@@ -279,5 +288,39 @@ func TestAnAgentRunsNoSchedule(t *testing.T) {
 	}
 	if len(rig.runner.asks) != 0 {
 		t.Fatalf("asks = %+v, want none", rig.runner.asks)
+	}
+}
+
+// A CALL THIS TOOL CANNOT NAME ITS PERSON FOR RUNS NOTHING, and its refusal
+// carries why: one with no credential is forbidden, and one whose operation
+// key no engine minted is an argument to correct, each with the resolver's
+// error as its cause rather than dropped.
+func TestACallWithNoPersonToActAsRunsNothingAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	rig := newScheduleRig(t, "")
+	ctx := builtin.OutsideAnyTurn(context.Background())
+	res, err := rig.tool.Call(ctx, map[string]any{"scope_type": "unit", "scope": "quality", "name": "standup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools.RefusalOf(res) != tools.RefusalForbidden || res.Cause == nil ||
+		!strings.Contains(res.Cause.Error(), "nobody to attribute") {
+		t.Fatalf("a call with no credential = %+v, want forbidden with the resolver's error", res)
+	}
+
+	keyed := newScheduleRigAs(t, func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
+		a, err := builtin.PrincipalActor(ctx, turn)
+		if err != nil {
+			return builtin.Actor{}, err
+		}
+		return a.Keyed("not-an-operation-id")
+	})
+	res, _ = keyed.run(t, boundTo("jane"), "unit", "quality", "standup")
+	var bad *statelog.CallerOpIDError
+	if tools.RefusalOf(res) != tools.RefusalInvalid || !errors.As(res.Cause, &bad) {
+		t.Fatalf("a call with a malformed operation key = %+v, want invalid with its fault", res)
+	}
+	if len(rig.runner.asks)+len(keyed.runner.asks) != 0 {
+		t.Fatalf("asks = %+v and %+v, want none", rig.runner.asks, keyed.runner.asks)
 	}
 }

@@ -146,6 +146,21 @@ func (t *runSchedule) Parameters() map[string]any {
 	}
 }
 
+// unnamedCaller is the refusal of a call this tool cannot name its person
+// for, with the reason as its cause, so the act route and the log read why:
+// an operation key no engine minted is the caller's argument to correct, and
+// anything else is a call that carries no person this tool may act as.
+func unnamedCaller(err error) tools.Result {
+	var key *statelog.CallerOpIDError
+	if errors.As(err, &key) {
+		return refusedBy(tools.RefusalInvalid, err, RunScheduleTool+" ran nothing: the "+
+			"operation key this request carries is not one this engine minted. Send back "+
+			"the key an earlier answer returned, unchanged, or none to run it afresh.")
+	}
+	return refusedBy(tools.RefusalForbidden, err, RunScheduleTool+
+		" acts as the person whose credential calls it, and this call carries none.")
+}
+
 func (t *runSchedule) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	return t.CallForTurn(ctx, nil, args)
 }
@@ -159,8 +174,7 @@ func (t *runSchedule) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
-		return refused(tools.RefusalForbidden, RunScheduleTool+
-			" acts as the person whose credential calls it, and this call carries none."), nil
+		return unnamedCaller(err), nil
 	}
 	if actor.Kind == worklet.AuthorAgent {
 		return refused(tools.RefusalForbidden, RunScheduleTool+" ran nothing: when a seat's "+
