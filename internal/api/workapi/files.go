@@ -135,6 +135,15 @@ const downloadHead = 32 << 10
 // getFile answers GET /worklet/files/{project}/{path...}: the file's bytes,
 // streamed, as an attachment.
 func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
+	// THE PATH IS HELD TO THE TRACKER'S RULE FIRST, as the upload's and the
+	// removal's are. Handed to the reader as it was typed, a path the reader
+	// refuses reached [readFailed], which classes no refusal of the
+	// tracker's ([worklet.ErrInvalid]), and was answered `500` as a fault of
+	// this node, with an error in its log.
+	filePath, ok := filePathOf(w, r)
+	if !ok {
+		return
+	}
 	fresh, err := statelog.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
@@ -142,8 +151,7 @@ func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fresh.Level = statelog.LevelFor(statelog.SurfaceDashboard, fresh.Level)
-	detail, err := s.Work.Files.File(r.Context(), r.PathValue("project"),
-		r.PathValue("path"), fresh)
+	detail, err := s.Work.Files.File(r.Context(), r.PathValue("project"), filePath, fresh)
 	if err != nil {
 		fileReadFailed(w, r, err)
 		return

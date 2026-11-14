@@ -255,11 +255,12 @@ type ArtifactDeps struct {
 
 	// Set by [Register] and [OperatorTools] from the deps around them; ops,
 	// the one operation rule every family of write tools takes
-	// ([operations]), by [OperatorTools] alone.
-	work      WorkDeps
-	compact   *compact.Compactor
-	authorize Authorizer
-	ops       operations
+	// ([operations]), by [OperatorTools] alone. work carries the surface's
+	// authority decision ([WorkDeps.Authorize], set before work is taken
+	// here), which a copy of a project's file asks ([WorkDeps.copyFrom]).
+	work    WorkDeps
+	compact *compact.Compactor
+	ops     operations
 }
 
 // serves reports whether every half the tools act through is wired. They are
@@ -318,7 +319,7 @@ func (d ArtifactDeps) orgFor(turn *turnctx.Turn) *org.Organization {
 // artifactCandidates are the artifacts tools a seat's registry may offer.
 func artifactCandidates(deps Deps) []candidate {
 	a := deps.Artifacts
-	a.work, a.compact, a.authorize = deps.Work, deps.Compact, deps.Authorize
+	a.work, a.compact = deps.Work, deps.Compact
 	return artifactToolSet(a)
 }
 
@@ -326,7 +327,7 @@ func artifactCandidates(deps Deps) []candidate {
 // offer a person and their assistant.
 func artifactOperatorCandidates(deps OperatorDeps) []candidate {
 	a := deps.Artifacts
-	a.work, a.authorize = deps.Work, deps.Authorize
+	a.work = deps.Work
 	if a.Org == nil {
 		a.Org = deps.Org
 	}

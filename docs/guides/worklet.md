@@ -2924,8 +2924,12 @@ whole fleet shares, a bucket on the fleet's own broker or an S3 bucket —
 rather than in every data node's database. So a node that holds no data at all reads and
 writes files as any other node does. Every upload stores its bytes as a
 new object **before** it writes the row naming it, so a file that is listed is
-always a file that can be read, and every read is checked against the row's
-hash.
+always a file that can be read. A read of the whole file, such as a download
+or a copy into an artifact (`from_project_file`), is checked against the row's
+SHA-256 and size. A page a seat reads (`read_project_file`) is checked against
+the length the row's size implies, since part of a file cannot be held to the
+whole file's hash
+([Writing and reading](../concepts/object-store.md#writing-and-reading)).
 
 | | |
 |---|---|
