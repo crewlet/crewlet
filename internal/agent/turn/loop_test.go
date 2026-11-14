@@ -530,6 +530,56 @@ func TestAStallSpansTheTurnsSegments(t *testing.T) {
 	}
 }
 
+// THE STALL GUARD COMPARES A ROUND WITH THE ONE BEFORE IT ACROSS A SPAN A PARK
+// DROPPED. A parked turn past its share folds whole closed rounds into one
+// entry that keeps its last round's artifact hash (ledger.Iteration.Through),
+// and the round after the span follows that round: the same artifact again is
+// a stall, though the rounds before it went; and an artifact equal only to a
+// round BEFORE the span is no stall, since the rounds between them changed it.
+//
+// Mutation: skip a span in the seed, and the repeat of the span's last round
+// runs on while the echo of a round before it is taken for a stall.
+func TestTheStallGuardComparesARoundWithTheOneBeforeItAcrossADroppedSpan(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		history []ledger.Iteration
+		stall   bool
+	}{
+		"the span's last round repeated": {
+			history: []ledger.Iteration{{Iteration: 1, Through: 3, ArtifactHash: turn.ArtifactHash("same")}},
+			stall:   true,
+		},
+		"a round before the span echoed": {
+			history: []ledger.Iteration{
+				{Iteration: 1, ArtifactHash: turn.ArtifactHash("same")},
+				{Iteration: 2, Through: 3, ArtifactHash: turn.ArtifactHash("moved")},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:    []turn.Work{delivered("same"), {Suspended: true}},
+				surfaces: []turn.Surface{slackSurface()},
+				reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+			}
+			res, err := turn.Run(context.Background(), f, settings(), turn.Input{
+				RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 4, History: tc.history,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if stalled := res.Breach != nil && res.Breach.Kind == types.GuardStall; stalled != tc.stall {
+				t.Errorf("the resumed round ended %+v (breach %+v): a stall %v, want %v", res.Decision,
+					res.Breach, stalled, tc.stall)
+			}
+			if !tc.stall && !res.Suspended {
+				t.Errorf("the round after the echo = %+v, want the next round launched", res)
+			}
+		})
+	}
+}
+
 func TestProgressIsNotAStall(t *testing.T) {
 	t.Parallel()
 	f := &fake{
@@ -627,6 +677,41 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 	// And the next round is handed the ledger, or it re-fires what landed.
 	if len(f.historySeen) < 2 || len(f.historySeen[1]) != 1 {
 		t.Errorf("the next round saw %v", f.historySeen)
+	}
+}
+
+// A CLOSED ROUND KEEPS NO SUCCESSFUL CALL'S OUTPUT, and a failed call keeps its
+// error: nothing reads a successful output once its round has closed — the
+// prior-work ledger shows a failed call's error alone — and a parked turn
+// carries every round it closed on its run's row. The round's own call list is
+// left as it came.
+//
+// Mutation: close the round with its calls as they came, and the successful
+// call's output is still on the record.
+func TestAClosedRoundKeepsNoSuccessfulOutput(t *testing.T) {
+	t.Parallel()
+	first := delivered("first")
+	first.Calls = []ledger.Call{
+		{Name: "slack_post", Result: "posted at 12:00"},
+		{Name: "slack_history", Result: "rate limited", Failed: true},
+	}
+	f := &fake{
+		works:    []turn.Work{first, delivered("second")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
+	}
+	res, _ := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("")})
+	if len(res.Iterations) != 1 {
+		t.Fatalf("ledger = %d entries, want the one closed round", len(res.Iterations))
+	}
+	want := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history", Result: "rate limited", Failed: true}}
+	if got := res.Iterations[0].Calls; len(got) != len(want) || got[0].Name != want[0].Name ||
+		got[0].Result != want[0].Result || got[1].Result != want[1].Result || !got[1].Failed {
+		t.Errorf("the closed round keeps %+v, want %+v", got, want)
+	}
+	if first.Calls[0].Result != "posted at 12:00" {
+		t.Errorf("closing the round changed the round's own call list: %+v", first.Calls)
 	}
 }
 

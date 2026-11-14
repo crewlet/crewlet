@@ -2046,9 +2046,9 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
 // the turn's run has an outcome nobody knows — its entry still in flight as
 // the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
-// round's record holding one so read ([ledger.Call.Unfinished]): that call may
-// be the reply, so the end says its delivery is unknown, never that the turn
-// did not reply.
+// round's record holding one so read, listed ([ledger.Call.Unfinished]) or
+// counted ([ledger.Elided.Unfinished]): that call may be the reply, so the end
+// says its delivery is unknown, never that the turn did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
@@ -2070,13 +2070,16 @@ func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered c
 
 // unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
 // one the log it resumes from held in flight as it was read, or one a closed
-// round's record lists so ([ledger.Call.Unfinished]).
+// round's record lists so ([ledger.Call.Unfinished]) or counts so in the tally
+// of the calls it does not list ([ledger.Elided.Unfinished]) — where a park
+// past its share folded the round's calls (internal/agent/execstate).
 func unfinishedIn(in resumeInput) bool {
 	if len(in.Bridged.InFlight) > 0 {
 		return true
 	}
 	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
-		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished }) ||
+			slices.ContainsFunc(it.Elided, func(e ledger.Elided) bool { return e.Unfinished > 0 })
 	})
 }
 
@@ -2217,23 +2220,18 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
-	// closed rounds condensed where the state is past it, and a state still
-	// past it refused by name rather than by the broker, which would refuse
-	// this write and every write of the row after it — the name saying which
-	// of the two is past the share, the turn's own context or its closed rounds.
+	// closed rounds condensed where the state is past it — down to one count
+	// of calls per tool for the lot — and a state still past it refused by
+	// name rather than by the broker, which would refuse this write and every
+	// write of the row after it: only the turn's own context is ever past it.
 	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
-	switch tooLarge, ok := errors.AsType[*execstate.TooLargeError](err); {
-	case ok:
-		what := "its closed rounds, condensed as far as a park condenses them (every round's calls " +
-			"folded by tool, its text, its intent and its review cut to their openings), still take it " +
-			"past its share"
-		if tooLarge.OwnContext() {
-			what = "the turn's own context (its ask, its trigger's words, its turn-start context and how its " +
-				"conversation's earlier turns ended) is past its share by itself, which no condensing of its " +
-				"closed rounds could change"
-		}
+	switch {
+	case errors.Is(err, execstate.ErrTooLarge):
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
-			"the parked turn state is past its share of the run's row: "+what, err)
+			"the parked turn state is past its share of the run's row: the turn's own context (its ask, its "+
+				"trigger's words, its turn-start context and how its conversation's earlier turns ended) is "+
+				"past it with every closed round folded into one count of calls per tool, which is the least "+
+				"a park keeps of them", err)
 		return false, nil
 	case err != nil:
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
@@ -2241,12 +2239,13 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	case condensed.Any():
 		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
-			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
-			"texts_cut", condensed.Texts, "intents_cut", condensed.Intents,
-			"tallies_folded", condensed.Identities, "rounds_calls_folded", condensed.Calls,
-			"reviews_cut", condensed.Reviews, "bytes", len(blob),
+			"payloads_left_out", condensed.LeftOut, "texts_cut", condensed.Texts,
+			"intents_cut", condensed.Intents, "tallies_folded", condensed.Identities,
+			"rounds_calls_folded", condensed.Calls, "reviews_cut", condensed.Reviews,
+			"rounds_dropped", condensed.Rounds, "bytes", len(blob),
 			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
-				"row; every call keeps its tool, its identity or its tool's count, and its outcome")
+				"row; every call keeps its tool, its identity or its tool's count, and its outcome, and a "+
+				"dropped round its calls by tool")
 	}
 	// The iteration rides BESIDE the blob: the coordinator files each
 	// launch's own record under it and never decodes the state.
