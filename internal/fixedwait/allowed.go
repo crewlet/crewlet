@@ -160,7 +160,6 @@ var allowed = []Entry{
 	{File: "internal/agent/toolloop/record_test.go", Func: "TestARequestInFlightIsAnnouncedBeforeTheModelAnswers", ExemptWait: 1, ElapsedBound: 1, Piece: 6},
 	{File: "internal/agent/toolloop/record_test.go", Func: "TestARunsFirstRoundStartsWithTheRun", HeadStart: 1, ElapsedBound: 1, Piece: 6},
 	{File: "internal/agent/toolloop/record_test.go", Func: "TestAToolCallIsTimedAndNamesItsOrigin", ElapsedBound: 2, Piece: 6},
-	{File: "internal/agent/toolloop/record_test.go", Func: "TestEveryRoundRecordsItsOwnSpanAndTokens", ElapsedBound: 2, ExemptElapsed: 1, Piece: 6},
 	{File: "internal/agent/toolloop/record_test.go", Func: "pause", ExemptWait: 1, Piece: 6},
 	{File: "internal/agent/toolloop/session_test.go", Func: "TestACallThatRunsAloneWaitsOnlyForCallsThatCanArriveBesideIt", ElapsedBound: 1, Piece: 6},
 	{File: "internal/agent/toolloop/session_test.go", Func: "TestAHarnessThatRecordsCallsLateIsNotWaitedFor", ElapsedBound: 1, Piece: 6},
