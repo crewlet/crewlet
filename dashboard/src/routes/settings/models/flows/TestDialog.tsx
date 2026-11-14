@@ -23,8 +23,9 @@ import {
 } from "@crewlethq/ui";
 import type { ModelCheckName, ModelSignInRoute } from "~/contract/models.ts";
 import type { CheckAnswer, CheckLine } from "~/protocol/models.ts";
-import { checkModel, type ModelAnswer } from "../api.ts";
+import type { ModelAnswer } from "../api.ts";
 import type { ModelView } from "../data.ts";
+import { useCheckModel } from "../useCheckModel.ts";
 import { CHECK } from "../words.ts";
 
 /**
@@ -192,6 +193,7 @@ export function TestDialog({
   const [reading, setReading] = useState<Reading>({ kind: "running" });
   const [run, setRun] = useState(0);
   const key = model.key;
+  const checkModel = useCheckModel();
 
   useEffect(() => {
     const abort = new AbortController();

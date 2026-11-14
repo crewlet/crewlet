@@ -32,10 +32,11 @@ const calls: string[] = [];
 vi.mock("../api.ts", () => ({
   testCredential: vi.fn(),
   storeCredential: vi.fn(),
-  checkModel: vi.fn(),
   checkHostLogin: vi.fn(),
   writeDocument: vi.fn(),
 }));
+const checkModel = vi.hoisted(() => vi.fn());
+vi.mock("../useCheckModel.ts", () => ({ useCheckModel: () => checkModel }));
 vi.mock("~/protocol/configWrite.ts", () => ({ getConfig: vi.fn() }));
 
 const answers: Record<string, unknown> = {};

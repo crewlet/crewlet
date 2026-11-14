@@ -91,14 +91,17 @@ for its answer; a proxy set below fifty cuts those answers off with a 504.
 Nothing is lost when it does — the node finishes the gesture whatever happens
 to the connection, and both clients read an answer the engine did not write
 as one that never arrived, keeping the operation id to finish it with — but
-the operator then has to finish it to see what it did. The one route whose
-work grows with what it reads — a check of a Gitlet node's copy of a repository
-(`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte — needs no
-longer timeout: it runs on the node's own time and answers within a quarter
-of a second — `200` with a small copy's report, `202` for a check still
-running — and a running check's outcome is read with
-`GET /gitlet/repos/{name}/verify/{id}` until it ends
-([API reference](../reference/api-endpoints.md#post-gitletreposnameverify)).
+the operator then has to finish it to see what it did. The two routes whose
+work outlasts that — a check of a Gitlet node's copy of a repository
+(`POST /gitlet/repos/{name}/verify`), about nine seconds a gigabyte, and a
+model's test (`POST /llm/providers/{key}/check`), up to three minutes of
+harness runs — need no longer timeout: each runs on the node's own time and
+answers within seconds — `200` with what a quick one found, `202` for one still
+running — and a running one's outcome is read with
+`GET /gitlet/repos/{name}/verify/{id}` or `GET /llm/providers/{key}/check`
+until it ends
+([API reference](../reference/api-endpoints.md#post-gitletreposnameverify),
+[and for a model](../reference/api-endpoints.md#post-llmproviderskeycheck)).
 
 ### Every machine's clock
 
