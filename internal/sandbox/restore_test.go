@@ -423,6 +423,87 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 	}
 }
 
+// A NOT-CONTINUED LINE NAMES WHAT THE LAUNCH CONTINUES INSTEAD. A launch whose
+// chosen session is refused falls to the session the box it reuses holds, the
+// job before's own copy, where it has one it may continue, and to a session of
+// its own otherwise; the line saying why the chosen one was refused is written
+// once that is decided, and names it — never "a session of its own" for a run
+// that goes on in the box's copy. A launch that refuses nothing says nothing,
+// and one that refuses the box's copy too says each, naming the same fallback.
+//
+// Mutation: log the refusal before the fallback is decided, or name a session
+// of its own whatever the launch continues, and a case goes red.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
+	const (
+		refusedKept = "not the one its launch was asked to continue"
+		ranOut      = "ran out of"
+	)
+	for _, tc := range []struct {
+		name                   string
+		chosen, reused, ranOut bool
+		kind                   BriefKind
+		session, outcome       string
+		reasons                []string
+	}{
+		{name: "a refused kept session, the box's copy continued", chosen: true, reused: true,
+			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
+		{name: "a refused kept session in a box of its own", chosen: true,
+			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept}},
+		{name: "a refused kept session, the box's copy run out of context", chosen: true, reused: true,
+			ranOut: true, kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept, ranOut}},
+		{name: "the box's copy run out of context, nothing chosen", reused: true, ranOut: true,
+			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{ranOut}},
+		{name: "the box's copy, nothing chosen", reused: true, kind: BriefContinued, session: "sess-ask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig := newCoordRig(t)
+			rig.coordinator.spoolDir = t.TempDir()
+			key := objstore.KeyAt(time.Now())
+			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
+				Through: new(0), Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 14}
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, kept)},
+				archives: map[string][]byte{key.String(): []byte("the transcript")}}
+			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+			if tc.ranOut {
+				opened.ExhaustedSessions = []string{"sess-ask"}
+			}
+			req := continuingKept(kept)
+			// REFUSED: the record keeps another capture than the one the
+			// launch was asked to continue.
+			req.Session.CaptureSeq = 2
+			if !tc.chosen {
+				req.Session = nil
+			}
+			req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
+			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+				rig.runner, tc.reused, false)
+			t.Cleanup(got.release)
+			if got.kind != tc.kind || got.session != tc.session {
+				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,
+					got.session, tc.kind, tc.session)
+			}
+			var lines []string
+			for line := range strings.Lines(logs.String()) {
+				if strings.Contains(line, "msg=executor_session_not_continued") {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) != len(tc.reasons) {
+				t.Fatalf("logged %d not-continued lines, want %d: %q", len(lines), len(tc.reasons), lines)
+			}
+			for i, line := range lines {
+				if !strings.Contains(line, tc.reasons[i]) || !strings.Contains(line, tc.outcome) {
+					t.Errorf("line %d is %q, want it saying %q and naming what the launch continues: %q", i,
+						line, tc.reasons[i], tc.outcome)
+				}
+			}
+		})
+	}
+}
+
 // A RESTORED SESSION IS THE SEAT'S AND THE TURN'S OWN, and a sibling's end
 // changes nothing about it. The launch reads the row of the turn it launches
 // for, under the seat it launches as, and nothing else: a sibling turn of the

@@ -145,7 +145,9 @@ import (
 // An object the store no longer holds or whose seal does not open
 // (executordomain.ErrUnreadable), a log that does not answer, a box whose
 // harness cannot take the session up: each starts the run on a session of its
-// own, handed the brief written for one, and is logged with its reason
+// own, handed the brief written for one — or, where the launch reuses the box
+// the job before ran in, the session that box holds — and is logged with its
+// reason once what the launch continues instead is decided, naming that
 // (`executor_session_not_continued`). The session is fetched SEALED onto this
 // node's disk and opened whole once before a byte of it reaches the box
 // ([executorkeep.TurnRowStore.Fetch]), so the decision is made before the
@@ -1481,9 +1483,16 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // the job before's own, that job's session as the box holds it
 // ([Continuation.SessionID]), as a run always could, unless that job ran out of
 // context in it; else a session of its own.
+//
+// EACH SESSION IT DOES NOT CONTINUE IS LOGGED ONCE THE ONE IT FALLS TO IS
+// DECIDED ([Coordinator.notContinued]), naming that one: the box's copy where
+// a refused choice still leaves it, else a session of its own. Said as each
+// was refused, the line told an operator the run started fresh where it went
+// on in the box's copy.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
+	var refused []string
 	if want := req.Session; want != nil {
 		var (
 			launch continuedLaunch
@@ -1501,20 +1510,26 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch.told = want.Told
 			return launch
 		}
-		c.notContinued(ctx, req, why)
+		refused = append(refused, why)
 	}
+	launch, outcome := freshLaunch(req), startsItsOwn
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		if !opened.sessionExhausted(continued.SessionID) {
+		if opened.sessionExhausted(continued.SessionID) {
+			refused = append(refused, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
+		} else {
 			// THE COPY THE BOX HOLDS, measured as the job before's record
 			// holds it, read by the reset that opened this job in the write
 			// that replaced that record ([PriorBox.Context]).
-			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
+			launch = continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
 				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context,
 				restart: opened.Prior.Restart, release: func() {}}
+			outcome = continuesBoxCopy
 		}
-		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
-	return freshLaunch(req)
+	for _, why := range refused {
+		c.notContinued(ctx, req, why, outcome)
+	}
+	return launch
 }
 
 // continueKept continues the turn's kept capture want in box, or says why it
@@ -1694,13 +1709,25 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 		}}, ""
 }
 
-// notContinued logs why a launch that was asked to continue its turn's session
-// starts one of its own.
-func (c *Coordinator) notContinued(ctx context.Context, req LaunchRequest, why string) {
+// notContinued logs why a launch did not continue a session it was offered,
+// and outcome, what it continues instead ([Coordinator.continueSession]).
+func (c *Coordinator) notContinued(ctx context.Context, req LaunchRequest, why, outcome string) {
 	log.InfoContext(ctx, "executor_session_not_continued", "turn_id", req.Turn.TurnID,
-		"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why),
-		"outcome", "the run starts a session of its own, handed the brief written for one")
+		"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why), "outcome", outcome)
 }
+
+// What a launch continues in place of a session it did not, as
+// [Coordinator.notContinued] says it.
+const (
+	// continuesBoxCopy: the session the box it reuses holds, the job
+	// before's own copy, which the run's script falls back from to a
+	// session of its own where its harness cannot take it up.
+	continuesBoxCopy = "the run continues the session the box it reuses holds, the job before's own copy, " +
+		"handed the brief that continues it there, and starts a session of its own only where its harness " +
+		"cannot take that copy up"
+	// startsItsOwn: nothing to continue.
+	startsItsOwn = "the run starts a session of its own, handed the brief written for one"
+)
 
 // restoreSpoolPrefix names a launch's spool of the session it carries, under
 // [spoolPrefix] and in the same directory, so a spool a crash left behind is
