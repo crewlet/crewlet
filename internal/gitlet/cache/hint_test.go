@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -184,83 +185,93 @@ func TestAHintIsConfirmedAgainstThePacksRow(t *testing.T) {
 // request a balancer cuts no longer takes the work of a slow disk's hash with
 // it for the next to start again from byte zero.
 //
+// ASKED WHILE THE HASH RUNS is a state the case brings about, never one it
+// waits out: the case runs in a synctest bubble, and the hash is let go only
+// once synctest.Wait has returned — every other goroutine of the case durably
+// blocked, so each of the eight is parked on a verdict it asked for while the
+// hash was held. A confirmation still on its way to the pack's check when the
+// hash ended would find its verdict decided and hash nothing, whatever joining
+// does.
+//
 // Mutations: hash in every confirmation (no hash in flight is joined) — the
 // pack is hashed nine times; hash on the first asker's context — its leaving
 // ends the hash, and the confirmations after it are answered no verdict.
 func TestOneHashAPackHowManyHintsAskAtOnce(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	_, row := w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t)
-	s := w.sync(t, c, repo)
-	pack := filepath.Join(s.Dir, "objects", "pack", "pack-"+row.GitChecksum+".pack")
-	b, err := os.ReadFile(pack)
-	if err != nil {
-		t.Fatal(err)
-	}
-	overwriteBytes(t, pack, 20, []byte{b[20] ^ 0xff})
-	hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: row.GitChecksum}
-
-	started, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	log := hashLog{during: func() {
-		once.Do(func() { close(started) })
-		<-release
-	}}
-	cache.SetHashHook(c, log.hook)
-
-	// The first asker leaves while its hash runs.
-	first, leave := context.WithCancel(t.Context())
-	firstAnswer := make(chan bool, 1)
-	go func() {
-		_, ok := c.ConfirmHint(first, s, hint)
-		firstAnswer <- ok
-	}()
-	select {
-	case <-started:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the first confirmation's hash never started")
-	}
-	leave()
-	if ok := <-firstAnswer; ok {
-		t.Error("a confirmation whose caller left mid-hash answered a repair")
-	}
-
-	// Eight more ask while that same hash still runs.
-	const asks = 8
-	var wg sync.WaitGroup
-	answers := make(chan bool, asks)
-	for range asks {
-		wg.Go(func() {
-			ask, done := context.WithTimeout(t.Context(), 30*time.Second)
-			defer done()
-			f, ok := c.ConfirmHint(ask, s, hint)
-			answers <- ok && f.Reason == cache.RebuildCorrupt
-		})
-	}
-	// Every confirmation has long since reached the pack's check: what is
-	// left of one before it is a stat of three files and a map read.
-	time.Sleep(200 * time.Millisecond)
-	close(release)
-	wg.Wait()
-	close(answers)
-	for ok := range answers {
-		if !ok {
-			t.Errorf("a confirmation asked while the first asker's hash ran was not answered its verdict, corrupt")
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t)
+		s := w.sync(t, c, repo)
+		pack := filepath.Join(s.Dir, "objects", "pack", "pack-"+row.GitChecksum+".pack")
+		b, err := os.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if got := log.hashed(); len(got) != 1 {
-		t.Errorf("hashed %d times, want once for all %d confirmations, the one that left included", len(got), asks+1)
-	}
-	for outcome, want := range map[string]uint64{"gone": 1, "confirmed": asks} {
-		if got := counter(w.rec, metrics.CodeCacheHints, "outcome", outcome); got != want {
-			t.Errorf("%s{outcome=%s} = %d, want %d", metrics.CodeCacheHints, outcome, got, want)
+		overwriteBytes(t, pack, 20, []byte{b[20] ^ 0xff})
+		hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: row.GitChecksum}
+
+		started, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		log := hashLog{during: func() {
+			once.Do(func() { close(started) })
+			<-release
+		}}
+		cache.SetHashHook(c, log.hook)
+
+		// The first asker leaves while its hash runs.
+		first, leave := context.WithCancel(t.Context())
+		firstAnswer := make(chan bool, 1)
+		go func() {
+			_, ok := c.ConfirmHint(first, s, hint)
+			firstAnswer <- ok
+		}()
+		select {
+		case <-started:
+		case <-time.After(hangDetector):
+			t.Fatal("the first confirmation's hash never started")
 		}
-	}
-	if got := counter(w.rec, metrics.CodeCacheHintHashes, "outcome", "confirmed"); got != 1 {
-		t.Errorf("%s{outcome=confirmed} = %d, want the one hash", metrics.CodeCacheHintHashes, got)
-	}
+		leave()
+		if ok := <-firstAnswer; ok {
+			t.Error("a confirmation whose caller left mid-hash answered a repair")
+		}
+
+		// Eight more ask while that same hash still runs.
+		const asks = 8
+		var wg sync.WaitGroup
+		answers := make(chan bool, asks)
+		for range asks {
+			wg.Go(func() {
+				ask, done := context.WithTimeout(t.Context(), hangDetector)
+				defer done()
+				f, ok := c.ConfirmHint(ask, s, hint)
+				answers <- ok && f.Reason == cache.RebuildCorrupt
+			})
+		}
+		// Every confirmation parked on its verdict before the hash is let go.
+		synctest.Wait()
+		close(release)
+		wg.Wait()
+		close(answers)
+		for ok := range answers {
+			if !ok {
+				t.Errorf("a confirmation asked while the first asker's hash ran was not answered its verdict, corrupt")
+			}
+		}
+		if got := log.hashed(); len(got) != 1 {
+			t.Errorf("hashed %d times, want once for all %d confirmations, the one that left included", len(got),
+				asks+1)
+		}
+		for outcome, want := range map[string]uint64{"gone": 1, "confirmed": asks} {
+			if got := counter(w.rec, metrics.CodeCacheHints, "outcome", outcome); got != want {
+				t.Errorf("%s{outcome=%s} = %d, want %d", metrics.CodeCacheHints, outcome, got, want)
+			}
+		}
+		if got := counter(w.rec, metrics.CodeCacheHintHashes, "outcome", "confirmed"); got != 1 {
+			t.Errorf("%s{outcome=confirmed} = %d, want the one hash", metrics.CodeCacheHintHashes, got)
+		}
+	})
 }
 
 // A HINT'S HASH RUNS IN A READ SLOT. Hashing is a core's work requests wait

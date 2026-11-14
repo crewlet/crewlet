@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -869,63 +870,87 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 
 // A round that began after Verify's own sync and is still writing when
 // Verify comes to list is waited for: the listing reads the directory the
-// round left, never one half written.
+// round left, never one half written. The round is let go only once every
+// other goroutine of the case is durably blocked (synctest.Wait, in a
+// bubble), and the clock has then moved past every timer the cache arms
+// (pastEveryTimer) and every goroutine has blocked again: a listing that did
+// not wait has begun by then, however late Verify ran, and so has one that
+// waited for the round only as long as a grace of its own. The pass's own
+// bound is set that much past CheckBudget, so the span does not end it; and
+// on a healthy build the round, held on its fault, and Verify behind it wait
+// on no other clock, so nothing runs in the span.
+//
+// Mutations: Verify lists without the repository's write lock (list's
+// acquireWrite taken out) — it lists while the round is held writing; Verify
+// waits for the lock a minute at most — the same, once the clock has moved.
 func TestVerifyWaitsForARoundStillWriting(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	script := &gitletfault.Script{}
-	reached, release := make(chan struct{}), make(chan struct{})
-	type synced struct {
-		at  statelog.Position
-		err error
-	}
-	done := make(chan synced, 1)
-	var once sync.Once
-	var c *cache.Cache
-	c = w.open(t, func(o *cache.Options) {
-		o.Faults = script
-		cache.BeforeVerifyWaits(o, func(string) {
-			once.Do(func() {
-				w.push(t, repo, "refs/heads/dev", nil)
-				script.Arm(gitletfault.SyncRefs, gitletfault.Action{Block: release, Reached: reached})
-				go func() {
-					held, err := c.Sync(context.Background(), repo, linearizable)
-					if err == nil {
-						held.Release()
-					}
-					done <- synced{held.Position, err}
-				}()
-				<-reached
-				// Long enough for a listing that did not wait to have begun.
-				time.AfterFunc(200*time.Millisecond, func() { close(release) })
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		script := &gitletfault.Script{}
+		reached, release := make(chan struct{}), make(chan struct{})
+		type synced struct {
+			at  statelog.Position
+			err error
+		}
+		done := make(chan synced, 1)
+		var once sync.Once
+		var c *cache.Cache
+		c = w.open(t, func(o *cache.Options) {
+			o.Faults = script
+			cache.SetCheckBudget(o, func(held int64) time.Duration {
+				return pastEveryTimer + cache.CheckBudget(held)
+			})
+			cache.BeforeVerifyWaits(o, func(string) {
+				once.Do(func() {
+					w.push(t, repo, "refs/heads/dev", nil)
+					script.Arm(gitletfault.SyncRefs, gitletfault.Action{Block: release, Reached: reached})
+					go func() {
+						held, err := c.Sync(context.Background(), repo, linearizable)
+						if err == nil {
+							held.Release()
+						}
+						done <- synced{held.Position, err}
+					}()
+					<-reached
+					// Let go once Verify is parked on the round — or has
+					// listed without waiting for it, at once or once the
+					// clock has moved.
+					go func() {
+						synctest.Wait()
+						time.Sleep(pastEveryTimer)
+						synctest.Wait()
+						close(release)
+					}()
+				})
+			})
+			cache.WhileVerifyLists(o, func(string) {
+				select {
+				case <-release:
+				default:
+					t.Error("Verify listed the repository while a round was still writing it")
+				}
 			})
 		})
-		cache.WhileVerifyLists(o, func(string) {
-			select {
-			case <-release:
-			default:
-				t.Error("Verify listed the repository while a round was still writing it")
-			}
-		})
-	})
-	w.sync(t, c, repo)
+		w.sync(t, c, repo)
 
-	report, err := verify(t.Context(), c, repo, false)
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if len(report.Problems) != 0 {
-		t.Errorf("Verify after the round it waited for found %q", report.Problems)
-	}
-	round := <-done
-	if round.err != nil {
-		t.Fatal(round.err)
-	}
-	if report.Position != round.at {
-		t.Errorf("Verify reported position %v, want the round's %v", report.Position, round.at)
-	}
+		report, err := verify(t.Context(), c, repo, false)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if len(report.Problems) != 0 {
+			t.Errorf("Verify after the round it waited for found %q", report.Problems)
+		}
+		round := <-done
+		if round.err != nil {
+			t.Fatal(round.err)
+		}
+		if report.Position != round.at {
+			t.Errorf("Verify reported position %v, want the round's %v", report.Position, round.at)
+		}
+	})
 }
 
 // A round waiting for a listing to end is a round of the cache's lifetime:

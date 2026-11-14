@@ -236,9 +236,21 @@ func TestAnEvictedRepositorySyncsCold(t *testing.T) {
 
 // A ROUND THAT GROWS THE CACHE PAST ITS BUDGET KICKS THE JANITOR: a burst of
 // cold syncs would otherwise overshoot the budget by whatever arrives before
-// the next tick. The janitor here never ticks, and its first pass has ended
-// before the round, so only the round's kick can evict the repository used
-// longest ago.
+// the next tick. The cache here is never started, so a kick stays where it
+// was sent until the case takes it (cache.JanitorKicked): every kick before
+// the round is taken first, the round's is read once it has answered, and
+// the pass that kick wakes the janitor for, run by the case, evicts the
+// repository used longest ago and keeps the one a reader holds.
+//
+// Read off a started janitor, an eviction could not say whose kick woke it.
+// The round's end wakes the maintainer, a maintenance run's end unpins the
+// repository it ran on, and an unpin over the budget kicks the janitor too
+// (Cache.unpin) — so a round that kicked nothing still had the repository
+// evicted, by the maintenance run its own end woke, well inside any bound a
+// case would wait.
+//
+// Mutation: a round kicks no janitor for growing past the budget (sync.go's
+// kick on overBudget taken out) — no kick waits once the round has answered.
 func TestAGrowingRoundKicksTheJanitor(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -246,19 +258,26 @@ func TestAGrowingRoundKicksTheJanitor(t *testing.T) {
 	a, b := w.repo(t, 1), w.repo(t, 2)
 	w.push(t, a, "refs/heads/main", nil)
 	w.push(t, b, "refs/heads/main", nil)
-	c := w.open(t, clk.on, neverTicks)
+	c := w.open(t, clk.on)
 	sa := w.sync(t, c, a)
 	cache.SetMaxBytes(c, heldBy(t, sa.Dir))
 	sa.Release()
-	startIdle(t, w, c)
+	cache.JanitorPass(c) // the boot's trash, with nothing over the budget
+	if _, ok := cache.Repos(c)[a]; !ok {
+		t.Fatal("the repository the budget is set to hold was evicted before the round")
+	}
+	cache.JanitorKicked(c) // every kick so far: the boot's, the first round's
 
 	clk.Add(time.Minute)
 	sb := w.sync(t, c, b)
 	defer sb.Release()
-	eventually(t, "the least recently used repository is evicted", func() bool {
-		_, ok := cache.Repos(c)[a]
-		return !ok
-	})
+	if !cache.JanitorKicked(c) {
+		t.Fatal("the round that grew the cache past its budget left no kick for the janitor")
+	}
+	cache.JanitorPass(c)
+	if _, ok := cache.Repos(c)[a]; ok {
+		t.Error("the pass the round's kick asks for kept the least recently used repository past the budget")
+	}
 	if _, ok := cache.Repos(c)[b]; !ok {
 		t.Error("the repository a reader holds was evicted")
 	}

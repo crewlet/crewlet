@@ -55,6 +55,19 @@ func JanitorTick(c *Cache) {
 	}
 }
 
+// JanitorKicked reports whether a kick is waiting for the janitor, and takes
+// it, as MaintainerKicked does the maintainer's: in a cache never started
+// nothing else takes one, so a kick stays where it was sent until the case
+// reads it, and a case sees each one once.
+func JanitorKicked(c *Cache) bool {
+	select {
+	case <-c.kicks:
+		return true
+	default:
+		return false
+	}
+}
+
 // RecordUse runs the janitor's tick step, synchronously: every repository
 // used since its last stamp has its last use stamped on the disk.
 func RecordUse(c *Cache) {
@@ -1424,12 +1437,24 @@ func PickAndSettle(c *Cache, keep bool) string {
 }
 
 // BackfillAudit is every copy c's backfill schedule holds otherwise than a
-// look at it now says (backfillDue): in another queue than its first step
-// due, under another key, or counted otherwise as behind — leaving out the
-// copies marked since the last pick and those whose time in the later queue
-// has come, which the next pick looks at again. None for a schedule every
-// change to a copy's work has reached: a change no mark follows is one the
-// backfill never takes up, or takes up in the wrong order.
+// look at it says (backfillDue): in another queue than its first step due,
+// under another key, or counted otherwise as behind — leaving out the copies
+// marked since the last pick, which the next pick looks at again. None for a
+// schedule every change to a copy's work has reached: a change no mark
+// follows is one the backfill never takes up, or takes up in the wrong order.
+//
+// EACH PLACE IS HELD TO A LOOK AS OF AN INSTANT IT STANDS FOR, never to how
+// far a clock has moved since it was made. A copy in a due queue, or in none,
+// is looked at as of c's now, which no later instant changes: a step fallen
+// due stays due. A copy in the LATER QUEUE is looked at as of the last instant
+// before its key — when its next step falls due, as the look that placed it
+// computed — since a look at or past that instant says what has fallen due by
+// then, which is the pick's to find as it takes the copy out of the queue,
+// and nothing of the place. Left out once c's clock had reached its key, as
+// it once was, such a copy passed the audit with any change no mark followed
+// whenever the clock had moved that far since the placement: on the machine's
+// clock, as far as a runner lost between the two — a retry window, five
+// seconds.
 //
 // AT ANY MOMENT: each copy's look and its place are read in one hold of its
 // lock, and every change to a copy's work is marked in the hold that makes it
@@ -1472,17 +1497,21 @@ func BackfillAudit(c *Cache) []string {
 	}
 	for _, e := range entries {
 		e.mu.Lock()
-		d := c.backfillDue(e, now)
 		s.mu.Lock()
 		got := e.bf
 		queued := e.bfQueued.Load()
 		s.mu.Unlock()
+		at := now
+		if got.kind == 0 && !got.when.IsZero() {
+			at = got.when.Add(-time.Nanosecond) // in the later queue
+		}
+		d := c.backfillDue(e, at)
 		e.mu.Unlock()
 		if got.behind {
 			behind++
 		}
 		switch {
-		case got.dirty, got.kind == 0 && !got.when.IsZero() && !got.when.After(now):
+		case got.dirty:
 		case got.kind != d.work:
 			problems = append(problems, fmt.Sprintf("%s is queued for %q, and a look says %q is due", e.id,
 				workNames[got.kind], workNames[d.work]))

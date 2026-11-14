@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -270,118 +271,139 @@ func (h *heldHash) at(path string) {
 // is let go. The copy made due AT ONCE goes before one only its interval made
 // due, whatever their order otherwise. And the scrub's own pin is no use: the
 // copy's last use stays where it was, so a copy nobody uses after its scrub is
-// not scrubbed again at the next interval.
+// not scrubbed again at the next interval. The second pass is read in a
+// synctest bubble, twice, never after a pause: once every goroutine of the
+// case is durably blocked (synctest.Wait) — a pass that did not wait for the
+// node's one scrub has begun hashing by then, however late it ran — and again
+// once the clock has moved past every timer the cache arms (pastEveryTimer)
+// and every goroutine has blocked again — one that waited for it only as long
+// as a grace of its own has begun by then too. The cache's clock is the
+// case's own (clk), which the span does not move, the steps beside the held
+// scrub are over and their bound let go, and on a healthy build the held
+// scrub and the pass behind it wait on no clock: nothing runs in the span.
 //
 // Mutations: the scrub takes the entry's write lock (the sync waits for it);
-// two scrubs at once (the second pass hashes while the first is held); the
-// interval's taken first; the scrub's pin counted as a use (the unused copy is
-// scrubbed again).
+// two scrubs at once (the second pass hashes while the first is held), or once
+// a minute's wait for the node's one scrub has passed (the second pass hashes
+// once the clock has moved); the interval's taken first; the scrub's pin
+// counted as a use (the unused copy is scrubbed again).
 func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	clk := newClock()
-	hold := newHeldHash()
-	repos := []string{w.repo(t, 1), w.repo(t, 2)}
-	for _, repo := range repos {
-		w.push(t, repo, "refs/heads/main", nil)
-	}
-	c := w.open(t, clk.on, func(o *cache.Options) { cache.WhileHashing(o, hold.at) })
-	for _, repo := range repos {
-		w.sync(t, c, repo)
-		if why, _ := cache.ScrubDue(c, repo); why != "" {
-			t.Fatalf("a copy this process built has its scrub due for %q, want only its interval", why)
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		clk := newClock()
+		hold := newHeldHash()
+		repos := []string{w.repo(t, 1), w.repo(t, 2)}
+		for _, repo := range repos {
+			w.push(t, repo, "refs/heads/main", nil)
 		}
-	}
-	if done := cache.ScrubPass(c); len(done) != 0 {
-		t.Fatalf("copies this process built were scrubbed at once: %v", done)
-	}
-	clk.Add(cache.ScrubInterval)
-	for _, repo := range repos {
-		w.sync(t, c, repo)
-	}
-	// The copy whose id sorts LAST is made due at once by a report of a
-	// crash: it goes first all the same.
-	first := slices.Max(repos)
-	then := slices.Min(repos)
-	cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, first), Result: gitproc.Result{Crashed: true}})
-	if why, _ := cache.ScrubDue(c, first); why != "report" {
-		t.Fatalf("after a crash report the copy's scrub is due for %q, want report", why)
-	}
+		c := w.open(t, clk.on, func(o *cache.Options) { cache.WhileHashing(o, hold.at) })
+		for _, repo := range repos {
+			w.sync(t, c, repo)
+			if why, _ := cache.ScrubDue(c, repo); why != "" {
+				t.Fatalf("a copy this process built has its scrub due for %q, want only its interval", why)
+			}
+		}
+		if done := cache.ScrubPass(c); len(done) != 0 {
+			t.Fatalf("copies this process built were scrubbed at once: %v", done)
+		}
+		clk.Add(cache.ScrubInterval)
+		for _, repo := range repos {
+			w.sync(t, c, repo)
+		}
+		// The copy whose id sorts LAST is made due at once by a report of a
+		// crash: it goes first all the same.
+		first := slices.Max(repos)
+		then := slices.Min(repos)
+		cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, first), Result: gitproc.Result{Crashed: true}})
+		if why, _ := cache.ScrubDue(c, first); why != "report" {
+			t.Fatalf("after a crash report the copy's scrub is due for %q, want report", why)
+		}
 
-	hold.armed.Store(filepath.Base(w.dir(t, c, first)))
-	order := make(chan []string, 1)
-	go func() { order <- cache.ScrubPass(c) }()
-	var path string
-	select {
-	case path = <-hold.reached:
-	case <-time.After(hangDetector):
-		t.Fatal("the scrub never hashed the copy made due at once")
-	}
-	if !strings.Contains(path, filepath.Base(w.dir(t, c, first))) {
-		t.Fatalf("the scrub hashed %s first, want the copy made due at once", path)
-	}
-	// Beside the held scrub: a push's delta sync, an adoption and a reader
-	// answered at once.
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	w.push(t, first, "refs/heads/main", nil)
-	s, err := c.Sync(ctx, first, statelog.Freshness{Level: statelog.ReadLinearizable})
-	if err != nil {
-		t.Fatalf("a delta sync beside the scrub: %v", err)
-	}
-	pushID := uuid.Must(uuid.NewV7()).String()
-	scratch, err := c.NewScratch(ctx, s, pushID)
-	if err != nil {
-		t.Fatalf("NewScratch beside the scrub: %v", err)
-	}
-	tip, cs := w.packInto(t, first, scratch.Dir, nil)
-	row := w.storeBundle(t, w.bundle(cs), pushID)
-	row.Added = w.log.write(first, []gitlet.PackRow{row}, map[string]string{"refs/heads/adopted": tip})
-	if err := c.Adopt(ctx, first, scratch, row.Ref()); err != nil {
-		t.Errorf("an adoption beside the scrub: %v", err)
-	}
-	scratch.Remove()
-	s.Release()
-	at, err := c.Sync(ctx, first, statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		t.Fatalf("a reader at once beside the scrub: %v", err)
-	}
-	at.Release()
-	used := cache.LastUsed(c, first)
-
-	// One scrub on the node: a second pass hashes nothing while the first
-	// is held.
-	second := make(chan []string, 1)
-	go func() { second <- cache.ScrubPass(c) }()
-	time.Sleep(100 * time.Millisecond)
-	if n := hold.during.Load(); n != 0 {
-		t.Errorf("%d hashes began while one scrub was held: two scrubs ran at once", n)
-	}
-	close(hold.release)
-	var passes [][]string
-	for _, ch := range []chan []string{order, second} {
+		hold.armed.Store(filepath.Base(w.dir(t, c, first)))
+		order := make(chan []string, 1)
+		go func() { order <- cache.ScrubPass(c) }()
+		var path string
 		select {
-		case done := <-ch:
-			passes = append(passes, done)
+		case path = <-hold.reached:
 		case <-time.After(hangDetector):
-			t.Fatal("a scrub pass never ended")
+			t.Fatal("the scrub never hashed the copy made due at once")
 		}
-	}
-	var all []string
-	for _, p := range passes {
-		all = append(all, p...)
-	}
-	if !slices.Equal(all, []string{first, then}) {
-		t.Errorf("the passes scrubbed %v, want the copy made due at once (%s) before the interval's (%s)",
-			passes, first, then)
-	}
-	if got := cache.LastUsed(c, first); !got.Equal(used) {
-		t.Errorf("the scrub moved the copy's last use from %v to %v: its pin is no use", used, got)
-	}
-	clk.Add(cache.ScrubInterval)
-	if done := cache.ScrubPass(c); len(done) != 0 {
-		t.Errorf("copies nobody used after their scrub were scrubbed again: %v", done)
-	}
+		if !strings.Contains(path, filepath.Base(w.dir(t, c, first))) {
+			t.Fatalf("the scrub hashed %s first, want the copy made due at once", path)
+		}
+		// Beside the held scrub: a push's delta sync, an adoption and a
+		// reader answered at once.
+		ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+		defer cancel()
+		w.push(t, first, "refs/heads/main", nil)
+		s, err := c.Sync(ctx, first, statelog.Freshness{Level: statelog.ReadLinearizable})
+		if err != nil {
+			t.Fatalf("a delta sync beside the scrub: %v", err)
+		}
+		pushID := uuid.Must(uuid.NewV7()).String()
+		scratch, err := c.NewScratch(ctx, s, pushID)
+		if err != nil {
+			t.Fatalf("NewScratch beside the scrub: %v", err)
+		}
+		tip, cs := w.packInto(t, first, scratch.Dir, nil)
+		row := w.storeBundle(t, w.bundle(cs), pushID)
+		row.Added = w.log.write(first, []gitlet.PackRow{row}, map[string]string{"refs/heads/adopted": tip})
+		if err := c.Adopt(ctx, first, scratch, row.Ref()); err != nil {
+			t.Errorf("an adoption beside the scrub: %v", err)
+		}
+		scratch.Remove()
+		s.Release()
+		at, err := c.Sync(ctx, first, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("a reader at once beside the scrub: %v", err)
+		}
+		at.Release()
+		used := cache.LastUsed(c, first)
+		cancel() // the steps beside the scrub are over
+
+		// One scrub on the node: a second pass hashes nothing while the
+		// first is held — read once the pass is parked, and again once the
+		// clock has moved past every timer the cache arms.
+		second := make(chan []string, 1)
+		go func() { second <- cache.ScrubPass(c) }()
+		oneScrub := func(when string) {
+			t.Helper()
+			if n := hold.during.Load(); n != 0 {
+				t.Errorf("%d hashes began while one scrub was held, %s: two scrubs ran at once", n, when)
+			}
+		}
+		synctest.Wait()
+		oneScrub("once every goroutine had blocked")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		oneScrub("once the clock had then moved past every timer the cache arms")
+		close(hold.release)
+		var passes [][]string
+		for _, ch := range []chan []string{order, second} {
+			select {
+			case done := <-ch:
+				passes = append(passes, done)
+			case <-time.After(hangDetector):
+				t.Fatal("a scrub pass never ended")
+			}
+		}
+		var all []string
+		for _, p := range passes {
+			all = append(all, p...)
+		}
+		if !slices.Equal(all, []string{first, then}) {
+			t.Errorf("the passes scrubbed %v, want the copy made due at once (%s) before the interval's (%s)",
+				passes, first, then)
+		}
+		if got := cache.LastUsed(c, first); !got.Equal(used) {
+			t.Errorf("the scrub moved the copy's last use from %v to %v: its pin is no use", used, got)
+		}
+		clk.Add(cache.ScrubInterval)
+		if done := cache.ScrubPass(c); len(done) != 0 {
+			t.Errorf("copies nobody used after their scrub were scrubbed again: %v", done)
+		}
+	})
 }
 
 // A STORED REPORT MAKES THE SCRUB DUE AT ONCE, AND IT REINSTALLS ONLY WHAT
