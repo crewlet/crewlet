@@ -12,11 +12,12 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { Callout, EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
+import { EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
 import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useModelsData, type ModelView } from "./data.ts";
+import { QueryState } from "~/components/common.tsx";
 import { EntryPage } from "./EntryPage.tsx";
 import { Overview } from "./Overview.tsx";
 import { flowMisfit, useFlow, type OnFlow } from "./parts.tsx";
@@ -58,11 +59,16 @@ export function Models({ id }: { id?: string }) {
   const misfit = useMisfit(data, flow, model);
 
   if (data.loading) return <Skeleton variant="text" rows={8} label="Loading models" />;
-  if (data.error && data.models.length === 0) {
+  // A FAILED READ IS THE SHARED FAILED-READ STATE, with its Try again: it
+  // printed the bare code ("query_failed") as the reason.
+  if (data.failed && data.models.length === 0) {
     return (
-      <Callout variant="danger" title="The models could not be read">
-        {data.error}
-      </Callout>
+      <QueryState
+        error={data.failed.error}
+        refusal={data.failed.refusal}
+        {...(data.failed.detail ? { detail: data.failed.detail } : {})}
+        loading={false}
+      />
     );
   }
 

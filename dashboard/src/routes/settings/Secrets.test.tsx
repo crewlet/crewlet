@@ -183,7 +183,7 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
   );
   render(<Secrets />);
 
-  expect(await screen.findByText(/The engine failed to answer\./)).toBeDefined();
+  expect(await screen.findByText(/the engine failed to answer\./)).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
