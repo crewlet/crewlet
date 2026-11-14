@@ -47,15 +47,21 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // call the resumed segment made, and a run that came back from a coding box is
 // the turn most likely to have pushed a branch or opened a pull request
 // already. A turn that PANICKED is abandoned too: the parked state is the same
-// bytes on every delivery, so the retry reaches the same defect.
+// bytes on every delivery, so the retry reaches the same defect. And so is a
+// resume REFUSED for a reason every retry would meet again (turn.ErrPermanent;
+// today a round lost with its host past its limit), whatever its record shows.
 //
-// A resumer wraps its error in this when, and only when, the turn's own answer
-// says so (in the engine, turn.Abandon). The coordinator then never reverts the
+// A resumer wraps its error in this when, and only when, the turn must not run
+// again from the same completion: in the engine, a turn that turn.Abandon gives
+// up, a resume that panicked outside the turn loop, a turn a person stopped,
+// and a relaunch that failed and ended its run with it — and an [Unresumable],
+// a run no build will resume, matches it too. The coordinator never reverts the
 // claim, which is what stops a retry winning the flip: it settles the delivery
 // and the run, reclaiming the box and deleting the record, so no redelivery
 // finds anything to claim. Every other resume failure still reverts and comes
-// back, because the parked turn is the expensive thing here and a resume that
-// proved nothing has lost nothing by trying again.
+// back, because the parked turn is the expensive thing here and a resume whose
+// record shows no act, and that a retry may get past, has lost nothing by
+// trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
 // Unresumable is a run no build will ever resume, as the engine judges it. It
@@ -3836,11 +3842,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		}
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
-			// the completion to a retry, and that retry would re-enter the
-			// same parked turn and either repeat the writes this turn has
-			// already made or reach the same panic, which are the
-			// two things a resume must not do twice. The turn is lost
-			// either way, and neither is recoverable by trying again.
+			// the completion to a retry, and every way a resumer marks a
+			// turn so ([ErrResumeAbandoned]) is one a retry cannot cure: it
+			// would re-enter the same parked turn and repeat the writes this
+			// turn has already made, reach the same panic, meet the same
+			// refusal or run on past a person's stop, or find no run to
+			// collect, its relaunch having failed and ended it. The turn is
+			// over either way.
 			//
 			// So the run is SETTLED, which keeps that promise for good: a
 			// finished run has no record for a redelivery to claim. Left
@@ -3861,12 +3869,12 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				"detail", "the run is settled rather than un-claimed, so the completion is "+
 					"not redelivered into a conversation a retry must not re-enter")
 			c.settleAbandoned(ctx, run, nil)
-			// THE TURN RAN AND WROTE OUTSIDE THE ENGINE, so whatever drove
-			// it is SPENT: this is the one branch that deliberately keeps
-			// the claim, and handing the delivery back to the ordinary
-			// route would run a second turn on a message the resumed one
-			// has already acted on. A refusal it took included, whose
-			// delivery the take left unspent ([Coordinator.spendRefused]).
+			// THE TURN RAN and must not run again, so whatever drove it is
+			// SPENT: this is the one branch that deliberately keeps the
+			// claim, and handing the delivery back to the ordinary route
+			// would run a second turn on a message the resumed one has
+			// already taken up. A refusal it took included, whose delivery
+			// the take left unspent ([Coordinator.spendRefused]).
 			c.spendRefused(ctx, run)
 			return AnswerConsumed, nil
 		}

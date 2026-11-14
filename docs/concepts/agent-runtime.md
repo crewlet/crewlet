@@ -106,9 +106,11 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
          incomplete
 
 3. Engine check (no model call), over the whole turn's record
-   ├── no_action nobody asked for and nothing acted on -> the turn ends
+   ├── no_action nobody asked for, and nothing changed outside
+   │     the engine -> the turn ends
    ├── a claim the record refutes -> loop back with a correction
-   │     naming the tools that deliver where the asker is waiting
+   │     naming what the turn did and the tools that deliver where
+   │     the asker is waiting
    └── a work pickup's turn with no typed answer on its item while
          the item is still the seat's, read off the seat's own rows
          on it since the turn began -> loop back naming the five
@@ -524,9 +526,9 @@ stateDiagram-v2
   gate's refusal, the stamp a refused charge would have written
   ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
-  the engine (an MCP write, a colleague ask, an executor's launch), in which case the
-  trigger is recorded and acked, because running it again after the reset would
-  repeat those writes.
+  the engine (a delivery, a colleague ask, a reaction — never a call the engine
+  knows is a read), in which case the trigger is recorded and acked, because
+  running it again after the reset would repeat those writes.
 
 **Why a park and not a retry.** Before the park, a wake reaching a spent seat
 ran a turn that was refused on its first charge, and a refusal proves nothing

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -54,6 +55,9 @@ type Lost struct {
 // ErrRoundLost is a round whose jobs were lost with their hosts more often than
 // a round is carried on after ([Lost.Limit]): a run that keeps taking its own
 // host down, which every relaunch would take down again.
+//
+// ITS REFUSAL ENDS THE TURN: it wraps [turn.ErrPermanent] beside this, since a
+// retry of the resume carries the same losses and is refused the same way.
 var ErrRoundLost = errors.New("the executor's round was lost with its host too often to start again")
 
 // Reseed is what the run carrying a lost job's round on is told beside its
@@ -194,6 +198,6 @@ func (l *Lost) refusal() error {
 	if l.Losses <= l.Limit {
 		return nil
 	}
-	return fmt.Errorf("%w: its run was lost %d times in this round, the last when %s, and a "+
-		"round is carried on after at most %d", ErrRoundLost, l.Losses, l.why(), l.Limit)
+	return fmt.Errorf("%w, and %w: its run was lost %d times in this round, the last when %s, and a "+
+		"round is carried on after at most %d", ErrRoundLost, turn.ErrPermanent, l.Losses, l.why(), l.Limit)
 }

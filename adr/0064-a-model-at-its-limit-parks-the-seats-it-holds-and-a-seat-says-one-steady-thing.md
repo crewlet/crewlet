@@ -90,8 +90,13 @@ opens with the calls the round that parked made before it suspended
 (`turn.Work.Inherited`), so the record stays whole for the delivery check and
 the ledger, while `turn.Result.Acted` (what `turn.Abandon` reads) counts only
 the calls this attempt made. A resume that broke before a new round (a usage
-limit, a runner it could not build) is reverted and retried, never abandoned;
-one that wrote again and then broke is abandoned as before. **A resume never
+limit, a runner it could not build) is not abandoned for what the round that
+parked wrote: it is reverted and retried unless something else ends its turn,
+and one that wrote again and then broke is abandoned as before. What else ends
+a resumed turn, whatever it wrote, is not this decision but `internal/engine`'s
+(`resumeTurn`), and
+[A turn that broke halfway](../docs/concepts/seat-ownership.md#a-turn-that-broke-halfway)
+is its account. **A resume never
 runs into a limit its models already know, and one that meets a limit is a
 wait:** the turn gate every resume passes (ADR-0063) asks the seat's spent
 budget and its models' limit after the node's admission and before the claim,

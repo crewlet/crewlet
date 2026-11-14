@@ -284,6 +284,53 @@ func TestOnlyAPositiveReadHintCounts(t *testing.T) {
 	}
 }
 
+// A PRESUMED WRITE IS AN MCP TOOL NOBODY MARKED EITHER WAY. The delivery fence
+// counts every MCP tool its annotations do not call a read, and must; a turn
+// told what it did has to know which of those it counts by that default alone,
+// or a turn that only searched is told it wrote. One marked a write is a write,
+// `read_only: false` or `destructive: true`, its server's or an operator's
+// override; one marked a read delivers nothing; and a first-party tool is the
+// engine's own to classify: none of them is presumed, and every presumed one
+// delivers. `destructive: false` alone marks neither, so a tool marked only so
+// is presumed.
+//
+// Mutation: drop the origin test, and the unannotated builtin is presumed; read
+// any hint short of Yes as unknown, and the denied write is presumed; leave the
+// destructive hint unread, and the two tools marked destructive are presumed;
+// read any destructive hint as a write, and the one marked not destructive is
+// not.
+func TestAPresumedWriteIsAnMCPToolNobodyMarkedEitherWay(t *testing.T) {
+	t.Parallel()
+	r := tools.NewRegistry()
+	for name, hints := range map[string]tools.Annotations{
+		"unannotated": {},
+		"denied":      {ReadOnly: mcp.No},
+		"asserted":    {ReadOnly: mcp.Yes},
+		"destructive": {Destructive: mcp.Yes},
+		"additive":    {Destructive: mcp.No},
+		// An operator's override on a server that says only where its tool
+		// reaches, as tool-capabilities.md's create_pull_request is written.
+		"overridden": mcp.Annotations{OpenWorld: mcp.Yes}.Merge(mcp.Annotations{Destructive: mcp.Yes}),
+	} {
+		if err := r.RegisterWith(tool(name), tools.Origin("s"), hints); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	mustRegister(t, r, tool("reflect"), tools.OriginBuiltin)
+
+	snapshot := r.Snapshot()
+	presumed := snapshot.PresumedWrites()
+	if got := slices.Sorted(slices.Values(presumed)); !slices.Equal(got, []string{"additive", "unannotated"}) {
+		t.Errorf("presumed writes = %v, want only the MCP tools nobody marked a read or a write", got)
+	}
+	deliveries := snapshot.Deliveries()
+	for _, name := range presumed {
+		if _, ok := deliveries[name]; !ok {
+			t.Errorf("%s is presumed a write but does not deliver: the two views disagree", name)
+		}
+	}
+}
+
 func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 	t.Parallel()
 	// A real server publishes dozens of tools, and an executor shown all of

@@ -59,14 +59,34 @@ func (e *PanicError) Unwrap() error { return e.failure }
 // The reasons [Abandon] gives, as constants so a caller that logs or records
 // one says the same sentence every other caller does.
 const (
-	// AbandonedActed is a turn that broke after its own record proved it had
-	// already reached outside the engine.
+	// AbandonedActed is a turn that broke after its own record showed it had
+	// already reached outside the engine ([Acted]).
 	AbandonedActed = "the turn broke after writing outside the engine"
 
 	// AbandonedPanicked is a turn that panicked.
 	AbandonedPanicked = "the turn panicked, and a redelivery would run the " +
 		"same defect on the same input"
+
+	// AbandonedPermanent is a turn whose phase refused to run for a reason a
+	// redelivery would meet again ([ErrPermanent]). It says only that the
+	// refusal is final: why is the error's to say, which every account of an
+	// abandoned turn prints beside its reason, and which says a retry would be
+	// refused the same way.
+	AbandonedPermanent = "the turn was refused for good"
 )
+
+// ErrPermanent marks a phase that refused to run for a reason a redelivery of
+// the same trigger would meet again, wrapped beside the error that says why:
+// an executor's round lost with its host past the limit a round is carried on
+// after (internal/agent/runner's ErrRoundLost). [Abandon] gives such a turn up.
+//
+// A MARK THIS PACKAGE DECLARES AND THE REFUSER WRAPS, because Abandon is one
+// rule for both paths a turn arrives by, and this package imports neither of
+// the packages that decide a refusal is final. Read as an ordinary broken
+// phase, the refusal was handed back, refused again on every announcement of
+// its run, and given up only once its resume had failed for half an hour, the
+// seat held behind it throughout.
+var ErrPermanent = errors.New("a retry would be refused the same way")
 
 // Abandon reports why a turn that returned err must NOT be run again from its
 // trigger, or false when a redelivery may run it cleanly.
@@ -76,16 +96,19 @@ const (
 // carry its own copy of the rule; a panic added to one and forgotten in the
 // other is exactly the drift one function makes impossible.
 //
-// Two cases, the first outranking the second because it is the more specific
+// Three cases, each outranking the next because it is the more specific
 // account of what happened:
 //
 //   - a PANIC is never retried. The premise a retry rests on is that the
-//     turn's own record proves nothing reached outside, and a panic destroys
+//     turn's own record shows nothing reached outside, and a panic destroys
 //     the record of the round it happened in, so that premise cannot be
 //     established at all. Even when it could, the redelivery runs the same
 //     defect again.
-//   - a turn whose record PROVES an outward write is not retried either,
-//     because the retry would repeat the write. See [Result.Acted].
+//   - a refusal a retry would MEET AGAIN ([ErrPermanent]) is not retried
+//     either: nothing about the trigger changes between its deliveries, so
+//     each is refused the same way, whatever the record shows.
+//   - a turn whose record shows an outward write ([Acted]) is not retried
+//     either, because the retry would repeat the write. See [Result.Acted].
 //
 // Everything else keeps its retry: a provider that did not answer, a runner
 // that could not be built, a refused budget. None of them wrote anything and
@@ -98,6 +121,8 @@ func Abandon(res Result, err error) (reason string, abandon bool) {
 	switch {
 	case errors.As(err, &panicked):
 		return AbandonedPanicked, true
+	case errors.Is(err, ErrPermanent):
+		return AbandonedPermanent, true
 	case res.Acted:
 		return AbandonedActed, true
 	}

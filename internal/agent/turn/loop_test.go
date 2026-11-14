@@ -231,6 +231,43 @@ func TestNoActionAfterActingIsCorrected(t *testing.T) {
 	}
 }
 
+// A NO_ACTION AFTER A COLLEAGUE ASK IS CORRECTED WITHOUT A REVIEW. Nothing was
+// delivered — an ask answers nobody waiting on the turn — but a colleague was
+// woken, so the round is sent back by the engine itself, without a review call,
+// told what it called, and the next round reports what the turn did and is
+// reviewed then.
+//
+// Mutation: read Delivered for Check's `acted` again, and the turn ends
+// skipped in its first round.
+func TestANoActionAfterAColleagueAskIsCorrectedWithoutAReview(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{
+			{Outcome: turn.OutcomeNoAction, Summary: "nothing to do",
+				Calls: []ledger.Call{{Name: "a2a_ask"}}},
+			{Outcome: turn.OutcomeDelivered, Summary: "asked the lead to own the follow-up"},
+		},
+		surfaces: []turn.Surface{worldSurface()},
+		reviews:  []turn.Review{{}, {Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
+		turn.Input{RunID: "t1", Reply: turn.NoReply()})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done {
+		t.Errorf("decision = %s, want done: a turn that asked a colleague is reported, not skipped",
+			res.Decision)
+	}
+	if !slices.Equal(f.reviewedRounds, []int{2}) {
+		t.Errorf("the reviewer ran on rounds %v, want round 2 alone: the engine corrects "+
+			"round 1 itself", f.reviewedRounds)
+	}
+	if len(f.notesSeen) != 2 || !strings.Contains(f.notesSeen[1], `called "a2a_ask"`) {
+		t.Errorf("notes = %q, want round 2 told why round 1 came back, naming the ask", f.notesSeen)
+	}
+}
+
 // WRITING ABOUT AN ACTION DOES NOT PERFORM IT. The claim is checked against
 // the engine's own record before any model judges it.
 func TestADeliveryClaimWithNoCallIsCorrectedWithoutAReview(t *testing.T) {
@@ -1408,6 +1445,51 @@ func TestARoundThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
 	if res.Acted {
 		t.Error("a phase that never called anything claimed to have acted, " +
 			"which would discard a trigger worth retrying")
+	}
+}
+
+// A ROUND THAT ONLY READ THE WORLD COMES BACK. A web search and an SSH read
+// both reach outside the process, and neither changes anything a redelivery
+// would repeat, so a round that made only those and broke keeps its retry —
+// while the same round that also asked a colleague is given up, since a
+// redelivery would ask again.
+//
+// Mutation: drop the read-only clause from Acted, and the reading round is
+// given up as one that wrote.
+func TestABrokenRoundThatOnlyReadTheWorldComesBack(t *testing.T) {
+	t.Parallel()
+	surface := turn.Surface{
+		Catalogue:      []string{"web_search", "ssh_read", "a2a_ask"},
+		KnownReads:     []string{"web_search", "ssh_read"},
+		KnownOpenWorld: []string{"web_search", "ssh_read", "a2a_ask"},
+	}
+	read := []ledger.Call{{Name: "web_search"}, {Name: "ssh_read"}}
+	for name, tc := range map[string]struct {
+		calls   []ledger.Call
+		abandon bool
+	}{
+		"it only read":         {calls: read},
+		"it asked a colleague": {calls: append(slices.Clone(read), ledger.Call{Name: "a2a_ask"}), abandon: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:    []turn.Work{{Calls: tc.calls}},
+				surfaces: []turn.Surface{surface},
+				workErr:  errors.New("the provider went away mid-loop"),
+			}
+			res, err := turn.Run(t.Context(), f, turn.Settings{MaxIterations: 3},
+				turn.Input{RunID: "t1", Reply: turn.NoReply()})
+			if err == nil {
+				t.Fatal("Run returned no error for a broken phase")
+			}
+			if res.Acted != tc.abandon {
+				t.Errorf("Acted = %v, want %v", res.Acted, tc.abandon)
+			}
+			if _, abandon := turn.Abandon(res, err); abandon != tc.abandon {
+				t.Errorf("Abandon = %v, want %v", abandon, tc.abandon)
+			}
+		})
 	}
 }
 

@@ -520,12 +520,12 @@ func annotationsFor(name string) tools.Annotations {
 		// read_session would be refused it as a write somebody reads.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case A2AAskTool:
-		// One of the two that leave this process. Not destructive — an ask
-		// is a message, not an edit — but NOT idempotent: asking twice
-		// wakes a colleague twice and spends two of their turns. A worker
-		// is additionally denied it BY NAME, because "one colleague's desk"
-		// is a narrower objection than open-world and deserves its own
-		// sentence; see internal/agent/subagent.
+		// It leaves this process, as every open-world builtin does. Not
+		// destructive — an ask is a message, not an edit — but NOT
+		// idempotent: asking twice wakes a colleague twice and spends two of
+		// their turns. A worker is additionally denied it BY NAME, because
+		// "one colleague's desk" is a narrower objection than open-world and
+		// deserves its own sentence; see internal/agent/subagent.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case MarkOnboardedTool:
 		// A write whose repeat is genuinely free: the marker is a fact

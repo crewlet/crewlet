@@ -358,8 +358,9 @@ func (r Request) Ask() []*events.Event {
 //     still recorded: the ledger answers "has this trigger been worked", not
 //     "did the work succeed", and re-running a failing turn on every
 //     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when its own record proves it had
-//     already reached outside the engine — see [Dispatcher.abandon] for why
+//     PHASE broke is recorded too, but only when [turn.Abandon] gives a
+//     reason — an outward write its own record shows, a panic, or a refusal
+//     every redelivery would meet again — see [Dispatcher.abandon] for why
 //     that is a different question from "did it fail", and why answering it
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
@@ -849,9 +850,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// lost the right to do.
 			//
 			// BELOW [turn.Abandon] rather than above it: a turn that
-			// panicked or that proved an outward write must not be run
-			// again wherever the seat now lives, and handing it on would
-			// do exactly that.
+			// panicked, or whose record shows an outward write, must not be
+			// run again wherever the seat now lives, and handing it on
+			// would do exactly that.
 			if errors.Is(err, seat.ErrSeatMoved) {
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
@@ -867,7 +868,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// over — rather than by the NAK below, whose redelivery is
 			// refused the same way until the budget of deliveries runs
 			// out. Below [turn.Abandon] for the reason the seat-moved
-			// branch is: a turn that proved an outward write is
+			// branch is: a turn whose record shows an outward write is
 			// recorded, not run again when the window resets.
 			//
 			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
@@ -998,15 +999,20 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 //
 // So the trigger is recorded and acked. That LOSES the rest of the turn, which
 // is the honest price and the reason it needs a reason rather than suspicion:
-// [turn.Abandon] gives one only for a turn whose record proves it reached
-// outside, or for a panic, which runs the same defect again however many times
-// it is delivered. Everything else (a provider that never answered, a runner
-// that could not be built, a refused budget) proves nothing and keeps its
-// retry. A seat handed to another node mid-turn keeps its retry too, but as a
-// DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it. So does a refused budget, whose seat is parked until the
-// refusing window turns over rather than NAKed into the same refusal: see
-// [Dispatcher.parkOnBudget].
+// [turn.Abandon] gives one only for a turn whose record shows it reached
+// outside, for a panic, which runs the same defect again however many times it
+// is delivered, or for a refusal every redelivery would meet again
+// ([turn.ErrPermanent]). Everything else (a provider that never answered, a
+// runner that could not be built, a refused budget) is given none and keeps its
+// retry. A seat handed to another node mid-turn keeps its retry too, but as
+// a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
+// what detects it. So does a failure a redelivery would meet again until
+// something changes, whose seat is parked or paused until it does rather than
+// NAKed into the same refusal: a refused budget until the refusing window
+// turns over ([Dispatcher.parkOnBudget]), a chain every member of which is at
+// its limit until the first is tried again ([Dispatcher.Provider]), and a
+// failure a retry cannot cure, the second time in a row, until its settings
+// change or a person resumes it ([Dispatcher.Failure]).
 //
 // It is not silent. A turn that ran has already published its own completion
 // marked failed (see [Engine.publishTurnCompleted], which fires on the error
