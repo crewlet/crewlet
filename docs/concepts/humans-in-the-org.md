@@ -807,9 +807,10 @@ Three things to keep in mind:
   sets response expectations.
 
 See `examples/nimbus.company.yaml` for a complete working org with a
-founder seat above the agent CEO. That company's only surface is chat, so
-the founder seat there carries a single `contact` identity
-(`mattermost_user_id`); add one per surface you connect.
+founder seat above the agent CEO. Every surface that company runs is the
+engine's own, where a person acts as their seat, so the founder seat there
+carries no `contact` identity at all; add one per vendor surface you
+connect.
 
 ---
 

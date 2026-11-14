@@ -206,7 +206,7 @@ A ready-to-publish playbook ships at
 [`examples/nimbus-docs/LEAD/Manager 1-1.md`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-docs/LEAD/Manager%201-1.md)
 — its `LEAD/` parent directory routes it to the org-wide `LEAD` space
 every agent can read, and its `# Manager 1:1` H1 becomes the page title.
-Both bundled examples run Doclet, so publish it
+The bundled example runs Doclet, so publish it
 through your own assistant on
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 — see [publishing knowledge docs](knowledge-system.md#publishing-knowledge-docs).

@@ -160,13 +160,14 @@ to operate and nothing to point a DSN at.
 
 The Docker stack is for the **self-hostable integrations**: Mattermost and
 GitLab, each behind its own compose profile with a bootstrap script that
-stands it up and provisions a config's seats — `make mattermost-up` and
-`make gitlab-up` are the profile and its script in one step, and take
-`COMPANY=` to provision that config's seats in the same run.
-`make mattermost-up COMPANY=examples/nimbus.company.yaml` is the whole setup
-for the bundled example, whose only integration is chat; the GitLab profile
-needs a config that declares `integrations.gitlab`, which that one does not. Jira and Confluence
-have no profile — Atlassian is not something a compose file can stand up. See
+stands it up — `make mattermost-up` and `make gitlab-up` are the profile and
+its script in one step, and `make gitlab-up` takes `COMPANY=` to provision
+that config's seats in the same run. The bundled example needs neither: its
+chat, tracker, wiki and code are the engine's own, so it runs from the binary
+alone. To try a vendor, add its blocks to a copy of the example as its page
+shows — the GitLab profile needs a config that declares
+`integrations.gitlab`. Jira and Confluence have no profile — Atlassian is not
+something a compose file can stand up. See
 [docs/integrations/](docs/integrations/).
 
 ## Running tests and lint

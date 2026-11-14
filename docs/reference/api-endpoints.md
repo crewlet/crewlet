@@ -3307,7 +3307,7 @@ this answer carries.** The listing is cut at 500 entries because a response
 body and a socket frame have a size budget, so render the total and say what
 was left out — a short listing read as the whole comparison is a caller
 believing nothing else moved. The two differ only on a document several times
-the size of the example company, whose 401 leaves all changing at once still
+the size of the example company, all of whose leaves changing at once still
 fits. `crewlet config diff` writes to a terminal, which has no such budget,
 and prints every change.
 

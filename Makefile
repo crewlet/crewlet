@@ -246,7 +246,9 @@ COMPOSE ?= docker compose
 
 # Passed through to the GitLab bootstrap script, which reconciles the company
 # config named here and skips that step when it is empty:
-#   make gitlab-up COMPANY=examples/nimbus.company.yaml
+#   make gitlab-up COMPANY=nimbus.local.company.yaml
+# (a copy of the example with integrations.gitlab added, as
+# docs/integrations/gitlab.md's walkthrough builds it).
 COMPANY ?=
 
 .DEFAULT_GOAL := help
