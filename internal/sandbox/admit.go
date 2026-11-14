@@ -228,11 +228,11 @@ type refusedCompletion struct {
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the
 // gate's answer and the keep would leave the completion kept for a signal that
-// has already been and gone, until the next poll. So the caller reads what was
-// signalled BEFORE it asks the gate (seen), and the keep, under the lock
-// Readmit takes, re-fires at once instead of keeping when the condition has been
-// signalled for the seat since: the same rule [Coordinator.waitOwed] applies
-// to an answer.
+// has already been and gone, until the waiter's next announcement of it. So the
+// caller reads what was signalled BEFORE it asks the gate (seen), and the keep,
+// under the lock Readmit takes, re-fires at once instead of keeping when the
+// condition has been signalled for the seat since: the same rule
+// [Coordinator.waitOwed] applies to an answer.
 //
 // NOR IS A PERSON'S STOP. A stop ends a collected job's wait by re-firing what is
 // kept for it ([Coordinator.endCollectedWait]), and it leaves a run whose
@@ -366,6 +366,6 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
 			"error", err.Error(),
 			"detail", "the completion re-fired when its condition cleared was not settled; "+
-				"the waiter's next poll announces it again")
+				"the waiter announces it again on its schedule")
 	}
 }

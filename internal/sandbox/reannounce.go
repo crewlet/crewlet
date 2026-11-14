@@ -38,6 +38,17 @@ import "time"
 // minutes, and a job held for a day is announced a few hundred times rather
 // than on every poll. The resume give-up ([ResumeGiveUp]) still sees several
 // attempts inside its half hour.
+//
+// AND INSIDE THE BROKER'S DELIVERY BUDGET, which nothing else keeps it. A
+// completion whose claim the holder's own store does not answer is handed back
+// NAK'd and nothing renews it ([Coordinator.collectFailedAt]), so its next
+// announcement has to be out before its last can be dead-lettered: at the
+// default cadence the ceiling, the poll that makes the announcement and that
+// poll's own bound come to under seven minutes, and the broker carries a
+// failing message at least about eight (internal/queue/jetstream's
+// LeastTimeToDeadLetter). TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter
+// holds the two apart, and a ceiling raised past it would leave a completion
+// whose only copy is its dead letter while a store is silent.
 const reannounceCeilingPolls = 20
 
 // announced is one turn's last announced job and its schedule.

@@ -1691,10 +1691,11 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
 	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
-	// waiter that drives its box announces its completion again on its next
-	// poll, and keeps the box meanwhile; the error carries the refusal, whose
-	// condition decides what the caller does with this delivery. What was
-	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
+	// waiter that drives its box announces its completion again on its
+	// schedule (reannounce.go), and keeps the box meanwhile; the error
+	// carries the refusal, whose condition decides what the caller does with
+	// this delivery. What was signalled is read first, for the reason
+	// [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
 	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
 	// met a refusal after its claim that lifts at an instant, which the gate
@@ -1986,8 +1987,10 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // ([CoordinatorOptions.Ended]), which a retry ends again to no effect. So the
 // run is left as the completion found it: running, its box kept alive by the
 // poll, its turn suspended. The completion is then NAK'd and comes back on the
-// queue's backoff, here or on the seat's next owner, and the poll fires a fresh
-// one on its next tick; whichever claims first collects.
+// queue's backoff, here or on the seat's next owner, and the waiter announces
+// the job again on its schedule, a fresh message at most
+// [reannounceCeilingPolls] poll intervals after its last (reannounce.go);
+// whichever claims first collects.
 // Settling on the first failure used to destroy the turn — and its charge and
 // its record — over one transport blip, or over the drain whose cancellation
 // was the failure.
@@ -2033,9 +2036,11 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // host announces it again once it is back, and here the host and the box are
 // up. Where the store is this node's own, it has NO GIVE-UP OF ITS OWN: it is
 // retried as a claim the store does not take is ([Coordinator.completeAdmitted]),
-// each announcement bounded by the broker's deliveries of it and the poll
-// announcing the job again, and a store silent that long holds every run where
-// it is, the claim first, while its own alarms name it. Going on without the
+// each announcement bounded by the broker's deliveries of it and the waiter's
+// schedule announcing the job again, which loses nothing whatever the
+// deliveries come to ([Coordinator.collectFailedAt] says why), and a store
+// silent that long holds every run where it is, the claim first, while its own
+// alarms name it. Going on without the
 // step would read the run without what the step stands for (a call still in
 // flight, a session that ran out or was refused), and giving the run up would throw away a
 // result its box holds. But where the silence is the box's host's alone, its
@@ -2088,8 +2093,9 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// THE BOX'S HOST DID NOT ANSWER, which says nothing about the box
 		// ([ErrBoxHostSilent]): handed back uncounted, and the completion
 		// acknowledged rather than retried on the queue's backoff — the
-		// host announces it again on its own next poll once it is back,
-		// and one that never comes back is found gone by the fleet.
+		// host's own waiter announces it again on its schedule once the
+		// host is back (reannounce.go), and one that never comes back is
+		// found gone by the fleet.
 		log.WarnContext(ctx, "sandbox_collect_host_silent", "turn_id", run.TurnID,
 			"node", run.LaunchNode, "error", cause.Error(),
 			"detail", "the node whose host the run's box is on did not answer the collection; "+
@@ -2106,10 +2112,29 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
 		// go on without ([ErrStoreSilent]), which says nothing about the box:
 		// handed back uncounted, and the completion NAK'd for the queue's
-		// backoff, while the poll announces the job again on its next tick.
-		// A host whose store alone has been silent for the box timeout is
-		// given up by the collection that read the box, never here: its job
-		// is lost with that host ([collectVerdict.lostWithHost]).
+		// backoff. A host whose store alone has been silent for the box
+		// timeout is given up by the collection that read the box, never
+		// here: its job is lost with that host ([collectVerdict.lostWithHost]).
+		//
+		// WHERE THE STORE IS THIS NODE'S OWN, THE NAK IS ALL IT TAKES. Once
+		// the claim is back (now, or when a release this node owes lands,
+		// claimrelease.go), the run's row is running and unheld, and the
+		// waiter that drives its box announces such a job's completion on
+		// its schedule for as long as the row stays so, never stopping
+		// (reannounce.go): each announcement a fresh message with a fresh
+		// budget, due at most [reannounceCeilingPolls] poll intervals after
+		// the last. So a delivery that dead-letters meanwhile loses nothing.
+		// And at production's cadence that ceiling, 300 s, is inside the
+		// broker's delivery budget, about 601 s from a message's first
+		// delivery to its dead letter and never under about 481 s with its
+		// jitter (internal/queue/jetstream's LeastTimeToDeadLetter): while
+		// the waiter's own store lists the row, a fresh announcement is out
+		// before the last can dead-letter, so the completion always has a
+		// delivery in flight, and no dead letter the silence leaves is its
+		// last copy (TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter).
+		// A waiter whose store is silent too announces nothing while it is,
+		// and its first pass that lists the row again announces the job at
+		// once, its wait long past.
 		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the coordination store did not answer a step the collection cannot go on "+

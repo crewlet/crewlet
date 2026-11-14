@@ -3607,8 +3607,9 @@ func (e *Engine) mayResumeAnswer(_ context.Context, handle string) (sandbox.Refu
 // ([sandbox.PendingRun.HeldFor]); see [sandbox.Coordinator.Readmit]. It is THE
 // hook for whatever ends a condition a refusal names: call it with that
 // condition and the seat, and a refused completion resumes now rather than at
-// the waiter's next poll. Nothing to do on a node with no sandbox runtime,
-// which owes no answer, kept no completion and holds no resume.
+// the waiter's next announcement of it. Nothing to do on a node with no
+// sandbox runtime, which owes no answer, kept no completion and holds no
+// resume.
 func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Readmit(cond, handles...)
@@ -3843,11 +3844,12 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //
 // A completion the node's admission refused ([Engine.admitResume]) left its run
 // unclaimed and running, so the delivery carries nothing that is lost with it:
-// the waiter announces a finished run again on every poll for as long as its
-// row is running ([sandbox.Waiter]). What a refusal does to the delivery is
-// therefore keyed on the condition it names ([sandbox.TurnRefused]), never on
-// which error caused it, so a condition a later change adds is handed back by
-// the rule for its kind with nothing here to edit:
+// the waiter announces a finished run again on its schedule for as long as its
+// row is running and unheld, at most twenty poll intervals apart, five minutes
+// at the default cadence ([sandbox.Waiter]). What a refusal does to the
+// delivery is therefore keyed on the condition it names ([sandbox.TurnRefused]),
+// never on which error caused it, so a condition a later change adds is handed
+// back by the rule for its kind with nothing here to edit:
 //
 //   - A CONDITION THAT CLEARS BY WAITING (the seat's ownership not yet proven
 //     again, and any limit a seat sits out) is ACKED. A Nak or a deferral each
@@ -3856,8 +3858,9 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     boundary while nothing was wrong with it, and a deferral would also
 //     quiesce the attachment, which nothing undoes. The coordinator keeps the
 //     completion and re-fires it when the condition clears
-//     ([Engine.readmitResumes]), and the poll's next announcement is the
-//     backstop for a clearing nothing signals, one poll interval at most.
+//     ([Engine.readmitResumes]), and the waiter's next announcement is the
+//     backstop for a clearing nothing signals, at most twenty poll intervals
+//     after its last.
 //   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
 //     node, which is leaving, so the attachment is quiesced for the rest of the
 //     drain, as a mailbox's is, and the completion goes back to the head of the
@@ -3877,7 +3880,20 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // names no condition, a row the store says a newer lease owns while this
 // node's lease still stands, which the heartbeat settles within a beat) comes
 // back on the broker's backoff: to this node once its store recovers, or to
-// the seat's next owner. Acking it would lose the turn.
+// the seat's next owner. Acked, it would wait for the waiter's next
+// announcement instead, up to five minutes away.
+//
+// THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
+// dead-letters while it lasts loses nothing: the waiter's schedule never stops
+// while the run's row is running and unheld, and its next announcement is a
+// fresh message with a fresh budget, due at most twenty poll intervals after
+// the last. At production's cadence that is 300 s, inside the broker's
+// delivery budget (about 601 s from a message's first delivery to its dead
+// letter, never under about 481 s with its jitter), so while the waiter's own
+// store answers, a fresh announcement is in flight before the last can
+// dead-letter, and no dead letter the silence leaves is the completion's last
+// copy (internal/sandbox's collectFailedAt, held by its
+// TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter).
 func controlOutcome(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()

@@ -351,7 +351,7 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 // drain and the completion waits at the head for the seat's next holder. A
 // condition that clears by waiting is acked, which spends none of the broker's
 // deliveries and quiesces nothing: the run is left unclaimed and the waiter
-// announces it again on its next poll (TestAnUnclaimedCompletionIsAnnouncedAgain).
+// announces it again on its schedule (TestAnUnclaimedCompletionIsAnnouncedAgain).
 // A condition this build names nowhere yet, a provider's limit here, takes the
 // waiting rule with no change to the hand-back, which is the point of keying it
 // on the condition. Only a failure the refusal does not explain is a Nak.

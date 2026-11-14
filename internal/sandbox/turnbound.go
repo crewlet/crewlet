@@ -16,7 +16,8 @@ import (
 // it. A resume that fails is handed back, and one that meets a condition that
 // ends by waiting (a model's usage limit, a spent budget, a paused seat) is
 // held until that condition clears. Either way the waiter announces the job
-// again on its next poll, so the job comes round until its resume runs.
+// again on its schedule (reannounce.go), so the job comes round until its
+// resume runs.
 //
 // Two bounds keep that from going on for ever, and both END THE RUN, announced
 // on the board under a reason of its own, with the seat freed:

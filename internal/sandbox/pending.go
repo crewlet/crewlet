@@ -2775,9 +2775,9 @@ type PendingStore interface {
 
 	// LiftHold clears the hold a release put on a run's resume
 	// ([PendingRun.HeldFor]) where it is held for cond, reporting whether
-	// it was: the condition was signalled, and the next poll announces the
-	// job's completion. FALSE IS NOT AN ERROR: the run is held for
-	// something else, is not held, or is gone.
+	// it was: the condition was signalled, and the waiter announces the
+	// job's completion again on its schedule. FALSE IS NOT AN ERROR: the run
+	// is held for something else, is not held, or is gone.
 	LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error)
 
 	// MarkAwaiting parks a run on a question, freeing the seat. A

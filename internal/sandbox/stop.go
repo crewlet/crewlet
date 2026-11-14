@@ -184,9 +184,10 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 
 // endCollectedWait ends whatever the resume of run's collected job waits on, for
 // a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted, so the
-// waiter's next poll announces the job, and a completion of it this node kept
-// for a condition, held here or refused at the gate ([Coordinator.keepRefused]),
-// is re-fired at once. Reports whether this node was holding the job itself.
+// waiter announces the job again on its schedule, and a completion of it this
+// node kept for a condition, held here or refused at the gate
+// ([Coordinator.keepRefused]), is re-fired at once. Reports whether this node
+// was holding the job itself.
 //
 // WHY A STOP ENDS THE WAIT. The stop leaves a collected job to its turn, whose
 // fence closes it as stopped at its first round, before any model call or

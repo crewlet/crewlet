@@ -317,7 +317,7 @@ func TestAnInlineAnswerTheNodeRefusesIsStillOwed(t *testing.T) {
 // A COMPLETION REFUSED ON A CONDITION IS RE-FIRED THE MOMENT THE CONDITION
 // CLEARS, for the seat it was refused on, and not after the seat is let go.
 //
-// The waiter would announce it again on its next poll; the signal that the
+// The waiter would announce it again on its schedule; the signal that the
 // condition cleared ([Coordinator.Readmit]) does not wait for that. A signal for
 // another condition or another seat leaves it kept, and a seat this node lets
 // go of takes its kept completions with it, for the waiter that drives each

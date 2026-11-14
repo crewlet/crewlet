@@ -92,6 +92,36 @@ func TestARedeliveryIsSpreadAroundItsSpacing(t *testing.T) {
 	}
 }
 
+// THE LEAST A FAILING MESSAGE IS CARRIED BEFORE ITS DEAD LETTER is its budget's
+// returns, each at the floor of its jitter: at the defaults 1, 2, 4, 8 and 16 s,
+// then nineteen at the 30 s ceiling, 601 s, and four fifths of that. A layer
+// above holds a wait of its own under it (internal/sandbox's
+// TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter), so the figure is
+// spelled out here apart from the spacing it is computed from, and every
+// return the shipped spacing makes is held to its share of it.
+//
+// Mutation: count the dead-lettering delivery as one more return, or take each
+// spacing whole rather than at its floor, and the figure is not the one spelled
+// out.
+func TestTheLeastTimeToADeadLetterIsTheBudgetsReturnsAtTheirFloor(t *testing.T) {
+	t.Parallel()
+	const returns = maxDeliver - 1
+	whole := (1+2+4+8+16)*time.Second + (returns-5)*30*time.Second
+	if got, want := LeastTimeToDeadLetter(), whole-whole/5; got != want {
+		t.Fatalf("LeastTimeToDeadLetter = %v, want %v: %d returns spaced %v in all, at four fifths",
+			got, want, returns, whole)
+	}
+	shipped := &Queue{}
+	for n := uint64(1); n <= returns; n++ {
+		spacing := shipped.nakSpacing(n)
+		for range 50 {
+			if got := shipped.nakBackoff(n); got < spacing-spacing/5 {
+				t.Fatalf("return %d waited %v, under the floor of its %v spacing", n, got, spacing)
+			}
+		}
+	}
+}
+
 // A HANDOFF IS NOT A FAILURE, and the backoff must not treat it as one.
 //
 // The wait doubled per DELIVERY, and this package's own budget comment says

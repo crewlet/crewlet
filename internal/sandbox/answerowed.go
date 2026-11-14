@@ -2041,8 +2041,8 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 // cond, at its gate or held here after its claim ([Coordinator.keepRefused]),
 // which is re-fired at once rather than at the waiter's next announcement of
 // it, and a resume held on cond on its run's row after its run was collected
-// ([PendingRun.HeldFor]), whose hold is lifted so the next poll announces the
-// job again ([Coordinator.liftHoldsLocked]).
+// ([PendingRun.HeldFor]), whose hold is lifted so the waiter announces the job
+// again on its schedule ([Coordinator.liftHoldsLocked]).
 //
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
 // event: with nothing waiting it is one pass over this node's owed answers and
@@ -2071,8 +2071,8 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 
 // liftHoldsLocked lifts, in the background, every hold on cond this node's
 // seats' runs are under ([PendingRun.HeldFor]) — the seats named, or every
-// seat — so the next poll announces those jobs' completions again. The caller
-// holds c.mu.
+// seat — so the waiter announces those jobs' completions again on its
+// schedule. The caller holds c.mu.
 //
 // THE ROWS ARE THE RECORD, not a list in memory: a hold is written on the run
 // and survives the node, so a node that took the seat over since lifts what
