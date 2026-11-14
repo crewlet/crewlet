@@ -111,6 +111,7 @@ import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { refToken } from "~/app/frame/objects.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT, TASK_RAIL_STACKS } from "~/app/layout.ts";
 import { ListPosition } from "./ListPosition.tsx";
@@ -118,8 +119,10 @@ import { ItemEditNote, ItemEditsProvider } from "./item/edit.tsx";
 import { Checklists, ItemDescription, ItemTitle, Subtasks } from "./item/Body.tsx";
 import { Activity } from "./item/Activity.tsx";
 import { ItemLead, ItemRail } from "./item/Rail.tsx";
+import { taskEntries, taskTargetOf, useTaskActions, type TaskActions } from "./taskMenu.tsx";
 import type {
   AgentRow,
+  WorkItemsAnswer,
   WorkItemDetail,
   WorkProjectDetail,
   WorkSummary,
@@ -273,6 +276,40 @@ function useTask(id: string) {
   return { state, item, project, children, worklet };
 }
 
+/**
+ * The task menu's entries for the task on screen: Move to project and Move to
+ * trash while it is live, Restore and Delete permanently once it is in the
+ * trash.
+ *
+ * WHETHER IT HAS SUBTASKS IS ALREADY READ HERE (its sub-tasks' own question),
+ * so the removal asks about them without asking the engine again; until that
+ * answer has come, the trash asks it itself.
+ */
+function taskMenuEntries(
+  actions: TaskActions,
+  detail: WorkItemDetail,
+  children: WorkItemsAnswer | null | undefined,
+) {
+  const known = children
+    ? { subtasks: (children.items?.length ?? 0) > 0 || (children.groups?.length ?? 0) > 0 }
+    : undefined;
+  const task = detail.task;
+  return taskEntries(
+    actions,
+    [
+      taskTargetOf({
+        ...detailItem(detail),
+        key: task.key,
+        title: task.title,
+        project: task.project,
+        ...(task.parent ? { parent: task.parent } : {}),
+      }),
+    ],
+    Boolean(detail.task.removed),
+    known,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------
@@ -391,20 +428,23 @@ export function WorkItem({ id }: { id: string }) {
       nav.to(projectPath(item.project), { peek: refToken({ kind: "item", id: address }) });
     }
   };
+  // MOVE AND THE TRASH, from the same menu: see `taskMenu.tsx`.
+  const actions = useTaskActions();
+  const more = item
+    ? [
+        {
+          key: "board",
+          label: "Open on the board",
+          icon: <SquareKanbanGlyph size="sm" />,
+          onSelect: openOnBoard,
+        },
+        { kind: "separator" as const, key: "before-trash" },
+        ...taskMenuEntries(actions, state.data!, children.data),
+      ]
+    : [];
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
   // link, rather than a second ellipsis next to the frame's.
-  usePageMenu(
-    item
-      ? [
-          {
-            key: "board",
-            label: "Open on the board",
-            icon: <SquareKanbanGlyph size="sm" />,
-            onSelect: openOnBoard,
-          },
-        ]
-      : [],
-  );
+  usePageMenu(more.filter((entry) => entry.kind !== "separator") as PageMenuEntry[]);
 
   return (
     <>
@@ -432,18 +472,12 @@ export function WorkItem({ id }: { id: string }) {
               label={`More for ${item.key}`}
               icon={<EllipsisGlyph size="sm" />}
               align="end"
-              items={[
-                {
-                  key: "board",
-                  label: "Open on the board",
-                  icon: <SquareKanbanGlyph size="sm" />,
-                  onSelect: openOnBoard,
-                },
-              ]}
+              items={more}
             />
           </span>
         )}
       </PageActions>
+      {actions.dialog}
 
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={8} label="Loading the task" />
@@ -594,6 +628,9 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   const live = item ? liveOn(agents, item) : null;
   // THE ADDRESS ITS WRITES NAME, as the page's — see [WorkItem].
   const address = state.data ? itemAddress(detailItem(state.data)) : "";
+  // THE TASK'S MENU IS OFFERED HERE TOO, in the header: a calendar's chip and
+  // a timeline's bar open this rail, and it is where a reader decides.
+  const actions = useTaskActions();
 
   return (
     <>
@@ -618,7 +655,17 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 identifier={item.key}
                 title={item.title}
                 status={itemFlags(state.data)}
+                actions={
+                  <Menu
+                    label={`More for ${item.key}`}
+                    icon={<EllipsisGlyph size="sm" />}
+                    triggerVariant="ghost"
+                    align="end"
+                    items={taskMenuEntries(actions, state.data, children.data)}
+                  />
+                }
               />
+              {actions.dialog}
               <div className="col gap-3 task-peek">
                 {item.removed && <RemovedNote tomb={item.removed} now={now} />}
                 <Coverage answer={state.data} />

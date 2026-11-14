@@ -147,6 +147,9 @@ const ALL_SET: TrackerFilters = {
   sort: "-updated",
   blocked: true,
   due: "overdue",
+  start: "thisweek",
+  created: "last7",
+  updated: "lastmonth",
   removed: true,
   fields: { "f.area": "api" },
 };

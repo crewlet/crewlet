@@ -2388,7 +2388,13 @@ const (
 	// claims, and a failed phase's call frozen with what its record left out)
 	// added 972 bytes, nearly all script, and took it to 5974.6 KiB
 	// (6,118,027 bytes): 5975 KiB.
-	treeBudget = 5<<20 + 855<<10
+	// A task's own menu on every Worklet shape and its page (Move to project,
+	// Move to trash with the subtask question and Undo, Restore and Delete
+	// permanently with its confirmation), a list's selection and its bar, the
+	// Start, Created and Updated filters, group by parent, and one writer for
+	// the grouping keys added 14,693 bytes, nearly all script, and took it to
+	// 5989.0 KiB (6,132,720 bytes): 5990 KiB.
+	treeBudget = 5<<20 + 870<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

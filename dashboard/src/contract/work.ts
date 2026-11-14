@@ -193,6 +193,12 @@ export const GROUP_AXES: readonly { value: string; label: string; workspace?: bo
   { value: "tag", label: "Tag" },
   { value: "project", label: "Project", workspace: true },
   { value: "unit", label: "Unit" },
+  // WHOSE SUBTASKS THEY ARE: a band per parent, headed with the parent's key
+  // and title (the engine reads those off the parent's own row, since the
+  // column is keyed by its id), and one for the work no task holds. Every row
+  // is filtered on its own here (`subtasks=separate`), so the bands are the
+  // subtasks the question admits, under the task each belongs to.
+  { value: "parent", label: "Parent" },
   // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
   // the engine cuts it against the COMPANY's day rather than the reader's, so
   // the bands, a row's overdue flag and every `due=` filter agree about a

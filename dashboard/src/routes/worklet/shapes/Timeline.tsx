@@ -15,7 +15,8 @@
  */
 
 import { Fragment, useMemo } from "react";
-import type { WorkSummary } from "~/protocol/index.ts";
+import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
+import { TaskRowMenu, type TaskActions } from "../taskMenu.tsx";
 import {
   barTitle,
   monthDay,
@@ -183,16 +184,29 @@ function Band({
   onOpen,
   selected,
   now,
+  actions,
+  inTrash,
+  more,
 }: {
   title?: string;
   count?: number;
+  /**
+   * The rest of a band its page did not carry: the list narrowed to it. A
+   * band is a page of its column (`group_limit`), and its count is the whole
+   * column's, so a band counting 340 drew its first hundred bars and nothing
+   * said where the rest were.
+   */
+  more?: { href: string; open: () => void };
   rows: WorkSummary[];
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   selected: string;
   now: number;
+  actions?: TaskActions;
+  inTrash: boolean;
 }) {
+  const hidden = count !== undefined ? count - rows.length : 0;
   const line = useMemo(() => timelineOf(rows, { now }), [rows, now]);
   const ticks = useMemo(() => weekTicks(line), [line]);
   const height = line.bars.length * ROW_PX;
@@ -214,28 +228,32 @@ function Band({
               as on screen, so Tab meets a row's name before its bar. */}
           <div className="tl-names">
             {line.bars.map((bar) => (
-              <a
-                key={bar.row.id}
-                className={cx("tl-name", selected === itemAddress(bar.row) && "selected")}
-                href={hrefOf(bar.row)}
-                title={`${bar.row.key} · ${bar.row.title}`}
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                  e.preventDefault();
-                  onOpen(bar.row);
-                }}
-              >
-                <TypeIcon type={bar.row.type} types={chrome.types} />
-                <span className="work-key mono">{bar.row.key}</span>
-                <span className="tl-name-title truncate">{bar.row.title}</span>
-                <PriorityMark priority={bar.row.priority} />
-                <Assignee
-                  handle={bar.row.assignee}
-                  seatName={chrome.seatName}
-                  seatKind={chrome.seatKind}
-                  seatAvatar={chrome.seatAvatar}
-                />
-              </a>
+              <div key={bar.row.id} className="tl-name-row">
+                <a
+                  className={cx("tl-name", selected === itemAddress(bar.row) && "selected")}
+                  href={hrefOf(bar.row)}
+                  title={`${bar.row.key} · ${bar.row.title}`}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                    e.preventDefault();
+                    onOpen(bar.row);
+                  }}
+                >
+                  <TypeIcon type={bar.row.type} types={chrome.types} />
+                  <span className="work-key mono">{bar.row.key}</span>
+                  <span className="tl-name-title truncate">{bar.row.title}</span>
+                  <PriorityMark priority={bar.row.priority} />
+                  <Assignee
+                    handle={bar.row.assignee}
+                    seatName={chrome.seatName}
+                    seatKind={chrome.seatKind}
+                    seatAvatar={chrome.seatAvatar}
+                  />
+                </a>
+                {/* THE ROW'S MENU, beside its name rather than in it: the name
+                  is a link, and a control inside a link is two targets in one. */}
+                {actions && <TaskRowMenu row={bar.row} actions={actions} inTrash={inTrash} />}
+              </div>
             ))}
           </div>
           <div className="tl-inner" style={{ ["--tl-days" as string]: line.days }}>
@@ -338,6 +356,19 @@ function Band({
           )}
         </div>
       )}
+      {more && hidden > 0 && (
+        <a
+          className="tl-band-more"
+          href={more.href}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            more.open();
+          }}
+        >
+          {hidden} more →
+        </a>
+      )}
     </div>
   );
 }
@@ -354,15 +385,35 @@ function Band({
 export function TimelineView({
   rows,
   groups,
+  heading,
+  overflowHref,
+  onOverflow,
   chrome,
   hrefOf,
   onOpen,
   selected,
   now,
   more,
+  actions,
+  inTrash = false,
 }: {
   rows: WorkSummary[];
-  groups: { key: string; label?: string; count: number; rows: WorkSummary[] }[];
+  groups: WorkGroup[];
+  /**
+   * A band's heading in the company's own words, as the board and the list
+   * head theirs ([headingOf]). The answer's own `label` is filled only on the
+   * axes whose values are not words already (a team, a due band, a field's
+   * option), so a band read off it was headed `in_progress` or a seat's
+   * handle on every other axis.
+   */
+  heading: (group: WorkGroup) => string;
+  /** Where the rest of a band is, the list narrowed to it, as the list's own bands say it. */
+  overflowHref?: (key: string) => string;
+  onOverflow?: (key: string) => void;
+  /** The trash's gestures, where the screen offers them: each row's menu. */
+  actions?: TaskActions;
+  /** The timeline draws the trash (`removed=true`), so a row's menu restores. */
+  inTrash?: boolean;
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
@@ -392,7 +443,7 @@ export function TimelineView({
         {groups.map((group) => (
           <Fragment key={group.key}>
             <Band
-              title={group.label || group.key}
+              title={heading(group)}
               count={group.count}
               rows={group.rows}
               chrome={chrome}
@@ -400,6 +451,13 @@ export function TimelineView({
               onOpen={onOpen}
               selected={selected}
               now={now}
+              actions={actions}
+              inTrash={inTrash}
+              more={
+                overflowHref && onOverflow
+                  ? { href: overflowHref(group.key), open: () => onOverflow(group.key) }
+                  : undefined
+              }
             />
           </Fragment>
         ))}
@@ -415,6 +473,8 @@ export function TimelineView({
         onOpen={onOpen}
         selected={selected}
         now={now}
+        actions={actions}
+        inTrash={inTrash}
       />
       {/* THE AXIS IS DERIVED FROM THE ROWS PRESENT, so a later page may widen
           it — which is the honest drawing of more rows, and the only way to the

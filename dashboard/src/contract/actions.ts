@@ -149,6 +149,28 @@ export const ACTIONS = {
     refreshes: ["work_search", "atlas_work", "atlas_entry_work"],
     scope: "person",
   },
+  remove_work_item: {
+    // "MOVE TO TRASH" on a task's page and peek, on each row's menu of every
+    // shape, and on a selection's bar (`routes/worklet/taskMenu.tsx`): the task
+    // alone, or with its subtasks (`subtree`) where the reader chose to take
+    // them. Undone by the restore below, which brings back what it took.
+    args: ["item", "subtree"],
+    domain: "tracker",
+    apps: ["worklet"],
+    refreshes: ["work_search"],
+    scope: "person",
+  },
+  move_work_item: {
+    // "MOVE TO PROJECT…" on a task's page and peek and each row's menu
+    // (`routes/worklet/taskMenu.tsx`): one top-level task, and its subtree
+    // with it, re-keyed in the project it moves to. Its project's lead's, or
+    // an admin's, as the engine decides on the stored row.
+    args: ["item", "project"],
+    domain: "tracker",
+    apps: ["worklet"],
+    refreshes: ["work_search"],
+    scope: "person",
+  },
   restore_work_item: {
     args: ["item"],
     domain: "tracker",
