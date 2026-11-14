@@ -787,7 +787,7 @@ func TestASwapTellsTheBackfill(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the round never reached the swap's rename")
 	}
 	// A pick while the swap is staged places the copy by the old
@@ -918,7 +918,7 @@ func TestACrashBeforeTheSwapsRenameLeavesTheOldIncarnation(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the round never reached the swap's rename")
 	}
 	crashed := filepath.Join(t.TempDir(), "crashed")
@@ -1202,7 +1202,7 @@ func TestAStoppedRunCountsForTheDutyCycle(t *testing.T) {
 	}
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the maintenance run never reached its step")
 	}
 
@@ -1497,7 +1497,7 @@ func TestAReportFromTheStagedNextIncarnationIsTheCopys(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the round never reached the swap's rename")
 	}
 	staged := names(t, w.path("scratch"))

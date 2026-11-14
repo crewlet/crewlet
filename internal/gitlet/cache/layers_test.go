@@ -1652,7 +1652,7 @@ func TestAScrubAcrossTheTipsWriteGivesTheChainFileNoVerdict(t *testing.T) {
 	go func() { scrubbed <- cache.ScrubPass(c) }()
 	select {
 	case <-hold.reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the scrub never hashed the copy's commit-graph-chain")
 	}
 	// Beside it, the tail moves and the tip is written again in place.
@@ -1670,7 +1670,7 @@ func TestAScrubAcrossTheTipsWriteGivesTheChainFileNoVerdict(t *testing.T) {
 	close(hold.release)
 	select {
 	case <-scrubbed:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the scrub never ended once released")
 	}
 

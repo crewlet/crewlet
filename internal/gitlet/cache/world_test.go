@@ -244,6 +244,7 @@ func (c *clock) At(t time.Time) <-chan time.Time {
 func (c *clock) fire() {
 	kept := c.timers[:0]
 	for _, tm := range c.timers {
+		//fixedwait:stated a timer's instant and the fake clock's own time, both on the case's clock
 		if tm.at.After(c.at) {
 			kept = append(kept, tm)
 			continue

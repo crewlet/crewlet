@@ -576,7 +576,7 @@ func heldRemoval(t *testing.T, w *world) (c *cache.Cache, release func()) {
 	c.Start(t.Context())
 	select {
 	case <-in:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the janitor's first pass did not reach a removal in %v", hangDetector)
 	}
 	return c, release
@@ -785,7 +785,7 @@ func TestTheJanitorsTickStampsTheLastUse(t *testing.T) {
 
 	select {
 	case ticks <- time.Now():
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the janitor did not take a tick in %v", hangDetector)
 	}
 	eventually(t, "the tick stamps A's last use", func() bool {

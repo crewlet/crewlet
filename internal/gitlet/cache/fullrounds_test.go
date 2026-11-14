@@ -107,7 +107,7 @@ func (h *heldReads) answered(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 			t.Fatalf("a held read's sync was not answered within %v of its release", hangDetector)
 		}
 	}
@@ -308,7 +308,7 @@ func TestADeltaTheLogAnswersInFullHoldsASlotFromItsSecondPage(t *testing.T) {
 	h.answered(t)
 	select {
 	case got = <-done:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the read was not answered within %v of the slots' release", hangDetector)
 	}
 	if got.err != nil {
@@ -353,7 +353,7 @@ func TestAStoppingNodeEndsEveryWaitForAFullRound(t *testing.T) {
 		if !errors.Is(err, cache.ErrStopped) {
 			t.Errorf("a sync whose round was in line when the node stopped: %v, want ErrStopped", err)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("a round in line for a slot outlived the node's stop by %v", hangDetector)
 	}
 	if _, _, waiting := cache.FullRounds(c); waiting != 0 {
@@ -362,7 +362,7 @@ func TestAStoppingNodeEndsEveryWaitForAFullRound(t *testing.T) {
 	h.release()
 	select {
 	case <-stopped:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("Stop did not return within %v of the held read's end", hangDetector)
 	}
 }

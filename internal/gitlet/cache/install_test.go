@@ -621,7 +621,7 @@ func TestABundleIsDurableBeforeAnyOfItIsPlaced(t *testing.T) {
 		mu.Unlock()
 		select {
 		case <-together:
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 		}
 		err = f.Sync()
 		mu.Lock()

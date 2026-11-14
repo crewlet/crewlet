@@ -442,7 +442,7 @@ func TestAKickWhileATaskRunsTheRepositoryHoldsItOnceMore(t *testing.T) {
 			go func() { pass <- cache.InstallPass(c) }()
 			select {
 			case <-settling:
-			case <-time.After(hangDetector):
+			case <-time.After(hangDetector): //fixedwait:liveness
 				t.Fatalf("the installer's task did not end its try within %v", hangDetector)
 			}
 			// The try has ended and is not settled yet: the store answers,
@@ -545,6 +545,7 @@ func TestARoundThatServesTheChainEndsTheInstallersWait(t *testing.T) {
 		clk.Set(at)
 	}
 	cache.InstallPass(c)
+	//fixedwait:stated the retry instant is the installer's c.now() plus its window, both on the case's clock (clk.on)
 	if at, failures := cache.InstallWait(c, repo); failures != 4 || !at.After(clk.Now()) {
 		t.Fatalf("after four failed tries the next is due at %v after %d failures, want a wait ahead", at,
 			failures)
@@ -757,7 +758,7 @@ func TestAnInstallersCanaryWaitsBehindNoCheck(t *testing.T) {
 	go func() { first <- cache.InstallPass(c) }()
 	select {
 	case <-piece:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the installer's check of %s took no piece within %v", checked, hangDetector)
 	}
 

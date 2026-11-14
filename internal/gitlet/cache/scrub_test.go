@@ -614,6 +614,7 @@ func TestTheScrubberRunsWhatFallsDue(t *testing.T) {
 	eventually(t, "the started cache's scrub of a copy used past its interval", func() bool {
 		once.Do(func() { w.sync(t, c, repo) })
 		at, _, _ := cache.Scrubbed(c, repo)
+		//fixedwait:stated both scrubbed instants are the cache's c.now() on the case's clock (clk.on)
 		return at.After(first)
 	})
 }
@@ -703,6 +704,7 @@ func BenchmarkScrub(b *testing.B) {
 						b.StartTimer()
 						done := cache.ScrubPass(c)
 						b.StopTimer()
+						//fixedwait:measure the scrub's duration, the benchmark's reported figure, held to no bound
 						took += time.Since(at)
 						if stop != nil {
 							waits = append(waits, stop()...)
@@ -750,6 +752,7 @@ func probeReads(b *testing.B, pool *gitproc.Pool) (stop func() []time.Duration) 
 		for ctx.Err() == nil {
 			at := time.Now()
 			release, err := pool.HoldRead(ctx)
+			//fixedwait:measure how long a probe waited, which the benchmark reports and holds to no bound
 			waited := time.Since(at)
 			switch {
 			case err == nil:
@@ -760,6 +763,7 @@ func probeReads(b *testing.B, pool *gitproc.Pool) (stop func() []time.Duration) 
 			}
 			select {
 			case <-ctx.Done():
+			//fixedwait:simulated a request on the node every millisecond, beside the scrub
 			case <-time.After(time.Millisecond):
 			}
 		}
@@ -951,7 +955,7 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 						cache.KickScrubber(c)
 						select {
 						case <-held:
-						case <-time.After(hangDetector):
+						case <-time.After(hangDetector): //fixedwait:liveness
 							t.Fatalf("round %d: the scrubber, kicked, armed no wake within %v", round, hangDetector)
 						}
 					}
@@ -961,6 +965,7 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 					}
 					eventually(t, "the scrub at the interval's end", func() bool {
 						now, _, _ := cache.Scrubbed(c, repo)
+						//fixedwait:stated both scrubbed instants are the cache's c.now() on the case's clock (clk.on)
 						return now.After(at) || (at.IsZero() && !now.IsZero())
 					})
 				}
@@ -1058,7 +1063,7 @@ func TestTheNodesScrubIsGivenByEvidence(t *testing.T) {
 				if repoOfPath(path) != first {
 					t.Fatalf("the pass began with %s, want the first copy queued (%s)", path, first)
 				}
-			case <-time.After(hangDetector):
+			case <-time.After(hangDetector): //fixedwait:liveness
 				t.Fatal("the pass never began a scrub")
 			}
 
@@ -1091,7 +1096,7 @@ func TestTheNodesScrubIsGivenByEvidence(t *testing.T) {
 			}
 			select {
 			case <-passed:
-			case <-time.After(hangDetector):
+			case <-time.After(hangDetector): //fixedwait:liveness
 				t.Fatal("the scrub pass never ended")
 			}
 			if evidence == "request" {

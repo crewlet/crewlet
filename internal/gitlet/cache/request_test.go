@@ -606,7 +606,7 @@ func TestARequestOnACopyARebuildReplacedIsAnsweredByTheRebuild(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the first request's whole rebuild never began")
 	}
 	go func() {

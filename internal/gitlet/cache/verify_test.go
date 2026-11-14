@@ -562,8 +562,21 @@ func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
 // worse for it, and a check with room checks it whole. The bound grows with
 // what a copy holds: the hashing and the connectivity check over every byte.
 //
-// Mutation: run the pass under its caller's context alone, and the wedged
-// check outlives its bound until its caller gives up.
+// The bound is a claim about the clock, so the case runs in a synctest
+// bubble, and holds it from both sides: one pass is wedged one nanosecond
+// past its bound and must end there, another one nanosecond short of it and
+// must check the copy whole, each counted from the instant the pass told its
+// caller the bound and armed it, which is exact on the bubble's clock however
+// slow the runner — git's own work takes none of it, since the bubble's clock
+// moves only while every goroutine in it waits. On the machine's clock a
+// wedge had to outlast the bound by a margin a loaded runner could not eat,
+// and a pass ended anywhere inside that margin passed.
+//
+// Mutations: run the pass under its caller's context alone, and the wedge
+// past its bound ends with the check still running, which then runs whole
+// and answers no ErrPastBound; arm the pass at twice the bound it tells and
+// names, and the same; arm it at half the bound, and the pass wedged short of
+// its bound is ended inside it.
 func TestACheckPassEndsAtItsBound(t *testing.T) {
 	t.Parallel()
 	if small, large := cache.CheckBudget(1<<20), cache.CheckBudget(1<<30); small >= large ||
@@ -577,73 +590,104 @@ func TestACheckPassEndsAtItsBound(t *testing.T) {
 			"each mebibyte", got, want)
 	}
 
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	var (
-		mu     sync.Mutex
-		bound  = time.Hour
-		wedged bool
-	)
-	c := w.open(t, func(o *cache.Options) {
-		cache.SetCheckBudget(o, func(int64) time.Duration {
-			mu.Lock()
-			defer mu.Unlock()
-			return bound
+	synctest.Test(t, func(t *testing.T) {
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		var (
+			mu      sync.Mutex
+			bound   = time.Hour
+			wedge   time.Duration // from armedAt; none when 0
+			armedAt time.Time
+		)
+		c := w.open(t, func(o *cache.Options) {
+			cache.SetCheckBudget(o, func(int64) time.Duration {
+				mu.Lock()
+				defer mu.Unlock()
+				return bound
+			})
+			cache.BeforeVerifyFsck(o, func(string) {
+				mu.Lock()
+				wait, until := wedge != 0, armedAt.Add(wedge)
+				mu.Unlock()
+				if wait {
+					time.Sleep(time.Until(until))
+				}
+			})
 		})
-		cache.BeforeVerifyFsck(o, func(string) {
+		w.sync(t, c, repo)
+
+		var told []time.Duration
+		// Told as the pass arms its bound, with nothing between: the instant
+		// the bound counts from.
+		checking := func(b time.Duration) {
 			mu.Lock()
-			wait := wedged
+			armedAt = time.Now()
 			mu.Unlock()
-			if wait {
-				time.Sleep(200 * time.Millisecond)
-			}
-		})
+			told = append(told, b)
+		}
+		mu.Lock()
+		bound, wedge = 20*time.Millisecond, 20*time.Millisecond+time.Nanosecond
+		mu.Unlock()
+		v, err := c.AdmitVerify(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, err := v.Run(t.Context(), cache.VerifyRun{Checking: checking})
+		v.Release()
+		if !errors.Is(err, cache.ErrPastBound) || !strings.Contains(err.Error(), "20ms") || report.Packs != 1 {
+			t.Fatalf("a check wedged past its bound = %+v, %v; want ErrPastBound naming the bound, its packs "+
+				"counted", report, err)
+		}
+		if len(told) != 1 || told[0] != 20*time.Millisecond {
+			t.Errorf("the check told its caller %v, want its one pass's bound", told)
+		}
+
+		// A PASS WITH ROOM: wedged to one nanosecond short of its bound, it
+		// is not ended, and checks the copy whole.
+		mu.Lock()
+		bound, wedge = 20*time.Millisecond, 20*time.Millisecond-time.Nanosecond
+		mu.Unlock()
+		told = nil
+		v, err = c.AdmitVerify(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, err = v.Run(t.Context(), cache.VerifyRun{Checking: checking})
+		v.Release()
+		if err != nil || report.Packs != 1 || len(report.Problems) != 0 {
+			t.Fatalf("a check wedged to a nanosecond short of its bound = %+v, %v; want the copy checked whole",
+				report, err)
+		}
+		if len(told) != 1 || told[0] != 20*time.Millisecond {
+			t.Errorf("the check with room told its caller %v, want its one pass's bound", told)
+		}
+
+		// THE REPAIR: a damaged copy found, the rebuild told with no bound,
+		// and the rebuilt copy's pass told its own.
+		mu.Lock()
+		bound, wedge = time.Hour, 0
+		mu.Unlock()
+		packs, err := filepath.Glob(filepath.Join(w.dir(t, c, repo), "objects", "pack", "pack-*.pack"))
+		if err != nil || len(packs) != 1 {
+			t.Fatalf("the copy's packs are %v (%v)", packs, err)
+		}
+		damage(t, packs[0], 28, []byte{0xff, 0xff, 0xff, 0xff})
+		told = nil
+		v, err = c.AdmitVerify(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, err = v.Run(t.Context(), cache.VerifyRun{Repair: true, Checking: checking})
+		v.Release()
+		if err != nil || !report.Rebuilt || len(report.Problems) != 0 {
+			t.Fatalf("a repair with room = %+v, %v; want the copy rebuilt whole", report, err)
+		}
+		if !slices.Equal(told, []time.Duration{time.Hour, 0, time.Hour}) {
+			t.Errorf("a repair told its caller %v, want the check's bound, none for the rebuild, the recheck's",
+				told)
+		}
 	})
-	w.sync(t, c, repo)
-
-	var told []time.Duration
-	checking := func(b time.Duration) { told = append(told, b) }
-	mu.Lock()
-	bound, wedged = 20*time.Millisecond, true
-	mu.Unlock()
-	v, err := c.AdmitVerify(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err := v.Run(t.Context(), cache.VerifyRun{Checking: checking})
-	v.Release()
-	if !errors.Is(err, cache.ErrPastBound) || !strings.Contains(err.Error(), "20ms") || report.Packs != 1 {
-		t.Fatalf("a check wedged past its bound = %+v, %v; want ErrPastBound naming the bound, its packs "+
-			"counted", report, err)
-	}
-	if len(told) != 1 || told[0] != 20*time.Millisecond {
-		t.Errorf("the check told its caller %v, want its one pass's bound", told)
-	}
-
-	// THE REPAIR: a damaged copy found, the rebuild told with no bound, and
-	// the rebuilt copy's pass told its own.
-	mu.Lock()
-	bound, wedged = time.Hour, false
-	mu.Unlock()
-	packs, err := filepath.Glob(filepath.Join(w.dir(t, c, repo), "objects", "pack", "pack-*.pack"))
-	if err != nil || len(packs) != 1 {
-		t.Fatalf("the copy's packs are %v (%v)", packs, err)
-	}
-	damage(t, packs[0], 28, []byte{0xff, 0xff, 0xff, 0xff})
-	told = nil
-	v, err = c.AdmitVerify(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err = v.Run(t.Context(), cache.VerifyRun{Repair: true, Checking: checking})
-	v.Release()
-	if err != nil || !report.Rebuilt || len(report.Problems) != 0 {
-		t.Fatalf("a repair with room = %+v, %v; want the copy rebuilt whole", report, err)
-	}
-	if !slices.Equal(told, []time.Duration{time.Hour, 0, time.Hour}) {
-		t.Errorf("a repair told its caller %v, want the check's bound, none for the rebuild, the recheck's", told)
-	}
 }
 
 // A CHECK OF A REPOSITORY THIS NODE HOLDS NO COPY OF IS NONE: a check builds no
@@ -788,7 +832,7 @@ func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 		if !slices.Equal(ran, []string{repo}) {
 			t.Errorf("the maintenance run Verify ran beside ran every step on %v, want %s", ran, repo)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the maintenance run Verify ran beside never ended")
 	}
 
@@ -978,8 +1022,9 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 				// The round waits for this listing from the moment the
 				// sync is its waiter.
 				deadline := time.Now().Add(hangDetector)
+				//fixedwait:measure a setup poll's own deadline: its firing only ends the wait, and ErrStopped decides
 				for cache.Waiting(c, repo) == 0 && time.Now().Before(deadline) {
-					time.Sleep(time.Millisecond)
+					time.Sleep(time.Millisecond) //fixedwait:liveness
 				}
 				stopped, cancel := context.WithTimeout(context.Background(), hangDetector)
 				defer cancel()
@@ -989,7 +1034,7 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 					if !errors.Is(err, cache.ErrStopped) {
 						t.Errorf("a round Stop ended while it waited for a listing = %v, want ErrStopped", err)
 					}
-				case <-time.After(hangDetector):
+				case <-time.After(hangDetector): //fixedwait:liveness
 					t.Error("Stop left a round waiting for a listing")
 				}
 			})
@@ -1246,14 +1291,16 @@ func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
 	}()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the check's round never reached its end")
 	}
 	cancel()
 	// Released once the check has LEFT its round — and before the test
 	// hears from it, since what it says on its way out would order its read
 	// before the round's write and hide the race this case is for.
+	//fixedwait:liveness
 	for deadline := time.Now().Add(hangDetector); cache.Waiting(c, repo) != 0; time.Sleep(time.Millisecond) {
+		//fixedwait:measure the poll's own deadline, whose firing only fails the case
 		if time.Now().After(deadline) {
 			t.Fatal("the check did not leave its round when its context ended")
 		}
@@ -1267,7 +1314,7 @@ func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("the check whose context ended = %v, want context.Canceled", err)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the check did not return when its context ended")
 	}
 }
