@@ -796,9 +796,9 @@ func (r syncReport) lines() []reportLine {
 	default:
 		line.level, line.msg = slog.LevelInfo, "memory_sync_ran_out"
 		detail = "a backlog draining: the cycle's bound ran out inside the rows this node " +
-			"held for the seat when it took it, after they moved marks, and the next " +
-			"backlogs' turn carries on from the first row past them, after every seat's " +
-			"own pass"
+			"held for the seat when it took it, after they moved marks, and this seat's " +
+			"backlog carries on from the first row past them when a backlogs' turn next " +
+			"reaches it, after every seat's own pass"
 	}
 	line.args = append(line.args, "detail", detail)
 	return append(out, line)
