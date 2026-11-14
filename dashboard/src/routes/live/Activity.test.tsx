@@ -149,7 +149,7 @@ test("a refused first page is not a company that has published nothing", async (
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  expect(screen.getByText(/the engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 
@@ -191,13 +191,13 @@ test("a refused first page keeps the control that asks it again", async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  expect(screen.getByText(/the engine failed to answer\./)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /^Load \d+ older$/ }));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
   expect(screen.getByText("opened a task")).toBeTruthy();
-  expect(screen.queryByText(/The engine failed to answer\./)).toBeNull();
+  expect(screen.queryByText(/the engine failed to answer\./)).toBeNull();
 });
 
 // AND A PAGE STILL IN FLIGHT IS NOT ONE EITHER.
