@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -76,10 +77,11 @@ import (
 // it, the delivery refused while the clock ran is in flight still, handed back
 // and renewed on its own budget, and a re-fire that announced it afresh beside
 // it would leave two announcements in flight, and more with every refusal and
-// re-fire after. Nor does anything bring back a re-fire whose renewal the
-// broker does not take, so its own line says the completion waits for that
-// host's store, and never that a delivery was handed back to make the renewal
-// again: WHAT A REFUSED RENEWAL LEAVES IS ITS CALLER'S TO SAY
+// re-fire after. Nor does any delivery bring back a re-fire whose renewal the
+// broker does not take, so this node makes that renewal again on its own timer
+// until one lands, the run settles or the seat is let go ([refirePublish]),
+// and its own line says so, never that a delivery was handed back to make the
+// renewal again: WHAT A REFUSED RENEWAL LEAVES IS ITS CALLER'S TO SAY
 // ([Coordinator.renewing], [Coordinator.refire]).
 //
 // NOTHING IS RENEWED WHILE NO CLOCK RUNS: a step this node's own store did not
@@ -169,8 +171,8 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 // hand-back while the clock on its box's host runs, and answers why it could
 // not where the broker did not take it. What that leaves is the caller's to
 // say: a delivery in hand comes back to make it again ([Coordinator.renewing]),
-// and a re-fire, which has none, waits for the host's store
-// ([Coordinator.refire]).
+// and a re-fire, which has none, is made again on this node's timer
+// ([Coordinator.refire], [refirePublish]).
 //
 // TRIGGER'S TRACE AND SOURCE, so the resume it leads to nests under the turn
 // that launched the job, as the waiter's own announcement does; trigger may be
@@ -199,4 +201,137 @@ func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trig
 			"delivery about to run out or of a re-fire that had none, and the collection is asked again "+
 			"until the store answers or the box timeout records the job lost with that node")
 	return nil
+}
+
+// refirePublish is a re-fire's announcement afresh that the broker did not take
+// ([Coordinator.refire]), which this node makes again on its own timer.
+//
+// A RE-FIRE HAS NO DELIVERY TO COME BACK ON. It renews only where its own
+// collection started the clock on its box's host, so the delivery it was kept
+// from was acknowledged, no clock running then, and neither that host's waiter
+// nor anything else carries the completion: a renewal the broker refused, left
+// so, held the job until that host's store answered. So it is published again
+// after the hand-back's spacing ([answerRetryDelay]: a second, doubling to
+// thirty, the queue's own failure backoff), each refusal arming the next
+// attempt, and KEPT UNTIL ONE LANDS, THE RUN SETTLES OR THE SEAT IS LET GO
+// ([Coordinator.runSettled], [Coordinator.ReleaseSeat]): from there whatever
+// settled the run has announced what became of it, or the completion is the
+// seat's next holder's to announce. Outside the clock, should the host's store
+// answer again meanwhile, that host's waiter's schedule stands behind it as
+// well; inside, nothing but this does. IN THIS NODE'S MEMORY, as the kept
+// completion it came from is: a restart forgets both.
+type refirePublish struct {
+	ev       types.ExecutorFinished
+	trigger  *events.Event
+	cond     Condition
+	attempts int
+	// stop cancels the armed attempt, reporting whether it had not started,
+	// [CoordinatorOptions.After]'s contract; nil once that attempt began.
+	// Under mu.
+	stop func() bool
+}
+
+// armRepublish keeps kept's announcement afresh, which the broker refused for
+// the attempts-th time, and arms its next attempt after the hand-back's
+// spacing, answering how long that is and whether it was armed: not for a
+// coordinator that is stopping, nor, where prev is set, for an announcement
+// that is no longer prev, its run settled or its seat let go meanwhile.
+func (c *Coordinator) armRepublish(kept refusedCompletion, attempts int, prev *refirePublish,
+) (time.Duration, bool) {
+	turnID := kept.ev.TurnID
+	delay := answerRetryDelay(attempts)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || (prev != nil && c.republish[turnID] != prev) {
+		return delay, false
+	}
+	c.dropRepublishLocked(turnID)
+	p := &refirePublish{ev: kept.ev, trigger: kept.trigger, cond: kept.cond, attempts: attempts}
+	c.republish[turnID] = p
+	c.inflight.Add(1)
+	p.stop = c.after(delay, func() {
+		defer c.inflight.Done()
+		c.republishNow(turnID, p)
+	})
+	return delay, true
+}
+
+// republishNow makes the attempt p was armed for, where p is still owed: the
+// announcement made, and dropped once the broker takes it, or, refused again,
+// armed again after a longer spacing, which its line says. A seat this node no
+// longer holds drops it, its completion the next holder's to announce.
+func (c *Coordinator) republishNow(turnID string, p *refirePublish) {
+	ctx := c.life
+	if ctx.Err() != nil {
+		return
+	}
+	c.mu.Lock()
+	owed := c.republish[turnID] == p
+	if owed {
+		p.stop = nil
+	}
+	c.mu.Unlock()
+	if !owed {
+		return
+	}
+	if _, held := c.leaseOf(p.ev.AgentHandle); !held {
+		c.dropRepublish(turnID, p)
+		return
+	}
+	refused := c.renew(ctx, p.ev, p.trigger)
+	if refused == nil {
+		c.dropRepublish(turnID, p)
+		return
+	}
+	delay, armed := c.armRepublish(refusedCompletion{cond: p.cond, ev: p.ev, trigger: p.trigger},
+		p.attempts+1, p)
+	if !armed {
+		return
+	}
+	log.WarnContext(ctx, "sandbox_completion_refire_unsettled",
+		"turn_id", p.ev.TurnID, "agent", p.ev.AgentHandle, "condition", string(p.cond),
+		"attempts", p.attempts+1, "retry_in_s", delay.Seconds(), "error", refused.Error(),
+		"detail", "the completion re-fired when its condition cleared still could not be announced "+
+			"afresh, and its box's host cannot read the coordination store, so no waiter announces it; "+
+			"this node announces it again on its timer until one lands, the run settles or the seat "+
+			"is let go")
+}
+
+// dropRepublish drops p, turnID's owed announcement, where it still is.
+func (c *Coordinator) dropRepublish(turnID string, p *refirePublish) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.republish[turnID] == p {
+		c.dropRepublishLocked(turnID)
+	}
+}
+
+// dropRepublishLocked drops turnID's owed announcement, if any, its armed
+// attempt cancelled. Under mu.
+func (c *Coordinator) dropRepublishLocked(turnID string) {
+	p := c.republish[turnID]
+	if p == nil {
+		return
+	}
+	if p.stop != nil && p.stop() {
+		c.inflight.Done()
+	}
+	p.stop = nil
+	delete(c.republish, turnID)
+}
+
+// runSettled drops what this node keeps of turnID's run only until the run
+// settles: the clock on the store of its box's host ([hostUnsettled], which
+// says where a run settles) and a re-fire's announcement it still owes
+// ([refirePublish]).
+func (c *Coordinator) runSettled(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.runSettledLocked(turnID)
+}
+
+// runSettledLocked is [Coordinator.runSettled] for a caller holding mu.
+func (c *Coordinator) runSettledLocked(turnID string) {
+	delete(c.unsettled, turnID)
+	c.dropRepublishLocked(turnID)
 }

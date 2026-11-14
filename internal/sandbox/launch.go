@@ -737,11 +737,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Recorded(opened.LaunchID)
 	}
 	// A STOP OF THE TURN'S LAST LAUNCH IS NOT THIS ONE'S: this job is new.
-	// Nor is a clock on the store of the last job's host: that job's
-	// collection is over, whatever it came to ([hostUnsettled]).
+	// Nor is a clock on the store of the last job's host, nor a re-fire's
+	// announcement of it this node still owes: that job's run settled here,
+	// whatever it came to ([hostUnsettled], [refirePublish]).
 	c.mu.Lock()
 	delete(c.launchStops, req.Turn.TurnID)
-	delete(c.unsettled, req.Turn.TurnID)
+	c.runSettledLocked(req.Turn.TurnID)
 	c.mu.Unlock()
 	// THE TURN'S FENCE AGAIN, now that a stop can find the row — see
 	// [LaunchRequest.Fence]. Refused, the launch is over before any box

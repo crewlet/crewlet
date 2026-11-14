@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -831,9 +832,10 @@ func renewedOn(rig *coordRig) []*events.Event {
 // A RENEWAL THE BROKER DOES NOT TAKE IS SAID BY WHAT IT LEAVES. On a delivery,
 // the delivery is handed back to make the renewal again when it comes back, and
 // its line says so (sandbox_completion_renew_failed). A re-fire has no delivery
-// to come back on: its own line says the completion waits for the host's store
-// (sandbox_completion_refire_unsettled), and nothing says a delivery was handed
-// back, since a reader told so waits for a retry that never comes.
+// to come back on: its own line says this node publishes the completion again
+// on its timer, and when (sandbox_completion_refire_unsettled), and nothing
+// says a delivery was handed back, since a reader told so waits for a delivery
+// that never comes.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
@@ -859,32 +861,139 @@ func TestARefusedRenewalIsSaidByWhatItLeaves(t *testing.T) {
 		})
 	})
 
-	t.Run("a re-fire says it waits for the host's store, and no more", func(t *testing.T) {
-		logs := captureLogs(t)
-		rig := newCoordRig(t)
-		gate := gated(rig)
-		gate.refuse(true)
-		unsettledHost(t, rig)
-		payload, kept := rig.completion("t1")
-		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
-			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
-		}
-		gate.refuse(false)
-		rig.queue.mu.Lock()
-		rig.queue.err = errBrokerRefused
-		rig.queue.mu.Unlock()
-		rig.coordinator.Readmit(conditionDrain, "swe")
-		rig.coordinator.inflight.Wait()
+	t.Run("a re-fire says it publishes the completion again, and no more", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			logs := captureLogs(t)
+			refusedRefire(t)
 
-		if failed := linesSaying(logs.String(), "sandbox_completion_renew_failed"); len(failed) != 0 {
-			t.Fatalf("a re-fire's refused renewal said a delivery was handed back to make it again: %q", failed)
-		}
-		refire := linesSaying(logs.String(), "sandbox_completion_refire_unsettled")
-		if len(refire) != 1 || !strings.Contains(refire[0], "level=WARN") ||
-			!strings.Contains(refire[0], errBrokerRefused.Error()) {
-			t.Fatalf("the re-fire's refused renewal was said as %q; want it once, at warning, with the "+
-				"broker's refusal", refire)
-		}
+			if failed := linesSaying(logs.String(), "sandbox_completion_renew_failed"); len(failed) != 0 {
+				t.Fatalf("a re-fire's refused renewal said a delivery was handed back to make it again: %q", failed)
+			}
+			refire := linesSaying(logs.String(), "sandbox_completion_refire_unsettled")
+			if len(refire) != 1 || !strings.Contains(refire[0], "level=WARN") ||
+				!strings.Contains(refire[0], errBrokerRefused.Error()) ||
+				!strings.Contains(refire[0], fmt.Sprintf("retry_in_s=%v", answerRetryDelay(1).Seconds())) {
+				t.Fatalf("the re-fire's refused renewal was said as %q; want it once, at warning, with the "+
+					"broker's refusal and when it is published again", refire)
+			}
+		})
+	})
+}
+
+// refusedRefire has the rig's gate refuse t1's completion while no clock runs
+// on its box's host, so its delivery is acknowledged and the completion kept,
+// and re-fires it once the condition clears into a collection that host's store
+// does not answer, with the broker refusing every publish: the re-fire's own
+// collection starts the clock, and its announcement afresh is refused. It
+// returns the rig and that host's store. Inside a synctest bubble, whose Wait
+// is how it waits for the re-fire.
+func refusedRefire(t *testing.T) (*coordRig, *silentStore) {
+	t.Helper()
+	rig := newCoordRig(t)
+	gate := gated(rig)
+	gate.refuse(true)
+	store, _ := unsettledHost(t, rig)
+	payload, kept := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+		t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+	}
+	gate.refuse(false)
+	rig.queue.mu.Lock()
+	rig.queue.err = errBrokerRefused
+	rig.queue.mu.Unlock()
+	rig.coordinator.Readmit(conditionDrain, "swe")
+	synctest.Wait()
+	if renewed := renewedOn(rig); len(renewed) != 0 {
+		t.Fatalf("the broker took %d announcements it was to refuse", len(renewed))
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || !clocked(rig) {
+		t.Fatalf("the re-fire left the run %s, clocked %v; want it handed back to running, its own "+
+			"collection having started the clock", got.Status, clocked(rig))
+	}
+	return rig, store
+}
+
+// brokerTakes has the rig's broker take every publish again.
+func brokerTakes(rig *coordRig) {
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	rig.queue.err = nil
+}
+
+// A RE-FIRE'S ANNOUNCEMENT THE BROKER REFUSED IS PUBLISHED AGAIN. A re-fire has
+// no delivery in hand, so a renewal the broker does not take has nothing to come
+// back on: left so, the completion of a job whose box's host cannot read the
+// store waited for that store, its host's waiter announcing nothing. So this
+// node publishes it again on its own timer, on the hand-back's spacing (a
+// second, doubling to thirty), until one lands; and drops it once the run
+// settles or the seat is let go, when announcing the job is no longer this
+// node's to do.
+//
+// Mutation: leave a refused re-fire's announcement unmade, and nothing carries
+// the completion; arm it again at a fixed spacing; keep it past the seat's
+// release, or past the run's settle, and this node announces a completion that
+// is no longer its own to announce.
+func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
+	t.Parallel()
+
+	t.Run("until one lands, on the hand-back's spacing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			rig, _ := refusedRefire(t)
+			if delays := rig.retries.delays(); !slices.Equal(delays, []time.Duration{answerRetryDelay(1)}) {
+				t.Fatalf("the refused announcement was armed again after %v; want once, after %v", delays,
+					answerRetryDelay(1))
+			}
+			// REFUSED AGAIN, and armed again after twice as long.
+			rig.fireRetries()
+			if delays := rig.retries.delays(); !slices.Equal(delays, []time.Duration{answerRetryDelay(2)}) {
+				t.Fatalf("the announcement refused twice was armed again after %v; want once, after %v", delays,
+					answerRetryDelay(2))
+			}
+			brokerTakes(rig)
+			rig.fireRetries()
+			renewed := renewedOn(rig)
+			if len(renewed) != 1 {
+				t.Fatalf("the broker took %d announcements of the completion once it answered; want one", len(renewed))
+			}
+			if got, ok := renewed[0].Data.(*types.ExecutorFinished); !ok || got.TurnID != "t1" {
+				t.Fatalf("published %+v; want t1's completion", renewed[0].Data)
+			}
+			if fired := rig.fireRetries(); fired != 0 {
+				t.Fatalf("%d attempts were still armed once the announcement landed", fired)
+			}
+		})
+	})
+
+	t.Run("dropped when the seat is let go", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			rig, _ := refusedRefire(t)
+			brokerTakes(rig)
+			rig.coordinator.ReleaseSeat("swe")
+			rig.fireRetries()
+			if renewed := renewedOn(rig); len(renewed) != 0 {
+				t.Fatalf("a seat let go of still had its completion announced %d times", len(renewed))
+			}
+		})
+	})
+
+	t.Run("dropped when the run settles", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			rig, store := refusedRefire(t)
+			brokerTakes(rig)
+			// THE HOST'S STORE ANSWERS, and another announcement of the job
+			// is collected and resumed, and the run ended: it settled.
+			store.answer()
+			if err := collectAgain(t, rig); err != nil {
+				t.Fatalf("the collection once the host's store answered = %v", err)
+			}
+			if resumed := rig.resumer.calls(); len(resumed) != 1 {
+				t.Fatalf("the turn resumed %d times; want once", len(resumed))
+			}
+			rig.fireRetries()
+			if renewed := renewedOn(rig); len(renewed) != 0 {
+				t.Fatalf("a settled run still had its completion announced %d times", len(renewed))
+			}
+		})
 	})
 }
 

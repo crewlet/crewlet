@@ -379,8 +379,9 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // acknowledged when it was kept, no clock running then, so the re-fire's
 // completion is announced afresh at once, whatever the hand-back (renew.go),
 // and a renewal the broker does not take is said here, as what it leaves: no
-// delivery to make it again on, and the completion waiting for that host's
-// store. WHERE THE CLOCK RAN BEFORE IT, NOTHING IS ANNOUNCED: the delivery
+// delivery to make it again on, so this node makes it again on its own timer
+// until one lands, the run settles or the seat is let go ([refirePublish]).
+// WHERE THE CLOCK RAN BEFORE IT, NOTHING IS ANNOUNCED: the delivery
 // refused while the clock ran was handed back, never acknowledged, and is in
 // flight still, renewed on its own budget, so an announcement made here beside
 // it would leave two in flight, and one more with every refusal and re-fire
@@ -413,12 +414,24 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 		return
 	}
 	err = unannounced(kept.ev, err)
-	if refused := c.renew(ctx, kept.ev, kept.trigger); refused != nil {
-		log.WarnContext(ctx, "sandbox_completion_refire_unsettled",
-			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
-			"error", err.Error()+"; "+refused.Error(),
-			"detail", "the completion re-fired when its condition cleared was handed back, and its "+
-				"box's host cannot read the coordination store, so no waiter announces it; it could not "+
-				"be announced afresh either, and waits for that host's store to answer")
+	refused := c.renew(ctx, kept.ev, kept.trigger)
+	if refused == nil {
+		// ONE ANNOUNCEMENT IN FLIGHT: an earlier re-fire's this node still
+		// owed is this one's now.
+		c.mu.Lock()
+		c.dropRepublishLocked(kept.ev.TurnID)
+		c.mu.Unlock()
+		return
 	}
+	delay, armed := c.armRepublish(kept, 1, nil)
+	if !armed {
+		return
+	}
+	log.WarnContext(ctx, "sandbox_completion_refire_unsettled",
+		"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+		"attempts", 1, "retry_in_s", delay.Seconds(), "error", err.Error()+"; "+refused.Error(),
+		"detail", "the completion re-fired when its condition cleared was handed back, and its "+
+			"box's host cannot read the coordination store, so no waiter announces it; it could not "+
+			"be announced afresh either, and this node announces it again on its timer until one "+
+			"lands, the run settles or the seat is let go")
 }

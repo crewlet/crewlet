@@ -1092,6 +1092,10 @@ type Coordinator struct {
 	// collections that its own coordination store did not answer, by turn
 	// id, kept until the job's run settles ([hostUnsettled]). Under mu.
 	unsettled map[string]hostUnsettled
+	// republish is each re-fire's announcement afresh the broker did not
+	// take, by turn id, made again on this node's timer until one lands, the
+	// run settles or its seat is let go ([refirePublish]). Under mu.
+	republish map[string]*refirePublish
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
@@ -1251,6 +1255,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		claiming:     map[string]int{},
 		writing:      map[string]*runWrites{},
 		unsettled:    map[string]hostUnsettled{},
+		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -1311,6 +1316,9 @@ func (c *Coordinator) Stop() {
 			c.inflight.Done()
 		}
 		r.stop = nil
+	}
+	for turnID := range c.republish {
+		c.dropRepublishLocked(turnID)
 	}
 	c.mu.Unlock()
 	c.end()
@@ -2206,7 +2214,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
 			"box_gone", gone, "error", cause.Error())
-		c.forgetUnsettled(run.TurnID)
+		c.runSettled(run.TurnID)
 		// The job is OVER even though collection failed. Free the seat and
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a
@@ -5145,8 +5153,9 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	// collection of its job is made again, and a clock on the store of its
 	// box's host goes now ([hostUnsettled]), a lost job's round carried on to
 	// its end included. Not at the record's delete, which an end the executor
-	// log is still owed keeps minutes behind the decision.
-	c.forgetUnsettled(decided.TurnID)
+	// log is still owed keeps minutes behind the decision. And so does a
+	// re-fire's announcement this node still owes it ([refirePublish]).
+	c.runSettled(decided.TurnID)
 	c.reportStopped(ctx, decided)
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
 	c.noteLaunchStop(decided)
@@ -6718,8 +6727,15 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 		}
 	}
 	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
-	// successor's collections start one of their own.
+	// successor's collections start one of their own. And any re-fire's
+	// announcement it still owed: the run's completion is the successor's
+	// to announce now, and its waiter's, or the delivery handed back for it.
 	maps.DeleteFunc(c.unsettled, func(_ string, u hostUnsettled) bool { return u.handle == handle })
+	for turnID, p := range c.republish {
+		if p.ev.AgentHandle == handle {
+			c.dropRepublishLocked(turnID)
+		}
+	}
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail

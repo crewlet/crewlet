@@ -528,14 +528,6 @@ func (c *Coordinator) hostClocked(turnID, launch string) bool {
 	return ok && kept.launch == launch
 }
 
-// forgetUnsettled drops the clock on the host of turnID's box, for a run that
-// settled: its collection given up, or its end decided ([hostUnsettled]).
-func (c *Coordinator) forgetUnsettled(turnID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.unsettled, turnID)
-}
-
 // ReadHostedBox makes, for the node that asked, the read of a box on this
 // node's host ([BoxReader]): the run's row read again here, and the read made
 // only where the row still licenses it.
