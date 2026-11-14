@@ -318,7 +318,7 @@ one record.
 
 **A confirmation no inbox took is turned away, never answered done.** An
 inbox that serves no job, closed by its session's end,
-records nothing and says so (`mcpbridge.ErrInboxNotServing`), and the
+records nothing and says so (`mcpbridge.ErrNoteUntaken`), and the
 bridge turns the confirmation away to ask again, as it turns away one that
 reaches a session whose end took the inbox already. Answered done, the plugin
 never confirmed the note again, and the ending reported unconfirmed a note

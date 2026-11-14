@@ -1798,7 +1798,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 //     both reported is one record.
 //
 // AN INBOX THAT SERVES NO JOB TAKES NO READ, AND SAYS SO
-// ([mcpbridge.ErrInboxNotServing]): one closed, its opening's end having taken
+// ([mcpbridge.ErrNoteUntaken]): one closed, its opening's end having taken
 // it after the notes route found it serving, or one not yet bound, which no
 // opening serves, its bind coming before the bridge files the opening
 // ([Engine.openBridge]), and which says so too. Answered done, the plugin
@@ -1840,7 +1840,7 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
 	switch {
 	case launch == "":
-		return mcpbridge.ErrInboxNotServing
+		return mcpbridge.ErrNoteUntaken
 	case len(ids) == 0:
 		return nil
 	}
@@ -1886,7 +1886,7 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	// confirmation is turned away.
 	keyless := i.steers.waitsForItsKey(ctx, run, launch, ids)
 	if keyless || waitsUntaken(run, candidates) {
-		return mcpbridge.ErrInboxNotServing
+		return mcpbridge.ErrNoteUntaken
 	}
 	return nil
 }

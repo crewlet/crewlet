@@ -69,7 +69,7 @@ func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.closed {
-		return mcpbridge.ErrInboxNotServing
+		return mcpbridge.ErrNoteUntaken
 	}
 	i.reads = append(i.reads, ids)
 	return i.readErr
@@ -510,7 +510,7 @@ func readWith(ctx context.Context, t *testing.T, client *http.Client, url string
 // 204: the plugin never confirmed the note again, and the record kept it served
 // and unread, which the run's ending reports unconfirmed and a later launch
 // tells again as one the session may already show. So a closed inbox says it
-// took nothing ([mcpbridge.ErrInboxNotServing]); and a read on a run whose
+// took nothing ([mcpbridge.ErrNoteUntaken]); and a read on a run whose
 // tools are closed is turned away too: the seat leaves this node's grants,
 // which closes the fence, before its release ends the opening, so a read
 // meets the closed fence whether or not the release has come yet. Each is

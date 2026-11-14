@@ -86,7 +86,7 @@ type SteerInbox interface {
 	// record; an error is a read that could not be confirmed written, and its
 	// notes wait, or, where the write landed, are reported when the harness
 	// confirms them again. An inbox that serves no job, not yet bound or
-	// closed, takes no read and answers [ErrInboxNotServing], and so does one
+	// closed, takes no read and answers [ErrNoteUntaken], and so does one
 	// whose job the run's record takes no read of any more, for a note named
 	// that still waits. So does one that cannot open a note named that still
 	// waits for the job, its node not holding the key the note is sealed
@@ -95,11 +95,11 @@ type SteerInbox interface {
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
 	// handed out closes, every later Take and Wait answers nothing, and every
-	// later Read [ErrInboxNotServing].
+	// later Read [ErrNoteUntaken].
 	Close()
 }
 
-// ErrInboxNotServing is what a [SteerInbox] answers a [SteerInbox.Read] with
+// ErrNoteUntaken is what a [SteerInbox] answers a [SteerInbox.Read] with
 // where it left a note the read names untaken that the read made again can
 // have taken. One that serves no job that takes notes recorded nothing:
 // closed, the opening that served it having ended; not yet bound to its job,
@@ -117,7 +117,7 @@ type SteerInbox interface {
 // ([Bridge.serveSteer]), and its next try reaches the inbox that serves the
 // job now, the run that goes on once a claim is handed back, or a node that
 // holds the key.
-var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox left a note the read names untaken, for the read made again")
+var ErrNoteUntaken = errors.New("mcpbridge: the run's note inbox left a note the read names untaken, for the read made again")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -366,7 +366,7 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
 // away with, and a read that reached its opening as it ended, that its inbox
-// did not take ([ErrInboxNotServing]), or that a run whose tools are closed
+// did not take ([ErrNoteUntaken]), or that a run whose tools are closed
 // takes no more ([Bridge.serveSteer], [readNotes]): the pace the bridge's own
 // relay reads a seat's lease again at while it waits for the seat's next
 // holder ([holderRetryCeiling]), because that holder is what serves the
@@ -404,7 +404,7 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 //     the run's end then refuses the read's next try. Answered done, the read
 //     was recorded nowhere, and the seat's next holder was never asked.
 //   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
-//     ([ErrInboxNotServing]): the end closed it after the route found it
+//     ([ErrNoteUntaken]): the end closed it after the route found it
 //     serving. The inbox decides that under its own lock, which its close
 //     takes, so a read either found it serving and is recorded through the
 //     store, which a later close does not touch, or did not and is not
@@ -439,7 +439,7 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 	switch err := inbox.Read(r.Context(), body.IDs); {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, ErrInboxNotServing):
+	case errors.Is(err, ErrNoteUntaken):
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 	default:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_read_failed", "error", err.Error(),

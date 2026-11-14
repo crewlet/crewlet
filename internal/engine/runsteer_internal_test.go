@@ -315,7 +315,7 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 // only a note it opened, so a confirmation naming that note took no read of
 // it, and answered done, the plugin never confirmed it again: the read was
 // recorded nowhere. So the confirmation is turned away
-// (mcpbridge.ErrInboxNotServing), the note still waiting and served to the
+// (mcpbridge.ErrNoteUntaken), the note still waiting and served to the
 // job, and said once, at WARN with the keys this node holds, however often the
 // plugin asks again. A note beside it that this node opens is recorded and
 // reported all the same, and reported again through the job's earlier read
@@ -357,8 +357,8 @@ func TestAConfirmationOfANoteUnderAnUnheldKeyWaitsForANodeThatHoldsIt(t *testing
 	inbox := boundInbox(t, keyless, store, "run-1", launch)
 	viewHolds(t, inbox, 1)
 	for try := range 2 {
-		if err := inbox.Read(ctx, []string{"n-old", "n-new"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-			t.Fatalf("confirmation %d of a note this node cannot open answered %v, want ErrInboxNotServing",
+		if err := inbox.Read(ctx, []string{"n-old", "n-new"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+			t.Fatalf("confirmation %d of a note this node cannot open answered %v, want ErrNoteUntaken",
 				try+1, err)
 		}
 	}
@@ -557,8 +557,8 @@ func TestEveryNoteThatWaitsForItsKeyIsSaidOnceWhereverItsConfirmationIsTurnedAwa
 		sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
-	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrNoteUntaken", err)
 	}
 	if got := said(); !slices.Equal(got, []string{"n-old-1", "n-old-2"}) {
 		t.Fatalf("the confirmation turned away under the claim said %v, want n-old-1 and n-old-2 once each", got)
@@ -570,8 +570,8 @@ func TestEveryNoteThatWaitsForItsKeyIsSaidOnceWhereverItsConfirmationIsTurnedAwa
 		sandbox.Release{Launch: launch, To: sandbox.StatusRunning}); err != nil || !ok {
 		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
 	}
-	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Fatalf("the confirmation made again answered %v, want ErrInboxNotServing", err)
+	if err := inbox.Read(ctx, ids); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Fatalf("the confirmation made again answered %v, want ErrNoteUntaken", err)
 	}
 	if read := readOn(ctx, store, "run-1", "n-new"); read == nil || read.Launch != launch ||
 		read.Boundary != string(types.SteerBoundaryStep) {

@@ -1588,7 +1588,7 @@ func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 // again, and the record kept it served and unread, so the run's ending reported
 // unconfirmed a note OpenCode had delivered, and a later launch told it again
 // as one the session may already show. So such an inbox answers
-// mcpbridge.ErrInboxNotServing, which the bridge turns away to ask again, and
+// mcpbridge.ErrNoteUntaken, which the bridge turns away to ask again, and
 // the confirmation made again is recorded by the inbox that serves the job. An
 // inbox not yet bound serves no job either, and says so too, though no opening
 // serves one (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound).
@@ -1610,14 +1610,14 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 
 	// THE OPENING'S END CLOSED THE INBOX the route found serving.
 	served.Close()
-	if err := served.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Errorf("a confirmation reaching a closed inbox answered %v, want ErrInboxNotServing", err)
+	if err := served.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Errorf("a confirmation reaching a closed inbox answered %v, want ErrNoteUntaken", err)
 	}
 	// AN INBOX NOT YET BOUND takes no read either.
 	unbound := runs.inbox(identityOfRun(mustRow(t, store, "run-1")), 1)
 	t.Cleanup(unbound.Close)
-	if err := unbound.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Errorf("a confirmation reaching an inbox not yet bound answered %v, want ErrInboxNotServing", err)
+	if err := unbound.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Errorf("a confirmation reaching an inbox not yet bound answered %v, want ErrNoteUntaken", err)
 	}
 	if n := mustRow(t, store, "run-1").Steer.Notes[0]; !n.Waiting() || n.Served != launch {
 		t.Fatalf("a confirmation no inbox took left n-1 %+v, want it waiting, served to job %s", n, launch)
@@ -1646,7 +1646,7 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 // found it serving, took nothing, since the record took no read of the job,
 // and answered done: the bridge said 204, the plugin never confirmed the note
 // again, and the record kept it served and unread. So the inbox answers
-// mcpbridge.ErrInboxNotServing for a note its take left waiting, which the
+// mcpbridge.ErrNoteUntaken for a note its take left waiting, which the
 // bridge turns away to ask again; and once the claim is handed back, the
 // collection not finished, and the run goes on in its box, the confirmation
 // made again is recorded. A note named that no longer waits is no such note:
@@ -1680,8 +1680,8 @@ func TestAConfirmationItsJobsRecordNoLongerTakesSaysSo(t *testing.T) {
 		sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
-	if err := inbox.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Errorf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	if err := inbox.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Errorf("a confirmation its job's record no longer takes answered %v, want ErrNoteUntaken", err)
 	}
 	if n := mustRow(t, store, "run-1").Steer.Notes[0]; !n.Waiting() || n.Served != launch {
 		t.Fatalf("a confirmation the record did not take left n-1 %+v, want it waiting, served to job %s",
@@ -1795,8 +1795,8 @@ func TestAConfirmationTurnedAwayStillReportsWhatItsJobReadBefore(t *testing.T) {
 		sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
-	if err := inbox.Read(ctx, []string{"n-1", "n-2"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
-		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	if err := inbox.Read(ctx, []string{"n-1", "n-2"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
+		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrNoteUntaken", err)
 	}
 	// N-1 REPORTED AGAIN, as one record: the same id at the same instant.
 	eventually(t, "n-1's report made again", func() bool { return len(steered(p)) == 2 })
@@ -1960,7 +1960,7 @@ func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan st
 	return nil, h.release
 }
 
-func (h *heldInbox) Read(context.Context, []string) error { return mcpbridge.ErrInboxNotServing }
+func (h *heldInbox) Read(context.Context, []string) error { return mcpbridge.ErrNoteUntaken }
 
 func (h *heldInbox) Close() {
 	h.enter.Do(func() { close(h.closing) })
