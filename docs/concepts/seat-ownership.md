@@ -461,7 +461,9 @@ the backlogs'. Within the backlogs' turn the seats take their turns by the same
 rule, from where its last turn ran out. With one exception: a backlogs' turn
 the bound cut after it moved a mark hands the next cycle to the first seat, so
 a backlog longer than a cycle drains over as many cycles as it needs without
-ever going ahead of what the seats write. So while the seats' turns leave the
+taking the start of any: the backlogs take a cycle's start only after a turn
+of theirs that moved nothing while it was not the cycle's first, or after a
+cycle that ran out just before their turn. So while the seats' turns leave the
 backlogs' turn the time to move a mark, every cycle starts at the first seat
 and carries every seat's own rows before any backlog. A backlogs' turn that
 came late and moved nothing starts the next cycle so that it has a whole one,
@@ -542,14 +544,20 @@ first. Its hydration records where the node's change sequence stood as it
 completed. Each cycle carries each held seat's rows stamped above that, and its
 profiles, skills and onboarding marker, and then gives the seats' older rows
 one turn: the backlog their hydrations brought in or found, which the
-changelog mostly holds already. While the seats' turns fit a cycle, every
-cycle carries every seat's own rows before any older row. So a crash loses
-what the seat wrote since the last cycle that carried its own rows: about the
-last cycle's writes, or up to 2k + 3 cycles' while cycles run out at k of the
-node's seats, since a seat can then wait 2k + 2 cycles between two that reach
-it (above). While they do, a cycle can start part-way through the seats, and
-the older rows' turn then comes before the own rows of the seats after it,
-which had theirs in the cycle before. Among the k are a seat whose own rows
+changelog mostly holds already. While the seats' turns leave the older rows'
+turn the time to move a mark, every cycle carries every seat's own rows before
+any older row. So a crash loses what the seat wrote since the last cycle that
+carried its own rows: about the last cycle's writes while that holds. A turn
+of the older rows that moves nothing, reached with too little of a cycle left
+or while the broker is not acknowledging, or a cycle that runs out just before
+it, gives them the next cycle's start, and that cycle can be theirs alone; and
+a seat whose turn cycles run out in holds the seats after it back. With k such
+seats a seat can wait 2k + 2 cycles between two that reach it (above), two of
+them for the older rows' turn even when no seat's turn runs a cycle out, so a
+crash loses up to 2k + 3 cycles' writes. While cycles run out, a cycle can
+start part-way through the seats, and the older rows' turn then comes before
+the own rows of the seats after it, which had theirs in the cycle before.
+Among the k are a seat whose own rows
 outlast a cycle, one whose profiles and skills do, and one still being taken,
 every row of which counts as its own until its hydration completes; the last
 is what a restart's cycles meet first, once per seat taken. A graceful handoff

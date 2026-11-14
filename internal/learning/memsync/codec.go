@@ -79,13 +79,14 @@
 // carries the seat's own rows and then the tables sent whole, and
 // [Syncer.PublishBacklog] the backlog, after it: a release's flush while its
 // bound has time, and the engine's memory sync cycle in a turn the held seats'
-// backlogs share, after their own passes, so while those fit a cycle what a
-// seat writes waits for no seat's backlog. The backlog is the republish node
-// migration 0041 keeps: it puts this node's rows back on a changelog restored
-// or recreated while the node ran, and carries what an earlier holding's flush
-// did not reach. A seat with no boundary, one whose hydration here has not
-// completed or that a release has forgotten, has every row as its own, which
-// is how a publish carried a seat before boundaries.
+// backlogs share, after their own passes, so while those leave that turn the
+// time to move a mark what a seat writes waits for no seat's backlog. The
+// backlog is the republish node migration 0041 keeps: it puts this node's rows
+// back on a changelog restored or recreated while the node ran, and carries
+// what an earlier holding's flush did not reach. A seat with no boundary, one
+// whose hydration here has not completed or that a release has forgotten, has
+// every row as its own, which is how a publish carried a seat before
+// boundaries.
 //
 // # What is deliberately not replicated
 //

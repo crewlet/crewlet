@@ -23,22 +23,27 @@ import (
 // its tables sent whole, before it gives the backlogs their turn: the rows an
 // acquisition or a restart left this node to carry back for each seat, which
 // the changelog mostly holds already ([memorySync.resume]). So what a seat
-// writes waits for no backlog while the seats' own passes fit a cycle.
-// Otherwise the window is longer whatever this value is. Cycles that run out
-// in k seats' own passes leave a seat waiting up to 2k + 2 cycles between two
-// that reach its own, so a crash can lose up to 2k + 3 cycles' writes
-// ([memorySync.resume]); a seat still being taken is among the k, every row
-// of it its own until its hydration completes. A seat's new rows wait behind
-// a burst it wrote, too, such as a vector fill after a change of embedding
-// model (crewlet/crewlet#1041). A seat whose counterparty profiles and skills
-// outlast a cycle never has its onboarding marker carried, while the seats'
-// backlogs still take their turn once in every lap of the seats
-// (crewlet/crewlet#1040). A row larger than the broker takes fails every pass
-// of its seat that meets it, at that row, so nothing after it in that pass,
-// in its table or in the tables the pass carries after it, is carried
-// (crewlet/crewlet#349). A graceful handoff's flush starts where the cycles
-// left off, and what it cannot reach in its own bound is lost too
-// ([memoryFlushTimeout]).
+// writes waits for no backlog while the seats' own passes leave the backlogs'
+// turn the time to move a mark. Otherwise the window is longer whatever this
+// value is. A backlogs' turn that moves nothing, reached with too little of a
+// cycle left or on a broker that has stopped acknowledging, or a cycle that
+// runs out just before it, gives the backlogs the next cycle's start, and
+// that cycle can be theirs alone; and each seat whose own pass a cycle runs
+// out in holds the seats after it back too. With k such seats, a seat waits
+// up to 2k + 2 cycles between two that reach its own, two of them for the
+// backlogs' turn even when no own pass runs out, so a crash can lose up to
+// 2k + 3 cycles' writes ([memorySync.resume]); a seat still being taken is
+// among the k, every row of it its own until its hydration completes. A
+// seat's new rows wait behind a burst it wrote, too, such as a vector fill
+// after a change of embedding model (crewlet/crewlet#1041). A seat whose
+// counterparty profiles and skills outlast a cycle never has its onboarding
+// marker carried, while the seats' backlogs still take their turn once in
+// every lap of the seats (crewlet/crewlet#1040). A row larger than the broker
+// takes fails every pass of its seat that meets it, at that row, so nothing
+// after it in that pass, in its table or in the tables the pass carries after
+// it, is carried (crewlet/crewlet#349). A graceful handoff's flush starts
+// where the cycles left off, and what it cannot reach in its own bound is
+// lost too ([memoryFlushTimeout]).
 //
 // Thirty seconds against a turn that takes minutes, so while the cycles keep
 // up the worst case is roughly one turn's worth of diary entries and one

@@ -472,8 +472,9 @@ the dependency surface before choosing a host for it:
   carries back everything its hydration brought in, in one turn a cycle that
   its seats share, with what is left of the three hundred rows or so a cycle
   carries across such a link after every seat's own rows and its profiles and
-  skills, which each cycle carries first: while those outlast a cycle, that
-  turn still comes once in every lap of the seats
+  skills, which each cycle carries first while they leave that turn the time
+  to move a mark: while those outlast a cycle, that turn still comes once in
+  every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **The harness of every model its seats name, installed and signed in
