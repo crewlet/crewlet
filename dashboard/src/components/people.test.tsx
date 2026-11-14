@@ -32,6 +32,7 @@ import {
   NO_SEAT,
   seatGestures,
   SeatHolding,
+  useSeatGesture,
   seatOptions,
   UnboundRemedy,
   useHumanSeats,
@@ -198,8 +199,17 @@ async function reach(
  *  every signed-in reader asks, the engine masking what each may see. */
 function Holding({ seat, grants }: { seat: { handle: string; name: string }; grants: string[] }) {
   const listing = useHumanSeats(true);
+  const gesture = useSeatGesture(grants);
   return (
-    <SeatHolding seat={seat} seats={listing} manages={canManagePeople(grants)} held={grants} />
+    <>
+      <SeatHolding
+        seat={seat}
+        seats={listing}
+        manages={canManagePeople(grants)}
+        onGesture={gesture.open}
+      />
+      {gesture.dialog}
+    </>
   );
 }
 

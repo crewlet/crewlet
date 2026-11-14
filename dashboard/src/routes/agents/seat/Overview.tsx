@@ -90,7 +90,7 @@ import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 
 import { useViewer } from "~/lib/viewer.ts";
-import { canManagePeople, SeatHolding } from "~/components/people.tsx";
+import { canManagePeople, SeatHolding, type SeatGesture } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
 import type { AgentMemory } from "~/contract/memory.ts";
@@ -172,6 +172,11 @@ export interface OverviewProps {
    * Overview is the seat's empty state, with the ways to fill it.
    */
   humanSeats?: RestResult<HumanSeat[]>;
+  /**
+   * A gesture pressed on that empty state. The page owns its dialog, since
+   * the write it makes ends this empty state.
+   */
+  onSeatGesture?: (gesture: SeatGesture, row: HumanSeat) => void;
 }
 
 export function Overview(props: OverviewProps) {
@@ -1169,6 +1174,7 @@ function HumanOverview({
   now,
   unheld = false,
   humanSeats,
+  onSeatGesture,
 }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
@@ -1211,15 +1217,15 @@ function HumanOverview({
         {/* A SEAT NOBODY HOLDS IS SAID HERE, in the column a person's day and
             work would fill, with the ways to fill it: a notice above an empty
             column read as a page that had failed to load. */}
-        {unheld && humanSeats && (
+        {unheld && humanSeats && onSeatGesture && (
           <Card>
             <SeatHolding
               form="empty"
               seat={{ handle: seat.handle, name: seat.name }}
               seats={humanSeats}
               manages={canManagePeople(viewer.grants)}
-              held={viewer.grants}
               you={self}
+              onGesture={onSeatGesture}
             />
           </Card>
         )}

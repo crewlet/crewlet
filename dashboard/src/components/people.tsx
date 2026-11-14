@@ -12,7 +12,7 @@
  * engine refuses a person with none, ADR-0032), so the place a person comes
  * from is a vacant human seat: its card's menu on the org chart, the seat's
  * peek, and its page — each through [SeatHolding]'s three states (held,
- * invited, vacant) and the dialogs [SeatGestureDialog] opens. People
+ * invited, vacant) and the dialogs [useSeatGesture] opens. People
  * lists, edits, suspends and removes people; it no longer invites anybody, and
  * points at the chart instead.
  *
@@ -725,6 +725,38 @@ export function SeatGestureDialog({
 }
 
 /**
+ * The one owner of a seat gesture's dialog on a screen: `open` starts a
+ * gesture about a seat's row, and `dialog` is drawn by the caller.
+ *
+ * CALLED WHERE THE SEAT'S HOLDING CANNOT UNMOUNT IT: the page, the peek or the
+ * editor section itself, never a branch chosen by whether the seat is held,
+ * invited or open. The dialog's last screen is the invitation link or the
+ * first password link, shown once, and the write that produced it is the very
+ * thing that moves the seat from one branch to the other. Held here, the
+ * dialog stays until the person closes it, whatever the listing says next: a
+ * refused re-read, a poll, or the seat now being held.
+ */
+export function useSeatGesture(held: readonly string[]): {
+  open: (gesture: SeatGesture, row: HumanSeat) => void;
+  dialog: ReactNode;
+} {
+  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  const open = useCallback(
+    (gesture: SeatGesture, row: HumanSeat) => setOpening({ gesture, row }),
+    [],
+  );
+  const dialog = opening ? (
+    <SeatGestureDialog
+      gesture={opening.gesture}
+      seat={opening.row}
+      held={held}
+      onClose={() => setOpening(null)}
+    />
+  ) : null;
+  return { open, dialog };
+}
+
+/**
  * Who holds a human seat — said on the seat's own page, where a held seat
  * names its holder, an invited one its invitation (with its cancellation), and
  * a vacant one the two ways to fill it.
@@ -732,30 +764,27 @@ export function SeatGestureDialog({
  * A READ THAT FAILED IS SAID: drawn as nothing, a refused or unreachable
  * listing removed the only way to fill the seat with no word why.
  *
- * THE DIALOG IS NOT THE LISTING'S: every write is announced
- * ([directoryMoved]) and the listing reads again — and a read refused then
- * (a node behind its identity log, a poll, the refetch as the tab comes back
- * from the email the link was pasted into) leaves no data. Drawn inside the
- * branch that needs the listing, the open dialog went with it, and so did the
- * invitation link or first password link the engine shows only once. So the
- * gesture is held here and its dialog drawn beside whatever the listing says,
- * as the chart and the peek draw theirs.
+ * THE DIALOG IS NOT DRAWN HERE: this component only reports the gesture
+ * (`onGesture`), and its host draws the dialog ([useSeatGesture]). A write's
+ * own effect changes what the listing says, and a page that draws this
+ * component in one place while the seat is open and in another once it is
+ * held unmounts the first the moment a person is added. A dialog kept in this
+ * component's state went with it, and so did the first password link the
+ * engine shows only once.
  */
 export function SeatHolding({
   seat,
   seats,
   manages,
-  held,
   you = false,
   form = "notice",
+  onGesture,
 }: {
   seat: SeatName;
   /** The listing, as [useHumanSeats] read it. */
   seats: RestResult<HumanSeat[]>;
   /** The reader is an admin, so the gestures are drawn. */
   manages: boolean;
-  /** The reader's own grants. */
-  held: readonly string[];
   /** The seat is the reader's own. */
   you?: boolean;
   /**
@@ -766,27 +795,18 @@ export function SeatHolding({
    * nothing.
    */
   form?: "notice" | "empty";
+  /** A gesture was pressed: the host's [useSeatGesture] opens its dialog. */
+  onGesture: (gesture: SeatGesture, row: HumanSeat) => void;
 }) {
-  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
   return (
-    <>
-      <SeatHoldingState
-        seat={seat}
-        seats={seats}
-        manages={manages}
-        you={you}
-        form={form}
-        onGesture={(gesture, row) => setOpening({ gesture, row })}
-      />
-      {opening && (
-        <SeatGestureDialog
-          gesture={opening.gesture}
-          seat={opening.row}
-          held={held}
-          onClose={() => setOpening(null)}
-        />
-      )}
-    </>
+    <SeatHoldingState
+      seat={seat}
+      seats={seats}
+      manages={manages}
+      you={you}
+      form={form}
+      onGesture={onGesture}
+    />
   );
 }
 
