@@ -539,13 +539,14 @@ func runFakeReport(script fakeScript) {
 // zombie is not running ([procgrouptest.Running]). Read off kill(pid, 0), a
 // zombie answered as running until its parent reaped it, so a report asked of a
 // server that had just been stopped was answered (#1080's defect, in a fake). A
-// record the kernel would not give exits the fake 72 rather than answer either
-// way. Both fakes that stand in for a harness's own server ask it.
+// record the kernel would not give exits the fake 79, a status no other fake
+// exits with, rather than answer either way. Both fakes that stand in for a
+// harness's own server ask it.
 func serverRunning(pid int) bool {
 	running, err := procgrouptest.Running(pid)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fake: reading the kernel's record of the server, pid %d: %v\n", pid, err)
-		os.Exit(72)
+		os.Exit(79)
 	}
 	return running
 }

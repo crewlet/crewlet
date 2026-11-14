@@ -24,9 +24,10 @@ import (
 //
 // The server here is a process this case starts, kills and holds unreaped
 // until it ends, so every report is asked of an exited, unreaped server, never
-// of one a race left running or reaped. Linux alone, for waitid's WNOWAIT: the
-// one wait that returns once the kernel holds the child as a zombie and reaps
-// nothing.
+// of one a race left running or reaped. It waits with waitid's WNOWAIT, which
+// returns once the kernel holds the child as a zombie and reaps nothing. Linux
+// alone, because golang.org/x/sys/unix wraps waitid only there, and the build
+// links no cgo to reach darwin's.
 func TestAReportAskedOfAnExitedServerIsRefusedBeforeItsReap(t *testing.T) {
 	pid := exitedUnreapedServer(t)
 	for _, tc := range []struct {
