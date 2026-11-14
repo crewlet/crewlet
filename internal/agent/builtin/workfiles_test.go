@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,32 +42,63 @@ func newFakeFiles() *fakeFiles { return &fakeFiles{files: map[string]worklet.Fil
 
 func (f *fakeFiles) key(project, path string) string { return project + "/" + path }
 
+// Files answers a page of a project's files as the tracker's reader does
+// ([worklet.Reader.Files]), the folder aside: a project other than ENG
+// [worklet.ErrNoProject], and otherwise its live rows in path order after
+// q.After, every field a listing carries, held to the reader's own page —
+// [worklet.DefaultFilePage] for none, never more than [worklet.MaxFilePage] —
+// with Next to go on from.
 func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileListing, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if q.Project != "ENG" {
 		return worklet.FileListing{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, q.Project)
 	}
+	page := q.Limit
+	switch {
+	case page <= 0:
+		page = worklet.DefaultFilePage
+	case page > worklet.MaxFilePage:
+		page = worklet.MaxFilePage
+	}
 	var out worklet.FileListing
 	for _, file := range f.files {
-		if !file.Removed() && file.Project == q.Project {
+		if !file.Removed() && file.Project == q.Project && file.Path > q.After {
 			out.Files = append(out.Files, worklet.FileRow{Project: file.Project, Path: file.Path,
-				Size: file.Size, Version: file.Version,
-				CreatedBy: file.CreatedBy, UpdatedBy: file.UpdatedBy})
+				ContentType: file.ContentType, Hash: string(file.Hash), Size: file.Size,
+				Version: file.Version, CreatedBy: file.CreatedBy, CreatedAt: file.CreatedAt,
+				UpdatedBy: file.UpdatedBy, UpdatedAt: file.UpdatedAt})
 		}
+	}
+	slices.SortFunc(out.Files, func(a, b worklet.FileRow) int { return strings.Compare(a.Path, b.Path) })
+	if len(out.Files) > page {
+		out.Files, out.Next = out.Files[:page], out.Files[page-1].Path
 	}
 	out.Complete, out.Level = true, q.Freshness.Level
 	return out, nil
 }
 
-func (f *fakeFiles) File(_ context.Context, project, path string,
+// File answers one file as the tracker's reader does ([worklet.Reader.File]):
+// the project's key normalised and the path held to the tracker's rule first,
+// refused in the tracker's error; a project other than ENG
+// [worklet.ErrNoProject], as [fakeFiles.Files] answers one; and a file it
+// holds no row for, or holds removed, [worklet.ErrNoFile].
+func (f *fakeFiles) File(_ context.Context, project, filePath string,
 	_ statelog.Freshness) (worklet.FileDetail, error) {
 
+	project = worklet.ProjectKey(project)
+	filePath, err := worklet.NormalizeFilePath(filePath)
+	if err != nil {
+		return worklet.FileDetail{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	file, ok := f.files[f.key(project, path)]
+	if project != "ENG" {
+		return worklet.FileDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, project)
+	}
+	file, ok := f.files[f.key(project, filePath)]
 	if !ok || file.Removed() {
-		return worklet.FileDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoFile, path)
+		return worklet.FileDetail{}, fmt.Errorf("%w: %s in %s", worklet.ErrNoFile, filePath, project)
 	}
 	return worklet.FileDetail{File: file}, nil
 }
@@ -249,6 +281,49 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 	}
 }
 
+// A SEAT'S FILE LISTING IS A PAGE ITS ANSWER CARRIES, whatever the call asks
+// for: fifty files by default and a hundred at most, each page with the next
+// to go on from. The tracker's own page — two hundred by default, a thousand
+// at most — is past what one tool answer carries ([builtin.ToolAnswerBytes]),
+// so a listing of a project of three hundred files was refused as too large,
+// asked for nothing at all.
+//
+// Mutation: hand the tracker the limit the call asked for again, and the rows
+// asking for no page and for more than a page are refused as too large.
+func TestASeatsFileListingIsAPageItsAnswerCarries(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	at := time.Unix(1_700_000_000, 0).UTC()
+	for i := range 300 {
+		p := fmt.Sprintf("reports/2026/q%03d.md", i)
+		files.files[files.key("ENG", p)] = worklet.File{Project: "ENG", Path: p,
+			ContentType: "text/markdown; charset=utf-8", Hash: objstore.HashOf([]byte(p)),
+			Size: 1234, Object: objstore.KeyAt(at), Version: 3,
+			CreatedBy: "agent-cto", CreatedAt: at, UpdatedBy: "agent-cto", UpdatedAt: at}
+	}
+	for _, c := range []struct {
+		name  string
+		args  map[string]any
+		files float64
+	}{
+		{"asked for no page", map[string]any{}, 50},
+		{"asked for more than a page", map[string]any{"limit": 5000}, 100},
+		{"asked for a page it carries", map[string]any{"limit": 7}, 7},
+	} {
+		got := callWork(t, reg, worklet.ListProjectFilesTool, c.args)
+		if got.Failed {
+			t.Errorf("%s: refused: %s", c.name, got.Output)
+			continue
+		}
+		listed := fileAnswer(t, got.Output)
+		if listed["count"] != c.files || listed["next"] == "" {
+			t.Errorf("%s: listed %v files with next %q, want %v and a next",
+				c.name, listed["count"], listed["next"], c.files)
+		}
+	}
+}
+
 // A LARGE FILE IS READ A PAGE AT A TIME, each page ending on a whole character
 // and saying where the next begins — so paging through reassembles the text.
 func TestALargeFileIsReadInPagesOnWholeCharacters(t *testing.T) {
@@ -355,13 +430,59 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	}
 }
 
+// A FILE TOOL ABOUT WHAT IS NOT THERE ANSWERS not_found: a listing of a
+// project that is not there, a read of a project or a file that is not there,
+// and a removal of a file that is not there are each ABOUT what is missing, so
+// each is refused not_found, with the tracker's own sentinel beneath it. A
+// copy that only NAMES the file answers the same words invalid
+// (TestACopyNamingWhatIsNotThereIsTheArgumentToChange): the class is each
+// call's own statement, which is why fileReadFailure takes it from its caller.
+//
+// Mutation: pass invalid from the listing, the read or the removal and that
+// tool's rows go red.
+func TestAFileToolAboutWhatIsNotThereAnswersNotFound(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		sentinel   error
+	}{
+		{"a listing of a project that is not there", worklet.ListProjectFilesTool,
+			map[string]any{"project": "ops"}, worklet.ErrNoProject},
+		{"a read of a project that is not there", worklet.ReadProjectFileTool,
+			map[string]any{"project": "ops", "path": "reports/q3.md"}, worklet.ErrNoProject},
+		{"a read of a file that is not there", worklet.ReadProjectFileTool,
+			map[string]any{"path": "reports/q4.md"}, worklet.ErrNoFile},
+		{"a removal of a file that is not there", worklet.RemoveProjectFileTool,
+			map[string]any{"path": "reports/q4.md"}, worklet.ErrNoFile},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			files, objects := newFakeFiles(), newFakeObjects()
+			reg := workRegistry(t, fileDeps(files, objects))
+			if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
+				"path": "reports/q3.md", "content": "# Q3",
+			}); got.Failed {
+				t.Fatal(got.Output)
+			}
+			got := callWork(t, reg, c.tool, c.args)
+			switch {
+			case !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound:
+				t.Errorf("answered %v %q, want not_found", tools.RefusalOf(got), got.Output)
+			case !errors.Is(got.Cause, c.sentinel):
+				t.Errorf("the refusal carries %v, not the tracker's %v", got.Cause, c.sentinel)
+			}
+		})
+	}
+}
+
 // A PATH THE TRACKER REFUSES IS TOLD IN THE TRACKER'S WORDS, without the
 // "worklet:" its error opens with: the read, write and remove tools printed the
 // path refusal whole, so a model read the package's name in front of what to
 // change.
 //
-// Mutation: print NormalizeFilePath's error with %v again in any of the three
-// tools and its row goes red.
+// Mutation: print NormalizeFilePath's error with %v again in normalizePath and
+// every row goes red.
 func TestAPathTheTrackerRefusesIsToldInItsWords(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()

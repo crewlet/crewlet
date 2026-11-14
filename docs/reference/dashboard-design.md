@@ -10552,7 +10552,8 @@ engine flags it (`over_budget`, against `tool_budget`); a callout naming every
 agent over the budget; and a note naming the servers whose agents an
 integration decides. A row opens the agent's tools (`?agent=`): its total
 against the budget, every server it reaches with why and how many of its tools
-sit at each level, and the built-in tools every agent holds. On a phone a row
+sit at each level, and how many of the built-in tools it is offered
+(`builtin_tools`). On a phone a row
 is the agent and its total. While the engine is still counting, the view says
 so rather than drawing zeros.
 

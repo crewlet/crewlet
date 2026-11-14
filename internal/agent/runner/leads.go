@@ -67,11 +67,14 @@ func (r *Runner) copyMayLackBrief() bool {
 // again of the leads that brief told ([Resume.Leads]): the section that tells
 // them ([prompts.LeadsToldAgain]), "" for none; which they were, for the job's
 // record to mark told in turn (sandbox.BriefTold.Told), one that does not open
-// here among them, since the brief was to tell it; the ones it was to tell and
-// could not read, by their numbers, marked told in turn the same way
-// (sandbox.BriefTold.ToldUnread, [Resume.LeadsUnread]); and the held call every
-// held lead among them tells what became of, which no list of the round's
-// calls in the same brief tells ([Runner.calledAfter]).
+// here and a review whose round the turn's record no longer keeps whole
+// ([reviewOf]) among them, since the brief was to tell each, so a continuation
+// of a session that may lack this brief says it in its place in turn, never
+// silently; the ones it was to tell and could not read, by their numbers,
+// marked told in turn the same way (sandbox.BriefTold.ToldUnread,
+// [Resume.LeadsUnread]); and the held call every held lead among them tells
+// what became of, which no list of the round's calls in the same brief tells
+// ([Runner.calledAfter]).
 type toldAgain struct {
 	section string
 	refs    []sandbox.LeadRef
@@ -123,7 +126,9 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 // leadAgain is one lead told again, under a heading of its own, to a run working
 // in round current: an answer in words of its own ([answerAgain]); a review as
 // its send-back told it, on the notes of the round it closed
-// ([prompts.BuildContinuedRound]); the turn's task with its boundary, the closed
+// ([prompts.BuildContinuedRound]), or, where the turn's record no longer keeps
+// that round whole ([reviewOf]), as a review that is not kept
+// ([prompts.ReviewNotKept]); the turn's task with its boundary, the closed
 // rounds its brief rendered and the answers it told, or was to tell where its
 // read of them failed ([Runner.taskAgain]); and one that did not open here, or
 // that this build cannot render, as a message that cannot be read here
@@ -133,6 +138,16 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 // ledger's quoted output are somebody else's words. held is the held calls a
 // task told again tells what became of among its answers, which no list of
 // the round's calls in the same brief tells ([withHeld]).
+//
+// A REVIEW NOT KEPT IS SAID IN ITS PLACE, in words of its own: told on its
+// round's notes, it would be a send-back that said nothing; told as one that
+// cannot be read here, a message whose copy the engine holds; and counted
+// among the earlier messages not kept, it would be said to come before every
+// lead the section tells, though it can follow one (the turn's task, which a
+// base continuation keeps where the turn has kept no session of its own yet,
+// as on its first launch), and, the later of two that differ standing, the
+// run would take the leads before it as standing over a review that may have
+// redirected the work.
 func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, history []ledger.Iteration, current int,
 	b provenance.Boundary) (text string, held []string) {
 
@@ -145,6 +160,7 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, history []ledge
 		if notes, found := reviewOf(history, lead.Round); found {
 			return r.sendBackLead(notes).Nested().Text, nil
 		}
+		return prompts.ReviewNotKept, nil
 	case lead.Kind == sandbox.LeadKindTask && lead.Task != nil:
 		return r.taskAgain(ctx, lead, history, current, b)
 	}
@@ -152,11 +168,18 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, history []ledge
 }
 
 // reviewOf is the review notes that closed round iteration of history, and
-// whether history holds that round: what a send-back's lead told its session
-// ([Runner.sendBackLead]).
+// whether history keeps that round whole: what a send-back's lead told its
+// session ([Runner.sendBackLead]).
+//
+// A SPAN OF ROUNDS A PARK DROPPED KEEPS NONE OF THEIR REVIEWS
+// ([ledger.Iteration.Through]): a parked turn past its share folds whole closed
+// rounds into one entry, which keeps their calls by tool and none of their
+// prose (internal/agent/execstate). So a round folded into one, its first
+// round among them, is not kept here, never read as a round whose review said
+// nothing.
 func reviewOf(history []ledger.Iteration, iteration int) (string, bool) {
 	for _, round := range history {
-		if round.Iteration == iteration {
+		if round.Iteration == iteration && round.Through == 0 {
 			return round.ReviewNotes, true
 		}
 	}
@@ -167,10 +190,15 @@ func reviewOf(history []ledger.Iteration, iteration int) (string, bool) {
 // the turn began, as [prompts.NextTurnAgain] tells it of the session its
 // conversation's last turn left ([Resume.Base]), then the turn's ask as that
 // brief told it, with only the closed rounds its prior-work block rendered
-// ([Runner.turnAsk]): a round closed after it is in the session, or is told by
-// its own rule, and told here too, round 1's calls would be told in the task's
-// ledger and again in the calls the brief lists after it. The base's turn and
-// home are the engine's record of that session, defused under b.
+// ([Runner.turnAsk], [roundsThrough]): a round closed after it is in the
+// session, or is told by its own rule, and told here too, round 1's calls would
+// be told in the task's ledger and again in the calls the brief lists after it.
+// Where a park has folded rounds the brief rendered into a span since, the span
+// is told as the record keeps it, whole even where it runs on past the brief's
+// last round ([roundsThrough]), and a review the task carried that the span
+// took is said gone by the span's own words ([ledger.Iteration.Through]). The
+// base's turn and home are the engine's record of that session, defused under
+// b.
 //
 // AND THEN THE ANSWERS THAT BRIEF TOLD, after the ask, as that brief told them
 // ([earlierAnswers]): the brief that continued the session its conversation's
@@ -196,7 +224,7 @@ func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, history []led
 		m.BaseTurn, m.EndedAt, m.CapturedAt = provenance.Neutralise(b, base.Turn), base.EndedAt, base.CapturedAt
 		m.WentOn, m.Lost, m.Interrupted = base.WentOn, base.Lost, base.Interrupted
 	}
-	rendered := history[:min(max(task.Rounds, 0), len(history))]
+	rendered := roundsThrough(history, task.Rounds)
 	reviewed := ""
 	if task.Reviewed > 0 {
 		reviewed, _ = reviewOf(history, task.Reviewed)
@@ -207,6 +235,26 @@ func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, history []led
 		told += "\n\n" + answers.section.Nested().Text
 	}
 	return told, answers.held
+}
+
+// roundsThrough is the entries of history that stand for the closed rounds up to
+// round, the last one a brief rendered ([sandbox.LeadTask.Rounds]): every entry
+// whose first round is at or before it, in order.
+//
+// BY THE ROUNDS' NUMBERS, NEVER BY HOW MANY ENTRIES: a parked turn past its
+// share folds whole closed rounds into one span of them
+// ([ledger.Iteration.Through]), so once a later park has folded rounds the
+// brief rendered, as many entries as it rendered reach past them, into rounds
+// closed after it. And a span that runs on past round is among them: it stands
+// for rounds the brief rendered too, whose calls a session that may lack that
+// brief is told no other way, so it tells the calls of a round closed after,
+// counted by tool, rather than lose those.
+func roundsThrough(history []ledger.Iteration, round int) []ledger.Iteration {
+	n := 0
+	for n < len(history) && history[n].Iteration <= round {
+		n++
+	}
+	return history[:n]
 }
 
 // turnAsk is the turn's own ask as a fresh brief renders it ([Runner.executorBrief])
@@ -226,17 +274,84 @@ func (r *Runner) turnAsk(ctx context.Context, history []ledger.Iteration, notes 
 // answerAt is where an answer told stands in the brief that tells it, for the
 // words that tell it ([answerAgain]): named, the round it came in as its heading
 // names it ([prompts.AnswerRound]), "" in a brief that names no answer's round;
-// and listed, that round where the same brief lists its calls as work already
-// done (a fresh brief's prior-work block, or the one a task told again renders),
-// zero where it does not. A held call made is then told among those calls, and
-// its answer points to them ([prompts.HeldCallListed]): told by both, one call
-// would be told twice, the second time as a call of its own, which no list of a
-// round's calls does for the call a lead tells ([Runner.calledAfter]). A closed
-// round's list keeps no held call's id to leave the call out by, so the answer
-// is the one that defers.
+// round, that round; and done, the entry standing for it where the same brief
+// tells its calls as work already done (a fresh brief's prior-work block, or the
+// one a task told again renders), nil where it does not ([doneFor]). A held
+// call made in it is then among that entry's calls, which say how it ended only
+// where the entry lists it ([heldIn]), and its answer points to them
+// ([prompts.HeldCallListed]): told by both, one call would be told twice, the
+// second time as a call of its own, which no list of a round's calls does for
+// the call a lead tells ([Runner.calledAfter]). A closed round's list keeps no
+// held call's id to leave the call out by, so the answer is the one that
+// defers. Where the entry may count the call rather than list it, the answer
+// tells what became of it as one of that entry's calls
+// ([prompts.HeldCallCounted]).
 type answerAt struct {
-	named  string
-	listed int
+	named string
+	round int
+	done  *ledger.Iteration
+}
+
+// heldListing is how the entry a brief tells a round's calls under, as work
+// already done, holds the call an answer of that round let be made ([heldIn]).
+type heldListing int
+
+const (
+	// heldUnlisted: no entry stands for the round, or the one that does holds
+	// no call of the tool, as where the call's record did not land: the
+	// answer tells what became of the call, as no line of the brief does.
+	heldUnlisted heldListing = iota
+	// heldListed: the round kept whole lists the call, and its line says how
+	// it ended: the answer points to it ([prompts.HeldCallListed]).
+	heldListed
+	// heldCounted: the entry may count the call rather than list it, so it may
+	// not say how the call ended: the answer tells that, as one of the entry's
+	// calls ([prompts.HeldCallCounted]).
+	heldCounted
+)
+
+// doneFor is the entry of done, the closed rounds a brief tells as work already
+// done, that stands for round: the round kept whole, or the span of rounds a
+// park folded it into ([ledger.Iteration.Through]), nil where none does.
+func doneFor(done []ledger.Iteration, round int) *ledger.Iteration {
+	for i := range done {
+		if done[i].Iteration <= round && round <= max(done[i].Iteration, done[i].Through) {
+			return &done[i]
+		}
+	}
+	return nil
+}
+
+// heldIn is how done, the entry a brief tells a round's calls under as work
+// already done ([doneFor]), holds a call to tool that an answer of that round
+// let be made ([heldListing]).
+//
+// LISTED ONLY WHERE NOTHING BUT THE LIST CAN HOLD IT. A closed round's list
+// keeps no held call's id, so the call is known to be listed with how it ended
+// only where the round is kept whole, lists a call of the tool whose arguments
+// are sealed, as a held call's and the one a person approved are
+// ([ledger.Call.Withheld]), and nothing of the round's record could count it
+// instead. A span of rounds a park dropped lists no call. A round's tally
+// counts calls by tool, listing none of them: those its run's record dropped
+// from its middle, or every call of the round where a park folded its calls
+// into it (internal/agent/execstate); and a count that names no tool may hold
+// a call of any. And a read past the ledger's read cap is counted rather than
+// listed ([ledger.FormatOptions.MaxReadCalls]). Pointed to such an entry, the
+// answer would say a list tells how the call ended that does not, and what
+// became of the call would be told nowhere.
+func heldIn(done *ledger.Iteration, tool string) heldListing {
+	switch {
+	case done == nil:
+		return heldUnlisted
+	case done.Through != 0, slices.Contains(done.Reads, tool),
+		slices.ContainsFunc(done.Elided, func(e ledger.Elided) bool {
+			return e.Calls > 0 && (e.Name == "" || e.Name == tool)
+		}):
+		return heldCounted
+	case slices.ContainsFunc(done.Calls, func(c ledger.Call) bool { return c.Withheld && c.Name == tool }):
+		return heldListed
+	}
+	return heldUnlisted
 }
 
 // answerAgain is an answer lead told again, under fence token b: the run's
@@ -267,9 +382,16 @@ func answerAgain(a sandbox.LeadAnswer, result *sandbox.HeldResult, at answerAt, 
 		if said := strings.TrimSpace(a.Words); said != "" {
 			w.WriteString("They said: " + provenance.Neutralise(b, said) + "\n\n")
 		}
-		if made := h.outcome.kind == heldMade || h.outcome.kind == heldUnread; made && at.listed > 0 {
-			w.WriteString(prompts.HeldCallListed(at.listed))
-		} else {
+		listing := heldUnlisted
+		if h.outcome.kind == heldMade || h.outcome.kind == heldUnread {
+			listing = heldIn(at.done, h.Tool)
+		}
+		switch listing {
+		case heldListed:
+			w.WriteString(prompts.HeldCallListed(at.round))
+		case heldCounted:
+			w.WriteString(prompts.HeldCallCounted(at.round, at.done.Iteration, at.done.Through) + h.told(b))
+		default:
 			w.WriteString(h.told(b))
 		}
 	case a.Refused != nil:
@@ -432,16 +554,28 @@ func reviewLead(history []ledger.Iteration) []sandbox.Lead {
 
 // taskLead is the lead a continuation of the session its conversation's last
 // turn left opens with, as the run keeps it beside its record: the turn's task,
-// told with every closed round of history the brief's prior-work block rendered
-// and, where notes is a review that sent the round back, carrying the review of
-// the round it closed, history's last ([Runner.taskFor]), for round, the round
-// the launch runs.
+// told with every closed round of history the brief's prior-work block rendered,
+// kept as the last one's number ([lastRound]), and, where notes is a review that
+// sent the round back, carrying the review of the round it closed, history's
+// last ([Runner.taskFor]), for round, the round the launch runs.
 func taskLead(round int, history []ledger.Iteration, notes string) []sandbox.Lead {
-	task := &sandbox.LeadTask{Rounds: len(history)}
+	task := &sandbox.LeadTask{Rounds: lastRound(history)}
 	if strings.TrimSpace(notes) != "" && len(history) > 0 {
 		task.Reviewed = history[len(history)-1].Iteration
 	}
 	return []sandbox.Lead{{Kind: sandbox.LeadKindTask, Round: round, Task: task}}
+}
+
+// lastRound is the number of the last closed round history holds, zero for none:
+// its last entry's own, or the last round of the span a park folded it into
+// ([ledger.Iteration.Through]). A number, never how many entries history holds,
+// which a park that folds rounds into a span makes fewer ([roundsThrough]).
+func lastRound(history []ledger.Iteration) int {
+	if len(history) == 0 {
+		return 0
+	}
+	last := history[len(history)-1]
+	return max(last.Iteration, last.Through)
 }
 
 // withHeld is leadHeld, the held calls a brief's own lead tells what became of,
@@ -513,10 +647,17 @@ func (r *Runner) turnsAnswers(current int, history []ledger.Iteration, b provena
 // ([prompts.AnswerUnread]); with how many earlier leads are not kept (cut), as
 // [prompts.EarlierAnswers] tells them, fresh or told again.
 //
-// listed is the closed rounds the same brief lists the calls of as work already
+// listed is the closed rounds the same brief tells the calls of as work already
 // done: a held call an answer of one of them approved was made in that round,
 // and is among its calls, so the answer points there rather than tell its
-// outcome a second time ([answerAt]).
+// outcome a second time, where the round's list says how it ended ([answerAt],
+// [heldIn]). AN ENTRY THAT MAY COUNT THE CALL LISTS NONE OF IT: a span of
+// rounds a park dropped ([ledger.Iteration.Through]), which counts their calls
+// by tool under a heading that names no round of them alone, and a round whose
+// tally may count the call, as every round beside a span does once a park has
+// folded its calls into its tally (internal/agent/execstate). Neither can say
+// how the call ended, so its answer tells what became of it, as one of that
+// entry's calls, never as a call beside the ones the entry counts.
 //
 // EVERY KIND OF ANSWER, as a lead keeps it: a withdrawal, a refused reply and a
 // held call a person allowed or denied are each what a person, or the seat
@@ -542,10 +683,7 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 		if held := lead.Answer.Held; held != nil && lead.Answer.Refused == nil {
 			out.held = append(out.held, held.HeldID)
 		}
-		at := answerAt{named: named}
-		if slices.ContainsFunc(listed, func(closed ledger.Iteration) bool { return closed.Iteration == lead.Round }) {
-			at.listed = lead.Round
-		}
+		at := answerAt{named: named, round: lead.Round, done: doneFor(listed, lead.Round)}
 		rendered = append(rendered, answerAgain(*lead.Answer, told.Result, at, b))
 	}
 	out.section = prompts.EarlierAnswers(rendered, cut, fresh)

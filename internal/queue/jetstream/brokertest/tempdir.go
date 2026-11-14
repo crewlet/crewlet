@@ -68,7 +68,15 @@ func tempDir(t testing.TB, removeAll func(string) error) string {
 	// NAMED WITH testbinary.StoreDirPrefix, which is how a test binary tells
 	// a store directory TempDir made from any other: an embedded broker
 	// started in no such directory is refused (jetstream.ErrStoreOutsideTempDir).
-	dir, err := os.MkdirTemp("", testbinary.StoreDirPrefix) //nolint:usetesting // t.TempDir's own removal is the one this replaces: a late flush fails it
+	//
+	// MADE WHERE t.TempDir MAKES ITS DIRECTORIES: under GOTMPDIR where that is
+	// set, as the testing package reads it, and the system's temporary
+	// directory otherwise. A store under the system's while a case's other
+	// files sat under GOTMPDIR put the two on two filesystems wherever GOTMPDIR
+	// names another, and a rename from one into the other — a git pack written
+	// from a case's work tree into its node's repository (gittest.Pack) —
+	// failed with EXDEV.
+	dir, err := os.MkdirTemp(os.Getenv("GOTMPDIR"), testbinary.StoreDirPrefix) //nolint:usetesting // t.TempDir's own removal is the one this replaces: a late flush fails it
 	if err != nil {
 		t.Fatalf("make a directory for a test broker's store: %v", err)
 	}

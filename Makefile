@@ -132,8 +132,8 @@ TEST_TIMEOUT := 30m
 # a cold vet pass per test package in every test job — run SERIALLY in
 # `test-solo`, whose -p 1 serialises vet with everything else.
 #
-# GOTESTBUILD is every flag that changes what is COMPILED, held apart so the
-# solo half's prebuild (below) compiles exactly what its run then finds in the
+# GOTESTBUILD is every flag that changes what is COMPILED, held apart so
+# each half's prebuild (below) compiles exactly what its run then finds in the
 # build cache: a flag in one and not the other is a different action ID, and
 # the prebuild would compile a tree nothing reads.
 GOTESTBUILD := -race
@@ -641,9 +641,27 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # whole run — and the prerequisite says so before anything runs. ci.yml's
 # `test (race)` installs node for the same reason. (internal/e2e's dashboard
 # replay is node's other consumer, in the solo half below.)
+#
+# FOUR PACKAGES AT A TIME, whatever the machine. `go test pkgA pkgB …` runs
+# package binaries at -p=GOMAXPROCS, and each binary runs its parallel tests at
+# -parallel=GOMAXPROCS as well, so left at the defaults the half's concurrency
+# grows with the SQUARE of the cores. CI's four-vCPU runners hold four binaries
+# of up to four tests each, four per core, and the suite's timing bounds are
+# measured there. An eight-core host held eight binaries of up to eight, eight
+# per core, beside eight race detectors' memory, and failed them: on 8 cores
+# and 15 GB, `make test` failed six packages on deadlines, its git pushes and
+# broker starts running past their bounds. internal/gitlet/mirror took 436s
+# there, where alone it passes in 33s, and every one of the six passed run
+# alone. At four, -parallel still follows the cores, so every machine runs at
+# CI's four per core and holds at most CI's four race binaries, and CI's own
+# legs run exactly as they did. The compile is not held to it: the half is
+# prebuilt at the default -p first, as the solo half is (PREBUILD, below).
+PARALLEL_HALF_PACKAGES := 4
+
 test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
-	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json $(PARALLEL_PKGS)
+	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
+	$(GIT_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -658,8 +676,9 @@ test: require-node git ## the suite, minus the packages that run alone (ci: test
 # the first test started. On CI that was 266s of a 992s step running no test
 # at all. So the half is compiled FIRST at the default -p by PREBUILD, which
 # starts no test binary and so forms no cluster, and the -p 1 run finds every
-# compile in the build cache. Every other run at -p 1 (`bench`) is prebuilt
-# the same way. Measured from a cold cache (4 vCPUs, the machine shared): 423s
+# compile in the build cache. Every other run held below the default -p is
+# prebuilt the same way: `bench` at -p 1, and the parallel half at its four
+# packages (above). Measured from a cold cache (4 vCPUs, the machine shared): 423s
 # serial, against 144s for the prebuild plus 19s for a -p 1 run left with
 # seven links and the seven generated test mains, which is all it compiles.
 #
@@ -711,14 +730,15 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # was correct and an output that named one test. Both accumulate now; see the
 # comment on `check`.
 #
-# The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
-# the solo half, compiled without it. Each half whole, as `check` runs them:
-# `override` beats a TEST_SHARD from the command line or the environment.
+# The same flags as the gates bar -race (GOTESTRUN), and the same width and
+# prebuild for each half, compiled without it. Each half whole, as `check`
+# runs them: `override` beats a TEST_SHARD from the command line or the
+# environment.
 test-norace: override TEST_SHARD =
 test-norace: require-node git ## the full suite without -race (faster; not a gate)
 	@$(GIT_ENV) status=0; \
 	echo "==> parallel partition"; \
-	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
+	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \
 	echo "==> solo partition"; \
 	{ $(call PREBUILD,,$(SOLO_PKGS)) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
 	exit $$status
