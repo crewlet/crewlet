@@ -161,6 +161,21 @@ func (b *Bridge) SkillHandler() http.Handler { return b.routed(b.serveSkill) }
 // serveSkill answers one report of the skill route on the opening that holds
 // it — admitted, as every route under the prefix is, by the routing in front
 // of it ([Bridge.routed]).
+//
+// A REPORT THE OPENING CANNOT COUNT IS ANSWERED 204 ALL THE SAME, NEVER TURNED
+// AWAY: one reaching the opening as it ends, whose load the end refuses and
+// records nowhere, and one behind a fence that has closed (the seat moved, or
+// a person stopped it), whose load is recorded refused ([binding.Call]).
+// Neither unlocks anything. A notes read in the same place is turned away to
+// ask again ([readNotes]), because its plugin confirms again. The skills
+// plugin never posts a load again, whatever it is answered, and ends its
+// reports for the rest of the run on a 401 or a 404 (internal/sandbox/executor,
+// opencode_skills.js): a 503 would buy nothing, and a refusal would end the
+// reports of a run that goes on with the seat's next holder. What makes good a
+// load that did not count is the required-skill guard: the run's next call to
+// a tool the skill covers is refused, naming the skill to load, and the load
+// its model makes then is reported afresh, to the opening that serves the run
+// by then.
 func (b *Bridge) serveSkill(w http.ResponseWriter, r *http.Request, opened *binding) {
 	if !opened.session.nativeSkills() {
 		// A SESSION HANDED NO SKILLS has no skill route at all.
