@@ -282,8 +282,8 @@ type benchLooks struct {
 // Err is the context's error, a look End takes at it.
 func (l *benchLooks) Err() error {
 	now := time.Now()
-	l.longest = max(l.longest, now.Sub(l.last))
-	l.last = now
+	stretch := now.Sub(l.last) //fixedwait:measure End's stretch between two looks, reported, deciding nothing
+	l.longest, l.last = max(l.longest, stretch), now
 	return l.Context.Err()
 }
 
@@ -291,7 +291,9 @@ func (l *benchLooks) Err() error {
 // returned.
 func (l *benchLooks) ended() (end, look time.Duration) {
 	now := time.Now()
-	return now.Sub(l.start), max(l.longest, now.Sub(l.last))
+	end = now.Sub(l.start) //fixedwait:measure End's time, reported, deciding nothing
+	look = now.Sub(l.last) //fixedwait:measure End's last stretch without a look, reported, deciding nothing
+	return end, max(l.longest, look)
 }
 
 // benchModelled holds the chain to a thread it models, handing orders
