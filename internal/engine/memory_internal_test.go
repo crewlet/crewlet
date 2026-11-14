@@ -161,8 +161,9 @@ func (m *scriptedMemory) flush(t *testing.T, seat string) []reportLine {
 // table answers.
 var carriedWhole = memsync.Carried{Rows: 6, Marked: 3}
 
-// draining is what a publish its bound cut inside a backlog answers: the rows
-// the changelog acknowledged, each of which moved a mark.
+// draining is what a call its bound cut after its rows moved marks answers,
+// in either range, a seat's own pass or its backlog: the rows the changelog
+// acknowledged, each of which moved a mark.
 var draining = memsync.Carried{Rows: 428, Marked: 428, StoppedIn: "agent_diary"}
 
 // nothingAcknowledged is what a call the bound cut before the changelog
@@ -425,14 +426,15 @@ func TestEverySeatIsCarriedWithinTwoCyclesForEachSeatThatRunsOut(t *testing.T) {
 // three seats that each need two thirds of a cycle, none needs more than one,
 // and yet the cycles run out at all three, each when a cycle reaches it
 // second. Its 2k is the cycles between two that reach a seat, which a seat
-// sorted after a backlog can wait in full: of a, b and c, where b needs a
-// little over two cycles once, a completes and the first cycle runs out at b,
-// b has the whole second, and c waits both, 2k for k = 1, before the third
-// reaches it. And the backlogs' turn is one more turn a cycle can run out in,
-// which holds the turns after it back two more cycles: two for each turn the
-// cycles run out in, the backlogs' among them, is 2k + 2 for k seats. Of a, b,
-// c and d, in cycles from b's turn, where c's own pass runs out twice and the
-// backlogs' turn moves nothing in two, a waits four, 2k + 2 for k = 1.
+// sorted after a burst can wait in full: of a, b and c, where b's own pass
+// needs a little over two cycles once, a completes and the first cycle runs
+// out at b, b has the whole second, and c waits both, 2k for k = 1, before
+// the third reaches it. And the backlogs' turn is one more turn a cycle can
+// run out in, which holds the turns after it back two more cycles: two for
+// each turn the cycles run out in, the backlogs' among them, is 2k + 2 for k
+// seats. Of a, b, c and d, in cycles from b's turn, where c's own pass runs
+// out twice and the backlogs' turn moves nothing in two, a waits four, 2k + 2
+// for k = 1.
 //
 // A seat is reached when a cycle calls its own pass with time left: one
 // called on a bound already spent carries nothing.
@@ -465,7 +467,7 @@ func TestNoSeatWaitsMoreThanTwoCyclesForEachTurnACycleRunsOutIn(t *testing.T) {
 		ranOutAt: []string{"a", "b", "c"},
 		waited:   1,
 	}, {
-		name:     "a backlog that holds the seat sorted after it back for two cycles",
+		name:     "a burst that holds the seat sorted after it back for two cycles",
 		seats:    []string{"a", "b", "c"},
 		outlasts: func(seat string, n int, _ bool) bool { return seat == "b" && n <= 2 },
 		ranOutAt: []string{"b"},
