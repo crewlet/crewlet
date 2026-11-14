@@ -139,6 +139,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{FeedUnreadable: 3},
 			"could not be translated",
 		},
+		"a delivery the inbound group never handled": {
+			statelog.KindInboundDeadLettered,
+			statelog.Reading{InboundDeadLetters: []statelog.FeedDeadLetter{
+				{Age: time.Hour, ExpiresIn: 29*24*time.Hour + 23*time.Hour}}},
+			"the notification service's inbound group holds 1 delivery(ies) no node handled",
+		},
 		"a change feed down past the stall grace": {
 			statelog.KindFeedStopped,
 			statelog.Reading{FeedsDown: []statelog.FeedOutage{{Source: "chat",

@@ -251,7 +251,10 @@ func entryOf(ref Ref, claims []*Claim, hosts map[*Claim]Ref, members []Ref, now 
 	e := Entry{ID: ref.ID(), Ref: ref, Lane: ref.Kind.Lane(), Name: ref.Key, Members: members,
 		Facts: []FactView{}, Relations: []Edge{}, Sources: []Source{}}
 	var exists *resolution
-	asserted, sources := false, map[voice]Source{}
+	// THE NEWEST LIVE CLAIM OF EACH VOICE names the voice: an agent's source
+	// carries its turn, and a voice that recorded in several turns is named
+	// by its latest, never by whichever facet a map walk met last.
+	asserted, sources := false, map[voice]*Claim{}
 	var support, winners []*Claim
 	for k, cs := range facets {
 		r := resolve(cs)
@@ -260,7 +263,9 @@ func entryOf(ref Ref, claims []*Claim, hosts map[*Claim]Ref, members []Ref, now 
 		}
 		for _, c := range r.voices {
 			if !c.Denied {
-				sources[voiceOf(c)] = c.Source
+				if held, ok := sources[voiceOf(c)]; !ok || newer(c, held) < 0 {
+					sources[voiceOf(c)] = c
+				}
 				if c.ObservedAt.After(e.LastSeen) {
 					e.LastSeen = c.ObservedAt
 				}
@@ -290,11 +295,17 @@ func entryOf(ref Ref, claims []*Claim, hosts map[*Claim]Ref, members []Ref, now 
 	if !asserted && (exists == nil || !exists.winner.Denied) {
 		return Entry{}, false
 	}
-	for _, s := range sources {
-		e.Sources = append(e.Sources, s)
+	for _, c := range sources {
+		e.Sources = append(e.Sources, c.Source)
+		if c.Source.Kind == SourceAgent {
+			e.reports = append(e.reports, Report{Source: c.Source, ObservedAt: c.ObservedAt})
+		}
 	}
 	slices.SortFunc(e.Sources, func(a, b Source) int {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	})
+	slices.SortFunc(e.reports, func(a, b Report) int {
+		return cmp.Or(b.ObservedAt.Compare(a.ObservedAt), cmp.Compare(a.Source.Name, b.Source.Name))
 	})
 	e.State, e.Confidence = stateOf(exists, support, winners, now)
 	e.Word = e.Confidence.Display()

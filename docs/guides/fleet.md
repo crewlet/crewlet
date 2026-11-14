@@ -357,7 +357,7 @@ node:
 | `gitlet` | Serves the company's git repositories, where the company sets [`code.backend: gitlet`](../concepts/gitlet.md): a disposable [cache](../concepts/gitlet.md#the-cache-on-a-gitlet-node) of them on this node's disk, sized by its Tier A [`gitlet` block](../concepts/configuration.md#gitlet), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
-| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the sandbox waiter, the integration reconcile loop, the atlas collect duty, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the delegated decisions sweep, the sandbox waiter, the integration reconcile loop, the atlas collect duty, the atlas wake duty, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
 `data` decides **which state logs it applies**: a data node applies all eleven
@@ -814,7 +814,9 @@ The consequences worth stating plainly:
   rather than run it without the field; the asking node tries the next data
   node. Where none is on the newer build yet, a seat's tool or a person's
   request answers `fleet_builds_differ`, the engine's record of how a turn
-  ended stays owed (the seat's mail waits on it) until one is, and the refusing
+  ended stays owed (the seat's mail waits on it) until one is, a coding run
+  whose change's open uses one comes back with the change not opened, for its
+  seat to open again with `code_open_change`, and the refusing
   data node logs `estate_request_refused` at `WARN` with
   `disposition=unknown_keys`, naming the keys, once per request it refuses. A
   request that does not use the field is served as before. **Upgrade the data
@@ -823,8 +825,10 @@ The consequences worth stating plainly:
   upgraded is refused the answers it would carry into another request — a
   publish keeping a version's files, a view save and the views listed to make
   one, the catalogue, a project's fields or a datastore's schema sent back
-  whole, a list's query, a Gitlet node's sync of a repository — and answers
-  `fleet_builds_differ` for those until it is upgraded too. See
+  whole, a list's query, a Gitlet node's sync of a repository, the queue work
+  a repository's home Gitlet node lands its merge queue from — and answers
+  `fleet_builds_differ` for those until it is upgraded too, while such a home's
+  merge queues wait, losing nothing. See
   [A build reads what it is asked whole](../concepts/scaling.md#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it).
 - **A roll finishes within the hour, or its wakes are dead-lettered.**
   Every node pulls each domain's wake feed from one durable consumer, so a
@@ -848,6 +852,56 @@ The consequences worth stating plainly:
   (`crewlet.tracker.feed.dead_letter_discarded`). An entry nothing replays
   or discards is kept for `stream.event_retention_hours` and then expires,
   and its wake with it (`crewlet.tracker.feed.dead_letter_expired`). See
+  [Dead letters](../concepts/event-system.md#dead-letters).
+- **An older node hands a newer record's wake back to the fleet, and a
+  node of the newer build delivers what the fleet did not.**
+  Every node takes the notification service's deliveries from one consumer
+  group, `notify-inbound`, and a wake carries the record its feed relayed,
+  so a wake whose record the newer build wrote reaches the older nodes too,
+  which cannot read it. An older node that wins one hands it back rather
+  than acknowledge it for the whole fleet (`inbound_deferred` and
+  `delivery_passed`, both at `INFO`), and goes on taking its other
+  deliveries. So does a delivery from a first-party source the newer build
+  added — a domain given a wake feed, say — which an older node has no
+  parser for (`reason=newer_source`): the engine's own producers mark what
+  they publish, so it is told apart from a vendor's webhook nothing parses,
+  which is acknowledged as before. It comes back on the redelivery backoff,
+  a second doubling to thirty, for the group's 25 deliveries, about ten
+  minutes, and nothing steers those deliveries to a node of the newer
+  build: early in a roll, one newer node among many older ones, every one
+  of them can go to an older node. One that no node has taken by then is
+  dead-lettered with its copy among the group's unhandled deliveries,
+  `dlq.crewlet.notifications.inbound.notify-inbound.unhandled.{digest}`
+  (`dead_lettered` at `ERROR`, with `returned=pass` and
+  `reason=newer_record`), as is one whose last delivery a node that sheds or
+  stops handed back after the passes, or one whose last delivery reached a
+  newer node that could not publish its wake — its broker did not answer,
+  or its stop ended the handler — a failure of that node's, never of the
+  wake (`handler_failed` with `fault=node`). Every node of the newer build
+  replays that subject: one already running within ten seconds of the keep,
+  since it asks the broker on every such beat whether the subject moved,
+  and a node starting at its start. It delivers each copy's wake and drops
+  the copy (`inbound_dead_letters_replayed`), so a roll that takes longer
+  than ten minutes loses no wake to its length, and one paused with a newer
+  node among older ones delivers them as they are kept. A copy whose keep
+  fails — refused, or cut by a node that stopped or was killed while it
+  crossed — is kept by the message's next delivery (`dead_letter_failed` at
+  `WARN`), since the broker delivers a message five times past its budget
+  for that; two losses remain: a copy whose keep fails at every one of
+  those deliveries (`dead_letter_failed` at `ERROR`), and one no node of a
+  build that reads it runs to replay before the retention lets it go,
+  counted below. Waiting, each holds one of the group's acknowledgement
+  slots for up to its ten minutes, out of the broker's 1000, so only a
+  sustained 1.7 such wakes a second early in a roll would delay the group's
+  other mail, and none of it is lost. While any such wake waits,
+  `inbound_dead_lettered` is raised on every data node, naming how many wait
+  and how soon the first expires: one that stays is one no running node
+  reads, so finish the roll, or start a node of the newer build if it has
+  paused, and it is delivered. One that expires first is counted as a lost
+  wake (`crewlet.notify.inbound.dead_letter_expired`). `crewlet feeds
+  dead-letters` does not list these: they are the notification service's,
+  not a wake feed's. See
+  [Delivery semantics](../concepts/event-system.md#delivery-semantics) and
   [Dead letters](../concepts/event-system.md#dead-letters).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the

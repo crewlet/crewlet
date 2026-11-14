@@ -101,7 +101,8 @@ func (r *Runner) resume(ctx context.Context, history []ledger.Iteration) (turn.W
 //
 // A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report (see
 // [Asked]). And so does a job lost with its host ([Lost]), and one refused on a
-// sign-in replaced while it ran ([Rotated]), unless the round's calls already
+// sign-in replaced while it ran ([Rotated]), and one whose continued session
+// its provider refused ([Refused]), unless the round's calls already
 // hold its submission: such a job had finished its work, and the round is
 // collected.
 func (r Resume) carriedRound() carried {
@@ -114,6 +115,8 @@ func (r Resume) carriedRound() carried {
 		return r.Lost
 	case r.Rotated != nil && !submittedRound:
 		return r.Rotated
+	case r.Refused != nil && !submittedRound:
+		return r.Refused
 	}
 	return nil
 }

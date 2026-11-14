@@ -34,17 +34,54 @@ type Parsed struct {
 // never quoted, since what a parser says of a file repeats its text.
 var errUnparsed = errors.New("not a file of its format")
 
-// Parse reads one listed file of the repository named repo as its format and
-// answers what it declares. raw is the file's bytes, nil for a format that
-// is listed by its presence. PURE, and it never fails: a file that is not its
-// format declares nothing and says so.
+// Repo is the repository a file is read from, as the parsers name it.
+type Repo struct {
+	// Voice is the name its files' claims are made under ([atlas.CodeSource]).
+	Voice string
+	// Name is its short name, which a service it builds is named for.
+	Name string
+	// Key is its key in the atlas, which what it builds is built from.
+	Key string
+}
+
+// GitletRepo is the Gitlet repository named name.
+func GitletRepo(name string) Repo {
+	return Repo{Voice: name, Name: name, Key: atlas.GitletPrefix + "/" + name}
+}
+
+// ForgeRepo is the repository a forge holds under the atlas key key
+// (github.com/acme/api), and false for one whose key is no voice's name.
+//
+// ITS VOICE IS ITS KEY WITH ':' FOR EVERY '/', since a source's name takes no
+// slash: exact both ways, because no host and no part of a forge's path holds
+// a colon, and never a Gitlet repository's name, which holds neither. Its
+// short name is the last part of its path, which a key holds in lower case.
+func ForgeRepo(key string) (Repo, bool) {
+	ref, err := atlas.RecordedRef(atlas.KindRepository, key)
+	if err != nil || ref.Key != key || ref.OnGitlet() || strings.Contains(key, ":") {
+		return Repo{}, false
+	}
+	voice := strings.ReplaceAll(key, "/", ":")
+	// THE VOICE'S OWN GRAMMAR, asked of the vocabulary: a key too long or
+	// too strange to be a source's name is a repository that is not read.
+	if _, err := atlas.Exists(ref, atlas.CodeSource(voice), time.Unix(0, 0).UTC()); err != nil {
+		return Repo{}, false
+	}
+	return Repo{Voice: voice, Name: key[strings.LastIndexByte(key, '/')+1:], Key: key}, true
+}
+
+// Parse reads one listed file of repo as its format and answers what it
+// declares. raw is the file's bytes, nil for a format that is listed by its
+// presence. PURE, and it never fails: a file that is not its format declares
+// nothing and says so.
 //
 // THE PARSERS DECODE INTO CLOSED TYPES: a field nobody declared is never
 // decoded, so an environment block, a command line, a secret's data and a
 // dependency's version have no field to land in
 // (TestNoParserDeclaresAFieldForAnEnvironmentValue).
-func Parse(repo, file string, format deployfiles.Format, raw []byte, at time.Time) (out Parsed) {
-	f := &finder{b: collect.NewBuilderFor(atlas.CodeSource(repo), at), repoName: repo, file: file}
+func Parse(repo Repo, file string, format deployfiles.Format, raw []byte, at time.Time) (out Parsed) {
+	f := &finder{b: collect.NewBuilderFor(atlas.CodeSource(repo.Voice), at), repoName: repo.Name, repoKey: repo.Key,
+		file: file}
 	// A PARSER PANIC IS AN UNREADABLE FILE, never the node's: the bytes are
 	// anybody's with a push, and this runs in the home's loop.
 	defer func() {
@@ -97,6 +134,7 @@ func Parse(repo, file string, format deployfiles.Format, raw []byte, at time.Tim
 type finder struct {
 	b        *collect.Builder
 	repoName string
+	repoKey  string
 	file     string
 }
 
@@ -106,9 +144,9 @@ func (f *finder) where(parts ...string) string {
 }
 
 // repository is the repository the file is in, NAMED and never claimed:
-// Gitlet's own rows say it exists.
+// Gitlet's own rows, or its forge's read, say it exists.
 func (f *finder) repository(where string) (atlas.Ref, bool) {
-	return f.b.Names(where, atlas.KindRepository, atlas.GitletPrefix+"/"+f.repoName)
+	return f.b.Names(where, atlas.KindRepository, f.repoKey)
 }
 
 // service claims the service keyed key.

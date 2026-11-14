@@ -3,6 +3,7 @@ package cloudflare_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -134,10 +135,11 @@ func TestTheAtlasReadsEveryNameAndCertificate(t *testing.T) {
 	if len(read.Withheld) != 0 {
 		t.Errorf("the read withheld %+v", read.Withheld)
 	}
-	// One call for the account, one page of zones, and a page of records
-	// and a page of packs for each of the fake's three zones.
-	if read.Calls != 8 {
-		t.Errorf("the read made %d calls, want 8", read.Calls)
+	// One call for the account, one page of zones, a page of records and a
+	// page of packs for each of the fake's three zones, and one call for each
+	// of the four optional listings the fake's token may read.
+	if read.Calls != 12 {
+		t.Errorf("the read made %d calls, want 12", read.Calls)
 	}
 	v := atlas.Fold(read.Claims, atlasNow)
 	account := find(t, v, atlas.KindAccount, "cloudflare/"+testAccount)
@@ -247,6 +249,19 @@ func TestNoCredentialShapeReachesTheAtlasFromCloudflare(t *testing.T) {
 			"id": "pack-2", "type": "universal", "status": "active", "hosts": []string{shape.Sample, "example.com"},
 			"certificates": []map[string]any{{"id": "cert-2", "issuer": shape.Sample, "expires_on": "2027-01-01T00:00:00Z"}},
 		}}}
+		// AND THE OPTIONAL LISTINGS: the shape as each one's name or id, and
+		// in every field beside it that the read never decodes.
+		beside := func(row map[string]any) map[string]any {
+			maps.Copy(row, undecodedOptional(shape.Sample))
+			return row
+		}
+		f.workers = []map[string]any{beside(map[string]any{"id": shape.Sample}), beside(map[string]any{"id": "edge-api"})}
+		f.pages = []map[string]any{beside(map[string]any{"name": shape.Sample}), beside(map[string]any{"name": "docs"})}
+		f.buckets = []map[string]any{beside(map[string]any{"name": shape.Sample}), beside(map[string]any{"name": "assets"})}
+		f.tunnels = []map[string]any{
+			beside(map[string]any{"id": shape.Sample, "name": "office"}),
+			beside(map[string]any{"id": "f70ff985-a4ef-4643-bbbc-4a0ed4fc8415", "name": shape.Sample}),
+		}
 		read := readAtlas(t, f)
 		out, err := json.Marshal(read)
 		if err != nil {
@@ -255,7 +270,16 @@ func TestNoCredentialShapeReachesTheAtlasFromCloudflare(t *testing.T) {
 		if piece := shape.Sample[len(shape.Sample)/2:]; strings.Contains(string(out), piece) {
 			t.Errorf("%s: a piece of the shape reached the read: %s", shape.Name, out)
 		}
-		if len(read.Withheld) < 6 {
+		// What sat beside a credential is still read, and a tunnel whose
+		// name was refused is still an entry, by its id.
+		v := atlas.Join(atlas.Fold(read.Claims, atlasNow), atlas.Joined{}, atlasNow)
+		find(t, v, atlas.KindWorkload, "cloudflare/workers/edge-api")
+		find(t, v, atlas.KindWorkload, "cloudflare/pages/docs")
+		find(t, v, atlas.KindBucket, "cloudflare/r2/assets")
+		if tunnel := find(t, v, atlas.KindWorkload, "cloudflare/tunnels/f70ff985-a4ef-4643-bbbc-4a0ed4fc8415"); len(factOf(tunnel, atlas.FactName)) != 0 {
+			t.Errorf("%s: the tunnel whose name was refused is named %v", shape.Name, factOf(tunnel, atlas.FactName))
+		}
+		if len(read.Withheld) < 11 {
 			t.Errorf("%s: %d values withheld, want every planted mapped field: %+v", shape.Name,
 				len(read.Withheld), read.Withheld)
 		}

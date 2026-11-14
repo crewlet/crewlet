@@ -560,8 +560,10 @@ func TestATurnAfterASessionRanOutOfContextStartsItsOwnSayingWhy(t *testing.T) {
 		t.Fatalf("the first launch is answered %+v, want no session, saying which ran out", basis)
 	}
 	endings := read.endingsBlock()
-	if !strings.Contains(endings, "ran out of its model's context") || !strings.Contains(endings, account) {
-		t.Fatalf("the brief tells %q, want what the turn was asked and that its session ran out", endings)
+	if !strings.Contains(endings, "ran out of its model's context") || !strings.Contains(endings, "refused") ||
+		!strings.Contains(endings, account) {
+		t.Fatalf("the brief tells %q, want what the turn was asked and that its session could not go on, "+
+			"for either cause a retired session has", endings)
 	}
 }
 

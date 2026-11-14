@@ -367,6 +367,22 @@ func (l liveWork) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (wo
 	return r.WorkPatterns(ctx, q)
 }
 
+func (l liveWork) EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error) {
+	r, err := l.reader()
+	if err != nil {
+		return worklet.EntryMarks{}, err
+	}
+	return r.EntryMarks(ctx, level)
+}
+
+func (l liveWork) EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now time.Time) (worklet.EntryWork, error) {
+	r, err := l.reader()
+	if err != nil {
+		return worklet.EntryWork{}, err
+	}
+	return r.EntryWork(ctx, q, now)
+}
+
 func (l liveWork) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
 	r, err := l.reader()
 	if err != nil {
@@ -647,6 +663,8 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		halves.Atlas = engine.AtlasToolDeps(e)
 		// AND ITS WRITES, through the router, decided on that read.
 		halves.AtlasWrite = engine.AtlasWriteToolDeps(e)
+		// AND THE ASK THAT A SOURCE BE READ NOW, on the coordination store.
+		halves.AtlasRefresh = engine.AtlasRefreshToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

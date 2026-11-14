@@ -22,8 +22,9 @@ first ([who reads it](../concepts/atlas.md#who-reads-it)). A person without it
 sees the row locked, with the permission it needs, never hidden.
 
 The atlas is never a way round another permission: a person who does not use
-Gitlet is shown no repository from it, and an integration's standing or a
-server's connection test is shown only to an administrator, as on the screens
+Gitlet is shown no repository from it, an integration's standing or a
+server's connection test is shown only to an administrator, and the work that
+touches an entry is shown only to a person who uses Worklet, as on the screens
 those come from.
 
 ## What it shows today
@@ -36,9 +37,9 @@ through the operator tools
 | Lane | What fills it in this version |
 |---|---|
 | Entry | the zones the Cloudflare integration declares, the host names the engine answers at (`api.external_url`, `api.public.external_url`), and what the engine reads from the Cloudflare account: every zone, every name an A, AAAA or CNAME record gives and what it points at, and every certificate pack ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
-| Services | the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the containers running on each server you [let the atlas read](#reading-inside-a-server), the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
-| Runtime | the servers the SSH integration declares, with the open ports of each one you let the atlas read, and the hosts that report to Datadog |
-| Data | the databases, queues and buckets a Gitlet repository's compose files, manifests and charts name, shown as likely, and what people add |
+| Services | Crewlet itself, on the nodes it runs on, the services of the Datadog service catalogue and the ones its monitors' `service:` tags name, the containers running on each server you [let the atlas read](#reading-inside-a-server), the services a Gitlet repository's deploy files declare, shown as likely ([what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare)), and what people add |
+| Runtime | each node of the engine's own fleet (its address for administrators only, marked internal), the servers the SSH integration declares, with the open ports of each one you let the atlas read, and the hosts that report to Datadog |
+| Data | the engine's own event stream and object store, as its nodes say them, the databases, queues and buckets a Gitlet repository's compose files, manifests and charts name, shown as likely, and what people add |
 | Platforms | each connected integration's account, and the vendors a Gitlet repository's dependency and Terraform files name, shown as likely |
 | Code and delivery | Gitlet's repositories and their checks, the repositories the GitHub and GitLab integrations name, and what the engine reads from the GitHub organisation: every repository the agents' apps cover, its workflows and the environments it deploys to ([what integrations read](../concepts/atlas.md#what-integrations-read)) |
 | Observability | what the engine reads from the Datadog organisation: every monitor with its state, and what each one watches ([what integrations read](../concepts/atlas.md#what-integrations-read)), and what people add |
@@ -81,7 +82,8 @@ and one selection.
   line. **Every change** opens [Changes](#changes).
 - **Where it comes from**: the vendors the entries come from, and how many
   entries are Confirmed, Likely and Unconfirmed. Under it, **Review** says how
-  many things wait for a person and opens [Review](#review).
+  many things wait for a person and opens [Review](#review), and **Sources**
+  opens [each integration's last read](#sources-and-refresh-now).
 
 Nothing in the band, or anywhere on the page, is a request rate, a latency or
 an error budget: the engine holds none. Health is the engine's word for an
@@ -104,6 +106,10 @@ its name.
   pipeline whose last run or deployment failed with everything it deploys,
   among them). A quiet entry draws none. Each cluster's title counts its
   entries and how many of them need attention.
+- **A blue notch means it is being worked on**: a quiet entry that an open
+  Worklet task names ([work on an entry](#work-on-an-entry)). An entry that
+  needs attention keeps its red or amber notch, and its card says how many
+  open tasks name it. The mark is drawn for a reader who uses Worklet.
 - **A dashed edge means unconfirmed**: an entry only an agent reported, with
   nothing the engine could check. These are hidden until somebody confirms
   them; **Show unconfirmed** under Filter shows them, and says how many it
@@ -164,6 +170,10 @@ last change with what it was, and its confidence. Fifty rows load at a time,
 with **Load more**; the groups stay whole because the engine reads the whole
 atlas in that order.
 
+A row whose entry an open Worklet task names says so beside its health ("2
+open tasks"), for a reader who uses Worklet, and the words open the entry's
+[Work tab](#work-on-an-entry).
+
 Pressing a row selects the entry on the map and opens it beside the page.
 
 ## An entry
@@ -181,10 +191,12 @@ page:
 - its facts, each with where it came from, how far it is trusted and when it
   was last seen ("seen by Cloudflare · confirmed · 4 min ago", "observed by sre
   · likely · turn");
+- **Work**: the open tasks that name it, the first five, with the rest on
+  its page;
 - **Recent changes**: the atlas's own log for this entry, newest first, each
   line with who recorded it.
 
-**Open** takes you to its page, which has four tabs:
+**Open** takes you to its page, which has five tabs:
 
 - **Overview**: the same, with the diagram drawn wide, how much the company
   uses it, which agents hold an account there, the keys merged into it, and
@@ -192,6 +204,7 @@ page:
 - **Relations**: what it depends on, what depends on it, the seats, units and
   pages it names, and everything that depends on it hop by hop, with the way to
   show the same on the map.
+- **Work**: the Worklet tasks that name it ([work on an entry](#work-on-an-entry)).
 - **Sources**: what each source says about it. Where two sources disagree, both
   values are shown first, with which one the atlas shows and why (a person's
   value over a newer report, or the newest of two equally trusted sources); the
@@ -211,6 +224,31 @@ file it cites, or a repository's deploy and dependency files) and
 **Internal** beside an address marks one on a private network. The atlas keeps
 these, since they are the company's own map, and says so rather than hiding
 them.
+
+## Work on an entry
+
+A task in Worklet can name the entries it touches: the server a change rolls
+out to, the database a migration runs on. The link is made on the task, under
+**Atlas entries** in its side panel (**Link an atlas entry**), or by an agent
+working on it ([the Worklet guide](worklet.md#the-atlas-entries-a-task-touches)).
+Nothing is written to the atlas, and a link never changes an entry's health or
+its confidence.
+
+- **The Work tab** of an entry lists the open tasks that name it, most
+  recently changed first, then the ones finished in the last 30 days, each
+  with its key, title and status, and opens the task. The tab counts the open
+  ones.
+- **The map and the catalogue mark an entry with open work**: a blue notch on
+  a quiet entry's card, and the count on its row.
+- **Worklet decides who sees work.** A person who holds Atlas and does not use
+  Worklet sees the Work tab locked, with the permission it needs, and no mark.
+  Where the company keeps its work outside Worklet, the tab says so.
+- **Atlas decides who sees entries.** On the task, a person who holds Atlas
+  sees each entry as a chip that opens it. A person who does not sees how many
+  entries the task names, locked with the permission it needs, and no name.
+- **An entry that left the atlas.** A task that names an entry since retired
+  still opens it; one whose entry is no longer in the atlas at all says "1
+  entry is no longer in the atlas" on the task, where the link can be removed.
 
 ## Adding and correcting
 
@@ -264,6 +302,9 @@ is gone the moment its cause is:
   is drawn: it is settled where it is declared, and the item says so.
 - **Unconfirmed**: an entry only an agent reported, with nothing the engine
   could check. It stays off the map until you **Confirm** it, or **Retire** it.
+  Under it is what the agent said: which agent, in which turn (the link opens
+  the run, where the call's own answer is), the tool whose call it cited, and
+  what a call of that tool is evidence of.
 - **Likely**: an entry an agent backed with a call or a file, that no person,
   integration or setting stands behind yet. It stays here, even after
   somebody corrects one fact on it, until somebody confirms the entry itself.
@@ -274,7 +315,74 @@ Pick several with their boxes to decide them together: **Accept as shown**
 confirms each entry and keeps each shown value, and **Retire** retires the
 picked entries. A bulk decision lists what it decides in a dialog and sends
 only when you press again there; what the engine refused stays picked, with
-its reason.
+its reason. An entry an agent reported is listed there with who reported it.
+
+An agent's value beside a person's, in a disagreement, names the call it cited
+in the same way.
+
+**One thing in Review also reaches your Inbox:** a newer report that differs
+from a value you set or confirmed yourself. It appears under **Needs you**
+with both values and opens the entry's Sources tab, where you keep one. It
+leaves the Inbox as soon as somebody decides. Everything else waits in Review
+for every holder of Atlas together, so the Inbox does not fill with
+infrastructure changes.
+
+**An agent that owns an entry is woken about it.** When an entry whose owner
+is an agent turns to Alerting, or its sources come to disagree, the engine
+wakes that agent to look: at most once a day for each entry, and only about
+a change it has not already been told. The agent reads the entry itself and
+acts within its role; a disagreement is still yours to settle in Review. A
+paused agent, or one out of budget, is not woken until it runs again. To turn
+this off for the company, set `atlas.owner_wakes: false` in the company
+document ([The owning agent is woken when its entry
+drifts](../concepts/atlas.md#the-owning-agent-is-woken-when-its-entry-drifts)).
+
+**What has waited too long reaches the Setup Advisor.** A disagreement nobody
+has decided in 7 days is listed in [Settings › Advisor](advisor.md#what-the-atlas-shows)
+with the entries it is on, beside a service nobody owns, an owner that left the
+chart, a service open to the internet that nothing watches, and a source that
+stopped reading. Each is fixed from there or from the entry's own page: both
+send the same change.
+
+## Sources and Refresh now
+
+**Sources** (from the band, `#/company/atlas/sources`) lists each integration
+the atlas reads for the company: Cloudflare, Datadog, GitHub, GitLab and the
+company's servers among them, once each is connected. DigitalOcean and Expo
+are read only once you give the atlas a read-only identity of its own there,
+which is optional
+([DigitalOcean](../integrations/digitalocean.md#let-the-atlas-read-the-team),
+[Expo](../integrations/expo.md#let-the-atlas-read-the-account)); until then
+their cards say Not read yet, and nothing else is affected. Each is read whole on a timer (every hour
+unless [`atlas.refresh_interval_seconds`](../getting-started/configuration.md)
+says otherwise), and its card says how the last read went:
+
+- **Its state**: Read, Partly read (the read finished and was refused some
+  part), Last read failed, or Not read yet, with when it was read and when it
+  is read next. A read that failed is tried again five minutes later, and the
+  atlas keeps what the last whole read found.
+- **Its last whole read in figures**: the entries it held, the calls it made
+  at the vendor (for the servers, the commands it ran), the changes it
+  recorded, and **Values withheld**: how many values it left out because they
+  were shaped like a credential. They are counted and never shown, here or
+  anywhere else.
+- **What it could not read**: each listing the vendor refused, with the
+  permission that restores it, and each server it could not reach or whose
+  command failed. What an earlier read found there stands. Why a read failed
+  outright is shown to administrators; everyone else is told that it failed.
+- **Entries it stopped seeing**: how many entries the last read did not list.
+  Nothing is retired on one miss: an entry is retired only when a second whole
+  read, a day later, does not list it either.
+- **Each server**, for the servers' card: when the server was last read whole,
+  and how many of its parts (its ports, its containers) the last read could
+  not read. Only a server whose inventory is switched on is listed
+  ([let the atlas read a server](../integrations/ssh.md#let-the-atlas-read-a-server)).
+
+**Refresh now** asks for a read of that source without waiting for the timer.
+The node that reads for the atlas makes it within a minute, and the card says
+who asked while it waits. The engine reads one source at most once every five
+minutes, whoever asks: inside that time the button is held and says when it
+can be pressed again. Anyone holding Atlas may ask; an agent never does.
 
 ## Changes
 
@@ -283,6 +391,21 @@ company, newest first: its lines a day for the last fourteen days, then each
 line with the entry it is about and who recorded it. It lists what people,
 integrations and agents recorded; what the engine reads from the settings and
 its own records at every read leaves no line.
+
+## On Home
+
+**Atlas attention** is a card you can add to your Home (Edit Home, under
+Atlas). It shows how many entries are Alerting and how many Need a look, and
+lists the four most urgent with the reason for each in one sentence. Pressing
+an entry opens it; **Open** goes to the atlas, and a line under the list says
+how many more the page holds.
+
+- When nothing is wrong it says **Nothing is alerting**, with how many entries
+  the atlas holds. It says that only over a read that reached every source: if
+  one was not read, the card names it and says the list may be short.
+- It is offered only to people who hold Atlas. If your access is taken away,
+  the card stays on your Home and says you no longer have access; it shows no
+  entry and reads nothing.
 
 ## Asking about it
 

@@ -1761,7 +1761,7 @@ func eachOpenCodeItem(content json.RawMessage, each func(openCodeContent) error)
 		stopped error
 	)
 	// The walk's own error is no reader's: the items before it were read.
-	_ = eachElement(content, func(element json.RawMessage) error {
+	_ = eachElement(content, func(element json.RawMessage, _ int) error {
 		wire = openCodeItemWire{}
 		if wireObject(element) && wireDecode(element, &wire) != nil {
 			wire = openCodeItemWire{}

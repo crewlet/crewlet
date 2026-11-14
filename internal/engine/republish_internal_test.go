@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -123,44 +124,64 @@ func TestTheCallerDoesNotWaitForTheRebuild(t *testing.T) {
 // the distinction that matters: a skipped rebuild is exactly the state this
 // mechanism exists to prevent — a credential sealed, resolvable, and read by
 // nothing that is running.
+//
+// ON THE BUBBLE'S CLOCK. The window's end is a real timer (`time.AfterFunc` in
+// [republisher.request]), and the case read "during the window" against it: a
+// runner that descheduled the case for more than the window between the first
+// run and the read saw the coalesced run too (crewlet/crewlet#1112). In a
+// synctest bubble the timer runs on the bubble's clock, which moves only once
+// every goroutine in it is blocked, so the window is a state the case holds:
+// the read comes after [synctest.Wait] has let the immediate run finish and
+// before anything has advanced the clock, and the coalesced run is released by
+// the case's own wait for it.
+//
+// Mutation: drop the coalesced run (the window's timer never armed), and the
+// second call never comes; fire it at once rather than at the window's end,
+// and two calls are read during the window; credit the burst to its first
+// request rather than its last, and the operator is wrong.
 func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 	t.Parallel()
-	log := newRepublishLog()
-	clock := time.Unix(0, 0)
-	var mu sync.Mutex
-	r := &republisher{
-		window: 50 * time.Millisecond,
-		now: func() time.Time {
-			mu.Lock()
-			defer mu.Unlock()
-			return clock
-		},
-	}
-	t.Cleanup(r.stop)
+	synctest.Test(t, func(t *testing.T) {
+		log := newRepublishLog()
+		clock := time.Unix(0, 0)
+		var mu sync.Mutex
+		r := &republisher{
+			window: 50 * time.Millisecond,
+			now: func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				return clock
+			},
+		}
+		t.Cleanup(r.stop)
 
-	// Six seals inside one window, which is one operator pressing Connect.
-	r.request(as("atlassian"), log.run)
-	for _, who := range []string{"jira", "confluence", "datadog", "gitlab", "founder"} {
-		r.request(as(who), log.run)
-	}
+		// Six seals inside one window, which is one operator pressing Connect.
+		r.request(as("atlassian"), log.run)
+		for _, who := range []string{"jira", "confluence", "datadog", "gitlab", "founder"} {
+			r.request(as(who), log.run)
+		}
 
-	// One ran immediately; the other five are owed, not gone.
-	log.waitFor(t, 1)
-	if got := log.calls(); len(got) != 1 {
-		t.Fatalf("calls = %v during the window, want exactly the first", got)
-	}
-	log.waitFor(t, 2)
+		// One ran immediately; the other five are owed, not gone. READ ONCE
+		// EVERYTHING DUE NOW HAS RUN, and before the clock has moved: a
+		// coalesced run fired early is then among the calls read.
+		log.waitFor(t, 1)
+		synctest.Wait()
+		if got := log.calls(); len(got) != 1 {
+			t.Fatalf("calls = %v during the window, want exactly the first", got)
+		}
+		log.waitFor(t, 2)
 
-	got := log.calls()
-	if len(got) != 2 {
-		t.Fatalf("calls = %v, want the immediate one and one for the burst", got)
-	}
-	// THE LATEST OPERATOR, because the burst collapses to one revision and
-	// it is credited to whoever most recently caused it.
-	if got[1] != "founder" {
-		t.Errorf("the coalesced re-activation was credited to %q, want the "+
-			"last request's operator", got[1])
-	}
+		got := log.calls()
+		if len(got) != 2 {
+			t.Fatalf("calls = %v, want the immediate one and one for the burst", got)
+		}
+		// THE LATEST OPERATOR, because the burst collapses to one revision and
+		// it is credited to whoever most recently caused it.
+		if got[1] != "founder" {
+			t.Errorf("the coalesced re-activation was credited to %q, want the "+
+				"last request's operator", got[1])
+		}
+	})
 }
 
 // A PASS THAT CANNOT CONVERGE IS BOUNDED, which the inline rebuild was not.

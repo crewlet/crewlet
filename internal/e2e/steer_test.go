@@ -68,7 +68,8 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 	// its hooks, and its standing instructions told of them. The version
 	// probe the run's script makes first is answered and gone. Its hooks are in
 	// the notes' settings' pinned copy, which 2.1.310 is handed in the file's
-	// place: the same settings, with the compaction point pinned besides.
+	// place: the same settings, with the compaction point and a resume's load
+	// pinned besides.
 	args := n.agentArgv(t)
 	if filepath.Base(valueOf(args, "--settings")) != "claude-settings-notes-pinned.json" ||
 		filepath.Base(valueOf(args, "--append-system-prompt-file")) != "system-notes.md" {

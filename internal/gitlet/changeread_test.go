@@ -725,8 +725,6 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 			Introduced: &gitlet.IntroducedQuery{RepoID: "id"}},
 		"an introduced page of a target": {Kind: gitlet.ReadIntroduced, Target: "refs/heads/main",
 			Introduced: &gitlet.IntroducedQuery{RepoID: "id"}},
-		"an introduced page of a queue": {Kind: gitlet.ReadIntroduced, QueueDue: &gitlet.QueueDueQuery{},
-			Introduced: &gitlet.IntroducedQuery{RepoID: "id"}},
 		"an introduced page of running checks": {Kind: gitlet.ReadIntroduced,
 			ChecksRunning: &gitlet.ChecksRunningQuery{}, Introduced: &gitlet.IntroducedQuery{RepoID: "id"}},
 		"a duty listing that needs":        {Kind: gitlet.ReadCompactionDue, MinPacks: 1, Needs: gitlet.NeedReview},

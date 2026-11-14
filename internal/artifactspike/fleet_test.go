@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -76,7 +77,7 @@ func startBrokersOn(tb testing.TB, topo topology, base js.Config) *brokers {
 	tb.Helper()
 	switch topo {
 	case topoSolo:
-		base.StoreDir = tb.TempDir()
+		base.StoreDir = brokertest.TempDir(tb)
 		q, err := js.Open(tb.Context(), base)
 		if err != nil {
 			tb.Fatalf("start the embedded broker: %v", err)

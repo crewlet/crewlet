@@ -159,7 +159,7 @@ func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (auth
 	material := testKeyMaterial(t)
 	keyed := func() *engine.Engine {
 		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 			b.Secrets.Keys = []config.SecretKey{{ID: b.Secrets.ActiveKeyID, Material: material}}
 		})})
 	}

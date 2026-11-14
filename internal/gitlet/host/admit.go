@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -22,9 +23,9 @@ import (
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
 // it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its eight accessors —
-// principal, share, refs, objects, boxFloor, resyncKey, floorWords and
-// engineCommitter — and a box's nil check
+// three ran but through the admission's own fields and its nine accessors —
+// principal, writtenFor, share, refs, objects, boxFloor, resyncKey, floorWords
+// and engineCommitter — and a box's nil check
 // where its pushes raise the run's floor and are left out of the operator
 // audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
@@ -262,6 +263,28 @@ func (a admission) principal() gitlet.Principal {
 		return gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: a.box.Seat, Run: run}
 	}
 	return gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
+}
+
+// writtenFor is whom a push this request lands is made for
+// (gitlet.Proposal.WrittenFor), by who pushes. A CODING BOX's push is its
+// run's turn's write made late — a seat's own writes are tool calls, which the
+// engine builds — so it is made for whom that turn works for, as the run's row
+// carries it (BoxRun.WorkingFor, which the run's checkout composed for the
+// turn's own code writes), and for nobody, the seat's own work, where the run
+// works for its seat; whatever the row holds is carried as it stands, a value a
+// newer build wrote that this one does not know included, since the committer
+// that decides the push holds it to its rule — the admission refused before
+// anything of the push only a row naming what no checkout writes, and answered
+// a kind this build does not know as a newer build's run (boxadmit.go's step
+// 7). A PERSON'S push is their own and states nothing, and a check's box
+// pushes nothing. ONE ANSWER for the push's landing and for its measure before
+// receive-pack runs (commandsRefusal), so a push is measured carrying what it
+// will carry.
+func (a admission) writtenFor() types.WrittenFor {
+	if a.box == nil {
+		return types.WrittenFor{}
+	}
+	return types.ForTurn(a.box.WorkingFor)
 }
 
 // refs is the freshness every read of this request's REFS syncs at — a v0

@@ -310,6 +310,7 @@ answer is that there is no such work.
 | **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages** | knowledge-base pages the task names, set with `linked_pages` on `update_work_item`. `linked_page=<page id>` lists the tasks that name a page. |
+| **atlas entries** | the entries of the company's [atlas](atlas.md) the task touches (the servers, services, databases, domains and accounts the work changes), set with `linked_entries` on `update_work_item`. Up to 32, each kept by the entry's id. See [The atlas entries a task touches](#the-atlas-entries-a-task-touches). |
 | **references** | other tasks this task's description mentions by key (`ENG-12`), derived by the applier on every data node from the first 64 distinct keys the description names, where a task's former key resolves like its current one. `references=<key>` lists the tasks whose description mentions it. A comment's mentions are not references. |
 | **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
 | **reopens** | how many times the task left a finished status for an unfinished one. |
@@ -1120,7 +1121,7 @@ over the project's [files](#a-projects-files):
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** answers one comment by id and nothing else. **Nothing in the answer is cut**: every comment on a thread page is whole — a page holds as many as fit 16 KiB, at least one, and `comments_cursor` continues exactly where it stopped — and the description is whole too. The description is one of the `include` parts (`body`, `comments`, `history`, `links`, `fields`; all five by default), so that each part on its own always fits one answer: a read that names other parts says the description was left out and how large it is, rather than handing over an item that reads as having none. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. A subtask is filed in its **parent's** project when the call names none — the caller's own team is the default only for an item with no parent. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
-| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the one field that is not every caller's to set: it belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
+| `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the one field that is not every caller's to set: it belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked`, `linked_pages` and `linked_entries` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
 | `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or any permission the seat's own GitHub App can hold, at any level the Agents tab offers), as a decision on the item that needs it: the grant or declining. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
@@ -2022,8 +2023,8 @@ edge exists and that page cannot draw it. Cleared edges stay on the row rather
 than disappearing when the blocker finishes: what a plan looked like once it
 was executed is the thing a timeline is for.
 
-`waiting_on`, `blocking`, `linked` and `linked_pages` on `update_work_item`
-take one of two explicit shapes and never a bare list:
+`waiting_on`, `blocking`, `linked`, `linked_pages` and `linked_entries` on
+`update_work_item` take one of two explicit shapes and never a bare list:
 
 ```json
 {"waiting_on": {"add": ["ENG-7"], "remove": ["ENG-2"]}}
@@ -2034,6 +2035,45 @@ A bare list is refused naming both, because the two readings of it are
 opposite: as a delta it adds one edge, and as a set it silently drops every
 edge not repeated. `create_work_item` keeps a plain `waiting_on` list — a new
 item has no dependencies to replace.
+
+### The atlas entries a task touches
+
+Work that changes a server, a service, a database, a domain or a vendor account
+can say so: `linked_entries` on `update_work_item` names the entries of the
+company's [atlas](atlas.md) the task touches, in the same two shapes as every
+set-valued argument.
+
+```json
+{"item": "ENG-42", "linked_entries": {"add": ["orders-db"]}}
+{"item": "ENG-42", "linked_entries": {"remove": ["7f3c2a10-5b1e-5c3d-9a4f-0d2e6b8c1a57"]}}
+```
+
+- **Name an entry by its id, its exact name or its key.** The engine resolves
+  it through your own read of the atlas and keeps the entry's id on the task,
+  never its name. A name two entries answer to is refused, naming each by id.
+- **A task names at most 32 entries.** Work that touches more systems than
+  that is about the company at large, and its project is the thing to link.
+- **Adding takes the Atlas permission as well as Worklet's**, because nobody
+  links what they may not read; an agent adds one only in a turn whose
+  requester may read the atlas. Removing a link by its id takes Worklet's
+  alone, so a link to an entry the atlas no longer holds can always be taken
+  off.
+- **Who sees them.** On the task, a reader who holds Atlas sees each entry as
+  a chip that opens it. A reader who does not is told how many entries the
+  task names and is handed none of them, on the dashboard, over the API and
+  in `get_work_item` alike. The task's history says how many entries it named
+  before and after a change, never which.
+- **Where it shows in the atlas.** The entry's Work tab lists the open tasks
+  that name it and the ones finished in the last 30 days, and the map and the
+  catalogue mark an entry with open work, for a reader who uses Worklet
+  ([reading the atlas](atlas.md#work-on-an-entry)).
+- **What an agent is told.** A turn on a task that names entries is handed a
+  few lines about each before it starts, ahead of anything its ask names
+  ([Systems in this work](../concepts/agent-runtime.md#systems-in-this-work)).
+
+The link is the task's own: it is recorded on the tracker's log with the task
+and nothing is written to the atlas
+([ADR-0140](../../adr/0140-a-task-names-the-atlas-entries-it-touches-by-id-on-its-own-record.md)).
 
 ### A question on a task
 

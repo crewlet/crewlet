@@ -138,7 +138,7 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Seven more are a
+itself is recorded beside either as the write's `operator_id`. Eight more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
@@ -152,7 +152,11 @@ holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat; and, where the company hosts its code, `code_repo_readers`, who
 read a `visibility: unit` repository, an administrator's audit, and
 `code_mark_inbox`, a person's marks over their own code notices, served beside
-the code writes (a seat is woken, never shown an inbox).
+the code writes (a seat is woken, never shown an inbox); and `atlas_refresh`,
+any Atlas holder's ask that one integration be read for the atlas now rather
+than on its next scheduled read, which the engine honours within a minute and
+refuses for a source read less than five minutes ago
+([Sources](atlas.md#sources-and-refresh-now)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
@@ -235,8 +239,8 @@ and can message the agent may ask it to edit, as with all other agent work;
 reading and sharing are never exempt. A turn woken by somebody the company
 does not know opens no artifact at all, and authors none. The bound is the turn's, not the agent's, and it
 follows the turn's work: a colleague it asks, the turn the answer wakes, and a
-colleague its writes on Worklet, Doclet or Chatlet wake all read for the same
-somebody, and what the agent already knows is no read
+colleague its writes on Worklet, Doclet, Chatlet or Gitlet wake all read for
+the same somebody, and what the agent already knows is no read
 ([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
@@ -569,8 +573,8 @@ Gitlet permission woke reads nothing: every code tool is refused before
 anything is read, and the seat is told why and that an administrator can give
 the person Gitlet
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
-The bound is that turn's alone: a colleague the seat asks reads for the seat,
-and the turn the answer wakes is the seat's own work.
+The bound follows the turn's work: a colleague the seat asks reads for the same
+somebody, and so does the turn the answer wakes.
 An operator's own assistant calls the tools in no turn, for its caller alone.
 
 **A repository's text is fenced.** A file's lines — a blame's among them —
@@ -638,6 +642,9 @@ same way: a colleague must hold the access the write needs on the repository
 write), and a stranger or a person without the permission has a seat write
 nothing of a change
 ([Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
+And a write made in such a turn carries them on, so a colleague it wakes works
+for them too ([An agent uses only the apps of the person it works
+for](../concepts/identity-and-access.md#an-agent-uses-only-the-apps-of-the-person-it-works-for)).
 Every call names one
 operation — derived from the turn or a request's own key, or on the operator
 catalogue the `op_id` the call was answered — so the same call made again,

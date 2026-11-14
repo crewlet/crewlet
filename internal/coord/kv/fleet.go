@@ -402,7 +402,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why TWENTY-TWO buckets and not one
+// # Why TWENTY-THREE buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -482,6 +482,10 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           standing is what its last complete read established, and one
 //	           that expired would read as a source never read, so the
 //	           collect duty would retire nothing and read everything at once
+//	atlasRefreshes
+//	           none at all: the collect duty drops an ask once it is honoured
+//	           or its source is gone, and an age would drop one the duty had
+//	           not reached yet without telling whoever made it
 //	atlasCode  none at all, for the atlas sources' reason: one that expired
 //	           would read as a repository never scanned, and its files
 //	           would be read again for a branch that has not moved
@@ -542,6 +546,7 @@ const (
 	integrationsSuffix = "_integrations"
 	atlasSourcesSuffix = "_atlas_sources"
 	atlasCodeSuffix    = "_atlas_code_scans"
+	atlasRefreshSuffix = "_atlas_source_refreshes"
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
 	custodySuffix      = "_custody"
@@ -697,6 +702,7 @@ type FleetStore struct {
 	integrations jetstream.KeyValue
 	atlasSources jetstream.KeyValue
 	atlasCode    jetstream.KeyValue
+	atlasRefresh jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
 	custody      jetstream.KeyValue
@@ -722,6 +728,12 @@ type FleetStore struct {
 	// certified against and a key as its stream LEADER holds it (walk.go),
 	// and purge a marker through its own revision (markers.go).
 	js jetstream.JetStream
+
+	// reach is how this node's connection reaches the buckets
+	// ([FleetConfig.Reach]), which every bucket's writes are held to the
+	// pace of and a caller's budget for a run's value counts
+	// ([FleetStore.ValueCrossing]).
+	reach Reach
 
 	// ageless is every bucket above the broker never ages — the ones whose
 	// removal markers stay until [FleetStore.SweepMarkers] removes them.
@@ -774,7 +786,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, twenty-two buckets in a row, and a boot that nobody meant to allow ten
+// bucket, twenty-three buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -815,7 +827,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}
 
 	store := &FleetStore{
-		js:            js,
+		js: js, reach: cfg.Reach,
 		maxRateWindow: cfg.MaxRateWindow, freshness: cfg.StatusFreshness,
 	}
 	store.tallies.codec = codec[coord.Tally]{
@@ -883,6 +895,8 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0},
 		{&store.atlasCode, atlasCodeSuffix,
 			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0},
+		{&store.atlasRefresh, atlasRefreshSuffix,
+			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 		{&store.objects, objectsSuffix,
@@ -899,6 +913,14 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
 			return nil, err
+		}
+		if bucket.into == &store.runs {
+			// A RUN'S RECORD AND ITS PARTS are budgeted to what one key
+			// holds (internal/sandbox's RowBytes), so every read of one is
+			// given the crossing of a reply that large ([holdingLarge]) —
+			// before the handle is kept anywhere, the marker sweep's list
+			// of ageless buckets included.
+			got = holdingLarge(got)
 		}
 		*bucket.into = got
 		switch bucket.into {
@@ -1002,7 +1024,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	}
 	// THE BUCKET WHOSE AGE OUTLASTS THE WINDOW, and no longer than it must:
 	// the valve's windows in rate, aged a few of them, and a window up to a
-	// day in windows, aged a few days (see "Why TWENTY-TWO buckets"). A window
+	// day in windows, aged a few days (see "Why TWENTY-THREE buckets"). A window
 	// in a bucket that reaped it before it closed would restart its count
 	// mid-window and pass far more than its caller asked for, so a longer
 	// one is refused loudly rather than counted.
@@ -2822,6 +2844,46 @@ func (f *FleetStore) DeleteAtlasSourceStatus(ctx context.Context, kind string) e
 	err := f.atlasSources.Purge(ctx, encodeKey(kind))
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("delete the atlas source standing", err)
+	}
+	return nil
+}
+
+// ---- the atlas sources' refresh asks ------------------------------------ //
+
+// AtlasSourceRefreshes returns every waiting ask, keyed by source.
+func (f *FleetStore) AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	err := f.each(ctx, f.atlasRefresh, func(kve jetstream.KeyValueEntry) error {
+		// A key this backend did not write is skipped, and the value is
+		// copied, as the atlas sources' are.
+		if kind, ok := decodeKey(kve.Key()); ok {
+			out[kind] = bytes.Clone(kve.Value())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PutAtlasSourceRefresh records an ask for one source.
+func (f *FleetStore) PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/kv: an atlas source refresh ask needs a source name")
+	}
+	if _, err := f.atlasRefresh.Put(ctx, encodeKey(kind), value); err != nil {
+		return unavailable("record the atlas source refresh ask", err)
+	}
+	return nil
+}
+
+// DeleteAtlasSourceRefresh drops a source's ask: PURGED, as every removal
+// from an ageless bucket is (markers.go).
+func (f *FleetStore) DeleteAtlasSourceRefresh(ctx context.Context, kind string) error {
+	err := f.atlasRefresh.Purge(ctx, encodeKey(kind))
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("delete the atlas source refresh ask", err)
 	}
 	return nil
 }

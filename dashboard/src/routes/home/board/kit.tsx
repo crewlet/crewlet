@@ -300,6 +300,28 @@ export function WidgetNote({ children }: { children: ReactNode }) {
 }
 
 /**
+ * "3 more on the page" under a list cut short, linking to the page that lists
+ * them all. The count is said bare: "more" takes no plural.
+ */
+export function WidgetMore({
+  more,
+  to,
+  query,
+}: {
+  /** How many the list left out; nothing is drawn for none. */
+  more: number;
+  to: string[];
+  query?: Record<string, string>;
+}) {
+  if (more <= 0) return null;
+  return (
+    <a className="home-card-more t-link" href={href(to, query)}>
+      {`${more.toLocaleString()} more on the page`}
+    </a>
+  );
+}
+
+/**
  * The note a widget draws when its choice is missing or no longer exists (a
  * saved view deleted, a seat taken off the chart): one sentence for every
  * widget, saying where the choice is made.

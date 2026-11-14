@@ -1,5 +1,6 @@
 /**
- * What the Artifacts screens share: copying an artifact's address, a listed
+ * What the Artifacts screens share: copying an artifact's address, opening it
+ * on a page of its own in a new tab, a listed
  * artifact as the design system's card and who can open it, the card an
  * artifact's place shows when the reader may not open it, and the state a
  * refusal maps to.
@@ -19,7 +20,7 @@ import {
 import { href } from "~/app/router.tsx";
 import { queryErrorCode, type ArtifactListItem } from "~/protocol/index.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { artifactPath } from "~/app/routes.ts";
+import { artifactPath, artifactStandalonePath } from "~/app/routes.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { GalleryPreview } from "./GalleryPreview.tsx";
 
@@ -128,6 +129,17 @@ function pageAddress(path: string[], query?: Record<string, string>): string {
  */
 export function artifactAddress(id: string, version?: number): string {
   return pageAddress(artifactPath(id), version ? { version: String(version) } : undefined);
+}
+
+/**
+ * Opens an artifact on its standalone page (its bar and the artifact, no
+ * sidebar) in a new tab, at one of its older versions where `version` names
+ * one. THE DASHBOARD'S PAGE, never the frame's own address: a page runs only
+ * inside its sandboxed frame, under the host that answers its bridge.
+ */
+export function openInNewTab(id: string, version?: number): void {
+  const query = version ? { version: String(version) } : undefined;
+  window.open(pageAddress(artifactStandalonePath(id), query), "_blank", "noopener");
 }
 
 /** Copies an artifact's address, and says whether the browser let it. */

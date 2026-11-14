@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
@@ -47,7 +48,8 @@ func BenchmarkEngineRebase(b *testing.B) {
 					b.StartTimer()
 					began := time.Now()
 					res, err := r.f.Nodes()[0].Host().Write(b.Context(), gitlet.EngineWrite{
-						Kind: gitlet.WriteRebaseChange, RepoID: r.repo, Principal: pat(), OpID: opNow(),
+						Kind: gitlet.WriteRebaseChange, RepoID: r.repo, Principal: pat(),
+						WrittenFor: types.ForNobody(), OpID: opNow(),
 						Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: featureRef,
 						ExpectedHead: r.head, Change: r.change})
 					took := time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it

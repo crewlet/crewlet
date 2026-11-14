@@ -199,8 +199,8 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			t.Parallel()
 			runner := executor.NewClaudeCode()
 			script := startAndScript(t, runner, box(t, runner), req)
-			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE DISABLE_AUTO_COMPACT DISABLE_COMPACT "+
-				"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
+			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE CLAUDE_CODE_REMOTE "+
+				"DISABLE_AUTO_COMPACT DISABLE_COMPACT CLAUDE_AUTOCOMPACT_PCT_OVERRIDE CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
 				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",
@@ -212,6 +212,59 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	if script := startAndScript(t, runner, box(t, runner), sandbox.RunRequest{Brief: "x"}); strings.Contains(script, "CLAUDE_CODE_") {
 		t.Errorf("an OpenCode run unsets Claude Code's variables:\n%s", script)
 	}
+}
+
+// EVERY CLAUDE CODE RUN STARTS OUTSIDE ITS HOSTED MODE, a fresh one and a
+// resumed one alike, under every sh a box may run the script with.
+// CLAUDE_CODE_REMOTE marks Anthropic's own hosted environment, which no box
+// is: switched on, a resume's load gives a record whose parent the transcript
+// does not hold an earlier record as its parent, picked by timestamp, so the
+// run would continue a conversation its session never recorded. It can come
+// from the seat's environment, the image or a profile the login shell sources,
+// and the wrapper unsets it after all three, on every run: unset on a resume
+// alone, a relaunch would not run as the job it continues ran. Played on a
+// real box whose seat's environment and profile both switch it on, the harness
+// a stand-in that records the environment it started with.
+//
+// Mutation: drop CLAUDE_CODE_REMOTE from the wrapper's unsets and both runs
+// start with it; unset it on the resume alone, and the fresh run does; unset
+// it around the login shell rather than in it, and the profile's value reaches
+// both.
+func TestEveryClaudeCodeRunStartsOutsideItsHostedMode(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, b := realBoxUnder(t, sh)
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", sessionHarness("2.1.310"))
+		if err := b.WriteFile(t.Context(), b.Home()+"/.profile", []byte("export CLAUDE_CODE_REMOTE=true\n")); err != nil {
+			t.Fatalf("write the profile: %v", err)
+		}
+		seat := map[string]string{"CLAUDE_CODE_REMOTE": "true"}
+		// outside reads the environment the run's harness started with, which
+		// the stand-in records afresh on every run, and clears the record for
+		// the next one, so a harness that never started reads as none.
+		outside := func(run string) {
+			t.Helper()
+			env := boxFile(t, b, b.Home()+"/env")
+			if env == "" {
+				t.Fatalf("the %s run's harness recorded no environment:\n%s", run, boxFile(t, b, paths(b).Err()))
+			}
+			for kv := range strings.SplitSeq(env, "\n") {
+				if strings.HasPrefix(kv, "CLAUDE_CODE_REMOTE=") {
+					t.Errorf("the %s run's harness started with %s, in its hosted mode", run, kv)
+				}
+			}
+			if err := b.WriteFile(t.Context(), b.Home()+"/env", nil); err != nil {
+				t.Fatalf("clear the recorded environment: %v", err)
+			}
+		}
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin", Env: seat})
+		outside("fresh")
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
+		if !res.Continued {
+			t.Fatalf("the run did not continue its session:\n%s", boxFile(t, b, paths(b).Err()))
+		}
+		outside("resumed")
+	})
 }
 
 // THE SETTINGS FILES ARE THE MEASURED SHAPES, and nothing more. Every run's
@@ -787,7 +840,7 @@ var claudeSettingsSince = map[string]string{
 	// Declared ("Environment variables to set for Claude Code sessions") in the
 	// shipped schema of 2.1.310, the oldest read for it, and 2.1.322. Only the
 	// pinned copies hold it, which are handed from 2.1.310 alone
-	// (executor.ClaudeCompactionPinFloor), so no older release needs reading.
+	// (executor.ClaudeSettingsPinFloor), so no older release needs reading.
 	"env": "2.1.310",
 }
 
@@ -817,10 +870,10 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 	// A pinned copy is handed from the later of its file's own floor and the
 	// pin's ([claudePinGate] runs after the gates that choose the file).
 	pinned := func(floor string) string {
-		if executor.ReleaseAtLeast(floor, executor.ClaudeCompactionPinFloor) {
+		if executor.ReleaseAtLeast(floor, executor.ClaudeSettingsPinFloor) {
 			return floor
 		}
-		return executor.ClaudeCompactionPinFloor
+		return executor.ClaudeSettingsPinFloor
 	}
 	oldest := map[string]string{
 		p.ClaudeSettings():             "1.0.61",
@@ -908,14 +961,15 @@ func pinnedOf(p executor.Paths, file string) string {
 // CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE would move the point the run compacts at
 // after the wrapper pinned it. So each settings file the configuration writes
 // (every run's, the skills' and the notes') has a pinned copy holding the same
-// settings and an `env` block of exactly those three: the window the wrapper
-// pins for the run's model, and the two overrides blank, which the harness
-// reads as none. The file itself holds no `env`, since a release older than
-// the pin's floor is handed it.
+// settings and an `env` block of exactly the pin: those three, the window the
+// wrapper pins for the run's model and the two overrides blank, which the
+// harness reads as none, and the two switches a resume is started without,
+// blank too (the next case's). The file itself holds no `env`, since a release
+// older than the pin's floor is handed it.
 //
 // Mutation: write one file's pinned copy without the block or with another
-// window, leave an override out rather than blank, or write the block into
-// the file itself, and this goes red.
+// window, leave an override or a switch out rather than blank, or write the
+// block into the file itself, and this goes red.
 func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -929,6 +983,8 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
+		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
 	}
 	read := func(file string) map[string]any {
 		raw, err := b.ReadFile(t.Context(), file)
@@ -956,6 +1012,51 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 			got, _ := json.Marshal(pinned)
 			want, _ := json.Marshal(plain)
 			t.Errorf("%s's pinned copy holds %s beside its env, want the file's own settings %s", file, got, want)
+		}
+	}
+}
+
+// EVERY PINNED SETTINGS COPY BLANKS WHAT MOVES WHAT A RESUME HANDS ITS MODEL.
+// A resumed run's script unsets CLAUDE_CODE_RESUME_INTERRUPTED_TURN and
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP before its harness starts, but Claude Code
+// assigns every settings source's `env` block to its own environment before
+// print mode resumes the session, a checkout's own `.claude/settings.json`
+// among them, so a repository that sets either would switch it on again: the
+// turn its last process was cut off in run again before the brief, or a
+// transcript past 5 MiB read by another rule. So every pinned copy the
+// configuration writes (every run's, the skills' and the notes') names both in
+// its `env` block, each as the empty string: a name left out leaves the
+// repository's value standing, and both releases read the empty string as off.
+//
+// Mutation: leave either name out of the pin, or write it with a value of its
+// own, and this goes red.
+func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	p := executor.PathsFor(b)
+	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
+		Skills: handedSkills(), SkillLoads: skillWiring()}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	for _, file := range []string{p.ClaudeSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeNotesSettingsPinned()} {
+		raw, err := b.ReadFile(t.Context(), file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		var doc struct {
+			Env map[string]string `json:"env"`
+		}
+		if err = json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s is not settings with a string env block: %v\n%s", file, err, raw)
+		}
+		for _, name := range []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"} {
+			switch value, set := doc.Env[name]; {
+			case !set:
+				t.Errorf("%s leaves %s out of its env, so a repository's own settings can switch it on for a "+
+					"resume", file, name)
+			case value != "":
+				t.Errorf("%s sets %s to %q, want it blank", file, name, value)
+			}
 		}
 	}
 }
@@ -1119,4 +1220,47 @@ func passages(text string, goSource bool) []string {
 	}
 	flush()
 	return out
+}
+
+// A REQUEST THE PROVIDER REFUSED AS BUILT IS TOLD BY ITS STATUS: the harness
+// answers it as its result's text, under its failure flag and the status the
+// provider gave. Such a run failed, its error is the provider's message, and it
+// is named apart from every other failure; a spent plan, an outage and a
+// conversation past its context are not it.
+//
+// Mutation: read the sentence instead of the status, or drop the context
+// exception, and a case goes red.
+func TestARequestItsProviderRefusedIsToldByItsStatus(t *testing.T) {
+	t.Parallel()
+	const said = "API Error: 400 tools.88.custom.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'"
+	for _, c := range []struct {
+		name, line string
+		want       bool
+	}{
+		{"an invalid request", `{"type":"result","subtype":"success","is_error":true,"api_error_status":400,` +
+			`"terminal_reason":"api_error","result":"` + said + `"}`, true},
+		{"a request too large", `{"type":"result","subtype":"success","is_error":true,"api_error_status":413,` +
+			`"result":"API Error: 413 request too large"}`, true},
+		{"a spent plan", `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,` +
+			`"result":"You've hit your limit"}`, false},
+		{"an outage", `{"type":"result","subtype":"success","is_error":true,"api_error_status":529,` +
+			`"result":"API Error: 529 overloaded"}`, false},
+		{"a context past its model's", `{"type":"result","subtype":"success","is_error":true,` +
+			`"api_error_status":400,"terminal_reason":"prompt_too_long","result":"Prompt is too long"}`, false},
+		{"the sentence with no status", `{"type":"result","subtype":"success","is_error":true,` +
+			`"result":"` + said + `"}`, false},
+		{"a run that succeeded and quoted it", `{"type":"result","subtype":"success","is_error":false,` +
+			`"api_error_status":400,"result":"` + said + `"}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := claude().Parse(c.line)
+			if got.RequestRefused != c.want {
+				t.Errorf("RequestRefused = %v, want %v, on %s", got.RequestRefused, c.want, c.line)
+			}
+			if c.want && (got.Success || got.Error == "") {
+				t.Errorf("a refused run is %+v, want a failure carrying the provider's message", got)
+			}
+		})
+	}
 }

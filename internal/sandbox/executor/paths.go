@@ -484,9 +484,9 @@ func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-sett
 func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
 
 // ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
-// settings with the compaction point pinned besides ([claudeCompactionPin]),
-// which the run's script names in that file's place on a release that takes
-// the pin ([claudePinGate]). Beside it, for its reason.
+// settings with the compaction point and a resume's load pinned besides
+// ([claudeSettingsPin]), which the run's script names in that file's place on
+// a release that takes the pin ([claudePinGate]). Beside it, for its reason.
 func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-settings-pinned.json" }
 
 // ClaudeNotesSettingsPinned is [Paths.ClaudeNotesSettings]'s pinned copy

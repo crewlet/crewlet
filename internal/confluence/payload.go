@@ -5,6 +5,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Reading Confluence's storage format.
@@ -16,12 +17,18 @@ import (
 // it must not lose is where the line breaks were: a page whose bulleted list
 // collapses into one sentence reads to a model as a different document.
 
+// compiled is a pattern compiled at first use and never at init, which every
+// start of the binary pays for and a push's hook is one.
+func compiled(pattern string) func() *regexp.Regexp {
+	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(pattern) })
+}
+
 var (
-	blockBreak = regexp.MustCompile(`(?i)</(p|div|h[1-6]|li|tr|pre|blockquote|ac:rich-text-body)>`)
-	lineBreak  = regexp.MustCompile(`(?i)<br\s*/?>`)
-	anyTag     = regexp.MustCompile(`<[^>]+>`)
-	blankRun   = regexp.MustCompile(`\n{3,}`)
-	spaceRun   = regexp.MustCompile(`[ \t]+`)
+	blockBreak = compiled(`(?i)</(p|div|h[1-6]|li|tr|pre|blockquote|ac:rich-text-body)>`)
+	lineBreak  = compiled(`(?i)<br\s*/?>`)
+	anyTag     = compiled(`<[^>]+>`)
+	blankRun   = compiled(`\n{3,}`)
+	spaceRun   = compiled(`[ \t]+`)
 )
 
 // Flatten turns storage-format XHTML into the text a model reads.
@@ -34,18 +41,18 @@ func Flatten(storage string) string {
 	if storage == "" {
 		return ""
 	}
-	text := lineBreak.ReplaceAllString(storage, "\n")
-	text = blockBreak.ReplaceAllString(text, "\n")
-	text = anyTag.ReplaceAllString(text, " ")
+	text := lineBreak().ReplaceAllString(storage, "\n")
+	text = blockBreak().ReplaceAllString(text, "\n")
+	text = anyTag().ReplaceAllString(text, " ")
 	text = html.UnescapeString(text)
-	text = spaceRun.ReplaceAllString(text, " ")
+	text = spaceRun().ReplaceAllString(text, " ")
 
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimSpace(line)
 	}
 	text = strings.Join(lines, "\n")
-	return strings.TrimSpace(blankRun.ReplaceAllString(text, "\n\n"))
+	return strings.TrimSpace(blankRun().ReplaceAllString(text, "\n\n"))
 }
 
 // MentionIDs are the accounts named in a page or comment body.
@@ -54,7 +61,7 @@ func Flatten(storage string) string {
 // `ri:userkey` on Data Center, so both are read — a parser that knew one
 // would route nothing on the other, silently, because "nobody was mentioned"
 // is an ordinary answer.
-var mentionPattern = regexp.MustCompile(
+var mentionPattern = compiled(
 	`<ri:user[^>]*ri:(?:account-id|userkey|username)="([^"]+)"`)
 
 // MentionIDs returns the mentioned accounts in document order, deduped.
@@ -63,7 +70,7 @@ func MentionIDs(storage string) []string {
 		out  []string
 		seen = map[string]bool{}
 	)
-	for _, m := range mentionPattern.FindAllStringSubmatch(storage, -1) {
+	for _, m := range mentionPattern().FindAllStringSubmatch(storage, -1) {
 		if id := m[1]; id != "" && !seen[id] {
 			seen[id] = true
 			out = append(out, id)

@@ -1552,6 +1552,27 @@ type SandboxRuns interface {
 	// replaces.
 	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
+
+	// ValueCrossing is how long a change of a run's value at what one key
+	// holds ([MaxValueBytes]) takes to cross this store's connection — the
+	// read its decision is taken on, and the write, for every time the store
+	// may send it: [MaxValueCrossing] where the connection crosses a link — a
+	// node without `data`, every node of an external cluster — and NONE in
+	// the store's own process, where nothing crosses.
+	//
+	// WHAT A CALLER'S OWN BUDGET ADDS TO ITS REASON. Every change of a run's
+	// record or of a part beside it reads the value whole and writes it whole,
+	// and the store gives a read the time its reply takes to arrive, and a
+	// write whose caller set no deadline the crossing of what it carries; a
+	// caller's own deadline it keeps as it is. So a caller that bounds a
+	// change for a reason of its own — a store's slow moment, an election
+	// outlasted — bounds it by that reason and this, never by the reason
+	// alone, which cut a value of megabytes while its bytes were still
+	// crossing and read it as a store that did not answer
+	// (crewlet/crewlet#1076, crewlet/crewlet#1149). Sized at the bound rather
+	// than at the value being changed, which the caller cannot know: the
+	// store decides what it writes after the caller's deadline is set.
+	ValueCrossing() time.Duration
 }
 
 // RunPart names one part kept beside a sandbox run's record — see
@@ -1809,10 +1830,12 @@ type AtlasSources interface {
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
 }
 
-// AtlasCodeScans is where the atlas's scan of each Gitlet repository's deploy
-// and dependency files keeps its standing (internal/atlas/codescan): the
-// default branch's tip it last read whole, how many files it listed and
-// read, and what it refused.
+// AtlasCodeScans is where the atlas's scan of each repository's deploy and
+// dependency files keeps its standing (internal/atlas/codescan): the default
+// branch's tip it last read whole, how many files it listed and read, and
+// what it refused. A Gitlet repository's is keyed by its id; a forge's own
+// standing and each of its repositories' are keyed under `forge/`
+// (codescan.ForgeStore), which no repository's id starts with.
 //
 // # Why the fleet holds it
 //
@@ -1845,6 +1868,46 @@ type AtlasCodeScans interface {
 	// DeleteAtlasCodeScan drops a repository's standing once it is no longer
 	// scanned. One that is not there is the outcome asked for.
 	DeleteAtlasCodeScan(ctx context.Context, repo string) error
+}
+
+// AtlasSourceRefreshes is where a person's ask that an atlas source be read
+// now waits for the collect duty (internal/atlas/collect): who asked, and
+// when.
+//
+// # Why the fleet holds it
+//
+// The node a person asks on is rarely the node holding the duty, so the ask
+// is a record the whole company reads: the duty to honour it, every screen to
+// say that it waits. Current value only: the read it asked for is the
+// source's standing once it is made.
+//
+// # A bucket of its own
+//
+// Not the atlas sources' bucket: the duty is that bucket's one writer and
+// replaces a standing whole, so an ask written beside a visit in flight
+// would be lost to the visit's own save.
+//
+// # The value is OPAQUE, and no retention
+//
+// There is at most one key per source, dropped by the duty once the source
+// is read or the company no longer connects it, so nothing grows. An age
+// would drop an ask the duty had not reached yet without telling whoever
+// made it.
+type AtlasSourceRefreshes interface {
+	// AtlasSourceRefreshes returns every waiting ask, keyed by the source
+	// it names. RAISES rather than answering empty on an unreachable store:
+	// "nobody asked" and "the store cannot be read" are different answers
+	// to a person who just asked.
+	AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error)
+
+	// PutAtlasSourceRefresh records an ask for one source, replacing any
+	// prior one. LAST WRITE WINS: two people asking at once ask for the
+	// same read.
+	PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error
+
+	// DeleteAtlasSourceRefresh drops a source's ask once it is honoured or
+	// its source is gone. One that is not there is the outcome asked for.
+	DeleteAtlasSourceRefresh(ctx context.Context, kind string) error
 }
 
 // MailboxRecord is the fleet's record of one agent seat's durable mailbox.
@@ -2028,9 +2091,11 @@ type Fleet interface {
 	Secrets
 	Integrations
 	AtlasSources
+	AtlasSourceRefreshes
 	AtlasCodeScans
 	SeatAccess
 	AccessReviews
+	AtlasWakes
 	ConversationHolds
 	BoxReadings
 	Mailboxes

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 )
@@ -15,10 +16,12 @@ import (
 // their findings' lines on a Gitlet node's copy, by the one rule a finding is
 // shown by, all of them or none.
 
-// suggest is an apply_suggestions by who onto ref, at head.
+// suggest is an apply_suggestions by who onto ref, at head, made for nobody
+// but who.
 func suggest(repo string, who gitlet.Principal, ref, head string, ss ...gitlet.SuggestionOp) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteApplySuggestions, RepoID: repo, Principal: who, OpID: opNow(),
-		Fresh: linear, Ref: ref, ExpectedHead: head, Message: "Apply the review's suggestions", Suggestions: ss}
+	return gitlet.EngineWrite{Kind: gitlet.WriteApplySuggestions, RepoID: repo, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: ref, ExpectedHead: head,
+		Message: "Apply the review's suggestions", Suggestions: ss}
 }
 
 // suggestion is a suggestion of a finding of its own on lines start to end of

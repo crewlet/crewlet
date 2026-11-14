@@ -13,18 +13,23 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/collect"
 	"github.com/crewlet/crewlet/internal/atlas/derive"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var atlasNow = time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
@@ -189,7 +194,8 @@ func atlasSourcesWith(code queries.CodeSource, log *atlasLog) queries.Sources {
 				return builtin.AtlasSettings{Company: atlasCompany(), Revision: "r9",
 					Deployment: derive.Deployment{APIAddress: "https://crewlet.acme.example"}}, true
 			},
-			Log: func(context.Context) (builtin.AtlasLogReads, bool) { return log, log != nil },
+			Log:     func(context.Context) (builtin.AtlasLogReads, bool) { return log, log != nil },
+			Sources: atlasDesk{},
 			Records: func(context.Context) gather.Sources {
 				var recorded gather.Log
 				if log != nil {
@@ -204,6 +210,70 @@ func atlasSourcesWith(code queries.CodeSource, log *atlasLog) queries.Sources {
 				}
 			},
 		},
+	}
+}
+
+// atlasDesk is acme's sources as the coordination store holds them: its
+// servers read with one part refused, Cloudflare read whole and asked for
+// again, Datadog's last read failed, and GitHub never read.
+type atlasDesk struct{}
+
+func (atlasDesk) AtlasSourceReport(_ context.Context, now time.Time) (collect.Report, bool, error) {
+	read := now.Add(-10 * time.Minute)
+	standings := map[integration.Kind]collect.Status{
+		integration.KindCloudflare: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 12,
+			Calls: 5, Withheld: 2, Recorded: 1, Retired: 1, Purged: 1,
+			Missing: []collect.Missing{{Since: read, Entries: []string{"a"}}}},
+		integration.KindDatadog: {LastAttemptAt: now.Add(-time.Minute), LastCompleteAt: read,
+			LastError: "datadog: 503 from the vendor"},
+		integration.KindSSH: {LastAttemptAt: read, Completed: true, LastCompleteAt: read, Entries: 3, Calls: 4,
+			Unread:         []collect.Finding{{Part: "web-2 ports", Scope: "web-2", Detail: "The engine could not reach the server."}},
+			UnreadOverflow: 1,
+			Scopes:         []collect.Scope{{ID: "web-1", LastReadAt: read}, {ID: "web-2", Unread: 1}}},
+	}
+	asked := map[integration.Kind]collect.Request{integration.KindCloudflare: {RequestedAt: now.Add(-time.Minute), By: "ada"}}
+	return collect.Describe([]integration.Kind{integration.KindCloudflare, integration.KindDatadog,
+		integration.KindGitHub, integration.KindSSH}, standings, asked, time.Hour, now), true, nil
+}
+
+func (atlasDesk) AskAtlasRefresh(context.Context, integration.Kind, collect.Request) error {
+	return nil
+}
+
+// A FAULT'S OWN TEXT IS AN ADMINISTRATOR'S: every holder is told a source's
+// last read failed, and only an administrator is sent why, as on every other
+// screen an integration's fault is shown.
+//
+// Mutation: send the report as it was read, and a member is sent the vendor's
+// error.
+func TestASourcesFaultIsSentToAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+	s := atlasSources(atlasCode())
+	failed := func(ctx context.Context) map[string]any {
+		for _, row := range listOf(t, askAtlas(ctx, t, s, "atlas_sources", nil)["sources"]) {
+			if row["kind"] == "datadog" {
+				return row
+			}
+		}
+		t.Fatal("the answer names no datadog source")
+		return nil
+	}
+	member := failed(asAtlasReader(t))
+	if member["state"] != "failed" {
+		t.Errorf("a member is not told the read failed: %v", member)
+	}
+	if _, sent := member["last_error"]; sent {
+		t.Errorf("a member was sent the fault's text: %v", member["last_error"])
+	}
+	if admin := failed(asAtlasReader(t, iam.GrantAdmin)); admin["last_error"] != "datadog: 503 from the vendor" {
+		t.Errorf("an administrator was sent %v, want the fault", admin["last_error"])
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	outsider := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "eve", Kind: iam.KindPerson,
+		Seat: "eve", Stage: iam.StageActive})
+	if _, err := r.Answer(outsider, "atlas_sources", nil); err == nil {
+		t.Error("somebody without the atlas read its sources")
 	}
 }
 
@@ -406,6 +476,8 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 	trace := askAtlas(ctx, t, s, "atlas_trace", map[string]any{"id": entryID(atlas.KindDomain, "acme.example")})
 	facets := askAtlas(ctx, t, s, "atlas_facets", nil)
 	review := askAtlas(ctx, t, s, "atlas_review", nil)
+	sources := askAtlas(ctx, t, s, "atlas_sources", nil)
+	standings := listOf(t, sources["sources"])
 	answers := []map[string]any{entries, mp, cf, trace, facets, log, activity, review}
 	lines := append(listOf(t, log["lines"]), pluck2(t, listOf(t, activity["entries"]), "last")...)
 
@@ -430,22 +502,30 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := append(listOf(t, review["items"]), listOf(t, asMap(t, map[string]any{"items": waiting.Items})["items"])...)
+	// And acme's own queue with more waiting: an agent's fact that names the
+	// tool it cited, and the entry only an agent reported, with its reports.
+	queued := listOf(t, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", nil)["items"])
+	items = append(items, queued...)
+	reports := pluck(items, "reports")
+	cited := append(pluck(pluck(queued, "fact"), "source"), pluck(pluck(pluck(queued, "fact"), "others"), "source")...)
 	facts, edges := pluck(full, "facts"), pluck(full, "relations")
 	summaries := append(append(listOf(t, entries["rows"]), listOf(t, mp["nodes"])...), pluck(listOf(t, cf["used_by"]), "entry")...)
 	for iface, rows := range map[string][]map[string]any{
-		"AtlasRead":           answers,
-		"AtlasCoverage":       pluck(answers, "coverage"),
-		"AtlasSummary":        summaries,
-		"AtlasEntriesAnswer":  {entries},
-		"AtlasMapLane":        listOf(t, mp["lanes"]),
-		"AtlasMapGroup":       listOf(t, mp["groups"]),
-		"AtlasMapEdge":        append(listOf(t, mp["edges"]), listOf(t, trace["edges"])...),
-		"AtlasMapAnswer":      {mp},
-		"AtlasEntry":          full,
-		"AtlasRef":            append(pluck(full, "ref"), pluck(full, "members")...),
-		"AtlasFactView":       facts,
-		"AtlasValue":          append(pluck(facts, "value"), pluck(pluck(facts, "others"), "value")...),
-		"AtlasSource":         append(pluck(facts, "source"), pluck(full, "sources")...),
+		"AtlasRead":          answers,
+		"AtlasCoverage":      pluck(answers, "coverage"),
+		"AtlasSummary":       summaries,
+		"AtlasEntriesAnswer": {entries},
+		"AtlasMapLane":       listOf(t, mp["lanes"]),
+		"AtlasMapGroup":      listOf(t, mp["groups"]),
+		"AtlasMapEdge":       append(listOf(t, mp["edges"]), listOf(t, trace["edges"])...),
+		"AtlasMapAnswer":     {mp},
+		"AtlasEntry":         full,
+		"AtlasRef":           append(pluck(full, "ref"), pluck(full, "members")...),
+		"AtlasFactView":      facts,
+		"AtlasValue":         append(pluck(facts, "value"), pluck(pluck(facts, "others"), "value")...),
+		"AtlasSource": append(append(pluck(facts, "source"), pluck(full, "sources")...),
+			append(pluck(reports, "source"), cited...)...),
+		"AtlasReport":         reports,
 		"AtlasClaimed":        pluck(append(facts, edges...), "others"),
 		"AtlasEdge":           edges,
 		"AtlasUse":            pluck(full, "use"),
@@ -465,8 +545,35 @@ func TestTheAtlasAnswersAreTheirDeclaredShapes(t *testing.T) {
 		"AtlasActivityAnswer": {activity},
 		"AtlasReviewItem":     items,
 		"AtlasReviewAnswer":   {review, askAtlas(ctx, t, waitingAtlas(t), "atlas_review", map[string]any{"limit": 1})},
+		"AtlasSourceFinding":  pluck(standings, "unread"),
+		"AtlasSourceScope":    pluck(standings, "scopes"),
+		"AtlasSourceStanding": standings,
+		"AtlasSourcesAnswer":  {sources},
 	} {
 		holdShape(t, iface, rows, iface == "AtlasRead")
+	}
+}
+
+// THE ANSWERS ABOUT WORK ARE THEIR DECLARED SHAPES, read and unread alike:
+// what the dashboard's types declare is what these questions send.
+func TestTheAtlasWorkAnswersAreTheirDeclaredShapes(t *testing.T) {
+	t.Parallel()
+	web := entryID(atlas.KindHost, "ssh/web-1")
+	row := worklet.TaskRow{ID: "t-1", Key: "ENG-1", Title: "Patch web-1"}
+	s := atlasWorkSources(&stubWork{marks: worklet.EntryMarks{Open: map[string]int{web: 2}, Capped: true},
+		entryWork: worklet.EntryWork{Open: []worklet.TaskRow{row}, Recent: []worklet.TaskRow{row},
+			OpenTotal: worklet.ClaimTotal{Total: 60, Capped: true}, RecentTotal: worklet.ClaimTotal{Total: 1}}})
+	holder, outsider := asAtlasReader(t, iam.GrantWorklet), asAtlasReader(t)
+	byID := map[string]any{"id": web}
+	work := askAtlas(holder, t, s, "atlas_entry_work", byID)
+	named := askAtlas(holder, t, s, "atlas_named", map[string]any{"ids": web})
+	for iface, rows := range map[string][]map[string]any{
+		"AtlasWorkAnswer":      {askAtlas(holder, t, s, "atlas_work", nil), askAtlas(outsider, t, s, "atlas_work", nil)},
+		"AtlasEntryWorkAnswer": {work, askAtlas(outsider, t, s, "atlas_entry_work", byID)},
+		"AtlasNamedAnswer":     {named},
+		"AtlasNamed":           listOf(t, named["named"]),
+	} {
+		holdShape(t, iface, rows, false)
 	}
 }
 
@@ -491,7 +598,7 @@ func waitingAtlas(t *testing.T) queries.Sources {
 	for _, c := range []func() (atlas.Claim, error){
 		func() (atlas.Claim, error) {
 			return atlas.Says(atlasRepo, atlas.FactDefaultBranch, "trunk",
-				atlas.AgentSource("sre", "turn-2", atlas.EvidenceCall), atlasNow.Add(-time.Hour))
+				atlas.AgentSource("sre", "turn-2", atlas.EvidenceCall).Citing("ssh_read"), atlasNow.Add(-time.Hour))
 		},
 		func() (atlas.Claim, error) {
 			return atlas.Says(atlasCheckout, atlas.FactName, "Checkout", atlas.PersonSource("ada"), atlasNow.Add(-2*time.Hour))
@@ -543,6 +650,22 @@ func TestTheAtlasReviewIsWhatWaitsAsItsAskerReadsTheAtlas(t *testing.T) {
 	whole := askAtlas(coder, t, s, "atlas_review", map[string]any{"kind": "unconfirmed"})
 	if whole["total"] != float64(1) || whole["counts"].(map[string]any)["disagreement"] != float64(2) {
 		t.Errorf("the review counts %v in all and %v by kind", whole["total"], whole["counts"])
+	}
+	// NARROWED TO THE ASKER'S OWN WORD: ada named the service and a later read
+	// differs, so she alone is told; a colleague, and a credential acting as
+	// no seat, are told nothing.
+	if got, want := waits(member, map[string]any{"mine": true}), []string{"disagreement checkout-api"}; !slices.Equal(got, want) {
+		t.Errorf("asked what contradicts her own word ada is shown %v, want %v", got, want)
+	}
+	grace := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "grace", Kind: iam.KindPerson,
+		Seat: "grace", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAtlas}})
+	token := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "token:ops", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAtlas}})
+	for who, ctx := range map[string]context.Context{"a colleague": grace, "a credential acting as no seat": token} {
+		if got := askAtlas(ctx, t, s, "atlas_review", map[string]any{"mine": true}); len(listOf(t, got["items"])) != 0 ||
+			got["total"] != float64(0) {
+			t.Errorf("%s is told %v contradicts their word", who, got["items"])
+		}
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
@@ -707,6 +830,7 @@ func TestTheDashboardNamesEveryAtlasWord(t *testing.T) {
 		"AtlasFamily":         strs(atlas.Families),
 		"AtlasChange":         strs(atlas.Changes),
 		"AtlasReviewKind":     strs(atlas.ReviewKinds),
+		"AtlasSourceState":    strs(collect.States),
 	} {
 		declared, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
@@ -813,5 +937,230 @@ func TestTheDashboardKnowsWhatEachFactAndRelationAdmits(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// advisedSources is acme's atlas with what people recorded in it, on a chart
+// that holds one agent seat and no unit.
+func advisedSources(t *testing.T) queries.Sources {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte("name: acme\nproviders:\n  llm:\n    p: {model: m}\n  sandbox: {fake: true}\n" +
+		"roles:\n  - name: CEO\n    handle: ceo\n    llm: p\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := atlasSourcesWith(atlasCode(), acmeLog(t))
+	s.Company = func() (*config.Company, *org.Organization) { return cfg, chart }
+	return s
+}
+
+// THE ADVISOR NAMES AN ATLAS ENTRY ONLY TO A HOLDER OF THE ATLAS APP, read as
+// the asker reads the atlas. A holder is named the service nobody owns and
+// the server whose owning unit the chart does not hold, each with the call
+// that fixes it; whoever asks without the app is told how many and sent no
+// name, no id and no call.
+//
+// Mutation: read Names as true whoever asks, and the reader without the app
+// is sent checkout-api.
+func TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp(t *testing.T) {
+	t.Parallel()
+	s := advisedSources(t)
+	read := func(ctx context.Context) (map[advisor.Class]advisor.Finding, string) {
+		t.Helper()
+		answer, err := s.AdvisedOfAtlas(ctx, advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(answer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[advisor.Class]advisor.Finding{}
+		for _, f := range answer.Findings {
+			out[f.Class] = f
+		}
+		return out, string(raw)
+	}
+	holder, _ := read(asAtlasReader(t))
+	unowned, gone := holder[advisor.ClassAtlasUnowned], holder[advisor.ClassAtlasOwnerGone]
+	if len(unowned.Entries) != 1 || unowned.Entries[0].ID != atlasCheckout.ID() ||
+		unowned.Fix.Kind != advisor.FixAtlasAct || unowned.Fix.Act.Tool != builtin.AtlasSetOwnerTool {
+		t.Errorf("a holder's unowned finding = %+v, want checkout-api with the owner write", unowned)
+	}
+	if len(gone.Entries) != 1 || gone.Entries[0].ID != atlasWeb.ID() || gone.Entries[0].Owner.Name != "platform" {
+		t.Errorf("a holder's owner finding = %+v, want web-1 and the unit the chart no longer holds", gone)
+	}
+
+	nobody := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "bo", Kind: iam.KindPerson,
+		Seat: "bo", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}})
+	blind, raw := read(nobody)
+	if len(blind) != len(holder) {
+		t.Fatalf("a reader without the app is raised %d findings, a holder %d", len(blind), len(holder))
+	}
+	for class, f := range blind {
+		if len(f.Entries) != 0 || f.Fix.Act != nil || f.Fix.Kind != advisor.FixNone || f.Title != holder[class].Title {
+			t.Errorf("%s for a reader without the app = %+v, want the count and nothing named", class, f)
+		}
+	}
+	for _, secret := range []string{"checkout-api", "web-1", atlasCheckout.ID().String(), atlasWeb.ID().String()} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("the answer for a reader without the atlas app holds %q", secret)
+		}
+	}
+}
+
+// staleDesk is acme's sources four hours on: Cloudflare read whole ten
+// minutes ago, and Datadog not since four hours ago, on an hourly read.
+type staleDesk struct{ atlasDesk }
+
+func (staleDesk) AtlasSourceReport(_ context.Context, now time.Time) (collect.Report, bool, error) {
+	recent, old := now.Add(-10*time.Minute), now.Add(-4*time.Hour)
+	standings := map[integration.Kind]collect.Status{
+		integration.KindCloudflare: {LastAttemptAt: recent, Completed: true, LastCompleteAt: recent},
+		integration.KindDatadog:    {LastAttemptAt: recent, LastCompleteAt: old, LastError: "datadog: 503 from the vendor"},
+	}
+	return collect.Describe([]integration.Kind{integration.KindCloudflare, integration.KindDatadog,
+		integration.KindGitHub}, standings, nil, time.Hour, now), true, nil
+}
+
+// A SOURCE THAT STOPPED READING IS THE ADVISOR'S ONCE THREE READS HAVE PASSED,
+// off the standings the atlas's own sources question answers: the one not
+// read whole in four hours is listed with the ask for a read as its fix, and
+// neither the one read ten minutes ago nor the one never read is.
+func TestTheAdvisorListsASourceThatStoppedReading(t *testing.T) {
+	t.Parallel()
+	s := advisedSources(t)
+	deps := *s.Atlas.(*builtin.AtlasDeps)
+	deps.Sources = staleDesk{}
+	s.Atlas = &deps
+	answer, err := s.AdvisedOfAtlas(asAtlasReader(t), advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range answer.Findings {
+		if f.Class == advisor.ClassAtlasSourceStale {
+			got = append(got, f.Subject.Name+" "+f.Fix.Act.Tool+" "+f.Fix.Act.Args["integration"])
+		}
+	}
+	if !slices.Equal(got, []string{"Datadog " + builtin.AtlasRefreshTool + " datadog"}) {
+		t.Errorf("stale sources = %v, want Datadog alone with a read asked for", got)
+	}
+}
+
+// fleetNodes is acme's two live nodes as their presence rows say them: a
+// broker member that names its address, and a second node.
+type fleetNodes struct{}
+
+func (fleetNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return []coord.Lease{
+		{Resource: coord.ClassNode.Resource("node-a"), Meta: map[string]any{"broker": "member",
+			coord.InfraKey: coord.NodeInfra{Address: "10.0.0.4", ObjectsBackend: "nats"}.Meta()}},
+		{Resource: coord.ClassNode.Resource("node-b"), Meta: map[string]any{"broker": "leaf",
+			coord.InfraKey: coord.NodeInfra{Address: "203.0.113.9", ObjectsBackend: "nats"}.Meta()}},
+	}, nil
+}
+
+// fleetSources is acme's atlas on a node that reads its fleet's presence.
+func fleetSources(t *testing.T) queries.Sources {
+	t.Helper()
+	s := atlasSources(atlasCode())
+	deps := *s.Atlas.(*builtin.AtlasDeps)
+	records := deps.Records
+	deps.Records = func(ctx context.Context) gather.Sources {
+		src := records(ctx)
+		src.Nodes = fleetNodes{}
+		return src
+	}
+	s.Atlas = &deps
+	return s
+}
+
+// THE ENGINE'S OWN NODES ARE IN THE ATLAS FOR EVERY HOLDER, AND THEIR
+// ADDRESSES FOR AN ADMINISTRATOR ALONE, marked internal whatever network
+// they are on. A holder who is no administrator reads each node, the broker
+// on its member and the object store, and no answer of the atlas sends them
+// a node's address: not the entry, not the list, not the map.
+//
+// Mutation: read the view without atlas.For's address rule, and a member's
+// atlas_entry holds 10.0.0.4.
+func TestANodesAddressIsAnsweredToAnAdministratorAlone(t *testing.T) {
+	t.Parallel()
+	s := fleetSources(t)
+	node := entryID(atlas.KindHost, "crewlet/node-a")
+	public := entryID(atlas.KindHost, "crewlet/node-b")
+	addresses := func(ctx context.Context, id string) []map[string]any {
+		t.Helper()
+		entry := asMap(t, askAtlas(ctx, t, s, "atlas_entry", map[string]any{"id": id})["entry"])
+		var out []map[string]any
+		for _, f := range listOf(t, entry["facts"]) {
+			if f["fact"] == "address" {
+				out = append(out, asMap(t, f["value"]))
+			}
+		}
+		return out
+	}
+	admin := asAtlasReader(t, iam.GrantAdmin)
+	for id, want := range map[string]string{node: "10.0.0.4", public: "203.0.113.9"} {
+		got := addresses(admin, id)
+		if len(got) != 1 || got[0]["text"] != want || got[0]["private"] != true {
+			t.Errorf("an administrator's address of %s = %v, want %s marked internal", id, got, want)
+		}
+	}
+	member := asAtlasReader(t)
+	if got := addresses(member, node); len(got) != 0 {
+		t.Errorf("a holder who is no administrator is answered a node's address: %v", got)
+	}
+	for _, what := range []string{"atlas_entry", "atlas_entries", "atlas_map", "atlas_facets"} {
+		params := map[string]any{}
+		if what == "atlas_entry" {
+			params["id"] = node
+		}
+		raw, err := json.Marshal(askAtlas(member, t, s, what, params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range []string{"10.0.0.4", "203.0.113.9"} {
+			if strings.Contains(string(raw), address) {
+				t.Errorf("%s answers a holder who is no administrator the node address %s", what, address)
+			}
+		}
+		if what == "atlas_entries" && !strings.Contains(string(raw), "crewlet/node-a") {
+			t.Errorf("%s leaves the node itself out for a holder: %s", what, raw)
+		}
+	}
+}
+
+// A NODE'S PAGE DRAWS WHAT RELIES ON IT: the trace an entry's neighbourhood
+// reads answers the engine's own service and its broker one step from a
+// broker member, with the relation each stands on it by, so the fleet's
+// entries are drawn among their neighbours like every other kind's.
+func TestANodesTraceAnswersTheEngineAndItsBroker(t *testing.T) {
+	t.Parallel()
+	s := fleetSources(t)
+	node := entryID(atlas.KindHost, "crewlet/node-a")
+	trace := askAtlas(asAtlasReader(t), t, s, "atlas_trace",
+		map[string]any{"id": node, "direction": "up", "depth": 1, "relations": "all"})
+	var keys []string
+	for _, hop := range listOf(t, trace["hops"]) {
+		for _, e := range listOf(t, hop["entries"]) {
+			keys = append(keys, e["key"].(string))
+		}
+	}
+	slices.Sort(keys)
+	if !slices.Equal(keys, []string{"crewlet", "crewlet/broker"}) {
+		t.Errorf("one step up from the node = %v, want the engine and its broker", keys)
+	}
+	if edges := listOf(t, trace["edges"]); len(edges) != 2 || edges[0]["to"] != node || edges[0]["relation"] != "runs_on" {
+		t.Errorf("the trace's edges = %v, want two that run on the node", edges)
+	}
+	down := askAtlas(asAtlasReader(t), t, s, "atlas_trace", map[string]any{
+		"id": entryID(atlas.KindService, "crewlet"), "direction": "down", "depth": 1, "relations": "all"})
+	if n := len(listOf(t, listOf(t, down["hops"])[0]["entries"])); n != 4 {
+		t.Errorf("one step down from the engine holds %d entries, want its two nodes, its broker and its object store", n)
 	}
 }

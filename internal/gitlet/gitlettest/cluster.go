@@ -99,6 +99,20 @@ type Cluster interface {
 	// the code log, and every router's memory of a member that refused or
 	// went silent lapsed, as the half minute a router keeps it does.
 	Settle(ctx context.Context) error
+	// AwaitElection waits, for as long as ctx allows, until every running
+	// member's own broker answers a read of the code log's state
+	// (DataNode.LogStats), its applier held or not: the read its committer's
+	// admission makes before every ordinary append (statelog.Reserve), asked
+	// through that member's own client as the admission asks it. A member's
+	// death takes that answer from its survivors until the elections the
+	// death causes are over — a broker whose meta group has no leader answers
+	// it 503, err_code 10008, which the committer refuses `usage_unknown` and
+	// its asker takes to the next member (F55) — so a case asks a write of
+	// the survivors only once this has returned: asked while the elections
+	// run, the write is decided by a member after the runner-up, or by none.
+	// Never Fleet.Level for it, which waits on each member's applier too, and
+	// so on one a case holds.
+	AwaitElection(ctx context.Context) error
 	// SplitMaintainers has every member of nodes take itself for repoID's
 	// maintainer — its compactor's Maintainers answering yes — until the case
 	// ends: a presence view split between them, which no lease or epoch
@@ -205,7 +219,7 @@ func quorum(c Cluster) error {
 // (SplitMaintainers), so a case whose maintenance leaked past its own
 // repositories (Cluster.ConfineMaintenance) fails on it whichever members it
 // runs its passes on: F28's held compaction is this one's, F29's compactor
-// applies two. Declared before any case, it is no case's own.
+// lands two. Declared before any case, it is no case's own.
 func dueThroughout(t *testing.T, c Cluster) {
 	t.Helper()
 	rc := newRepoCase(t, c, "fleet-due")
@@ -688,6 +702,13 @@ func aGateDroppedPushIsNotApplied(t *testing.T, c Cluster) {
 // the push is ok, no attempt waited out on the dead member, whose subjects
 // nothing serves, so the broker answers an ask of them at once.
 //
+// (b)'S PUSH WAITS FOR THE KILL'S ELECTION (Cluster.AwaitElection), as F29's
+// proposal does: pushed while it runs, the runner-up's admission cannot read
+// the code log's usage — a broker the kill left with no meta leader answers
+// that read 503 — and the push is decided by the member after it, or by none,
+// so (b) would hold how soon an election ends on a loaded runner rather than
+// the walk past a dead committer.
+//
 // NO PUSH WAITS OUT A WRITE ATTEMPT, read off the routers' own asks rather
 // than the pushes' wall time (Cluster.WaitedOut): an ask of the committer's
 // proposal lane whose attempt reached its deadline is the write attempt a
@@ -783,6 +804,9 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 	reported, waited := c.Unanswered(committer), c.WaitedOut(committer)
 	c.Kill(t, committer)
 	down = true
+	if err := c.AwaitElection(rc.ctx); err != nil {
+		t.Fatalf("the survivors' brokers after %s's death: %v", committer, err)
+	}
 	res := p.Push(rc.ctx, work, rc.url(r), "main")
 	if !res.OK("refs/heads/main") {
 		t.Errorf("a push whose committer died before it: %s, want ok", res)

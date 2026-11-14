@@ -137,9 +137,9 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if message == "" {
 		message = fmt.Sprintf("Apply the review's suggestions to %s", cv.g.ref())
 	}
-	w := gitlet.EngineWrite{Kind: gitlet.WriteApplySuggestions, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := written(ctx, turn, cv.g.c, gitlet.EngineWrite{Kind: gitlet.WriteApplySuggestions, RepoID: repo.ID,
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
-		Message: message, Suggestions: suggestions, Ceiling: cv.g.c.write}
+		Message: message, Suggestions: suggestions})
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}

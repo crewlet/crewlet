@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Statuses is the coordination store's bucket of source standings
@@ -15,6 +16,11 @@ type Statuses interface {
 	AtlasSourceStatuses(ctx context.Context) (map[string][]byte, error)
 	PutAtlasSourceStatus(ctx context.Context, kind string, value []byte) error
 	DeleteAtlasSourceStatus(ctx context.Context, kind string) error
+
+	// The asks that a source be read now (coord.AtlasSourceRefreshes).
+	AtlasSourceRefreshes(ctx context.Context) (map[string][]byte, error)
+	PutAtlasSourceRefresh(ctx context.Context, kind string, value []byte) error
+	DeleteAtlasSourceRefresh(ctx context.Context, kind string) error
 }
 
 // CoordStore is each source's standing on the fleet's coordination store:
@@ -78,6 +84,51 @@ func (s *CoordStore) Save(ctx context.Context, st Status) error {
 func (s *CoordStore) Forget(ctx context.Context, kind integration.Kind) error {
 	if err := s.statuses.DeleteAtlasSourceStatus(ctx, kind.String()); err != nil {
 		return fmt.Errorf("collect: forget the %s standing: %w", kind, err)
+	}
+	return nil
+}
+
+// Requests reads every waiting ask that a source be read now. One this
+// build cannot decode is skipped, as a standing is: the duty drops it with
+// the next read of its source.
+func (s *CoordStore) Requests(ctx context.Context) (map[integration.Kind]Request, error) {
+	raw, err := s.statuses.AtlasSourceRefreshes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("collect: read the refresh asks: %w", err)
+	}
+	out := make(map[integration.Kind]Request, len(raw))
+	for kind, value := range raw {
+		var req Request
+		if err := json.Unmarshal(value, &req); err != nil {
+			log.WarnContext(ctx, "atlas_source_refresh_undecodable", "source", kind, "error", err)
+			continue
+		}
+		out[integration.Kind(kind)] = req
+	}
+	return out, nil
+}
+
+// Ask records a person's ask that kind be read now.
+func (s *CoordStore) Ask(ctx context.Context, kind integration.Kind, req Request) error {
+	if kind == "" || req.RequestedAt.IsZero() {
+		return errors.New("collect: a refresh ask names its source and its instant")
+	}
+	req.RequestedAt = req.RequestedAt.UTC()
+	req.By = textcut.Within(req.By, MaxRequestByLength)
+	value, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("collect: encode the %s refresh ask: %w", kind, err)
+	}
+	if err := s.statuses.PutAtlasSourceRefresh(ctx, kind.String(), value); err != nil {
+		return fmt.Errorf("collect: record the %s refresh ask: %w", kind, err)
+	}
+	return nil
+}
+
+// Answered drops a source's ask, once it is read or gone.
+func (s *CoordStore) Answered(ctx context.Context, kind integration.Kind) error {
+	if err := s.statuses.DeleteAtlasSourceRefresh(ctx, kind.String()); err != nil {
+		return fmt.Errorf("collect: drop the %s refresh ask: %w", kind, err)
 	}
 	return nil
 }

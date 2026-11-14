@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -49,12 +50,15 @@ func decideEstate(t *testing.T) *estate {
 	return e
 }
 
-// proposalOf is one undecided push of cmds, with no pack.
+// proposalOf is one undecided push of cmds, with no pack, made for nobody but
+// its pusher — stated, so the seat's a case puts in its place (pushBy) states
+// it too.
 func proposalOf(cmds ...Command) Proposal {
 	return Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: decideRepo,
 		Principal: Principal{Kind: PrincipalOperator, OperatorID: "op", Seat: "op"},
 		Via:       ViaGit, Node: "node-a", Commands: cmds, ReceivedAt: decideAt,
+		WrittenFor: types.ForNobody(),
 	}
 }
 

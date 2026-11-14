@@ -1063,7 +1063,7 @@ func embeddedNATSServing(t *testing.T, domain string) *nats.Conn {
 		JetStreamDomain:   domain,
 		Port:              -1,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

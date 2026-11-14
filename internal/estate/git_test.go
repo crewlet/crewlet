@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -276,12 +277,16 @@ func asks(halves map[string]*fakeGit) map[string]int {
 
 // writeOf is a person's commit of one file onto repo's main, as a tool asks
 // one: under an operation of its own, valid by the one rule every party to a
-// write holds it to (gitlet.EngineWrite.Validate).
+// write holds it to (gitlet.EngineWrite.Validate), and stated made for nobody,
+// as a serving node reads every write it decodes — so what arrives is what
+// was sent, and a case that puts a seat in its writer's place sends a write
+// its router asks.
 func writeOf(repo string) gitlet.EngineWrite {
 	text := "one\n"
 	return gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: repo,
-		Principal: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-		OpID:      statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+		Principal:  gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		WrittenFor: types.ForNobody(),
+		OpID:       statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 		Ref: "refs/heads/main", ExpectedHead: "1111111111111111111111111111111111111111", Message: "one",
 		Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "README.md", Content: &text}}}
 }

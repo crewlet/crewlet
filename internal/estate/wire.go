@@ -295,18 +295,33 @@ func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 // THE CHECK EVERY WRITE'S ACTOR IS HELD TO BEFORE IT IS ASKED ANYWHERE, this
 // node's own copy in process included, so the answer is the same from every
 // node: the tracker's, by the router itself for every operation that runs as
-// an actor ([callAs]), and a page or chat write's, whose arguments hold the
-// actor, by its own [op.refusedBeforeAsking]. A serving node cannot make it,
-// because it cannot tell what never arrived from what an older node, knowing
-// no carrier, never sent: it reads both as stated nobody
-// ([Actor.UnmarshalJSONFrom], and Doclet's and Chatlet's own), and the turn
-// the write woke would work for the writing seat, every app. Each domain's
-// writer keeps its own check, for a write that reaches it another way.
+// an actor ([callAs]); a page or chat write's, whose arguments hold the
+// actor, by its own [op.refusedBeforeAsking]; and a code write's, whose
+// request holds its asker, by its own too ([codeWrites]). A serving node
+// cannot make it, because it cannot tell what never arrived from what an
+// older node, knowing no carrier, never sent: it reads both as stated nobody
+// ([Actor.UnmarshalJSONFrom], Doclet's and Chatlet's own, and each code
+// write's request's), and the turn the write woke would work for the writing
+// seat, every app. Each domain's writer keeps its own check, for a write that
+// reaches it another way.
 func actorWrites(who string, kind iam.ActorKind, writtenFor types.WrittenFor) error {
 	if _, err := writtenFor.For(kind); err != nil {
 		return fmt.Errorf("estate: a write as %q is asked of no node: %w", who, err)
 	}
 	return nil
+}
+
+// codeWrites is the check every code write is held to before it is asked
+// anywhere ([op.refusedBeforeAsking]): that the asker its request holds —
+// inside it, since no code operation runs as an actor — may state whom the
+// write is made for as the request states it ([actorWrites], by the kind of
+// writer the asker is: gitlet.Principal.WriterKind). The six writes a seat's
+// call forms declare it: a push, a change's lifecycle and its conversation, a
+// write of a merge queue, a merge and an engine write. The node that decides
+// the request holds the rest of the carrier's rule (gitlet's
+// writtenForUnder).
+func codeWrites(asker gitlet.Principal, writtenFor types.WrittenFor) error {
+	return actorWrites(asker.Actor(), asker.WriterKind(), writtenFor)
 }
 
 // opClass is what a failover may do with an operation that went unanswered.
@@ -706,13 +721,17 @@ type op[A, R any] struct {
 // refused here names its check there.
 //
 // AND FOR AN ACTOR THAT MAY WRITE NOTHING, held in a page or chat write's
-// arguments ([actorWrites]): a serving node reads a carrier that never
-// arrived as stated nobody, whichever build left it off, so the actor is held
-// to it where the write is asked, as [callAs] holds the actor every tracker
-// operation runs as. A DECLARATION, NOT A LIST: every operation whose
+// arguments ([actorWrites]), or a code write's asker that may state nothing
+// of whom it writes for ([codeWrites]): a serving node reads a carrier that
+// never arrived as stated nobody, whichever build left it off, so the actor
+// is held to it where the write is asked, as [callAs] holds the actor every
+// tracker operation runs as. A DECLARATION, NOT A LIST: every operation whose
 // arguments hold a page or chat actor must declare it, or be named with why
-// not, which TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite
-// holds over the registry, so a new write cannot forget it.
+// not, and every one whose request holds a code asker beside whom it is made
+// for must declare it, which
+// TestEveryOperationHoldingAPageOrChatActorRefusesOneThatCannotWrite and
+// TestEveryCodeWriteRefusesAnAgentsRequestThatStatesNobody hold over the
+// registry, so a new write cannot forget it.
 //
 // A property of the asking side, like [op.keyedBy]: the server runs the
 // operation as it always did.

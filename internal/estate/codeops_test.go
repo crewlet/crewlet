@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -257,6 +258,19 @@ func (f *fakeNode) Read(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, e
 		Seq: f.codeSeq + 1_000}}, nil
 }
 
+// QueueDue answers an empty page of the queue work a home owes, read at a
+// position past every one this node committed at — or refuses with codeErr.
+func (f *fakeNode) QueueDue(context.Context, gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	f.note("code.queue_due")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codeErr != nil {
+		return gitlet.QueueDueAnswer{}, f.codeErr
+	}
+	return gitlet.QueueDueAnswer{Position: statelog.Position{Stream: codeStream, Generation: 1,
+		Seq: f.codeSeq + 1_000}}, nil
+}
+
 // TurnsMovedCode answers that no turn moved code, or refuses with codeErr.
 func (f *fakeNode) TurnsMovedCode(context.Context, gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	f.note("code.turns_moved")
@@ -325,6 +339,10 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 		}},
 		{opCodeRead.spec.name, func() error {
 			_, err := seam.Read(ctx, gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos})
+			return err
+		}},
+		{opCodeQueueDue.spec.name, func() error {
+			_, err := seam.QueueDue(ctx, gitlet.QueueDueQuery{RepoID: "019a0c2e-0000-7000-8000-0000000000a1"})
 			return err
 		}},
 		{opCodeTurnsMoved.spec.name, func() error {
@@ -400,8 +418,8 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 		repo := fmt.Sprintf("repo-%02d", i)
 		committer := rendezvous.Order(repo, holders)[0]
 		w := gitlet.ConversationWrite{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
-			Comment: &gitlet.Comment{RepoID: repo, ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i),
-				Body: "why?"}}
+			WrittenFor: types.ForNobody(), Comment: &gitlet.Comment{RepoID: repo,
+				ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i), Body: "why?"}}
 		if _, err := r.Code().Converse(t.Context(), w); err != nil {
 			t.Fatalf("converse on %s: %v", repo, err)
 		}
@@ -423,7 +441,8 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	order := rendezvous.Order(repo, holders)
 	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = gitlet.ErrNotServing })
 	w := gitlet.ConversationWrite{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_comment_on_change",
-		Comment: &gitlet.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
+		WrittenFor: types.ForNobody(),
+		Comment:    &gitlet.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
 	if _, err := r.Code().Converse(t.Context(), w); err != nil {
 		t.Fatalf("converse: %v", err)
 	}
@@ -534,7 +553,10 @@ func (f *fleet) proposedOn(repo string) []string {
 	return out
 }
 
-// proposalTo is a push of one branch to repo under pushID.
+// proposalTo is a push of one branch to repo under pushID, stated made for
+// nobody, as a serving node reads every push it decodes — so what arrives is
+// what was sent, and a case that puts a seat in its pusher's place sends a
+// push its router asks.
 func proposalTo(repo, pushID string) gitlet.Proposal {
 	return gitlet.Proposal{
 		PushID: pushID, RepoID: repo, Node: "agent-1",
@@ -543,6 +565,7 @@ func proposalTo(repo, pushID string) gitlet.Proposal {
 		Commands: []gitlet.Command{{Ref: "refs/heads/main", Old: gitlet.ZeroOID,
 			New: "1111111111111111111111111111111111111111"}},
 		ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC),
+		WrittenFor: types.ForNobody(),
 	}
 }
 
@@ -587,6 +610,7 @@ type codeDesk struct {
 // codeAnswers is what a desk answers each operation with.
 type codeAnswers struct {
 	read      gitlet.ReadAnswer
+	due       gitlet.QueueDueAnswer
 	snap      gitlet.RepoSnapshot
 	ref       gitlet.RepoRef
 	out       gitlet.PushOutcome
@@ -708,6 +732,11 @@ func (d *codeDesk) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswe
 	return held.read, err
 }
 
+func (d *codeDesk) QueueDue(_ context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	held, err := d.took(q)
+	return held.due, err
+}
+
 func (d *codeDesk) TurnsMovedCode(_ context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
 	held, err := d.took(q)
 	return held.moved, err
@@ -764,16 +793,17 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // the admission's resolve, a cache's snapshot page, the receiver's pending
 // wait, the REST routes' listing, a seat's refs listing, a Gitlet node's
 // introduced pages and its compactor's, publisher's and maintainer's due
-// listings, and a seat's resolve of a ref reach a data node from a node that
-// holds no data —
+// listings, a home's due queue, and a seat's resolve of a ref reach a data
+// node from a node that holds no data —
 // and a read by object id and a merge preview the Gitlet node — with their
 // arguments as they were sent (a seat's reads naming the colleague they are
 // made for, whose grant the answering node judges too), their answers come
 // back as they were given — a snapshot's layers, packs, refs, pushes,
 // retirements and cursor, a repository's detail, its limits and who set its
-// rules, the refs and the introducing pushes, the due listings, a resolved
-// ref, a page of a diff, a preview's conflicted paths — and a refusal keeps
-// the identity the host and the cache branch on.
+// rules, the refs and the introducing pushes, the due listings, a home's
+// queue work with its given-up attempts and owed closes, a resolved ref, a
+// page of a diff, a preview's conflicted paths — and a refusal keeps the
+// identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1083,6 +1113,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// field of the answer.
 	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
 	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	// WHOM EACH SEAT'S WRITE IS MADE FOR, which crosses whole beside it.
+	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "lead"})
 	item := &gitlet.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 		SourceRef: "refs/heads/fix", TargetRef: "refs/heads/main", Head: "6666666666666666666666666666666666666666",
 		Title: title, Body: body, Draft: true, Owner: seat,
@@ -1106,6 +1138,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	} {
 		p.OpID, p.Asker, p.Seen, p.ExpectedVersion = "019a0c2e-0000-7000-8000-0000000000d0.code_open_change",
 			seat, at, 4
+		p.WrittenFor = carrier
 		d.mu.Lock()
 		d.changed = gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: item.ChangeID, Number: 42,
 			Version: 5, Position: at, Unchanged: true, Refusal: gitlet.ChangeRefusalStale,
@@ -1131,7 +1164,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a dequeue": {Dequeue: &gitlet.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
 	} {
-		p.OpID, p.Asker, p.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at
+		p.OpID, p.Asker, p.Seen, p.WrittenFor = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at,
+			carrier
 		d.mu.Lock()
 		d.queued = gitlet.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			State: gitlet.QueueWaiting, Place: 3, Position: at, Refusal: gitlet.MergeRefusalGateUnmet,
@@ -1152,7 +1186,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// among them, crossing whole whoever set them — and every field of the
 	// answer, the preconditions a gate_unmet names among them.
 	merge := gitlet.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
-		Seen: at, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+		Seen: at, WrittenFor: carrier, Merge: gitlet.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
 			ChangeID: item.ChangeID, Method: gitlet.MergeMethodSquash, TargetRef: "refs/heads/main",
 			BaseOID: "6666666666666666666666666666666666666666", HeadOID: "7777777777777777777777777777777777777777",
 			CommitOID: "8888888888888888888888888888888888888888",
@@ -1226,7 +1260,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 2, Node: "node-b", Refresh: true,
 			ChangeVersion: 4, ReadinessVersion: 6, Ready: true, WaitsPerson: true}},
 	} {
-		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
+		w.OpID, w.Asker, w.Seen, w.WrittenFor = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change",
+			seat, at, carrier
 		d.mu.Lock()
 		d.conversed = gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID,
 			FindingIDs: []string{"019a0c2e-0000-7000-8000-0000000000e4"}, Position: at,
@@ -1385,19 +1420,76 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: gitlet.ReadChecksDue, ChecksDue: &gitlet.ChecksDueQuery{RepoID: ref.ID, RefreshBefore: created},
 			Cursor: "refs/heads/fix", Fresh: statelog.FloorAt(statelog.ReadSession, at)},
-		// ONE BRANCH'S MERGE QUEUE, and ONE REPOSITORY'S QUEUE WORK ITS HOME
-		// OWES: the target or the due query dropped on the wire would answer
-		// every branch's queue, or the repositories holding one.
+		// ONE BRANCH'S MERGE QUEUE: the target dropped on the wire would
+		// answer every branch's queue.
 		{Asker: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}, Kind: gitlet.ReadQueue, Repo: "app",
 			Target: "refs/heads/main", Limit: 5, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
-		{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: ref.ID}, Cursor: "c-2",
-			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
 			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)
 		}
 		if got := d.last(); !reflect.DeepEqual(got, q) {
 			t.Errorf("read %s asked %+v, want %+v", q.Kind, got, q)
+		}
+	}
+
+	// THE HOME'S DUE QUEUE, each query and each page whole: the listing after
+	// a marked cursor, and one repository's page with every field of its
+	// target's queue work — an entry, enqueued by a seat for a credential
+	// with the apps that credential's turn used, a candidate with a check on
+	// its commit — a given-up train's attempt and an owed close of the same
+	// entry. Dropped on the wire, the repository's id would list every
+	// repository, the cursor read a first page again, the floor read rows from
+	// before the home's own record, and an entry's member land, eject or close
+	// the entry as another — whom its enqueue was made for among them, without
+	// which its work item is closed for nobody, decided for the enqueuer alone.
+	entry := gitlet.QueueWorkEntry{EntryID: "019a0c2e-0000-7000-8000-0000000000f1", Seq: at,
+		State: gitlet.QueueTesting, HeadOID: "7777777777777777777777777777777777777777",
+		Method: gitlet.MergeMethodSquash, CloseTask: true,
+		EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
+		WorkingFor: &types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+			Apps: []iam.Grant{iam.GrantWorklet, iam.GrantGitlet}},
+		Train: "019a0c2e-0000-7000-8000-0000000000f2", CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
+		Change: gitlet.ChainChange{ID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42, Title: title, Body: body,
+			SourceRef: "refs/heads/fix", Owner: "dev", Authors: []string{"dev", "founder"}},
+		WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"}}
+	owed := entry
+	owed.State, owed.Train, owed.CandidateID = gitlet.QueueLanded, "", ""
+	owed.CloseOp = gitlet.CloseWorkItemOpID("019a0c2e-0000-7000-8000-0000000000f5", entry.EntryID)
+	for name, due := range map[string]struct {
+		q      gitlet.QueueDueQuery
+		answer gitlet.QueueDueAnswer
+	}{
+		"the listing": {gitlet.QueueDueQuery{Cursor: "abandoned:" + ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+			gitlet.QueueDueAnswer{DueRepos: []string{ref.ID}, Next: "close:" + ref.ID, Position: at}},
+		"one repository": {gitlet.QueueDueQuery{RepoID: ref.ID, EnqueuedSince: created, Cursor: "refs/heads/dev",
+			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
+			gitlet.QueueDueAnswer{DueQueue: &gitlet.QueueDue{TargetRef: "refs/heads/main", Repo: "app", Mirrored: true,
+				Tip: "6666666666666666666666666666666666666666", Depth: 2, Batch: 3,
+				Required: []string{"lint", "unit"}, Entries: []gitlet.QueueWorkEntry{entry}, More: true,
+				Train: []gitlet.QueueWorkCandidate{{CandidateID: entry.CandidateID, Train: entry.Train, Ordinal: 1,
+					BaseOID: "6666666666666666666666666666666666666666",
+					TipOID:  "8888888888888888888888888888888888888888",
+					Commits: []gitlet.QueueWorkCommit{{EntryID: entry.EntryID,
+						Commit: "8888888888888888888888888888888888888888",
+						Checks: []gitlet.TipCheck{{Name: "unit", Attempt: 2, State: gitlet.CheckStateFailed,
+							Reason: gitlet.CheckReasonExit}}}}}},
+				DropEpoch: 3, Enqueued: 12},
+				QueueAbandoned: []gitlet.AbandonedCheck{{CheckKey: gitlet.CheckKey{RepoID: ref.ID,
+					OID: "9999999999999999999999999999999999999999", Target: "refs/heads/main", Name: "lint",
+					Attempt: 1}, CandidateID: "019a0c2e-0000-7000-8000-0000000000f4",
+					Reason: gitlet.CheckReasonDequeued}},
+				QueueOwedCloses: []gitlet.QueueWorkEntry{owed}, Next: "refs/heads/main", Position: at}},
+	} {
+		d.mu.Lock()
+		d.due = due.answer
+		d.mu.Unlock()
+		if got, err := seam.QueueDue(ctx, due.q); err != nil || !reflect.DeepEqual(got, due.answer) {
+			t.Errorf("the due queue's %s = (%+v, %v), want %+v", name, got, err, due.answer)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, due.q) {
+			t.Errorf("the due queue's %s asked %+v, want %+v", name, got, due.q)
 		}
 	}
 
@@ -1485,7 +1577,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.mu.Unlock()
 	for name, w := range map[string]gitlet.EngineWrite{
 		"a commit onto a new branch": {Kind: gitlet.WriteCommitFiles, RepoID: ref.ID, Principal: seatRun,
-			OpID: "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
+			WrittenFor: types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
+				Apps: []iam.Grant{iam.GrantGitlet}}),
+			Ceiling: &gitlet.WriteCeiling{Kind: gitlet.WriteCeilingNobody},
+			OpID:    "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
 			Ref: "refs/heads/seats/dev/fix", Base: "6666666666666666666666666666666666666666",
 			Message: "fix the flaky upload", Files: []gitlet.FileOp{
 				{Op: gitlet.FileOpPut, Path: "a.go", Content: &content, Mode: gitlet.ModeExecutable},
@@ -1497,7 +1592,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				{Op: gitlet.FileOpMode, Path: "g.sh", Mode: gitlet.ModeFile},
 			}},
 		"a cherry-pick onto a head": {Kind: gitlet.WriteCherryPick, RepoID: ref.ID, Principal: seatRun,
-			OpID: "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+			WrittenFor: types.ForTurn(nil),
+			OpID:       "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 			Ref: "refs/heads/seats/dev/fix", ExpectedHead: "6666666666666666666666666666666666666666",
 			Commit: "7777777777777777777777777777777777777777", Message: "pick the fix"},
 	} {
@@ -1516,7 +1612,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.err = fmt.Errorf("commit 7777777: %w", gitlet.ErrObjectNotFound)
 	d.mu.Unlock()
 	if _, err := seam.GitWrite(ctx, gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: ref.ID,
-		Principal: seatRun, OpID: "019a0c2e-0000-7000-8000-0000000000f4",
+		Principal: seatRun, WrittenFor: types.ForNobody(), OpID: "019a0c2e-0000-7000-8000-0000000000f4",
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: "refs/heads/seats/dev/new",
 		Commit: "7777777777777777777777777777777777777777"}); !errors.Is(err, gitlet.ErrObjectNotFound) {
 		t.Errorf("a served object-not-found crossed as %v", err)
@@ -1646,7 +1742,7 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	d := &codeDesk{codeAnswers: codeAnswers{pos: pushed, ref: repo,
 		snap: gitlet.RepoSnapshot{Repo: repo, Position: past, Full: true},
 		out:  gitlet.PushOutcome{Position: past},
-		read: gitlet.ReadAnswer{Position: past}}}
+		read: gitlet.ReadAnswer{Position: past}, due: gitlet.QueueDueAnswer{Position: past}}}
 	serveDesk(t, f, d)
 	if _, err := f.client.Code().Propose(t.Context(), proposalTo("repo-floor", "push-floor")); err != nil {
 		t.Fatalf("propose: %v", err)

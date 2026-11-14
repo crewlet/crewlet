@@ -58,6 +58,8 @@ import {
   CONTAINER_SHAPE,
   ITEM_KEY_SHAPE,
   KEY_SHAPE,
+  artifactStandalonePath,
+  pagePath,
   resolve,
   resolves,
 } from "./routes.ts";
@@ -662,6 +664,35 @@ describe("the resolver", () => {
       "Artifacts",
       "Folders",
     ]);
+  });
+
+  // ONE ARTIFACT, TWO FRAMES: its page in the dashboard, and the same page on
+  // its own (no sidebar) under one reserved word, read only after an id.
+  test("an artifact's page and its standalone page are one screen, by id", () => {
+    expect(resolve(["artifacts", uuid])).toMatchObject({
+      screen: "artifact",
+      id: uuid,
+      standalone: false,
+    });
+    expect(resolve(artifactStandalonePath(uuid))).toMatchObject({
+      screen: "artifact",
+      id: uuid,
+      standalone: true,
+      workspace: "artifacts",
+    });
+    expect(artifactStandalonePath(uuid)).toEqual(["artifacts", uuid, "standalone"]);
+    expect(resolve(["artifacts", uuid, "standalone", "x"]).resolved).toBe(false);
+    expect(resolve(["artifacts", uuid, "details"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "yours", "standalone"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "standalone"]).resolved).toBe(false);
+    expect(RESERVED_SEGMENTS).toContain("standalone");
+    // NAMED AND REMEMBERED AS THE ARTIFACT: the same trail, and one recent.
+    expect(crumbsFor(artifactStandalonePath(uuid), { [uuid]: "Q4 roadmap" })).toEqual(
+      crumbsFor(["artifacts", uuid], { [uuid]: "Q4 roadmap" }),
+    );
+    expect(pagePath(artifactStandalonePath(uuid))).toEqual(["artifacts", uuid]);
+    expect(pagePath(["artifacts", uuid])).toEqual(["artifacts", uuid]);
+    expect(pagePath(["worklet", "ENG-42"])).toEqual(["worklet", "ENG-42"]);
   });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {

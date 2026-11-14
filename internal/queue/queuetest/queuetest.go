@@ -859,6 +859,14 @@ const (
 	// wait on settleFor and on a signal; negative ones on Settle.
 	quietFor = 150 * time.Millisecond
 
+	// keepFor ends a case that waits on the keep of a dead letter at the
+	// transport's ceiling, and only so that a hang ends: such a case is
+	// decided by the keep's own completion, which a drain reports
+	// (WaitForHandlers), never by this bound. Generous on purpose: a keep of
+	// megabytes under the race detector on a loaded runner outlasted
+	// settleFor, which is sized for a delivery of a few bytes.
+	keepFor = 2 * time.Minute
+
 	// overlapRounds is how many publish/drain pairs the overlap case races
 	// against each other.
 	//

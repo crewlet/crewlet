@@ -563,6 +563,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 		builtin.LoadToolSkillTool:        {"key": "deploys"},
 		builtin.LookupColleagueTool:      {"query": "agent-ceo"},
 		builtin.MoveArtifactTool:         {"artifacts": []any{artifact}, "folder": "Marketing"},
+		builtin.AtlasRefreshTool:         {"integration": "cloudflare"},
 		builtin.PauseSeatTool:            {"handle": "agent-ceo"},
 		builtin.PublishArtifactTool:      {"artifact": artifact, "base_version": 2, "content": "<p>plain</p>"},
 		builtin.QueryArtifactDataTool:    {"artifact": artifact, "collection": "notes"},

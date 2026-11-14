@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -20,15 +21,15 @@ import (
 func writeOp(at time.Time) string { return statelog.NewOpID(at, "") }
 
 // aWrite is a commit_files any party may act on: alice's put of one file onto
-// a branch she creates from a commit.
+// a branch she creates from a commit, made for nobody but alice.
 func aWrite() gitlet.EngineWrite {
 	text := "hello\n"
 	return gitlet.EngineWrite{
 		Kind: gitlet.WriteCommitFiles, RepoID: "0190f3c4-0000-7000-8000-0000000000aa",
 		Principal: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "alice",
 			Run: gitlet.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}},
-		OpID: writeOp(time.Now()), Ref: "refs/heads/topic", Base: oidOf("B"), Message: "a change",
-		Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "docs/a.md", Content: &text}},
+		OpID: writeOp(time.Now()), WrittenFor: types.ForNobody(), Ref: "refs/heads/topic", Base: oidOf("B"),
+		Message: "a change", Files: []gitlet.FileOp{{Op: gitlet.FileOpPut, Path: "docs/a.md", Content: &text}},
 	}
 }
 
@@ -159,13 +160,14 @@ func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 			w.Files[0] = gitlet.FileOp{Op: gitlet.FileOpMove, Path: "a", To: deep + "/x"}
 		}), "files[0].to: " + pastDepth},
 		"a revert of nothing": {gitlet.EngineWrite{Kind: gitlet.WriteRevert, RepoID: aWrite().RepoID,
-			Principal: aWrite().Principal, OpID: aWrite().OpID, Ref: "refs/heads/main", ExpectedHead: oidOf("H")},
-			"commit:"},
+			Principal: aWrite().Principal, WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID,
+			Ref: "refs/heads/main", ExpectedHead: oidOf("H")}, "commit:"},
 		"a create with a message": {gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: aWrite().RepoID,
-			Principal: aWrite().Principal, OpID: aWrite().OpID, Ref: "refs/heads/x", Commit: oidOf("C"),
-			Message: "m"}, "message:"},
+			Principal: aWrite().Principal, WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID,
+			Ref: "refs/heads/x", Commit: oidOf("C"), Message: "m"}, "message:"},
 		"a delete of no head": {gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: aWrite().RepoID,
-			Principal: aWrite().Principal, OpID: aWrite().OpID, Ref: "refs/heads/x"}, "expected_head:"},
+			Principal: aWrite().Principal, WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID,
+			Ref: "refs/heads/x"}, "expected_head:"},
 	} {
 		err := tc.w.Validate()
 		if !errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(err.Error(), tc.names) {
@@ -233,8 +235,8 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 	lt := func(n int) string { return strings.Repeat("<", n) }
 	pick := func(kind gitlet.EngineWriteKind, message string) gitlet.EngineWrite {
 		return gitlet.EngineWrite{Kind: kind, RepoID: aWrite().RepoID, Principal: aWrite().Principal,
-			OpID: aWrite().OpID, Ref: "refs/heads/main", ExpectedHead: oidOf("H"), Commit: oidOf("C"),
-			Message: message}
+			WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID, Ref: "refs/heads/main", ExpectedHead: oidOf("H"),
+			Commit: oidOf("C"), Message: message}
 	}
 	commit := func(message string) gitlet.EngineWrite {
 		w := aWrite()

@@ -543,11 +543,14 @@ tracker's write, so it is decided as `update_work_item` is: a person who does
 not use the tracker has the change merged and the item left as it was. A
 close that fails or is refused leaves the change merged and says why
 (`merged; ENG-42 not closed: …`). A queued change's landing closes it as
-whoever queued it, once the landing has applied: the close stays owed on the
-queue's rows until it is made, so a home that stops or a tracker that does not
-answer delays it to the next turn rather than losing it, and a close that will
-never be made (a vendor's item, a queuer who may no longer update it, an item
-Worklet no longer holds or will not set done) is told
+whoever queued it — and, where a seat queued it in a turn it worked for
+somebody, for that somebody, within the apps they use, as the seat's own close
+would be in that turn — once the landing has applied: the close stays owed on
+the queue's rows until it is made, so a home that stops or a tracker that does
+not answer delays it to the next turn rather than losing it, and a close that
+will never be made (a vendor's item, a queuer who may no longer update it,
+somebody it was queued for who has left, may not act now or does not use the
+tracker, an item Worklet no longer holds or will not set done) is told
 to the change's authors and the queuer under `merged`. `override_reason` is a
 person's reason to merge past the gate, merged directly and recorded on the
 change; a seat cannot override.
@@ -1062,7 +1065,11 @@ turn a person woke — their message, their comment, a work item they assigned
 permission too: for a person without it, every code tool is refused, its
 executor is given no repository, and the seat tells them an administrator can
 give them Gitlet. Not even the seat's own branches are changed for them. A
-colleague seat's turn is held to that colleague's grant as well ([Reads made
+colleague seat's turn is held to that colleague's grant as well, and a turn
+woken by a change, a review, a comment or a push a colleague made while it
+worked for somebody — or by what Gitlet records later about that push, or
+about a change the colleague queued — is held to that somebody instead, as on
+Worklet, Doclet and Chatlet ([Reads made
 for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else),
 [Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
 

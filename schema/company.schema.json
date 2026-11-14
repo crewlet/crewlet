@@ -25,6 +25,15 @@
     "AWSProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "atlas_read": {
+          "description": "Add a read-only role for the atlas to the stack, so the atlas lists the account's Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names. Off by default. Turning it on or off changes the CloudShell block: run it again, and paste its last line when it is on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "certificate_authority": {
           "description": "The engine's certificate authority: its P-256 private key, then its certificate, both PEM. Minted by the connect form and never shown; the stack's trust anchor holds only the certificate. It can sign in as the provisioner, which can create agent roles and attach the Crewlet levels.",
           "type": [
@@ -36,7 +45,7 @@
           "x-crewlet-secret": true
         },
         "connection": {
-          "description": "The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
+          "description": "The stack's CrewletConnection output: five ARNs joined by commas, or seven where the stack holds the atlas's role, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made.",
           "type": [
             "string",
             "number",
@@ -246,6 +255,15 @@
       "properties": {
         "agent_records": {
           "description": "Whether agents record in the atlas what a tool call of their own turn showed them, and dispute what it holds (default true). false stops both; what they recorded before stays until a person retires it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "owner_wakes": {
+          "description": "Whether the agent seat that owns an atlas entry is woken when the entry drifts: its health turns to alerting, or its sources come to disagree (default true). At most one wake an entry a day. false wakes nobody; the entry still waits in Review.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -1737,6 +1755,10 @@
     "DigitalOcean": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "$ref": "#/$defs/DigitalOceanAtlas",
+          "description": "Optional. The read-only token the atlas reads the team's resources with. Without it the atlas shows the DigitalOcean account alone."
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -1749,6 +1771,25 @@
         "provisioning": {
           "$ref": "#/$defs/DigitalOceanProvisioning",
           "description": "The DigitalOcean team the agents' tokens act in. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "DigitalOceanAtlas": {
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Reference to the sealed personal access token made for the atlas, with these Custom Scopes and no other: account:read, droplet:read, kubernetes:read, database:read, load_balancer:read, domain:read, app:read and project:read. A token that can change anything is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -2001,6 +2042,10 @@
     "Expo": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "$ref": "#/$defs/ExpoAtlas",
+          "description": "Optional. The view-only robot the atlas reads the account's projects and builds as. Without it the atlas shows the Expo account alone."
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -2013,6 +2058,25 @@
         "provisioning": {
           "$ref": "#/$defs/ExpoProvisioning",
           "description": "The Expo account the agents' robot users act for. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ExpoAtlas": {
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Reference to the sealed access token of a robot user made for the atlas, holding the Viewer role on the account. A robot with any other role is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -2161,7 +2225,7 @@
           "x-crewlet-secret": true
         },
         "token": {
-          "description": "Read PAT for participants-based routing; empty degrades routing.",
+          "description": "Read PAT (read_api) for participants-based routing and the atlas's read of the group; empty degrades routing.",
           "type": [
             "string",
             "number",
@@ -2292,6 +2356,15 @@
     "GoogleCloudProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "atlas_read": {
+          "description": "Let the atlas list what each project the provisioner reads runs (instances, databases, Cloud Run services, functions, buckets and topics) through Cloud Asset Inventory, as the service account crewlet-atlas in the identity project, which may only search resources by name and type. Off by default. Turning it on changes the Cloud Shell block: run it again.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "federation_key": {
           "description": "The engine's ES256 private key (PKCS#8 PEM) whose public half the federation provider holds. Minted by the connect form and never shown; it can act as the provisioner, which can create service accounts in the identity project and grant the agent levels.",
           "type": [
@@ -5479,6 +5552,15 @@
     "Scaleway": {
       "additionalProperties": false,
       "properties": {
+        "atlas": {
+          "description": "See more in Atlas: the engine makes a read-only IAM application named for Atlas, with its own policy and API key, and reads the Organization's servers, clusters, databases, load balancers, bucket names, DNS zones, containers and functions under it. Off deletes the application, its policy and its key.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Turn the integration on.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",

@@ -88,7 +88,7 @@ func subjectStream(b *testing.B, n int) *jsapi.Leader {
 	b.Helper()
 	srv, err := server.NewServer(&server.Options{
 		ServerName: "jsapi-bench", JetStream: true, DontListen: true,
-		StoreDir: b.TempDir(), NoLog: true, NoSigs: true,
+		StoreDir: brokertest.TempDir(b), NoLog: true, NoSigs: true,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

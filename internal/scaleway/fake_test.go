@@ -56,7 +56,10 @@ type fakeScaleway struct {
 	keys     map[string]*fakeKey
 	sets     map[string]string
 	projects []scaleway.Project
-	seq      int
+	// projectFields is what every project's row carries beside its ID and
+	// name: the fields a read of the projects never decodes.
+	projectFields map[string]any
+	seq           int
 	// now is the fake's clock, which a test moves through [fakeScaleway.edit].
 	now time.Time
 
@@ -73,6 +76,15 @@ type fakeScaleway struct {
 	// noSecret answers a key create with no secret.
 	noSecret bool
 
+	// rows is what each product listing answers, by route and locality
+	// ("instances/fr-par-1", "dns", "dns records/acme.example"), each row as
+	// Scaleway would send it, undecoded fields included.
+	rows map[string][]map[string]any
+	// buckets is each project's bucket names, by "project/region".
+	buckets map[string][]string
+	// unserved answers a product listing in a locality 404.
+	unserved map[string]bool
+
 	writes   []string
 	requests []string
 	rw       *httpxtest.Rewriter
@@ -83,6 +95,7 @@ func newFakeScaleway() *fakeScaleway {
 	f := &fakeScaleway{
 		apps: map[string]*fakeApp{}, policies: map[string]*fakePolicy{}, keys: map[string]*fakeKey{},
 		sets: map[string]string{}, refuse: map[string]int{}, limited: map[string]int{},
+		rows: map[string][]map[string]any{}, buckets: map[string][]string{}, unserved: map[string]bool{},
 		projects: []scaleway.Project{
 			{ID: projectWeb, Name: "web"}, {ID: projectData, Name: "data"}, {ID: projectUnnamed},
 		},
@@ -93,6 +106,9 @@ func newFakeScaleway() *fakeScaleway {
 		for _, name := range sets {
 			f.sets[name] = "projects"
 		}
+	}
+	for _, name := range scaleway.AtlasSets() {
+		f.sets[name] = "projects"
 	}
 	for _, name := range append(scaleway.OrgSets(), "IAMApplicationManager", "IAMPolicyManager",
 		"IAMManager", "OrganizationManager", "BillingManager") {
@@ -166,6 +182,8 @@ func route(method, path string) (string, string) {
 	switch {
 	case path == "/account/v3/projects" && method == http.MethodGet:
 		return "projects", ""
+	case method == http.MethodGet && productRoute(parts) != "":
+		return productRoute(parts), ""
 	case len(parts) < 3 || parts[0] != "iam" || parts[1] != "v1alpha1":
 		return "", ""
 	}
@@ -215,6 +233,10 @@ func (f *fakeScaleway) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
 	now := f.now
+	if strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
+		f.serveBuckets(w, r)
+		return
+	}
 	if !f.authenticated(r.Header.Get("X-Auth-Token"), now) {
 		f.fail(w, http.StatusUnauthorized, "denied_authentication", "authentication is denied")
 		return
@@ -235,6 +257,10 @@ func (f *fakeScaleway) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	if _, product := productSets[strings.Fields(name)[0]]; product {
+		f.serveProduct(w, r, name)
+		return
+	}
 	if slices.Contains([]string{"keys", "apps", "policies", "sets", "projects"}, name) && q.Get("organization_id") != testOrg {
 		f.fail(w, http.StatusBadRequest, "invalid_arguments", "organization_id is required")
 		return
@@ -433,7 +459,9 @@ func (f *fakeScaleway) serve(w http.ResponseWriter, r *http.Request) {
 	case "projects":
 		rows := make([]any, 0, len(f.projects))
 		for _, p := range f.projects {
-			rows = append(rows, p)
+			row := map[string]any{"id": p.ID, "name": p.Name}
+			maps.Copy(row, f.projectFields)
+			rows = append(rows, row)
 		}
 		f.page(w, r, "projects", rows)
 	}
@@ -461,7 +489,9 @@ func (f *fakeScaleway) badRules(rules []scaleway.RuleSpec) string {
 			return "a rule names projects or the organization"
 		}
 		for _, name := range r.PermissionSetNames {
-			if f.sets[name] != scope {
+			// A PROJECT SET ON THE ORGANIZATION IS EVERY PROJECT, as Scaleway
+			// reads it; an organization set on projects is refused.
+			if listed := f.sets[name]; listed != scope && (listed != "projects" || scope != "organization") {
 				return "permission set " + name + " is not available at " + scope + " scope"
 			}
 		}

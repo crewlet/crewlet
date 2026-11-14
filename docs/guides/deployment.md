@@ -855,9 +855,9 @@ down still serves its own company, so that connection closing never stops the
 node — the donor [dials again](retention.md) by itself.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the seven engine streams
+uses, on every start and idempotently: the eight engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the thirteen state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`, `CREWLET_FAILED`), the thirteen state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
@@ -1511,7 +1511,7 @@ both.
 - **`data`** holds the company's durable state — a copy of the replicated estate, the identity directory's included, and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
 - **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the atlas collect duty, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep
+- **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the atlas collect duty, the atlas wake duty, the learning passes, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the Gitlet nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every Gitlet node reads.
 
@@ -1696,7 +1696,7 @@ the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too.
 
 Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
-plus 60 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
+plus 150 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
 The drain waits for the turns already running — and, on a pod that serves
 Gitlet, for the clones and pushes already running, which it
@@ -1705,16 +1705,21 @@ longest turn (or the longest clone or push the pod should finish) is the part
 of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
-spend, the reads of unit repositories and the day's usage, closing the store —
-takes milliseconds on a healthy
-fleet but up to about 46 s on a member that has lost both its event stream and
-its coordination store, and about 50 s on a node without `data`, each step
-waiting out its own bound (see
+spend, the reads of unit repositories and the day's usage, and, on a pod that
+runs seats, the sandbox coordinator's own end (a retry still running, all of
+whose teardowns are held to one grace from the stop, a session keep still
+uploading, and the stamp of each keep it cuts, thirty seconds each), closing
+the store — takes milliseconds on a healthy
+fleet but up to about 136 s on a member that runs seats and has lost both its
+event stream and its coordination store, about 140 s on a node without
+`data`, and about 46 s on a member that runs none, each step waiting out its
+own bound (see
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)). A grace of the longest turn
-alone kills such a member before its store closes; the extra 60 s covers that
+alone kills such a member before its store closes; the extra 150 s covers that
 with room for the process to exit. A deployment whose turns finish in seconds
-still needs 60 s, not Kubernetes' 30 s default — and an `ingress` pod with the
-`preStop` sleep described above needs 60 s plus that sleep.
+still needs 150 s, not Kubernetes' 30 s default — a pod that runs no seats
+60 s — and an `ingress` pod with the `preStop` sleep described above needs
+60 s plus that sleep.
 
 #### Sizing the startup probe
 
@@ -2005,7 +2010,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
-- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the atlas collect duty, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the integration reconcile, the atlas collect duty, the atlas wake duty, the maintenance sweep, the state logs' trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty and the delegated decisions sweep. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the maintenance sweep and the trim, three hours for the learning passes).
 - *Unbounded table growth.* `scheduled_runs` answers a short-horizon question and is written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so is the chat read state of a human seat the company no longer has, which no age could tell from a person who simply has not opened chat for a while, forgotten 24 hours after a sweep first finds the seat gone — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 Two things are still per-process. `max_concurrent`: Tier A's

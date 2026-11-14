@@ -25,7 +25,7 @@ type restartRig struct {
 func newRestartRig(t *testing.T) *restartRig {
 	t.Helper()
 	return &restartRig{
-		dir:  filepath.Join(t.TempDir(), "stream"),
+		dir:  filepath.Join(brokertest.TempDir(t), "stream"),
 		seat: coord.SeatResource(fixtureSeat("swe")),
 		w:    newSpentWorld(t),
 	}

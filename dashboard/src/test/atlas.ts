@@ -13,6 +13,7 @@ import type {
   AtlasEntry,
   AtlasEntryAnswer,
   AtlasEntriesAnswer,
+  AtlasEntryWorkAnswer,
   AtlasFacetsAnswer,
   AtlasFactView,
   AtlasFamily,
@@ -22,15 +23,21 @@ import type {
   AtlasLogAnswer,
   AtlasMapAnswer,
   AtlasMapEdge,
+  AtlasNamed,
+  AtlasNamedAnswer,
   AtlasRead,
   AtlasReviewAnswer,
   AtlasReviewItem,
+  AtlasSourceStanding,
+  AtlasSourcesAnswer,
   AtlasRelation,
   AtlasSummary,
   AtlasTraceAnswer,
   AtlasVendor,
   AtlasWord,
+  AtlasWorkAnswer,
 } from "~/contract/atlas.ts";
+import type { WorkSummary } from "~/protocol/index.ts";
 
 export const SEEN = "2026-11-11T09:00:00Z";
 
@@ -567,7 +574,13 @@ export function disputedServer(company: GrownCompany): AtlasEntryAnswer {
           others: [
             {
               value: { type: "ip", text: "10.0.4.19", private: true },
-              source: { kind: "agent", name: "sre", turn: idFor("turn"), evidence: "call" },
+              source: {
+                kind: "agent",
+                name: "sre",
+                turn: idFor("turn"),
+                evidence: "call",
+                tool: "ssh_read",
+              },
               confidence: "observed",
               observed_at: "2026-11-11T10:30:00Z",
             },
@@ -727,6 +740,159 @@ export function waitingItems(company: GrownCompany): AtlasReviewItem[] {
       fact: address,
       since: "2026-11-11T10:30:00Z",
     },
-    { id: `${guess.id}/unconfirmed`, kind: "unconfirmed", entry: guess, since: SEEN },
+    {
+      id: `${guess.id}/unconfirmed`,
+      kind: "unconfirmed",
+      entry: guess,
+      // WHAT THE AGENT SAID BEHIND IT: a message it read, which the engine
+      // could check nothing behind.
+      reports: [
+        {
+          source: {
+            kind: "agent",
+            name: "sre",
+            turn: idFor("turn-2"),
+            evidence: "none",
+            tool: "read_channel",
+          },
+          observed_at: SEEN,
+        },
+      ],
+      since: SEEN,
+    },
   ];
+}
+
+/** One source's standing, read whole ten minutes before [SEEN] unless `over` says otherwise. */
+export function sourceStanding(
+  kind: string,
+  over: Partial<AtlasSourceStanding> = {},
+): AtlasSourceStanding {
+  return {
+    kind,
+    state: "read",
+    last_attempt_at: "2026-11-11T08:50:00Z",
+    last_complete_at: "2026-11-11T08:50:00Z",
+    entries: 12,
+    calls: 5,
+    withheld: 0,
+    recorded: 0,
+    retired: 0,
+    purged: 0,
+    missing: 0,
+    unread: [],
+    unread_overflow: 0,
+    scopes: [],
+    next_read_at: "2026-11-11T09:50:00Z",
+    ...over,
+  };
+}
+
+/**
+ * The sources of a company that connects four: Cloudflare read whole with two
+ * values withheld, Datadog refused one listing, GitHub's last read failed,
+ * and two servers, one of them unreachable.
+ */
+export function sourcesAnswer(over: Partial<AtlasSourcesAnswer> = {}): AtlasSourcesAnswer {
+  return {
+    sources: [
+      sourceStanding("cloudflare", { entries: 48, calls: 9, withheld: 2, recorded: 3, retired: 1 }),
+      sourceStanding("datadog", {
+        state: "partial",
+        entries: 14,
+        calls: 6,
+        missing: 2,
+        unread: [
+          {
+            part: "monitors",
+            detail: "Grant the application key the monitors_read scope, so the monitors are read.",
+          },
+        ],
+      }),
+      sourceStanding("github", {
+        state: "failed",
+        last_attempt_at: "2026-11-11T08:58:00Z",
+        last_complete_at: "2026-11-11T07:50:00Z",
+        next_read_at: "2026-11-11T09:03:00Z",
+        refreshable_at: "2026-11-11T09:03:00Z",
+      }),
+      sourceStanding("ssh", {
+        state: "partial",
+        entries: 5,
+        calls: 4,
+        unread: [
+          {
+            part: "web-2 ports",
+            scope: "web-2",
+            detail:
+              "The engine could not reach the server. Let the engine's address through its firewall.",
+          },
+        ],
+        unread_overflow: 1,
+        scopes: [
+          { id: "web-1", last_read_at: "2026-11-11T08:50:00Z" },
+          { id: "web-2", last_read_at: "2026-11-10T08:50:00Z", unread: 2 },
+        ],
+      }),
+    ],
+    refresh_interval_seconds: 3600,
+    refresh_floor_seconds: 300,
+    ...over,
+  };
+}
+
+/** One task as a list row, open unless its status says otherwise. */
+export function taskRow(key: string, title: string, over: Partial<WorkSummary> = {}): WorkSummary {
+  return {
+    id: idFor(`task:${key}`),
+    key,
+    project: key.split("-")[0] ?? "",
+    title,
+    type: "task",
+    status: "in_progress",
+    status_group: "active",
+    updated: SEEN,
+    version: 1,
+    ...over,
+  };
+}
+
+/** `atlas_work`: how many open tasks name each entry, or why none was read. */
+export function workAnswer(open: Record<string, number>, unread?: string): AtlasWorkAnswer {
+  return unread ? { unread, open: {} } : { open };
+}
+
+/** `atlas_entry_work`: the tasks naming one entry, each total the list's length unless given. */
+export function entryWorkAnswer(
+  open: WorkSummary[] = [],
+  recent: WorkSummary[] = [],
+  over: Partial<AtlasEntryWorkAnswer<WorkSummary>> = {},
+): AtlasEntryWorkAnswer<WorkSummary> {
+  return {
+    open,
+    recent,
+    open_total: { total: open.length },
+    recent_total: { total: recent.length },
+    ...over,
+  };
+}
+
+/**
+ * `atlas_named`: each asked id beside the fixture's entry it names, in the
+ * order asked, and the ids that name none. `merged` maps a member's id to the
+ * entry it merged into, as the engine answers a link stored under a member.
+ */
+export function namedAnswer(
+  fixture: AtlasFixture,
+  ids: readonly string[],
+  merged: Readonly<Record<string, string>> = {},
+): AtlasNamedAnswer {
+  const named: AtlasNamed[] = [];
+  const missing: string[] = [];
+  for (const id of new Set(ids)) {
+    const entry = fixture.nodes.find((node) => node.id === (merged[id] ?? id));
+    if (entry) named.push({ id, entry });
+    else missing.push(id);
+  }
+  return { named, missing };
 }

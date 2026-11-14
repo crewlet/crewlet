@@ -156,11 +156,10 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, mergeVerb, repo.ID, args)
-	w := gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
+	w := written(ctx, turn, cv.g.c, gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: repo.ID,
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.TargetRef, ExpectedHead: head,
 		Change: cv.change.Number, Method: method, DeleteSource: deleteSource(args),
-		Override: strings.TrimSpace(argString(args, "override_reason")), CloseTask: argBool(args, "close_task"),
-		Ceiling: cv.g.c.write}
+		Override: strings.TrimSpace(argString(args, "override_reason")), CloseTask: argBool(args, "close_task")})
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
@@ -499,10 +498,11 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// AN ENTRY IS ITS ENQUEUER'S, NEVER A TURN'S: the committer judges the
 	// asker as a party, so the dequeue names no run, as the enqueue does —
 	// but it carries whom the turn works for (the write's ceiling), which
-	// the committer holds the dequeue to beside the seat itself.
+	// the committer holds the dequeue to beside the seat itself, and whom
+	// the dequeue is made for, composed beside that ceiling.
 	asker.Run = gitlet.RunProvenance{}
 	p := gitlet.QueueProposal{OpID: op, Asker: asker, Seen: cv.at, Ceiling: g.c.write,
-		Dequeue: &gitlet.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
+		WrittenFor: g.c.actor.WrittenFor, Dequeue: &gitlet.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
 	if err := p.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, g.c.actor, g.repo.Name, err), nil
 	}

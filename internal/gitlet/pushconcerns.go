@@ -14,7 +14,8 @@ import (
 // move, a close by a deleted branch and a push to a ref no change uses are
 // bookkeeping (concerns.go). Each entry carries the routings of the changes
 // its own commands merge and open ([PushEntry.Routing]), its pusher their
-// actor, stamped by the push decide in the snapshot it decides the entry in.
+// actor and whom the push was made for beside it ([PushEntry.WorkingFor]),
+// stamped by the push decide in the snapshot it decides the entry in.
 //
 // # The bytes
 //
@@ -76,6 +77,8 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 	if len(merged) == 0 && opened == "" {
 		return nil, nil
 	}
+	// WHO PUSHED, AND FOR WHOM: the entry's pusher, and the carrier its
+	// committer stamped on it from the push's request ([PushEntry.WorkingFor]).
 	actor, actorKind := e.Principal.party()
 	var out []ChangeRouting
 	for _, id := range merged {
@@ -94,7 +97,7 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 			}
 		}
 		routed, err := routingFor(ctx, tx, concerning{repoName: r.repo.name, change: row, actor: actor,
-			actorKind: actorKind, authors: true, addedAuthors: added, merged: true})
+			actorKind: actorKind, workingFor: e.WorkingFor, authors: true, addedAuthors: added, merged: true})
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +116,8 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 		row := *b.rows[opened]
 		row.number = r.pendingNumber
 		routed, err := routingFor(ctx, tx, concerning{repoName: r.repo.name, change: row, actor: actor,
-			actorKind: actorKind, roster: r.roster, mentionText: []string{e.Change.Title, e.Change.Body}})
+			actorKind: actorKind, workingFor: e.WorkingFor, roster: r.roster,
+			mentionText: []string{e.Change.Title, e.Change.Body}})
 		if err != nil {
 			return nil, err
 		}

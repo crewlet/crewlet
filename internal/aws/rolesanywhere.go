@@ -36,10 +36,12 @@ type APIError struct {
 
 func (e *APIError) Error() string { return fmt.Sprintf("aws: %d %s: %s", e.Status, e.Code, e.Message) }
 
-// transient reports an answer worth retrying.
+// transient reports an answer worth retrying: a throttle under each name a
+// service gives one (SQS answers its own with a 403), or a server's fault.
 func (e *APIError) transient() bool {
 	switch e.Code {
-	case "Throttling", "ThrottlingException", "TooManyRequestsException", "ServiceUnavailable", "InternalFailure":
+	case "Throttling", "ThrottlingException", "TooManyRequestsException", "ServiceUnavailable", "InternalFailure",
+		"RequestLimitExceeded", "RequestThrottled", "SlowDown", "PriorRequestNotComplete":
 		return true
 	}
 	return e.Status == http.StatusTooManyRequests || e.Status >= 500

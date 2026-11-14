@@ -15,7 +15,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -398,6 +400,86 @@ func TestAnAnswerACallerWritesBackIsReadWholeOrRefused(t *testing.T) {
 	}
 }
 
+// A HOME'S QUEUE READ IS READ WHOLE OR REFUSED: a newer data node's due-queue
+// page holding a member this build does not declare — on an entry its home
+// would land or eject, or on a close it owes — is refused, naming the member
+// under the result and the node that gave it, since the home steps on every
+// entry as the entry it read and would carry the rest on without the member;
+// a page read whole decodes, its fields at their zero left off by the serving
+// node; and a home of a build that read its queue as a kind of code.read,
+// whose answer a caller only shows, is refused by this build's data node,
+// whose code.read declares no such member, its code half never asked — so no
+// home steps on less than a data node answered.
+//
+// Mutation: drop answeredWhole from opCodeQueueDue and the page reaches the
+// home without the member; declare queue_due among code.read's arguments
+// again and the older home's read is answered.
+func TestAHomesQueueReadIsReadWholeOrRefused(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	x, err := exchangesOf(opCodeQueueDue.spec, opCodeQueueDue, nil, gitlet.QueueDueQuery{RepoID: repoID(1)}, nil,
+		"")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: 9}
+	entry := gitlet.QueueWorkEntry{EntryID: "019a0c2e-0000-7000-8000-0000000000f1", State: gitlet.QueueWaiting,
+		HeadOID: strings.Repeat("7", 40), Method: gitlet.MergeMethodMerge, CloseTask: true,
+		EnqueuedBy: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"},
+		Change:     gitlet.ChainChange{ID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42}}
+	newer := mustInput(t, entry)
+	newer = append(newer[:len(newer)-1], `,"went_on":true}`...)
+	for name, tc := range map[string]struct {
+		result string
+		key    string
+	}{
+		"an entry its home lands": {`{"due_queue":{"target_ref":"refs/heads/main","entries":[` + string(newer) +
+			`]},"next":"refs/heads/main"}`, "result.due_queue.entries[].went_on"},
+		"a close it owes": {`{"queue_owed_closes":[` + string(newer) + `]}`, "result.queue_owed_closes[].went_on"},
+	} {
+		_, final, err := f.client.settle(t.Context(), opCodeQueueDue.spec, x, "data-a",
+			reply{Node: "data-a", Result: json.RawMessage(tc.result)}, &walk{})
+		var refused *ErrUnknownKeys
+		if !final || !errors.As(err, &refused) || !refused.Answer || !slices.Equal(refused.Keys, []string{tc.key}) ||
+			!slices.Equal(refused.Nodes, []string{"data-a"}) {
+			t.Fatalf("a page holding %s with a member this build does not declare settled as (%v, %v), want "+
+				"the page refused, naming %s", name, final, err, tc.key)
+		}
+	}
+
+	whole := gitlet.QueueDueAnswer{DueQueue: &gitlet.QueueDue{TargetRef: "refs/heads/main",
+		Entries: []gitlet.QueueWorkEntry{entry}}, QueueOwedCloses: []gitlet.QueueWorkEntry{entry},
+		Next: "refs/heads/main", Position: at}
+	sent, err := encodeResult(opCodeQueueDue.spec, whole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, final, err := f.client.settle(t.Context(), opCodeQueueDue.spec, x, "data-a",
+		reply{Node: "data-a", Result: sent}, &walk{})
+	if !final || err != nil || !reflect.DeepEqual(value, whole) {
+		t.Fatalf("a page read whole settled as (%+v, %v, %v), want %+v", value, final, err, whole)
+	}
+	if got, err := encodeResult(opCodeQueueDue.spec, gitlet.QueueDueAnswer{Next: "refs/heads/main"}); err != nil ||
+		string(got) != `{"next":"refs/heads/main"}` {
+		t.Errorf("a page is sent as (%s, %v), want its fields at their zero left off", got, err)
+	}
+
+	// AN OLDER HOME'S READ, a kind of code.read: its member is no argument of
+	// that operation in this build, which reads its home's queue whole alone.
+	node := f.nodes["data-a"]
+	older := request{Op: opCodeRead.spec.name, Args: json.RawMessage(`{"kind":"queue_due","queue_due":{"repo_id":"` +
+		repoID(1) + `"},"fresh":{"level":"stale"}}`)}
+	rep := askSigned(t, f.start(t), "data-a", older)
+	var refused *ErrUnknownKeys
+	if err := decodeError(rep.Err); rep.Unserved != "" || rep.Result != nil || !errors.As(err, &refused) ||
+		refused.Op != opCodeRead.spec.name || !slices.Equal(refused.Keys, []string{"args.queue_due"}) {
+		t.Fatalf("an older home's queue read was answered %+v, want it refused naming args.queue_due", rep)
+	}
+	if node.askedFor(opCodeRead.spec.name) {
+		t.Fatal("the code half was asked a queue read this build does not declare")
+	}
+}
+
 // A REQUEST NO BUILD COULD READ WHOLE CROSSES AS ITSELF, AND AS AN ESTATE NOBODY
 // SERVED: a node that answers on another's behalf — a Gitlet node proposing a
 // push its data nodes refused — hands its asker the refusal with every field,
@@ -584,9 +666,10 @@ var zeroByMethod = map[string]string{
 	"objstore.Key":                 "Go's own zero: its method compares the key with Key{}",
 	"artifacts.ID":                 "Go's own zero: its method compares the id with ID{}",
 	"types.WrittenFor": "a carrier of nobody, stated or not: the asking node refuses an agent's " +
-		"actor that states nothing before anything is asked (estate's actorWrites), and the serving " +
-		"node reads the absence as stated nobody (each actor's UnmarshalJSONFrom calls " +
-		"types.WrittenFor.Received), which is what a build without the field sends",
+		"actor, or a code write's agent asker, that states nothing before anything is asked (estate's " +
+		"actorWrites and codeWrites), and the serving node reads the absence as stated nobody (each " +
+		"actor's and each code write's request's UnmarshalJSONFrom calls types.WrittenFor.Received), " +
+		"which is what a build without the field sends",
 }
 
 // isZeroer is a type with an IsZero method of its own, which the encoder asks
@@ -831,7 +914,23 @@ var decodesItself = map[string]string{
 		"handed (jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own " +
 		"error, so the wire's rule refuses a member the carrier does not declare inside it, as " +
 		"anywhere; all it adds is that the carrier was stated",
+	"gitlet.ChangeProposal":    codeWriteDecodes,
+	"gitlet.ConversationWrite": codeWriteDecodes,
+	"gitlet.EngineWrite":       codeWriteDecodes,
+	"gitlet.QueueProposal":     codeWriteDecodes,
+	"gitlet.MergeProposal":     codeWriteDecodes,
+	"gitlet.Proposal":          codeWriteDecodes,
 }
+
+// codeWriteDecodes is why each request a code write forms drops no member
+// decoding itself (gitlet's writtenfor.go).
+const codeWriteDecodes = "refuses one there too: it decodes through the decoder it is handed " +
+	"(jsonv2.UnmarshalDecode, with no options of its own) and returns the decoder's own error, so " +
+	"the wire's rule refuses a member its build does not declare anywhere inside it, as anywhere in " +
+	"what an operation takes; all it adds is that whom the write is made for was stated " +
+	"(types.WrittenFor.Received), and the same refusal of its carrier's kind, or an app a " +
+	"credential's carrier names, that the build does not know (gitlet's unknownToThisBuild), which " +
+	"drops nothing either"
 
 // NO TYPE AN OPERATION TAKES DECODES A KEY AWAY BY ITSELF. The wire's rule
 // refuses an undeclared member at every depth the standard library decodes,
@@ -900,6 +999,8 @@ var answeredWholeBy = map[string]string{
 		"its read asks (internal/agent/builtin's list_work_items, internal/api/queries' work items)",
 	"code.repo_state": "code.repo_state: a page's cursor (gitlet.RepoSnapshot.Next) is the next " +
 		"page's request (internal/gitlet/cache)",
+	"code.queue_due": "code.queue: a home's merge queue lands, ejects and settles each entry its page " +
+		"answers as the entry it read, stating the page's position as what it saw (internal/gitlet/home)",
 }
 
 // EVERY ANSWER READ WHOLE IS ONE A CALLER CARRIES INTO ANOTHER REQUEST, and

@@ -314,7 +314,16 @@
 // names the CHANGE as what starts its turn (types.OriginCodeChange, the change
 // as the Gitlet screens name it, under the seat's own reason), so the turns a
 // change started are found from the change, as a chat message's are from the
-// message.
+// message. A seat's record says whom its write was made for where a turn it
+// starts reads it (ADR-0109): beside the seat on a routing that may wake a
+// seat, so that turn works for them too, held to what they may use, and on an
+// open, a reopen, a push, a merge and an enqueue whatever they wake, kept on
+// their rows for the engine's later records, which carry it beside the actor
+// they name: a revision's facts, a failed check of a head and the home's
+// landing read it back from the push's rows, and the merge queue's landing
+// from its entry's row — which its ejection and a close it could not make
+// carry beside no actor, and for which its close of a landed change's item is
+// made (concerns.go, writtenfor.go).
 //
 // # A repository's checks are rows on their own subject
 //
@@ -600,39 +609,42 @@
 // below).
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes; restated from one count of one
-// iteration once an entry named its way, once a seat's push was measured
-// beside a person's, once the person pushed through a token's name, once a
-// seat's entry carried the day its quota counted it on, and once a seat's
-// coding box's push was measured beside them): the code log's
-// growth over the records the committer forms for that same person's push —
-// its principal naming the token bound to them, `pat:` and its id, its one
-// command, its bundle named and its one introduced id — is 1 380 bytes a push
-// in a record of its own, the same every count, and about 792 a push for
-// sixty-four at once to one repository, which group commit lands in two
-// records or, as its batches fall, now and then one, moving the figure by
-// under a byte: a record's envelope is about 610 bytes, forty of them the
-// signed frame every record is appended in (ADR-0031), and each push it
-// carries about 773 more, twelve of them the way it names (`"via":"git",`).
-// A SEAT's push of the same commit takes 101.0 bytes more (push=agent, the
-// same every count): its principal names the seat and the run behind it — a
-// UUID turn id, the work item `native ENG-1234`, a seventeen-byte model id —
-// where a person's names the token, its way is `engine`, and its entry
-// carries the company day its quota counted it on ([PushEntry.Day]),
-// nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
-// and about 893 in a burst. A seat's CODING BOX's push of the commit takes
-// 245.0 bytes more than a person's (push=box): its principal names, beside
-// the run the engine's write names, the executor that pushed — the
-// launch's id, a UUID — the harness the box ran (`claude-code`) and
-// the identity and the project of the work item its run was launched for (a
+// iteration once an entry named its way, once a seat's push was measured beside
+// a person's, once the person pushed through a token's name, once a seat's
+// entry carried the day its quota counted it on, once a seat's coding box's
+// push was measured beside them, and once a seat's entry carried whom its push
+// was made for): the code log's growth over the records the committer forms for
+// that same person's push — its principal naming the token bound to them,
+// `pat:` and its id, its one command, its bundle named and its one introduced
+// id — is 1 380 bytes a push in a record of its own, the same every count, and
+// about 792 a push for sixty-four at once to one repository, which group commit
+// lands in two records or, as its batches fall, now and then one, moving the
+// figure by under a byte: a record's envelope is about 610 bytes, forty of them
+// the signed frame every record is appended in (ADR-0031), and each push it
+// carries about 773 more, twelve of them the way it names (`"via":"git",`). A
+// SEAT's push of the same commit takes 148.0 bytes more (push=agent, the same
+// every count): its principal names the seat and the run behind it — a UUID
+// turn id, the work item `native ENG-1234`, a seventeen-byte model id — where a
+// person's names the token, its way is `engine`, and its entry carries the
+// company day its quota counted it on ([PushEntry.Day]), nineteen bytes
+// (`,"day":"2031-04-02"`), and whom the push was made for
+// ([PushEntry.WorkingFor]) — the person who assigned the work, a human seat by
+// its handle — 47 (`,"working_for":{"kind":"seat","seat":"founder"}`); so 1 528
+// bytes alone in its record and about 940 in a burst. A seat's CODING BOX's
+// push of the commit takes 287.0 bytes more than a person's (push=box): its
+// principal names, beside the run the engine's write names, the executor that
+// pushed — the launch's id, a UUID — the harness the box ran (`claude-code`)
+// and the identity and the project of the work item its run was launched for (a
 // Worklet task's UUID, [RunProvenance.WorkID], 49 of those bytes, and its
-// project's key, [RunProvenance.WorkProject], 21 for `ENG`), and its way is
-// `git`; so 1 625 bytes alone in its record and about 1 037 in a burst (the
-// person's 792 and the same 245), the most a seat's push takes of the log, at which the code log's
-// day prices every one of the reference company's (internal/worklet's
-// codeLogDay). The compactions that merge the pushes' packs add
-// their own records, MEASURED a push (internal/gitlet/compact's steady arms,
-// the code log's growth over every pass): 108 bytes where a merge takes the
-// floor's sixteen, a quiet repository's, and 43 where it takes a minute's
+// project's key, [RunProvenance.WorkProject], 21 for `ENG`), its way is `git`,
+// and its entry carries the day and whom it was made for as the engine's push
+// does; so 1 667 bytes alone in its record and about 1 079 in a burst (the
+// person's 792 and the same 287), the most a seat's push takes of the log, at
+// which the code log's day prices every one of the reference company's
+// (internal/worklet's codeLogDay). The compactions that merge the pushes' packs
+// add their own records, MEASURED a push (internal/gitlet/compact's steady
+// arms, the code log's growth over every pass): 108 bytes where a merge takes
+// the floor's sixteen, a quiet repository's, and 43 where it takes a minute's
 // hundreds, a busy one's — a compaction's record is its envelope and its
 // output's row, shared by every pack it merges, and a few dozen bytes a pack,
 // so the more it merges at once the less a push pays. A day later the
@@ -640,17 +652,17 @@
 // about 700 bytes for each repository holding a row past the grace at each of
 // its quarter-hourly passes, so 44 bytes a push where every merge's rows are
 // swept apart, a quiet repository's (75 sweeps of 77 merges, MEASURED by the
-// same arm), and a fraction of a byte where a busy one's quarter hour of
-// merges is swept together, a record for every [RetireSweepRows] of its rows
-// whatever pushes they came from. The log keeps the trim's window of records
-// rather than the history, so the reference company's 3 000 pushes a day,
-// every one a seat's and priced as its coding box's, hold about 34 MB of it
-// over the default seven-day min_age, and the records that merge their packs
-// and sweep what those merges retired at most about 3.2 MB beside them —
-// about 37 MB, under a twenty-fifth of the log's 1 GiB floor — and the bytes
-// of a push's pack are never on it: a record names its bundle. The records
-// of the changes those pushes revise come beside them, several times their
-// bytes (config's DerivedCodeLogNumerator has the day).
+// same arm), and a fraction of a byte where a busy one's quarter hour of merges
+// is swept together, a record for every [RetireSweepRows] of its rows whatever
+// pushes they came from. The log keeps the trim's window of records rather than
+// the history, so the reference company's 3 000 pushes a day, every one a
+// seat's and priced as its coding box's, hold about 35 MB of it over the
+// default seven-day min_age, and the records that merge their packs and sweep
+// what those merges retired at most about 3.2 MB beside them — about 38 MB,
+// under a twenty-fifth of the log's 1 GiB floor — and the bytes of a push's
+// pack are never on it: a record names its bundle. The records of the changes
+// those pushes revise come beside them, several times their bytes (config's
+// DerivedCodeLogNumerator has the day).
 //
 // # The activation fence
 //
@@ -1685,7 +1697,7 @@
 // written back in one upsert and its changes read in one statement, as a push
 // record's changes are ([writeEntries], [changeRowsIn]).
 //
-// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one `queue_due` page over
+// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one due-queue page over
 // a target of [MaxCandidateEntries] live entries, each change's body at
 // [MaxChangeBodyBytes]; -benchtime 20x and one count on two E-cores of a Core
 // Ultra 7 265U): a page names the gate's depth × batch entries, their changes

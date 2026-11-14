@@ -1701,7 +1701,7 @@ func resultText(content json.RawMessage) (string, bool) {
 		return text, true
 	}
 	text, blocks := "", 0
-	err := eachElement(content, func(raw json.RawMessage) error {
+	err := eachElement(content, func(raw json.RawMessage, _ int) error {
 		blocks++
 		if blocks > 1 || !wireObject(raw) {
 			return errNotOneText

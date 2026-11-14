@@ -28,6 +28,11 @@ type StackReport struct {
 	// Split is every certificate identity that opened what it must not, each
 	// a sentence. Empty where each was refused.
 	Split []string
+
+	// Atlas is every way the atlas's role differs from what this engine
+	// renders, each a sentence; empty where the company has not asked for the
+	// role. Apart from Drift, since no agent depends on it.
+	Atlas []string
 }
 
 // Outdated reports a stack rendered by another version of this engine.
@@ -37,9 +42,11 @@ func (r StackReport) Outdated() bool { return r.Version != StackVersion }
 // for regions: the boundary, the level policies, and the provisioner's and the
 // broker's trust and single inline policy, with no managed policy beside it.
 // Then it proves the identity split live: a seat's certificate cannot become
-// the provisioner, and the provisioner's cannot become the broker. An error is
-// a read that failed; what differs is in the report.
-func (c *Client) CheckStack(ctx context.Context, regions []string) (StackReport, error) {
+// the provisioner, and the provisioner's cannot become the broker. With atlas,
+// it holds the atlas's role to its trust and policy too, and proves that no
+// other identity opens it and that it opens no other. An error is a read that
+// failed; what differs is in the report.
+func (c *Client) CheckStack(ctx context.Context, regions []string, atlas bool) (StackReport, error) {
 	var r StackReport
 	for _, name := range append([]string{boundaryName}, levelNames()...) {
 		want := levelDocOrBoundary(name, regions)
@@ -72,7 +79,55 @@ func (c *Client) CheckStack(ctx context.Context, regions []string) (StackReport,
 		r.Roles, r.RolesQuota = int(sum.SummaryMap["Roles"]), int(sum.SummaryMap["RolesQuota"])
 	}
 	r.Split = c.checkSplit(ctx)
+	if atlas {
+		problems, err := c.checkAtlas(ctx, issuer)
+		if err != nil {
+			return r, err
+		}
+		r.Atlas = problems
+		if c.conn.HasAtlas() {
+			r.Split = append(r.Split, c.checkAtlasSplit(ctx)...)
+		}
+	}
 	return r, nil
+}
+
+// checkAtlas holds the atlas's role to its trust and its one inline policy.
+// A stack or an output without the role is a sentence, never an error: the
+// company asked for it and has not run the block since.
+func (c *Client) checkAtlas(ctx context.Context, issuer string) ([]string, error) {
+	name := c.conn.resolve(atlasName)
+	if !c.conn.HasAtlas() {
+		return []string{"The stack output does not carry the Atlas reader " + name}, nil
+	}
+	problems, _, err := c.checkOwnRole(ctx, name, atlasTrustDoc(issuer), atlasDoc())
+	if hasCode(err, "NoSuchEntity") {
+		return []string{"The role " + name + " is missing"}, nil
+	}
+	return problems, err
+}
+
+// checkAtlasSplit asks for what the atlas's identity must not have, and for
+// the atlas's role under the other two identities. Each must be refused.
+func (c *Client) checkAtlasSplit(ctx context.Context) []string {
+	var out []string
+	conn := c.conn
+	try := func(sentence, cn, profile, role string) {
+		if _, err := c.ra.createSession(ctx, conn.CA, cn, profile, role, conn.TrustAnchorARN); err == nil {
+			out = append(out, sentence)
+		}
+	}
+	atlas := conn.resolve(atlasCN)
+	only := "the atlas's trust must admit only " + atlas + "."
+	try("The atlas's certificate can become the provisioner: the provisioner's trust must admit only "+
+		conn.resolve(provisionerCN)+".", atlas, conn.ProvisionerProfileARN, conn.ProvisionerRoleARN)
+	try("The atlas's certificate can become the broker: the broker's trust must admit only "+
+		strings.TrimSuffix(conn.resolve(seatCNPrefix), "-")+"-* names.", atlas, conn.SeatProfileARN, conn.BrokerRoleARN)
+	try("The provisioner's certificate can become the atlas: "+only,
+		conn.resolve(provisionerCN), conn.AtlasProfileARN, conn.AtlasRoleARN)
+	try("A seat's certificate can become the atlas: "+only,
+		seatCN(conn.Company, "test-split"), conn.AtlasProfileARN, conn.AtlasRoleARN)
+	return out
 }
 
 func levelDocOrBoundary(name string, regions []string) obj {

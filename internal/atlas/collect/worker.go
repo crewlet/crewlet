@@ -55,6 +55,11 @@ type Store interface {
 	Load(ctx context.Context) (map[integration.Kind]Status, error)
 	Save(ctx context.Context, st Status) error
 	Forget(ctx context.Context, kind integration.Kind) error
+
+	// Requests is every waiting ask that a source be read now, and Answered
+	// drops one.
+	Requests(ctx context.Context) (map[integration.Kind]Request, error)
+	Answered(ctx context.Context, kind integration.Kind) error
 }
 
 // Options is what a worker is built from.
@@ -82,6 +87,10 @@ type Options struct {
 	// is claimed, so a shedding node's lease lapses; nil admits.
 	Admits func() bool
 
+	// Code reads the files of the repositories each forge among the sources
+	// hosts ([CodePass]); nil reads none.
+	Code CodePass
+
 	// Tick overrides [Tick]; zero takes it. Now is the clock; nil is the
 	// wall clock in UTC.
 	Tick time.Duration
@@ -97,6 +106,7 @@ type Worker struct {
 	interval func() time.Duration
 	claim    func(context.Context) (bool, error)
 	admits   func() bool
+	code     CodePass
 	tick     time.Duration
 	now      func() time.Time
 
@@ -124,7 +134,8 @@ func New(opts Options) (*Worker, error) {
 	}
 	w := &Worker{
 		sources: opts.Sources, store: opts.Store, log: opts.Log, input: opts.Input,
-		interval: opts.Interval, claim: opts.ClaimDuty, admits: opts.Admits, tick: opts.Tick, now: opts.Now,
+		interval: opts.Interval, claim: opts.ClaimDuty, admits: opts.Admits, code: opts.Code, tick: opts.Tick,
+		now: opts.Now,
 	}
 	if w.sources == nil {
 		w.sources = Registered()
@@ -225,6 +236,14 @@ func (w *Worker) Tick(ctx context.Context) {
 			"detail", "no source is read this tick; the recorded standings are still what the API serves")
 		return
 	}
+	asked, err := w.store.Requests(ctx)
+	if err != nil {
+		// THE CADENCE DOES NOT WAIT ON THE ASKS: every source is still read
+		// when it is due, and an ask is honoured by the tick that reads it.
+		log.WarnContext(ctx, "atlas_source_refresh_asks_unreadable", "error", err,
+			"detail", "every source is read on its own cadence this tick; an ask waits for the next")
+		asked = nil
+	}
 	now := w.now().UTC()
 	interval := w.interval()
 	known := map[integration.Kind]bool{}
@@ -235,28 +254,56 @@ func (w *Worker) Tick(ctx context.Context) {
 		kind := src.Kind()
 		known[kind] = true
 		st, found := standings[kind]
-		if !in.Config.DeclaresIntegration(kind.String()) {
+		if !Connected(src, in.Config) {
 			// A SOURCE THE COMPANY DOES NOT CONNECT HAS NO STANDING: its
-			// row is forgotten, as an integration's status is. What it
-			// recorded stays on the log until a read or a person retires it.
+			// row is forgotten, as an integration's status is, and so is an
+			// optional one it has not asked for. What it recorded stays on
+			// the log until a read or a person retires it.
 			if found {
 				w.forget(ctx, kind)
 			}
+			// AND WHAT ITS REPOSITORIES' FILES DECLARED IS WITHDRAWN: a
+			// forge the company disconnected is one nothing reads again.
+			if _, hosts := src.(CodeHost); hosts && w.code != nil {
+				w.code.Forget(ctx, kind)
+			}
+			w.answered(ctx, asked, kind)
 			continue
 		}
 		if !found {
 			st = Status{Kind: kind}
 		}
-		if !st.Due(now, interval) {
-			continue
+		req, waiting := asked[kind]
+		if waiting && !req.Waits(st) {
+			// AN ASK A READ ALREADY ANSWERED is dropped: the visit that
+			// answered it could not, where its drop failed or it was made
+			// while the visit ran.
+			w.answered(ctx, asked, kind)
 		}
-		// STILL OURS? Re-claimed before every source, for the reconcile
-		// loop's reason: a visit makes hundreds of vendor calls, and the
-		// duty's lease is sized for one visit rather than a sweep.
-		if !w.holdsDuty(ctx) {
-			return
+		if st.DueFor(now, interval, req) {
+			// STILL OURS? Re-claimed before every source, for the reconcile
+			// loop's reason: a visit makes hundreds of vendor calls, and the
+			// duty's lease is sized for one visit rather than a sweep.
+			if !w.holdsDuty(ctx) {
+				return
+			}
+			w.visit(ctx, src, in, st, now)
+			// THE VISIT IS THE ANSWER, whatever it found: a read that failed
+			// is on the standing, and asking again is the person's to decide.
+			w.answered(ctx, asked, kind)
 		}
-		w.visit(ctx, src, in, st, now)
+		// A FORGE'S REPOSITORIES ARE READ AFTER THE FORGE ITSELF, as a visit
+		// of their own: the pass comes due apart from the source's read, and
+		// the lease is re-claimed for it as for any visit.
+		if host, hosts := src.(CodeHost); hosts && w.code != nil && w.code.Due(ctx, kind, interval, now) {
+			if !w.holdsDuty(ctx) {
+				return
+			}
+			bounded, cancel := context.WithTimeout(ctx, VisitDeadline)
+			in.Now = now
+			w.code.Pass(bounded, host, in, now)
+			cancel()
+		}
 	}
 	// A STANDING WITH NO SOURCE IN THIS BUILD is forgotten too: a build
 	// that dropped a vendor's source would otherwise show it as read.
@@ -264,6 +311,21 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !known[kind] {
 			w.forget(ctx, kind)
 		}
+	}
+	for kind := range asked {
+		if !known[kind] {
+			w.answered(ctx, asked, kind)
+		}
+	}
+}
+
+// answered drops the ask for kind, where asked holds one.
+func (w *Worker) answered(ctx context.Context, asked map[integration.Kind]Request, kind integration.Kind) {
+	if _, waiting := asked[kind]; !waiting {
+		return
+	}
+	if err := w.store.Answered(ctx, kind); err != nil {
+		log.WarnContext(ctx, "atlas_source_refresh_ask_kept", "source", kind.String(), "error", err)
 	}
 }
 

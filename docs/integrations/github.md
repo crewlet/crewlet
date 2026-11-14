@@ -868,6 +868,25 @@ For each agent whose GitHub access is switched on, the engine mints one token fo
 
 A read costs one call per installation for the installation, one for its token and one to revoke it, one per hundred repositories, and for each repository that is not archived two to three calls plus one per environment. It spends the installation's own hourly allowance (5,000 requests, more for a larger organization), which the agent's work shares. When GitHub answers with its rate limit the read stops and records nothing, and the engine reads again five minutes later; a read that fails part way never retires anything. A repository, a workflow or an environment that two complete reads at least a day apart both miss is retired from the atlas.
 
+### The files the atlas reads
+
+Where Gitlet does not mirror a repository, the engine also reads its deploy and dependency files through GitHub, for [what a repository's files declare](../concepts/atlas.md#what-a-repositorys-files-declare). The closed list of files, what is decoded from each and what is never read are the ones Gitlet's repositories are read by: GitHub is asked for a tree and for the listed files on it, and for nothing else.
+
+| Call | Permission | Why |
+|---|---|---|
+| `GET /installation/repositories` | Metadata | the repositories, and when anything was last pushed to each |
+| `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` | Contents (Read-only) | where the default branch is, asked only after a push |
+| `GET /repos/{owner}/{repo}/git/trees/{commit}?recursive=1` | Contents (Read-only) | the tree at that commit, asked only when the branch moved |
+| `GET /repos/{owner}/{repo}/git/blobs/{sha}` | Contents (Read-only) | one listed file whose content changed, by the object the tree names |
+
+It reads as each agent's installation that holds Contents, under one token an installation minted for the pass with Read-only of Metadata and Contents, and revokes it when the pass ends. An agent's own tokens are not involved, and the pass's token never writes, whatever the agent may. A repository several installations cover is read as the first, in the order of the agents' handles, that holds Contents.
+
+**An `.env` file is never asked for.** Neither is a values file, a variable or state file, a manifest named for secrets, a workflow under `.github`, or anything else off the list. A `Dockerfile` and a `Procfile` say what they say by being there and are not read. A symbolic link is never read as a file. A file past 64 KiB is counted and not read.
+
+**Bounds.** One pass reads at most 50 files and a mebibyte of them and lists at most 100 trees; the rest is read five minutes later. A repository nothing was pushed to costs no request beyond the listing. A tree GitHub truncates (a repository of some hundred thousand files) has none of its files read. The calls spend the installation's hourly allowance, which the agent's work shares; when GitHub answers with its rate limit the pass stops and is run again five minutes later.
+
+**What is not read.** An archived repository, an empty one, and a repository Gitlet mirrors, which Gitlet's own scan reads. A repository only an installation without Contents covers: grant an agent that works in it Contents ([access in GitHub's own terms](#access-in-githubs-own-terms)). While an installation cannot be read through, nothing its repositories' files declared is withdrawn.
+
 ---
 
 ## Webhooks

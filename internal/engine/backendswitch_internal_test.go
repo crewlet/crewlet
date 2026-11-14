@@ -188,7 +188,7 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	booted := parseCompany(t, nativeCleanupCompany)
 	if booted.TrackerBackendFor() != config.TrackerWorklet {

@@ -1,8 +1,9 @@
 /**
  * Company › Atlas › Review: what waits for a person. The engine computes it
  * on every read and stores none of it: the facts and relations the sources
- * disagree on, then the entries only an agent reported. Each item carries the
- * decisions it allows; a decision is an ordinary write in the person's own
+ * disagree on, then the entries only an agent reported. An agent's record is
+ * shown with its evidence: the seat, the turn, the call it cited and what that
+ * call is evidence of. Each item carries the decisions it allows; a decision is an ordinary write in the person's own
  * name, and the item is gone from the next read once its cause is.
  *
  * Several items are decided together from the bar over the list. A bulk
@@ -26,22 +27,29 @@ import {
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import type { AtlasReviewAnswer, AtlasReviewItem, AtlasReviewKind } from "~/contract/atlas.ts";
+import type {
+  AtlasReport,
+  AtlasReviewAnswer,
+  AtlasReviewItem,
+  AtlasReviewKind,
+} from "~/contract/atlas.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
+import { andList } from "~/lib/words.ts";
 import { WAITING } from "./AddEntry.tsx";
 import { ClaimList, DecisionButtons, decide, useDecisionWrites } from "./Decisions.tsx";
 import { entryPath } from "./entry.tsx";
 import { ATLAS_POLL_MS } from "./filters.ts";
-import { EntryDisc } from "./parts.tsx";
+import { Cited, EntryDisc, sourceSetBy } from "./parts.tsx";
 import { KINDS, RELATIONS, factLabel } from "./words.ts";
 import { reviewDecisions, undecided, type Decision } from "./writes.ts";
 
@@ -74,7 +82,7 @@ const idOf = (item: AtlasReviewItem) => item.id;
 const nextOf = (answer: AtlasReviewAnswer) => answer.next_cursor ?? "";
 
 /** What a waiting item is about, in a few words: the fact, the relation, or the entry itself. */
-function subjectOf(item: AtlasReviewItem): string {
+export function subjectOf(item: AtlasReviewItem): string {
   if (item.fact) return factLabel(item.fact);
   if (item.relation)
     return `${RELATIONS[item.relation.relation]} ${item.target?.name ?? ""}`.trim();
@@ -212,10 +220,13 @@ export function Review() {
                             />
                           </>
                         ) : (
-                          <Text variant="body" tone="secondary">
-                            {KINDS[item.entry.kind].word}{" "}
-                            <span className="mono">{item.entry.key}</span>. {words.why}
-                          </Text>
+                          <>
+                            <Text variant="body" tone="secondary">
+                              {KINDS[item.entry.kind].word}{" "}
+                              <span className="mono">{item.entry.key}</span>. {words.why}
+                            </Text>
+                            <Reports reports={item.reports ?? []} seatName={seatName} now={now} />
+                          </>
                         )}
                         {undecided(item) && (
                           <Text variant="body" tone="secondary">
@@ -254,6 +265,39 @@ export function Review() {
   );
 }
 
+/**
+ * What each agent said behind an entry that waits, newest first: who reported
+ * it and in which turn, as the by-line every claim carries, then the call it
+ * cited. The turn's link opens the run, where the call's own answer is.
+ */
+function Reports({
+  reports,
+  seatName,
+  now,
+}: {
+  reports: readonly AtlasReport[];
+  seatName: (handle: string) => string;
+  now: number;
+}) {
+  if (reports.length === 0) return null;
+  return (
+    <ul className="atlas-claims" aria-label="What was reported, and the call behind it">
+      {reports.map((report) => (
+        <li key={`${report.source.name ?? ""}:${report.source.turn ?? ""}`}>
+          <SetByLine setBy={sourceSetBy(report, seatName, now)} className="t-caption muted" />
+          <Cited source={report.source} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Who reported an entry that waits, for the line a bulk decision lists it on. */
+function reportedBy(item: AtlasReviewItem, seatName: (handle: string) => string): string {
+  const names = [...new Set((item.reports ?? []).map((one) => seatName(one.source.name ?? "")))];
+  return names.length > 0 ? `, reported by ${andList(names)}` : "";
+}
+
 /** The decision a bulk press takes on one item. */
 function bulkDecision(item: AtlasReviewItem, how: "accept" | "retire"): Decision | undefined {
   return reviewDecisions(item).find((one) =>
@@ -280,6 +324,8 @@ function BulkDialog({
 }) {
   const writes = useDecisionWrites();
   const toast = useToast();
+  const seatBadge = useSeatBadgeOf();
+  const seatName = (handle: string) => seatBadge(handle).name;
   const [busy, setBusy] = useState(false);
   const planned = items.flatMap((item) => {
     const decision = bulkDecision(item, how);
@@ -358,7 +404,7 @@ function BulkDialog({
         {planned.map(({ item, decision }) => (
           <li key={item.id}>
             <strong>{item.entry.name}</strong>: {decision.label.toLowerCase()}
-            {item.fact || item.relation ? ` (${subjectOf(item)})` : ""}
+            {item.fact || item.relation ? ` (${subjectOf(item)})` : reportedBy(item, seatName)}
           </li>
         ))}
       </ul>

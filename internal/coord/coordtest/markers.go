@@ -104,6 +104,11 @@ var markerCases = []fleetCase{{
 		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
 			h.t.Fatalf("DeleteAtlasSourceStatus: %v", err)
 		}
+		h.putAtlasRefresh("cloudflare", `{"by":"ada"}`)
+		h.putAtlasRefresh("datadog", `{"by":"ada"}`)
+		if err := h.f.DeleteAtlasSourceRefresh(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatalf("DeleteAtlasSourceRefresh: %v", err)
+		}
 		h.putAtlasCodeScan("repo-a", `{"tip":"1"}`)
 		h.putAtlasCodeScan("repo-b", `{"tip":"1"}`)
 		if err := h.f.DeleteAtlasCodeScan(h.ctx, "repo-a"); err != nil {
@@ -168,6 +173,9 @@ var markerCases = []fleetCase{{
 		}
 		if got := h.atlasSourceNames(); !slices.Equal(got, []string{"datadog"}) {
 			h.t.Errorf("atlas source standings after the sweep = %v, want [datadog]", got)
+		}
+		if got := h.atlasRefreshNames(); !slices.Equal(got, []string{"datadog"}) {
+			h.t.Errorf("atlas source refresh asks after the sweep = %v, want [datadog]", got)
 		}
 		if got := h.atlasCodeScanRepos(); !slices.Equal(got, []string{"repo-b"}) {
 			h.t.Errorf("atlas code scan standings after the sweep = %v, want [repo-b]", got)

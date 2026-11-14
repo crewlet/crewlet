@@ -57,7 +57,7 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 	for _, clustered := range []bool{false, true} {
 		t.Run("clustered="+strconv.FormatBool(clustered), func(t *testing.T) {
 			t.Parallel()
-			store := filepath.Join(t.TempDir(), "store")
+			store := filepath.Join(brokertest.TempDir(t), "store")
 			if err := os.MkdirAll(store, 0o700); err != nil {
 				t.Fatal(err)
 			}

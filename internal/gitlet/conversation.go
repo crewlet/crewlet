@@ -180,16 +180,14 @@ const (
 	// for changes ([ChangeRouting.ReReview]): the change is theirs to look at
 	// again.
 	//
-	// BASE FORMAT, under the condition [KindChange] states: a value only an
-	// apply writes, from the records' own ops, so a build that knows the ops
-	// knows the value.
+	// BASE FORMAT, as [KindChange] is: a value only an apply writes, from the
+	// records' own ops, so a build that knows the ops knows the value.
 	ReviewerReviewed ReviewerState = "reviewed"
 	// ReviewerEnded is a reviewer whose ask was still waiting when the change
 	// closed or merged — settled by the change's own [AskSettle] record, which
 	// asks it again if the change is reopened.
 	//
-	// BASE FORMAT, under the condition [KindChange] states, as
-	// [ReviewerReviewed].
+	// BASE FORMAT, as [ReviewerReviewed] is.
 	ReviewerEnded ReviewerState = "ended"
 )
 
@@ -213,9 +211,8 @@ const (
 	// unit's effective lead, or the seat itself. No principal asked, so its
 	// row names no asker.
 	//
-	// BASE FORMAT, under the condition [KindChange] states: a value only a
-	// revise's apply writes, from the record's own op, so a build that knows
-	// the op knows the value.
+	// BASE FORMAT, as [KindChange] is: a value only a revise's apply writes,
+	// from the record's own op, so a build that knows the op knows the value.
 	ReviewerPathOwner ReviewerReason = "path_owner"
 )
 
@@ -232,9 +229,8 @@ func (r ReviewerReason) Valid() bool { return slices.Contains(ReviewerReasons(),
 // it, from the write's asker; a reviewer's kind, from the chart; a comment's
 // id and the thread it is in — so a record says what it did with no lookup.
 //
-// Every field is in the base format, under the condition [KindChange] states —
-// Mentions and Routing among them, under the condition concerns.go states for
-// a routing.
+// Every field is in the base format, as [KindChange] is: Mentions and Routing
+// among them, as concerns.go's head says of a routing.
 
 // Reviewer is one reviewer a request names: a seat by its handle, or a person
 // by the human seat they hold. Its Kind is STAMPED BY THE WRITER from the
@@ -298,11 +294,7 @@ type Comment struct {
 	// finding's, named by the finding's id — and "" for a comment that
 	// replies to none; never beside a ParentID.
 	//
-	// BASE FORMAT, under the condition [KindChange] states; a field a
-	// comment gained after its op, so once a build without it has run it
-	// takes {Name: "Comment.FindingID", Since: 2, Op: "comment", Path:
-	// []string{"mutation", "finding_id"}}, which an older build defers the
-	// record by rather than writing the reply into a thread of its own.
+	// BASE FORMAT, as [KindChange] is.
 	FindingID string `json:"finding_id,omitempty"`
 	// By is who said it. STAMPED BY THE WRITER from the write's asker; an
 	// asker sends none.
@@ -551,7 +543,7 @@ type FindingResolve struct {
 // for this record on the change's own subject. The home's own write, which no
 // principal asks.
 //
-// Every field is in the base format, under the condition [OpAsks] states.
+// Every field is in the base format, as [OpAsks] is.
 type AskSettle struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`

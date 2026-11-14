@@ -75,11 +75,11 @@ func (q *Queue) SubscribeBatch(
 			// top of this loop already answers with `continue`, ten lines
 			// up, which is what it should have said here too.
 			if ctx.Err() != nil {
-				a.nakAll(ctx, batch)
+				a.handBackUndispatched(ctx, batch, handBackStopping)
 				return
 			}
 			if a.blocked() {
-				a.nakAll(ctx, batch)
+				a.handBackUndispatched(ctx, batch, a.blockedBy())
 				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key)
@@ -239,14 +239,14 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		//
 		// UNHANDLED IS NOT UNCHARGED. These messages were FETCHED, which
 		// is where this broker's counter moves, so their delivery is
-		// already spent by the time the loop gets here — nakAll only
+		// already spent by the time the loop gets here — the hand-back only
 		// decides whether the last one dead-letters with a copy or is
 		// discarded by MaxDeliver in silence. That is the contract's rule
 		// and not this backend's shape: see [queue.DeliveriesLeft], and
 		// internal/queue/memory, whose mailbox is a slice and therefore
 		// has to charge a take deliberately.
 		if a.blocked() {
-			a.nakAll(ctx, part.Items)
+			a.handBackUndispatched(ctx, part.Items, a.blockedBy())
 			continue
 		}
 
@@ -267,9 +267,11 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// [queue.DeliveriesLeftFor].
 		res := runBatchHandler(a.withProgress(a.withHeadroom(ctx, part.Items...), part.Items...),
 			a.log, evs, h)
-		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
+		// IN FLIGHT UNTIL THE OUTCOME IS SETTLED, a dead letter's keep
+		// included, for [attachment.dispatchOne]'s reason.
+		a.q.endHandler()
 		// AFTER THE OUTCOME IS APPLIED: an acked message leaves the
 		// consumer's unfinished count only then, and released before it
 		// would read as waiting for that moment.
@@ -283,7 +285,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 // unit and its verdict covers all of it. Acking some and NAKing others would
 // deliver a partial one to the successor.
 func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
-	queue.LogBatchResult(a.log, a.key.topic, a.key.group, batchKey, evs, res)
+	queue.LogBatchResult(ctx, a.log, a.key.topic, a.key.group, batchKey, evs, res)
 
 	switch res.Outcome {
 	case queue.OutcomeAck:
@@ -296,25 +298,35 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			// failed for the life of the attachment. That is
 			// ordinary operation here — an answer a parked executor
 			// is still owed is NAKed and acked on a later pass.
+			var mark uint64
 			if md, err := d.msg.Metadata(); err == nil {
-				a.settled(md.Sequence.Stream)
+				mark = a.settled(md.Sequence.Stream)
 			}
 			if err := d.msg.Ack(); err != nil {
 				a.log.Warn("ack_failed", "error", err.Error())
 			}
+			a.clearMark(ctx, mark)
 		}
 	case queue.OutcomeDefer:
-		a.nakAll(ctx, items)
+		a.nakAll(ctx, items, res.Reason)
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
-			a.nakOrDeadLetter(ctx, d.msg)
+			a.nakOrDeadLetter(ctx, d.msg, d.ev, res.FailsMessage())
+		}
+	case queue.OutcomePass:
+		// Each message by its own delivery count, under the partition's
+		// reason, and the attachment goes on taking mail: see
+		// [attachment.pass].
+		for _, d := range items {
+			a.pass(ctx, d.msg, d.ev, res.Reason)
 		}
 	}
 }
 
 // nakAll hands a whole batch back — a deferral, a hold or a pause that landed
-// mid-drain, or teardown. Nothing is wrong with any of these messages.
+// mid-drain, or teardown — for reason. Nothing is wrong with any of these
+// messages.
 //
 // THROUGH THE BUDGET CHECK, because a Nak spends a delivery whatever it means.
 // Handing a batch back is not a failure, but JetStream counts it as one
@@ -324,8 +336,22 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 // `dead_lettered` line, no advisory consumer anywhere in this package to
 // notice. A healthy inbox event, silently gone. The boundary is the same one
 // the failure path already honours; what differs is only how it got there.
-func (a *attachment) nakAll(ctx context.Context, items []delivery) {
+func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string) {
 	for _, d := range items {
-		a.handBack(ctx, d.msg)
+		a.handBack(ctx, d.msg, d.ev, reason)
 	}
+}
+
+// handBackUndispatched hands back what a drain fetched and this consumer will
+// not dispatch — a stop, a hold, a pause, a quiesce or a detach met before a
+// handler ran — for reason ([attachment.nakAll]).
+//
+// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs, for the reason
+// [attachment.dispatchOne] counts its own hand-back: one of them may spend a
+// message's budget, and its dead letter's keep crosses a link at its bytes'
+// pace, under a drain that would otherwise read the queue as idle and stop it.
+func (a *attachment) handBackUndispatched(ctx context.Context, items []delivery, reason string) {
+	a.q.beginHandler()
+	defer a.q.endHandler()
+	a.nakAll(ctx, items, reason)
 }

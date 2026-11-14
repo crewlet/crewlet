@@ -49,32 +49,68 @@ func (f *frames) list() []toolloop.Result {
 // pause is a response's Writing that takes d: the model's half of a round.
 func pause(d time.Duration) func() { return func() { time.Sleep(d) } }
 
+// clock is the clock a case hands the loop as [toolloop.Config.Now]: it moves
+// only when the case moves it, so every span on the record is exactly what the
+// case's scripted model and tools took, and nothing a runner spends scheduling
+// the harness and its socket is added to any of them. It holds a mutex because
+// the loop reads it from several goroutines at once.
+type clock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+// advance moves the clock on by d: the model writing for d, or a tool running
+// for it.
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
 // EVERY ROUND RECORDS ITS OWN SPAN AND TOKENS: one round per model request,
 // numbered one-based, started in UTC within the run, timed for the MODEL's half
-// only — at least the model's own time and never its calls on top — and costed
-// as its own request, cache included as a breakdown of input and never on top
-// of it. A chain can move a phase between models, so each round names the one
+// only — exactly the model's own time, never its calls on top — and costed as
+// its own request, cache included as a breakdown of input and never on top of
+// it. A chain can move a phase between models, so each round names the one
 // that served IT.
+//
+// DECIDED ON A CLOCK THE CASE MOVES, never the wall clock: the model writes for
+// exactly delay and each call runs for exactly callTook, so a round that kept
+// to its model's half took exactly delay, and round 2 carrying round 1's two
+// calls would have taken 75ms. A bound on the wall clock read a loaded
+// runner's scheduling of the harness and its socket as the calls' time, and
+// failed a healthy build (#1138). The clock starts an hour east of UTC, so a
+// start the loop failed to record in UTC is told by its zone, and decades
+// before any wall clock reads, so a stamp the loop read off the wall clock
+// instead is told by its year.
 func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 	t.Parallel()
-	const delay = 15 * time.Millisecond
+	const delay, callTook = 15 * time.Millisecond, 30 * time.Millisecond
+	clk := &clock{at: time.Date(2000, time.January, 1, 0, 0, 0, 0, time.FixedZone("UTC+1", 60*60))}
+	began := clk.now()
+	writing := func() { clk.advance(delay) }
 	surf := newSurface("read")
-	surf.delay = 30 * time.Millisecond
+	surf.hook = func(context.Context, llm.ToolCall) { clk.advance(callTook) }
 	prov := script(runOf(
-		llmtest.Response{Text: "reading", Model: "first-member", Writing: pause(delay),
+		llmtest.Response{Text: "reading", Model: "first-member", Writing: writing,
 			Calls: []llmtest.Call{{Name: "read"}, {Name: "read", Args: `{"n":2}`}},
 			Usage: llm.Usage{Input: 1000, Output: 40, CacheRead: 800, CacheWrite: 150}},
-		llmtest.Response{Text: "done", Model: "second-member", Writing: pause(delay),
+		llmtest.Response{Text: "done", Model: "second-member", Writing: writing,
 			Usage: llm.Usage{Input: 1300, Output: 20, CacheRead: 1100}},
 	))
-	before := time.Now().UTC()
-	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 6})
-	after := time.Now().UTC()
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 6, Now: clk.now})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(res.Rounds) != 2 {
-		t.Fatalf("recorded %d rounds, want one per model request (2): %+v", len(res.Rounds), res.Rounds)
+	if len(res.Rounds) != 2 || len(res.Executions) != 2 || len(res.Invocations) != 1 {
+		t.Fatalf("recorded rounds %+v and calls %+v over runs %+v, want one round per model request (2), "+
+			"round 1's two calls and one run", res.Rounds, res.Executions, res.Invocations)
 	}
 	first, second := res.Rounds[0], res.Rounds[1]
 	for i, r := range res.Rounds {
@@ -84,21 +120,32 @@ func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 		if r.StartedAt.Location() != time.UTC {
 			t.Errorf("round %d started at %v, want UTC", r.Round, r.StartedAt)
 		}
-		if r.StartedAt.Before(before) || r.StartedAt.After(after) {
-			t.Errorf("round %d started at %v, outside the run [%v, %v]", r.Round, r.StartedAt, before, after)
+		if r.Duration != delay {
+			t.Errorf("round %d took %v, want exactly its model's %v", r.Round, r.Duration, delay)
 		}
-		if r.Duration < delay {
-			t.Errorf("round %d took %v, want at least the model's %v", r.Round, r.Duration, delay)
+	}
+	// WITHIN THE RUN: round 1's model began as the run did, and the run ended
+	// with round 2's answer.
+	inv := res.Invocations[0]
+	if !first.StartedAt.Equal(began) || !inv.StartedAt.Equal(began) {
+		t.Errorf("round 1 began at %v in a run begun at %v, want both at %v", first.StartedAt, inv.StartedAt, began)
+	}
+	if answered, ended := second.StartedAt.Add(second.Duration), inv.StartedAt.Add(inv.Duration); !answered.Equal(ended) {
+		t.Errorf("round 2 was answered at %v in a run that ended at %v, want the same instant", answered, ended)
+	}
+	// Round 1's calls ran on the same clock, one after the other, each for
+	// exactly callTook from where round 1's model half ended.
+	for i, ex := range res.Executions {
+		if from := began.Add(delay + time.Duration(i)*callTook); !ex.StartedAt.Equal(from) || ex.Duration != callTook {
+			t.Errorf("call %d ran from %v for %v, want from %v for exactly %v", i+1, ex.StartedAt, ex.Duration, from, callTook)
 		}
 	}
 	// THE MODEL'S HALF ONLY: round 2's model began once round 1's calls had
-	// returned, so its start is after them and its duration excludes them.
+	// returned, so its start is their end, and its span (exactly delay, above)
+	// leaves them out.
 	lastCall := res.Executions[len(res.Executions)-1]
-	if callsEnded := lastCall.StartedAt.Add(lastCall.Duration); second.StartedAt.Before(callsEnded) {
-		t.Errorf("round 2 began at %v, before round 1's calls ended at %v", second.StartedAt, callsEnded)
-	}
-	if second.Duration >= delay+surf.delay {
-		t.Errorf("round 2 took %v — its duration carries the calls' time", second.Duration)
+	if callsEnded := lastCall.StartedAt.Add(lastCall.Duration); !second.StartedAt.Equal(callsEnded) {
+		t.Errorf("round 2 began at %v, want when round 1's calls ended, %v", second.StartedAt, callsEnded)
 	}
 	if first.Model != "first-member" || second.Model != "second-member" {
 		t.Errorf("rounds served by %q, %q — want the model each response named", first.Model, second.Model)

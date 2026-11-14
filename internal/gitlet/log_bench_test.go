@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
@@ -150,6 +151,17 @@ func BenchmarkPushLogBytes(b *testing.B) {
 	// committerOn's.
 	const rounds = 16
 	day := period.At(period.Day, harnessAt, time.UTC).Label
+	// madeFor is whom who's push was made for: a seat's, the person who
+	// assigned the work its run does, as a pickup of an assigned item works
+	// for whom it was assigned (ADR-0109) — a human seat by its handle, as
+	// the code log's day prices a seat's records made for one — and a
+	// person's push, nobody but themselves.
+	madeFor := func(who gitlet.Principal) types.WrittenFor {
+		if who.Kind != gitlet.PrincipalAgent {
+			return types.ForNobody()
+		}
+		return types.ForTurn(&types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"})
+	}
 	// grew is the log's growth a push over rounds records of one push each by
 	// who, built as via names, each moving ref on from the commit the record
 	// before left — ON A LOG OF ITS OWN, so every principal's records sit at
@@ -164,10 +176,10 @@ func BenchmarkPushLogBytes(b *testing.B) {
 			if who.Kind == gitlet.PrincipalAgent {
 				who.Run.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String()
 			}
-			// THE ENTRY AS THE COMMITTER FORMS IT: a seat's carries its day,
-			// and a person's none.
+			// THE ENTRY AS THE COMMITTER FORMS IT: a seat's carries its day
+			// and whom its push was made for, and a person's neither.
 			n.push(repo, gitlet.EntryOf(gitlet.Proposal{PushID: id, RepoID: repo, Principal: who,
-				Via: via, Node: n.id, Commands: []gitlet.Command{set(ref, tip, next)},
+				WrittenFor: madeFor(who), Via: via, Node: n.id, Commands: []gitlet.Command{set(ref, tip, next)},
 				Pack: suitePack(id), Introduced: []string{next}, IntroducedCount: 1,
 				ReceivedAt: harnessAt}, day))
 			tip = next

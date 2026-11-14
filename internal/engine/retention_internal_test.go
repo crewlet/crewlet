@@ -557,7 +557,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

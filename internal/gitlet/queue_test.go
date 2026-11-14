@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -69,18 +70,18 @@ func (n *node) passed(repoID, oid, target, name string) {
 }
 
 // enqueueing is asker's enqueue of change, at head and on main, under an
-// operation id of its own.
+// operation id of its own, made for nobody but the asker.
 func enqueueing(repo, change string, asker gitlet.Principal, head string) gitlet.QueueProposal {
 	opID := statelog.NewOpID(time.Now(), "code_merge_change")
-	return gitlet.QueueProposal{OpID: opID, Asker: asker, Enqueue: &gitlet.Enqueue{RepoID: repo,
-		EntryID: gitlet.QueueEntryID(opID), ChangeID: change, TargetRef: mainRef, HeadOID: head,
-		Method: gitlet.MergeMethodMerge}}
+	return gitlet.QueueProposal{OpID: opID, Asker: asker, WrittenFor: types.ForNobody(),
+		Enqueue: &gitlet.Enqueue{RepoID: repo, EntryID: gitlet.QueueEntryID(opID), ChangeID: change,
+			TargetRef: mainRef, HeadOID: head, Method: gitlet.MergeMethodMerge}}
 }
 
-// dequeueing is asker's dequeue of entry.
+// dequeueing is asker's dequeue of entry, made for nobody but the asker.
 func dequeueing(repo, entry string, asker gitlet.Principal) gitlet.QueueProposal {
 	return gitlet.QueueProposal{OpID: statelog.NewOpID(time.Now(), "code_dequeue_change"), Asker: asker,
-		Dequeue: &gitlet.Dequeue{RepoID: repo, EntryID: entry}}
+		WrittenFor: types.ForNobody(), Dequeue: &gitlet.Dequeue{RepoID: repo, EntryID: entry}}
 }
 
 // requireQueued fails t unless res is a write applied at a position, leaving

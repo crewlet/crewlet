@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // Who may touch a box.
@@ -104,28 +106,50 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // the reason the poll is bounded by it: what the host does is the poll's own
 // work (a reconnect, a probe) and the run's own files read back and its box
 // paused, all of it on its own host. And the TAKE of the job's harness session
-// beside it ([SessionTakeBudget]), with the room the take leaves after it —
-// once for its own records, the stamp of what came of it and the digest it
-// leaves in the box, beside which a collection records how its job's harness
-// ended, with no time of its own ([Coordinator.markHarnessEnd]), and once for
-// the pause and the answer ([discardGrace] each, [Coordinator.takeContext]) —
-// because the read is where the session is taken out of the box, on the host
-// and before the box is paused: the host reads only for its share of the
-// budget ([BoxReadAnswerShare]), so all of it is counted at that share, and a
-// take at its bound fits a host's read whole rather than being cut by the
-// host's own deadline. Only the take: the upload and the record are made after
-// the host has answered, off the read ([Coordinator.keepCapture]), so no asker
-// waits on an upload.
+// beside it ([SessionTakeBudget]), and the room its reservation of the
+// capture's place is given beside it ([Coordinator.reserveRoom]), with the
+// room the take leaves after it — once for its own records, the stamp of what
+// came of it and the digest it leaves in the box, beside which a collection
+// records how its job's harness ended ([Coordinator.markHarnessEnd],
+// [Coordinator.takeRecordsRoom]), and once for the pause, its record and the
+// answer ([Coordinator.pauseRoom]) — because the read is where the session is
+// taken out of the box, on the host and before the box is paused: the host
+// reads only for its share of the budget ([BoxReadAnswerShare]), so all of it
+// is counted at that share, and a take at its bound fits a host's read whole
+// rather than being cut by the host's own deadline. Only the take: the upload
+// and the record are made after the host has answered, off the read
+// ([Coordinator.keepCapture]), so no asker waits on an upload.
+//
+// # Each change of the run's row the host's read makes, at the slowest crossing
+//
+// The reservation, the stamp of what came of the take, how the job's harness
+// ended and the pause's record each read the run's row whole and write it
+// whole ([boxReadChanges]), and the host may reach the store across a link the
+// engine allows to be as slow as thirty seconds a mebibyte, where a change of a
+// row at its bound takes thirteen minutes ([RowBudget]). The host gives each
+// its crossing on its own connection; the asker cannot know which connection
+// that is, so it counts the slowest node's, coord.MaxValueCrossing, for each, as
+// every wait one node keeps on another node's change of a run's row does
+// ([standbyBudget]). Held to their flat graces, each was cut while its bytes
+// were still crossing: the place went unreserved, so no capture was made, or
+// the stamp of what came of the take, or how the harness ended, went
+// unrecorded (crewlet/crewlet#1151).
 //
 // AND A READ THAT MAY END THE JOB HOLDS THE JOB'S END BEFORE ITS TAKE
 // ([JobEndBudget]): a stop's and a loss's end it first ([Coordinator.endJob]),
 // and so does a collection's where the turn's cap has passed with the job still
 // working ([Coordinator.readBox]), at most the end's wait and the kill past it,
-// and that is counted at the host's share as the take is. The host's share of
-// such a read's budget is then the end's 145 seconds, the take's 240 and its two
-// graces, and 45 — the poll's bound at the share — for the read's own steps, so
-// a take after an end at its bound is handed its whole budget all the same
-// ([Coordinator.takeContext]).
+// and that is counted at the host's share as the take is — and for a
+// collection, the record that the cap ended a job it saw working, one more
+// change of the row, made on its own context before the end's wait begins,
+// within a teardown's grace and the row's crossing
+// ([Coordinator.markEndedAtDeadline]), so it is counted at both, as every
+// other change is at its reason and its crossing. The host's share of such a
+// read's budget is then the end's 145 seconds and that record's grace, the
+// take's 240 and its reservation's room, its two graces, the crossings of the
+// changes, and 45 — the poll's bound at the share — for the read's own steps,
+// so a take after an end at its bound and its record at theirs is handed its
+// whole budget all the same ([Coordinator.takeContext]).
 //
 // EVERY COLLECTION OF A TURN WITH A CAP holds the end, whether or not the cap
 // has passed on the asker's clock: the host decides whether to end the job on
@@ -134,21 +158,45 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // collection of a turn with none never ends its job, and waits for the take
 // alone.
 //
-// What that costs is the wait for a host that has truly stopped — about eight
-// minutes for a collection of a turn with no cap before the asker hands the
-// claim back, where it was one, and about eleven for every other read — which a
-// host that is only slow, ending a job at its bound or packing a session at its
-// bound, must not be taken for. Ordinary reads answer in seconds, a job ending
-// in a few and a session of a day's work being a mebibyte or two. A read that
-// has not finished in that is a host that is not answering, and is answered as
-// one ([ErrBoxHostSilent]); it announces the completion again from its own next
-// poll.
+// What that costs is the wait for a host that has truly stopped — about
+// seventy-eight minutes for a collection of a turn with no cap before the
+// asker hands the claim back, where it was one, about eighty-one for a stop's
+// or a loss's read, and about ninety-nine for a collection of a turn with a
+// cap — which a host that is only slow, ending a job at its bound, packing a
+// session at its bound or changing a run's row at its bound across a link at
+// the slowest pace allowed, must not be taken for. Ordinary reads answer in
+// seconds, a job ending in a few and a session of a day's work being a
+// mebibyte or two. A read that has not finished in that is a host that is not
+// answering, and is answered as one ([ErrBoxHostSilent]); it announces the
+// completion again from its own next poll. Only a node that asks ANOTHER
+// node's host waits on it: a box this node hosts it reads itself.
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
-	held := SessionTakeBudget + 2*discardGrace
+	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}
+	if read.recordsTheCap(run) {
+		held += discardGrace + coord.MaxValueCrossing
+	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
+}
+
+// boxReadChanges is how many changes of a run's row every read of its box gives
+// room to on its host: the reservation of the capture's place
+// ([Coordinator.reserveRoom]), and the two of the take's records' room — the
+// stamp of what came of the take and how its job's harness ended
+// ([Coordinator.takeRecordsRoom]) — and the pause's record
+// ([Coordinator.pauseRoom]). A read that makes fewer is given the room all the
+// same, since the host's rooms are the read's whatever it asks.
+const boxReadChanges = 4
+
+// recordsTheCap reports whether a host's read of run's box may make, beside
+// [boxReadChanges], the record that the turn's cap ended a job it saw working
+// ([Coordinator.markEndedAtDeadline]), a fifth change of the row counted in
+// [BoxReadBudget] at its reason and the slowest node's crossing: a collection
+// of a turn with a cap, which may end its job ([BoxRead.mayEnd]).
+func (r BoxRead) recordsTheCap(run PendingRun) bool {
+	return r == BoxReadCollect && r.mayEnd(run)
 }
 
 // mayEnd reports whether the read may end run's job before it takes its
@@ -340,7 +388,7 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 		// ending decided: the job ended and its session taken here, and kept
 		// off the read.
 		spooled, kept := c.readLost(ctx, run)
-		c.keepLater(spooled)
+		c.keepLater(ctx, spooled)
 		return Result{Kept: kept}, false, nil
 	}
 	return c.readBox(ctx, run, read)

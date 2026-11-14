@@ -501,7 +501,7 @@ func newDomainNode(t *testing.T, clock *clock) *domainNode {
 	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
 	// its cap from the runner's free space it takes three quarters of it,
 	// a fact about the machine rather than about the upload under test.
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

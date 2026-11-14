@@ -607,6 +607,8 @@ func (m *mergeGate) rules(ctx context.Context) (gitlet.GateRules, error) {
 // enqueue puts the change in its target's queue, at the head its caller read —
 // the enqueue's decide its gate — and answers what became of it. The
 // enqueue's asker names no run: an entry is its enqueuer's, never a turn's.
+// It is made for whom the write was (gitlet.EngineWrite.WrittenFor), handed on
+// as the write stated it.
 func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (gitlet.EngineWriteResult, error) {
 	w := wr.w
 	asker := w.Principal
@@ -614,6 +616,7 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (gitlet.Engine
 	entry := gitlet.QueueEntryID(w.OpID)
 	wr.landed = true
 	res, err := wr.s.o.Estate.Queue(ctx, gitlet.QueueProposal{OpID: w.OpID, Asker: asker, Seen: wr.synced.Position,
+		WrittenFor: w.WrittenFor,
 		Enqueue: &gitlet.Enqueue{RepoID: w.RepoID, EntryID: entry, ChangeID: j.change.ID, TargetRef: w.Ref,
 			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: j.deleteSource, CloseTask: w.CloseTask}})
 	var quiet silence
@@ -675,8 +678,10 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 	wr.landed = true
 	landStart := s.now()
 	l, err := s.land(ctx, landing{Synced: wr.synced, Scratch: sc, Commands: []gitlet.Command{wr.cmd},
-		Principal: w.Principal, Via: gitlet.ViaMerge, PushID: wr.pushID, ReceivedAt: s.now(),
-		Merge: &gitlet.MergeProposal{OpID: w.OpID, Asker: w.Principal, Seen: wr.synced.Position,
+		Principal: w.Principal, WrittenFor: w.WrittenFor, Via: gitlet.ViaMerge, PushID: wr.pushID,
+		ReceivedAt: s.now(),
+		Merge: &gitlet.MergeProposal{OpID: w.OpID, Asker: w.Principal, WrittenFor: w.WrittenFor,
+			Seen: wr.synced.Position,
 			Merge: gitlet.Merge{RepoID: w.RepoID, MergeID: wr.pushID, ChangeID: j.change.ID, Method: w.Method,
 				TargetRef: w.Ref, BaseOID: j.tip, HeadOID: w.ExpectedHead, CommitOID: commit,
 				DeleteSource: j.deleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})

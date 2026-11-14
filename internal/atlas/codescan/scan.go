@@ -7,12 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
-	"github.com/crewlet/crewlet/internal/atlasdomain"
-	"github.com/crewlet/crewlet/internal/deployfiles"
 	"github.com/crewlet/crewlet/internal/gitlet"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -60,7 +56,7 @@ type Options struct {
 // repository's deploy and dependency files when its default branch moves.
 type Scanner struct {
 	code   Code
-	log    collect.Log
+	reader reader
 	store  Store
 	admits func() bool
 	now    func() time.Time
@@ -70,8 +66,7 @@ type Scanner struct {
 	// repository: what lets a nudge that moved no tip cost one row read.
 	standings map[string]Status
 	// listed is the repositories the listing in flight has named.
-	listed   map[string]bool
-	readings *readings
+	listed map[string]bool
 }
 
 // New builds the scanner.
@@ -84,8 +79,8 @@ func New(o Options) (*Scanner, error) {
 	case o.Store == nil:
 		return nil, errors.New("codescan: a store is required: every repository's standing is recorded there")
 	}
-	s := &Scanner{code: o.Code, log: o.Log, store: o.Store, admits: o.Admits, now: o.Now, standings: map[string]Status{},
-		listed: map[string]bool{}, readings: newReadings(MaxReadingBytes)}
+	s := &Scanner{code: o.Code, reader: reader{log: o.Log, readings: newReadings(MaxReadingBytes)}, store: o.Store,
+		admits: o.Admits, now: o.Now, standings: map[string]Status{}, listed: map[string]bool{}}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -210,7 +205,7 @@ func (s *Scanner) scan(ctx context.Context, tip gitlet.DefaultTip, st Status, fl
 	}
 	st.Repo, st.Name = tip.ID, tip.Name
 	st.LastAttemptAt, st.Completed, st.LastError = now, false, ""
-	st.Calls, st.Reads, st.Pending, st.Recorded, st.Purged = 0, 0, 0, 0, 0
+	st.Calls, st.Reads, st.Bytes, st.Pending, st.Recorded, st.Purged = 0, 0, 0, 0, 0, 0
 
 	var files []gitlet.CodeFile
 	if tip.Head != "" {
@@ -225,76 +220,21 @@ func (s *Scanner) scan(ctx context.Context, tip gitlet.DefaultTip, st Status, fl
 		}
 		files, st.Unlisted = a.CodeFiles.Files, a.CodeFiles.More
 	}
-	held := s.readings.of(tip.ID, tip.Name)
-	current := make(map[string]reading, len(files))
-	for _, f := range files {
-		format, ok := deployfiles.Classify(f.Path)
-		if !ok {
-			// A NODE OF ANOTHER BUILD LISTED IT: this build's list is the
-			// one this build reads by.
-			continue
-		}
-		if r, ok := held[f.Path]; ok && r.blob == f.OID {
-			current[f.Path] = r
-			continue
-		}
-		r := reading{blob: f.OID}
-		switch {
-		case !format.Parsed():
-			r.parsed = Parse(tip.Name, f.Path, format, nil, now)
-		case f.Size > deployfiles.MaxFileBytes:
-			r.oversize = true
-		case st.Reads == MaxReadsPerPass:
-			st.Pending++
-			continue
-		default:
-			raw, err := s.read(ctx, tip, f, floor, &st)
-			if err != nil {
-				s.readings.keep(tip.ID, tip.Name, current)
-				return s.fault(ctx, st, err)
-			}
-			r.parsed = Parse(tip.Name, f.Path, format, raw, now)
-		}
-		current[f.Path] = r
+	listed := make([]listedFile, len(files))
+	for i, f := range files {
+		listed[i] = listedFile{path: f.Path, oid: f.OID, size: f.Size}
 	}
-	st.Listed = len(files)
-	if st.Pending > 0 {
-		// HALF A COMMIT IS NEVER PUBLISHED: what was read is kept for the
-		// next pass, which the backstop asks for since the tip is not read.
-		for path, r := range held {
-			if _, ok := current[path]; !ok {
-				current[path] = r
-			}
-		}
-		s.readings.keep(tip.ID, tip.Name, current)
-		return s.save(ctx, st)
+	read := func(ctx context.Context, f listedFile) ([]byte, bool, error) {
+		raw, err := s.read(ctx, tip, f, floor)
+		return raw, false, err
 	}
-	s.readings.keep(tip.ID, tip.Name, current)
-
-	var want []atlas.Claim
-	st.Oversize, st.Unparsed, st.Withheld, st.Truncated = 0, 0, 0, 0
-	entries := map[atlas.Ref]bool{}
-	for _, f := range files {
-		r, ok := current[f.Path]
-		if !ok {
-			continue
-		}
-		want = append(want, r.parsed.Claims...)
-		st.Withheld += r.parsed.Withheld
-		st.Truncated += r.parsed.Truncated
-		if r.oversize {
-			st.Oversize++
-		}
-		if r.parsed.Unparsed {
-			st.Unparsed++
-		}
-		for _, c := range r.parsed.Claims {
-			entries[c.Subject] = true
-		}
-	}
-	st.Entries = len(entries)
-	if err := s.publish(ctx, tip.Name, want, now, &st); err != nil {
+	whole, err := s.reader.settle(ctx, tip.ID, GitletRepo(tip.Name), listed, read, &budget{maxReads: MaxReadsPerPass},
+		&st, now)
+	switch {
+	case err != nil:
 		return s.fault(ctx, st, err)
+	case !whole:
+		return s.save(ctx, st)
 	}
 	st.Tip, st.Rules, st.Completed, st.LastCompleteAt = tip.Head, Rules, true, now
 	log.InfoContext(ctx, "atlas_code_read", "repo", tip.Name, "tip", tip.Head, "listed", st.Listed,
@@ -303,21 +243,14 @@ func (s *Scanner) scan(ctx context.Context, tip gitlet.DefaultTip, st Status, fl
 	return s.save(ctx, st)
 }
 
-// read is one listed file's bytes at the tip, nil for an empty file.
-func (s *Scanner) read(ctx context.Context, tip gitlet.DefaultTip, f gitlet.CodeFile, floor statelog.Position,
-	st *Status) ([]byte, error) {
-
-	if f.Size == 0 {
-		return nil, nil
-	}
+// read is one listed file's bytes at the tip.
+func (s *Scanner) read(ctx context.Context, tip gitlet.DefaultTip, f listedFile, floor statelog.Position) ([]byte, error) {
 	a, err := s.code.GitRead(ctx, gitlet.GitQuery{Kind: gitlet.GitCodeFiles, RepoID: tip.ID, Fresh: freshAt(floor),
-		CodeFiles: &gitlet.CodeFilesQuery{Commit: tip.Head, File: f.Path}})
-	st.Calls++
-	st.Reads++
+		CodeFiles: &gitlet.CodeFilesQuery{Commit: tip.Head, File: f.path}})
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("codescan: read a listed file of %s at %s: %w", tip.Name, tip.Head, err)
-	case a.CodeFiles == nil || a.CodeFiles.File == nil || a.CodeFiles.File.OID != f.OID:
+	case a.CodeFiles == nil || a.CodeFiles.File == nil || a.CodeFiles.File.OID != f.oid:
 		// THE SAME COMMIT HOLDS THE SAME BLOB at a path: another answer is
 		// no reading of the file that was listed.
 		return nil, fmt.Errorf("codescan: a file of %s at %s was answered as another object than the one listed",
@@ -330,53 +263,19 @@ func (s *Scanner) read(ctx context.Context, tip gitlet.DefaultTip, f gitlet.Code
 // the name they said it under, and forgets its standing and its readings.
 func (s *Scanner) release(ctx context.Context, st Status, now time.Time) error {
 	if st.Name != "" {
-		if err := s.publish(ctx, st.Name, nil, now, &st); err != nil {
+		if err := s.reader.publish(ctx, st.Name, nil, now, &st); err != nil {
 			return fmt.Errorf("codescan: withdraw what the files of %s declared: %w", st.Name, err)
 		}
 	}
 	if err := s.store.Forget(ctx, st.Repo); err != nil {
 		return err
 	}
-	s.readings.drop(st.Repo)
+	s.reader.readings.drop(st.Repo)
 	s.mu.Lock()
 	delete(s.standings, st.Repo)
 	s.mu.Unlock()
 	log.InfoContext(ctx, "atlas_code_released", "repo", st.Name, "recorded", st.Recorded,
 		"detail", "the repository is no longer scanned, so what its files declared is withdrawn")
-	return nil
-}
-
-// actor is who the scan's records are attributed to: the engine's own kind,
-// named for the worker, and no credential, since none made the write.
-var actor = iam.Actor{Name: Name, Kind: iam.ActorSystem}
-
-// publish makes the voice of the repository named name hold exactly want:
-// one record per entry that differs from the log, in a fixed order, stopping
-// at the first fault. A record the log refuses because an administrator
-// purged what it names is counted and the rest go on.
-func (s *Scanner) publish(ctx context.Context, name string, want []atlas.Claim, now time.Time, st *Status) error {
-	src := atlas.CodeSource(name)
-	live, err := s.log.LiveOf(ctx, src, statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		return err
-	}
-	st.Recorded, st.Purged = 0, 0
-	for _, rec := range collect.Replace(live.Claims, want) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		_, err := s.log.Read(ctx, atlasdomain.Call{By: actor, OpID: statelog.NewOpID(now, Name)},
-			atlasdomain.ReadInput{Source: src, Entry: rec.Entry, Claims: rec.Claims, Withdrawn: rec.Withdrawn,
-				ObservedAt: now})
-		switch {
-		case errors.Is(err, atlasdomain.ErrPurged):
-			st.Purged++
-		case err != nil:
-			return err
-		default:
-			st.Recorded++
-		}
-	}
 	return nil
 }
 

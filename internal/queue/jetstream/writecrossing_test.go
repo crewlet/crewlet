@@ -79,7 +79,8 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 		t.Parallel()
 		q := leafAcrossSlowLink(t, slowLinkRate)
 		const topic, group = "slowlink.retired", "grp"
-		if err := q.deadLetter(t.Context(), topic, group, incompressible(t, queue.MaxPayloadBytes)); err != nil {
+		if err := q.deadLetter(t.Context(), topics.DeadLetter(topic, group), "a message at the ceiling",
+			incompressible(t, queue.MaxPayloadBytes)); err != nil {
 			t.Fatalf("a message at the ceiling the budget dead-lettered, across a link "+
 				"carrying a mebibyte a second, was answered as not kept: %v", err)
 		}
@@ -164,7 +165,7 @@ func leafAcrossSlowLink(t *testing.T, rate int64) *Queue {
 	memberCfg.LeafHost, memberCfg.LeafPort = "127.0.0.1", AnyPort
 	// A MEMBER THAT SERVES LEAVES PERSISTS, and the leaf creates what it
 	// is first to use in the file store to match.
-	memberCfg.StoreDir, memberCfg.StoreMaxBytes = t.TempDir(), brokertest.StoreMaxBytes
+	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member := startTestServer(t, memberCfg)
 
 	link := linktest.Slow(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()), rate)

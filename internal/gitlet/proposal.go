@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -40,9 +41,7 @@ type Proposal struct {
 	// relay's git, or the engine's own — and carried whole into the record's
 	// entry and the push row: a push's history says how it was made as the
 	// code that made it saw it, never as a commit says. It rides the estate's
-	// wire as it rides the record, under [PushEntry.Via]'s stated condition:
-	// a committer of a build without it would decide the push into an entry
-	// naming no way.
+	// wire as it rides the record, in the base format ([PushEntry.Via]).
 	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
@@ -92,10 +91,30 @@ type Proposal struct {
 	// receiver judges first. Its decide opens it in the push's own entry
 	// ([PushEntry.Change]), names the live change its source already heads,
 	// or answers why it opened none ([PushAnswer.Change]); it never refuses
-	// the push. It rides the estate's wire as it rides the record, under
-	// [PushEntry.Change]'s stated condition: a committer of a build without
-	// it would decide the push and open nothing.
+	// the push. It rides the estate's wire as it rides the record, in the
+	// base format ([PushEntry.Change]).
 	Change *ChangeOption `json:"change,omitempty"`
+	// WrittenFor is whom a SEAT'S push is made for (ADR-0109), as
+	// [ChangeProposal.WrittenFor] is: whoever the turn that asked an engine
+	// write works for, handed on by the Gitlet node that built it
+	// ([EngineWrite.WrittenFor]), or stated nobody for a push made for the
+	// seat alone — a coding box's among them, its run's row holding no
+	// carrier for its code writes. A person's states nothing, and so does the
+	// engine's own expiry, which carries nobody. Held to the principal by
+	// [writtenForInvalid]: a push carries no ceiling, its builder having held
+	// it to the write's or the run's already.
+	//
+	// A proposal is no record, so this field takes no versionedFields row; the
+	// push's entry its committer stamps it on carries it ([PushEntry.WorkingFor],
+	// [Proposal.entryWith]), which takes one. It crosses the estate's wire to
+	// whichever data node decides it, and a node of a build without it refuses
+	// a push carrying somebody, naming args.written_for, so the walk asks one
+	// that reads it, and a node of a build that does not know its carrier's
+	// kind, or an app a credential's carrier names, refuses it alike, naming
+	// args.written_for.kind or args.written_for.apps[] ([unknownToThisBuild]);
+	// one made for nobody sends no member, as such a build does. What such a
+	// build sends arrives stated nobody ([Proposal.UnmarshalJSONFrom]).
+	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 }
 
 // ProposeResult is what became of one proposal.
@@ -170,6 +189,13 @@ const maxDetailBytes = MaxRefNameBytes + 64
 // [ErrInvalidProposal] and naming the field. The receiver forms proposals, so
 // a refusal here is the receiver's bug — never a client's push refused.
 //
+// BUT FIRST, A VALUE WHOM THE PUSH IS MADE FOR NAMES THAT THIS BUILD DOES NOT
+// KNOW, which is no receiver's bug — a coding box's run's row may hold one a
+// newer build wrote — and is answered as the proposal's decoder answers it on
+// the wire, never as ErrInvalidProposal, whatever else the proposal holds
+// ([unknownToThisBuild]): this build cannot judge the push at all, and a
+// committer of a build that knows the value does.
+//
 // A PACK'S SIZES MUST LAY OUT A BUNDLE: a row whose sizes describe no bundle
 // names an object no cache can install, so it is refused here, before it is
 // published, rather than by the first fetch. The applier does not check them
@@ -209,20 +235,23 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // ([Proposal.completed]): every command forced and decided, a pack, the most
 // introduced ids a row lists, the push's id and the receive instant at their
 // longest spellings, the push --atomic, and for a seat's push the company day
-// its committer stamps ([entryBound]). p is the proposal as the receiver
-// holds it once it has read the client's commands, before receive-pack runs:
-// its principal — a seat's run with it — how it is being built ([Proposal.Via]), its
-// node and its commands, with the receiver's refusals that need no object;
+// and whom it was made for, which its committer stamps ([entryBound]). p is
+// the proposal as the receiver holds it once it has read the client's
+// commands, before receive-pack runs: its principal — a seat's run with it —
+// whom it is made for ([Proposal.WrittenFor]), how it is being built
+// ([Proposal.Via]), its node and its commands, with the receiver's refusals
+// that need no object;
 // every other field is ignored but its change ([Proposal.Change]), which the
 // receiver learns only from the options receive-pack hands its hook and asks
 // this again with before it proposes one — its title, where the options
 // named none, still to be filled in and measured at its longest
 // ([ChangeOption.measured]): a change too wide for the entry
 // beside the commands at their largest is answered to its pusher and left
-// out, so the push lands without it. The principal and the way are MEASURED
-// AS STAMPED, since every proposer stamps both before its work: no work adds
-// to them, so taking them at a largest that is not theirs would refuse a push
-// that fits.
+// out, so the push lands without it. The principal, whom the push is made for
+// and the way are MEASURED AS STAMPED, since every proposer stamps them before
+// its work: no work adds to them, so taking them at a largest that is not
+// theirs would refuse a push that fits — and a measure without whom it is made
+// for would be short of the entry its committer stamps by that carrier.
 //
 // WHAT IT REFUSES IS THE CLIENT'S PUSH, never the receiver's bug: the client
 // chose the commands, and every other field is taken at its largest. A push
@@ -275,9 +304,9 @@ func (p Proposal) ValidateCommands() error {
 // adds [commandResultBound] for the committer's decision — a pack whose every
 // field is spelled at its longest, the push id and the receive instant at
 // their longest spellings, and the push --atomic. The principal, its run among
-// it, the way and the change stay as their proposer stamped them: no work adds
-// to them, and [entryBound] measures the change's target, and a title its
-// receiver is still to fill in, at their longest.
+// it, the way, whom the push is made for and the change stay as their proposer
+// stamped them: no work adds to them, and [entryBound] measures the change's
+// target, and a title its receiver is still to fill in, at their longest.
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -370,6 +399,11 @@ func ValidPushID(id string) bool {
 
 // validFields is every rule of [Proposal.Validate] but the record budget.
 func (p Proposal) validFields() error {
+	// FIRST, A VALUE THIS BUILD DOES NOT KNOW, before any rule judges the
+	// push (writtenfor.go's head).
+	if err := unknownToThisBuild(writtenForAt, p.WrittenFor); err != nil {
+		return err
+	}
 	if !ValidPushID(p.PushID) {
 		return fmt.Errorf("%w: push_id: %q is not a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalidProposal, p.PushID)
@@ -451,6 +485,11 @@ func (p Proposal) validFields() error {
 	case len(p.Commands) > MaxCommandsPerPush:
 		return fmt.Errorf("%w: commands: %d, past the %d one push may carry (MaxCommandsPerPush)",
 			ErrInvalidProposal, len(p.Commands), MaxCommandsPerPush)
+	}
+	// WHOM IT IS MADE FOR, held to its pusher: a seat's push states it, and
+	// nobody else's carries anybody ([writtenForInvalid]).
+	if err := writtenForInvalid(p.Principal, p.WrittenFor); err != nil {
+		return refusedCarrier(ErrInvalidProposal, err)
 	}
 	if err := validCommands(p.Commands); err != nil {
 		return err
@@ -617,8 +656,10 @@ func (p Proposal) validPack() error {
 // entryWith is the record entry p becomes with cmds as its decided commands,
 // counted against day: every field of the proposal, no Detail on any command
 // — a sentence is an answer, not state — and, on a SEAT'S entry alone, the
-// company day its decide counted it against ([PushEntry.Day]), which the
-// committer stamps and no proposer sends.
+// company day its decide counted it against ([PushEntry.Day]) and whom the
+// push was made for ([PushEntry.WorkingFor]), which the committer stamps and
+// no proposer sends. ONE BUILDER for the entry the decide records and the one
+// [entryBound] measures, so a push is measured carrying what it will carry.
 func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 	stored := make([]Command, len(cmds))
 	for i, c := range cmds {
@@ -631,7 +672,7 @@ func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 		IntroducedCount: p.IntroducedCount, ReceivedAt: p.ReceivedAt,
 	}
 	if p.Principal.Kind == PrincipalAgent {
-		e.Day = day
+		e.Day, e.WorkingFor = day, p.WrittenFor.Carrier()
 	}
 	return e
 }
@@ -662,7 +703,8 @@ const (
 
 // entryBound is the most bytes p's entry can take in a push record: the
 // entry encoded as proposed — a seat's carrying the day its decide stamps, at
-// its longest ([longestDay]), and its change as its decide would open it,
+// its longest ([longestDay]), and whom it was made for, as its decide stamps
+// it ([Proposal.entryWith]), and its change as its decide would open it,
 // the target it stamps, and a title its receiver is still to fill in, at
 // their longest where the options named none
 // ([ChangeOption.measured]), and an operator's landings as its decide would

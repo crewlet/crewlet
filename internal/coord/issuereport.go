@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sync"
 	"time"
 )
 
@@ -84,18 +85,23 @@ const MaxIssueReportPayloadBytes = 8 << 10
 // address is well under this; the relay's word is held to it all the same.
 const MaxIssueReportAddressBytes = 256
 
+// The shapes a report's fingerprint and class are held to, compiled at first
+// use for the insight records' reason: a bounded repeat compiles to a program
+// holding every count, which no push's hook should pay for.
 var (
-	issueFingerprintShape = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	issueClassShape       = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	issueFingerprintShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-f]{64}$`) })
+	issueClassShape       = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	})
 )
 
 // Validate refuses a record that is not the shape this file promises, which is
 // what keeps a mistaken caller's words out of the fleet's store.
 func (r IssueReport) Validate() error {
 	switch {
-	case !issueFingerprintShape.MatchString(r.Fingerprint):
+	case !issueFingerprintShape().MatchString(r.Fingerprint):
 		return fmt.Errorf("coord: an issue report's fingerprint must be 64 lowercase hex digits")
-	case !issueClassShape.MatchString(r.Class):
+	case !issueClassShape().MatchString(r.Class):
 		return fmt.Errorf("coord: an issue report's class must be a catalogue id")
 	case !r.Status.Valid():
 		return fmt.Errorf("coord: an issue report's status %q is not one this build names", r.Status)

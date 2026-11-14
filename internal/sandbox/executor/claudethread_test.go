@@ -2827,7 +2827,8 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 }
 
 // A LIST IS WALKED AN ELEMENT AT A TIME: each element is handed out as it is
-// read, in order and as written but for the whitespace around it; the walk
+// read, in order and as written but for the whitespace around it, with where
+// in the list it sits, so the list holds those very bytes there; the walk
 // stops at the first error its callback returns, returns that error itself,
 // never wrapped, and reads no element after it, so a list whose later elements
 // are no JSON at all still ends with the callback's error; and a value that is
@@ -2837,15 +2838,20 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 //
 // Mutation: read the list whole before handing out its first element, and the
 // list whose third element is no JSON ends with the decode's error, its first
-// two never handed out; wrap the callback's error, and it no longer comes back
-// as itself; walk on past it, and the walk ends with the decode's error; take
-// any value for a list, and a string or nothing ends the walk with io.EOF;
-// take what follows a list, and a list followed by another reads as one.
+// two never handed out; hand out where an element ends for where it sits, and
+// no element is where the walk says; wrap the callback's error, and it no
+// longer comes back as itself; walk on past it, and the walk ends with the
+// decode's error; take any value for a list, and a string or nothing ends the
+// walk with io.EOF; take what follows a list, and a list followed by another
+// reads as one.
 func TestAListIsWalkedAnElementAtATime(t *testing.T) {
 	t.Parallel()
 	walk := func(list string, stopAt int, stop error) ([]string, error) {
 		var handed []string
-		err := eachElement(json.RawMessage(list), func(element json.RawMessage) error {
+		err := eachElement(json.RawMessage(list), func(element json.RawMessage, at int) error {
+			if at < 0 || at+len(element) > len(list) || list[at:at+len(element)] != string(element) {
+				t.Errorf("%q hands out %s as sitting at %d", list, element, at)
+			}
 			handed = append(handed, string(element))
 			if len(handed) == stopAt {
 				return stop
@@ -2900,21 +2906,23 @@ func ctListRecord(t *testing.T, head, element, tail string, size int) string {
 // in order, its name unquoted as the layer's options read a name (an escape
 // resolved, a lone surrogate and a byte that is no UTF-8 each as U+FFFD, and
 // its case as written) and its value as written but for the whitespace around
-// it; a key written twice is handed out both times, each in its place; the
-// walk stops at the first error its callback returns, returns that error
-// itself, never wrapped, and reads no key after it, so an object whose third
-// key's value is no JSON still ends with the callback's error; and a value
-// that is no object, an object cut short, one whose key is no string, one
-// whose value is no JSON and one followed by more are each an error of the
+// it, with where in the object the value sits, so the object holds those very
+// bytes there; a key written twice is handed out both times, each in its
+// place; the walk stops at the first error its callback returns, returns that
+// error itself, never wrapped, and reads no key after it, so an object whose
+// third key's value is no JSON still ends with the callback's error; and a
+// value that is no object, an object cut short, one whose key is no string,
+// one whose value is no JSON and one followed by more are each an error of the
 // walk's own, never io.EOF. An empty object hands out nothing.
 //
 // Mutation: read the object whole before handing out its first key, and the
 // object whose third key is no JSON ends with the decode's error, its first
 // two never handed out; hand a name out as written, and an escaped name keeps
-// its escape; fold a key written twice into one, and its second value is
-// never handed out; wrap the callback's error, and it no longer comes back as
-// itself; walk on past it, and the walk ends with the decode's error; take any
-// value for an object, and a string or nothing ends the walk with io.EOF;
+// its escape; hand out where a value ends for where it sits, and no value is
+// where the walk says; fold a key written twice into one, and its second value
+// is never handed out; wrap the callback's error, and it no longer comes back
+// as itself; walk on past it, and the walk ends with the decode's error; take
+// any value for an object, and a string or nothing ends the walk with io.EOF;
 // take what follows an object, and an object followed by another reads as
 // one.
 func TestAnObjectIsWalkedAKeyAtATime(t *testing.T) {
@@ -2922,7 +2930,10 @@ func TestAnObjectIsWalkedAKeyAtATime(t *testing.T) {
 	type key struct{ name, value string }
 	walk := func(object string, stopAt int, stop error) ([]key, error) {
 		var handed []key
-		err := eachKey(json.RawMessage(object), func(name []byte, value json.RawMessage) error {
+		err := eachKey(json.RawMessage(object), func(name []byte, value json.RawMessage, at int) error {
+			if at < 0 || at+len(value) > len(object) || object[at:at+len(value)] != string(value) {
+				t.Errorf("%q hands out %s's value %s as sitting at %d", object, name, value, at)
+			}
 			handed = append(handed, key{string(name), string(value)})
 			if len(handed) == stopAt {
 				return stop
@@ -3074,7 +3085,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	oneList := json.RawMessage(`[1]`)
 	longList := json.RawMessage(ctListRecord(t, "[", "1", "]", listBytes))
 	elements := 0
-	count := func(json.RawMessage) error {
+	count := func(json.RawMessage, int) error {
 		elements++
 		return nil
 	}
@@ -3082,7 +3093,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		t.Fatalf("a list of %d bytes walks as %d elements, %v; want every one of its %d", len(longList), elements,
 			err, strings.Count(string(longList), "1"))
 	}
-	keepNone := func(json.RawMessage) error { return nil }
+	keepNone := func(json.RawMessage, int) error { return nil }
 	fewObjects, fewBytes := allocationsOf(func() { _ = eachElement(oneList, keepNone) })
 	manyObjects, manyBytes := allocationsOf(func() { _ = eachElement(longList, keepNone) })
 	if manyObjects > fewObjects+slack || manyBytes > fewBytes+uint64(len(longList)) {
@@ -3145,7 +3156,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 // hand out a copy of each name, and an object of listBytes costs an
 // allocation or more for every key it holds.
 func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
-	keepNone := func([]byte, json.RawMessage) error { return nil }
+	keepNone := func([]byte, json.RawMessage, int) error { return nil }
 	for name, key := range map[string]func(int) string{
 		"names written plainly": func(i int) string { return fmt.Sprintf(`"m%06x":{}`, i) },
 		"names escaped":         func(i int) string { return fmt.Sprintf(`"\u006d%06x":{}`, i) },
@@ -3154,7 +3165,7 @@ func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 		long, n := ctKeysRecord(t, `{`, key, `}`, listBytes)
 		object := json.RawMessage(long)
 		keys := 0
-		if err := eachKey(object, func([]byte, json.RawMessage) error {
+		if err := eachKey(object, func([]byte, json.RawMessage, int) error {
 			keys++
 			return nil
 		}); err != nil || keys != n {

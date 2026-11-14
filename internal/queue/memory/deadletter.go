@@ -53,9 +53,9 @@ func (q *Queue) KeepDeadLetter(_ context.Context, subject, id string, header, bo
 		return false, fmt.Errorf("memory: keep a dead letter on %s: %w", subject, err)
 	}
 	// THE CONTRACT'S CEILING FOR A KEEP, the one the broker is held to as
-	// well ([queue.LetterFraming]): an entry kept here and refused there is
+	// well ([queue.LetterFits]): an entry kept here and refused there is
 	// the one direction a twin must never be wrong in.
-	if size := len(header) + len(body) + queue.LetterFraming; size > queue.MaxPayloadBytes {
+	if !queue.LetterFits(header, body) {
 		return false, fmt.Errorf("memory: keep a dead letter on %s: %d bytes of header and body exceed "+
 			"the %d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
 			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)

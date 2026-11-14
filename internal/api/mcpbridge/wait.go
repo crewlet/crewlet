@@ -62,22 +62,24 @@ type bounded interface {
 const callFloor = crewletmcp.DefaultRequestTimeout
 
 // callMargin is what a call's answer can take beyond its tool's own bound:
-// the opening's first request held behind the record of which session the
-// job's box started (internal/engine's sessionStartRecordBudget, five
-// seconds), the write of the call's entry ahead of it (its beginBudget, five
-// seconds), the update of that entry once it returns and its retries (its
-// appendRetryWaits, 1.75 seconds in all, and four attempts), an activation's
-// answer held for the box's re-list (internal/toolsession's relistWait, two
-// seconds), a relayed answer's frame (internal/httprelay's pushWait, five
-// seconds), and after `delegate`'s cap its workers' harnesses ending within
-// their grace (internal/providers/llm/harness's termGrace, five seconds). About
-// twenty-four seconds of fixed waits, which a minute covers twice over, ON A
-// COORDINATION STORE THAT ANSWERS: each of the update's four attempts is a
-// compare-and-swap no clock here bounds, and a store in an outage holds the
-// call's answer for as long as it takes, which no margin would cover. NOTHING
-// HOLDS THE SUM TO THE MARGIN: the six live in four other packages, two of
-// them the engine's, which this one cannot import, so moving any of them is
-// reading this margin again.
+// the write of the call's entry ahead of it (internal/engine's beginBudget,
+// five seconds), the update of that entry once it returns and its retries
+// (its appendRetryWaits, 1.75 seconds in all, and four attempts), an
+// activation's answer held for the box's re-list (internal/toolsession's
+// relistWait, two seconds), a relayed answer's frame (internal/httprelay's
+// pushWait, five seconds), and after `delegate`'s cap its workers' harnesses
+// ending within their grace (internal/providers/llm/harness's termGrace, five
+// seconds). About nineteen seconds of fixed waits, which a minute covers three
+// times over, ON A COORDINATION STORE THAT ANSWERS: each of the update's four
+// attempts is a compare-and-swap no clock here bounds, and a store in an
+// outage holds the call's answer for as long as it takes, which no margin
+// would cover. The opening's first request waits on nothing of the store's:
+// [Session.Started] holds the run's skill guard in process, and the record of
+// which session the job's box started is written off that request's path
+// (internal/engine's bridgeLedger.started), however long the run's row takes
+// to cross. NOTHING HOLDS THE SUM TO THE MARGIN: the five live in four other
+// packages, two of them the engine's, which this one cannot import, so moving
+// any of them is reading this margin again.
 //
 // AND IT IS PART OF EVERY CALL'S OWN BOUND ([callBound]): the instant its entry
 // says nobody need wait for it past ([Begun.Until]).

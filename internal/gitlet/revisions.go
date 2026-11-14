@@ -87,21 +87,16 @@ import (
 //
 // # The record's format does not move
 //
-// What a push record's commands do to a change — a revision, a merge, a close
-// — is derived from the commands it already carries, and the one thing it
-// carries for a change, the change a push opens from its options, is a field
-// with a stated condition of its own ([PushEntry.Change]). Under the code
-// domain's stated condition —
-// no build that carries the code domain has run without these rows, since none
-// of the domain is on main — every build that meets a push record derives
-// them. Once a build without them has run, a push record such a build would
-// apply short of a change's rows must say so: the committer would stamp each
-// entry whose commands move a live change with how many it moves, and the push
-// op would take {Name: "PushEntry.Changes", Since: 2, Op: "push", Path:
-// []string{"mutation", "pushes", "changes"}} in versionedFields, with
-// RecordVersion at 2, its line under "What each version added" and a Carrying
-// record in the statelogtest candidate, so such a build retains such a record
-// rather than apply its refs without its changes.
+// What a push record's commands do to a change — a revision, a merge, a
+// close — is derived from the commands it already carries, and the one thing
+// it carries for a change, the change a push opens from its options, is a
+// field of its own ([PushEntry.Change]). The domain landed on main with these
+// rows, so every build that meets a push record derives them. What a later
+// apply comes to derive from the commands needs a versionedFields row
+// ([RecordVersion]), and so does what a revision keeps beside them: whom the
+// seat's push that made it was made for, the entry's own field
+// ([PushEntry.WorkingFor]), which came with version 2 and which a revision's
+// row keeps as its entry carries it ([revisionRow]).
 
 // SourceDeleted is the close reason (code_changes.close_reason) of a change a
 // push closed by deleting its source branch — the one reason no person wrote.
@@ -237,14 +232,17 @@ type targetWas struct {
 	held   bool
 }
 
-// revisionRow is one code_revisions row a record writes.
+// revisionRow is one code_revisions row a record writes: whom the push that
+// made the revision was made for among it, as its entry carries it
+// ([PushEntry.WorkingFor]).
 type revisionRow struct {
-	change string
-	n      int64
-	head   string
-	pusher string
-	kind   PartyKind
-	pushID string
+	change     string
+	n          int64
+	head       string
+	pusher     string
+	kind       PartyKind
+	pushID     string
+	workingFor *types.WorkingFor
 }
 
 // authorRow is one code_change_authors row a record writes.
@@ -610,7 +608,7 @@ func (b *changeBook) move(e PushEntry) {
 		row = b.touch(row.id)
 		row.head, row.revision = c.New, row.revision+1
 		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
-			pusher: pusher, kind: kind, pushID: e.PushID})
+			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor})
 		// A PUSH NO SEAT OR PERSON MADE adds no author — no decide admits
 		// one, since a token bound to nobody reads only, and an author row
 		// naming nobody would name what no review could ask after.
@@ -733,7 +731,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	w.touched = append(w.touched, id)
 	w.opened[id] = true
 	w.revisions = append(w.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
-		pushID: e.PushID})
+		pushID: e.PushID, workingFor: e.WorkingFor})
 	b.author([2]string{id, owner})
 	w.authors = append(w.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
 	if e.Change.Body != "" {

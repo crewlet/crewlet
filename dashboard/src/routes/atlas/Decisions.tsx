@@ -12,7 +12,7 @@ import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import type { AtlasClaimed, AtlasFactView } from "~/contract/atlas.ts";
 import { useAct, type Act } from "~/lib/useAct.ts";
-import { FactValue, sourceSetBy } from "./parts.tsx";
+import { Cited, FactValue, sourceSetBy } from "./parts.tsx";
 import type { Decision, DecisionTool } from "./writes.ts";
 
 /** A claim as a list of claims draws it: the one shown, or another beside it. */
@@ -42,6 +42,7 @@ export function ClaimList({
           </Tag>
         </span>
         <SetByLine setBy={sourceSetBy(shown, seatName, now)} className="t-caption muted" />
+        <Cited source={shown.source} />
       </li>
       {others.map((claim) => (
         <li key={`${claim.source.kind}:${claim.source.name ?? ""}:${claim.observed_at}`}>
@@ -55,6 +56,7 @@ export function ClaimList({
             )}
           </span>
           <SetByLine setBy={sourceSetBy(claim, seatName, now)} className="t-caption muted" />
+          <Cited source={claim.source} />
         </li>
       ))}
     </ul>

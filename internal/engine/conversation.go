@@ -212,10 +212,11 @@ func conversationEndings(head executordomain.Head, seat string, fires bool,
 	})
 }
 
-// exhaustedAccount is what the block tells of a turn a launch of which ran out of
-// its model's context: why its transcript is not what carries the conversation on.
-const exhaustedAccount = "the session it ran out in is retired, so no later turn continues it, and what came " +
-	"before reaches later turns through these accounts rather than a transcript"
+// exhaustedAccount is what the block tells of a turn a launch of which could not
+// go on in its session (out of its model's context, or refused by its provider):
+// why its transcript is not what carries the conversation on.
+const exhaustedAccount = "the session it could not go on in is retired, so no later turn continues it, and " +
+	"what came before reaches later turns through these accounts rather than a transcript"
 
 // turnEndingOf is one ended turn's row as the block tells it: the engine's
 // account of how it ended (its executorkeep.Ending), and what it was asked —

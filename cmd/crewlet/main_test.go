@@ -72,7 +72,7 @@ const peopleCompanyYAML = companyYAML + `  - name: Founder
 // that point at them.
 func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	boot := filepath.Join(dir, "crewlet.yaml")
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
@@ -270,7 +270,7 @@ func TestRunRefusesABadConfigBeforeStartingAnything(t *testing.T) {
 // the world shares, which is the opposite of what signing a record buys.
 func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))

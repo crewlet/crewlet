@@ -92,12 +92,28 @@ for ROLE in roles/serviceusage.serviceUsageViewer roles/iam.roleViewer; do
   gcloud projects add-iam-policy-binding "$TARGET" --member="serviceAccount:$PROV" \
     --role="$ROLE" --condition=None --format=none
 done
+
+# Only where "See more in Atlas" made its account: let it search this project too.
+ATLAS=crewlet-atlas@${IDENTITY}.iam.gserviceaccount.com
+if gcloud iam service-accounts describe "$ATLAS" --project="$IDENTITY" >/dev/null 2>&1; then
+  if gcloud iam roles describe crewletAtlasReader --project="$TARGET" >/dev/null 2>&1; then
+    gcloud iam roles update crewletAtlasReader --project="$TARGET" \
+      --permissions=cloudasset.assets.searchAllResources --format=none
+  else
+    gcloud iam roles create crewletAtlasReader --project="$TARGET" --title="Crewlet Atlas reader" \
+      --description="Search resources by name and type, for Crewlet's atlas. Do not add permissions." \
+      --stage=GA --permissions=cloudasset.assets.searchAllResources --format=none
+  fi
+  gcloud projects add-iam-policy-binding "$TARGET" --member="serviceAccount:$ATLAS" \
+    --role="projects/$TARGET/roles/crewletAtlasReader" --condition=None --format=none
+fi
 ```
 
 **What this does:**
 - It creates `crewletOperator`, a custom role with exactly the 12 restart and scale permissions above. Google has no predefined Compute or GKE operator role that holds no credential-making permission; see [Roles no level grants](#roles-no-level-grants-and-why).
 - It gives the provisioner **Project IAM Admin three times**, each under a condition listing one level's roles. The provisioner can then grant or revoke those roles and nothing else. Google limits one such list to 10 roles, so each level has its own.
 - It adds **Service Usage Viewer** (to check the project's APIs) and **Role Viewer** (to check `crewletOperator`).
+- Where [See more in Atlas](#see-more-in-atlas-what-each-project-runs) made the `crewlet-atlas` account, it lets that account search this project's resources by name and type.
 
 **Afterwards:**
 - On the project's IAM page, the provisioner should show Project IAM Admin three times, each with its "Crewlet ... roles only" condition, plus Service Usage Viewer and Role Viewer, and nothing else.
@@ -225,6 +241,7 @@ integrations:
       provisioner: crewlet-provisioner@example-crewlet-id.iam.gserviceaccount.com
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
+      atlas_read: false
 roles:
   - handle: sre
     integrations:
@@ -240,6 +257,7 @@ roles:
 | `provisioning.provisioner` | yes | The provisioner's email, `<id>@<identity project>.iam.gserviceaccount.com`. The identity project is read from it. |
 | `provisioning.provider` | once the key is made | The provider's full resource name, as the Cloud Shell block prints it. |
 | `provisioning.federation_key` | yes | Crewlet's ES256 key, made by the dashboard and sealed as `GOOGLE_CLOUD_FEDERATION_KEY`. Keep it a `${VAR}` reference. |
+| `provisioning.atlas_read` | no | Let the atlas search what each project runs, as the account `crewlet-atlas` ([see more in Atlas](#see-more-in-atlas-what-each-project-runs)). Off by default. |
 | `roles[].integrations.google_cloud.enabled` | yes | Whether the agent has its own account. Off disables it and removes its roles. |
 | `roles[].integrations.google_cloud.level` | no | `viewer` (the default), `operator` or `administer`. |
 | `roles[].integrations.google_cloud.projects` | when enabled | The project IDs the agent acts on, each one prepared for Crewlet. At least one. |
@@ -265,6 +283,81 @@ No level ever grants a role that mints or reveals a credential outliving the age
 
 Each prepared project's conditions refuse these to the provisioner too, so it cannot grant one even if asked.
 
+## What the atlas reads
+
+The engine reads the company's projects for its [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads as the provisioner, through the same federation, and needs no role beyond the ones the two setup blocks grant. Every call it adds is a `GET`, and nothing at Google Cloud is changed.
+
+| Part | Calls | Role | What the atlas gains |
+|---|---|---|---|
+| Projects | `GET /v3/projects:search`, 100 a page | whatever lets the provisioner see the project | each active project as an account, with its id and its display name. The identity project is the account the settings already name |
+| Services | `GET /v1/projects/{id}/services` for the enabled ones, once per project | Service Usage Viewer on the project, which the [Prepare a project](#prepare-a-project-for-crewlet) block grants | what the project is used for |
+
+**What an enabled API says.** Each enabled API is read as one of the atlas's capabilities, and its own name is never recorded:
+
+| Capability | Enabled API |
+|---|---|
+| `compute` | Compute Engine, Cloud Run, Kubernetes Engine, Cloud Functions, App Engine, Batch |
+| `database` | Cloud SQL, Spanner, Firestore, Memorystore for Redis and for Memcached, AlloyDB, Bigtable |
+| `dns` | Cloud DNS |
+| `model_api` | Vertex AI, the Gemini API |
+| `ci` | Cloud Build, Cloud Deploy |
+| `code_hosting` | Cloud Source Repositories, Secure Source Manager |
+| `identity` | Identity Platform, Identity-Aware Proxy |
+
+An API that is not in the table says nothing. That includes every API a new project has enabled before anybody uses it (Cloud Storage, BigQuery, Datastore, Cloud Logging and Cloud Monitoring): being enabled is no sign that the project uses them.
+
+**A project that is being deleted is not read.** Google keeps a deleted project for thirty days in a state other than active. The atlas leaves it out from the first read after the deletion and retires it a day later.
+
+**A refusal is a finding, never a failed read.** Where Google refuses a project's services (the provisioner lacks Service Usage Viewer there, as on a project the Prepare a project block never ran on), the project is still read as an account, the source's standing on the atlas counts the projects and names the block, and what an earlier read said those projects are used for stays as it was. A provisioner Google refuses the listing of projects itself, or does not trust at federation or impersonation, fails the read as a rejected credential.
+
+**What is never read.** A project's labels and tags, its IAM policy, and its organization or folder. Without **See more in Atlas**, nothing inside a project is read either; with it, what each project runs is read by name and type alone, as the next section says.
+
+**Cost and limits.** A read costs one call per hundred projects and one per active project, beside the two that mint the provisioner's token once an hour. When Google answers a read with its rate limit, the call waits as long as Google asks (five seconds where it names no wait), up to three times and thirty seconds a wait; past that, or when any listing fails part way, the read stops and records nothing, and the engine reads again five minutes later. A provisioner that can read more than 1,000 projects is not read: the standing says so, and nothing is retired. A project that two complete reads at least a day apart both miss is retired from the atlas.
+
+### See more in Atlas: what each project runs
+
+**See more in Atlas** on the connect form (`integrations.google_cloud.provisioning.atlas_read`, off by default) lets the atlas list what each project the provisioner reads runs. It is optional, nothing waits on it, and it never changes what an agent can do.
+
+**The one step.** Turn **See more in Atlas** on and save, then run the Cloud Shell block on the connection again, as somebody who is an Owner of the projects. The block now also:
+
+- enables the Cloud Asset API in the identity project, and lets the new account use it there (Service Usage Consumer);
+- creates the service account `crewlet-atlas` in the identity project, if it does not exist;
+- lets Crewlet's subject act as it (Workload Identity User), as it does the provisioner;
+- on every active project where the provisioner holds a role, creates the custom role `crewletAtlasReader`, holding `cloudasset.assets.searchAllResources` and nothing else, and grants it to `crewlet-atlas`. A project the person running the block may not change is named and skipped.
+
+Nothing needs pasting back: the provider is unchanged. A project prepared later is covered by the atlas lines of [Prepare a project](#prepare-a-project-for-crewlet), or by running the identity block again.
+
+**Who reads.** The engine exchanges its federation token at Google's Security Token Service and impersonates `crewlet-atlas` directly, never through the provisioner. Cloud Audit Logs show each search under `crewlet-atlas@<identity project>.iam.gserviceaccount.com`, never under the provisioner or an agent.
+
+**Why not Cloud Asset Viewer.** That predefined role also lists and exports assets whole, and a whole asset is a function's environment variables or an instance's startup script. `crewletAtlasReader` holds the one permission that searches. The search names the fields it wants, and never asks for a resource's configuration (`versionedResources`).
+
+| Asset type | Read as | What the atlas gains |
+|---|---|---|
+| Compute Engine instance | a server | its name, its internal and external addresses, and its Region |
+| Cloud SQL instance | a datastore | its name and Region. Its engine is in its configuration, which is not read |
+| Memorystore for Redis instance | a datastore | its name, Region and the engine `redis` |
+| AlloyDB cluster | a datastore | its name, Region and the engine `postgres` |
+| Spanner instance | a datastore | its name and the engine `other` |
+| Cloud Run service, Cloud Run function | a workload running on the project | its name and Region |
+| Cloud Storage bucket | a bucket, by its global name | its name and location, and that the project uses object storage |
+| Pub/Sub topic | a queue | its name |
+
+Each entry belongs to, or runs on, its project's account. A resource Google is deleting is left out, and a stopped instance is still a server.
+
+**What is never read.** No resource's configuration, labels, tags, description, network tags, keys, environment, metadata or data. Of an instance's attributes only its two address lists are decoded. Kubernetes Engine clusters, DNS zones and every type outside the table are not read.
+
+**A refusal is a finding, never a failed read.** A project whose search Google refuses (the role was never granted there) is listed on the atlas's Sources tab, what an earlier read recorded of it stands, and every other project is read. An account that cannot be reached, or a Cloud Asset API that is off in the identity project, is one finding naming the block. Any other failure stops the read, which changes nothing.
+
+**To undo it.** Turn the switch off, which stops the searches at once, and delete the account in the identity project:
+
+```sh
+gcloud iam service-accounts delete crewlet-atlas@IDENTITY.iam.gserviceaccount.com --project=IDENTITY
+```
+
+Its grants stop working with it. The custom role `crewletAtlasReader` left on each project grants nothing to anybody; delete it with `gcloud iam roles delete crewletAtlasReader --project=PROJECT` if you want it gone. What the atlas already recorded stays until a person retires it.
+
+**Cost and limits.** A search costs one call per project per 500 resources, beside the two calls that mint the account's token once an hour. Cloud Asset Inventory allows 400 searches a minute per project the calls are billed to (the identity project); a read waits out Google's rate limit as every other Google Cloud read does.
+
 ## Google Cloud's limits worth knowing
 
 These are Google's, not Crewlet's.
@@ -276,6 +369,7 @@ These are Google's, not Crewlet's.
 | Roles in one grant condition | 10 | Why each level has its own condition |
 | Keys on a workload identity provider | 8 | Reconnecting updates the key in place |
 | Token lifetime | 1 hour | Crewlet renews before expiry |
+| Rate limits | A `429`, with `Retry-After` on some limits | A read waits as long as Google asks, or 5 seconds where it names no wait, up to 30 seconds and up to 3 times; a longer wait is left to the next pass. A write is never sent again: Google answers a spent quota with the same status |
 
 ## What is not supported yet
 

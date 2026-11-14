@@ -285,9 +285,15 @@ func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []Pending
 
 // endGone ends what one run of a gone launch node was waiting on — see
 // [Waiter.goneAfter].
+//
+// EACH WRITE OF THE RUN'S ROW IS GIVEN THE ROW'S CROSSING beyond the duty's
+// window ([Waiter.rowContext]): both are compare-and-sets, which a peer's pass
+// after the window makes beside it harmlessly.
 func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Time) {
 	if run.Status != StatusRunning {
-		released, err := w.pending.ExpirePause(ctx, run.TurnID)
+		releaseCtx, releaseDone := w.rowContext(ctx)
+		released, err := w.pending.ExpirePause(releaseCtx, run.TurnID)
+		releaseDone()
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_launch_node_gone_unrecorded", "turn_id", run.TurnID,
 				"node", run.LaunchNode, "error", err.Error())
@@ -302,8 +308,10 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		}
 		return
 	}
-	marked, err := w.pending.MarkLost(ctx, run.TurnID, run.LaunchID,
+	markCtx, markDone := w.rowContext(ctx)
+	marked, err := w.pending.MarkLost(markCtx, run.TurnID, run.LaunchID,
 		JobLoss{Cause: LossLaunchNodeGone, Node: run.LaunchNode, At: now})
+	markDone()
 	switch {
 	case err != nil:
 		log.WarnContext(ctx, "sandbox_launch_node_gone_unrecorded", "turn_id", run.TurnID,
@@ -465,7 +473,7 @@ func (w *Waiter) reclaimHostBox(ctx context.Context, manager *Manager, box HostB
 			"sandbox_id", box.SandboxID, "placement", string(box.Placement), "error", err.Error())
 		return
 	}
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	if err := provider.Kill(killCtx, box.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_host_box_reclaim_failed", "turn_id", box.TurnID,

@@ -10,11 +10,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE HOME'S QUEUE WORK IS ONE SNAPSHOT OF ONE TARGET (M5-D12, M5-D15): a
-// `queue_due` read of one repository answers its home a target a page, every
+// due-queue read of one repository answers its home a target a page, every
 // fact the queue worker decides its next step from read in one transaction by
 // the shipped reader over the shipped applier's rows — main's tip, the gate its
 // queue lands under (its depth and batch, the required check), the
@@ -57,8 +58,8 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	n.checked(repo, oidOf("M"), mainRef, "unit", 2, gitlet.CheckStatePassed)
 	n.checked(repo, oidOf("A"), mainRef, "unit", 1, gitlet.CheckStateFailed)
 
-	q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: repo}}
-	answer, err := n.reader.Read(t.Context(), q)
+	q := gitlet.QueueDueQuery{RepoID: repo}
+	answer, err := n.reader.QueueDue(t.Context(), q)
 	if err != nil || answer.DueQueue == nil {
 		t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
 	}
@@ -89,12 +90,12 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	}
 
 	q.Cursor = answer.Next
-	if after, err := n.reader.Read(t.Context(), q); err != nil || after.DueQueue != nil || after.Next != "" {
+	if after, err := n.reader.QueueDue(t.Context(), q); err != nil || after.DueQueue != nil || after.Next != "" {
 		t.Fatalf("the page after main reads %+v (next %q, %v), want none", after.DueQueue, after.Next, err)
 	}
 }
 
-// THE HOME'S QUEUE WORK READS WHAT ITS STEP NEEDS: a `queue_due` page names
+// THE HOME'S QUEUE WORK READS WHAT ITS STEP NEEDS: a due-queue page names
 // as many of its target's live entries as one train under the gate takes —
 // depth × batch, here one of two, and More for the other — and their changes'
 // descriptions, the body and the authors a squash's message is written from,
@@ -137,8 +138,7 @@ func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
 	}
 	work := func() gitlet.QueueDue {
 		t.Helper()
-		answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		answer, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo})
 		if err != nil || answer.DueQueue == nil {
 			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
 		}
@@ -169,7 +169,7 @@ func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
 }
 
 // THE HOME'S QUEUE WORK COUNTS WHAT ITS TARGET WAS ASKED TO LAND (M5-D28):
-// asked to, a `queue_due` read counts the entries enqueued on main at or
+// asked to, a due-queue read counts the entries enqueued on main at or
 // after an instant — the live ones and the ended ones alike, each by its
 // ENQUEUE's broker instant — and names the repository, which the merge-rate
 // alarm names the target by. An entry enqueued an hour before the window and
@@ -210,8 +210,7 @@ func TestTheHomesQueueWorkCountsItsTargetsEnqueues(t *testing.T) {
 
 	read := func(since time.Time) gitlet.QueueDue {
 		t.Helper()
-		answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo, EnqueuedSince: since}})
+		answer, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, EnqueuedSince: since})
 		if err != nil || answer.DueQueue == nil {
 			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
 		}
@@ -224,8 +223,8 @@ func TestTheHomesQueueWorkCountsItsTargetsEnqueues(t *testing.T) {
 	if d := read(time.Time{}); d.Enqueued != 0 {
 		t.Fatalf("a read asking no count counts %d enqueue(s), want none", d.Enqueued)
 	}
-	if _, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-		QueueDue: &gitlet.QueueDueQuery{EnqueuedSince: window}}); !errors.Is(err, gitlet.ErrInvalid) {
+	_, err = n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{EnqueuedSince: window})
+	if !errors.Is(err, gitlet.ErrInvalid) {
 		t.Fatalf("the listing asked to count enqueues answers %v, want invalid: the count is a repository's", err)
 	}
 }
@@ -247,10 +246,10 @@ func TestTheHomesQueueWorkReadsTheDropEpoch(t *testing.T) {
 	res, err := c.ProposeQueue(t.Context(), enqueueing(repo, change, ada, oidOf("B")))
 	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
 
-	q := gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, QueueDue: &gitlet.QueueDueQuery{RepoID: repo}}
+	q := gitlet.QueueDueQuery{RepoID: repo}
 	read := func() int64 {
 		t.Helper()
-		answer, err := n.reader.Read(t.Context(), q)
+		answer, err := n.reader.QueueDue(t.Context(), q)
 		if err != nil || answer.DueQueue == nil {
 			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
 		}
@@ -264,6 +263,82 @@ func TestTheHomesQueueWorkReadsTheDropEpoch(t *testing.T) {
 	requireExpunged(t, began, err)
 	if epoch := read(); epoch != 1 {
 		t.Fatalf("the queue work after an expunge's begin reads drop epoch %d, want the begin's, 1", epoch)
+	}
+}
+
+// THE HOME'S QUEUE WORK IS READ AT THE FLOOR ITS HOME STATES: the home asks its
+// queue at `session`, floored at the position its nudge or its own record
+// landed at, so a node that has not applied that position refuses `behind`
+// rather than answer from before it — the listing of repositories and one
+// repository's page alike — and once it has, answers WITH it, at a position
+// at or past the floor, which the records the home asks next state as seen. A
+// bare `session` names nothing to wait for and is refused as a level, and a
+// floor on another log is the request's own mistake, refused before any row is
+// read.
+//
+// Mutation: drop the query's level (Reader.QueueDue reading q.Fresh as
+// unstated) → the held node answers the queue from before the enqueue, red;
+// skip checkFreshness → the bare session is not refused as a level, red.
+func TestTheHomesQueueWorkIsReadAtTheFloorItsHomeStates(t *testing.T) {
+	t.Parallel()
+	a, b := newTwoNodes(t)
+	a.chart = testChart()
+	c, _ := committerOn(t, a, a.pub)
+	w, _ := writerOn(t, a, a.pub)
+	repo, change := queueRepo(t, a, c, "web")
+	ready(t, a, w, repo, change)
+	b.drain()
+	b.hold()
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
+
+	session := statelog.FloorAt(statelog.ReadSession, res.Position)
+	listing := gitlet.QueueDueQuery{Fresh: session}
+	page := gitlet.QueueDueQuery{RepoID: repo, Fresh: session}
+	for name, q := range map[string]gitlet.QueueDueQuery{"the listing": listing, "web's page": page} {
+		_, err := b.reader.QueueDue(t.Context(), q)
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind {
+			t.Errorf("%s at session on a node that has not applied its floor = %v, want refused behind",
+				name, err)
+		}
+	}
+
+	b.release()
+	listed, err := b.reader.QueueDue(t.Context(), listing)
+	if err != nil || !slices.Equal(listed.DueRepos, []string{repo}) {
+		t.Errorf("the listing at session once its floor is applied = %v (%v), want web, holding the entry",
+			listed.DueRepos, err)
+	}
+	work, err := b.reader.QueueDue(t.Context(), page)
+	switch {
+	case err != nil || work.DueQueue == nil:
+		t.Errorf("web's page at session once its floor is applied = %+v (%v), want main's queue work",
+			work.DueQueue, err)
+	case len(work.DueQueue.Entries) != 1 || work.DueQueue.Entries[0].EntryID != enqueue.Enqueue.EntryID:
+		t.Errorf("web's page at session answers %+v, want the entry enqueued at its floor", work.DueQueue.Entries)
+	default:
+		if before, err := work.Position.Before(res.Position); err != nil || before {
+			t.Errorf("web's page at session was read at %v (%v), before its floor %v", work.Position, err,
+				res.Position)
+		}
+	}
+
+	elsewhere := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	for name, tc := range map[string]struct {
+		fresh statelog.Freshness
+		want  error
+	}{
+		"a bare session": {statelog.Freshness{Level: statelog.ReadSession}, gitlet.ErrBadLevel},
+		"a session floored on another log": {statelog.FloorAt(statelog.ReadSession, elsewhere),
+			statelog.ErrForeignPosition},
+	} {
+		for _, q := range []gitlet.QueueDueQuery{{Fresh: tc.fresh}, {RepoID: repo, Fresh: tc.fresh}} {
+			if _, err := b.reader.QueueDue(t.Context(), q); !errors.Is(err, tc.want) {
+				t.Errorf("a due-queue read (repository %q) at %s = %v, want %v", q.RepoID, name, err, tc.want)
+			}
+		}
 	}
 }
 
@@ -295,7 +370,7 @@ func (n *node) trainAttempt(repoID, oid, name string, state gitlet.CheckState, p
 }
 
 // THE HOME'S QUEUE WORK ANSWERS A GIVEN-UP TRAIN'S CHECKS: the first page of
-// a repository's `queue_due` read answers every attempt its queue queued that
+// a repository's due-queue read answers every attempt its queue queued that
 // has not ended — queued or running — on a commit no train of its target
 // tests or landed, `dequeued` where a change its candidate merged left its
 // queue and `abandoned` where its train was given up otherwise, and never an
@@ -339,10 +414,9 @@ func TestTheHomesQueueWorkAnswersAGivenUpTrainsChecks(t *testing.T) {
 	res, err = c.ProposeQueue(t.Context(), enqueueing(other, otherChange, ada, oidOf("B")))
 	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
 
-	firstPage := func() gitlet.ReadAnswer {
+	firstPage := func() gitlet.QueueDueAnswer {
 		t.Helper()
-		answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		answer, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo})
 		if err != nil {
 			t.Fatalf("the home's queue work of web: %v", err)
 		}
@@ -396,8 +470,8 @@ func TestTheHomesQueueWorkAnswersAGivenUpTrainsChecks(t *testing.T) {
 			"page answers %+v, want the first train's two dequeued and the second's bisect probe abandoned, "+
 			"and never the run on the commit the live train tests", a.QueueAbandoned)
 	}
-	if b, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-		QueueDue: &gitlet.QueueDueQuery{RepoID: repo}, Cursor: a.Next}); err != nil || len(b.QueueAbandoned) != 0 {
+	if b, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Cursor: a.Next}); err != nil ||
+		len(b.QueueAbandoned) != 0 {
 		t.Fatalf("web's second page answers %+v (%v), want the given-up attempts on the first alone",
 			b.QueueAbandoned, err)
 	}
@@ -411,8 +485,7 @@ func TestTheHomesQueueWorkAnswersAGivenUpTrainsChecks(t *testing.T) {
 	var listed []string
 	cursor := ""
 	for range 4 {
-		page, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-			QueueDue: &gitlet.QueueDueQuery{}, Cursor: cursor})
+		page, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{Cursor: cursor})
 		if err != nil {
 			t.Fatalf("the listing of repositories owing queue work: %v", err)
 		}

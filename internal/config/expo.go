@@ -16,6 +16,16 @@ type Expo struct {
 
 	// Provisioning names the account the agents' robots act for.
 	Provisioning *ExpoProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The Expo account the agents' robot users act for. Required when enabled."`
+
+	// Atlas is the robot the atlas reads the account as; nil reads nothing.
+	Atlas *ExpoAtlas `yaml:"atlas,omitempty" json:"atlas,omitempty" desc:"Optional. The view-only robot the atlas reads the account's projects and builds as. Without it the atlas shows the Expo account alone."`
+}
+
+// ExpoAtlas is the atlas's own identity at Expo: a robot user a person
+// creates for it alone, with the Viewer role, so its reads are no agent's and
+// it is removed apart from every agent's robot.
+type ExpoAtlas struct {
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Reference to the sealed access token of a robot user made for the atlas, holding the Viewer role on the account. A robot with any other role is refused."`
 }
 
 // ExpoProvisioning is the account every seat's robot must hold its role on.

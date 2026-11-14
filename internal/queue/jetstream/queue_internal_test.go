@@ -110,7 +110,7 @@ func TestAHandoffDoesNotAgeAMessagesBackoff(t *testing.T) {
 	// Five handoffs of sequence 7: nothing here failed, so nothing is
 	// recorded against it.
 	const seq = 7
-	if got := a.failed(seq); got != 1 {
+	if got, _ := a.failed(seq, true); got != 1 {
 		t.Fatalf("the first failure counted as %d", got)
 	}
 	a.settled(seq)
@@ -118,7 +118,7 @@ func TestAHandoffDoesNotAgeAMessagesBackoff(t *testing.T) {
 	// After the message is settled its first failure is a first failure
 	// again, which is what a redelivery landing on a fresh attachment
 	// gets.
-	if got := a.failed(seq); got != 1 {
+	if got, _ := a.failed(seq, true); got != 1 {
 		t.Errorf("a settled message carried %d failures into its next life", got)
 	}
 }
@@ -129,13 +129,13 @@ func TestRepeatedFailuresOfOneMessageAge(t *testing.T) {
 	t.Parallel()
 	a := &attachment{}
 	for want := uint64(1); want <= 4; want++ {
-		if got := a.failed(11); got != want {
+		if got, _ := a.failed(11, want%2 == 0); got != want {
 			t.Fatalf("failure %d counted as %d", want, got)
 		}
 	}
 	// AND THEY ARE PER MESSAGE. One seat failing on one message must not
 	// slow the next message down.
-	if got := a.failed(12); got != 1 {
+	if got, _ := a.failed(12, true); got != 1 {
 		t.Errorf("a different message started at %d", got)
 	}
 }
@@ -145,8 +145,8 @@ func TestRepeatedFailuresOfOneMessageAge(t *testing.T) {
 func TestASettledMessageIsForgotten(t *testing.T) {
 	t.Parallel()
 	a := &attachment{}
-	a.failed(1)
-	a.failed(2)
+	a.failed(1, true)
+	a.failed(2, false)
 	a.settled(1)
 	a.settled(2)
 

@@ -1,6 +1,7 @@
 package googlecloud_test
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -14,6 +15,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -41,6 +43,7 @@ const (
 var googleHosts = []string{
 	"https://sts.googleapis.com", "https://iamcredentials.googleapis.com", "https://iam.googleapis.com",
 	"https://cloudresourcemanager.googleapis.com", "https://serviceusage.googleapis.com",
+	"https://cloudasset.googleapis.com",
 }
 
 // testClock is a world's time, which a wait moves forward rather than spends.
@@ -97,8 +100,10 @@ type fakeAccount struct {
 // fakeProject is one project the provisioner may read.
 type fakeProject struct {
 	ID, Name, State string
-	Policy          googlecloud.Policy
-	Services        map[string]bool
+	// Parent is the organization or the folder the project sits under.
+	Parent   string
+	Policy   googlecloud.Policy
+	Services map[string]bool
 }
 
 // fakeToken is a token the fake issued, and to whom.
@@ -137,6 +142,27 @@ type fakeGoogle struct {
 	mintRefusals int
 	// page is how many projects one search page holds; zero is all.
 	page int
+	// limited answers a route 429 this many times first, by method and path.
+	limited map[string]int
+	// retryAfter is the wait a 429 names, in seconds; zero is seven.
+	retryAfter int
+	// unmapped is what every project and service row carries beside the
+	// fields a client decodes.
+	unmapped map[string]any
+	// requests is every request served, by method and path.
+	requests []string
+
+	// atlasTrusted lets the federated subject act as the atlas's account,
+	// which exists where addAtlas made it; assets is what each project runs,
+	// as Cloud Asset Inventory answers a search, and assetPage how many
+	// results one page holds (zero is all). searched is each search's query.
+	atlasTrusted bool
+	// assetsOff answers every search as Google does with the Cloud Asset API
+	// off in the project the call is billed to.
+	assetsOff bool
+	assets    map[string][]map[string]any
+	assetPage int
+	searched  []url.Values
 
 	writes   []string
 	versions []int
@@ -332,6 +358,13 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	path := r.URL.Path
 	key := r.Method + " " + path
+	f.requests = append(f.requests, key)
+	if n := f.limited[key]; n > 0 {
+		f.limited[key] = n - 1
+		w.Header().Set("Retry-After", strconv.Itoa(cmp.Or(f.retryAfter, 7)))
+		f.fail(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Read requests'.")
+		return
+	}
 	if status, ok := f.refuse[key]; ok {
 		f.fail(w, status, http.StatusText(status), "refused by the test")
 		return
@@ -349,6 +382,8 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, ":generateAccessToken"):
 		f.impersonate(w, r, who, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/-/serviceAccounts/"),
 			":generateAccessToken"))
+	case who == atlasAccount && r.Method == http.MethodGet && strings.HasSuffix(path, ":searchAllResources"):
+		f.searchAssets(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/"), ":searchAllResources"))
 	case who != provisioner:
 		f.fail(w, http.StatusForbidden, "PERMISSION_DENIED", "only the provisioner calls these")
 	case path == "/v3/projects:search":
@@ -472,6 +507,7 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request, who, ac
 		f.fail(w, http.StatusNotFound, "NOT_FOUND", "Not found; Gaia id not found for email "+account)
 		return
 	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == provisioner:
+	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == atlasAccount && f.atlasTrusted:
 	case who == provisioner && f.delegates(target):
 		if f.mintRefusals > 0 {
 			f.mintRefusals--
@@ -490,6 +526,62 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request, who, ac
 	f.answer(w, map[string]any{"accessToken": value, "expireTime": expires.Format(time.RFC3339)})
 }
 
+// atlasAccount is the atlas's service account in the fake's identity project.
+var atlasAccount = googlecloud.AtlasAccountIn(identity)
+
+// addAtlas makes the atlas's account the identity block makes, trusted by the
+// federated subject.
+func (f *fakeGoogle) addAtlas() {
+	f.accounts["100000000000000000099"] = &fakeAccount{ID: googlecloud.AtlasAccountID, Email: atlasAccount,
+		UniqueID: "100000000000000000099", DisplayName: "Crewlet atlas"}
+	f.atlasTrusted = true
+}
+
+// searchAssets is searchAllResources on one project, as the atlas's account:
+// refused where the project holds no assets entry (the role was never
+// granted there), and paged by assetPage.
+func (f *fakeGoogle) searchAssets(w http.ResponseWriter, r *http.Request, project string) {
+	q := r.URL.Query()
+	f.searched = append(f.searched, q)
+	if f.assetsOff {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED",
+			"message": "Cloud Asset API has not been used in project " + identity + " before or it is disabled.",
+			"details": []any{map[string]any{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+				"reason": "SERVICE_DISABLED"}}}})
+		return
+	}
+	all, granted := f.assets[project]
+	if !granted {
+		f.fail(w, http.StatusForbidden, "PERMISSION_DENIED",
+			"The caller does not have permission cloudasset.assets.searchAllResources on projects/"+project)
+		return
+	}
+	start := 0
+	if tok := q.Get("pageToken"); tok != "" {
+		start, _ = strconv.Atoi(strings.TrimPrefix(tok, "p"))
+	}
+	end, next := len(all), ""
+	if f.assetPage > 0 && start+f.assetPage < len(all) {
+		end, next = start+f.assetPage, "p"+strconv.Itoa(start+f.assetPage)
+	}
+	results := make([]map[string]any, 0, end-start)
+	for _, a := range all[start:end] {
+		row := map[string]any{"project": "projects/123456789", "labels": map[string]any{"owner": "atlas-canary"},
+			"description": "atlas-canary", "networkTags": []string{"atlas-canary"},
+			"kmsKeys": []string{"atlas-canary"}, "parentFullResourceName": "atlas-canary"}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		for k, v := range a {
+			row[k] = v
+		}
+		results = append(results, row)
+	}
+	f.answer(w, map[string]any{"results": results, "nextPageToken": next})
+}
+
 // delegates reports an account whose own policy lets the provisioner mint for it.
 func (f *fakeGoogle) delegates(a *fakeAccount) bool {
 	plain, _ := googlecloud.HeldBy(a.Policy, "serviceAccount:"+provisioner)
@@ -497,10 +589,17 @@ func (f *fakeGoogle) delegates(a *fakeAccount) bool {
 }
 
 func (f *fakeGoogle) search(w http.ResponseWriter, r *http.Request) {
-	var out []map[string]string
+	var out []map[string]any
 	for _, id := range slices.Sorted(mapKeys(f.projects)) {
 		p := f.projects[id]
-		out = append(out, map[string]string{"projectId": p.ID, "displayName": p.Name, "state": p.State})
+		row := map[string]any{"projectId": p.ID, "displayName": p.Name, "state": p.State}
+		if p.Parent != "" {
+			row["parent"] = p.Parent
+		}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		out = append(out, row)
 	}
 	from, _ := strconv.Atoi(r.URL.Query().Get("pageToken"))
 	if f.page == 0 || from+f.page >= len(out) {
@@ -670,7 +769,11 @@ func (f *fakeGoogle) services(w http.ResponseWriter, project string) {
 	}
 	var out []map[string]any
 	for _, name := range slices.Sorted(mapKeys(p.Services)) {
-		out = append(out, map[string]any{"config": map[string]string{"name": name}, "state": "ENABLED"})
+		row := map[string]any{"config": map[string]any{"name": name, "title": f.unmapped["title"]}, "state": "ENABLED"}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		out = append(out, row)
 	}
 	f.answer(w, map[string]any{"services": out})
 }

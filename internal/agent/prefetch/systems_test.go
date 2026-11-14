@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -172,5 +174,75 @@ func TestTheSystemsBlockListsOnlyWhatTheWorkNamesWithinItsBounds(t *testing.T) {
 	}
 	if got := fetch(t, prefetch.Sources{Systems: many}, systemsRequest(t, theAsk)).Systems; got != "" {
 		t.Errorf("work that names no entry was handed %q", got)
+	}
+}
+
+// THE ENTRIES A WORK ITEM NAMES COME FIRST, in the item's own order, before
+// what the ask names, each once and through whichever entry its id merged
+// into; an id the seat's atlas does not hold, or a retired entry, lists
+// nothing. A turn whose ask names nothing still lists what its item names,
+// and the bounds hold whatever the item names (ADR-0140).
+//
+// Mutation: list what the ask names first and the first assertion fails; drop
+// the Linked half of the empty-ask check and the second does.
+func TestTheSystemsBlockListsWhatTheWorkItemNamesFirst(t *testing.T) {
+	t.Parallel()
+	settings, ada := atlas.SettingsSource("r1"), atlas.PersonSource("ada")
+	api := atlas.MustRef(atlas.KindService, "checkout-api")
+	db := atlas.MustRef(atlas.KindService, "orders-db")
+	queue := atlas.MustRef(atlas.KindService, "orders-queue")
+	old := atlas.MustRef(atlas.KindService, "legacy-api")
+	gone := atlas.MustRef(atlas.KindService, "never-recorded")
+	// A PERSON RECORDED IT AND THEN RETIRED IT.
+	retired := func() (atlas.Claim, error) {
+		recorded, err := atlas.Exists(old, ada, atlasNow.Add(-time.Hour))
+		if err != nil {
+			return atlas.Claim{}, err
+		}
+		return atlas.Denial(recorded, ada, atlasNow)
+	}
+	view := fold(t, exists(api, settings), exists(db, settings), exists(queue, settings), retired)
+	if e, found := view.Find(old.ID()); !found || e.State != atlas.StateRetired {
+		t.Fatalf("the fixture's retired entry reads %+v", e)
+	}
+	src := &systemsOf{view: view, readable: true}
+
+	r := systemsRequest(t, "checkout-api answers 502 since this morning")
+	r.Linked = []uuid.UUID{queue.ID(), gone.ID(), db.ID(), old.ID(), queue.ID(), api.ID()}
+	blocks := fetch(t, prefetch.Sources{Systems: src}, r)
+	at := func(name string) int { return strings.Index(blocks.Systems, "\n- "+name+" (") }
+	if at("orders-queue") < 0 || at("orders-queue") > at("orders-db") || at("orders-db") > at("checkout-api") {
+		t.Errorf("the block does not list the item's entries in its order, before the ask's:\n%s", blocks.Systems)
+	}
+	if blocks.SystemsNamed != 3 || strings.Contains(blocks.Systems, "legacy-api") {
+		t.Errorf("the block lists %d entries, want the three live ones, each once:\n%s", blocks.SystemsNamed,
+			blocks.Systems)
+	}
+
+	quiet := systemsRequest(t, "")
+	quiet.Linked = []uuid.UUID{db.ID()}
+	if got := fetch(t, prefetch.Sources{Systems: src}, quiet); got.SystemsNamed != 1 ||
+		!strings.Contains(got.Systems, "- orders-db (service)") {
+		t.Errorf("a turn asked nothing does not list what its work item names:\n%s", got.Systems)
+	}
+
+	var claims []func() (atlas.Claim, error)
+	var linked []uuid.UUID
+	for i := range prefetch.MaxSystems + 3 {
+		ref := atlas.MustRef(atlas.KindService, fmt.Sprintf("svc-%02d-api", i))
+		claims, linked = append(claims, exists(ref, settings)), append(linked, ref.ID())
+	}
+	many := systemsRequest(t, "")
+	many.Linked = linked
+	capped := fetch(t, prefetch.Sources{Systems: &systemsOf{view: fold(t, claims...), readable: true}}, many)
+	if capped.SystemsNamed != prefetch.MaxSystems || len(capped.Systems) > prefetch.MaxSystemsBytes+1024 ||
+		!strings.Contains(capped.Systems, "(3 more the work names;") {
+		t.Errorf("an item naming %d entries lists %d:\n%s", len(linked), capped.SystemsNamed, capped.Systems)
+	}
+
+	unread := systemsRequest(t, "")
+	unread.Linked, unread.ReadsAtlas = []uuid.UUID{db.ID()}, false
+	if got := fetch(t, prefetch.Sources{Systems: src}, unread); got.Systems != "" {
+		t.Errorf("a turn that may not read the atlas was told what its work item names:\n%s", got.Systems)
 	}
 }

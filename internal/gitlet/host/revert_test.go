@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -14,10 +15,11 @@ import (
 // merge brought into its target undone onto the target's tip, on a new
 // branch whose push opens "Revert <repo>!<n>" in its own record.
 
-// revertChange is who's revert_change of change n onto branch.
+// revertChange is who's revert_change of change n onto branch, made for
+// nobody but who.
 func revertChange(repo string, who gitlet.Principal, n int64, branch string) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteRevertChange, RepoID: repo, Principal: who, OpID: opNow(),
-		Fresh: linear, Ref: branch, Change: n}
+	return gitlet.EngineWrite{Kind: gitlet.WriteRevertChange, RepoID: repo, Principal: who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: branch, Change: n}
 }
 
 // mainTip is main's commit as a fresh clone reads it.

@@ -145,6 +145,16 @@ func (w Work) OwnAsks(ctx context.Context, q worklet.OwnAsksQuery, now time.Time
 	return call(ctx, w.r, opOwnAsks, nil, ownAsksArgs{Query: q, Now: now})
 }
 
+// EntryMarks answers how many open tasks name each atlas entry (ADR-0140).
+func (w Work) EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error) {
+	return call(ctx, w.r, opEntryMarks, nil, level)
+}
+
+// EntryWork answers the open and recently finished tasks naming an atlas entry.
+func (w Work) EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now time.Time) (worklet.EntryWork, error) {
+	return call(ctx, w.r, opEntryWork, nil, entryWorkArgs{Query: q, Now: now})
+}
+
 // Projects lists the company's projects.
 func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
@@ -1465,6 +1475,21 @@ func (c CodeSeam) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnsw
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
 
+// QueueDue answers a page of the queue work a repository's home owes, read
+// whole or refused ([opCodeQueueDue]): the home's merge queue's read. It never
+// raises this node's floor: a read's position is somebody else's writes.
+//
+// THE ENGINE'S ALONE, though every holder of the facade could call it: its
+// answer hands over whom each entry's enqueue was made for
+// (gitlet.QueueWorkEntry.WorkingFor), which no reader of a queue may see, so
+// the engine-class guard in this package's tests refuses it, and every road
+// to it, in the packages that serve a person or a model, as it refuses
+// [TurnThreads]. A surface lists a queue through [CodeSeam.Read]'s `queue`
+// kind, whose rows leave it out.
+func (c CodeSeam) QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	return call(ctx, c.r, opCodeQueueDue, nil, q)
+}
+
 // TurnsMovedCode answers which of a set of turns pushed, opened a change or
 // gave a review.
 func (c CodeSeam) TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {
@@ -1522,7 +1547,12 @@ func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) 
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
 // does (gitlet.EngineWrite.Validate): one it refuses is gitlet.ErrInvalid, naming
 // the field, before any Gitlet node is asked — never a round trip, a sync and a
-// slot of a Gitlet node's lane for an answer every node would give alike.
+// slot of a Gitlet node's lane for an answer every node would give alike. But
+// NOT A VALUE WHOM IT IS MADE FOR NAMES THAT THIS BUILD DOES NOT KNOW
+// (gitlet.IsUnknownToThisBuild), which is no answer every node gives alike: a
+// node of the build that knows it judges the write — a refusal as malformed
+// included, since Validate meets that value before any other rule — so it is
+// asked, and the walk answers it as the wire does ([unreadHere]).
 //
 // It raises this node's floors past the push's record where the write APPLIED
 // or is PENDING — this node's own write, which its next read of the
@@ -1532,7 +1562,7 @@ func (c CodeSeam) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) 
 // which landed nothing, nor for an outcome UNKNOWN, whose record may not
 // exist.
 func (c CodeSeam) GitWrite(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
-	if err := w.Validate(); err != nil {
+	if err := w.Validate(); err != nil && !gitlet.IsUnknownToThisBuild(err) {
 		return gitlet.EngineWriteResult{}, err
 	}
 	out, err := call(ctx, c.r, opCodeGitWrite, nil, w)

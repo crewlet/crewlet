@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
@@ -22,16 +23,17 @@ import (
 // THE BUILD'S CASES: what an engine write's commit holds, measured against
 // git's own commands where git has one.
 
-// pick is a revert or a cherry-pick of commit by who onto ref at head.
+// pick is a revert or a cherry-pick of commit by who onto ref at head, made
+// for nobody but who.
 func pick(kind gitlet.EngineWriteKind, repo string, who gitlet.Principal, ref, head, commit string) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: kind, RepoID: repo, Principal: who, OpID: opNow(), Fresh: linear, Ref: ref,
-		ExpectedHead: head, Commit: commit}
+	return gitlet.EngineWrite{Kind: kind, RepoID: repo, Principal: who, WrittenFor: types.ForNobody(), OpID: opNow(),
+		Fresh: linear, Ref: ref, ExpectedHead: head, Commit: commit}
 }
 
-// branch is alice's create of ref at commit.
+// branch is alice's create of ref at commit, made for nobody but alice.
 func branch(repo, ref, commit string) gitlet.EngineWrite {
-	return gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: repo, Principal: alice(), OpID: opNow(),
-		Fresh: linear, Ref: ref, Commit: commit}
+	return gitlet.EngineWrite{Kind: gitlet.WriteCreateBranch, RepoID: repo, Principal: alice(),
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: ref, Commit: commit}
 }
 
 // messageAt is a commit's message as git stores it, in dir.

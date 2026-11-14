@@ -53,8 +53,8 @@ const (
 	//
 	// RECORDABLE AS repo_archived IS, though the push decide refuses the
 	// whole push for it, so no record carries it today: a value of
-	// Command.Reason under the code domain's stated condition (mirror.go),
-	// which no build that carries the domain has run without.
+	// Command.Reason the domain landed on main with, in the base format
+	// ([RecordVersion]).
 	RefusalRepoImporting Refusal = "repo_importing"
 	// RefusalRepoMirrored is a write to a PULL MIRROR ([RepoRef.Mirrored]) —
 	// a push, a change's every write — which moves only by its syncs from

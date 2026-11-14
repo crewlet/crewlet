@@ -25,9 +25,18 @@ import (
 //
 // Two shapes, because an `unknown` answer is two different facts and the retry
 // has to be right for both: the pages record never landed, or it landed and the
-// answer was lost. In both, the tracker's log — which applied the first time —
-// answers the retry from its own rows at the position it already holds, and
-// gains no record.
+// answer was lost. In both, the tracker's log — which held the record durably
+// the first time — answers the retry from its own rows at the position it
+// already holds, and gains no record.
+//
+// DURABLY, NOT APPLIED. The write's answer for a record that landed on its log
+// before this node's applier reached it is `pending`, and the gate counts that
+// as done ([DomainGate.done]): every node applies it as it gets there. The
+// case asserted `applied`, which decided on how fast the applier ran rather
+// than on what the gate did, and failed on a loaded runner whose applier was
+// behind the write's wait (crewlet/crewlet#1100). What the gate must not do
+// with a log that holds the record is write it again, which the retry's counts
+// below hold.
 //
 // # And it is the rows answering, not the broker
 //
@@ -88,10 +97,10 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 					"itself complete: %+v", first)
 			}
 			got := byDomain(first)
-			if got[trackerName].Outcome != statelog.OutcomeApplied ||
-				got[pagesName].Outcome != statelog.OutcomeUnknown {
-				t.Fatalf("the partial gesture answered %+v, want the tracker applied "+
-					"and the pages log unknown", first.Domains)
+			if !got[trackerName].done() || got[pagesName].Outcome != statelog.OutcomeUnknown {
+				t.Fatalf("the partial gesture answered %+v, want the tracker's record "+
+					"durable on its log (applied, or pending until this node's applier "+
+					"reaches it) and the pages log unknown", first.Domains)
 			}
 			if !got[pagesName].Retry() {
 				t.Fatalf("an unknown outcome is not advised a retry: %+v", got[pagesName])
@@ -358,8 +367,12 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 		t.Fatalf("evict: %v", err)
 	}
 	got := byDomain(res)
-	if got[trackerName].Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the tracker's log, whose ledger reads, answered %+v", got[trackerName])
+	// DURABLE, NOT APPLIED: a record that landed before this node's applier
+	// reached it answers `pending`, which the gate counts as done
+	// (crewlet/crewlet#1100).
+	if !got[trackerName].done() {
+		t.Fatalf("the tracker's log, whose ledger reads, answered %+v, want its record "+
+			"durable (applied, or pending until this node's applier reaches it)", got[trackerName])
 	}
 	if d := got[pagesName]; d.Err == nil || !d.Retry() {
 		t.Fatalf("the pages log, whose ledger cannot be read, answered %+v — want "+

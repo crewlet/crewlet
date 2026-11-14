@@ -450,7 +450,7 @@ var wireTags = map[string][]string{
 	"turn.guard_breach":             {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":       {"backend", "container", "page_id", "walk"},
 	"operator_tools_changed":        {},
-	"raw_webhook":                   {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
+	"raw_webhook":                   {"body", "body_raw", "first_party", "forge_atlassian_id", "handle", "headers", "replayed", "trigger"},
 	"inbound_delivery":              {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
 	"iam_session_started":           {"expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
 	"iam_session_ended":             {"by", "lineage", "operator_id", "person", "reason"},

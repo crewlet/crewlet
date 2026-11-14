@@ -174,7 +174,7 @@ type fleet struct {
 // container and an e2b cell.
 func newFleet(t *testing.T) *fleet {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	q, err := js.Open(t.Context(), js.Config{StoreDir: filepath.Join(dir, "stream"),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {

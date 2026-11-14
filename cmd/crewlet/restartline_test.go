@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -51,7 +52,7 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 		{"booted on the stale file", true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := brokertest.TempDir(t)
 			cfg := filepath.Join(dir, "crewlet.yaml")
 			tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n", filepath.Join(dir, "crewlet.db")) +
 				fixtureStream(dir) + "api:\n  port: 0\n" + fixtureKeyring

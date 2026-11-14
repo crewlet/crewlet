@@ -329,6 +329,11 @@
   min-width: 0;
 }
 
+/* THE CALL A CLAIM CITED, under its by-line: a long tool name wraps. */
+.atlas-cited {
+  overflow-wrap: anywhere;
+}
+
 /* A TILE'S WAY ON: one link under its figures, which wraps inside its tile
    rather than widening it. */
 .atlas-band__link {
@@ -417,6 +422,15 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
+  min-width: 0;
+}
+
+/* SOURCES: one card a source, and inside a card its readings a step apart. */
+.atlas-sources,
+.atlas-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
   min-width: 0;
 }
 

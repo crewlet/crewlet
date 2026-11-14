@@ -176,18 +176,21 @@ type Ending struct {
 	// the two ordinals every capture of the turn carries.
 	LastWord *CapturePlace `json:"last_word,omitempty"`
 
-	// Exhausted names the sessions a launch of the turn ran out of its model's
-	// context in. The end is where the fleet is told, for Unkept's reason, and the
-	// log's apply retires each from every ended row of the conversation.
+	// Exhausted names the sessions a launch of the turn could not go on in: it
+	// ran out of its model's context, or its provider refused the request the
+	// session makes. The end is where the fleet is told, for Unkept's reason, and
+	// the log's apply retires each from every ended row of the conversation.
 	Exhausted []string `json:"exhausted,omitempty"`
 }
 
-// ExhaustedWhy is why no launch continues session, which ran out of its model's
-// context in a launch of turn: the one sentence a launch logs and a reader is told.
+// ExhaustedWhy is why no launch continues session, which a launch of turn could
+// not go on in: the one sentence a launch logs and a reader is told. It names
+// both causes, since the log keeps which sessions were retired and not why.
 func ExhaustedWhy(session, turn string) string {
-	return fmt.Sprintf("session %s ran out of its model's context in a launch of turn %s, and another "+
-		"launch of it would meet the same end, so it is retired: no launch continues it, and the "+
-		"conversation carries on from how its earlier turns ended", session, turn)
+	return fmt.Sprintf("session %s could not go on in a launch of turn %s (it ran out of its model's context, "+
+		"or its provider refused the request it makes), and another launch of it would meet the same end, "+
+		"so it is retired: no launch continues it, and the conversation carries on from how its earlier "+
+		"turns ended", session, turn)
 }
 
 // Unkept is a capture of a turn's session that no row names: its place among

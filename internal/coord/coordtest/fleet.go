@@ -66,8 +66,10 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"integrations", integrationCases},
 		{"atlas_sources", atlasSourceCases},
 		{"atlas_code_scans", atlasCodeScanCases},
+		{"atlas_source_refreshes", atlasSourceRefreshCases},
 		{"seat_access", seatAccessCases},
 		{"access_reviews", accessReviewCases},
+		{"atlas_wakes", atlasWakeCases},
 		{"conversation_holds", conversationHoldCases},
 		{"seen_through", seenThroughCases},
 		{"box_readings", boxReadingCases},
@@ -3079,3 +3081,90 @@ var followCases = []fleetCase{{
 		}
 	},
 }}
+
+// ---- the atlas sources' refresh asks ------------------------------------ //
+
+func (h *fleetHarness) putAtlasRefresh(kind, value string) {
+	h.t.Helper()
+	if err := h.f.PutAtlasSourceRefresh(h.ctx, kind, []byte(value)); err != nil {
+		h.t.Fatalf("PutAtlasSourceRefresh(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) atlasRefreshes() map[string][]byte {
+	h.t.Helper()
+	got, err := h.f.AtlasSourceRefreshes(h.ctx)
+	if err != nil {
+		h.t.Fatalf("AtlasSourceRefreshes: %v", err)
+	}
+	return got
+}
+
+func (h *fleetHarness) atlasRefreshNames() []string {
+	h.t.Helper()
+	names := slices.Collect(maps.Keys(h.atlasRefreshes()))
+	slices.Sort(names)
+	return names
+}
+
+var atlasSourceRefreshCases = []fleetCase{
+	{name: "a recorded ask reads back byte for byte", fn: func(h *fleetHarness) {
+		const ask = `{"requested_at":"2026-01-02T03:04:05Z","by":"ada"}`
+		h.putAtlasRefresh("cloudflare", ask)
+		if got := string(h.atlasRefreshes()["cloudflare"]); got != ask {
+			h.t.Fatalf("read back %q, want %q", got, ask)
+		}
+	}},
+
+	{name: "a source nobody asked for is absent rather than empty", fn: func(h *fleetHarness) {
+		h.putAtlasRefresh("datadog", `{}`)
+		if _, present := h.atlasRefreshes()["cloudflare"]; present {
+			h.t.Fatal("a source nobody asked for came back present")
+		}
+	}},
+
+	{name: "the last ask wins", fn: func(h *fleetHarness) {
+		h.putAtlasRefresh("cloudflare", `{"by":"ada"}`)
+		h.putAtlasRefresh("cloudflare", `{"by":"grace"}`)
+		if got := string(h.atlasRefreshes()["cloudflare"]); got != `{"by":"grace"}` {
+			h.t.Fatalf("read back %q, want the second ask", got)
+		}
+	}},
+
+	{name: "a dropped ask is gone, the rest survive, and dropping it again is fine", fn: func(h *fleetHarness) {
+		h.putAtlasRefresh("cloudflare", `{}`)
+		h.putAtlasRefresh("datadog", `{}`)
+		for range 2 {
+			if err := h.f.DeleteAtlasSourceRefresh(h.ctx, "cloudflare"); err != nil {
+				h.t.Fatalf("DeleteAtlasSourceRefresh: %v", err)
+			}
+		}
+		if got := h.atlasRefreshNames(); !slices.Equal(got, []string{"datadog"}) {
+			h.t.Fatalf("listed %v, want datadog alone", got)
+		}
+	}},
+
+	{name: "an ask the caller mutates afterwards does not change the store", fn: func(h *fleetHarness) {
+		value := []byte(`{"by":"ada"}`)
+		if err := h.f.PutAtlasSourceRefresh(h.ctx, "cloudflare", value); err != nil {
+			h.t.Fatalf("PutAtlasSourceRefresh: %v", err)
+		}
+		copy(value, []byte(`{"by":"eve"}`))
+		if got := string(h.atlasRefreshes()["cloudflare"]); got != `{"by":"ada"}` {
+			h.t.Fatalf("read back %q after the caller reused its buffer", got)
+		}
+	}},
+
+	{name: "an ask is kept apart from its source's standing", fn: func(h *fleetHarness) {
+		// The duty replaces a standing whole on every visit: an ask stored
+		// beside it would be lost to a visit in flight.
+		h.putAtlasRefresh("cloudflare", `{"by":"ada"}`)
+		h.putAtlasSource("cloudflare", `{"calls":1}`)
+		if err := h.f.DeleteAtlasSourceStatus(h.ctx, "cloudflare"); err != nil {
+			h.t.Fatal(err)
+		}
+		if got := string(h.atlasRefreshes()["cloudflare"]); got != `{"by":"ada"}` {
+			h.t.Fatalf("forgetting the source's standing took its ask with it: %q", got)
+		}
+	}},
+}

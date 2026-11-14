@@ -74,20 +74,13 @@ import (
 // scan walks from (the `expunge_tips` read), so a purge never drops the
 // commit a landing moves its target onto.
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// Every op, payload and field here is in the base format, under the condition
-// queue.go's head states: none of the code domain is on main, so no build
-// that carries it has run without them. Once one has, each op takes its
-// versionedFields row ({Name: "MutationRecord.Op <op>", Since: 2, Path:
-// []string{"op"}, Equals: "<op>"} — candidate, eject, land, green, broken,
-// queue_sweep, close_settled) with the companions queue.go's head names — a
-// land's apply setting code_queue.close_op, which a build without it would
-// leave unset on its copy, rides the same condition — and so do the
-// values they add to closed sets an older build reads: `merged_via` queue on
-// a change's row, `via` queue on a push's and `kind` queue on a landing's,
-// which an older reader of the first two refuses as a way it does not know
-// (scanPush). None is a gate.
+// Every op, payload and field here is in the base format, as queue.go's head
+// says: the domain landed on main with them, with a land's apply setting
+// code_queue.close_op, and with the values they add to closed sets
+// (`merged_via` queue on a change's row, `via` queue on a push's and `kind`
+// queue on a landing's). None is a gate.
 
 // The queue's bounds.
 const (
@@ -231,11 +224,7 @@ const (
 	// authors told why. Its decide holds the reason to the rows: refused
 	// stale on a repository that is not a pull mirror ([decideEject]).
 	//
-	// BASE FORMAT, under the condition this file's head states; once a build
-	// without it has run it takes {Name: "Ejection.Reason repo_mirrored",
-	// Since: 2, Op: "eject", Path: []string{"mutation", "entries",
-	// "reason"}, Equals: "repo_mirrored"}, since an older build's eject
-	// validation refuses a reason it does not know.
+	// BASE FORMAT, as this file's head says.
 	EjectRepoMirrored QueueEndReason = "repo_mirrored"
 )
 
@@ -248,7 +237,7 @@ func EjectReasons() []QueueEndReason {
 // MergedViaQueue is how a change a land record merged reached its target
 // ([MergedVia]): its queue landed it, tested merged on its target first.
 //
-// BASE FORMAT, under the condition this file's head states.
+// BASE FORMAT, as this file's head says.
 const MergedViaQueue MergedVia = "queue"
 
 // Candidate records a queue's TRAIN on one target: its candidates,
@@ -256,9 +245,7 @@ const MergedViaQueue MergedVia = "queue"
 // commits they built are stored in — the record of op candidate on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op candidate", Since: 2,
-// Path: []string{"op"}, Equals: "candidate"}.
+// BASE FORMAT, as this file's head says.
 type Candidate struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -289,19 +276,14 @@ type TrainCandidate struct {
 // Eject puts live entries out of their queue: the record of op eject on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op eject", Since: 2,
-// Path: []string{"op"}, Equals: "eject"}.
+// BASE FORMAT, as this file's head says.
 type Eject struct {
 	RepoID  string     `json:"repo_id"`
 	Entries []Ejection `json:"entries"`
 	// Routing is whom the record concerns, a routing an entry's change in
 	// the entries' order — its authors told it left the queue, or that its
 	// merge conflicted, and its enqueuer — STAMPED BY THE COMMITTER and
-	// kept within the record's room ([keptRoutings]). Under the condition
-	// this file's head states, it takes {Name: "Eject.Routing", Since: 2,
-	// Op: "eject", Path: []string{"mutation", "routing"}} once a build
-	// without it has run.
+	// kept within the record's room ([keptRoutings]).
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -318,9 +300,7 @@ type Ejection struct {
 // Land lands a queue's entries on their target in one record: the record of op
 // land on the repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op land", Since: 2,
-// Path: []string{"op"}, Equals: "land"}.
+// BASE FORMAT, as this file's head says.
 type Land struct {
 	RepoID string `json:"repo_id"`
 	// LandID is [QueueLandID] of the proposal's operation id: what each
@@ -345,9 +325,7 @@ type Land struct {
 	// Routing is whom the record concerns, a routing an entry's change in
 	// the entries' order — its authors told it merged, its enqueuer, who
 	// merged it, not — STAMPED BY THE DECIDE and kept within the record's
-	// room ([keptRoutings]). Under the condition this file's head states, it
-	// takes {Name: "Land.Routing", Since: 2, Op: "land", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
+	// room ([keptRoutings]).
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -368,9 +346,7 @@ type LandEntry struct {
 // whose required checks passed on it: the record of op green on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op green", Since: 2,
-// Path: []string{"op"}, Equals: "green"}.
+// BASE FORMAT, as this file's head says.
 type Green struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -384,9 +360,7 @@ type Green struct {
 // required checks having failed on its commit: the record of op broken on the
 // repository's subject.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op broken", Since: 2,
-// Path: []string{"op"}, Equals: "broken"}.
+// BASE FORMAT, as this file's head says.
 type Broken struct {
 	RepoID    string `json:"repo_id"`
 	TargetRef string `json:"target_ref"`
@@ -400,9 +374,7 @@ type Broken struct {
 	// Routing is whom the record concerns ([ChangeRouting]) — the authors
 	// of the change the landing merged, its enqueuer and the effective lead
 	// of the repository's owner — STAMPED BY THE COMMITTER; nil for a
-	// landing no change made. Under the condition this file's head states,
-	// it takes {Name: "Broken.Routing", Since: 2, Op: "broken", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
+	// landing no change made.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -411,9 +383,7 @@ type Broken struct {
 // less [QueueHistory]: the record of op queue_sweep on the repository's
 // subject ([Store.QueueSweep]).
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op queue_sweep", Since:
-// 2, Path: []string{"op"}, Equals: "queue_sweep"}.
+// BASE FORMAT, as this file's head says.
 type QueueSweep struct {
 	RepoID  string    `json:"repo_id"`
 	Through time.Time `json:"through"`
@@ -437,9 +407,7 @@ type QueueSweep struct {
 // of the rest; a record none of whose entries owes a close any more is
 // refused stale.
 //
-// BASE FORMAT, under the condition this file's head states; once a build
-// without it has run it takes {Name: "MutationRecord.Op close_settled",
-// Since: 2, Path: []string{"op"}, Equals: "close_settled"}.
+// BASE FORMAT, as this file's head says.
 type CloseSettled struct {
 	RepoID string `json:"repo_id"`
 	// Settled is how each close ended, an entry once, at most
@@ -450,10 +418,7 @@ type CloseSettled struct {
 	// change's authors and its enqueuer, under `merged`, the detail beside it
 	// ([ChangeRouting.NotClosed]) — a routing a change in Settled's order,
 	// STAMPED BY THE COMMITTER and kept within the record's room
-	// ([keptRoutings]); none for a closed one, which tells nobody. Under the
-	// condition this file's head states, it takes {Name:
-	// "CloseSettled.Routing", Since: 2, Op: "close_settled", Path:
-	// []string{"mutation", "routing"}} once a build without it has run.
+	// ([keptRoutings]); none for a closed one, which tells nobody.
 	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 

@@ -1,7 +1,9 @@
-// Package codescan reads a Gitlet repository's deploy and dependency files
-// for the atlas: what its default branch declares the company runs (services,
-// the databases, queues and buckets beside them, the vendors its code calls)
-// and how they relate, by exact keys only. ADR-0133 records the decision.
+// Package codescan reads a repository's deploy and dependency files for the
+// atlas, on Gitlet and on a forge Gitlet does not mirror it from: what its
+// default branch declares the company runs (services, the databases, queues
+// and buckets beside them, the vendors its code calls) and how they relate,
+// by exact keys only. ADR-0133 records the decision, and ADR-0136 the forges'
+// half.
 //
 // # Declared in code is a suggestion
 //
@@ -42,6 +44,20 @@
 // record in the coordination store ([CoordStore]). The reading of each blob:
 // this node alone, and only while it runs, so it is memory ([readings]): a
 // node that lost it reads a repository's files once more at its next move.
+//
+// # A forge's repositories are read by the same reader
+//
+// A GitHub or GitLab repository Gitlet does not mirror is read through its
+// forge (ADR-0136): [Forges] is the collect duty's [collect.CodePass], and a
+// forge's source lists a tree and serves a blob ([collect.CodeHost]). Which
+// file is listed, read or only counted, and that half a commit is never
+// published, is one function for both hosts ([reader]); the list is held
+// again where a forge is asked for a file's bytes, and the bytes are held to
+// the object the tree listed. No event is subscribed: a pass asks each
+// repository where its default branch is and reads only one that moved,
+// within bounds of files, bytes and trees a pass, recording what it cost.
+// A forge's standings share the scan's bucket under keys of their own
+// ([ForgeStore]), which Gitlet's reader skips.
 //
 // # What is not scanned
 //

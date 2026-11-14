@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/flock"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -20,7 +21,7 @@ import (
 // its keyring, written into its own directory; it returns the path.
 func clusterMemberConfig(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	doc := fmt.Sprintf(`node:
   id: node-a
 store:

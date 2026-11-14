@@ -3,14 +3,40 @@
 // own credential already holds, and records on the atlas's log what the read
 // found that the log does not hold yet (ADR-0129). Its first source reads
 // Cloudflare: the account's name, every zone, every A, AAAA and CNAME record
-// and every certificate pack. Its second reads Datadog: the organization,
+// and every certificate pack, and its Workers, Pages projects, R2 buckets and
+// Tunnels by name where the token holds their optional read groups. Its second reads Datadog: the organization,
 // its monitors and their states, its service catalogue, its hosts and its
 // Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
 // agents' installations cover, its workflows and its deployment environments.
 // Its fourth reads the company's servers (ADR-0134): on each server that opts
 // in, the ports it listens on and the containers it runs. That one is handed
 // to the worker by the engine rather than registered, since it runs commands
-// through the node's SSH runner.
+// through the node's SSH runner. Its fifth reads GitLab (ADR-0135): every
+// project of the company's group, its pipeline and its environments.
+// Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
+// project as an account, and what a Google Cloud project's enabled APIs say
+// it is used for; where a company asks, Scaleway's products are read too,
+// under an IAM application made for the atlas (ADR-0144). Its eighth reads
+// Atlassian (ADR-0138): every site of the organization as an account, and
+// each product as what its account does.
+// Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
+// own id and name, with a bot token one of the agents already holds. Its
+// eleventh reads AWS (ADR-0148), as a role of its own that the company adds
+// to its stack by choice: the Regions in use, instances, databases, load
+// balancers, queues, buckets and public DNS. Google Cloud's source also
+// searches what each project runs (ADR-0149), as a service account of its
+// own, where the company asks. Its twelfth and thirteenth read DigitalOcean
+// and Expo (ADR-0146), each with a read-only identity a person makes for the
+// atlas alone, since neither vendor gives the company a credential of its
+// own: a team's resources and the names that point at them, and an
+// account's projects and their builds.
+//
+// # A source may be the company's choice
+//
+// A source that reads under an identity the company adds by choice (AWS's
+// atlas role) is [Optional]: while the company has not asked for it, it is
+// not read and not listed among the sources, though its integration is
+// connected ([Connected], the one rule the duty and the report both read).
 //
 // # Its own duty, never the reconcile loop
 //
@@ -53,12 +79,46 @@
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
 //
+// A part behind a permission nobody asked the company for is OPTIONAL
+// ([Unread.Optional], ADR-0145): a refusal of it is carried like any other,
+// and the standing names it only where the voice holds an entry the part
+// said exists. A company that never gave the permission lost nothing, so its
+// source reads as whole.
+//
+// # A person may ask for a read, and the floor is the duty's
+//
+// A source is read on its interval, and sooner where a person asked
+// ([Status.DueFor]): on the tick after the ask, once [RefreshFloor] has passed
+// since the source's last attempt. The floor is the refresh interval's own, so
+// no gesture reads a vendor more often than the smallest cadence a company
+// may set, and it is held here as well as where the ask is made, since the
+// ask is a record anybody with the store could write. The ask is dropped when
+// its read is made, when a read already answered it, and when the company no
+// longer connects its source.
+//
+// # A source that reads in scopes keeps one last whole read each
+//
+// The servers are read one by one, and a server that could not be reached
+// says nothing of the others. Each scope the read visits ([Read.Scopes])
+// keeps the instant it was last read whole and how many of its parts the last
+// read was refused ([Scope]), counted from the read rather than from the
+// findings, which are bounded.
+//
 // # Other voices use the same builder and the same diff
 //
 // A voice that is no integration's (a repository's files,
 // internal/atlas/codescan) gathers its claims through [NewBuilderFor] and
 // records them with [Replace], which withdraws at once what the voice no
 // longer says: a reading that is exact at its instant needs no second miss.
+//
+// # A forge's repositories are a visit of their own
+//
+// A source whose vendor hosts repositories is also a [CodeHost] (ADR-0136):
+// it lists them, and serves a tree and a blob. The duty asks its [CodePass]
+// (codescan.Forges) about every such source after the source's own read; the
+// pass keeps its own standing and comes due apart from the read, and the
+// duty's lease is claimed again for it as for any visit. The seam is here so
+// a vendor implements it without importing the reader of the files.
 //
 // # Values are typed, and a credential has nowhere to go
 //
@@ -77,6 +137,9 @@
 // calls and withheld values it cost, the parts it was refused, and the
 // entries it has stopped seeing since when): the whole company, current value only, so it is a record in
 // the coordination store ([CoordStore]), beside the integration statuses and
-// apart from them. Which node reads: the `worker:atlas-collect` lease, claimed
-// per tick and re-claimed before every source.
+// apart from them. A person's ask that a source be read now ([Request]): the
+// whole company, current value only, until the duty honours it, so it is a
+// record of its own in the coordination store, never a field of the standing
+// the duty rewrites whole. Which node reads: the `worker:atlas-collect` lease,
+// claimed per tick and re-claimed before every source.
 package collect

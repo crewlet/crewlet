@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -221,11 +225,14 @@ func delta(have, want []string) (add, remove []string) {
 // page id, the edge rides the task's own record and there is no write to the
 // pages log at all — which is why it is a separate argument rather than a
 // `kind` on one list.
-func (d WorkDeps) inertRelations(ctx context.Context, tool string,
+func (d WorkDeps) inertRelations(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any, task worklet.Task) (*worklet.RelationIntent, *tools.Result) {
 
 	intent := &worklet.RelationIntent{}
-	touched := false
+	touched, refusal := d.entryRelations(ctx, turn, tool, args, task, intent)
+	if refusal != nil {
+		return nil, refusal
+	}
 	for _, side := range []struct {
 		name    string
 		kind    worklet.RelationKind
@@ -296,6 +303,85 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 		return nil, nil
 	}
 	return intent, nil
+}
+
+// readsAtlas reports whether the call's caller may read the company's atlas:
+// a holder of its app, and a seat only within whom its turn works for
+// (ADR-0109). An answer that could not be decided reads as no.
+func (d WorkDeps) readsAtlas(ctx context.Context) bool {
+	return d.decide(ctx, authz.Action(AtlasGetTool), authz.Object{Kind: authz.KindAtlasEntry}) == nil
+}
+
+// entryRelations is the `linked_entries` half: the atlas entries the item
+// touches, each stored by its id (ADR-0140). An entry is added only through
+// the caller's own read of the atlas, so nobody links what they may not read
+// and no id that is not an entry enters the record. One is removed by its id
+// with no read, so a link to an entry the atlas no longer holds can be taken
+// off.
+func (d WorkDeps) entryRelations(ctx context.Context, turn *turnctx.Turn, tool string,
+	args map[string]any, task worklet.Task, intent *worklet.RelationIntent) (bool, *tools.Result) {
+
+	const name = "linked_entries"
+	stated, held, bad := parseSetArg(args, name)
+	if bad != "" {
+		return false, refusalOf(failed(bad))
+	}
+	if !held {
+		return false, nil
+	}
+	var read *atlasRead
+	resolve := func(ref string, mustRead bool) (string, *tools.Result) {
+		if id, err := uuid.Parse(ref); err == nil && !mustRead {
+			return id.String(), nil
+		}
+		if read == nil {
+			if refusal := askAuthority(ctx, d.Authorize, authz.Action(AtlasGetTool),
+				authz.Object{Kind: authz.KindAtlasEntry}); refusal != nil {
+				return "", refusal
+			}
+			got, refusal := d.entries.read(ctx, turn, tool)
+			if refusal != nil {
+				return "", refusal
+			}
+			read = &got
+		}
+		by := "name"
+		if _, err := uuid.Parse(ref); err == nil {
+			by = "id"
+		}
+		entry, refusal := read.entryArg(tool, map[string]any{by: ref})
+		if refusal != nil {
+			return "", refusal
+		}
+		return entry.ID.String(), nil
+	}
+	var add, remove []string
+	for _, group := range []struct {
+		from     []string
+		into     *[]string
+		mustRead bool
+	}{
+		{stated.Values, &add, true}, {stated.Add, &add, true}, {stated.Remove, &remove, false},
+	} {
+		for _, ref := range group.from {
+			id, refusal := resolve(ref, group.mustRead)
+			if refusal != nil {
+				return false, refusal
+			}
+			*group.into = append(*group.into, id)
+		}
+	}
+	if stated.Whole {
+		// A WHOLE SET IS A DELTA OVER THIS KIND ALONE, as for the links above.
+		add, remove = delta(task.Entries(), add)
+	}
+	for _, id := range add {
+		intent.Add = append(intent.Add, worklet.Relation{Kind: worklet.RelationEntry, Other: id})
+	}
+	for _, id := range remove {
+		intent.Remove = append(intent.Remove, worklet.Relation{Kind: worklet.RelationEntry, Other: id})
+	}
+	return true, nil
 }
 
 // othersOfKind is the ids this task's relations of one kind name.

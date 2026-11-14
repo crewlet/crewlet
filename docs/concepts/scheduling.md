@@ -293,6 +293,14 @@ history reports a fired run its seat did not run as `skipped_superseded`
 the same trace, because every fire starts a trace of its own and the turn
 restores it.
 
+A schedule whose fires keep failing the same way does not fail silently. Its
+fires are one conversation, so a failure a retry cannot cure (a context that
+does not fit, work past its box's memory, a request the model's provider
+refuses) holds that conversation on its second fire in a row and stands as a
+`conversation.held` notice for the administrators until somebody writes on it
+or the settings it failed on change
+([A session its provider refuses is retired too](conversation-sessions.md#a-session-its-provider-refuses-is-retired-too)).
+
 > The at-most-once guarantee lives in the coordination store, not in the
 > node's file: a node whose `scheduled_runs` table cannot be read still
 > schedules correctly, and what it loses is the history of its own fires in

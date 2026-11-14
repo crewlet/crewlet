@@ -115,7 +115,7 @@ func TestABackupOfLogsNobodyWroteRestoresWhole(t *testing.T) {
 	boot := *e.boot
 	e.Stop(context.Background())
 
-	into := t.TempDir()
+	into := brokertest.TempDir(t)
 	nodePath := filepath.Join(into, "crewlet.db")
 	for _, copied := range manifest.Stores {
 		to := nodePath

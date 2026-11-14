@@ -16,12 +16,13 @@ import (
 // ([CloudShellBlock]) from then on, rendered for company's issuer and subject.
 func Requirements(company string, in *config.GoogleCloud, resolve func(string) (string, bool)) []setup.Requirement {
 	var provisioner, provider, key string
-	var enabled bool
+	var enabled, atlas bool
 	if in != nil {
 		enabled = in.Enabled
 		if in.Provisioning != nil {
 			provisioner, provider, key = in.Provisioning.Provisioner, in.Provisioning.Provider,
 				in.Provisioning.FederationKey
+			atlas = in.Provisioning.AtlasRead
 		}
 	}
 	keyPresent, keyResolved := setup.Resolution(key, resolve)
@@ -81,6 +82,18 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 			Blocks:    integration.FindingApprovalRequired,
 		},
 		{
+			// OPTIONAL, AND NEVER IN THE WAY: no agent depends on it, and on
+			// only adds an account the atlas alone acts as.
+			Field: "atlas_read", Label: "See more in Atlas", Kind: setup.KindToggle,
+			ConfigPath: "integrations.google_cloud.provisioning.atlas_read", Default: "false",
+			Hint: "Lets Atlas list what each project runs, as a service account of its own.",
+			More: "Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets " +
+				"and topics, by name and type, read hourly as " + AtlasAccountID + " through Cloud Asset Inventory. " +
+				"It reads no configuration, label, environment or data. One step: turn this on and save, then run " +
+				"the Cloud Shell block above again. To undo it, turn this off and delete the " + AtlasAccountID +
+				" service account in the identity project.",
+		},
+		{
 			// Hidden and on: connecting a switched-off integration is not a
 			// thing anybody means.
 			Field:      "enabled",
@@ -99,10 +112,12 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 		case "federation_key":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(key, resolve)
 			if keyHeld {
-				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve))
+				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve), atlas)
 			}
 		case "provider":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provider, resolve)
+		case "atlas_read":
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(atlas)
 		case "enabled":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(enabled)
 		}
