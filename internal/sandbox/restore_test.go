@@ -1408,6 +1408,11 @@ type silentStamps struct {
 	asked atomic.Int32
 }
 
+// RowCrossing is none: the silent store is in the node's own process, so a
+// row crosses nothing and a record's bound is its reason alone, which the
+// cases below time.
+func (s *silentStamps) RowCrossing() time.Duration { return 0 }
+
 func (s *silentStamps) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
 	if s.only != "" && stamp.State != s.only {
 		return s.PendingStore.StampCapture(ctx, turnID, stamp)
