@@ -19,6 +19,7 @@ import {
   InlineCode,
   Link,
   PageNote,
+  Skeleton,
   StepList,
   Text,
   type AttentionItem,
@@ -73,6 +74,10 @@ export function Advisor() {
         What your company&rsquo;s setup costs it, why, and the change that fixes each. You review
         every change before it is made; the engine never makes one on its own.
       </PageNote>
+      {/* THE READ IN FLIGHT IS A SKELETON, drawn beside `QueryState`, which
+          draws nothing while it waits: the screen was its one sentence over
+          an empty page, which reads as "nothing to change". */}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Reading the setup" />}
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && data.unread.length > 0 && (
           <Callout variant="warning" title="Some of the setup couldn't be read">

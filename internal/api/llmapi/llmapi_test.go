@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -283,6 +284,9 @@ type rig struct {
 	audit   *audit
 	leases  coord.Backend
 	guard   *recordingGuard
+	// later is how far the service's clock stands past [clock], in
+	// nanoseconds: a case moves it rather than waiting.
+	later atomic.Int64
 }
 
 // recordingGuard is the engine's guard, recording every policy it is asked
@@ -338,8 +342,8 @@ func newRigOver(t *testing.T, caller iam.Principal, store *fakeSecrets) *rig {
 		config: &fakeConfig{doc: doc}, secrets: store,
 		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
 	svc, err := llmapi.New(llmapi.Options{Engine: r.engine, Config: r.config, Secrets: r.secrets,
-		Leases: r.leases, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock },
-		Guard: r.guard.decide})
+		Leases: r.leases, Audit: r.audit, Node: "node-a", Guard: r.guard.decide,
+		Now: func() time.Time { return clock.Add(time.Duration(r.later.Load())) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,6 +488,68 @@ func TestACredentialThatSignsInIsSealedAndReactivated(t *testing.T) {
 	code, body = r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
 	if limited, _ := body["limited"].(map[string]any); code != http.StatusOK || limited["window"] != "weekly" {
 		t.Errorf("a limited test = %d %v, want it stored and said", code, body)
+	}
+}
+
+// THE WRITE AFTER A TEST DOES NOT TEST AGAIN. A person tests a credential and
+// then saves it, the same values for the same entry seconds apart, and each
+// test is a whole harness run: the save is answered by the dry run's pass. A
+// pass answers only for what was tested (another value, another entry or
+// another draft of it tests again), only for [llmapi.TestedWindow], and a
+// refused test is never one.
+//
+// Mutation: drop the recall, and the save runs the harness a second time; key
+// the pass on the entry alone, and a value nothing tested is sealed.
+func TestTheWriteAfterATestDoesNotTestAgain(t *testing.T) {
+	t.Parallel()
+	const path = "/llm/providers/sonnet/credential"
+	other := `{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-another-key-9x1Z"}}`
+
+	r := newRig(t)
+	if code, body := r.do(t, http.MethodPut, path+"?dry_run=true", sonnetKey, nil); code != http.StatusOK {
+		t.Fatalf("dry run = %d %v", code, body)
+	}
+	code, body := r.do(t, http.MethodPut, path, sonnetKey, nil)
+	if code != http.StatusOK || !strings.Contains(body["verified"].(string), "3.4 s") || body["check"] == nil {
+		t.Fatalf("the write after the test = %d %v, want it stored with the test's answer", code, body)
+	}
+	if got := r.secrets.rows["ANTHROPIC_API_KEY_SONNET"].value; got != "sk-ant-api03-not-a-real-key-7d2K" {
+		t.Errorf("sealed %q, want the tested value", got)
+	}
+	if len(r.engine.checks) != 1 {
+		t.Fatalf("the harness ran %d times for a test and its write, want once", len(r.engine.checks))
+	}
+
+	// ANOTHER VALUE was never tested, so it is.
+	if code, body := r.do(t, http.MethodPut, path, other, nil); code != http.StatusOK || len(r.engine.checks) != 2 {
+		t.Errorf("a write of an untested value = %d %v after %d tests, want it tested", code, body, len(r.engine.checks))
+	}
+	// ANOTHER DRAFT OF THE ENTRY is another thing to sign in.
+	draft := `{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-not-a-real-key-7d2K"},
+		"entity": {"harness": "claude-code", "model": "opus",
+		"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`
+	before := len(r.engine.checks)
+	if code, body := r.do(t, http.MethodPut, path, draft, nil); code != http.StatusOK || len(r.engine.checks) != before+1 {
+		t.Errorf("a write for an edited entry = %d %v after %d more tests, want one", code, body,
+			len(r.engine.checks)-before)
+	}
+
+	// PAST THE WINDOW the pass answers for nothing.
+	late := newRig(t)
+	late.do(t, http.MethodPut, path+"?dry_run=true", sonnetKey, nil)
+	late.later.Store(int64(llmapi.TestedWindow + time.Second))
+	if code, body := late.do(t, http.MethodPut, path, sonnetKey, nil); code != http.StatusOK || len(late.engine.checks) != 2 {
+		t.Errorf("a write past the window = %d %v after %d tests, want it tested again", code, body, len(late.engine.checks))
+	}
+
+	// A REFUSED TEST IS NO PASS: the write tests, and is refused itself.
+	refused := newRig(t)
+	refused.engine.check = llmapi.Check{At: clock, Node: "node-a", Failure: "auth", Said: "401"}
+	refused.do(t, http.MethodPut, path+"?dry_run=true", sonnetKey, nil)
+	if code, _ := refused.do(t, http.MethodPut, path, sonnetKey, nil); code != http.StatusUnprocessableEntity ||
+		len(refused.engine.checks) != 2 || len(refused.secrets.rows) != 0 {
+		t.Errorf("a write after a refused test = %d after %d tests, stored %v", code,
+			len(refused.engine.checks), refused.secrets.rows)
 	}
 }
 

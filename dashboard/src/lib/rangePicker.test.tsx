@@ -47,7 +47,13 @@ function picker(set: (next: Window) => void = vi.fn()): TimeRange {
     until: TO,
     previous: { since: "2031-04-16T01:00:00Z", until: FROM },
     bucket: "hour",
-    offer: { ranges: ["1d", "7d"], custom: true, fallback: "1d", buckets: ["hour"] },
+    offer: {
+      screen: "test",
+      ranges: ["1d", "7d"],
+      custom: true,
+      fallback: "1d",
+      buckets: ["hour"],
+    },
     set,
   };
 }

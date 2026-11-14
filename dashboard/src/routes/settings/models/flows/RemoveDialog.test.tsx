@@ -74,13 +74,22 @@ function open(assistantWebDenied: boolean) {
   const onDone = vi.fn();
   view = render(
     <Router>
-      <RemoveDialog model={data.models[0]!} data={data} onClose={() => {}} onDone={onDone} />
+      <RemoveDialog
+        model={data.models[0]!}
+        data={data}
+        onClose={() => {}}
+        onDone={onDone}
+        onRemoved={onRemoved}
+      />
     </Router>,
   );
   return onDone;
 }
 
 let view: ReturnType<typeof render>;
+
+/** Where the dialog sends the page once the model is gone: its opener decides. */
+const onRemoved = vi.fn();
 
 const settle = () => act(async () => {});
 
@@ -178,7 +187,7 @@ test("the removal waits for the typed name, then states the revision it read and
     summary: "Remove the model sonnet, move 2 uses to big, and move 1 use to default",
   });
   expect(onDone).toHaveBeenCalled();
-  expect(window.location.hash).toContain("settings/models");
+  expect(onRemoved).toHaveBeenCalledTimes(1);
 });
 
 test("a removal that has started finishes after the dialog closed, and moves nothing on screen", async () => {
@@ -204,6 +213,7 @@ test("a removal that has started finishes after the dialog closed, and moves not
     }),
   );
   expect(onDone).not.toHaveBeenCalled();
+  expect(onRemoved).not.toHaveBeenCalled();
   expect(window.location.hash).toBe("#/somewhere-else");
 });
 

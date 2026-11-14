@@ -17,7 +17,8 @@
 
 import { useServicesAsk } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
+import { useKeptRange } from "~/lib/keptRange.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -30,7 +31,9 @@ import { useSeatDecisions } from "~/lib/decisions.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import {
   DEFAULT_RANGE,
+  HOME_RANGE_SCREEN,
   HOME_RANGES,
+  isHomeRange,
   crewOf,
   flowPoints,
   rangeOf,
@@ -59,7 +62,15 @@ export function useHomeData() {
   const engine = useEngineHealth();
   const { connected, authRejected } = useConnection();
   const attention = useAttention();
-  const [rangeValue, setRange] = useParam("range", DEFAULT_RANGE);
+  // KEPT FOR THE READER, so Home opens on the range they last chose when the
+  // address names none: see `lib/keptRange.ts`.
+  const [rangeValue, setRange] = useKeptRange(
+    "range",
+    HOME_RANGE_SCREEN,
+    DEFAULT_RANGE,
+    isHomeRange,
+    "filter",
+  );
   const range = rangeOf(rangeValue);
   // --- assistant page actions (WP12) ---
   // THE PAGE'S ONE RANGE, which every widget with a time axis reads.
@@ -67,7 +78,11 @@ export function useHomeData() {
   useAssistantContext({
     actions: urlAction("home.range.set", {
       scope: "Home's window (view only)",
-      keys: { range: choiceKey("Window", HOME_RANGES, "filter", DEFAULT_RANGE) },
+      // WRITTEN IN FULL (`kept`): an address with no range opens the reader's
+      // own last choice, so "7 days" has to be said to be shown.
+      keys: {
+        range: { ...choiceKey("Window", HOME_RANGES, "filter", DEFAULT_RANGE), kept: true },
+      },
       nav,
     }),
   });

@@ -30,7 +30,6 @@ import {
   useToast,
   type SelectOption,
 } from "@crewlethq/ui";
-import { useNavigator } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
@@ -307,14 +306,16 @@ export function RemoveDialog({
   data,
   onClose,
   onDone,
+  onRemoved,
 }: {
   model: ModelView;
   data: ModelsData;
   onClose: () => void;
   onDone: () => void;
+  /** Where the page goes once the model is gone: back to what opened the dialog, where that still exists. */
+  onRemoved: () => void;
 }) {
   const toast = useToast();
-  const nav = useNavigator();
   const lifetime = useLifetimeSignal();
   const key = model.key;
   const assistantOn = data.assistant.enabled;
@@ -417,7 +418,7 @@ export function RemoveDialog({
     if (answer.outcome.kind === "saved") {
       toast.ok(`Removed ${key}.`);
       onDone();
-      nav.to(["settings", "models"]);
+      onRemoved();
       return;
     }
     setNotice({

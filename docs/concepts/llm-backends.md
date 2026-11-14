@@ -4027,7 +4027,10 @@ account a login names and the vendor's own sentence.
 **A credential is tested before it is stored.** Rotating a token or a key types
 the new value once: the engine hands it to the model's own harness, in a home of
 its own, for one one-turn call, and seals it only if the vendor signed it in (a
-`429` counts: it proves the credential authenticated). A refused value is never
+`429` counts: it proves the credential authenticated). The dashboard tests a
+value first and saves it after, and the save does not run the harness a second
+time: a test that passed on the node within the last ten minutes answers for a
+write of the same value to the same model by the same person. A refused value is never
 stored, so the model goes on signing in with the credential it had. Once
 sealed, the revision that reads it is re-activated in the same request, so every
 node reads it at the epoch the answer names

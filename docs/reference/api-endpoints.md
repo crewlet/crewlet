@@ -504,7 +504,7 @@ every other route.
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they carry **on this node**, the effective set: every app an admin holds spelled out, unknown names dropped, and `admin` only where this node's `api.auth.admin` serves it, so a client reads what it holds without expanding anything itself, the seat the identity directory binds them to, its `handle`, `name` and `kind`, all empty for a credential nobody is bound through, and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a person, or for a token or service account the directory binds to one, and the login for a credential bound to none. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller, the catalogue's writes the authority table can admit them to before any object is named, a write asking a step-up the caller has yet to make among them, always an array, `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project, and `space` is where a page of theirs that names no container lands, by the same rule. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. A credential bound to no seat, a Tier A token's session, a service account bound to none, is an **ordinary state**, not an error: a pipeline's token acts under its own login, and binding it to a seat is a directory row rather than a different credential. A person always holds a human seat, so a person is never answered unbound. `config_writer` is whether the caller's credential may change the company document, false for an anonymous caller and for every credential a [managed document's](../concepts/configuration.md#managed-configuration) `api.auth.company_writers` does not list, a person's session, a machine token and a lead's among them; it says nothing about authority, which `admin` or a lead's subtree still decides, and `config_managed_by` the Tier A token ids that alone may change it when another system manages it, empty when nothing does and for an anonymous caller. `assistant` is whether [Ask Crewlet](#ask-crewlet) is available to the caller on this node, `{available, reason?}`, with the first reason it is not: `disabled` (the company has not turned it on, or this node does not serve Ask Crewlet), `no_model` (`assistant.llm` names no chain Ask Crewlet's rules admit), `not_a_person` (a machine token, a service account or a Tier A token's session), `no_permission`, or `model_not_ready`, checked last so only a person Ask Crewlet would answer learns it: every model in `assistant.llm` is known unusable right now, read from what the node already holds and never by calling a model (its plan spent until a reset, its harness signed out or with nothing that signs it in, or its harness unable to start). With that reason the member carries `model: {code, message, hint?, retry_at?}`, the [turn error](#how-a-turn-fails-on-the-model) a question would have failed with, in the same words, and the hint an administrator or anybody else is given. An available member carries `reads_images: true` where a question's images are read: only [deep work](../guides/assistant.md#deep-work) reads them, so it is absent where the company has none, and the dashboard takes no image then. `chat_vendors` names the vendor chat a company talks on, to a holder of `chatlet` (see the [`viewer`](#queries) question) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
-| `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
+| `GET` | `/dashboard` | Dashboard shell (`/` and `/dashboard/` redirect here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
@@ -578,7 +578,7 @@ every other route.
 > cookie, and any other client sets the header. **No route reads a credential
 > off its URL**, the socket included: a `?token=…` authenticates nobody,
 > because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
-> `/otlp/*`, `/mcp/*`, `/box/git/*`, `/box/gitlet/*`, the dashboard shell (`/`, `/dashboard`, `/favicon.ico`,
+> `/otlp/*`, `/mcp/*`, `/box/git/*`, `/box/gitlet/*`, the dashboard shell (`/`, `/dashboard`, `/dashboard/`, `/favicon.ico`,
 > `/static/*`), and `/auth/config`, `/auth/login`, `/auth/logout`,
 > `/auth/invite/*` and `/auth/reset/*` — a login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
 > ends sessions and enrols second factors, and a prefix would put those behind
@@ -3046,6 +3046,12 @@ provider the catalogue does not list.
    anything is tested or sealed.
 5. The candidate values are handed to the model's own harness, in an isolated home,
    for one one-turn call, within the entry's `timeout_seconds` capped at 120 s.
+   That call is the whole test: the check's `shell` and `web` lines say their
+   probes were skipped, since they report on the harness and its profile, not
+   on a credential ([`POST .../check`](#post-llmproviderskeycheck) runs them).
+   A write that follows a `dry_run=true` of the same values for the same entry,
+   by the same caller on the same node within ten minutes, is answered by that
+   test's pass and does not run the harness again; any other write tests.
    A refusal is `422 credential_rejected` at the value, and nothing is stored.
    Its `detail` says what the failure meant rather than quoting the harness: the
    vendor refused the credential (wrong, expired or revoked, with the command

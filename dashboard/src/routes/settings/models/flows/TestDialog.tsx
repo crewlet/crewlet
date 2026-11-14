@@ -11,20 +11,12 @@
  */
 
 import { useEffect, useState } from "react";
-import {
-  Button,
-  Callout,
-  Disclosure,
-  Modal,
-  Spinner,
-  StatusDot,
-  Text,
-  VisuallyHidden,
-} from "@crewlethq/ui";
+import { Button, Callout, Disclosure, Modal, StatusDot, Text, VisuallyHidden } from "@crewlethq/ui";
 import type { ModelCheckName, ModelSignInRoute } from "~/contract/models.ts";
 import type { CheckAnswer, CheckLine } from "~/protocol/models.ts";
 import { checkModel, type ModelAnswer } from "../api.ts";
 import type { ModelView } from "../data.ts";
+import { Waiting } from "../Waiting.tsx";
 import { CHECK } from "../words.ts";
 
 /**
@@ -217,7 +209,7 @@ export function TestDialog({
       open
       onClose={onClose}
       title={`Test ${key}`}
-      subtitle="Runs the harness once with this model's sign-in and settings, on the node that answers. It costs a few tokens."
+      subtitle="Runs the harness with this model's sign-in and settings, on the node that answers. It costs a few tokens."
       size="md"
       footer={
         <>
@@ -239,10 +231,11 @@ export function TestDialog({
           {reading.sentence}
         </Callout>
       ) : reading.kind === "running" ? (
-        <div className="models-waiting" role="status">
-          <Spinner size="sm" />
-          <Text variant="body">Running the harness. This can take up to three minutes.</Text>
-        </div>
+        <Waiting>
+          Running the harness three times: one answer, then a check of its local tools and of its
+          web access. Each usually takes 5 to 20 seconds, and the three are given three minutes at
+          most.
+        </Waiting>
       ) : (
         <div className="models-stack">
           <Callout

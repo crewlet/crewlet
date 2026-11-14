@@ -130,7 +130,16 @@ export function Models({ id }: { id?: string }) {
         <RetryDialog model={model} data={data} onClose={flow.close} onDone={data.reload} />
       ) : null}
       {data.admin && model && !misfit && flow.flow === "remove" ? (
-        <RemoveDialog model={model} data={data} onClose={flow.close} onDone={data.reload} />
+        <RemoveDialog
+          model={model}
+          data={data}
+          onClose={flow.close}
+          onDone={data.reload}
+          // BACK TO WHERE IT WAS OPENED: the list (on the lens it was on)
+          // stays the list. Only the removed model's own page has nowhere to
+          // return to, and goes to the list.
+          onRemoved={() => (id ? nav.to(["settings", "models"]) : flow.close())}
+        />
       ) : null}
       {data.admin && model && !misfit && flow.flow === "device" ? (
         <DeviceDialog model={model} onClose={flow.close} onDone={data.reload} />
