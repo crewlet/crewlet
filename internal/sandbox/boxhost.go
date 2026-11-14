@@ -111,13 +111,13 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // ([PendingStore.RetireSessions]); the record of its job lost with the host
 // its box is on, where only that host has kept the box unread for the box
 // timeout ([PendingStore.MarkClaimLost], [Coordinator.loseWithHost]); and the
-// claim the collection is made under, the store's answer to it and a refusal
-// while the store has yet to take the release of the last one
-// ([Coordinator.claimCompletion]). Each wraps the store's error in it
-// ([storeSilent]). A completion handed back for it is this node's failure,
-// never the message's: the engine's control handler hands it back as the
-// node's own, so a delivery whose budget a store outage spends is not kept
-// with its group's poison (internal/engine's controlOutcome).
+// claim the collection is made under, where the store did not answer it or
+// this node refused it while the store has yet to take the release of the last
+// one ([Coordinator.claimCompletion]). Each wraps the store's error, or that
+// refusal, in it ([storeSilent]). A completion handed back for it is this
+// node's failure, never the message's: the engine's control handler hands it
+// back as the node's own, so a delivery whose budget a store outage spends is
+// not kept with its group's poison (internal/engine's controlOutcome).
 //
 // NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
 // is up: a collection handed it gives its claim back UNCOUNTED and has its

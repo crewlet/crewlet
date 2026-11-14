@@ -3911,7 +3911,10 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // is kept with the group's unhandled deliveries, never with its poison, the
 // subject an operator reads as messages that failed as themselves. A failure
 // the completion itself caused (a resume that failed, a refusal that names
-// nothing to wait on) stays the message's.
+// nothing to wait on) stays the message's wherever a waiter announces the job
+// again; while none can, it is marked and handed back as the node's with every
+// other hand-back (above), since its delivery is then what carries the
+// completion.
 //
 // THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
 // dead-letters while it lasts loses nothing: the waiter's schedule never stops
