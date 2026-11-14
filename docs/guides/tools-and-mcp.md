@@ -1721,9 +1721,10 @@ The page's **Agent access** tab draws `agents`: one row per agent, a column
 per server with the tools it offers the agent there (or the server's state,
 where it is not running), the agent's total, and **Over 100** beside an agent
 the engine flags. A callout names every agent over the budget. Choosing an
-agent opens its tools: its total against the budget, and each server it
-reaches with why and how many of its tools sit at each level. The tab is the
-administrator's, since `agents` is.
+agent opens its tools: its total against the budget, each server it reaches
+with why and how many of its tools sit at each level, and how many of the
+built-in tools it is offered. The tab is the administrator's, since `agents`
+is.
 
 ### Turning a server off
 

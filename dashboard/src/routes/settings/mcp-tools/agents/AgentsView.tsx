@@ -322,7 +322,8 @@ function EffectiveTools({
             })}
           />
           <Text as="p" variant="caption" tone="tertiary">
-            Plus {plural(agent.builtin_tools, "built-in tool")}, which every agent holds.
+            Plus {plural(agent.builtin_tools, "built-in tool")} it is offered, which the budget does
+            not count.
           </Text>
         </div>
       </Card.Body>
