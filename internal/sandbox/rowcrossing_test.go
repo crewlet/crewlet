@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,6 +46,25 @@ type rowCrossingCase struct {
 	// landed reports whether the row read back once write returned holds
 	// what the path wrote, and what it holds where it does not.
 	landed func(PendingRun) (bool, string)
+	// stamps is how many times the path asks the store to stamp a capture on
+	// the row where its change lands at its first ask: once for a path that
+	// asks again while the store does not answer ([Coordinator.askStamp]),
+	// none for a path that changes the row once.
+	stamps int32
+}
+
+// stampsAsked is the store a case's path writes through, counting every time
+// it is asked to stamp a capture on a run's row ([PendingStore.StampCapture]):
+// every ask a stamp's ask-again makes, so a stamp that landed on a later one
+// is told apart from one that landed on its first.
+type stampsAsked struct {
+	PendingStore
+	asked atomic.Int32
+}
+
+func (s *stampsAsked) StampCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	s.asked.Add(1)
+	return s.PendingStore.StampCapture(ctx, turnID, stamp)
 }
 
 // A RUN'S ROW AT ITS BOUND, CHANGED ACROSS A LEAF'S LINK, LANDS — through every
@@ -61,19 +81,25 @@ type rowCrossingCase struct {
 // crossing, the write read as a store that did not answer: the carry went
 // unrecorded, the stamp was asked again sending the whole row from its first
 // byte until its budget ended, and the end was refused (crewlet/crewlet#1076);
-// and a take's reservation of its place, made once its pack had run to its
-// bound, was left no time at all, so no capture was made
-// (crewlet/crewlet#1151). And the read every change begins with was asked again at two seconds and at
+// and a take's reservation of its place, inside the take's own budget after
+// its pack, shared the scrub's two minutes, which a change of a row at its
+// bound outlasts at the slowest pace a link is allowed (crewlet/crewlet#1151).
+// And the read every change begins with was asked again at two seconds and at
 // four while its reply was still on its way, each re-ask another whole reply
 // on the link, and never for longer than thirty seconds, which a reply of
 // eight mebibytes cannot cross on a link slower than about 280 KiB a second
 // (crewlet/crewlet#1149). Here the link carries 160 KiB a second each way, so
 // each row's read takes about fifty-one seconds and its write thirty-eight,
-// and each path's change lands, and its caller hears that it did.
+// and each path's change lands at its first ask, and its caller hears that it
+// did.
 //
 // Mutation: hold any of these changes to its caller's flat budget again,
-// without the crossing of a change of a row at its bound (RowBudget), or read
-// the row without its reply's crossing, and its row goes red.
+// without the crossing of a change of a row at its bound (RowBudget), and its
+// row goes red: the change is cut while its bytes are still crossing. Read the
+// row without its reply's crossing, and every row goes red too: the carry's
+// and the owed end's one change is cut at its read, and a stamp's and the
+// reservation's first ask is, which they ask again until one lands — a second
+// ask their rows refuse.
 func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 	t.Parallel()
 	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
@@ -99,7 +125,7 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			// THE KEEP'S STAMP OF WHAT CAME OF ITS CAPTURE, made off the read
 			// that took it, with no read's room to keep ([Coordinator.keepCapture]):
 			// over the place its take reserved, begun.
-			name: "a keep's stamp of what came of its capture",
+			name: "a keep's stamp of what came of its capture", stamps: 1,
 			row: PendingRun{TurnID: "t-stamp", AgentHandle: "swe", Status: StatusRunning,
 				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch,
 				Capture: &rowCrossingCapture},
@@ -117,14 +143,22 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			},
 		},
 		{
-			// THE TAKE'S RESERVATION OF ITS PLACE, made once its pack has run
-			// to its bound ([Coordinator.takeCapture]): what the take's time
-			// leaves it then is the room the take's context keeps beside the
-			// pack's budget ([Coordinator.takeContext]) — once nothing at all,
-			// so a reservation of a row of megabytes across a slow link was
-			// cut while its bytes were still crossing, and no capture was made
+			// THE TAKE'S RESERVATION OF ITS PLACE, held to the room alone that
+			// the take's context keeps for it beside the take's own budget
+			// ([Coordinator.reserveRoom], [Coordinator.takeContext]): the case
+			// reserves by the take's deadline less that budget, as though the
+			// pack and the scrub had each spent their bounds, so the room is
+			// what the reservation lands in or nothing does. A check of the
+			// room rather than a replay of the take: the reservation comes
+			// after the pack and before the scrub ([Coordinator.takeCapture]),
+			// and inside the take's budget, as it was before it had a room of
+			// its own, it shared the scrub's two minutes — which a change of a
+			// row at its bound across this relay, about ninety seconds, fits
+			// while leaving the scrub thirty, and at the slowest pace a link is
+			// allowed, thirteen minutes, outlasts, so the reservation was cut
+			// while its bytes were still crossing and no capture was made
 			// (crewlet/crewlet#1151).
-			name: "a take's reservation of its place",
+			name: "a take's reservation of its place", stamps: 1,
 			row: PendingRun{TurnID: "t-reserve", AgentHandle: "swe", Status: StatusRunning,
 				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch},
 			write: func(ctx context.Context, c *Coordinator, run PendingRun) string {
@@ -179,7 +213,8 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			if _, err := across.Member.CreateSandboxRun(t.Context(), c.row.TurnID, seeded); err != nil {
 				t.Fatalf("seed a row of %d bytes: %v", len(seeded), err)
 			}
-			rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.Pending = NewCoordStore(across.Leaf) })
+			store := &stampsAsked{PendingStore: NewCoordStore(across.Leaf)}
+			rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.Pending = store })
 			if why := c.write(t.Context(), rig.coordinator, c.row); why != "" {
 				t.Fatalf("a row of %d bytes written across a link carrying %d KiB a second: %s",
 					len(seeded), rowCrossingRate>>10, why)
@@ -199,6 +234,10 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			if ok, holds := c.landed(run); !ok {
 				t.Errorf("the path returned before its write of a row of %d bytes landed: the row holds %s",
 					len(seeded), holds)
+			}
+			if asked := store.asked.Load(); asked != c.stamps {
+				t.Errorf("the path asked the store for a stamp %d times, want %d: a change that landed "+
+					"only once asked again was cut at its first ask", asked, c.stamps)
 			}
 		})
 	}
