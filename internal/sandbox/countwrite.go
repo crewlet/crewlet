@@ -81,6 +81,25 @@ import "context"
 // ([Coordinator.adjustLocked]) swallowed on a seat with no other question, and
 // the park's move then counted the answered run as a question.
 //
+// A RELEASE STILL OWED HOLDS THE MOVES RECORDED BEHIND IT. A claim's release
+// the store did not answer stays out on its run until an attempt at it is
+// answered, its series making one at most [answerRetryCeiling] apart, and
+// none while a claim of the run is on its way ([Coordinator.oweRelease],
+// [Coordinator.retryOwed]), unless a claim of its job that wins takes it over
+// first or a later job's release takes its place (claimrelease.go). A write
+// recorded behind it on the run, the park of a job its resumed turn
+// relaunched before it failed and handed the claim back, say, has its answer
+// taken and moves nothing until then, and the run stays counted where the
+// moves made before the release left it, holding the seat as the claim does.
+// That is the recorded order's own rule, and the wait it makes is transient
+// and bounded: it ends with the first attempt at the release the store
+// answers, and the seat's mail is held behind the owed release throughout, so
+// no delivery is screened against the counts meanwhile, and a run counted as
+// the claim though its job has parked on a question is never missed by an
+// answer match. Moved ahead of the release instead, the later write's move
+// would be made before the move it follows, which is what this section's rule
+// refuses.
+//
 // # Where each write puts the run
 //
 // A write that lands moves its run to the set its own status names, whatever
