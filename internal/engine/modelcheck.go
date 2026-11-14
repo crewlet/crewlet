@@ -38,12 +38,6 @@ import (
 // every seat on the entry was signed in with, before anything was stored or
 // applied.
 //
-// A CANDIDATE IS ASKED ONLY WHETHER IT SIGNS IN
-// ([harness.DiagnoseOptions.SignInOnly]): with values, a smoke run is the one
-// harness run of the diagnosis. The local-tool and web probes report on the
-// profile and the installed harness, the same under any credential, and stay
-// with the diagnosis of the entry itself.
-//
 // [ErrNoModel] for an existing entry the active revision does not have.
 func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMProvider,
 	values map[string]string, smoke bool) (harness.Diagnosis, error) {
@@ -91,7 +85,6 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 	}
 	opts := harness.DiagnoseOptions{
 		Smoke:             smoke,
-		SignInOnly:        values != nil,
 		ExecutorSeats:     company.ExecutorSeatsOn(key),
 		ExecutorHarnesses: executor.Names(),
 		Cell:              string(company.EntryCell(key)),

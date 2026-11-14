@@ -320,20 +320,9 @@ func (d Diagnosis) executorLines() []string {
 // seat's executor can run on it. Passed in rather than read here, so `doctor`
 // reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
-	// Smoke runs the real completion and the two tool probes.
+	// Smoke runs the real completion and the two tool probes; with Values,
+	// the completion alone.
 	Smoke bool
-
-	// SignInOnly, with Smoke, runs the real completion alone and leaves the
-	// two tool probes out, saying so on their lines. It is the diagnosis of
-	// a CANDIDATE CREDENTIAL: the completion is the run that signs the harness
-	// in with it, and whether the entry's harness keeps to its local-tool and
-	// web stance is a fact about the profile and the installed build, the
-	// same with any credential. The probes are two or three more harness runs
-	// of 3 to 20 s each, one after another, so a person who pasted a token
-	// waited through all of them for an answer the first run already held
-	// (measured: 17.0 s for a refused token, 5.2 to 6.1 s of it the run that
-	// decided).
-	SignInOnly bool
 
 	// ExecutorSeats are the agent seats whose executor chain holds this
 	// entry, as the company resolves them. Empty means no seat's executor
@@ -385,6 +374,14 @@ type DiagnoseOptions struct {
 	// and removed for it when Home is empty: a candidate tested beside the
 	// entry's login would be tested with that login seeded next to it, and
 	// whichever the harness preferred would be what answered.
+	//
+	// AND IT MAKES ONE CALL, the smoke run, which is what signs the harness
+	// in with the candidate. The shell and web probes read what the ENTRY
+	// lets its harness reach, which a credential changes nothing of: run for
+	// a candidate, they were two or three more real calls on a credential
+	// nothing had stored, inside one person's wait, and a probe that misread
+	// its answer refused a credential the vendor had accepted. The entry's
+	// own check probes them.
 	Values map[string]string
 
 	// Home is a state directory of the diagnosis's own, in place of the
@@ -632,12 +629,19 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		c.set(CheckSmoke, "skipped: no binary to run")
 		c.set(CheckShell, stance+"; probe skipped, no binary to run")
 		c.set(CheckWeb, web+"; probe skipped, no binary to run")
-	case opts.SignInOnly:
-		answered = p.smokeCheck(ctx, c)
-		c.set(CheckShell, stance+"; "+signInOnlyProbe)
-		c.set(CheckWeb, web+"; "+signInOnlyProbe)
 	default:
-		answered = p.smokeCheck(ctx, c)
+		outcome := p.smoke(ctx)
+		answered = outcome.answered
+		c.set(CheckSmoke, outcome.verdict)
+		if outcome.kind != "" {
+			c.fail(CheckSmoke, outcome.kind, outcome.verdict)
+		}
+		if opts.Values != nil {
+			// A CANDIDATE IS TESTED BY ITS ONE CALL ([DiagnoseOptions.Values]).
+			c.set(CheckShell, stance+"; "+candidateProbeSkipped)
+			c.set(CheckWeb, web+"; "+candidateProbeSkipped)
+			break
+		}
 		verdict, problem := p.shellProbe(ctx)
 		if verdict == refusedVerdict {
 			// A refused shell is half the stance: the file tools read
@@ -681,21 +685,6 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		}
 	}
 	return d
-}
-
-// signInOnlyProbe is what a tool probe's line says of a diagnosis that asked
-// only whether the entry signs in ([DiagnoseOptions.SignInOnly]).
-const signInOnlyProbe = "probe skipped: this test asks only whether the entry signs in"
-
-// smokeCheck runs the smoke test and writes its line, reporting whether the
-// model replied at all.
-func (p *Provider) smokeCheck(ctx context.Context, c checks) bool {
-	outcome := p.smoke(ctx)
-	c.set(CheckSmoke, outcome.verdict)
-	if outcome.kind != "" {
-		c.fail(CheckSmoke, outcome.kind, outcome.verdict)
-	}
-	return outcome.answered
 }
 
 // noSignIn is the problem for an entry nothing authenticates, naming every
@@ -934,6 +923,10 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 
 // refusedVerdict is a probe that found its tool refused.
 const refusedVerdict = "probe: refused"
+
+// candidateProbeSkipped is the shell and web lines' verdict on a candidate's
+// diagnosis, which runs the smoke call alone ([DiagnoseOptions.Values]).
+const candidateProbeSkipped = "probe skipped: a candidate credential is tested by its one call"
 
 // fileProbe asks the harness to read a file the doctor has just written on the
 // engine host, outside the seat's home, and reports whether it did, on the

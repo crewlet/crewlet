@@ -4026,7 +4026,8 @@ account a login names and the vendor's own sentence.
 
 **A credential is tested before it is stored.** Rotating a token or a key types
 the new value once: the engine hands it to the model's own harness, in a home of
-its own, for one one-turn call, and seals it only if the vendor signed it in (a
+its own, for one one-turn call and nothing else (the shell and web probes read the
+entry, which a credential does not change), and seals it only if the vendor signed it in (a
 `429` counts: it proves the credential authenticated). The dashboard tests a
 value first and saves it after, and the save does not run the harness a second
 time: a test that passed on the node within the last ten minutes answers for a

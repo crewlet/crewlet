@@ -3047,8 +3047,9 @@ provider the catalogue does not list.
 5. The candidate values are handed to the model's own harness, in an isolated home,
    for one one-turn call, within the entry's `timeout_seconds` capped at 120 s.
    That call is the whole test: the check's `shell` and `web` lines say their
-   probes were skipped, since they report on the harness and its profile, not
-   on a credential ([`POST .../check`](#post-llmproviderskeycheck) runs them).
+   probes were skipped, since they read what the entry lets its harness reach,
+   which a credential does not change, and the entry's own
+   [check](#post-llmproviderskeycheck) probes them.
    A write that follows a `dry_run=true` of the same values for the same entry,
    by the same caller on the same node within ten minutes, is answered by that
    test's pass and does not run the harness again; any other write tests.

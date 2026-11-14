@@ -266,7 +266,9 @@ type PositionRegister interface {
 // server nothing declares or lists (mcpaccepted.go). The nineteenth is
 // [FeedMarkKey], how far a wake feed's fleet-wide group had acknowledged,
 // which an age would turn into a group never consumed and so a replay of its
-// log's whole retention (feedmarks.go).
+// log's whole retention (feedmarks.go). The twentieth is [ModelCheckKey], a
+// model entry's latest check, lapsed by its own fields as a device sign-in is
+// (modelcheck.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
