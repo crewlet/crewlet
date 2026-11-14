@@ -213,10 +213,12 @@ import (
 // each asked call's records counted. No reading, whole, and never a refusal of
 // the relaunch, where the session's id names no thread; the ask asks about no
 // call, holds more than a round's log lists, or asks about a call whose id is
-// none the log keeps or is carried by another call of the ask; its writer is
-// older than [holdingsWriterFloor], or unknown; its caller left while it
-// waited for its slots, or between members or lines; the archive did not open,
-// is no gzip or no tar, or inflates past its bound; a member is named
+// none the log keeps or is carried by another call of the ask; the release
+// that continues the session ([sandbox.HoldingsAsk.Resumer]) is unread, or
+// one whose resume the line layer does not model ([claudeResumeRead]); its
+// writer is older than [holdingsWriterFloor], or unknown; its caller left
+// while it waited for its slots, or between members or lines; the archive did
+// not open, is no gzip or no tar, or inflates past its bound; a member is named
 // absolutely or through `..`; a member it reads is held twice; the main thread
 // is no regular file, or is not there; a line of it is past its bound or is no
 // record, a user or assistant record's message does not decode, a record
@@ -371,10 +373,19 @@ func (ClaudeCode) holdingsFloor() string { return holdingsWriterFloor }
 
 // checkHoldings holds ask, and the session archive names, to what a reading
 // answers, before anything is opened: a session whose id names a thread
-// ([claudeMainThread]), and an ask of 1 to [sandbox.MaxBridgeCalls] calls, at
-// least one of them asked, each asked call's id one the log keeps
+// ([claudeMainThread]); a resumer's release whose resume the line layer
+// models ([claudeResumeRead]); and an ask of 1 to [sandbox.MaxBridgeCalls]
+// calls, at least one of them asked, each asked call's id one the log keeps
 // ([sandbox.ValidCallID]) and carried by no other call of the ask, asked or
 // not.
+//
+// ONLY A RESUMER WHOSE RESUME THE LAYER MODELS, never one at or after a
+// floor: a call is held only where the resume hands its model the call's
+// records ([threadChain]), and that is the resuming release's code, which the
+// layer read for a set of releases alone. A release before, between or after
+// them may load, relink, walk or drop records otherwise, and a reading of it
+// could hold a call its model was never handed. A release this code cannot
+// read, and an unread one, are outside the set as well.
 //
 // AN ID ANOTHER CALL CARRIES IS NO READING, NEVER A GUESS: the session files
 // both calls' records under the one id, so no record says whose it is, and an
@@ -382,6 +393,12 @@ func (ClaudeCode) holdingsFloor() string { return holdingsWriterFloor }
 func (ClaudeCode) checkHoldings(archive sandbox.SessionArchive, ask sandbox.HoldingsAsk) error {
 	if _, ok := claudeMainThread(archive.SessionID); !ok {
 		return &holdingsError{why: "the session's id names no Claude Code thread"}
+	}
+	if !claudeResumeRead(ask.Resumer) {
+		return &holdingsError{why: fmt.Sprintf("Claude Code %.64q continues the session, and a reading "+
+			"reads only for the releases whose resume the line layer models: a release joins them once its "+
+			"shipped resume is re-read against that model and a census of archives it wrote and resumed "+
+			"holds to it (claudeResumeRead, internal/sandbox/executor)", ask.Resumer)}
 	}
 	if len(ask.Calls) == 0 || len(ask.Calls) > sandbox.MaxBridgeCalls {
 		return &holdingsError{why: fmt.Sprintf("the ask names %d calls, and a reading answers 1 to %d: "+

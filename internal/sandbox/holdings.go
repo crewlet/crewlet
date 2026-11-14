@@ -68,13 +68,15 @@ type HoldingsReader interface {
 
 	// ReadHoldings reads what the archive open streams holds of the calls
 	// ask marks asked, or says why it reads none: a harness or a writer's
-	// release whose records it does not read, an ask it does not answer, an
-	// archive it cannot read whole within its bounds. It checks the ask
-	// past what every reading shares ([Coordinator.HoldingsOf]) before it
-	// opens anything, calls open at most once and closes what it answers,
-	// and decides only once that stream has reached io.EOF. It answers
-	// within ctx, which it checks between the bounded steps of its work, so
-	// a reading overruns ctx's deadline by one such step at most.
+	// release whose records it does not read, a resumer's release
+	// ([HoldingsAsk.Resumer]) whose resume it has not read, an ask it does
+	// not answer, an archive it cannot read whole within its bounds. It
+	// checks the ask past what every reading shares
+	// ([Coordinator.HoldingsOf]) before it opens anything, calls open at
+	// most once and closes what it answers, and decides only once that
+	// stream has reached io.EOF. It answers within ctx, which it checks
+	// between the bounded steps of its work, so a reading overruns ctx's
+	// deadline by one such step at most.
 	ReadHoldings(ctx context.Context, archive SessionArchive,
 		open func(context.Context) (io.ReadCloser, error), ask HoldingsAsk) (SessionHoldings, error)
 }
@@ -88,6 +90,19 @@ type HoldingsAsk struct {
 	// Calls are 1 to [MaxBridgeCalls] calls: a round's log lists at most
 	// that many.
 	Calls []LoggedCall
+
+	// Resumer is the release of the harness that continues the session: the
+	// relaunch box's, as it answered `--version` at its launch, read before
+	// the brief is chosen, in the form [CarryCheck.Version] keeps it
+	// ("2.1.310", a release [ValidRelease] holds). "" means unread, and no
+	// reader holds it.
+	//
+	// WHAT A SESSION HOLDS IS WHAT ITS RESUME HANDS ITS MODEL, and that is
+	// the resuming release's to decide, not the writer's: a release may load,
+	// order or drop the records another wrote otherwise. So each reader holds
+	// Resumer to the set of releases whose resume it read, and a release
+	// outside that set is no reading.
+	Resumer string
 }
 
 // LoggedCall is one listed call of a round as the run's log keeps it: what a
@@ -313,9 +328,10 @@ const holdingsReadWait = 15 * time.Second
 // continues the turn's row with reader, as the launch's caller asks it
 // ([Coordinator.ContinuedCapture]). INSIDE ONE WAIT ([holdingsReadWait]),
 // taken before the record is read. The ask is held here only to what every
-// reading shares, a reader and 1 to [MaxBridgeCalls] calls; reader checks the
-// rest, since what its harness's records answer is its own to say
-// ([HoldingsReader]).
+// reading shares, a reader, 1 to [MaxBridgeCalls] calls and a resumer's
+// release read ([HoldingsAsk.Resumer]); reader checks the rest, the resumer's
+// release among it, since what its harness's records answer, and which
+// releases' resume it read, is its own to say ([HoldingsReader]).
 func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, captureSeq int64,
 	ask HoldingsAsk, reader HoldingsReader) (SessionHoldings, error) {
 
@@ -326,6 +342,9 @@ func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, 
 	case len(ask.Calls) == 0 || len(ask.Calls) > MaxBridgeCalls:
 		return SessionHoldings{}, fmt.Errorf("the ask names %d calls, and a reading is asked about 1 to %d: "+
 			"a round's log lists at most that many", len(ask.Calls), MaxBridgeCalls)
+	case ask.Resumer == "":
+		return SessionHoldings{}, errors.New("the ask names no release of the harness that continues the " +
+			"session, and what a session holds is what that release's resume hands its model")
 	}
 	if why := c.continuesNoKept(); why != "" {
 		return SessionHoldings{}, errors.New(why)

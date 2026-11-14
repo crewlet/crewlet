@@ -65,8 +65,14 @@ func rhArchive(t *testing.T, id, output string) []byte {
 	return buf.Bytes()
 }
 
-// rhAsk asks about calls.
-func rhAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk { return sandbox.HoldingsAsk{Calls: calls} }
+// rhResumer is the release that continues every session here: one whose
+// resume the line layer models.
+const rhResumer = "2.1.322"
+
+// rhAsk asks about calls, for a session [rhResumer] continues.
+func rhAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk {
+	return sandbox.HoldingsAsk{Calls: calls, Resumer: rhResumer}
+}
 
 // rhRead starts a reading of archive, the session's, by runner under ctx, for
 // call; opened closes as it opens the archive, and done once it has ended,
@@ -228,7 +234,6 @@ func TestAReadingWhoseCallerLeftAsItOpenedEndsWithItsCallersError(t *testing.T) 
 }
 
 // A READING IS ONLY OF A WRITER ITS RULES WERE MEASURED ON: Claude Code 2.1.310
-
 // and later. A writer below it, a release the run recorded none of, one that
 // is no release, and one of the shape of a release whose number is past what
 // an int holds, at or past the floor as its digits read, are each no reading,
@@ -277,6 +282,70 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 			if got.Read || err == nil || opened {
 				t.Errorf("a reading = %+v, %v, the archive opened %t; want no reading, nothing opened",
 					got, err, opened)
+			}
+		})
+	}
+}
+
+// A READING IS ONLY FOR A RESUMER WHOSE RESUME THE LINE LAYER MODELS: a call is
+// held only where the resume hands its model the call's records, and that is
+// the code of the release that continues the session, which the layer read
+// for Claude Code 2.1.310 and 2.1.322 alone. Each of them is read. Every
+// other is no reading, and opens nothing: none read, as the relaunch box's
+// `--version` answered nothing; a release between them, before them or after
+// them, which may load, walk or drop records otherwise; and a release this
+// code cannot read, or one that reads as a modelled release only once its
+// digits are parsed.
+//
+// Mutation: drop the check, and the unread resumer's session is read; hold the
+// resumer to the range 2.1.310 to 2.1.322, and 2.1.311 is read; to 2.1.310
+// and later, and 2.1.323 is read; compare its numbers rather than the release
+// whole, and 02.1.310 is read.
+func TestAReadingIsOnlyForAResumerWhoseResumeTheLineLayerModels(t *testing.T) {
+	t.Parallel()
+	call := sandbox.LoggedCall{ID: "toolu_resumer", Asked: true, Output: "resumer done"}
+	archive := rhArchive(t, call.ID, call.Output)
+	for name, tc := range map[string]struct {
+		resumer string
+		read    bool
+	}{
+		"2.1.310, a modelled release":          {"2.1.310", true},
+		"2.1.322, a modelled release":          {"2.1.322", true},
+		"a resumer unread":                     {"", false},
+		"a release just after the first":       {"2.1.311", false},
+		"a release just before the second":     {"2.1.321", false},
+		"a release before them":                {"2.1.309", false},
+		"a release after them":                 {"2.1.323", false},
+		"a release of two numbers":             {"2.1", false},
+		"a release of no number":               {"2.1.x", false},
+		"a release whose number no int holds":  {"2.1.99999999999999999999", false},
+		"a modelled release spelled otherwise": {"02.1.310", false},
+		"a release as the box printed it":      {"2.1.310 (Claude Code)", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ask := rhAsk(call)
+			ask.Resumer = tc.resumer
+			opened := false
+			got, err := executor.NewClaudeCode().ReadHoldings(t.Context(), rhSession("2.1.310"),
+				func(context.Context) (io.ReadCloser, error) {
+					opened = true
+					return io.NopCloser(bytes.NewReader(archive)), nil
+				}, ask)
+			if tc.read {
+				if held, _ := got.Holds(call); err != nil || !held {
+					t.Fatalf("a reading for a session %q continues = %+v, %v; want its asked call held",
+						tc.resumer, got, err)
+				}
+				return
+			}
+			if got.Read || err == nil || opened {
+				t.Fatalf("a reading for a session %q continues = %+v, %v, the archive opened %t; want no "+
+					"reading, nothing opened", tc.resumer, got, err, opened)
+			}
+			if !strings.Contains(err.Error(), "claudeResumeRead") {
+				t.Errorf("no reading for a session %q continues says %q; want it to point at what a release "+
+					"passes to be read for", tc.resumer, err)
 			}
 		})
 	}

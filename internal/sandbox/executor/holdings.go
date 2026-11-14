@@ -20,10 +20,11 @@ import (
 // runner whose harness has no reading reads none. Claude Code's is
 // claudeholdings.go's.
 //
-// IN ORDER, NOTHING OPENED BEFORE THE LAST: the harness's reading; the ask and
-// the archive held to its own rule; the writer's release held to its floor;
-// the slots; and only then the archive opened, and read. A reading refused at
-// any of the first four holds no slot and opens no store connection.
+// IN ORDER, NOTHING OPENED BEFORE THE LAST: the harness's reading; the ask,
+// the release that continues the session among it, and the archive held to
+// its own rule; the writer's release held to its floor; the slots; and only
+// then the archive opened, and read. A reading refused at any of the first
+// four holds no slot and opens no store connection.
 //
 // THE SEATS' ONE TRANSCRIPT SLOT, INSIDE THE PROCESS'S TWO, AND NO POOL OF ITS
 // OWN ([SeatTranscriptReadsAtOnce]). A reading holds at its worst what one

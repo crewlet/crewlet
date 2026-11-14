@@ -138,8 +138,14 @@ func hsLogged(id, output string) sandbox.LoggedCall {
 	return sandbox.LoggedCall{ID: id, Asked: true, Output: output}
 }
 
-// hsAsk asks about calls.
-func hsAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk { return sandbox.HoldingsAsk{Calls: calls} }
+// hsResumer is the release that continues every session here: one whose
+// resume the line layer models ([claudeResumeRead]).
+const hsResumer = "2.1.322"
+
+// hsAsk asks about calls, for a session [hsResumer] continues.
+func hsAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk {
+	return sandbox.HoldingsAsk{Calls: calls, Resumer: hsResumer}
+}
 
 // hsRead is a reading of archive, session's, for ask.
 func hsRead(t *testing.T, archive []byte, session string, ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {

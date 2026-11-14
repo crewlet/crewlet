@@ -283,7 +283,7 @@ func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		main.WriteString(ctAssistant(ctUUID(1+i), ctUUID(2+i), hsCallOf(id, claudeToolAgent, hsAgentInput)) + "\n")
 	}
 	benchMember(b, tw, hsMain, main.String())
-	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
 // benchLongMetas writes [holdingsMaxAgents] subagents' metadata, each naming
@@ -297,7 +297,7 @@ func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 			strings.Replace(ctMeta, hsStarted, long, 1))
 	}
 	benchMember(b, tw, hsMain, ctBrief(ctUUID(1))+"\n")
-	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
 // benchRecords writes a main thread of [holdingsMaxRecords] records, the most
@@ -328,7 +328,7 @@ func benchRecords(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	}
 	main.WriteString(record(2, 2+replies, replies))
 	benchMember(b, tw, hsMain, main.String())
-	return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
 // benchBlocks writes a main thread of one user record of blocks at the line's
@@ -341,6 +341,6 @@ func benchBlocks(block string) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk
 		blocks := (threadLineMax - 1 - len(head) - len(tail) + 1) / (len(block) + 1)
 		record := head + strings.Repeat(block+",", blocks-1) + block + tail
 		benchMember(b, tw, hsMain, ctBrief(ctUUID(1))+"\n"+record+"\n")
-		return sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{{ID: "toolu_bench_asked", Asked: true}}}
+		return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 	}
 }

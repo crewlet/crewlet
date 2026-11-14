@@ -345,10 +345,15 @@ type holdingsQuestion struct {
 	reader          HoldingsReader
 }
 
+// holdingsResumer is the release that continues every session here, as the
+// relaunch's box answered `--version`: one Claude Code's reader reads for.
+const holdingsResumer = "2.1.322"
+
 // askingAbout is an ask of the calls with the ids given, each listed with an
-// outcome as the log keeps one, and each asked about.
+// outcome as the log keeps one, and each asked about, for a session
+// [holdingsResumer] continues.
 func askingAbout(ids ...string) HoldingsAsk {
-	ask := HoldingsAsk{Calls: make([]LoggedCall, 0, len(ids))}
+	ask := HoldingsAsk{Calls: make([]LoggedCall, 0, len(ids)), Resumer: holdingsResumer}
 	for _, id := range ids {
 		ask.Calls = append(ask.Calls, LoggedCall{ID: id, Asked: true, Output: "what " + id + " returned"})
 	}
@@ -367,11 +372,13 @@ func askingAbout(ids ...string) HoldingsAsk {
 // another capture, or none; a turn ended, or whose end is decided; a session
 // that ran out of context; a newer capture of its job begun; a runner that
 // does not restore the archive; and an ask of no call, or of more than a
-// round's log lists.
+// round's log lists, or for a session continued by a release nobody read,
+// which no reader holds.
 //
 // Mutation: skip ContinuityOf, read a capture the record does not keep or
 // whose harness ended its own run, read with nothing to restore from, or
-// spool the object rather than stream it, and a case goes red.
+// spool the object rather than stream it, or ask a reader for a resumer
+// nobody read, and a case goes red.
 func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 	t.Parallel()
 	tooMany := make([]string, MaxBridgeCalls+1)
@@ -440,6 +447,8 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			world: func(_ *testing.T, _ *holdingsWorld, q *holdingsQuestion) { q.ask = HoldingsAsk{} }},
 		"an ask of more calls than a round's log lists": {why: fmt.Sprintf("names %d calls", MaxBridgeCalls+1),
 			world: func(_ *testing.T, _ *holdingsWorld, q *holdingsQuestion) { q.ask = askingAbout(tooMany...) }},
+		"an ask whose resumer's release is unread": {why: "names no release of the harness that continues",
+			world: func(_ *testing.T, _ *holdingsWorld, q *holdingsQuestion) { q.ask.Resumer = "" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
