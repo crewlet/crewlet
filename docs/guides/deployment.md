@@ -1152,6 +1152,60 @@ write windowed, which
 [crewlet/crewlet#1035](https://github.com/crewlet/crewlet/issues/1035)
 tracks.
 
+**And the server's writes to a node: `write_timeout: retry`, on every
+server.** The other direction has a deadline of its own. nats-server writes
+everything pending for a connection in one batch under its `write_deadline`,
+10 s unless set. A node's connection to `stream.url` is a client connection
+to the server, and a client connection takes the `write_timeout` policy
+`close` unless the server's configuration sets one. Under `close`, a batch
+that misses the deadline makes the server mark the connection a slow consumer
+and close it, however much of the batch had already crossed. Routes, leaf
+connections and gateways default to `retry`, so only a client's connection is
+cut that way.
+
+At the engine's floor, 10 s carries about 341 KiB. Each of these can be far
+more:
+
+- one delivery of a message at 8 MiB: a state-log record, an event or a dead
+  letter;
+- the JSON reply to a leader's read of such a message, about 11.2 MB;
+- a pull of many smaller messages flushed together.
+
+So a node on a slow link is cut at its first large delivery, and the cut
+repeats:
+
+1. The node reconnects.
+2. Once its ack wait passes, the same delivery is handed to it again.
+3. The server cuts the connection again.
+
+The record never reaches the node's applier, and every lease, watch and
+request on the connection drops at each cut. Set
+
+```text
+write_timeout: retry
+```
+
+at the top level of the configuration of every server `stream.url` reaches.
+A batch that is still crossing is then written on rather than cut. The
+server closes a connection only when nothing of a batch crosses within
+`write_deadline`: a dead link, which is what the deadline is for. The cost is
+the server's memory. A client that has truly stopped reading holds up to the
+server's `max_pending` of it, 64 MB by default, until its deadline passes.
+
+Where you keep `close`, the server's `write_deadline` has to outlast the
+largest batch at the slowest link a node uses. At the floor that is four
+minutes for one 8 MiB message, more for the reply to a read of one, and more
+again for a batch, so `retry` is the setting to reach for. Neither setting
+reaches the engine, so a node cannot check them. The server logs each cut:
+
+```text
+Slow Consumer Detected: WriteDeadline of 10s exceeded with <n> chunks of <n> total bytes.
+```
+
+An embedded fleet needs none of this. A node's own connection there is
+in-process, and its links carry leaf connections and routes, whose policy is
+already `retry`.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
