@@ -420,13 +420,17 @@ var rules = sync.OnceValue(func() []rule {
 //
 // EACH SEGMENT AS RUNTOKEN WRITES IT: an eight-character tag (its `tagLen`),
 // a Unix expiry, and the HMAC-SHA256 in unpadded base64url, 43 characters. The
-// subject is anything but the dot that ends it, whitespace and `[`, and may be
-// empty: a token rides a URL path, so no issuer's subject holds whitespace or
-// a bracket, and runtoken signs an empty one. Never a bracket, because a
-// marker opens with one ([Marker]): a value another rule redacted where a
-// subject would stand is then never read, on a second pass, as a subject, so
-// redacting twice stays redacting once. And never a line break, so the rule
-// is nothing [Settled] has to hold back.
+// subject is anything but the dot that ends it, whitespace, `[` and `\`, and
+// may be empty: a token rides a URL path, so no issuer's subject holds
+// whitespace, a bracket or a backslash, and runtoken signs an empty one. Never
+// a bracket, because a marker opens with one ([Marker]): a value another rule
+// redacted where a subject would stand is then never read, on a second pass,
+// as a subject, so redacting twice stays redacting once. And never a line
+// break, so the rule is nothing [Settled] has to hold back: neither a real one
+// nor one escaped inside a string, which a key's lines are read across as they
+// are across a real one ([lineAt]). Taken by a subject, an escaped break went
+// into the token's marker, and lines a first pass had read apart were one line
+// to a second ([rule.next]).
 //
 // FIRST IN THE TABLE, before the vendors' rules, because its tag, subject and
 // signature are base64url or freer, which can spell a vendor's prefix and body
@@ -436,7 +440,7 @@ var rules = sync.OnceValue(func() []rule {
 // replace the piece it knows and leave the rest of the token, its signature
 // among it, in the text — or read the token's own `crewlet_rt1` as the end of
 // the key before it, and leave the rest.
-const runTokenPattern = `crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`
+const runTokenPattern = `crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[\\]*\.[0-9]+\.[A-Za-z0-9_-]{43}`
 
 // googleTokenPattern is a Google OAuth access token: `ya29.` and the body
 // Google writes in base64url — what `gcloud auth print-access-token` prints, a
