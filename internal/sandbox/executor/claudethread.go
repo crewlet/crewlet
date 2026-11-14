@@ -1817,13 +1817,19 @@ func (l threadLine) Model() (string, error) {
 // only the readers that ask for it.
 //
 // AND TO A TEXT ITS READERS COMPARE AS THE HARNESS DOES: an id holding the
-// replacement character, U+FFFD, is this accessor's error too. The layer's
-// decode reads a lone surrogate and each byte that is no UTF-8 as U+FFFD
-// ([threadDecoding]), where Claude Code's JSON.parse keeps a lone surrogate
-// as the code unit written and compares ids a code unit at a time, so two ids
-// the harness holds apart (`msg_\ud800` and `msg_\ud801`) would decode as one
-// and recover each other's records, which no resume does. Refused, such an id
-// costs its readers their reading of the thread, the direction that tells,
+// replacement character, U+FFFD, is this accessor's error too. A lone
+// surrogate reads alike to both: the layer's decode reads it as U+FFFD
+// ([threadDecoding]), and the resume's load makes every string of each record
+// it keeps well-formed the same way before it compares one (2.1.322's tIe,
+// 2.1.310's hYe, JavaScript's toWellFormed), so `msg_\ud800` and `msg_\ud801`
+// are one id to it too. A byte that is no UTF-8 need not read alike: the
+// layer's decode reads each such byte as one U+FFFD, where the harness's read
+// of its file can read a run of them as one, so two ids it holds apart (one
+// ending in the two bytes of a sequence cut short, E2 82, which it reads as
+// one U+FFFD, and one ending in FF FF, two) would decode as one and recover
+// each other's records, which no resume does. A U+FFFD read off an id cannot
+// say which it came from, so every id holding one is refused. Refused, such an
+// id costs its readers their reading of the thread, the direction that tells,
 // never a record recovered under another reply's id. Every one of the 2,239
 // assistant records of the 521 thread files the probes kept carries an ASCII
 // id of at most 36 bytes; only a box rewriting its own file writes another.

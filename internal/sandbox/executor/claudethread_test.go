@@ -2517,13 +2517,14 @@ func TestAReplySaysWhichModelWroteIt(t *testing.T) {
 // the record's message is no object, never "", which its readers would take
 // for a reply that recovers nothing. And an error where the id holds the
 // replacement character, as written or as the layer's decode reads a lone
-// surrogate or a byte that is no UTF-8: Claude Code compares ids a code unit
-// at a time, so two it holds apart could read here as one.
+// surrogate or a byte that is no UTF-8: the layer reads each such byte as one,
+// where Claude Code can read a run of them as one, so two ids it holds apart
+// could read here as one, and a U+FFFD cannot say which it came from.
 //
 // Mutation: read the id off every record's message, and a result carrying one
 // is a reply; read it as any JSON value, and a number reads as ""; read it as
 // "" whatever it holds, and no reply recovers its siblings; or hand out an id
-// holding the replacement character, and `msg_\ud800` is `msg_\ud801`.
+// holding the replacement character, and one holding a lone surrogate reads.
 func TestAReplySaysWhichReplyItIs(t *testing.T) {
 	t.Parallel()
 	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
