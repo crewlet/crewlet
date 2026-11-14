@@ -171,7 +171,10 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 	}
 	// WHOM IT CONCERNS, a routing an entry's change: its authors and its
 	// enqueuer told it left the queue — its authors that its merge
-	// conflicted, where it did — the home's own record, so nobody's actor.
+	// conflicted, where it did — the home's own record, so nobody's actor,
+	// carrying whom the entry's enqueue was made for (concerns.go's head,
+	// "Whom the actor acted for"): the turn it wakes fixes and queues the
+	// change again for them, never with every app the told seat holds.
 	ids := make([]string, len(e.Entries))
 	for i, x := range e.Entries {
 		ids[i] = entries[x.EntryID].ChangeID
@@ -188,7 +191,8 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 			continue
 		}
 		routed, routeErr := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
-			dequeued: true, conflicted: x.Reason == EjectConflict, enqueuer: entry.EnqueuedBy.reviewer()})
+			dequeued: true, conflicted: x.Reason == EjectConflict, enqueuer: entry.EnqueuedBy.reviewer(),
+			enqueuedFor: storedCarrier(entry.WorkingFor)})
 		if routeErr != nil {
 			return queueDecision{}, routeErr
 		}
@@ -407,13 +411,16 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	}
 	// WHOM IT CONCERNS, a routing an entry's change: its authors told it
 	// merged — all but its enqueuer, who merged it as the landing's push
-	// names them — within what the record's rows and bytes leave.
+	// names them, and for whom their enqueue was made, as the entry's row
+	// keeps it (concerns.go's head, "Whom the actor acted for") — within what
+	// the record's rows and bytes leave.
 	routings := make([]ChangeRouting, 0, len(stamped.Entries))
 	for i, e := range stamped.Entries {
-		merger, mergerKind := entries[e.EntryID].enqueuer().party()
+		entry := entries[e.EntryID]
+		merger, mergerKind := entry.enqueuer().party()
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		routed, err := routingFor(ctx, tx, concerning{repoName: repo.name, change: rows[i], actor: merger,
-			actorKind: mergerKind, authors: true, merged: true})
+			actorKind: mergerKind, workingFor: storedCarrier(entry.WorkingFor), authors: true, merged: true})
 		if err != nil {
 			return queueDecision{}, err
 		}
@@ -480,8 +487,10 @@ func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (que
 // asker reads as done — and a record none of whose closes is owed any more is
 // refused stale. Each not_closed close recorded is stamped whom it tells: its
 // change's authors and its enqueuer, under `merged`, its detail beside — the
-// home's own record, so nobody's actor; nobody where the repository holds the
-// change no more.
+// home's own record, so nobody's actor, carrying whom the entry's enqueue was
+// made for, so the turn it wakes leaves the item to what they may use rather
+// than close it with every app the told seat holds (concerns.go's head, "Whom
+// the actor acted for"); nobody where the repository holds the change no more.
 func decideCloseSettled(ctx context.Context, tx *sql.Tx, c CloseSettled, repo pushRepo, d queueDecision) (
 	queueDecision, error) {
 
@@ -519,7 +528,8 @@ func decideCloseSettled(ctx context.Context, tx *sql.Tx, c CloseSettled, repo pu
 			continue
 		}
 		routed, routeErr := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
-			merged: true, enqueuer: entry.EnqueuedBy.reviewer(), notClosed: s.Detail})
+			merged: true, enqueuer: entry.EnqueuedBy.reviewer(), notClosed: s.Detail,
+			enqueuedFor: storedCarrier(entry.WorkingFor)})
 		if routeErr != nil {
 			return queueDecision{}, routeErr
 		}

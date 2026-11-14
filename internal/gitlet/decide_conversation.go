@@ -664,8 +664,9 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	// records, which name no asker, the principal the decide found the record
 	// answers — a revision's facts their pusher ([decideRevise]) — and nobody
 	// for a mergeability, which nobody's act made. AND FOR WHOM: the asker's
-	// write was made for whom its request states; the home's records carry
-	// nobody yet (concerns.go's head, "Whom the actor acted for").
+	// write was made for whom its request states, and a revision's facts for
+	// whom the decide found the revision's push was made, as its row keeps it
+	// (concerns.go's head, "Whom the actor acted for").
 	if c.actor == "" {
 		c.actor, c.actorKind = w.Asker.party()
 		c.workingFor = w.WrittenFor.Carrier()

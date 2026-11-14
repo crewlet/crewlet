@@ -1475,6 +1475,21 @@ func (c CodeSeam) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnsw
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
 
+// QueueDue answers a page of the queue work a repository's home owes, read
+// whole or refused ([opCodeQueueDue]): the home's merge queue's read. It never
+// raises this node's floor: a read's position is somebody else's writes.
+//
+// THE ENGINE'S ALONE, though every holder of the facade could call it: its
+// answer hands over whom each entry's enqueue was made for
+// (gitlet.QueueWorkEntry.WorkingFor), which no reader of a queue may see, so
+// the engine-class guard in this package's tests refuses it, and every road
+// to it, in the packages that serve a person or a model, as it refuses
+// [TurnThreads]. A surface lists a queue through [CodeSeam.Read]'s `queue`
+// kind, whose rows leave it out.
+func (c CodeSeam) QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	return call(ctx, c.r, opCodeQueueDue, nil, q)
+}
+
 // TurnsMovedCode answers which of a set of turns pushed, opened a change or
 // gave a review.
 func (c CodeSeam) TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error) {

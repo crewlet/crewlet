@@ -696,3 +696,114 @@ func TestATurnAWriteWokeIsStillItsRequestersWhenItResumes(t *testing.T) {
 		}
 	}
 }
+
+// ejectionWake is the merge queue's ejection of enqueuer's entry for launch!1,
+// whose author told is, carrying carrier as whom the entry's enqueue was made
+// for — the record the repository's committer makes of a home's eject, its
+// routing naming no actor and stamped by gitlet's routingFor — relayed as the
+// code feed relays it.
+func ejectionWake(t *testing.T, enqueuer, told string, carrier *types.WorkingFor) *events.Event {
+	t.Helper()
+	eject := gitlet.Eject{RepoID: launchRepoID, Entries: []gitlet.Ejection{{
+		EntryID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d34", Reason: gitlet.EjectConflict,
+		Paths: []string{"upload/retry.go"}}},
+		Routing: []gitlet.ChangeRouting{{ChangeID: launchChangeID, ChangeRef: "launch!1", RepoName: "launch",
+			Title: "Retry the upload", Owner: told, OwnerKind: gitlet.PartyAgent, Authors: []string{told},
+			Enqueuer: enqueuer, Conflicted: true, Dequeued: true, WorkingFor: carrier}}}
+	body, err := json.Marshal(eject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whom := "nobody"
+	if carrier != nil {
+		whom = carrier.Seat
+	}
+	record := gitlet.MutationRecord{
+		RecordEnvelope: gitlet.RecordEnvelope{
+			OpID: "op-eject-for-" + whom, Subject: gitlet.RepoSubject(launchRepoID), Op: gitlet.OpEject,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "node-a",
+			Scope: gitlet.Scope{gitlet.RepoPath(launchRepoID)},
+		},
+		Mutation: body, Actor: "node-a", ActorKind: gitlet.ActorSystem,
+	}
+	payload, err := gitlet.Encode(record)
+	if err != nil {
+		t.Fatalf("encode the ejection: %v", err)
+	}
+	delivery, wake, err := gitlet.NewTranslator().Translate(t.Context(),
+		changefeed.Record{Payload: payload, Key: record.Subject.Wire()})
+	if err != nil || !wake {
+		t.Fatalf("the ejection relayed nothing: %v", err)
+	}
+	return rawDelivery(t, gitlet.Source, delivery.Body)
+}
+
+// AN ENGINE RECORD ABOUT AN AGENT'S ACT IS WORKED FOR WHOM THE ACT WAS MADE FOR
+// (ADR-0109's amendment), through the real parser and notification service:
+// the merge queue's ejection of cto's entry names no actor and tells the
+// change's author swe that it left the queue, carrying whom cto's enqueue was
+// made for, so swe's turn works for them, held to what they may use — ada,
+// who uses Gitlet alone, so swe is refused the Chatlet she does not use, its
+// ceiling hers. Carrying nobody, it wakes swe for itself, bounded by nothing,
+// as every engine record did. And the engine's ejections for two requesters
+// are two turns, each worked for its own, as one seat's writes for two
+// requesters are; two for one requester are one.
+//
+// Mutations: read no carrier off the engine as writer (writtenForIn) — swe's
+// turn works for itself with every app, red; key the engine's wakes as one
+// (notify's writerOf with no carrier for the engine) — ada's and omar's
+// ejections are one turn, worked for ada, red.
+func TestAnEngineRecordAboutAnAgentsActIsWorkedForWhomTheActWasMadeFor(t *testing.T) {
+	t.Parallel()
+	o := writtenChart(t)
+	reg := partyRegistry(o, nil)
+	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	omar := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "omar"}
+	people := personSeats{"ada": {Kind: iam.KindPerson, Seat: "ada", Stage: iam.StageActive,
+		Grants: []iam.Grant{iam.GrantGitlet}}}
+	for name, c := range map[string]struct {
+		carrier *types.WorkingFor
+		ceiling authz.CeilingKind
+		refused bool
+	}{
+		"the ejection of cto's entry enqueued for ada":    {ada, authz.CeilingRequester, true},
+		"the ejection of cto's entry enqueued for nobody": {nil, authz.CeilingNone, false},
+	} {
+		woken := wokenTurn(t, o, reg, "swe", ejectionWake(t, "cto", "swe", c.carrier))
+		if !reflect.DeepEqual(woken.WorkingFor, c.carrier) {
+			t.Errorf("%s: swe's turn works for %+v, want %+v", name, woken.WorkingFor, c.carrier)
+			continue
+		}
+		ceiling, err := builtin.CeilingOfTurn(t.Context(), woken, people)
+		switch {
+		case err != nil:
+			t.Fatalf("%s: compose swe's ceiling: %v", name, err)
+		case ceiling.Kind != c.ceiling || (c.carrier != nil && ceiling.Principal.Seat != c.carrier.Seat):
+			t.Errorf("%s: swe's turn is held to %+v, want a %s ceiling", name, ceiling, c.ceiling)
+		}
+		if got := postInRoom(t, o, people, woken); heldToTheCeiling(got) != c.refused {
+			t.Errorf("%s: swe's use of Chatlet answered %q, refused at the ceiling: %v, want %v", name,
+				got.Output, heldToTheCeiling(got), c.refused)
+		}
+	}
+
+	inbox := []*events.Event{
+		deliveredTo(t, o, reg, "swe", ejectionWake(t, "cto", "swe", ada)),
+		deliveredTo(t, o, reg, "swe", ejectionWake(t, "cto", "swe", omar)),
+		deliveredTo(t, o, reg, "swe", ejectionWake(t, "cto", "swe", ada)),
+	}
+	parts := queue.PartitionByKey(inbox, notify.KeyOf, func(e *events.Event) *events.Event { return e })
+	if len(parts) != 2 || len(parts[0].Items) != 2 || len(parts[1].Items) != 1 {
+		t.Fatalf("the engine's ejections for ada, omar and ada again made %d turns, want ada's two as one and "+
+			"omar's as another", len(parts))
+	}
+	for _, part := range parts {
+		want := ada
+		if part.Items[0] == inbox[1] {
+			want = omar
+		}
+		if got := workingForIn(part.Items); !reflect.DeepEqual(got, want) {
+			t.Errorf("a turn of the engine's ejections works for %+v, want %+v", got, want)
+		}
+	}
+}

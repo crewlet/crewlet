@@ -1103,14 +1103,11 @@ const (
 	// the asker's grant: one repository's in target and queue order — one of
 	// its targets', where [ReadQuery.Target] names one — beside the
 	// candidates of the trains testing its targets ([CandidateRow]); or,
-	// naming no repository, every repository's the asker may read.
+	// naming no repository, every repository's the asker may read. The queue
+	// work a repository's HOME owes is no kind of this read: its home carries
+	// what it reads into the records it asks next, so it reads it whole or
+	// not at all, through a read of its own ([Reader.QueueDue]).
 	ReadQueue ReadKind = "queue"
-	// ReadQueueDue is the queue work a repository's HOME Gitlet node owes
-	// ([QueueDueQuery]): with no repository, the active repositories holding
-	// a live entry or a given-up train's attempt, by id; with one, its queue
-	// work a target a page, and on its first page those attempts. The
-	// engine's own read, as `changes_due` is.
-	ReadQueueDue ReadKind = "queue_due"
 	// ReadLandings is one protected target's landings above its green
 	// ([LandingRow]), in the order they landed, beside its green row
 	// ([GreenRow]) — held to the asker's grant on its repository.
@@ -1155,8 +1152,7 @@ const (
 // [ReadQuery.BranchChanges], `check_box` the only one that reads
 // [ReadQuery.CheckBox], `checks_running` the only one that reads
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
-// that read [ReadQuery.Target], `queue_due` the only one that reads
-// [ReadQuery.QueueDue], `commit` the only one that reads
+// that read [ReadQuery.Target], `commit` the only one that reads
 // [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
 // and `notice_cards` the only one that reads [ReadQuery.NoticeCards].
 func ReadKinds() []ReadKind {
@@ -1165,7 +1161,7 @@ func ReadKinds() []ReadKind {
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed, ReadDefaultTips,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
+		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
 }
 
 // Valid reports a kind this build knows.
@@ -1522,12 +1518,10 @@ type ReadQuery struct {
 	// queues, and names the protected branch a `landings` read lists and a
 	// `green` read answers — REQUIRED for landings — a branch a change may
 	// name, beside the repository Repo names; refused on every other kind.
-	// QueueDue is a `queue_due` read's own: REQUIRED for that kind and
-	// refused on every other ([QueueDueQuery]). Estate request fields and no
-	// record's, so they take no versionedFields row: a node of a build that
-	// predates the kinds refuses the read as a kind it does not know.
-	Target   string         `json:"target,omitempty"`
-	QueueDue *QueueDueQuery `json:"queue_due,omitempty"`
+	// An estate request's field and no record's, so it takes no
+	// versionedFields row: a node of a build that predates the kinds refuses
+	// the read as a kind it does not know.
+	Target string `json:"target,omitempty"`
 
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
@@ -1676,22 +1670,6 @@ type ReadAnswer struct {
 	// change, in the query's order of repositories and branches, a branch
 	// heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
-	// DueQueue is a `queue_due` read's page of one repository: one target's
-	// queue work ([QueueDue]), the target the next page's cursor; nil past
-	// the last.
-	DueQueue *QueueDue `json:"due_queue,omitempty"`
-	// QueueAbandoned is, on a `queue_due` read's first page of one
-	// repository, the attempts its queues queued that have not ended, on
-	// commits no train of their target tests or landed ([AbandonedCheck]):
-	// what its home cancels once its targets have taken their steps.
-	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
-	// QueueOwedCloses is, on the same first page, the repository's landed
-	// entries still owing their change's work item its close (M5-D27,
-	// code_queue.close_op), at most [MaxOwedCloses]: what its home closes
-	// as each entry's enqueuer and settles (close_settled), whichever home
-	// asked the landing. An answer between nodes, so an older reader drops it
-	// and leaves the closes owed for a newer home.
-	QueueOwedCloses []QueueWorkEntry `json:"queue_owed_closes,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
 	// its page reaches; Ejected, on a named repository's first page, the

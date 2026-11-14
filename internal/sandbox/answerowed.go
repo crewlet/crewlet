@@ -307,11 +307,13 @@ type Reply struct {
 	Says bool
 
 	// WorkingFor is whom the delivery's writer wrote it for: the carrier an
-	// agent's write states (ADR-0109), read off the newest event by the rule
-	// a wake is read by, and nil for every writer that is no agent, for a
-	// vendor's delivery and for an agent's write made for nobody else. A
-	// reply answers a run only when it was written for whom the run works for
-	// ([Reply.putTo]).
+	// agent's write states (ADR-0109), and the one the engine's record about
+	// an agent's earlier act carries, read off the newest event by the rule a
+	// wake is read by; nil for a person's or a credential's writer, for a
+	// vendor's delivery and for an agent's write made for nobody else. A reply
+	// answers a run only when it was written for whom the run works for
+	// ([Reply.putTo]), and the engine's answers none, its writer holding no
+	// seat (Writer).
 	WorkingFor *types.WorkingFor
 }
 
@@ -437,8 +439,8 @@ func (r Reply) putTo(run PendingRun) bool {
 // for.
 //
 // NIL ALWAYS MATCHES: the writer spoke for itself. That is every vendor's
-// reply, Gitlet's until it carries the requester, every person's and
-// credential's, and an agent's written for nobody else. It is safe because a
+// reply, every person's and credential's, and an agent's written for nobody
+// else, on Gitlet as on the other surfaces of the engine's. It is safe because a
 // record skips its carrier only where its decide proves no agent but the
 // writer may start a turn (ADR-0109), and a wake held back delivers nothing.
 //

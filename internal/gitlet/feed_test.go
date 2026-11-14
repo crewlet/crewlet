@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -64,6 +65,19 @@ func woken(routed []notify.Routed) []string {
 		out = append(out, r.To.Handle+":"+r.Metadata[gitlet.MetaVia])
 	}
 	return out
+}
+
+// writtenBy is a wake's writer as a case says it: its kind and its seat, and
+// whom it wrote for, nobody where it carries none.
+func writtenBy(w *types.NotificationWriter) string {
+	if w == nil {
+		return "no writer"
+	}
+	whom := "nobody"
+	if w.WorkingFor != nil {
+		whom = fmt.Sprintf("%+v", *w.WorkingFor)
+	}
+	return fmt.Sprintf("%s %q for %s", w.Kind, w.Seat, whom)
 }
 
 // THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a record about a change
@@ -254,13 +268,18 @@ func TestARelayedCodeRecordANewerBuildWroteIsDeferredToAPeer(t *testing.T) {
 // says the seat wrote for, so the turn it starts works for them, held to what
 // they may use — dev's comment naming cto, made for founder, a version-2
 // record, wakes cto written by dev for founder. A person writes for nobody but
-// themselves, and so does the engine: the same routing with its actor
-// founder's, or nobody's, and the carrier forged on it, wakes cto written for
-// nobody. And dev's comment made for nobody, a version-1 record, wakes cto
-// written by dev for nobody: the seat's own work.
+// themselves, and so does the engine on every record but the merge queue's two
+// about an enqueue, which carry whom it was made for beside no actor
+// (TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade): the same
+// comment's routing with its actor founder's, or nobody's, and the carrier
+// forged on it, wakes cto written for nobody. And dev's comment made for
+// nobody, a version-1 record, wakes cto written by dev for nobody: the seat's
+// own work.
 //
-// Mutation: writerOf handing the writer no carrier — dev's comment made for
-// founder wakes cto written for nobody, red.
+// Mutations: writerOf handing the writer no carrier — dev's comment made for
+// founder wakes cto written for nobody, red; writerOf handing the engine's
+// carrier on every op — the engine's comment with the carrier forged on
+// wakes cto for founder, red.
 func TestACodeWakeIsWrittenForWhomItsAgentWroteIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -310,7 +329,7 @@ func TestACodeWakeIsWrittenForWhomItsAgentWroteIt(t *testing.T) {
 			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "dev", WorkingFor: founder}},
 		{"a person's routing with a carrier forged on", forged("founder", "founder"),
 			types.NotificationWriter{Kind: iam.ActorHuman, Seat: "founder"}},
-		{"the engine's routing with a carrier forged on", forged(""),
+		{"the engine's routing of a comment with a carrier forged on", forged(""),
 			types.NotificationWriter{Kind: iam.ActorSystem}},
 		{"dev's comment made for nobody", feedRecord(t, n, own),
 			types.NotificationWriter{Kind: iam.ActorAgent, Seat: "dev"}},
