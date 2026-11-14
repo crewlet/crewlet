@@ -200,8 +200,13 @@ type Spend struct {
 	// single-phase summary a dashboard shows before anyone expands it.
 	Response string
 
-	// ToolExecutions is every call the turn made, in order across phases.
+	// ToolExecutions is the turn's calls as its phases' records list them,
+	// in order across phases, and ElidedCalls the calls those records do not
+	// list, by tool: each phase's held to its share as its own record holds
+	// it ([keptExecutions]), so the turn holds no more of a phase's calls than
+	// its record does. [Spend.Calls] is the list the turn's record carries.
 	ToolExecutions []types.ToolExecution
+	ElidedCalls    []types.ElidedCalls
 
 	// ExecuteTools and AllTools are the tool NAMES, split the way the
 	// learning workers reason about them and accumulated differently on
@@ -315,6 +320,13 @@ type Spend struct {
 	FailedIn string
 }
 
+// Calls is the tool list a turn's record carries ([types.AgentTurnCompleted]):
+// every call its phases' records list, held to the one share a record has
+// (recordbytes.go), and what those records and this one do not list, by tool.
+func (s Spend) Calls() RecordCalls {
+	return keptExecutions(s.ToolExecutions, s.ElidedCalls)
+}
+
 // Total is the turn's own token count — what its PHASES spent, and what the
 // phase events sum to. It does not include what its workers or its extension
 // judgements cost; both are metered separately and reported in their own
@@ -365,7 +377,7 @@ func (r *Runner) Spend() Spend {
 }
 
 // record folds one completed phase into the turn's tally.
-func (s *Spend) record(rec phaseRecord) {
+func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 	switch rec.Phase {
 	case phase.Execute:
 		s.ExecuteModel = rec.Result.Model
@@ -396,7 +408,8 @@ func (s *Spend) record(rec phaseRecord) {
 	if rec.Result.Text != "" {
 		s.Response = rec.Result.Text
 	}
-	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
+	s.ToolExecutions = append(s.ToolExecutions, calls.Rows...)
+	s.ElidedCalls = keptTally(append(s.ElidedCalls, calls.ByTool...))
 	s.Tools = types.SumToolTallies(s.Tools, toolTallies(rec.Result.Executions))
 	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
@@ -1201,7 +1214,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	// (recordbytes.go), with what it does not keep said beside it.
 	k := rec.kept()
 	// Tallied BEFORE the publisher check: see [emitter].
-	e.tally.record(rec)
+	e.tally.record(rec, k.calls)
 	if !e.on() {
 		return
 	}
@@ -1299,7 +1312,8 @@ type keptPhase struct {
 // kept is what the phase's record keeps of its rounds and its calls: its
 // loop's calls, or its run's as the bridge recorded them, those of a round
 // past the window tallied with the ones the list drops and the ones a
-// collected run's own record dropped first ([phaseResult.RunElided]).
+// collected run's own record dropped first ([phaseResult.RunElided]). Kept
+// once, for its record and the turn's, which lists what this one does.
 func (rec phaseRecord) kept() keptPhase {
 	rounds := keptRounds(recordRounds{
 		Rounds:      phaseRounds(rec.Result.Rounds),

@@ -378,6 +378,14 @@ type AgentTurnCompleted struct {
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
+	// CallsElided is how many of the turn's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, with how many of each
+	// failed: the calls each phase's record does not list ([AgentPhaseCompleted.CallsElided]),
+	// and those this record drops in turn, which holds every phase's list to
+	// the one share a record has of its message. Absent on a record that
+	// lists every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
@@ -1084,7 +1092,8 @@ type AgentPhaseCompleted struct {
 }
 
 // ElidedCalls is one tool's calls a record did not list
-// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed. Name is empty for calls whose tool the
+// ([AgentPhaseCompleted.ElidedCalls], [AgentTurnCompleted.ElidedCalls]): how
+// many, and how many of them failed. Name is empty for calls whose tool the
 // record did not keep either — a long run whose dropped middle outgrew what
 // its record keeps of it, or tools past the most a record names, which are a
 // model calling names no tool has.

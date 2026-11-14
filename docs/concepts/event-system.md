@@ -502,7 +502,13 @@ agent_turn_started         # a turn, or a resumed segment of one, beginning —
                            # unless the turn died in its own frames — then a
                            # turn.guard_breach under its turn_id says so, or
                            # its process died under it
-agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
+agent_turn_completed       # full LLM reasoning cycle with tokens and tools,
+                           # its calls held to a record's one share of its
+                           # message and the rest counted: `calls_elided`,
+                           # and `elided_calls` by tool ({name, calls,
+                           # failed}) — every phase's unlisted calls, and the
+                           # ones this list drops in turn (see "What an agent
+                           # record keeps");
                            # names the work item the turn was charged to —
                            # including by `sole_write`, which only a
                            # completion can conclude — and carries
@@ -881,9 +887,9 @@ Deployment page above.
 
 ### What an agent record keeps
 
-A phase's record (`agent_phase_completed`) is one event, and an event past the queue's ceiling (8 MiB) is refused at its publish: it would not arrive long, it would not arrive at all, taking every fact of its phase with it. So each payload that grows with what a phase was handed and made has a share of the message, measured as the event encodes it with every escape counted (a page of HTML is six bytes a `<`), and a payload past its share is kept in part with the cut said. A record within every share is published as it was built.
+A phase's record (`agent_phase_completed`) and a turn's (`agent_turn_completed`) are each one event, and an event past the queue's ceiling (8 MiB) is refused at its publish: it would not arrive long, it would not arrive at all, taking every fact of its phase with it, and, for a turn's record, the end of the seat's live row. So each payload that grows with what a phase was handed and made has a share of the message, measured as the event encodes it with every escape counted (a page of HTML is six bytes a `<`), and a payload past its share is kept in part with the cut said. A record within every share is published as it was built.
 
-- **Tool calls** (`tool_executions`): past their share, every row is held to the shares an executor's own call log holds a call to (its arguments to 8 KiB, the newest successful submission's to 64 KiB, its answer and a failure's error to 4 KiB as their openings, its name to 256 bytes), and past that the middle beyond 200 calls is dropped, the first hundred and the newest hundred kept. `calls_elided` counts the calls the list does not keep and `elided_calls` names them by tool, at most 64 tools, the calls of any more counted under no name.
+- **Tool calls** (`tool_executions`): past their share, every row is held to the shares an executor's own call log holds a call to (its arguments to 8 KiB, the newest successful submission's to 64 KiB, its answer and a failure's error to 4 KiB as their openings, its name to 256 bytes), and past that the middle beyond 200 calls is dropped, the first hundred and the newest hundred kept. `calls_elided` counts the calls the list does not keep and `elided_calls` names them by tool, at most 64 tools, the calls of any more counted under no name. A turn's record holds every phase's list to the same one share and merges their counts.
 - **Rounds**: a phase past 256 rounds keeps its first and newest 128, each with its provider call, its prose, the harness runs over it, the notes read in it and the calls made in it. `rounds_elided` counts the rest, whose calls are counted in `calls_elided`.
 - **Prompts** (`system_prompt`, `user_prompt`): a quarter MiB each. Past it every part of the prompt keeps its opening, the longest cut first, and the outline (`system_sections`, `user_sections`) is rewritten to the kept text, so it still tiles it. The prompt the model was sent is not changed: this is the record's copy.
 - **Prose** (`round_narration`): a quarter MiB for every round's together; past it each round keeps an opening. A collected run's round carries a copy of its report, which past that share says the record's `response` holds the whole.
