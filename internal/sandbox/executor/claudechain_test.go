@@ -191,6 +191,27 @@ func rcCompacted(metadata string, lines ...string) []string {
 		rcBoundary(3, 2000, metadata), rcSummary(3, 4, 2100)}, lines...)
 }
 
+// rcIn is line, a main thread's record as the helpers above write one, as a
+// record of a subagent's thread: of agent's agentId, none for "", and a
+// sidechain's where side, saying both right after its parent.
+func rcIn(t *testing.T, line, agent string, side bool) string {
+	t.Helper()
+	keys := fmt.Sprintf(`"isSidechain":%t,`, side)
+	if agent != "" {
+		keys += `"agentId":"` + agent + `",`
+	}
+	return ctReplace(t, line, `"isSidechain":false,`, keys)
+}
+
+// rcOwn is line as a record of ctAgent's own, as its thread writes one.
+func rcOwn(t *testing.T, line string) string {
+	t.Helper()
+	return rcIn(t, line, ctAgent, true)
+}
+
+// rcAnother is a subagent other than ctAgent.
+const rcAnother = "b0123456789abcdef"
+
 // rcCase is one thread a case reads, and what it expects of it: every
 // record's answer by its line, the one order every variant hands, and the
 // line of the leaf every variant walks from, 0 for none.
@@ -229,6 +250,22 @@ func (tc rcCase) check(t *testing.T, name string) {
 	read := rcChain(t, "", tc.lines...)
 	read.expect(t, name, tc.want, rcOrder{tc.order, allVariants})
 	read.expectLeaf(t, name, tc.leaf)
+}
+
+// rcSubagentCase is a subagent's thread a case reads as ctAgent's: an rcCase,
+// and the lines of its own leaves, in turn.
+type rcSubagentCase struct {
+	rcCase
+	own []int
+}
+
+// check reads tc's thread as ctAgent's and holds it to what tc expects.
+func (tc rcSubagentCase) check(t *testing.T, name string) {
+	t.Helper()
+	read := rcChain(t, ctAgent, tc.lines...)
+	read.expect(t, name, tc.want, rcOrder{tc.order, allVariants})
+	read.expectLeaf(t, name, tc.leaf)
+	read.expectOwnLeaves(t, name, tc.own...)
 }
 
 // rcRead is a thread read into a chain: the chain, and each record's handle
@@ -360,8 +397,8 @@ func (r rcRead) expect(t *testing.T, name string, want map[int]rcAnswer, orders 
 }
 
 // expectCannotTell holds the whole thread to why: every record cannot tell
-// for it, no order handed, no leaf, and no answer a copy of another size
-// could rely on.
+// for it, no order handed, no leaf and no own leaves, and no answer a copy of
+// another size could rely on.
 func (r rcRead) expectCannotTell(t *testing.T, name string, why chainWhy) {
 	t.Helper()
 	if got, unknown := r.c.Unknown(); !unknown || got != why {
@@ -384,6 +421,9 @@ func (r rcRead) expectCannotTell(t *testing.T, name string, why chainWhy) {
 	if leaf, ok := r.c.Leaf(); ok {
 		t.Errorf("%s: a thread the model cannot place walks from %d", name, leaf)
 	}
+	if own := r.c.OwnLeaves(); own != nil {
+		t.Errorf("%s: a thread the model cannot place has the own leaves %v", name, own)
+	}
 }
 
 // expectLeaf holds the chain's leaf to the record on line, none for 0.
@@ -392,6 +432,19 @@ func (r rcRead) expectLeaf(t *testing.T, name string, line int) {
 	leaf, ok := r.c.Leaf()
 	if got := r.line(leaf); ok != (line != 0) || got != line {
 		t.Errorf("%s: the resume walks from line %d (%t), want %d", name, got, ok, line)
+	}
+}
+
+// expectOwnLeaves holds the chain's own leaves to the records on lines, in
+// turn.
+func (r rcRead) expectOwnLeaves(t *testing.T, name string, lines ...int) {
+	t.Helper()
+	var got []int
+	for _, h := range r.c.OwnLeaves() {
+		got = append(got, r.line(h))
+	}
+	if !slices.Equal(got, lines) {
+		t.Errorf("%s: the own leaves are on lines %v, want %v", name, got, lines)
 	}
 }
 
@@ -1058,65 +1111,59 @@ func TestAThreadTheModelCannotPlaceIsCannotTell(t *testing.T) {
 		return rcSystem(0, 3, 2000, subtypeCompactBoundary, `"compactMetadata":`+metadata+`,`)
 	}
 	for name, tc := range map[string]struct {
-		agent string
 		lines []string
 		why   chainWhy
 	}{
-		"a progress record": {"", append(slices.Clone(rcPlain), `{"type":"progress","uuid":"`+rcUUID(3)+
+		"a progress record": {append(slices.Clone(rcPlain), `{"type":"progress","uuid":"`+rcUUID(3)+
 			`","parentUuid":"`+rcUUID(2)+`","data":{}}`), whyProgress},
-		"a uuid of uppercase digits": {"", append(slices.Clone(rcPlain), strings.ReplaceAll(
+		"a uuid of uppercase digits": {append(slices.Clone(rcPlain), strings.ReplaceAll(
 			rcPrompt(2, 10, 2000), rcUUID(10), strings.ToUpper(rcUUID(10)))), whyUUID},
-		"a uuid two records carry": {"", append(slices.Clone(rcPlain), ctReplace(t, rcPrompt(2, 3, 2000),
+		"a uuid two records carry": {append(slices.Clone(rcPlain), ctReplace(t, rcPrompt(2, 3, 2000),
 			rcUUID(3), rcUUID(2))), whyDuplicateUUID},
-		"a sidechain's record": {"", append(slices.Clone(rcPlain), ctReplace(t, rcPrompt(2, 3, 2000),
+		"a sidechain's record": {append(slices.Clone(rcPlain), ctReplace(t, rcPrompt(2, 3, 2000),
 			`"isSidechain":false`, `"isSidechain":true`)), whySidechain},
-		"a file's snapshot": {"", append(slices.Clone(rcPlain), rcSystem(2, 3, 2000, subtypeFileSnapshot, "")),
+		"a file's snapshot": {append(slices.Clone(rcPlain), rcSystem(2, 3, 2000, subtypeFileSnapshot, "")),
 			whyFileSnapshot},
-		"a fork's briefing": {"", append(slices.Clone(rcPlain), rcAttach(2, 3, 2000, `{"type":"fork_briefing"}`)),
+		"a fork's briefing": {append(slices.Clone(rcPlain), rcAttach(2, 3, 2000, `{"type":"fork_briefing"}`)),
 			whyForkBriefing},
-		"a marked checkpoint": {"", append(slices.Clone(rcPlain), ctReplace(t, rcCheckpoint(2), `"lastPrompt"`,
+		"a marked checkpoint": {append(slices.Clone(rcPlain), ctReplace(t, rcCheckpoint(2), `"lastPrompt"`,
 			`"explicit":true,"lastPrompt"`)), whyMarkedCheckpoint},
-		"a checkpoint's numeric leaf": {"", append(slices.Clone(rcPlain), ctReplace(t, rcCheckpoint(2),
+		"a checkpoint's numeric leaf": {append(slices.Clone(rcPlain), ctReplace(t, rcCheckpoint(2),
 			`"leafUuid":"`+rcUUID(2)+`"`, `"leafUuid":7`)), whyCheckpointShape},
-		"a reply of a string": {"", []string{rcPlain[0], ctReplace(t, reply, rcSaid("done"), `"done"`)},
+		"a reply of a string": {[]string{rcPlain[0], ctReplace(t, reply, rcSaid("done"), `"done"`)},
 			whyAdmission},
-		"a message of null": {"", []string{rcPlain[0], ctReplace(t, reply,
+		"a message of null": {[]string{rcPlain[0], ctReplace(t, reply,
 			`"message":{"id":"msg_a","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":`+
 				rcSaid("done")+`,"stop_reason":"end_turn"}`, `"message":null`)}, whyAdmission},
-		"an API error's mark of a string": {"", []string{rcPlain[0], ctReplace(t, reply, `"type":"assistant"`,
+		"an API error's mark of a string": {[]string{rcPlain[0], ctReplace(t, reply, `"type":"assistant"`,
 			`"type":"assistant","isApiErrorMessage":"yes"`)}, whyAdmission},
-		"an attachment the drop cannot judge": {"", append(slices.Clone(rcPlain), rcAttach(2, 3, 2000,
+		"an attachment the drop cannot judge": {append(slices.Clone(rcPlain), rcAttach(2, 3, 2000,
 			`{"type":"skill_listing","names":["`+strings.Repeat("\xff", 513)+`"]}`)), whyAdmission},
-		"a reply id of a number": {"", []string{rcPlain[0], ctReplace(t, reply, `"id":"msg_a"`, `"id":7`)},
+		"a reply id of a number": {[]string{rcPlain[0], ctReplace(t, reply, `"id":"msg_a"`, `"id":7`)},
 			whyReplyID},
-		"a reply of no id under one of none, as q1t reads it": {"", []string{rcPlain[0],
+		"a reply of no id under one of none, as q1t reads it": {[]string{rcPlain[0],
 			rcReply(1, 2, "", 1000, rcSaid("a")),
 			rcReply(2, 3, "", 1500, rcCalls("x1")), rcCheckpoint(3), rcReply(1, 5, "msg_b", 3000, rcSaid("later"))},
 			whyReplyID},
-		"a call's id holding U+FFFD": {"", []string{rcPlain[0], rcReply(1, 2, "msg_a", 1000,
+		"a call's id holding U+FFFD": {[]string{rcPlain[0], rcReply(1, 2, "msg_a", 1000,
 			rcCalls(`x�`))}, whyCallID},
-		"a time of no milliseconds": {"", []string{rcPlain[0], ctReplace(t, reply, rcAt(1000),
+		"a time of no milliseconds": {[]string{rcPlain[0], ctReplace(t, reply, rcAt(1000),
 			"2026-01-02T03:04:06Z")}, whyTimestamp},
-		"a retraction list of a string": {"", append(slices.Clone(rcPlain), ctReplace(t,
+		"a retraction list of a string": {append(slices.Clone(rcPlain), ctReplace(t,
 			rcRetry(2, 3, 2000, rcQuoted(2)), `"retractedMessageUuids":[`+rcQuoted(2)+`]`,
 			`"retractedMessageUuids":"`+rcUUID(2)+`"`)), whyRetractionShape},
-		"a compaction's metadata of a string": {"", append(slices.Clone(rcPlain), boundary(`"kept"`)),
+		"a compaction's metadata of a string": {append(slices.Clone(rcPlain), boundary(`"kept"`)),
 			whyPreservedShape},
-		"a content replacement of no list": {"", append(slices.Clone(rcPlain),
+		"a content replacement of no list": {append(slices.Clone(rcPlain),
 			`{"type":"content-replacement","sessionId":"`+ctSession+`"}`), whyReplacementShape},
-		"a content replacement spreading too many": {"", append(slices.Clone(rcPlain),
+		"a content replacement spreading too many": {append(slices.Clone(rcPlain),
 			`{"type":"content-replacement","sessionId":"`+ctSession+`","replacements":[{}`+
 				strings.Repeat(",{}", threadChainMaxSpread)+`]}`), whySpread},
-		"a relink under an anchor naming no record": {"", append(slices.Clone(rcPlain),
+		"a relink under an anchor naming no record": {append(slices.Clone(rcPlain),
 			boundary(`{"preservedMessages":{"anchorUuid":"`+rcUUID(9)+`","uuids":[`+rcQuoted(2)+`]}}`),
 			rcPrompt(3, 4, 3000)), whyRelinkShape},
-		"a subagent's thread": {ctAgent, []string{ctReplace(t, rcPlain[0], `"isSidechain":false`,
-			`"isSidechain":true`)}, whySubagentMode},
-		"a subagent's fork reference": {ctAgent, []string{`{"type":"fork-context-ref","agentId":"` + ctAgent + `"}`},
-			whyForkContext},
-		"a subagent of no id a member is named by": {"a/b", slices.Clone(rcPlain), whyAgent},
 	} {
-		rcChain(t, tc.agent, tc.lines...).expectCannotTell(t, name, tc.why)
+		rcChain(t, "", tc.lines...).expectCannotTell(t, name, tc.why)
 	}
 	rcChain(t, "", rcPlain...).expect(t, "a thread holding none", map[int]rcAnswer{1: yes(whyChain),
 		2: yes(whyChain)}, rcOrder{[]int{1, 2}, allVariants})
@@ -1167,12 +1214,15 @@ func rcHungChain(records int) []string {
 // of more than threadChainMaxSpread records whose recovery spreads it is
 // whySpread, one of that many records not, as are more records than that
 // hung under one walked record, which the recovery spreads too, and that many
-// not.
+// not. A subagent's own load spreads its walk alike, and its thread then
+// hands no own leaves, though the chain chose its leaf among them before the
+// recovery.
 //
 // Mutation: drop the walk's spread check, and the long walk reads; or take
 // its bound for past it, and the walk of threadChainMaxSpread records is
 // cannot tell. Drop the hung records' spread check, and the long hung chain
-// reads.
+// reads. Answer OwnLeaves of a thread cannot tell, and the subagent's long
+// walk hands its leaf.
 func TestARecoverySpreadingPastACallsArgumentsIsCannotTell(t *testing.T) {
 	t.Parallel()
 	rcChain(t, "", rcLongChain(threadChainMaxSpread+1)...).expectCannotTell(t, "a walk past a call's arguments",
@@ -1180,6 +1230,11 @@ func TestARecoverySpreadingPastACallsArgumentsIsCannotTell(t *testing.T) {
 	if why, unknown := rcChain(t, "", rcLongChain(threadChainMaxSpread)...).c.Unknown(); unknown {
 		t.Errorf("a walk of as many records as a call takes is cannot tell (%s)", why)
 	}
+	// The subagent's long walk: rcLongChain's last reply its own, and so its
+	// own load's leaf.
+	long := rcLongChain(threadChainMaxSpread + 1)
+	long[len(long)-1] = rcOwn(t, long[len(long)-1])
+	rcChain(t, ctAgent, long...).expectCannotTell(t, "a subagent's walk past a call's arguments", whySpread)
 
 	rcChain(t, "", rcHungChain(threadChainMaxSpread+1)...).expectCannotTell(t,
 		"records hung under a walked record past a call's arguments", whySpread)
@@ -1247,12 +1302,15 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // path's fallback walks on to; and a reply only the prune's group reads as
 // part of its parent's, under a result written before its own call. A thread
 // of exactly 5,242,880 bytes is read as its small path reads it. A subagent's
-// thread, cannot tell whole in this commit, is whyLargeFile past the bound
-// where a record of it does not say it is a sidechain's right after its
-// parent, where it holds a boundary, a line whose JSON fails that a reader
-// takes for its start, or a line of no record that carries `"parentUuid":` at
-// its depth one, and whySubagentMode where every record says so and no such
-// line is there, and at the bound.
+// thread whose every record says it is a sidechain's right after its parent,
+// and that holds no line that binds it to the small path, is path-free, a
+// branch the main thread's dispatch from the last record would not reach among
+// it, since no reader has a slot to start from there: it answers alike under
+// the bound, at it and past it. Any other is whyLargeFile past the bound, and
+// answers as its small path does under it and at it, AnySize false: one whose
+// record says so after another key, or that holds a boundary, a line whose
+// JSON fails that a reader takes for its start, or a line of no record that
+// carries `"parentUuid":` at its depth one.
 //
 // Mutation: take the bound itself for past it, and the thread of 5,242,880
 // bytes is cannot tell; drop the dispatch's coverage, and the threads it never
@@ -1275,9 +1333,10 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // where one is at depth one, or by the first of them where none is, and the
 // record's own uuid is missed; read a walk that meets a parent naming no
 // record as handing the load every line, as the dispatch alone does, and the
-// record above it reads; or read a refused line, or a line of no record
-// carrying the key, as binding a main thread alone, and the subagent's thread
-// holding one reads.
+// record above it reads; read a refused line, or a line of no record carrying
+// the key, as binding a main thread alone, and the subagent's thread holding
+// one reads; or hold a subagent's thread to the main thread's dispatch from
+// its last record, and its branch costs it the bound.
 func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
 	t.Parallel()
 	past := claudeResumeLargeFile + 1
@@ -1428,35 +1487,50 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 	at.expect(t, "a reply of an id on another branch, of 5,242,880 bytes", branchAnswers,
 		rcOrder{[]int{1, 3, 2, 4, 5}, allVariants})
 
-	// side is line as a subagent's record, which says it is a sidechain's
-	// right after its parent.
-	side := func(line string) string {
-		return ctReplace(t, line, `"isSidechain":false,`, `"isSidechain":true,"agentId":"`+ctAgent+`",`)
-	}
-	agent := []string{side(rcPrompt(0, 1, 0)), side(rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
+	// agent is a subagent's thread every record of which says it is a
+	// sidechain's right after its parent, and hands both.
+	agent := []string{rcOwn(t, rcPrompt(0, 1, 0)), rcOwn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
 	for name, tc := range map[string]struct {
 		lines []string
-		why   chainWhy
+		free  bool
+		want  map[int]rcAnswer
+		order []int
+		leaf  int
 	}{
-		"a subagent's thread whose every record says it is a sidechain's at its head": {agent, whySubagentMode},
+		"a subagent's thread whose every record says it is a sidechain's at its head": {agent, true,
+			plain, []int{1, 2}, 2},
+		"a subagent's thread whose branch the main thread's dispatch would not reach": {append(slices.Clone(agent),
+			rcOwn(t, rcReply(1, 3, "msg_b", 2000, rcSaid("later")))), true,
+			rcHanding(whyChain, []int{1, 3}, map[int]rcAnswer{2: no(whyOffConversation)}), []int{1, 3}, 3},
 		"a subagent's thread of a record that says so after another key": {[]string{agent[0], ctReplace(t,
 			agent[1], `"isSidechain":true,"agentId":"`+ctAgent+`",`, `"agentId":"`+ctAgent+`","isSidechain":true,`)},
-			whyLargeFile},
-		"a subagent's thread holding a compaction's boundary": {append(slices.Clone(agent), side(rcSystem(2, 3, 2000,
-			subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`))), whyLargeFile},
+			false, plain, []int{1, 2}, 2},
+		"a subagent's thread holding a compaction's boundary": {append(slices.Clone(agent), rcOwn(t, rcSystem(2, 3,
+			2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`)), rcOwn(t, rcPrompt(3, 4, 3000))),
+			false, rcHanding(whyChain, []int{1, 2, 3, 4}), []int{1, 2, 3, 4}, 4},
 		"a subagent's thread holding a line whose JSON fails, which a reader takes for its start": {append(
 			slices.Clone(agent), `{"parentUuid":null,"uuid":"`+rcUUID(9)+`","timestamp":"`+rcAt(3000)+`" x}`),
-			whyLargeFile},
+			false, plain, []int{1, 2}, 2},
 		"a subagent's thread holding a line of no record that carries parentUuid at its depth one": {append(
 			slices.Clone(agent), `{"type":"queue-operation","operation":"enqueue","parentUuid":null,"uuid":"`+
-				rcUUID(9)+`","timestamp":"`+rcAt(3000)+`","sessionId":"`+ctSession+`"}`), whyLargeFile},
+				rcUUID(9)+`","timestamp":"`+rcAt(3000)+`","sessionId":"`+ctSession+`"}`), false, plain, []int{1, 2}, 2},
 	} {
-		rcChain(t, ctAgent, tc.lines...).expectCannotTell(t, name, whySubagentMode)
-		rcChain(t, ctAgent, rcSized(t, past, 1, `"content":"a prompt`, tc.lines...)...).expectCannotTell(t,
-			name+", past the bound", tc.why)
-		if tc.why == whyLargeFile {
-			rcChain(t, ctAgent, rcSized(t, claudeResumeLargeFile, 1, `"content":"a prompt`, tc.lines...)...).
-				expectCannotTell(t, name+", of 5,242,880 bytes", whySubagentMode)
+		for _, size := range []int{0, claudeResumeLargeFile, past} {
+			lines := tc.lines
+			if size > 0 {
+				lines = rcSized(t, size, 1, `"content":"a prompt`, tc.lines...)
+			}
+			read := rcChain(t, ctAgent, lines...)
+			at := fmt.Sprintf("%s, %d bytes", name, read.c.bytes)
+			if size == past && !tc.free {
+				read.expectCannotTell(t, at, whyLargeFile)
+				continue
+			}
+			read.expect(t, at, tc.want, rcOrder{tc.order, allVariants})
+			read.expectLeaf(t, at, tc.leaf)
+			if read.c.AnySize() != tc.free {
+				t.Errorf("%s is path-free %t, want %t", at, read.c.AnySize(), tc.free)
+			}
 		}
 	}
 }
@@ -2038,6 +2112,170 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 	} {
 		tc.check(t, name)
 	}
+}
+
+// A SUBAGENT'S CONVERSATION IS THE ONE ITS OWN LOAD HANDS: the load leads from
+// one of its own leaves, the records of the subagent's agentId and a
+// sidechain's that no such record names as its parent, a compaction's
+// boundary aside: the latest of them, the first in the file on a tie, an
+// attachment as well as a reply, none of no time; a record that is no
+// sidechain's, or of another agent, neither leads nor makes the record it
+// names a parent; and a thread of none, or none of a time, hands nothing. It
+// walks the whole file as the main thread's resume does, as its own relink
+// left it, by parents written after their records and by the fallback past a
+// record a torn write left, recovers beside its replies a result off the walk
+// as well, and hands on every record of the subagent's agentId that the walk,
+// the recovery or the tails reach, a sidechain's or not, and no other's. No
+// retraction filter or drop of malformed attachments runs on it, and a fork's
+// briefing is an attachment like any other there. Its own leaves are those its
+// load chose among, a second one off the conversation (DW's dropped reply) or
+// recovered (V3) as its load leaves it.
+//
+// Mutation: lead by the file's order, and V2 leads from its last own leaf;
+// take the later on a tie, and V2b does; lead from the first own leaf, and
+// V3's result and DW's dropped reply do; lead from any record, and the latest
+// one, no sidechain's, leads; let a record of no time, or a compaction's
+// boundary, lead; read every record's parent as naming one, and the own
+// leaves another agent's records name are none, so their thread hands
+// nothing; read own records by their agentId alone, or every agentId as the
+// subagent's, and a thread of none leads, and another agent's records are
+// handed; pick the leaf as the main thread's resume does, or file no own
+// leaves, and the answers and own leaves part from the load's; skip the
+// relink, and the turn it deletes is handed; filter on isSidechain as well as
+// agentId, and the record of the subagent's id that is no sidechain's is not
+// handed; hand another agent's records, or keep the tails' cannot tell for
+// them, and they are not answered not handed; run the retraction filter, and
+// the reply its fallback names is taken back; run the malformed-attachment
+// drop, and the hook's success it takes is cannot tell, and the thread of the
+// skill listing it cannot judge; refuse a fork's briefing, and its thread is
+// cannot tell; or stop the walk where a parent names no record, and the torn
+// copy hands its last two records alone.
+func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
+	t.Parallel()
+	own := func(line string) string { return rcOwn(t, line) }
+	untimed := func(line string, ms int) string { return ctReplace(t, line, `,"timestamp":"`+rcAt(ms)+`"`, "") }
+	// branches is V2's thread: off the prompt, a finished reply (2) at first,
+	// and a call (3), its result (4) and a finished reply (5) at then.
+	branches := func(first, then int) []string {
+		return []string{own(rcPrompt(0, 1, 0)), own(rcReply(1, 2, "msg_fb", first, rcSaid("b done"))),
+			own(rcReply(1, 3, "msg_x", 1000, rcCalls("x1"))), own(rcResults(3, 4, 2000, "x1")),
+			own(rcReply(4, 5, "msg_fa", then, rcSaid("a done")))}
+	}
+	branched := rcHanding(whyChain, []int{1, 2}, rcAll(no(whyOffConversation), 3, 4, 5))
+	// malformed is a call (2), its result (3), an attachment (4) of payload
+	// under the result, and a reply after it.
+	malformed := func(payload string) []string {
+		return []string{own(rcPrompt(0, 1, 0)), own(rcReply(1, 2, "msg_a", 1000, rcCalls("x1"))),
+			own(rcResults(2, 3, 2000, "x1")), own(rcAttach(3, 4, 2100, payload)),
+			own(rcReply(4, 5, "msg_b", 3000, rcSaid("done")))}
+	}
+	// torn is a reply cut inside a key by the write of a meta user record (51)
+	// after it, as p2 run d's box left its subagent's line 25.
+	torn := own(rcReply(4, 50, "msg_b", 1300, rcCalls("x2")))
+	torn = torn[:strings.Index(torn, `"stop_reason"`)+len(`"stop_rea`)] + own(rcMeta(4, 51, 4400))
+	// relinked is a thread whose compaction kept a prompt (3) and a reply (4)
+	// under its summary (6), deleted the turn before them (1, 2), and hangs
+	// a prompt (7) whose parent it deleted from them.
+	relinked := []string{own(rcPrompt(0, 1, 0)), own(rcReply(1, 2, "msg_a", 1000, rcSaid("a"))),
+		own(rcPrompt(2, 3, 2000)), own(rcReply(3, 4, "msg_k", 3000, rcSaid("k"))),
+		own(rcBoundary(5, 4000, rcKeeping(6, 3, 4))), own(rcSummary(5, 6, 4100)), own(rcPrompt(2, 7, 5000)),
+		own(rcReply(7, 8, "msg_b", 6000, rcSaid("b")))}
+	for name, tc := range map[string]rcSubagentCase{
+		"V2: the latest own leaf, written first": {rcCase{branches(5000, 3000), branched, []int{1, 2}, 2},
+			[]int{2, 5}},
+		"V2b: two own leaves of one time, the first in the file": {rcCase{branches(3000, 3000), branched,
+			[]int{1, 2}, 2}, []int{2, 5}},
+		"V1: an attachment the latest own leaf": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_x", 1000, rcCalls("x1"))), own(rcResults(2, 3, 1100, "x1")),
+			own(rcAttach(3, 4, 2000, rcNote)), own(rcReply(1, 5, "msg_f", 1200, rcSaid("done")))},
+			rcHanding(whyChain, []int{1, 2, 3, 4}, rcAll(no(whyOffConversation), 5)), []int{1, 2, 3, 4}, 4},
+			[]int{4, 5}},
+		"parents written after their records, as 2.1.310 writes them": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcAttach(3, 2, 20, rcNote)), own(rcAttach(1, 3, 10, rcNote)),
+			own(rcReply(2, 4, "msg_a", 1000, rcSaid("done")))}, rcHanding(whyChain, []int{1, 2, 3, 4}),
+			[]int{1, 3, 2, 4}, 4}, []int{4}},
+		"another agent's records, none's and its own id's no sidechain's": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			rcIn(t, rcAttach(1, 2, 100, rcNote), rcAnother, true), rcIn(t, rcAttach(2, 3, 200, rcNote), "", true),
+			rcIn(t, rcAttach(3, 4, 300, rcNote), ctAgent, false), own(rcReply(4, 5, "msg_a", 1000, rcSaid("done"))),
+			rcIn(t, rcAttach(5, 6, 1100, rcNote), rcAnother, true)},
+			rcHanding(whyChain, []int{1, 4, 5}, rcAll(no(whyAnotherAgent), 2, 3, 6)), []int{1, 4, 5}, 5},
+			[]int{1, 5}},
+		"its own id's latest record no sidechain's, which leads nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), rcIn(t, rcAttach(2, 3, 2000, rcNote), ctAgent, false)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2}, []int{2}},
+		"no record of its own: no conversation": {rcCase{[]string{rcIn(t, rcPrompt(0, 1, 0), ctAgent, false),
+			rcIn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")), ctAgent, false)},
+			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, nil},
+		"an own leaf of no time: no conversation": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			untimed(own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), 1000)},
+			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, []int{2}},
+		"a compaction's boundary, which leads nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), own(rcBoundary(3, 2000, `{"trigger":"manual"}`))},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2}, []int{2}},
+		"its own relink": {rcCase{relinked, rcHanding(whyChain, []int{5, 6, 3, 4, 7, 8},
+			rcAll(no(whyRelinkDeleted), 1, 2)), []int{5, 6, 3, 4, 7, 8}, 8}, []int{8}},
+		"a retraction, which takes back nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcSaid("refused"))), own(rcFallback(2, 3, 1500, rcQuoted(2))),
+			own(rcRetry(3, 4, 1600, rcQuoted(2))), own(rcReply(4, 5, "msg_b", 2000, rcSaid("done")))},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5}), []int{1, 2, 3, 4, 5}, 5}, []int{5}},
+		"a hook's success the malformed-attachment drop would take": {rcCase{malformed(ctReplace(t, rcHook("x1"),
+			`"content":""`, `"content":7`)), rcHanding(whyChain, []int{1, 2, 3, 4, 5}), []int{1, 2, 3, 4, 5}, 5},
+			[]int{5}},
+		"a skill listing the malformed-attachment drop's rules cannot judge": {rcCase{malformed(
+			`{"type":"skill_listing","names":["` + strings.Repeat("\xff", 513) + `"]}`),
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5}), []int{1, 2, 3, 4, 5}, 5}, []int{5}},
+		"a fork's briefing, an attachment like any other": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcAttach(1, 2, 100, `{"type":"fork_briefing","text":"the brief"}`)),
+			own(rcReply(2, 3, "msg_a", 1000, rcSaid("done")))}, rcHanding(whyChain, []int{1, 2, 3}),
+			[]int{1, 2, 3}, 3}, []int{3}},
+		"the torn copy: the fallback past the record a torn write left": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcCalls("x1"))), own(rcResults(2, 3, 1100, "x1")),
+			own(rcAttach(3, 4, 1200, rcNote)), torn, own(rcAttach(51, 6, 4500, rcNote)),
+			own(rcReply(6, 7, "msg_c", 4600, rcSaid("done")))}, rcHanding(whyChain, []int{1, 2, 3, 4, 6, 7}),
+			[]int{1, 2, 3, 4, 6, 7}, 7}, []int{4, 7}},
+		"DW's dropped reply, an own leaf off the conversation": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcCalls("x1"))), own(rcResults(2, 3, 1100, "x1")),
+			own(rcAttach(3, 4, 1200, rcNote)), own(rcReply(4, 5, "msg_b", 1300, rcCalls("x2"))),
+			own(rcMeta(4, 6, 3000)), own(rcReply(6, 7, "msg_c", 3100, rcSaid("done")))},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 6, 7}, rcAll(no(whyOffConversation), 5)),
+			[]int{1, 2, 3, 4, 6, 7}, 7}, []int{5, 7}},
+		"V3: two calls at once, the first's result an own leaf recovered beside its reply": {rcCase{[]string{
+			own(rcPrompt(0, 1, 0)), own(rcReply(1, 2, "msg_x", 1000, rcCalls("x1"))),
+			own(rcReply(2, 3, "msg_x", 1001, rcCalls("x2"))), own(rcResults(2, 4, 1100, "x1")),
+			own(rcResults(3, 5, 1200, "x2")), own(rcReply(5, 6, "msg_f", 1300, rcSaid("done")))},
+			rcHanding(whyChain, []int{1, 2, 3, 5, 6}, map[int]rcAnswer{4: yes(whyRecoveredResult)}),
+			[]int{1, 2, 3, 4, 5, 6}, 6}, []int{4, 6}},
+	} {
+		tc.check(t, name)
+	}
+}
+
+// A SUBAGENT'S SHAPE ITS LOAD CANNOT BE MODELLED ON IS CANNOT TELL, the whole
+// thread: a fork's reference naming the subagent, whose load hands the
+// parent's conversation before its own; a subagent id no member is named by;
+// and a file's snapshot, which 2.1.322's fallback passes over and 2.1.310's
+// does not, as in the main thread. A thread holding none is modelled.
+//
+// Mutation: drop any one check, or make the snapshot's the main thread's
+// alone, and the thread holding that shape is read as modelled.
+func TestASubagentShapeTheLoadCannotBeModelledOnIsCannotTell(t *testing.T) {
+	t.Parallel()
+	plain := []string{rcOwn(t, rcPrompt(0, 1, 0)), rcOwn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
+	for name, tc := range map[string]struct {
+		agent string
+		lines []string
+		why   chainWhy
+	}{
+		"a fork's reference naming the subagent": {ctAgent, append(slices.Clone(plain),
+			`{"type":"fork-context-ref","agentId":"`+ctAgent+`"}`), whyForkContext},
+		"a subagent id holding a slash": {"a/b", slices.Clone(plain), whyAgent},
+		"a file's snapshot": {ctAgent, append(slices.Clone(plain), rcOwn(t, rcSystem(2, 3, 2000,
+			subtypeFileSnapshot, ""))), whyFileSnapshot},
+	} {
+		rcChain(t, tc.agent, tc.lines...).expectCannotTell(t, name, tc.why)
+	}
+	rcChain(t, ctAgent, plain...).expect(t, "a thread holding none", rcHanding(whyChain, []int{1, 2}),
+		rcOrder{[]int{1, 2}, allVariants})
 }
 
 // A CHAIN ANSWERS WHAT ITS RECORDS CARRY: every record of one reply id shares

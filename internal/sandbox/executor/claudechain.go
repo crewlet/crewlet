@@ -108,8 +108,14 @@ const (
 	// the last compaction's boundary, where a boundary names what it kept,
 	// and not among the records it kept ([threadChain], THE RELINK).
 	whyRelinkDeleted chainWhy = "relink_deleted"
-	// whyNoConversation is every record of a thread the resume finds no
-	// conversation in, and so hands nothing of, but one its relink deleted.
+	// whyAnotherAgent is a record a subagent's own load walks, recovers or may
+	// hang as a tail whose agentId is not that subagent's, none among it: the
+	// load hands on the records of the subagent's own id alone ([threadChain],
+	// A SUBAGENT'S OWN LOAD).
+	whyAnotherAgent chainWhy = "another_agent"
+	// whyNoConversation is every record of a thread the resume, or a
+	// subagent's own load, finds no conversation in, and so hands nothing of,
+	// but one its relink deleted.
 	whyNoConversation chainWhy = "no_conversation"
 	// whyNoRecord is the answer for a handle that names no record of the
 	// thread: noChainRecord, or one past the handles the chain gave out.
@@ -125,13 +131,14 @@ const (
 	// whyRelease is a record one release's retraction filter drops and the
 	// other's does not.
 	whyRelease chainWhy = "release"
-	// whyTail is a record the resume's tails hang or may hang under the
-	// conversation: one the recovery hangs off a reply (a hook's records),
-	// which this model finds but does not hand yet, and one that may hang
-	// under the leaf, which it does not follow yet; or one only such a
-	// record's retraction list names. Gone once a later commit of this change
-	// models the tails (`feat(executor): model what a resume hangs off a reply
-	// and its leaf`).
+	// whyTail is a record the tails hang or may hang under the conversation
+	// (in a subagent's thread, one of the subagent's own id): one the
+	// recovery hangs off a reply (a hook's records), which this model finds
+	// but does not hand yet, and one that may hang under the leaf, which it
+	// does not follow yet; or, in the main thread, one only such a record's
+	// retraction list names. Gone once a later commit of this change models
+	// the tails (`feat(executor): model what a resume hangs off a reply and
+	// its leaf`).
 	whyTail chainWhy = "tail"
 	// whyAttachmentDrop is a handed attachment the resume's drop of malformed
 	// attachments may take, which this model does not follow yet; gone once a
@@ -209,15 +216,13 @@ const (
 	// whyResultByCall is a result 2.1.322's and 2.1.310's flag
 	// tengu_foamy_spring may hang elsewhere than under its parent.
 	whyResultByCall chainWhy = "result_by_call"
-	// whyForkContext is a fork's reference in a subagent's thread.
+	// whyForkContext is a fork's reference in a subagent's thread, any
+	// agent's: where it names the subagent, its own load hands the parent's
+	// conversation before its own ([threadChain], A SUBAGENT'S OWN LOAD).
 	whyForkContext chainWhy = "fork_context"
 	// whyAgent is the thread of a subagent id no member is named by
 	// ([validClaudeAgent]).
 	whyAgent chainWhy = "agent"
-	// whySubagentMode is every subagent's thread, until a later commit of
-	// this change models a subagent's own load (`feat(executor): model the
-	// conversation a subagent's own load hands it`).
-	whySubagentMode chainWhy = "subagent_mode"
 )
 
 // whyUndecided is the answer to a question asked of a chain End has not
@@ -229,11 +234,11 @@ const whyUndecided chainWhy = "undecided"
 
 // chainWhys is every reason, the place each answer stores its reason by.
 var chainWhys = [...]chainWhy{"", whyChain, whyRecoveredReply, whyRecoveredResult, whyOffConversation,
-	whyRetracted, whyRelinkDeleted, whyNoConversation, whyNoRecord, whyLeafFlag, whyRelease, whyTail,
-	whyAttachmentDrop, whyBound, whyLine, whyLineGap, whyProgress, whyUUID, whyDuplicateUUID, whySidechain,
-	whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape, whyAdmission, whyReplyID, whyCallID,
-	whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape, whyReplacementShape, whySpread,
-	whyLargeFile, whyResultByCall, whyForkContext, whyAgent, whySubagentMode, whyUndecided}
+	whyRetracted, whyRelinkDeleted, whyAnotherAgent, whyNoConversation, whyNoRecord, whyLeafFlag, whyRelease,
+	whyTail, whyAttachmentDrop, whyBound, whyLine, whyLineGap, whyProgress, whyUUID, whyDuplicateUUID,
+	whySidechain, whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape, whyAdmission,
+	whyReplyID, whyCallID, whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape,
+	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyForkContext, whyAgent, whyUndecided}
 
 // Valid reports whether w is one of the reasons.
 func (w chainWhy) Valid() bool { return w != "" && slices.Contains(chainWhys[:], w) }
@@ -352,7 +357,10 @@ const chainPrefixBytes = 10
 // deserializer e_n @295265705; 2.1.310's cMe @248512380 and TJt @248494717).
 // Every pass after those is the reader's own. Subagent mode
 // (newThreadChain(agent)) is a subagent's own load of its thread (2.1.322's
-// Rye @293845538, 2.1.310's FBe @247216758).
+// Rye @293845538, 2.1.310's FBe @247216758): what it hands on, the walk, the
+// recovery and the tails from its own leaf, of the subagent's own id, which
+// no retraction filter or drop of malformed attachments follows (A
+// SUBAGENT'S OWN LOAD); every pass after it is its reader's.
 //
 // THE BYTES ARE THE RESUME'S: what See and Unread are handed must be the file
 // the resume reads, every whole line of it in turn. That is the caller's
@@ -376,7 +384,8 @@ const chainPrefixBytes = 10
 // variants in all ([chainVariants]). Within this model they part in two
 // places: the leaf, where q1t moves it (2.1.322 with foamy_spring and
 // sorted_metcalfe on), and the retraction filter, whose names each release
-// reads off other records. A record handed under some variants and not others
+// reads off other records. Both are the main thread's: no variant parts a
+// subagent's thread. A record handed under some variants and not others
 // is handedUnknown (whyLeafFlag, whyRelease); each distinct order is handed
 // once, with the variants that hand it ([threadChain.EachOrder]).
 // foamy_spring's other effect, a result hung under a call it names rather than
@@ -431,8 +440,9 @@ const chainPrefixBytes = 10
 //   - in the main thread, a sidechain's record (whySidechain), a fork's
 //     briefing (2.1.322's jWo @293848295, 2.1.310's Ypo @247219197:
 //     whyForkBriefing), and anywhere, a file's snapshot, which 2.1.322 keeps
-//     out of the session's rows (ZI @293589374) and 2.1.310 does not:
-//     whyFileSnapshot;
+//     out of the session's rows (ZI @293589374) and out of the walk's
+//     fallback (`if(ZI(ne))continue` @293589741), and 2.1.310 out of
+//     neither: whyFileSnapshot;
 //   - a reply whose mark of an API error or model the layer cannot read, and
 //     an attachment whose payload the layer cannot judge by the
 //     malformed-attachment drop's rules (whyAdmission); a timestamp in no form
@@ -448,8 +458,9 @@ const chainPrefixBytes = 10
 //     passes it over: whyReplacementShape), or that lists more than
 //     [threadChainMaxSpread] entries, which either may fail to spread
 //     (whySpread);
-//   - in a subagent's thread, a fork's reference (whyForkContext), whose
-//     parent's walk its load prefixes.
+//   - in a subagent's thread, a fork's reference (whyForkContext), any
+//     agent's, though its load prefixes the parent's conversation by the
+//     subagent's own alone (A SUBAGENT'S OWN LOAD).
 //
 // For every record kept the chain files its parent as written (`parentUuid`
 // absent, null or "" a root, falsy to every walk; a lowercase canonical uuid
@@ -607,9 +618,10 @@ const chainPrefixBytes = 10
 // hangs under itself. Each of the 22 relinked threads the probes kept anchors
 // its kept records at the compaction's summary, after its boundary.
 //
-// THE LEAF (2.1.322's Gr @293820883 and Yya @293834568, 2.1.310's kr
-// @247196754 and m_i @247206356, alike but for q1t), read off the thread as
-// the relink left it. Where the resume did not relink, THE SINGLE PATH:
+// THE LEAF of the main thread (2.1.322's Gr @293820883 and Yya @293834568,
+// 2.1.310's kr @247196754 and m_i @247206356, alike but for q1t), read off the
+// thread as the relink left it; a subagent's own load chooses its own (A
+// SUBAGENT'S OWN LOAD). Where the resume did not relink, THE SINGLE PATH:
 //
 //   - the start is the last row; but where no checkpoint carries leafUuid and
 //     the newest row is not the last, it is the record of the latest
@@ -729,10 +741,56 @@ const chainPrefixBytes = 10
 // filter: an attachment its rules take is handedUnknown until a later commit
 // of this change models the drop (whyAttachmentDrop).
 //
-// WHAT THIS COMMIT LEAVES TO A LATER ONE: every subagent's thread is cannot
-// tell whole (whySubagentMode) until its own commit models a subagent's own
-// load, and one past 5,242,880 bytes that is not path-free is whyLargeFile
-// first.
+// A SUBAGENT'S OWN LOAD (2.1.322's Rye @293845538, 2.1.310's FBe
+// @247216758), the thread of newThreadChain(agent). It loads the subagent's
+// file with the main thread's own loader (`oee(h,S)` @293845856, `Cne(h,S)`
+// @247217076), so THE LINES THAT ARE NO RECORD, THE LOAD and THE RELINK hold
+// of it as written above, the relink being the loader's last step (`let
+// Dr=iWo(r,n)` @293820833, `let vs=ypo(n)` @247196708), and THE LARGE FILE by
+// its rule for a subagent's thread. The loader then picks a leaf from the
+// session's rows as the main thread's resume does, and the subagent's load
+// reads none of that pick; so a fork's briefing, which the loader passes over
+// only in choosing those rows (`!Ho.isSidechain&&!jWo(Ho)` @293815308,
+// `!Eo.isSidechain&&!Ypo(Eo)` @247192112), is an attachment like any other
+// there. The subagent's load chooses its own leaf:
+//
+//   - its OWN records are those of the subagent's agentId whose isSidechain is
+//     true (`tt.agentId===e&&tt.isSidechain` @293846307, @247217526); where
+//     there is none, it finds no conversation (`no_agent_messages`
+//     @293846356, @247217574);
+//   - its OWN LEAVES ([threadChain.OwnLeaves]) are the own records no own
+//     record names as its parent, each as the relink left it, a compaction's
+//     boundary aside (@293846434 and @293846471, @247217652 and @247217688):
+//     a record of another agent, or one that is no sidechain's, naming a
+//     record makes it no parent;
+//   - its LEAF is, of its own leaves that have a time, the one of the latest
+//     Date.parse of it, the first in the file on a tie (2.1.322's cj
+//     @293745290, 2.1.310's p0 @247129929, `y>s` from -Infinity); where none
+//     has one, it finds no conversation (`no_leaf` @293846585, @247217801).
+//
+// From that leaf it makes THE WALK, THE RECOVERY and THE TAILS as the main
+// thread's resume makes them (`Ce=A7t(H,Ee)` @293846609, `w$t(D,be)`
+// @247217828), over every record of the file the relink left, whatever its
+// agent or side, and hands on the records of the subagent's agentId alone,
+// whatever their side (`.filter((tt)=>tt.agentId===e)` @293846627,
+// @247217837): every other record the walk, the recovery or the tails reach
+// is not handed (whyAnotherAgent). No retraction filter and no drop of
+// malformed attachments runs on that load: the continuation runs the drop
+// only after a trim of its own that turns on its own state (2.1.322's
+// `Fce(rr)` @302266975 after `[...L5t(G.messages)]` @302266907, 2.1.310's
+// `dne(bn)` @268540138 after `[...wMt(I.messages)]` @268540070), which, as
+// every pass after the load, is its reader's. Where a fork's reference names
+// the subagent, its load hands the parent's conversation before its own
+// (`He=Y.get(e)` @293846722, `xe=V.get(e)` @247217932); the chain refuses a
+// fork's reference in a subagent's thread whichever agent it names
+// (whyForkContext). MEASURED by the design's census of the 89 subagent
+// threads the probes kept: each hands one list under both releases and every
+// flag, and its leaf is the last of its own leaves in the file; the 74
+// 2.1.310 threads hang records under parents written after them, so their
+// handed order is not the file's; 22 hold a second own leaf, 21 of them
+// handed (19 results recovered beside their reply, 2 attachments) and one a
+// reply its run dropped; and the walk takes its fallback in 2, past a line a
+// torn write left.
 //
 // THE BOUNDS: [threadChainMaxRecords] records, retraction prefixes and uuids
 // the newest boundary that names what it kept lists, and
@@ -818,10 +876,12 @@ type threadChain struct {
 	keptScratch [][16]byte
 
 	// What End decided: each record's verdict, by handle - 1, the distinct
-	// orders, and the leaf every variant walks from.
-	verdicts []chainVerdict
-	orders   []chainOrder
-	leaf     chainHandle
+	// orders, the leaf every variant walks from, and, in a subagent's thread,
+	// its own leaves.
+	verdicts  []chainVerdict
+	orders    []chainOrder
+	leaf      chainHandle
+	ownLeaves []chainHandle
 }
 
 // chainState is where a threadChain is in its one pass.
@@ -868,6 +928,9 @@ const (
 	kindNowhere
 	// kindDeleted is a record the relink deleted, in no step after it.
 	kindDeleted
+	// kindAgent is, in a subagent's thread, a record of that subagent's
+	// agentId; with kindSideTrue, one of its own.
+	kindAgent
 )
 
 // chainRecord is what the chain files of one record.
@@ -1137,13 +1200,18 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	if c.agent == "" && r.kind&kindSideTrue != 0 {
 		c.cannotTell(whySidechain)
 	}
+	if c.agent != "" && head.AgentID == c.agent {
+		r.kind |= kindAgent
+	}
 	snapshot := head.Type == recordSystem && head.Subtype == subtypeFileSnapshot
 	if snapshot {
 		c.cannotTell(whyFileSnapshot)
 	}
+	// A fork's briefing is no row; only the main thread's leaf reads rows
+	// (THE LOAD, A SUBAGENT'S OWN LOAD).
 	attachment, typeErr := line.AttachmentType()
 	briefing := typeErr == nil && attachment == attachmentForkBriefing
-	if briefing {
+	if briefing && c.agent == "" {
 		c.cannotTell(whyForkBriefing)
 	}
 	if mErr != nil {
@@ -1602,7 +1670,7 @@ func (c *threadChain) End(ctx context.Context) error {
 	c.index, c.written, c.sources, c.scratch, c.replies = nil, nil, nil, nil, nil
 	c.kept, c.keptScratch = chainKept{}, nil
 	if err != nil {
-		c.verdicts, c.orders, c.leaf = nil, nil, noChainRecord
+		c.verdicts, c.orders, c.leaf, c.ownLeaves = nil, nil, noChainRecord, nil
 		return err
 	}
 	c.state = chainDecided
@@ -1761,13 +1829,27 @@ func (c *threadChain) CallKey(id string) (chainCallID, bool) {
 }
 
 // Leaf is the record the resume walked from: in the main thread the leaf
-// every variant walks from. False where q1t's variants walk from another, and
-// where no record was walked.
+// every variant walks from, in a subagent's thread its own load's leaf. False
+// where q1t's variants walk from another, and where no record was walked.
 func (c *threadChain) Leaf() (chainHandle, bool) {
 	if c.state != chainDecided || c.why != "" || c.leaf == noChainRecord {
 		return noChainRecord, false
 	}
 	return c.leaf, true
+}
+
+// OwnLeaves is, in a subagent's thread, every record of the subagent's own
+// that no such record names as its parent, a compaction's boundary aside, in
+// the file's order: the records its own load chose its leaf among
+// ([threadChain], A SUBAGENT'S OWN LOAD), the leaf one of them where it found
+// one. The chain's own: a reader reads it and never writes it. Nil in the main
+// thread, before End decided, after an End its context cut short, and where
+// the thread is cannot tell.
+func (c *threadChain) OwnLeaves() []chainHandle {
+	if c.state != chainDecided || c.why != "" {
+		return nil
+	}
+	return c.ownLeaves[:len(c.ownLeaves):len(c.ownLeaves)]
 }
 
 // AnySize reports whether the thread is PATH-FREE ([threadChain], THE LARGE
@@ -2252,25 +2334,20 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.why == "" && c.agent != "" {
-		// A subagent's thread is path-free where its lines are: no reader has
-		// a slot to start from (THE LARGE FILE).
-		if c.bytes > claudeResumeLargeFile && c.smallOnly {
-			c.cannotTell(whyLargeFile)
-		}
-		c.cannotTell(whySubagentMode)
-	}
 	if c.why != "" {
 		return nil
 	}
 	// THE LARGE FILE: path-free where no line binds the thread to the small
-	// path, every reader starts from the last record, and the dispatch from
-	// it alone reaches every record.
+	// path and, in the main thread, every reader starts from the last record
+	// (lastMarked is the main thread's alone) and the dispatch from it alone
+	// reaches every record; in a subagent's thread no reader has a slot to
+	// start from, and every one reads every line.
+	main := c.agent == ""
 	free := !c.smallOnly && !c.lastMarked
 	var w *chainWork
 	if len(c.recs) > 0 {
 		w = c.work()
-		if free {
+		if free && main {
 			var err error
 			if free, err = c.covered(ctx, w); err != nil {
 				return err
@@ -2283,8 +2360,9 @@ func (c *threadChain) decide(ctx context.Context) error {
 	}
 	c.anySize = free
 	if len(c.recs) == 0 {
-		// No record: the resume finds no conversation, and hands nothing
-		// under every variant (2.1.322's Yya, `if(s.size===0)return null`).
+		// No record: the resume, or a subagent's own load, finds no
+		// conversation, and hands nothing under every variant (2.1.322's Yya,
+		// `if(s.size===0)return null`; Rye, `no_agent_messages`).
 		c.orders = []chainOrder{{variants: allVariants}}
 		return nil
 	}
@@ -2303,14 +2381,25 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	leaf0, leaf1, err := c.pick(ctx, w, relinked)
-	if err != nil || c.why != "" {
-		return err
+	var leaf0, leaf1 chainHandle
+	if main {
+		if leaf0, leaf1, err = c.pick(ctx, w, relinked); err != nil || c.why != "" {
+			return err
+		}
+	} else {
+		leaf0 = c.ownLeaf(w)
+		leaf1 = leaf0
 	}
-	groups := []chainGroup{{leaf: leaf0, variants: variants310}, {leaf: leaf0, variants: allVariants &^ variants310}}
-	if leaf1 != leaf0 {
-		groups[1].variants &^= variantsMetcalfe
-		groups = append(groups, chainGroup{leaf: leaf1, variants: variantsMetcalfe})
+	// The variants part where q1t moves the leaf and where each release's
+	// retraction filter reads its own names, both the main thread's alone
+	// (THE VARIANTS).
+	groups := []chainGroup{{leaf: leaf0, variants: allVariants}}
+	if main {
+		groups = []chainGroup{{leaf: leaf0, variants: variants310}, {leaf: leaf0, variants: allVariants &^ variants310}}
+		if leaf1 != leaf0 {
+			groups[1].variants &^= variantsMetcalfe
+			groups = append(groups, chainGroup{leaf: leaf1, variants: variantsMetcalfe})
+		}
 	}
 	leaves := []chainHandle{leaf0}
 	if leaf1 != leaf0 {
@@ -2661,6 +2750,39 @@ func (c *threadChain) leafOf(set []chainHandle) chainHandle {
 	}
 	return leaf
 }
+
+// ownLeaf is the leaf a subagent's own load walks from ([threadChain], A
+// SUBAGENT'S OWN LOAD; 2.1.322's Rye with cj, 2.1.310's FBe with p0): of its
+// own leaves, the records of its own that no record of its own names as its
+// parent, as the relink left each, a compaction's boundary aside, the one of
+// the latest time, the first in the file on a tie; none where none has a time,
+// when the load finds no conversation. It files the own leaves, in the file's
+// order.
+func (c *threadChain) ownLeaf(w *chainWork) chainHandle {
+	// w.a holds the records a record of the subagent's own names as its parent.
+	w.a.clear()
+	for i, r := range c.recs {
+		if r.kind&kindDeleted == 0 && c.own(chainHandle(i+1)) && r.parent != noChainRecord {
+			w.a.set(int(r.parent))
+		}
+	}
+	leaf := noChainRecord
+	for i, r := range c.recs {
+		h := chainHandle(i + 1)
+		if r.kind&(kindDeleted|kindBoundary) != 0 || !c.own(h) || w.a.has(int(h)) {
+			continue
+		}
+		c.ownLeaves = append(c.ownLeaves, h)
+		if r.kind&kindTimed != 0 && (leaf == noChainRecord || r.ms > c.recs[leaf-1].ms) {
+			leaf = h
+		}
+	}
+	return leaf
+}
+
+// own reports whether record h is one of the subagent's own: of its agentId,
+// and a sidechain's (`tt.agentId===e&&tt.isSidechain`).
+func (c *threadChain) own(h chainHandle) bool { return c.is(h, kindAgent|kindSideTrue) }
 
 // nearestTurn is the nearest user or assistant record up from from by
 // parent, from itself; none where the walk meets a root, a parent naming no
@@ -3297,9 +3419,11 @@ func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 
 // judge decides each record's answer under g's variants: the records the
 // relink deleted not handed, g's base handed, the records the tails may hang
-// cannot tell, the retraction filter of g's release, and the attachments the
-// malformed-attachment drop may take cannot tell ([threadChain], THE RELINK,
-// THE TAILS, THE RETRACTION FILTER and THE MALFORMED-ATTACHMENT DROP).
+// cannot tell; then, in the main thread, the retraction filter of g's release
+// and the attachments the malformed-attachment drop may take cannot tell, and
+// in a subagent's thread the hand-off to the subagent's own id ([threadChain],
+// THE RELINK, THE TAILS, THE RETRACTION FILTER, THE MALFORMED-ATTACHMENT DROP
+// and A SUBAGENT'S OWN LOAD).
 func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) error {
 	g.verdicts = make([]chainVerdict, len(c.recs))
 	off, deleted := chainVerdict{handed: verdictNo, why: whyAt(whyOffConversation)},
@@ -3320,6 +3444,7 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 	for _, h := range g.base {
 		g.verdicts[h-1] = chainVerdict{handed: verdictYes, why: g.how[h]}
 	}
+	main := c.agent == ""
 	var names, tails map[[chainPrefixBytes]byte]bool
 	for i := range g.verdicts {
 		if err := w.tick(ctx); err != nil {
@@ -3330,7 +3455,7 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 		if v.handed == verdictNo && c.tailable(h) && !c.is(h, kindDeleted) {
 			*v = tail
 		}
-		if v.handed == verdictNo || !c.readsRetractions(h, g.variants) {
+		if !main || v.handed == verdictNo || !c.readsRetractions(h, g.variants) {
 			continue
 		}
 		for _, p := range c.prefixesOf(h) {
@@ -3365,6 +3490,16 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 	for _, h := range g.base {
 		if v := &g.verdicts[h-1]; v.handed == verdictYes && c.is(h, kindAttachment|kindIllFormed) {
 			*v = chainVerdict{handed: verdictUnknown, why: whyAt(whyAttachmentDrop)}
+		}
+	}
+	if !main {
+		// The hand-off: a subagent's own load hands on what the walk, the
+		// recovery and the tails reach of its agentId alone, whatever its side.
+		another := chainVerdict{handed: verdictNo, why: whyAt(whyAnotherAgent)}
+		for i := range g.verdicts {
+			if v := &g.verdicts[i]; v.handed != verdictNo && c.recs[i].kind&kindAgent == 0 {
+				*v = another
+			}
 		}
 	}
 	for _, h := range g.base {
