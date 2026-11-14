@@ -273,3 +273,47 @@ func TestARowsWriteInTheStoresOwnProcessIsGivenItsReasonAlone(t *testing.T) {
 			coord.MaxValueCrossing)
 	}
 }
+
+// A CAPTURE'S BUDGET COUNTS ITS STAMP OF WHAT CAME OF IT, AND SO DOES EVERY WAIT
+// AFTER IT, AT THE SLOWEST NODE'S CROSSING.
+//
+// A keep stamps what came of its capture after the keep's own budget, and the
+// stamp writes the run's row whole, which across a slow link takes the row's
+// crossing; the node keeping it may be any node, and the node reading the
+// capture's age any other. So a capture begun is in flight until its take, its
+// keep and that stamp can all have run; a read standing by for it stands until
+// that and its own stamp of the next place; and a turn's end waits for the
+// standby's keep and that keep's stamp past both. Counted without the stamp,
+// a reader aged out a capture whose stamp was still crossing: a standby took
+// its place over and uploaded the session again, and the turn's end named it
+// begun and never finished.
+//
+// Mutation: drop the stamp from a capture's budget, from the standby's, or
+// from the end's wait, and the last instant it can still be crossing reads as
+// past.
+func TestACapturesBudgetCountsItsStampAtTheSlowestNodesCrossing(t *testing.T) {
+	t.Parallel()
+	stamp := sessionRecordBudget + coord.MaxValueCrossing
+	begun := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	capture := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1", State: CaptureBegun, At: begun}
+	// THE LAST INSTANT EACH CAN STILL BE UNDER WAY, a nanosecond short of
+	// its bound, as an age past the capture's own instant.
+	stamped := SessionTakeBudget + SessionKeepBudget + stamp
+	if !captureInFlight(PendingRun{Capture: &capture}, begun.Add(stamped-time.Nanosecond)) {
+		t.Errorf("a capture begun %v ago, its stamp of what came of it still crossing, reads as past its budget "+
+			"of %v, want in flight until its take, its keep and that stamp at the slowest node's crossing",
+			stamped-time.Nanosecond, SessionCaptureBudget)
+	}
+	standing := capture
+	standing.StandbyAt, standing.StandbyTaker = begun, "node-b:standby"
+	stood := stamped + captureWaitTick + stamp
+	if !standing.standing(begun.Add(stood - time.Nanosecond)) {
+		t.Errorf("a read standing by %v reads as gone, want it standing until the capture it stands by for "+
+			"can have stamped what came of it, one read after, and its own stamp of the next place: %v",
+			stood-time.Nanosecond, standbyBudget)
+	}
+	if kept := stood + SessionKeepBudget + stamp; endCaptureWait < kept {
+		t.Errorf("a turn's end waits %v for its captures, want at least the standby's stand, its keep and that "+
+			"keep's stamp of what came of it, %v", endCaptureWait, kept)
+	}
+}

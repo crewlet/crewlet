@@ -684,7 +684,7 @@ func TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows(t *testing.T) {
 // waits is continued — but only for as long as an ordinary keep takes: one
 // still begun after that is a slow store or a stopped node's, which the frame
 // holding the seat and a slot of the node's admission does not wait out for
-// the capture's own budget of twenty minutes and more. It continues nothing,
+// the capture's own budget of half an hour and more. It continues nothing,
 // saying so.
 //
 // Mutation: wait out the capture's own budget on the relaunch, or stop waiting
