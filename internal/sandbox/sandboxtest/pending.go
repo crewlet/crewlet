@@ -588,14 +588,13 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 // request, or rebuild the job's record in a write that is not a relaunch's, and
 // a check goes red.
 func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
 	carried := &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureCapture, Launch: "job-earlier"}
 	// launched opens turn's job, its attach naming its command and the measure
 	// its launch carried, and claims it, as its collection is made on a claim.
-	launched := func(turn string) (string, sandbox.PendingRun) {
+	launched := func(t *testing.T, turn string) (string, sandbox.PendingRun) {
 		t.Helper()
 		launch := mustLaunched(t, s, run(turn))
-		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-" + turn, CommandID: "cmd-" + turn,
+		if err := s.AttachSandbox(t.Context(), turn, sandbox.BoxRef{SandboxID: "box-" + turn, CommandID: "cmd-" + turn,
 			Brief: sandbox.BriefContinued, Context: carried}, sandbox.Fence{}); err != nil {
 			t.Fatalf("the attach that names the job's command: %v", err)
 		}
@@ -646,8 +645,9 @@ func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.Pendi
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
 			turn := tc.turn
-			launch, claimed := launched(turn)
+			launch, claimed := launched(t, turn)
 			if tc.started != "" {
 				if ok, err := s.MarkSessionStart(ctx, turn, launch, tc.started); err != nil || !ok {
 					t.Fatalf("MarkSessionStart = %v, %v", ok, err)
@@ -928,13 +928,13 @@ func testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch(t *testing.T, s
 	// leads named for the run and the job as the row names them.
 	attach := func(own []sandbox.KeptLead, told []sandbox.LeadRef) sandbox.PendingRun {
 		t.Helper()
-		row := mustGet(t, s, turn)
+		row := mustGetIn(ctx, t, s, turn)
 		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-leads", CommandID: "cmd-" + row.LaunchID,
 			Brief: sandbox.BriefContinued, Leads: sandbox.BriefLeads{Run: row.LeadsRun, Job: row.LaunchID,
 				Counted: row.LeadsAppended, Own: own, Told: told}}, sandbox.Fence{}); err != nil {
 			t.Fatalf("the attach that names %s's command: %v", row.LaunchID, err)
 		}
-		return mustGet(t, s, turn)
+		return mustGetIn(ctx, t, s, turn)
 	}
 	read := func(row sandbox.PendingRun) sandbox.TurnLeads {
 		t.Helper()
@@ -1045,7 +1045,7 @@ func testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns(t *testing.T, s sandbox.Pen
 	const turn = "t-leads-earlier"
 	attach := func(job string) sandbox.PendingRun {
 		t.Helper()
-		row := mustGet(t, s, turn)
+		row := mustGetIn(ctx, t, s, turn)
 		own := sandbox.KeptLead{Kind: sandbox.LeadKindAnswer, Job: row.LaunchID, Seq: row.LaunchSeq, Round: 1,
 			Sealed: []byte(job + "'s answer")}
 		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-earlier", CommandID: "cmd-" + job,
@@ -1053,7 +1053,7 @@ func testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns(t *testing.T, s sandbox.Pen
 				Counted: row.LeadsAppended, Own: []sandbox.KeptLead{own}}}, sandbox.Fence{}); err != nil {
 			t.Fatalf("the attach that names %s's command: %v", job, err)
 		}
-		return mustGet(t, s, turn)
+		return mustGetIn(ctx, t, s, turn)
 	}
 	mustBeginLaunch(t, s, run(turn))
 	first := attach("job-1")
@@ -1065,8 +1065,9 @@ func testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns(t *testing.T, s sandbox.Pen
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLeads,
-		func(coord.Record, bool) ([]byte, error) { return earlier, nil }); err != nil || !ok {
+	_, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLeads,
+		func(coord.Record, bool) ([]byte, error) { return earlier, nil })
+	if err != nil || !ok {
 		t.Fatalf("staging another run's leads beside the record: %v, %v", ok, err)
 	}
 	got, err := s.Leads(ctx, first)
@@ -1148,7 +1149,15 @@ func testAResumedTurnsCarryIsItsClaimsOwn(t *testing.T, s sandbox.PendingStore) 
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
 	t.Helper()
-	got, ok, err := s.Get(t.Context(), turnID)
+	return mustGetIn(t.Context(), t, s, turnID)
+}
+
+// mustGetIn is mustGet under ctx, for a closure that holds its case's context:
+// the read goes under the context the case threads to every other call it
+// makes, never one it makes of its own.
+func mustGetIn(ctx context.Context, t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
+	t.Helper()
+	got, ok, err := s.Get(ctx, turnID)
 	if err != nil {
 		t.Fatalf("get %s: %v", turnID, err)
 	}

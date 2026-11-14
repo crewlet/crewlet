@@ -304,7 +304,7 @@ func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 		if _, err := rig.launchVia(ctx, rig.manager, launchReq("t1")); err != nil {
 			t.Fatalf("a first launch: %v", err)
 		}
-		row := rig.get("t1")
+		row := rig.getIn(ctx, "t1")
 		read, err := rig.pending.Leads(ctx, row)
 		if err != nil || len(read.Kept) != 0 || read.Cut != 0 || len(row.Launch.LeadMarks) != 0 ||
 			row.LeadsAppended != 0 {
