@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/recordseal`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/engine.TestEverySignedChannelTheTreeBuildsIsClaimed`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -301,3 +301,25 @@ arguments, still inside the signed body, and a data node decodes both refusing
 any key its build does not declare (ADR-0025's amendment): what the fleet signed
 runs whole, or runs nowhere, and the asking node asks a data node that can read
 it.
+
+## Amendment: an MCP server's test is an instruction channel, and every signing call is held to the list
+
+A node asked to test an MCP server (`internal/engine`, `mcpcheck.go`) launches
+the server's command, or dials its address, as the company and with the
+credentials the server is started with, and a draft's entry travels in the
+request. So the request is an instruction by this record's own test, and it was
+signed from the start, in key domains of its own (`mcp.check.request`,
+`mcp.check.reply`). Nothing compared them with any other channel's:
+`internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn` holds apart
+the channels it builds, and it did not build this one, so a channel built later
+under the same name would have verified its frames with nothing failing. It
+builds this one now, and the list is held to the tree:
+`internal/engine.TestEverySignedChannelTheTreeBuildsIsClaimed` reads every call
+in the module's non-test source that names a key domain (signedask's `New` and
+`NewOneWay`, recordseal's `NewSigner` and `NewVerifier`) with its types,
+follows a name handed to a constructor out to the constant its callers give,
+and refuses a domain the list does not claim, one a state log signs in, and one
+that two functions build. A name it cannot read fails it, unless the gate says
+why the function spelling it signs only in claimed domains: today a state
+log's own signers, a probe of the record keyring at boot, and a backup's
+verifiers, each in a registered log's domain.
