@@ -56,9 +56,10 @@ import (
 //     Claude Code's resume files ([threadChainMaxCalls]), so its reading is
 //     no reading, reported as its read metric 0; and one of the smallest
 //     blocks of a kind no reader names, each of which it keeps a kind of;
-//   - the soundness critic's two shapes of ids the call-id rule refuses: 96
-//     Agent calls each under an id of a mebibyte, and [holdingsMaxAgents]
-//     metadata each naming its call by an id of 65,000 bytes;
+//   - two shapes of ids the call-id rule refuses, each of which a reading
+//     held live before it kept no such id: 96 Agent calls each under an id of
+//     a mebibyte, and [holdingsMaxAgents] metadata each naming its call by an
+//     id of 65,000 bytes;
 //   - a main thread at [threadChainMaxRecords], each record at its worst for
 //     what the model of Claude Code's resume holds ([benchRecords]).
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
@@ -285,8 +286,8 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 }
 
 // benchLongLegs writes a main thread of 96 Agent calls, each under an id of a
-// mebibyte, as the soundness critic measured 97.7 MiB held live before the
-// reading kept no id the call-id rule refuses ([holdingsWalk.leg]).
+// mebibyte, which held 97.7 MiB live before the reading kept no id the call-id
+// rule refuses ([holdingsWalk.leg]).
 func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	var main strings.Builder
 	main.WriteString(ctBrief(ctUUID(1)) + "\n")
@@ -299,9 +300,9 @@ func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 }
 
 // benchLongMetas writes [holdingsMaxAgents] subagents' metadata, each naming
-// the call that started it by an id of 65,000 bytes, as the soundness critic
-// measured 65.3 MiB held live before the reading kept no id a metadata names
-// that the call-id rule refuses ([subagentMetaOf]).
+// the call that started it by an id of 65,000 bytes, which held 65.3 MiB live
+// before the reading kept no id a metadata names that the call-id rule
+// refuses ([subagentMetaOf]).
 func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	long := strings.Repeat("t", 65000)
 	for i := range holdingsMaxAgents {
