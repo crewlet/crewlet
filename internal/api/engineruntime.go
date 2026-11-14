@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -272,8 +273,19 @@ func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
 // person back, its refusals mapped onto the page's ([mcpLanding]).
 func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
 
-// Builtins is the engine's own tools as this node's seats are offered them:
-// the registry's built-ins, and the discovery pair.
+// Builtins is the engine's own tools as this node's seats are offered them, off
+// the registry of the revision this node runs ([builtinOffer]).
+func (r engineRuntime) Builtins() queries.BuiltinOffer {
+	company := r.engine.Company()
+	if company == nil || company.Tools == nil {
+		return queries.BuiltinOffer{}
+	}
+	return builtinOffer(company.Tools.Snapshot())
+}
+
+// builtinOffer is snapshot's built-ins as catalogue rows with the discovery
+// pair, and the engine's one decision of what each agent seat is not offered of
+// them, taken against that same snapshot.
 //
 // THE REGISTRY'S BUILT-INS, not a list of every tool the engine could offer,
 // because a company on Jira holds no Worklet tool and a catalogue listing one
@@ -282,24 +294,26 @@ func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r
 // THE PAIR READ OFF THE RUNNER, which builds it, bound to no surface: this
 // reads each one's name, description and schema and calls nothing, and a
 // second description of either written here would drift from the one the
-// model is shown.
-func (r engineRuntime) Builtins() []queries.ToolRow {
-	company := r.engine.Company()
-	if company == nil || company.Tools == nil {
-		return nil
-	}
-	snapshot := company.Tools.Snapshot()
+// model is shown. No registry holds it, so nothing withholds it.
+//
+// THE WITHHOLDING IS engine.WithheldBuiltins, the answer every turn's surfaces
+// are cut by, against the snapshot the rows were read off, so an agent is
+// counted against exactly the built-ins it was decided on.
+func builtinOffer(snapshot tools.Snapshot) queries.BuiltinOffer {
 	delivers := snapshot.Deliveries()
-	var out []queries.ToolRow
+	var rows []queries.ToolRow
 	for _, entry := range snapshot.Entries() {
 		if entry.Origin == tools.OriginBuiltin {
-			out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
+			rows = append(rows, queries.CatalogueRow(entry, delivers[entry.Name()]))
 		}
 	}
 	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
-		out = append(out, queries.CatalogueRow(entry, ""))
+		rows = append(rows, queries.CatalogueRow(entry, ""))
 	}
-	return out
+	return queries.BuiltinOffer{Rows: rows,
+		Withheld: func(ctx context.Context, o *org.Organization, seat *org.Role) []string {
+			return engine.WithheldBuiltins(ctx, o, seat, snapshot)
+		}}
 }
 
 // ShuttingDown is the engine's own flag, which is set at the first moment of

@@ -195,7 +195,16 @@ func (f *fakeFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListi
 	return worklet.FileListing{}, errors.New("fake: the listing is the read surface's")
 }
 
-func (f *fakeFiles) File(context.Context, string, string, statelog.Freshness) (worklet.FileDetail, error) {
+// File answers the one file this fake holds, as the tracker's reader answers
+// a file ([worklet.Reader.File]): the path held to the tracker's rule first,
+// and refused in the tracker's error, so a route that hands the reader a path
+// as it was typed meets the refusal the real reader gives it.
+func (f *fakeFiles) File(_ context.Context, _, filePath string,
+	_ statelog.Freshness) (worklet.FileDetail, error) {
+
+	if _, err := worklet.NormalizeFilePath(filePath); err != nil {
+		return worklet.FileDetail{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.readErr != nil {
@@ -721,28 +730,47 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 	}
 }
 
-// A PATH THE TRACKER REFUSES IS TOLD IN ITS SENTENCE: `400 bad_path` naming
-// what is wrong with it, and never the error's text, which opens with the
-// package's name ("worklet: the path … ends in a slash").
+// A PATH THE TRACKER REFUSES IS TOLD IN ITS SENTENCE, ON EVERY BYTE ROUTE:
+// `400 bad_path` naming what is wrong with it, and never the error's text,
+// which opens with the package's name ("worklet: the path … ends in a
+// slash"). The download as much as the upload and the removal, and before
+// anything is read or written: the download handed the path to the reader as
+// it was typed, and the reader's refusal reached the fault's arm, `500
+// internal_error` with an error in the node's log.
 //
-// Mutation: answer the refusal with err.Error() again and the detail names
-// the package.
+// Mutation: answer the refusal with err.Error() again and every row names the
+// package; drop filePathOf from getFile and the GET row answers 500.
 func TestARefusedPathIsToldInTheTrackersSentence(t *testing.T) {
 	t.Parallel()
-	fake := newFakeFiles(t)
-	s := filesSurface(t, fake, chart{})
-	req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/reports/",
-		bytes.NewReader([]byte("x")))
-	rec := httptest.NewRecorder()
-	if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
-		t.Fatal(aborted)
-	}
-	answer := answerOf(t, rec)
-	detail, _ := answer["detail"].(string)
-	if rec.Code != http.StatusBadRequest || answer["error"] != string(httpjson.CodeBadPath) ||
-		!strings.Contains(detail, "ends in a slash") || strings.Contains(detail, "worklet") {
-		t.Errorf("a refused path answered %d %v, want 400 bad_path in the "+
-			"tracker's sentence", rec.Code, answer)
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			fake := newFakeFiles(t)
+			fake.holding(t, []byte("kept"))
+			s := filesSurface(t, fake, chart{})
+			var body io.Reader
+			if method == http.MethodPut {
+				body = bytes.NewReader([]byte("x"))
+			}
+			req := httptest.NewRequest(method, "/worklet/files/ENG/reports/", body)
+			rec := httptest.NewRecorder()
+			if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
+				t.Fatal(aborted)
+			}
+			answer := answerOf(t, rec)
+			detail, _ := answer["detail"].(string)
+			if rec.Code != http.StatusBadRequest || answer["error"] != string(httpjson.CodeBadPath) ||
+				!strings.Contains(detail, "ends in a slash") || strings.Contains(detail, "worklet") {
+				t.Errorf("a refused path answered %d %v, want 400 bad_path in the "+
+					"tracker's sentence", rec.Code, answer)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.puts) != 0 || len(fake.removals) != 0 || fake.objects != 0 {
+				t.Errorf("a refused path wrote %d files, removed %v and stored %d objects",
+					len(fake.puts), fake.removals, fake.objects)
+			}
+		})
 	}
 }
 

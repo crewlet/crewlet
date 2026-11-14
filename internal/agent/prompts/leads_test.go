@@ -238,3 +238,67 @@ func TestAnAnswerNamesTheRoundItCameIn(t *testing.T) {
 		t.Errorf("a held call of round 2 is pointed to as %q, not to its round's calls in the work already done", got)
 	}
 }
+
+// A COUNTED HELD CALL IS ONE OF ITS ENTRY'S CALLS, TOLD HOW IT ENDED. Where the
+// work already done holds the round an answer came in under an entry that may
+// count the held call it approved rather than list it, the answer says the call
+// is one of that round's calls, under the entry's heading in the work already
+// done: a round alone by its number, a span of rounds a park dropped by its
+// first and its last, written with "to" rather than its heading's dash; and that
+// what became of it is told there, since the entry may not say it.
+//
+// Mutation: name a span by its first round alone, say a round alone as a span,
+// name another round's calls, or leave out that the entry may count it, and a
+// case goes red.
+func TestACountedHeldCallIsOneOfItsEntrysCalls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		round, first, last int
+		says, never        []string
+	}{
+		{round: 2, first: 2, last: 0, says: []string{"one of round 2's calls, which Iteration 2 of the work already " +
+			"done earlier in this turn may count rather than list", "what became of it is told here"},
+			never: []string{"Iterations"}},
+		{round: 2, first: 2, last: 2, says: []string{"which Iteration 2 of the work already done"},
+			never: []string{"Iterations"}},
+		{round: 3, first: 2, last: 5, says: []string{"one of round 3's calls, which Iterations 2 to 5 of the work " +
+			"already done earlier in this turn may count rather than list"}, never: []string{"\u2013", "\u2014"}},
+	} {
+		got := HeldCallCounted(tc.round, tc.first, tc.last)
+		for _, want := range tc.says {
+			if !strings.Contains(got, want) {
+				t.Errorf("HeldCallCounted(%d, %d, %d) does not say %q: %q", tc.round, tc.first, tc.last, want, got)
+			}
+		}
+		for _, never := range tc.never {
+			if strings.Contains(got, never) {
+				t.Errorf("HeldCallCounted(%d, %d, %d) says %q: %q", tc.round, tc.first, tc.last, never, got)
+			}
+		}
+	}
+}
+
+// A REVIEW NOT KEPT IS SAID AS GONE, NEVER AS A COPY THE ENGINE HOLDS. A review
+// whose round a park has dropped from the turn's record is said in its place
+// among the messages told again, under a heading of its own at a lead's level:
+// that it sent the work back, that the round it reviewed is not kept on the
+// parked turn, as the work already done says of such a round, and that what it
+// said is not told again. Never as a message whose copy cannot be read here,
+// which says the engine holds one, and never a word of what it said.
+//
+// Mutation: say it in LeadUnread's words, or as a send-back, or leave out that
+// its round is not kept, and this goes red.
+func TestAReviewNotKeptIsSaidAsGoneNeverAsACopyTheEngineHolds(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{"### A review that sent this work back, which is not kept\n",
+		"is not kept on the parked turn", "what its reviewer said is gone", "not told again here"} {
+		if !strings.Contains(ReviewNotKept, want) {
+			t.Errorf("a review not kept does not say %q: %q", want, ReviewNotKept)
+		}
+	}
+	for _, never := range []string{"copy", "cannot be read", "does not open", "Your work was reviewed"} {
+		if strings.Contains(ReviewNotKept, never) {
+			t.Errorf("a review not kept says %q: %q", never, ReviewNotKept)
+		}
+	}
+}

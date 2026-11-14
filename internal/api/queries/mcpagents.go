@@ -1,5 +1,6 @@
 // What each agent seat is handed by the MCP servers its grants reach, counted
-// against the tool budget.
+// against the tool budget, and how many of the engine's own tools it is
+// offered beside them.
 
 package queries
 
@@ -30,7 +31,8 @@ import (
 const MCPToolBudget = 100
 
 // MCPAgentTools is one agent seat's MCP tools: every server whose grant
-// reaches it, what each hands it, and the count the budget is judged on.
+// reaches it, what each hands it, and the count the budget is judged on, and
+// how many of the engine's own tools it is offered.
 type MCPAgentTools struct {
 	// Seat is the seat's handle and Name its display name.
 	Seat string `json:"seat"`
@@ -47,8 +49,10 @@ type MCPAgentTools struct {
 	// MCPTools is how many MCP tools the seat is handed: every tool each
 	// server it is granted offers it, a name two servers offer counted once,
 	// since the seat is handed one tool under it. BuiltinTools is how many of
-	// the engine's own tools every agent is handed, which the budget does not
-	// count: they are the engine's, and the same for every agent.
+	// the engine's own tools on the answer's shelves ([MCPStatusAnswer.Builtin])
+	// the seat is offered: every one but those its turns' surfaces leave off
+	// ([BuiltinOffer.Withheld]), so it differs from seat to seat. The budget
+	// counts none of them: they are the engine's, not a server's.
 	MCPTools     int `json:"mcp_tools"`
 	BuiltinTools int `json:"builtin_tools"`
 	// OverBudget is whether MCPTools is past [MCPToolBudget].
@@ -93,10 +97,19 @@ type MCPAgentServer struct {
 // agent of it is offered, so the budget errs toward flagging, never toward
 // missing an agent past it.
 //
+// EACH AGENT'S BUILT-INS ARE THE ONES IT IS OFFERED, counted on the answer's
+// own shelves less what builtins withholds from it, decided over the chart
+// this reading lists it in: the engine's one answer, which its turns' surfaces
+// are cut by, so the page never counts an agent a tool its turns are not
+// offered. A withheld name no shelf carries takes nothing off
+// ([builtinsOffered]).
+//
 // NULL, NOT EMPTY, where this node cannot read the fleet's listings: it keeps
 // no copy, or its copy has not been read yet, a moment after it starts. An
 // agent counted at nothing there would read as one holding no tools.
-func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCPStatusAnswer) []MCPAgentTools {
+func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCPStatusAnswer,
+	builtins BuiltinOffer,
+) []MCPAgentTools {
 	out := []MCPAgentTools{}
 	if s.Company == nil {
 		return out
@@ -131,16 +144,12 @@ func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCP
 	for _, row := range status.Servers {
 		states[row.Name] = row.State
 	}
-	builtins := 0
-	for _, g := range status.Builtin {
-		builtins += len(g.Tools)
-	}
 	for seat := range roster.AllRoles() {
 		if !seat.IsAgent() {
 			continue
 		}
 		agent := MCPAgentTools{Seat: seat.Handle(), Name: seat.Name, Servers: []MCPAgentServer{},
-			BuiltinTools: builtins}
+			BuiltinTools: builtinsOffered(status.Builtin, builtins.withheldFrom(ctx, roster, seat))}
 		agent.Unit, agent.UnitKey = unitOf(seat, roster)
 		names := map[string]struct{}{}
 		for _, server := range servers {
@@ -164,6 +173,22 @@ func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCP
 		out = append(out, agent)
 	}
 	return out
+}
+
+// builtinsOffered is how many of the tools on shelves an agent is offered when
+// withheld names the ones it is not: every shelved tool but one withheld names.
+// A withheld name no shelf carries — a built-in the catalogue files nowhere,
+// or one this node does not register — takes nothing off.
+func builtinsOffered(shelves []BuiltinGroup, withheld []string) int {
+	n := 0
+	for _, g := range shelves {
+		for _, row := range g.Tools {
+			if !slices.Contains(withheld, row.Name) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // unitOf is the name and key of the unit seat sits in, both nil for a seat at

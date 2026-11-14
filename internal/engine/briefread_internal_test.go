@@ -88,7 +88,9 @@ func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 // late calls' words, whatever that job's harness's end; and the approved call
 // never under them, and at most once: not at all where the harness ended its
 // own run, its copy holding the brief that told it, and once among the round's
-// calls where it was cut off.
+// calls where it was cut off. Both arms' records carry the count the job's
+// collection writes of a copy far below its threshold, so the copy is judged
+// by its harness's end alone ([collectedFarBelow]).
 //
 // Mutation: drop the read from the resume the runner is handed or from the
 // launch, mark the approved call at the opening with the rest, drop the mark
@@ -161,6 +163,7 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 			// carried-on job's own box.
 			row := carried.row(t, turnID)
 			row.Launch.HarnessEnd = end
+			collectedFarBelow(&row.Launch)
 			brief := relaunchedInPlace(t, carried, runnerResume(resumeInput{Run: row, Bridged: next,
 				BridgedRead: next.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
@@ -215,10 +218,16 @@ func parkedOnAHeldCall(t *testing.T, store sandbox.PendingStore, turnID, launch 
 // relaunchedInPlace is the brief a relaunch built from resume hands the copy of
 // the session its job's box holds ([runner.Continuation.Brief]): the runner b's
 // company builds for its seat, as a resumed segment's is, relaunching through a
-// launcher that keeps what it is handed and launches nothing.
+// launcher that keeps what it is handed and launches nothing, and that answers
+// the probe as the engine's own launcher does on every basis, with the window
+// its chain's Claude Code members are held to: here a claude-sonnet-4-5
+// member's, a window this build knows, where the rig's own model is one it
+// does not, so a copy whose job's record counts it far below its threshold is
+// judged by its harness's end alone ([collectedFarBelow]).
 func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string {
 	t.Helper()
-	recorder := &relaunchRecorder{}
+	recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
+		Window: sandbox.ClaudeCodeWindow("claude-sonnet-4-5")}}
 	r, err := b.launcher.company.RunnerFor(t.Context(), b.handle, tools.NewRegistry(), RunnerInput{
 		Task: "fix the failing test", Reply: turn.ToolReply(""), Launcher: recorder,
 		Sessions: testSessions(t), Resume: resume,
@@ -235,6 +244,20 @@ func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string
 		t.Fatalf("the relaunch continues no copy in its job's box: %+v", handed)
 	}
 	return handed.Continue.Brief
+}
+
+// collectedFarBelow records on l the count the read that collected its job
+// writes of a Claude Code copy far below its threshold under the window
+// [relaunchedInPlace] judges it by, its thread restarting nowhere, as the
+// launch that handed it a session of its own records its basis
+// (sandbox.LaunchRecord.ResumedCount, BasisRestart). A copy with no count
+// reads as one its harness may compact, or one its job restarted, and is told
+// as a cut-off one whatever its harness's end (internal/agent/runner's
+// sessionHolds), so a case about what a copy whose harness ended its own run
+// holds records the count its collection would.
+func collectedFarBelow(l *sandbox.LaunchRecord) {
+	l.BasisRestart = new("")
+	l.ResumedCount = &sandbox.ResumedCount{Tokens: 10_000, Restart: new("")}
 }
 
 // relaunchRecorder is an executor launcher that keeps the request it is handed

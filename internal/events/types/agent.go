@@ -378,6 +378,14 @@ type AgentTurnCompleted struct {
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
+	// CallsElided is how many of the turn's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, with how many of each
+	// failed: the calls each phase's record does not list ([AgentPhaseCompleted.CallsElided]),
+	// and those this record drops in turn, which holds every phase's list to
+	// the one share a record has of its message. Absent on a record that
+	// lists every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
@@ -884,10 +892,18 @@ type AgentPhaseCompleted struct {
 	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// Steers is every person's note this phase read, with the round that
 	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
-	Steers       []PhaseSteer `json:"steers,omitempty"`
-	InputTokens  int          `json:"input_tokens"`
-	OutputTokens int          `json:"output_tokens"`
-	TotalTokens  int          `json:"total_tokens"`
+	Steers []PhaseSteer `json:"steers,omitempty"`
+	// RoundsElided is how many of the phase's rounds the lists above do not
+	// carry: a phase past the most rounds a record lists keeps its first half
+	// and its newest half (internal/agent/runner's recordbytes.go), each kept
+	// round with its provider call, prose, harness runs, the notes read in it
+	// and the calls made in it, and the calls of the rounds it leaves out are
+	// counted in CallsElided by tool. Absent on a record that lists every
+	// round.
+	RoundsElided int `json:"rounds_elided,omitempty"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
 	// provider's prompt cache served and stored, summed over Rounds. A
 	// BREAKDOWN of InputTokens, never an addition to it: TotalTokens is
@@ -980,6 +996,13 @@ type AgentPhaseCompleted struct {
 	// when it ended: a tool it activated over the bridge is here, and not in
 	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
+	// ToolsAvailableElided is how many more names the list held than
+	// ToolsAvailable carries, and ToolCatalogueElided the same of
+	// ToolCatalogue: each list is held to its share of this one message, its
+	// names in order while they fit (internal/agent/runner's recordbytes.go).
+	// Absent on a record that carries every name.
+	ToolsAvailableElided int `json:"tools_available_elided,omitempty"`
+	ToolCatalogueElided  int `json:"tool_catalogue_elided,omitempty"`
 	// ToolCatalogue is the rest of what the executor could reach, by
 	// discovery and with no schema: the tools of its universe it did not
 	// hold by the phase's end — an MCP server's tools, by name, which its
@@ -1012,13 +1035,15 @@ type AgentPhaseCompleted struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
-	// CallsElided is how many calls a collected executor's run made over its
-	// bridge that its run's record did not keep — a long run's dropped
-	// middle — and ElidedCalls those calls by tool, with how many of each
-	// failed. ToolExecutions lists only the calls the record kept, and this
-	// record outlives the run's: once the run's row is gone, what it dropped
-	// is said here or nowhere. Counted in its round's tool_calls. Absent on
-	// every other phase, and on a run whose record kept every call.
+	// CallsElided is how many of the phase's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, with how many of each
+	// failed: a list past its share of this one message keeps its first and
+	// newest calls (internal/agent/runner's recordbytes.go), and a collected
+	// executor's run made calls over its bridge that its run's own record
+	// did not keep, a long run's dropped middle, counted here with them.
+	// This record outlives the run's: once the run's row is gone, what it
+	// dropped is said here or nowhere. On a collected run's record, counted
+	// in its round's tool_calls. Absent on a record that lists every call.
 	CallsElided int           `json:"calls_elided,omitempty"`
 	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// PushedRefs are the refs the collected run moved on Gitlet, as its
@@ -1066,11 +1091,12 @@ type AgentPhaseCompleted struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
-// ElidedCalls is one tool's calls a collected executor's record did not keep
-// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed.
-// Name is empty for calls whose tool the record did not keep either — a long
-// run whose dropped middle outgrew what its record keeps of it, or a record an
-// older engine kept, which counted its drops and named none.
+// ElidedCalls is one tool's calls a record did not list
+// ([AgentPhaseCompleted.ElidedCalls], [AgentTurnCompleted.ElidedCalls]): how
+// many, and how many of them failed. Name is empty for calls whose tool the
+// record did not keep either — a long run whose dropped middle outgrew what
+// its record keeps of it, or tools past the most a record names, which are a
+// model calling names no tool has.
 //
 // BY TOOL, never by what each call asked for: the record is a person's
 // account of the run, and the identities the engine keeps of each call are its
@@ -1173,6 +1199,13 @@ type AgentTurnProgress struct {
 	// Steers is every person's note the phase has read so far — see
 	// [PhaseSteer].
 	Steers []PhaseSteer `json:"steers,omitempty"`
+	// RoundsElided is how many of the phase's rounds so far the frame's lists
+	// do not carry: past the most rounds a record lists, the frame keeps the
+	// first half and the newest half, each kept round with its provider
+	// call, prose, harness runs, notes and calls, and counts the calls of the
+	// rest in CallsElided (internal/agent/runner's recordbytes.go). Absent on
+	// a frame that carries every round.
+	RoundsElided int `json:"rounds_elided,omitempty"`
 	// MaxRounds is the cap the phase is running under NOW, which an
 	// extension raises mid-phase, and RoundCeiling the most it can be
 	// raised to. What "round 3 of 8" is rendered from, off the loop's own
@@ -1196,6 +1229,12 @@ type AgentTurnProgress struct {
 	// — see [RunningCall]. A LIST because a harness may run a
 	// response's calls at once. Absent whenever no call is running.
 	RunningCalls []RunningCall `json:"running_calls,omitempty"`
+	// RunningElided is how many more calls were in flight than RunningCalls
+	// lists: the frame holds its calls in flight to their share, each one's
+	// arguments to theirs, in the order they began. A call not listed as
+	// running is on ToolExecutions once it settles. Absent on a frame that
+	// lists every call in flight.
+	RunningElided int `json:"running_calls_elided,omitempty"`
 	// Invocations are the phase's harness runs that have ENDED so far — see
 	// [PhaseInvocation]. The run in flight is not on it until it ends, so
 	// the rounds past every entry's LastRound are that run's.
@@ -1211,6 +1250,14 @@ type AgentTurnProgress struct {
 	// has been published — which is why the sentinel is -1 rather than 0.
 	RoundNum       int             `json:"round_num"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
+	// CallsElided is how many of the phase's calls so far ToolExecutions does
+	// not list, and ElidedCalls those calls by tool: a frame is republished
+	// whole five times a second, so past its share the list keeps the newest
+	// calls that fit, a reader watching what arrives, and the phase's record
+	// keeps the first and the newest once it completes. Absent on a frame
+	// that lists every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// RoundNarration is what the model said in each round so far. Free on
 	// this event in storage terms — nothing persists it — and it is what
 	// lets the live view append a round rather than redraw one blob.

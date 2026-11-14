@@ -68,8 +68,11 @@ That one rule is what the rest of this page leans on:
   [Why a deletion needs no lock](#why-a-deletion-needs-no-lock)).
 - **The row checks the bytes, not the name.** The key says nothing about what
   the object holds, so the file's row carries the SHA-256 and the size of its
-  whole content, computed while the upload streamed, and every read is held
-  to both.
+  whole content, computed while the upload streamed. A read of the whole
+  object, such as a download, a backup or a copy into an artifact, is held to
+  both. A page of one, such as a seat's `read_project_file`, is held to the
+  length the size implies, since part of an object cannot be held to the whole
+  object's hash (see [Writing and reading](#writing-and-reading)).
 - **There is no dedupe.** The same bytes written twice are stored twice, and
   so is a file that is moved: a move is a write at the new path and a removal
   of the old one, and the write uploads the bytes again. A seat writing a file

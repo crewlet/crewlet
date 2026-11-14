@@ -57,8 +57,11 @@ import (
 // task are the engine's own words over records the turn keeps (the round's
 // review notes, the turn's task, its closed rounds and the session its
 // conversation's last turn left), so a lead of either keeps only what says
-// which: the round a review closed, and how many closed rounds a task's brief
-// rendered ([LeadTask]).
+// which: the round a review closed, and the last of the closed rounds a task's
+// brief rendered ([LeadTask]). Where a park has since dropped that round into a
+// span of the rounds it folded (internal/agent/ledger's Iteration.Through),
+// which keeps their calls and none of their reviews, a review is said in its
+// place as not kept, never told as one that said nothing.
 
 // LeadKind is what carried a session of the work on, as a later brief tells it
 // again.
@@ -69,7 +72,8 @@ const (
 	// a refused reply, or a held call a person answered ([LeadAnswer]).
 	LeadKindAnswer LeadKind = "answer"
 	// LeadKindReview is a review that sent the round back, recomposed from
-	// the round it closed ([KeptLead.Round]).
+	// the round it closed ([KeptLead.Round]), and said as not kept once a park
+	// has dropped that round.
 	LeadKindReview LeadKind = "review"
 	// LeadKindTask is the turn's task, told to a job that continued the
 	// session its conversation's last turn left, recomposed with the closed
@@ -266,9 +270,16 @@ type LeadHeld struct {
 // LeadTask is a task lead's own facts; the rest is recomposed from the turn's
 // records.
 type LeadTask struct {
-	// Rounds is how many closed rounds the brief's prior-work block rendered:
-	// the task is told again with those alone, since a round closed after it
-	// is told by its own rule.
+	// Rounds is the last of the closed rounds the brief's prior-work block
+	// rendered, by its number, zero for none: the task is told again with the
+	// rounds up to it, since a round closed after it is told by its own rule,
+	// and with a span a park has since folded them into whole, though it runs
+	// on past it, since that span holds their calls too (internal/agent/runner's
+	// roundsThrough). A NUMBER, NEVER HOW MANY ENTRIES THE BRIEF RENDERED: a
+	// park past its share folds whole closed rounds into one span of them
+	// (internal/agent/ledger's Iteration.Through), so once a later park has
+	// folded rounds the brief rendered, a count of its entries reaches past
+	// them into rounds closed after it.
 	Rounds int `json:"rounds"`
 
 	// Reviewed is the iteration whose review the task carried (a send-back's

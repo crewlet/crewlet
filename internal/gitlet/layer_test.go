@@ -66,7 +66,7 @@ type wroteLayer struct {
 }
 
 // writeLayers writes a layerFixture with the node's git (gittest.RequireNode:
-// the pin under every make target).
+// the pin under every make target that runs it).
 func writeLayers(t testing.TB) layerFixture {
 	t.Helper()
 	return writeLayersWith(t, gittest.RequireNode(t))

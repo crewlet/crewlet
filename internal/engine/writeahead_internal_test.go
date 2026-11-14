@@ -61,12 +61,15 @@ func TestACallsRecordIsUpdatedOnceByItsIdentity(t *testing.T) {
 
 // A RESUMED TURN THAT SHOWS NO REPLY BESIDE A CALL WHOSE OUTCOME IS UNKNOWN IS
 // NOT KNOWN TO HAVE FAILED TO REPLY. A call the round's log held in flight as its
-// collection read it — or a closed round's record holds so — may be the reply,
-// so the turn's end says whether it replied is unknown, never that it did not;
-// a turn whose record shows its reply, or holds no such call, is read as it was.
+// collection read it — or a closed round's record holds so, listed or, where a
+// park past its share folded the round's calls, counted in its tally — may be
+// the reply, so the turn's end says whether it replied is unknown, never that it
+// did not; a turn whose record shows its reply, or holds no such call, is read
+// as it was.
 //
 // Mutation: read a resumed turn's delivery off its record alone, and a reply
-// still running is said not to have gone.
+// still running is said not to have gone; read a closed round's listed calls
+// alone, and a park that folded them says so too.
 func TestAResumedTurnsDeliveryIsUnknownBesideACallWhoseOutcomeIsUnknown(t *testing.T) {
 	t.Parallel()
 	reply := turn.Reply{Kind: turn.ReplyTool, Surface: "vendor"}
@@ -74,15 +77,23 @@ func TestAResumedTurnsDeliveryIsUnknownBesideACallWhoseOutcomeIsUnknown(t *testi
 	closed := resumeInput{}
 	closed.State.Iterations = []ledger.Iteration{{Iteration: 1,
 		Calls: []ledger.Call{{Name: "vendor_post", Failed: true, Unfinished: true}}}}
+	tallied := resumeInput{}
+	tallied.State.Iterations = []ledger.Iteration{{Iteration: 1,
+		Elided: []ledger.Elided{{Name: "vendor_post", Calls: 3, Failed: 1, Unfinished: 1}}}}
+	failedOnly := resumeInput{}
+	failedOnly.State.Iterations = []ledger.Iteration{{Iteration: 1,
+		Elided: []ledger.Elided{{Name: "vendor_post", Calls: 3, Failed: 1}}}}
 	for name, tc := range map[string]struct {
 		in        resumeInput
 		delivered bool
 		unknown   bool
 	}{
-		"a call in flight as its log was read": {in: inFlight, unknown: true},
-		"a closed round's call so read":        {in: closed, unknown: true},
-		"no call whose outcome is unknown":     {in: resumeInput{}},
-		"a reply the record shows":             {in: inFlight, delivered: true},
+		"a call in flight as its log was read":   {in: inFlight, unknown: true},
+		"a closed round's call so read":          {in: closed, unknown: true},
+		"a closed round's call so read, tallied": {in: tallied, unknown: true},
+		"a tally of failures alone":              {in: failedOnly},
+		"no call whose outcome is unknown":       {in: resumeInput{}},
+		"a reply the record shows":               {in: inFlight, delivered: true},
 	} {
 		ending := resumedEnding(tc.in, turn.Result{Delivered: tc.delivered}, reply, colleagueAnswer{})
 		if ending.Delivered != tc.delivered || ending.DeliveryUnknown != tc.unknown {

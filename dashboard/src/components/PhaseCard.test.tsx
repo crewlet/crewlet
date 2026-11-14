@@ -74,6 +74,9 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     deliveredRefs: [],
     deliveredRefsElided: 0,
     callsElided: 0,
+    roundsElided: 0,
+    toolsAvailableElided: 0,
+    toolCatalogueElided: 0,
     elidedCalls: [],
     pushedRefs: [],
     pushedRefsElided: 0,
@@ -92,6 +95,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     roundStartedAt: "",
     runStartedAt: "",
     runningCalls: [],
+    runningElided: 0,
     bodyWithheld: false,
     steers: [],
     node: "",
@@ -642,14 +646,80 @@ describe("an executor round's launches", () => {
     );
     expect(
       screen.getByText(
-        /^63 more calls the run made aren’t listed: its record didn’t keep them\. By tool: comment_on_work_item once, read_file 59 times \(2 failed\) and 3 calls to tools the record didn’t keep\.$/,
+        /^63 more calls the phase made aren’t listed: its record didn’t keep them\. By tool: comment_on_work_item once, read_file 59 times \(2 failed\) and 3 calls to tools the record didn’t keep\.$/,
       ),
     ).toBeDefined();
     cleanup();
     render(
       <PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} defaultOpen />,
     );
-    expect(screen.queryByText(/more calls? the run made/)).toBeNull();
+    expect(screen.queryByText(/more calls? the phase made/)).toBeNull();
+  });
+
+  // A RUNNING PHASE'S CARD SAYS WHAT ITS FRAME LEFT OUT, in the live view's
+  // words: a frame keeps a running phase's newest calls, its round window and
+  // its calls in flight to their share, and the record keeps the first and the
+  // newest once the phase ends.
+  //
+  // Mutation: word a running phase's drops as its record's, and a reader takes
+  // the live view's newest calls for what the record will keep.
+  test("says what a running phase's frame left out", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          live: true,
+          roundsElided: 9,
+          callsElided: 120,
+          elidedCalls: [{ name: "read_file", calls: 120 }],
+          runningElided: 4,
+        })}
+        defaultOpen
+      />,
+    );
+    expect(
+      screen.getByText(
+        /^9 more rounds aren’t listed: the live view keeps a long phase’s first and newest/,
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        /^120 more calls the phase made aren’t listed: the live view keeps a running phase’s newest calls\./,
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        /^4 more calls are running than the live view lists: each is listed once it answers\.$/,
+      ),
+    ).toBeDefined();
+  });
+
+  // A HOST PHASE'S RECORD SAYS WHAT IT DID NOT LIST TOO: the rounds past the
+  // most a record lists, and the tool names past its lists' share, beside the
+  // calls it dropped — a record holds each to its share of one message.
+  //
+  // Mutation: draw the lists alone, and a long phase reads as the rounds and
+  // the tools its record happened to keep.
+  test("says the rounds and tool names a phase's record did not list", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          roundsElided: 12,
+          callsElided: 30,
+          elidedCalls: [{ name: "search", calls: 30 }],
+          toolsAvailable: ["read_file"],
+          toolsAvailableElided: 41,
+        })}
+        defaultOpen
+      />,
+    );
+    expect(
+      screen.getByText(
+        /^12 more rounds aren’t listed: the record keeps a long phase’s first and newest rounds/,
+      ),
+    ).toBeDefined();
+    expect(screen.getByText(/^30 more calls the phase made aren’t listed/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /^Tool surface/ }));
+    expect(screen.getByText("and 41 more tools the record doesn’t name")).toBeDefined();
   });
 
   // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's

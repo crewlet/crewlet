@@ -747,6 +747,130 @@ func TestATaskToldAgainCarriesTheReviewItsBriefCarried(t *testing.T) {
 	}
 }
 
+// A TASK TOLD AGAIN RENDERS THE ROUNDS ITS BRIEF RENDERED, BY THEIR NUMBERS. A
+// park past its share folds whole closed rounds into one span of them
+// (ledger.Iteration.Through), so by the time a task is told again the turn's
+// record can hold fewer entries than its brief rendered, beside rounds closed
+// after it: the task renders every entry up to the last round its brief
+// rendered, a span among them as the record keeps it, and never a round closed
+// after that brief, which is told by its own rule. A span that runs on past
+// that round is told too: it holds rounds the brief rendered, whose calls a
+// session that may lack the brief is told no other way.
+//
+// Mutation: render as many entries as the brief rendered rounds, stop short of
+// its last round, or leave out a span that runs on past it, and a case goes
+// red.
+func TestATaskToldAgainRendersTheRoundsItsBriefRenderedByTheirNumbers(t *testing.T) {
+	t.Parallel()
+	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-6", Seq: 6, Round: 7,
+		Task: &sandbox.LeadTask{Rounds: 6}}
+	spanned := []ledger.Elided{{Name: "slack_post", Calls: 4}}
+	for name, tc := range map[string]struct {
+		history     []ledger.Iteration
+		says, never []string
+	}{
+		"rounds a park folded since its brief": {
+			history: []ledger.Iteration{{Iteration: 1, Intent: "the first round's plan"},
+				{Iteration: 2, Through: 5, Elided: spanned}, {Iteration: 6, Intent: "the sixth round's plan"},
+				{Iteration: 7, Intent: "the seventh round's plan"}},
+			says:  []string{"the first round's plan", "Iterations 2", "the sixth round's plan"},
+			never: []string{"the seventh round's plan"}},
+		"every round in one span": {
+			history: []ledger.Iteration{{Iteration: 1, Through: 7, Elided: spanned}},
+			says:    []string{"Iterations 1", "slack_post ×4"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndCutOff,
+				tc.history, func(r *runner.Resume) {
+					r.Leads, r.Base = []runner.ResumeLead{toldLead(task)}, baseTurn
+				}).Continue.Brief
+			section := leadsSection(brief)
+			if !strings.Contains(section, "post the weekly summary") {
+				t.Fatalf("the copy is not told the turn's task again:\n%s", brief)
+			}
+			for _, want := range tc.says {
+				if !strings.Contains(section, want) {
+					t.Errorf("the task told again does not render %q:\n%s", want, section)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(section, never) {
+					t.Errorf("the task told again renders %q, of a round closed after its brief:\n%s", never,
+						section)
+				}
+			}
+		})
+	}
+}
+
+// A REVIEW WHOSE ROUND A PARK DROPPED IS SAID AS NOT KEPT, IN ITS PLACE. A
+// review's lead keeps only the round it closed, and is told again from that
+// round's notes; a park past its share folds whole closed rounds into one span
+// of them (ledger.Iteration.Through), which keeps none of their reviews. Told
+// again once its round is in one, the review is said in its place among the
+// messages told again, as a review that is not kept (prompts.ReviewNotKept):
+// never as a send-back that said nothing, which its round heading a span would
+// make it, nor as one that cannot be read here, which says the engine holds a
+// copy of it, nor among the earlier messages not kept, said before every
+// message the section tells, since it can follow one, as it follows the turn's
+// task a base continuation kept, and the later of two that differ stands. And
+// it is handed on as a lead this brief told, so a continuation of a session
+// that may lack this brief says it again rather than drop it silently.
+//
+// Mutation: read a span's first round as the review's, tell the review as one
+// that cannot be read here, count it among the earlier messages not kept, or
+// hand it on to no later brief, and a case goes red.
+func TestAReviewWhoseRoundAParkDroppedIsSaidAsNotKept(t *testing.T) {
+	t.Parallel()
+	review := sandbox.Lead{Kind: sandbox.LeadKindReview, Job: "job-3", Seq: 3, Round: 2}
+	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-1", Seq: 1, Round: 1, Task: &sandbox.LeadTask{}}
+	spanned := []ledger.Iteration{{Iteration: 1, ReviewNotes: "the first review"}, {Iteration: 2, Through: 5},
+		{Iteration: 6, ReviewNotes: "the sixth review"}}
+	for name, tc := range map[string]struct {
+		history []ledger.Iteration
+		leads   []sandbox.Lead
+		// after is what the section tells before the review, "" for nothing.
+		after string
+	}{
+		"the first round of a span": {history: spanned, leads: []sandbox.Lead{review}},
+		"a round inside a span":     {history: []ledger.Iteration{{Iteration: 1, Through: 6}}, leads: []sandbox.Lead{review}},
+		"after the task it follows": {history: spanned, leads: []sandbox.Lead{task, review},
+			after: "post the weekly summary"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			again := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndCutOff,
+				tc.history, func(r *runner.Resume) {
+					r.Leads, r.Base = nil, baseTurn
+					for _, lead := range tc.leads {
+						r.Leads = append(r.Leads, toldLead(lead))
+					}
+				})
+			section := leadsSection(again.Continue.Brief)
+			at := strings.Index(section, prompts.ReviewNotKept)
+			if at < 0 || strings.Count(section, prompts.ReviewNotKept) != 1 {
+				t.Fatalf("the review whose round a park dropped is not said once as not kept:\n%s",
+					again.Continue.Brief)
+			}
+			if told := strings.Index(section, tc.after); tc.after != "" && (told < 0 || told > at) {
+				t.Errorf("the review is not said in its place, after %q:\n%s", tc.after, section)
+			}
+			for _, never := range []string{"Your work was reviewed and sent back", prompts.LeadUnread,
+				"earlier such message", "the first review", "the sixth review"} {
+				if strings.Contains(section, never) {
+					t.Errorf("the review whose round a park dropped is told as %q:\n%s", never, section)
+				}
+			}
+			if !slices.Contains(again.Continue.Told.Told, sandbox.LeadRef{Job: "job-3",
+				Kind: sandbox.LeadKindReview}) {
+				t.Errorf("the brief hands on %+v told again, want the review it said as not kept among them",
+					again.Continue.Told.Told)
+			}
+		})
+	}
+}
+
 // reviewed is the turn's closed rounds, one per review, each sent back with the
 // notes given, the newest having made calls; none for no review.
 func reviewed(calls []ledger.Call, notes ...string) []ledger.Iteration {
@@ -886,7 +1010,7 @@ func TestABriefContinuingAKeptCaptureHandsOnTheLeadsItTold(t *testing.T) {
 // A BRIEF CONTINUING THE BASE HANDS ON THE TURN'S TASK AS IT RENDERED IT. A turn
 // that has kept no session of its own continues the one its conversation's last
 // turn left, its brief where the turn began and the turn's task: the run keeps
-// that task beside its record, with how many closed rounds the brief's ledger
+// that task beside its record, with the last closed round the brief's ledger
 // rendered and the review its task carried, and the answer that carries a round
 // on beside it. Told again with other rounds, or without its review, the task
 // would not be the message the session may lack.

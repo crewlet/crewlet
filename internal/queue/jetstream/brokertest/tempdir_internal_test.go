@@ -12,6 +12,25 @@ import (
 	"testing"
 )
 
+// A TEST BROKER'S STORE IS MADE WHERE THE CASE'S TEMPORARY DIRECTORIES ARE:
+// under GOTMPDIR where that is set, as t.TempDir makes them. Made under the
+// system's temporary directory while a case's other files sat under GOTMPDIR,
+// a store was on another filesystem wherever GOTMPDIR names one, and a git
+// pack written from a case's work tree into its node's repository renamed
+// across the two and failed (internal/gitlet/host's landing cases).
+//
+// NOT PARALLEL: it sets GOTMPDIR.
+//
+// Mutation: make the store under os.TempDir again, and it is not under the
+// GOTMPDIR the case set.
+func TestATestBrokersStoreIsMadeWhereTheCasesTempDirsAre(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GOTMPDIR", root)
+	if dir := TempDir(t); filepath.Dir(dir) != root {
+		t.Errorf("TempDir made %s, want a directory directly under GOTMPDIR %s", dir, root)
+	}
+}
+
 // A STORE A LATE FLUSH LANDED IN IS REMOVED BY THE NEXT ATTEMPT. The first
 // attempt is the race crewlet/crewlet#1079 met: it removes what it read of a
 // consumer's directory, the consumer's flush lands its state file there, and

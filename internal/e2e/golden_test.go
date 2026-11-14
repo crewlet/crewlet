@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1494,7 +1495,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	//
 	// The client is the compatibility reference and wins any disagreement
 	// — so a failure here is the SERVER's.
-	node := nodeBinary(t)
+	node := prereqtest.OnPath(t, "node", "the dashboard client replay runs the dashboard's own protocol "+
+		"module under it, the one place both halves of the wire protocol are checked against each other",
+		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
 	// A CEILING the company's turn cannot reach, so the capture carries the
 	// live token meters as well: the `budget` push is a frame the client
 	// folds like any other, and one only a capped company is sent.
@@ -1745,30 +1748,6 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 			"(%d captured):\n%s", len(texts), out)
 	}
 	t.Logf("%s", strings.TrimSpace(string(out)))
-}
-
-// nodeBinary finds node, or explains its absence the right way for the run.
-//
-// In CI it is a red build — this is the only place the two halves of the wire
-// protocol are checked against each other, so letting it go quiet retires the
-// check behind a green tick. Elsewhere a missing node skips, and that skip is
-// deliberately NOT declared in `internal/skipgate/allowed.go`: `make test-solo`
-// refuses to start without node (`require-node`), and a run that got past it
-// anyway fails on the undeclared skip rather than reporting a pass. Only a
-// bare `go test ./internal/e2e/` — the fast loop, not a gate — skips quietly.
-func nodeBinary(t *testing.T) string {
-	t.Helper()
-	node, err := exec.LookPath("node")
-	if err == nil {
-		return node
-	}
-	switch strings.ToLower(os.Getenv("CI")) {
-	case "1", "true", "yes":
-		t.Fatalf("node is not on PATH, so the client half of the wire-protocol "+
-			"gate would skip and the build would still pass: %v", err)
-	}
-	t.Skip("node is not installed; the dashboard client replay needs it")
-	return ""
 }
 
 func TestTheSeatCanReachItsBuiltins(t *testing.T) {
