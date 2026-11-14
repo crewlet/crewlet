@@ -120,16 +120,33 @@ test.each([1440, 768, 390])(
   async (width) => {
     await mount(width, sparseCompany());
     await eventually(() => expect(texts(".crewlet-graph-canvas__lane-label")).toEqual(LANES));
-    // AN EMPTY LANE SAYS WHAT IN THIS BUILD WOULD FILL IT, and a filled one draws its cards.
+    await eventually(() =>
+      expect(
+        document.querySelector<HTMLElement>(".crewlet-graph-canvas__world")?.dataset.detail,
+      ).toBeDefined(),
+    );
+    // AN EMPTY LANE SAYS WHAT IN THIS BUILD WOULD FILL IT (drawn from card size
+    // up, an outline under it), and a filled one draws its entries at whatever
+    // level of detail the fitted zoom has: names on cards and tiles, marks past them.
     const empty = texts(".crewlet-graph-canvas__empty").join(" ");
     expect(empty).toContain(
       "Services appear when a person adds one, with Add entry, and containers from the servers the SSH integration reads for Atlas.",
     );
     expect(empty).toContain("Servers appear from the SSH servers the SSH integration declares.");
     expect(empty).not.toContain("Repositories appear");
-    expect(texts(".crewlet-graph-canvas__name")).toEqual(
-      expect.arrayContaining(["acme/web", "acme/api", "acme/infra"]),
-    );
+    if (
+      document.querySelector<HTMLElement>(".crewlet-graph-canvas__world")!.dataset.detail ===
+      "marks"
+    ) {
+      const marks = [...document.querySelectorAll(".crewlet-graph-canvas__shapes path")].map(
+        (path) => path.getAttribute("d")?.match(/M/g)?.length ?? 0,
+      );
+      expect(marks.reduce((sum, n) => sum + n, 0)).toBeGreaterThanOrEqual(3);
+    } else {
+      expect(texts(".crewlet-graph-canvas__name")).toEqual(
+        expect.arrayContaining(["acme/web", "acme/api", "acme/infra"]),
+      );
+    }
     // THE MAP TAKES ITS SHARE OF THE WINDOW, the catalogue follows under it,
     // and nothing scrolls sideways.
     const picture = map()!.getBoundingClientRect();

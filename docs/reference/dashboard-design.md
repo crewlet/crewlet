@@ -9648,6 +9648,14 @@ draws at once arrives with groups the engine closed (`collapsed`), named in a
 banner above the map with a link to read each in the catalogue, so a partial
 map is never taken for the whole.
 
+**The map opens fitted to its view** (kit 0.127.0): all of it, centred, at the
+zoom that fits the map's box and the level of detail that zoom draws (a large
+company as tiles or marks, never blank boxes), with no other view painted
+first. The kit fits it again when its first entries arrive and when its box is
+resized while nobody has moved the view; a poll keeps the reader's view. Under
+half size an empty lane is its dashed outline, its words coming back with the
+cards.
+
 **One selection** (`sel={id}`, or the entry the sheet is open on) is lit on the
 map along its whole path both ways, with the rest receding to a fifth and the
 lit lines under a glow with faster dashes, and is marked in the catalogue. The

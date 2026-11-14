@@ -137,6 +137,12 @@ its name.
   than the engine draws at once arrives with some groups closed by the engine,
   named above the map with a link to read each in the catalogue.
 
+**The map opens with all of it in view**, centred and zoomed to fit the space
+it has, so a large company opens zoomed out and a phone shows the whole map
+small. It fits again when its space changes size (a sheet opening beside the
+page, fullscreen) while you have not moved it. Once you zoom or pan, the map
+keeps your view as it refreshes.
+
 Drag to pan, scroll or use the zoom bar to zoom, press `0` to fit the whole
 map, and use the fullscreen button in the zoom bar to give the map the screen.
 The map keeps a signal you can read at every zoom. From half size down an
@@ -145,8 +151,9 @@ still reads and cut to what fits, and the whole cell in its health colour when
 it is not quiet. Zoomed out further than a name fits, each entry is a filled
 mark in its health colour, and every cluster keeps its title, its count and
 its tally of entries that need a look at their own size, so the picture reads
-as how much of each cluster is quiet. A tile is pressed like a card; zoom in
-to press a mark.
+as how much of each cluster is quiet. An empty lane is its dashed outline until
+you zoom in to half size, where it says what would fill it. A tile is pressed
+like a card; zoom in to press a mark.
 With the keyboard, Tab onto the map, move with the arrow keys, press Enter to
 select an entry or open a group and Escape to clear; typing a name finds it.
 The moving dashes stand still for a reader who asked the system for less
