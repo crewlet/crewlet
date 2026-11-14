@@ -316,16 +316,18 @@ func Handling(messageBytes int) time.Duration {
 // The reply is CPU, not a link: the leader reads the message and encodes it
 // into JSON, base64 inside, each server it passes parses it whole, and the
 // reader decodes it. Read back on a member's own connection
-// (BenchmarkADomainLogReadOfItsLargestRecord, -benchtime 10x, two E-cores of
-// a Core Ultra 7 265U), the largest reply took 36.9 ms without the race
-// detector — 3.5 ms a mebibyte — and 0.79 s under it, and with two, four and
-// eight threads more kept busy beside it on those two cores 1.26, 2.24 and
-// 5.77 seconds: a load of five runnable threads a core under the race
-// detector, inside the ten to thirty-three on four cores this repository's
-// runners were measured at (internal/config's MinLeaseTTL), is half a second
-// a mebibyte. A second a mebibyte is twice that, and nearly three hundred
-// times what the reply costs a node that is not running under the race
-// detector.
+// (BenchmarkADomainLogReadOfItsLargestRecord, two E-cores of a Core Ultra 7
+// 265U), the largest reply took 36.9 ms without the race detector — 3.5 ms a
+// mebibyte. Under it, the slowest of three runs of five reads each, in one
+// process, took 0.73 s with nothing else on those two cores, and 3.80, 4.81
+// and 5.37 seconds with eight, twelve and sixteen threads more kept busy
+// beside it: one, five, seven and nine runnable threads a core, the last past
+// the top of the ten to thirty-three on four cores this repository's runners
+// were measured at (internal/config's MinLeaseTTL), 8.25 a core. Each step of
+// load added less than the one before, and at nine a core the reply took half
+// a second a mebibyte. A second a mebibyte is twice that at the top of the
+// load measured, and nearly three hundred times what the reply costs a node
+// that is not running under the race detector.
 //
 // It is a TERM, never a deadline: a reply that is answered in milliseconds
 // ends the read as soon as it is in. What the second a mebibyte costs is the

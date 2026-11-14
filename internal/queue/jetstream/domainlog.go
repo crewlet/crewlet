@@ -523,7 +523,7 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 // internal/objstore/natsobj gives its piece reads on the same connection
 // (internal/jsapi's Leader.Carrying). On a member's own connection the largest
 // record took 46 ms to read back on four cores
-// (BenchmarkADomainLogReadOfItsLargestRecord), and 0.79 s under the race
+// (BenchmarkADomainLogReadOfItsLargestRecord), and 0.73 s under the race
 // detector, which a loaded runner stretched past the read term, so the read
 // was asked again while its first reply was still being built; its handling
 // gives it 10.7 seconds (internal/jsapi's HandlingPace says why). For a log
