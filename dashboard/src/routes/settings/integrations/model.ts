@@ -41,6 +41,7 @@ import {
   rosterOf,
   sectionsFor,
   stuckDisconnecting,
+  stuckOn,
   toolsOf,
   total,
   useSetup,
@@ -359,6 +360,8 @@ export interface DropPlan {
   name: string;
   kinds: string[];
   stuck: string;
+  /** What holds it ([stuckOn]), "" where nothing does. */
+  stuckOn: "vendor" | "settings" | "";
   apps: { handle: string; name: string; url: string }[];
   appPath?: string | undefined;
 }
@@ -522,9 +525,23 @@ function surfaceIssues(entry: Entry, p: ReturnType<typeof presentSurfaces>[numbe
       owner: "you",
     });
   }
+  // A DISCONNECT THE COMPANY'S SETTINGS HOLD is the person's to move, and is
+  // said in words: the engine's fault is a list of setting paths, which drawn
+  // whole was a wall of them on the card, and "the last check failed" blamed a
+  // check. Disconnect opens with the settings it names.
+  const heldBySettings =
+    row.reconcile?.disconnecting && row.reconcile.teardown_held_by === "settings";
+  if (heldBySettings) {
+    add("teardown", {
+      tone: "warning",
+      problem: `Disconnecting ${surface.name} is held: the company's settings refused the change that removes it.`,
+      remedy: "Open Disconnect to see the settings it names, change them, and disconnect again.",
+      owner: "you",
+    });
+  }
   // A PASS THAT FAILED WITH NOTHING TO SHOW FOR IT is still a failed pass: the
   // loop tries again on its own, so the next move is Crewlet's.
-  if (row.reconcile?.last_error && kinds.size === 0) {
+  if (row.reconcile?.last_error && kinds.size === 0 && !heldBySettings) {
     add("pass", {
       tone: "warning",
       problem: asSentence(`The last check of ${surface.name} failed: ${row.reconcile.last_error}`),
@@ -786,6 +803,7 @@ export function useIntegrations(): Model {
       name: tool.entry.name,
       kinds: disconnectOrder(tool.entry, rows, tool.sections),
       stuck: stuckDisconnecting(tool.entry, rows),
+      stuckOn: stuckOn(tool.entry, rows),
       apps: toolsOf(tool.sections)
         .flatMap((t) => t.seats ?? [])
         .filter((seat) => seat.manage_url)

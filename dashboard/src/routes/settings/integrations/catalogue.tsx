@@ -1259,6 +1259,28 @@ export function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRo
 }
 
 /**
+ * What holds a disconnect [stuckDisconnecting] reports: `settings` where the
+ * company's settings refused the revision that removes the integration, and
+ * `vendor` otherwise (the third-party app's half, or a node too old to say).
+ *
+ * TWO DIFFERENT WAYS OUT, which is why it is asked. A vendor that will not
+ * let go is forced past; a revision the settings refuse is refused the same
+ * way when forced, and is fixed by changing the setting it names.
+ */
+export function stuckOn(
+  entry: Entry,
+  rows: Map<string, IntegrationRow>,
+): "vendor" | "settings" | "" {
+  for (const surface of entry.surfaces) {
+    const reconcile = rows.get(surface.key)?.reconcile;
+    if (reconcile?.disconnecting && reconcile.last_error) {
+      return reconcile.teardown_held_by === "settings" ? "settings" : "vendor";
+    }
+  }
+  return "";
+}
+
+/**
  * What actually arrived on one surface, newest first.
  *
  * FROM THE LISTING, never one payload per row. The event list returns a row's
