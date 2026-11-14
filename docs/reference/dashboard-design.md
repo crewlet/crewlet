@@ -1421,17 +1421,17 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, the column's landing and the Settings row's address, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). `{id}` is the model's key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP & tools**, the engine's runtime beside the models: every MCP server with its condition, its alarms, who it reaches and what last went wrong, a server's own page, and the engine's built-in tools by group *(every member's, in a reading that names no launch line, header, failure sentence or call; every action is an admin's)*. ONE tail segment is a tool, opened where the page shows it, and two are a server's page, discriminated on LENGTH, because a tool name is a third party's string | `view=` (`agents`, `builtin`) · `agent=` · `tab=` · `flow=` (`add`, `edit` with `step=`, `test`, `value` with `key=`, `restart`, `disable`, `remove`, `approve`, `drift`, with `server=` and `seat=`) · `q=` · `cap=` · `group=` · `peek=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
-| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
+| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it, and a pencil on every cap the document carries (the answer's `settable`) that changes it with a `PATCH /config` the engine checks first; an empty field is the default, which removes the key *(needs Admin access)* | |
 | `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/settings/spend/tasks` | **Settings › Token spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Worklet access; not offered where the company does not run Worklet)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/settings/people` | **People**, the identity directory but its service accounts: every person with their stage, login, access and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's report on them (`/iam/check`), and every human seat with whatever holds it, a person, a service account or an open invitation (`/iam/seats`) *(needs Admin access)*. An admin changes, suspends, resets, signs out and removes people, and cancels invitations. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart. An invitation's link and a reset link are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold is said in the peek) |
 | `#/settings/service-accounts` | **Service accounts**, the machine principals: each with its stage, login, access and the seat it acts as, and the directory's report on them; an admin creates one (on a human seat or none) and mints its token, shown once *(needs Admin access)*. A row opens in the peek, as on People | `peek=person:{id}` |
 | `#/settings/tokens` | **API tokens**, this node's Tier A token labels, each joined to the directory row its login names and the seat that row binds (`/iam/node-tokens`), and, where the company document is managed, the tokens that alone may write it *(needs Admin access)*. Never a value. A person's own tokens are on their Account | |
 | `#/settings/sign-in` | **Sign-in policy**, how people sign in, as the engine serves it: the shortest password, whether two-step verification is required, how long a session lives (from sign-in and unused) and how long a step-up lasts, read-only and naming the node that answered *(needs Admin access)* | |
-| `#/settings/delegated-decisions` | **Settings › Delegated decisions** ([Delegated decisions](../guides/delegated-decisions.md)): whether delegation is on, each rule as the engine numbers it (the kinds it delegates, its delegates, the people it escalates to, the paths a merge or deploy rule always puts to people and its spot-check rate), the limits the engine holds every delegate to, then the digest (what delegates decided on one company day, the last whole one unless `day=` names another), the spot-checks and the flagged denials of the week before, one toolbar narrowing all three and each list's foot saying how many of its rows it shows and whether the log held more (`delegated_decisions`) *(an administrator's and the people a rule escalates to; the engine refuses anybody else, so the row names no grant)*. Read-only | `day=` (a company day, `2026-11-09`) · `q=` · `verdict=allow\|escalate\|deny` · `by=agent\|person\|engine` |
+| `#/settings/delegated-decisions` | **Settings › Delegated decisions** ([Delegated decisions](../guides/delegated-decisions.md)): whether delegation is on, each rule as the engine numbers it (the kinds it delegates, its delegates, the people it escalates to, the paths a merge or deploy rule always puts to people and its spot-check rate), the limits the engine holds every delegate to, then the digest (what delegates decided on one company day, the last whole one unless `day=` names another), the spot-checks and the flagged denials of the week before, one toolbar narrowing all three and each list's foot saying how many of its rows it shows and whether the log held more (`delegated_decisions`) *(an administrator's and the people a rule escalates to; the engine refuses anybody else, so the row names no grant)*. The switch, **Add a rule** and each rule's change and removal write the `delegated_decisions` block (`PATCH /config`), an administrator's | `day=` (a company day, `2026-11-09`) · `q=` · `verdict=allow\|escalate\|deny` · `by=agent\|person\|engine` |
 | `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=worklet\|doclet\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes**, leases (each seat's holder and **since** when), duties, config rollout, and the fleet broker's members as the nodes advertise them and as its metadata group counts them *(needs Admin access)* | |
-| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
+| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)*: `revisions` lands on the History lens; one revision's page draws no lenses. The Active lens's **Edit** (the document as YAML, a file importable over it, checked with `PUT /config?dry_run=true` before it is saved) and **Reload** (`POST /config/reload`), and a revision's **Revert to this revision** on its page and its peek (`POST /config/revisions/{id}/revert`, shown the diff it applies), each asked first and carrying the summary the person writes | `lens=active\|entities\|audit\|diff` |
 | `#/settings/gitlet` | **Settings › Gitlet**, Gitlet as an administrator runs it: the code log's row of the retention report (its ceiling, what it holds and the trim's terms, drawn as Backups & retention draws it), Gitlet's alarms firing on every node from the fleet's node rows, the longest-standing first, the configuration's scratch policy and identity domain, each unset field beside the default it reads as, and every protected repository's rules, a page at a time from the engine's listing of the protected repositories (`code_repos` with `protected`) — what each lets a push do and what its merge gate asks, the gate read from the repository's detail (asked for by name, `gates`) once, as its fold is first opened, who last set each rule and when (the same detail's `rule_sources`: a seat, a person or a credential, or the company document), and which surface sets its rules *(needs Admin access; not offered where the company hosts no code)*. Read-only | |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention**: take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Its alarm list draws every standing alarm but the model, MCP and Gitlet kinds, which it names in one line with a link to the section that answers each (`lib/alarms.ts`, `alarmHome`). Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
 | `#/settings/advisor` | **Settings › Advisor**, Admin's: the [setup advisor](../guides/advisor.md)'s findings, the most costly first, with what the engine is handling listed apart; Review the change previews the exact entity write from the engine's own dry run (the fields it changes and any warning it would add), and only Apply saves it, under the entity's own tag. An atlas finding's **Review the fix** opens the entries it names, each linked to its page in the atlas, with the one control its fix asks for (an owner, a monitor, the values to choose between, or a read asked for now), sent as the reader's own atlas change; a reader answered no entries is offered none | |
@@ -9954,14 +9954,24 @@ The caps the engine holds a turn to are not policies the company writes for
 its agents to read: they are **Settings › Limits** (`#/settings/limits`), in
 the Runtime group, the engine's own answer for each (the turn's guardrails,
 delegation, notifications and a scheduled turn's timeout). Each group is a
-card holding the kit's `SettingsTable`, the shape every read-only settings
-page takes (Settings › Sign-in policy too): the cap's name with its key in
-the company document under it, the value in tabular figures, and its source,
-*Default* as a quiet word where the value is the engine's and a marked
-*Changed from* the default otherwise, *Off* rather than 0 where a value
-switches its limit off (the answer's `off` and `default_off`). Limits is
-read-only and admin's, and Principles offers it as a related row to a reader
-who may open it.
+card holding the kit's `SettingsTable` (the shape Settings › Sign-in policy
+takes too): the cap's name with its key in the company document under it, the
+value in tabular figures, and its source, *Default* as a quiet word where the
+value is the engine's and a marked *Changed from* the default otherwise, *Off*
+rather than 0 where a value switches its limit off (the answer's `off` and
+`default_off`). Every cap the document carries (the answer's `settable`: all
+but a scheduled turn's timeout, the engine's constant that each schedule sets
+for itself) has a pencil beside its value, drawn for every reader and disabled
+with the reason for one who cannot write the document, as a token ceiling's
+is. It opens a field for that cap in a popover: the typed value is read only
+as far as its unit (a whole number, seconds, a percentage), the engine checks
+it against the whole company (`PATCH /config?dry_run=true` under the read's
+revision) and refuses one it cannot run in its own words, a warning the
+change brings asks for a second press, and the save carries a summary naming
+the cap. An emptied field is the default, which removes the key rather than
+writing today's default. The saved value is drawn, marked *applying…*, until
+this node applied the revision and the answer carries it. Limits is admin's,
+and Principles offers it as a related row to a reader who may open it.
 
 **The brand is Company's too, and published.** **Company › Brand**
 (`#/company/brand`) is how the company looks and sounds in everything its
@@ -10109,7 +10119,21 @@ check names, the first two and a count of the rest, every entry on hover;
 "what the branch requires" where it names none, and "not for commands" for a
 command rule), and the limits
 the engine holds every delegate to, the deadline and the two hourly caps, as a
-settings table, since no document changes them. Under them one toolbar (a
+settings table, since no document changes them. The rules card's head holds a
+switch that turns delegation on or off and **Add a rule**, and each rule's
+row ends in a pencil and a bin; each is drawn for every reader and disabled
+with the reason for one who cannot write the document. The pencil and Add a
+rule open a side sheet filled from the company document as it is then (not
+from the rules this node applied, which may be older): the kinds as
+checkboxes, the delegates and the people it escalates to as seat pickers, the
+spot-check rate (empty is the engine's default), and, for a merge or deploy
+rule only, its paths and its required checks, one row per repository and
+branch. Save checks the whole rules list against the company first and says a
+refusal in the engine's words in the sheet; a rule changed since the sheet
+was filled is a conflict to reload, never written over. The bin asks first,
+saying that the rules after it move up one. All three are one write of the
+card (a change is the whole `rules` list, which a merge patch replaces), and
+*Saved, applying…* beside the switch says it until this node applied it. Under them one toolbar (a
 search over the seat, the request, the server and the reason; a verdict and
 who gave it, each the kit's `Select`; the day the digest covers, back a
 company day at a time and forward no further than today) narrows three grids:
@@ -10121,8 +10145,7 @@ running), or **Decided on** the day `day=` names, then **Spot-checks** and
 state's tone, why the engine changed or made it on hover (each of its closed
 words as a phrase), who gave it under which rule (Crewlet for the
 engine's own), and the giver's reason; each grid's foot says "Showing N of M"
-and whether the log held more than its page. It is read-only: the rules are
-the company document's, changed there. The read admits an administrator and
+and whether the log held more than its page. The read admits an administrator and
 the people a rule escalates to, so the row names no grant and anybody else is
 shown the engine's refusal. Home draws two notices off the same read for those
 people, above the board: "Delegates decided N requests yesterday", put away
@@ -10973,11 +10996,40 @@ rotation makes, and not counted among those that run it) — with
 no lens bar and no running document under it, and **See its changes** opens
 the Diff lens against the revision's *parent*, which is what that save
 changed (against the active revision, the active revision's own changes were
-empty). **It is read-only for the document**: a revision is written by
-`PUT /config`, `crewlet config import`, or a screen's own scoped write (a
-budget ceiling, the org builder), each of which validates against the schema
-before anything is stored, and the screen says so first, as its page note on
-every lens.
+empty). **It changes the document whole**, as its page note says on every
+lens, where every other screen changes a part:
+
+- **Revert to this revision**, on a revision's page and its peek (disabled on
+  the active revision, whose re-publication is a reload), opens a
+  confirmation drawing what the revert changes in the active revision
+  (`config_diff` against `active`, the cut said where the answer is a page of
+  it) and a summary field, and sends `POST /config/revisions/{id}/revert`.
+- **Reload**, on the Active lens, re-publishes the active document with the
+  summary the person writes (`POST /config/reload`). It stays open on a
+  managed document, where every other write here is disabled with the
+  managed sentence: it is the break-glass that carries a rotated credential.
+- **Edit**, on the Active lens, turns the card into the document as YAML
+  (`GET /config?format=yaml`, the kit's `SourceEditor`), with **Import a
+  file** to load one over it and **Check** (`PUT /config?dry_run=true` under
+  the read's entity tag). The engine's problems are listed in its words, one
+  the parser placed on a line marked in the gutter and offered as **Line N**;
+  Save checks again, asks a second press for a warning the document
+  introduces (the dry run's `introduced`), and stores it with the summary
+  under the same tag, so a colleague's save in between is a conflict. A
+  document saved as it was read sends nothing, and leaving with unsaved
+  writing asks first. Credentials are read masked and sent back masked: the
+  engine restores each mask from the revision the write is conditional on,
+  matched by identity, and refuses one it cannot match rather than clearing
+  a secret. An active revision stored without a seal opens to nobody; the
+  lens then offers **Replace the document**, the editor empty and conditional
+  on the revision the refusal named.
+
+The summary is required in each, and travels in `X-Summary` as its UTF-8
+bytes (the transport sends every header's text that way, since `fetch` takes
+a header as bytes and the engine reads them as UTF-8). Each refusal is the engine's: a managed document
+names its writers, a conflict offers a reload, and a write whose activation
+went unanswered (`503` with `outcome: "unknown"`) names the revision it
+stored and the node holding it, and says not to send it again.
 
 ## How it is built
 
