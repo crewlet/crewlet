@@ -460,10 +460,14 @@ const chainPrefixBytes = 10
 //     attachment of a batch's hook names, and the walk up from the last row
 //     to that batch's reply through another of its results or another of its
 //     records); and, in the metcalfe variants alone, where q1t holds (2.1.322
-//     @293811681): the checkpoint is a reply that made a call, the last row
-//     descends through a later reply that says something or calls, above
-//     that reply's own records, no record hangs off the checkpoint, and none
-//     off the last row but one that hangs off a reply, UF;
+//     @293811681): the checkpoint is a reply that made a call; the walk up
+//     from the last row reaches the record above the checkpoint's run (the
+//     checkpoint and the records of its id it hangs from), and of the records
+//     it passes outside that run, one is a reply that says something or
+//     calls (LE @293601245) and the last, the topmost, was written after the
+//     checkpoint (`K.timestamp>h.timestamp`); no record hangs off the
+//     checkpoint, and none off the last row but one that hangs off a reply,
+//     UF;
 //   - else the checkpoint, where it names a record; else the start;
 //   - the leaf is the nearest user or assistant record up from there by
 //     parent, where it has a timestamp: cj (2.1.322 @293745290, 2.1.310's p0
@@ -498,9 +502,10 @@ const chainPrefixBytes = 10
 // attachment, a system record but a compaction's boundary, a meta user record
 // holding no result), it takes from each child in turn what pye hands
 // (2.1.322 @293588633, 2.1.310's cce @246995483): the child and, after each,
-// its one child not met yet, every one a UF record of the parent's
-// isSidechain as written (absent, false and true apart) and none met, or
-// nothing where one is not or has two children not met; each record hung is
+// its one child not met yet, every one a UF record whose isSidechain, as
+// written, is that of the record the chain hangs under (absent, false and
+// true apart) and none met, or nothing where one is not or has two children
+// not met; each record hung is
 // met at once, so it blocks what a later window would hang. A window OPENS
 // where it recovered or hung a record (`xn.length===0&&Tn.size===0` skips the
 // rest), one of hung records alone among them. Windows that overlap merge, so
@@ -1159,8 +1164,9 @@ func (c *threadChain) End(ctx context.Context) error {
 // Unknown is the thread's own cannot tell: the first shape no model holds
 // that it met, and true; "" and false where the thread is modelled. Asked
 // while the chain files, it answers the first shape met so far, so a reader
-// can stop reading a thread the model already cannot place; after an End
-// its context cut short, whyUndecided.
+// can stop reading a thread the model already cannot place. After an End its
+// context cut short, it answers that shape where the thread met one before
+// End stopped, and whyUndecided where it met none.
 func (c *threadChain) Unknown() (chainWhy, bool) {
 	switch {
 	case c.why != "":
@@ -1171,12 +1177,14 @@ func (c *threadChain) Unknown() (chainWhy, bool) {
 	return "", false
 }
 
-// Handed is what the resume makes of record h; Why says why. noChainRecord,
-// and a handle the chain never gave out, answer handedNo (whyNoRecord);
-// pastChainBound answers handedUnknown (whyBound); every record of a thread
-// the model cannot place answers handedUnknown, with the thread's reason; and
-// asked before End decided, every record answers handedUnknown
-// (whyUndecided).
+// Handed is what the resume makes of record h; Why says why. It answers in
+// the order it checks: noChainRecord, whenever it is asked, handedNo
+// (whyNoRecord); every other handle, asked before End decided or after an End
+// its context cut short, handedUnknown (whyUndecided); then pastChainBound
+// handedUnknown (whyBound), a handle the chain never gave out handedNo
+// (whyNoRecord), every record of a thread the model cannot place
+// handedUnknown, with the thread's reason, and every other record what End
+// decided of it.
 func (c *threadChain) Handed(h chainHandle) handedness {
 	handed, _ := c.verdict(h)
 	return handed
@@ -1979,14 +1987,14 @@ func (c *threadChain) x1t(w *chainWork, from chainHandle, id chainReplyID) []cha
 
 // q1t reports whether 2.1.322's q1t (@293811681) holds of the last row and
 // the checkpoint, as the metcalfe variants read it: the checkpoint is a reply
-// that made a call; above its run of records of its own id lies a record; the
-// walk up from the last row reaches that record through a record that is no
-// part of the run, of a later timestamp than the checkpoint's, beside one
-// that is a reply saying something or making a call (LE @293601245); no
-// record hangs off the checkpoint, and none off the last row but one that
-// hangs off a reply. read is false where the run turns on a reply's id the
-// layer reads as none, which may be absent, where the run stops, or empty,
-// where it goes on (`message?.id!==void 0`).
+// that made a call; above its run (it and the records of its own id it hangs
+// from) lies a record; the walk up from the last row reaches that record, and
+// of the records it passes outside the run, the last, the topmost (`K`), was
+// written later than the checkpoint, and one is a reply saying something or
+// making a call (LE @293601245, `H`); no record hangs off the checkpoint, and
+// none off the last row but one that hangs off a reply. read is false where
+// the run turns on a reply's id the layer reads as none, which may be absent,
+// where the run stops, or empty, where it goes on (`message?.id!==void 0`).
 func (c *threadChain) q1t(w *chainWork, last, cp chainHandle) (fires, read bool) {
 	if !c.is(cp, kindAssistant|kindUse) {
 		return false, true
