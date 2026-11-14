@@ -292,7 +292,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// Where a model's executors can run, the catalogue a model step
 		// suggests from, and one device sign-in: the configuration's reader,
 		// and the one who starts a sign-in.
-		"llm_runners": "admin", "llm_models": "admin", "llm_device_sign_in": "admin",
+		"llm_runners": "admin", "llm_models": "admin", "llm_device_sign_in": "admin", "llm_check": "admin",
 
 		"work_items": "worklet", "work_comments": "worklet",
 		"work_item_turns": "worklet", "work_views": "worklet",

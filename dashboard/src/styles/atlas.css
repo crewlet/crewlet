@@ -85,6 +85,18 @@
   align-items: baseline;
   gap: var(--spacing-3);
 }
+/* HOW MANY NEED ATTENTION, each health a link: beside the title, wrapping
+   under it where the tile is narrow rather than cutting a count. */
+.atlas-band__head {
+  flex-wrap: wrap;
+}
+.atlas-band__counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
 .atlas-band__attention {
   display: grid;
   gap: var(--spacing-2);
@@ -345,6 +357,12 @@
 .atlas-toolbar__end {
   display: inline-flex;
   margin-inline-start: auto;
+}
+
+/* WHY EVERY CONTROL OF AN ENTRY IS HELD, said once under them. */
+.atlas-actions__note {
+  margin: 0;
+  max-width: 44rem;
 }
 
 /* AN ENTRY'S ACTIONS: one row under its header, then what the engine said of

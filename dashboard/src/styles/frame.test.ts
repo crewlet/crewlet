@@ -763,8 +763,7 @@ describe("the frame's layout", () => {
 
   // A TAB ROW SCROLLS RATHER THAN PUSHING THE WHOLE SCREEN SIDEWAYS.
   //
-  // uilet states this rule for its underline row and not for its pill one: a
-  // `.crewlet-tabs` is `display: inline-flex` and the pill variant is
+  // A `.crewlet-tabs` is `display: inline-flex` and the pill variant is
   // `width: fit-content`, and neither caps at the container, because a flex
   // row of nowrap labels has a MIN-content width equal to the sum of them.
   //
@@ -777,10 +776,17 @@ describe("the frame's layout", () => {
   // `max-width` is the half that matters, and the reason `overflow-x` alone
   // changes nothing: without it the box is still as wide as its content and a
   // scrollport has nothing to hide.
+  //
+  // THE KIT STATES IT NOW, with the ring that goes with it: a scroller clips at
+  // its padding edge, and while this tree made the row scroll the kit still
+  // drew a pill tab's ring flush on the tab, so every range control's ring
+  // lost a pixel top and bottom. One owner for the scroll and the ring, and no
+  // second copy here to drift from it.
   test("a pill tab row is bounded by its container, not by its content", () => {
-    const pill = block(sheet("screens.css"), ".crewlet-tabs--pill");
+    const pill = block(kitSheet(), ".crewlet-tabs--pill");
     expect(pill).toMatch(/max-width:\s*100%/);
     expect(pill).toMatch(/overflow-x:\s*auto/);
+    expect(sheet("screens.css")).not.toMatch(/\.crewlet-tabs--pill\s*\{/);
   });
 
   // AND THE ONE TABLE LEFT IN THE PRODUCT STACKS THERE TOO.

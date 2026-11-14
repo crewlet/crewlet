@@ -46,6 +46,7 @@ import type {
  */
 export function spendOffer(zone: string | undefined): Offer {
   return {
+    screen: "spend",
     ranges: ["7d", "30d", "90d"],
     custom: true,
     customDays: true,

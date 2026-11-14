@@ -61,6 +61,7 @@ import {
   PlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { WorkCard, type CardFact, type CardWaiting, type RowChrome } from "~/components/work.tsx";
+import { TaskRowMenu, type TaskActions } from "../taskMenu.tsx";
 import { presetForLane, type NewTaskPreset } from "~/app/newTask.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -104,6 +105,8 @@ export function Board({
   laneSlot,
   onAdd,
   cardOmit,
+  actions,
+  inTrash = false,
 }: {
   groups: WorkGroup[];
   axis: string;
@@ -147,6 +150,14 @@ export function Board({
   onAdd?: (preset: NewTaskPreset) => void;
   /** The card facts the reader put away (`card_hide=`) — see [CARD_FACTS]. */
   cardOmit?: ReadonlySet<CardFact>;
+  /**
+   * The trash's gestures, where the screen offers them: each card then carries
+   * its own menu, beside the card rather than in it, since a card is a link
+   * and a control inside a link is two targets in one. See `../taskMenu.tsx`.
+   */
+  actions?: TaskActions;
+  /** The board draws the trash (`removed=true`), so a card's menu restores. */
+  inTrash?: boolean;
 }) {
   const move = useAct("place_work_item");
   // THE DROP IN FLIGHT, drawn until the engine answers — and the UNPLACED one,
@@ -436,6 +447,7 @@ export function Board({
                         drag={dragProps(row)}
                         omit={cardOmit}
                       />
+                      {actions && <TaskRowMenu row={row} actions={actions} inTrash={inTrash} />}
                     </div>
                   ))}
                   {/* A DECLARED LANE WITH NOTHING IN IT. The engine pads a closed

@@ -503,12 +503,16 @@ export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
   const { login } = useViewer();
   // A TOKEN THE NODE'S CONFIG DECLARES is no directory record, so nothing can
   // bind it: the way in is a person, or a service account bound to a seat.
+  //
+  // THE COMMAND ENDS THE SENTENCE, never inside parentheses: drawn whole, it
+  // wraps as one piece, and wrapped in a parenthetical it left the "(" alone
+  // at the end of one line and a space before the ")" on the next.
   if (tierATokenOf(login)) {
     return (
       <>
-        To {to}, sign in as a person, or use a service account bound to an open seat (
-        <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>). A token declared in the
-        node&rsquo;s config acts as itself and holds no seat.
+        A token from the node&rsquo;s config can&rsquo;t hold a seat. To {to}, sign in as yourself,
+        or use a service account bound to an open seat:{" "}
+        <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>
       </>
     );
   }

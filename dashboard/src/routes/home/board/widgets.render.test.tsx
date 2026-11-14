@@ -606,9 +606,10 @@ describe("the Inbox widget", () => {
     };
   };
 
-  // THE CARD AND THE SIDEBAR SAY ONE COUNT: the card's page holds the few rows
-  // it draws, and the sidebar's holds a page of fifty with a cursor past it.
-  test("counts what the sidebar counts, as the floor the sidebar draws", async () => {
+  // THE CARD COUNTS ITS UPDATES, NOT THE BADGE: the badge counts what waits on
+  // the reader, and these rows only inform, so the card's figure is its own
+  // read's, a floor where the engine handed back a cursor.
+  test("counts its own unread updates, as a floor where more lie past its page", async () => {
     const inbox = (params: Record<string, unknown>) => {
       const limit = Number(params.limit);
       const all = Array.from({ length: 60 }, (_, i) => notice(i + 1));
@@ -626,8 +627,10 @@ describe("the Inbox widget", () => {
       inbox,
     });
     await settle();
-    expect(screen.getByText("Inbox · 50+ unread")).toBeTruthy();
-    expect(screen.getByText("All 50+ unread")).toBeTruthy();
+    const shown = document.querySelectorAll(".home-tasks li").length;
+    expect(shown).toBeGreaterThan(0);
+    expect(screen.getByText(`Inbox · ${shown}+ unread`)).toBeTruthy();
+    expect(screen.getByText(`All ${shown}+ unread`)).toBeTruthy();
   });
 });
 

@@ -277,7 +277,7 @@ test("a seat listing that failed is said on the page", async () => {
   location.hash = "#/company/org/seats/sam";
   engine(json(500, { error: "internal", message: "boom" }));
   await mount("sam", ["admin"]);
-  expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
+  expect(await screen.findByText(/the engine failed to answer/)).toBeTruthy();
   expect(screen.queryByText("This seat is open")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });

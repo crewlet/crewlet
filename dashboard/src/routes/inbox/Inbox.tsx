@@ -98,8 +98,8 @@ import { useBackends, useServicesRun, type OrgServices } from "~/lib/services.ts
 import { useNow } from "~/lib/clock.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
-import { useAttention, useUnwatched } from "~/lib/useAttention.ts";
+import { conditionKey, conditionsToDecide, watchedIn } from "~/lib/attention.ts";
+import { useAttentionSplit, useUnwatched } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -289,7 +289,10 @@ export function Inbox() {
   const person = useQuery("work_person", bound && runs.tracker ? { handle: owner } : undefined, {
     enabled: bound && runs.tracker,
   });
-  const attention = useAttention();
+  // THE PLATFORM NOTICES THIS READER PUT OFF are not in Needs you and count
+  // nowhere, and are listed under Put off with the way back (`lib/putOff.ts`).
+  const { shown: attention, putOff: putOffItems } = useAttentionSplit();
+  const [putOffOpen, setPutOffOpen] = useState(false);
   const unwatched = useUnwatched();
   // WHAT AGENT WORK WAITS ON THE READER, My work's own count, so the Inbox
   // leads with it when an item they hold or a question put to them holds any.
@@ -320,6 +323,7 @@ export function Inbox() {
   // every row draw again, and a condition that came and went with each push
   // moved the rows below it (useStableList).
   const needsNow = useStableList(rows.needs, rowKeyOf);
+  const othersNow = useStableList(rows.others, rowKeyOf);
   const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   // THE ROW THAT HAS JUST LANDED IN ANSWERED, which washes the group's
@@ -328,17 +332,33 @@ export function Inbox() {
   const [arrived, setArrived] = useState<string | undefined>(undefined);
   // ANSWERED BEFORE THIS VISIT: a question answered here is in Needs you,
   // and one answered before it is under Answered, never in both places.
-  const { needs, answered } = useMemo(
-    () => pairAnswered(keepSettled(needsNow, settled), answeredRows(answeredRead.data), settled),
-    [needsNow, settled, answeredRead.data],
-  );
+  // BOTH OPEN GROUPS ARE ANSWERED THE SAME WAY, so they are paired together
+  // and split back by where each row was listed.
+  const { needs, others, answered } = useMemo(() => {
+    const otherKeys = new Set(othersNow.map(rowKeyOf));
+    const paired = pairAnswered(
+      keepSettled([...needsNow, ...othersNow], settled),
+      answeredRows(answeredRead.data),
+      settled,
+    );
+    return {
+      needs: paired.needs.filter((r) => !otherKeys.has(r.key)),
+      others: paired.needs.filter((r) => otherKeys.has(r.key)),
+      answered: paired.answered,
+    };
+  }, [needsNow, othersNow, settled, answeredRead.data]);
   const snoozedRows = snoozedOpen && snoozed.notices ? noticeRows(snoozed.notices) : null;
+  const putOffRows: InboxRow[] = putOffItems
+    .filter((item) => conditionsToDecide([item]).length > 0)
+    .map((item) => ({ kind: "condition", key: conditionKey(item.id), at: item.at, item }));
   const earlierRows =
     earlierOpen && earlier.notices ? noticeRows(earlierOf(earlier.notices)) : null;
   const order: InboxRow[] = [
     ...needs,
+    ...others,
     ...(updatesOpen ? updates : []),
     ...(answeredOpen ? answered : []),
+    ...(putOffOpen ? putOffRows : []),
     ...(snoozedRows ?? []),
     ...(earlierRows ?? []),
   ];
@@ -361,6 +381,10 @@ export function Inbox() {
   useEffect(() => {
     if (open && !updatesOpen && updates.some((r) => r.key === open)) setUpdatesOpen(true);
   }, [open, updatesOpen, updates]);
+  // AND SO DOES A NOTICE PUT OFF, which a link may name as well.
+  useEffect(() => {
+    if (open && !putOffOpen && putOffRows.some((r) => r.key === open)) setPutOffOpen(true);
+  }, [open, putOffOpen, putOffRows]);
 
   // THE OPEN ROW: the one the URL names, or, beside the list (never in one
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
@@ -545,8 +569,9 @@ export function Inbox() {
     answered: allAnswered,
     answer: updatesRead.data,
     bound: notices,
-    error: Boolean(updatesRead.error || decisions.error),
-    shown: needs.length + updates.length,
+    // A FAILED VIEWER READ ASKED NOTHING, so nothing was checked and clear.
+    error: Boolean(updatesRead.error || decisions.error || viewer.failed),
+    shown: needs.length + others.length + updates.length,
     watched: watchedIn("seat", unwatched),
   });
   const showList = !single || !named;
@@ -586,7 +611,12 @@ export function Inbox() {
           a token's session, ordinary, never a person, since every person holds
           a human seat. The conditions a person decides are listed for all
           three, which is why the screen is not simply locked. */}
-      {viewer.anonymous ? (
+      {viewer.failed !== null ? (
+        // WHO THE READER IS COULD NOT BE READ, so neither could their updates
+        // or decisions: said, with its Try again, rather than a list with its
+        // groups silently missing.
+        <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
+      ) : viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
           Nobody is signed in. Sign in to see your updates and decisions.
         </Callout>
@@ -609,6 +639,8 @@ export function Inbox() {
         {showList && (
           <InboxColumn
             needs={needs}
+            others={others}
+            putOff={{ rows: putOffRows, open: putOffOpen, onOpenChange: setPutOffOpen }}
             updates={{ rows: updates, open: updatesOpen, onOpenChange: setUpdatesOpen }}
             snoozed={{
               rows: snoozedRows,

@@ -40,7 +40,7 @@ afterEach(() => {
 
 /**
  * The shell over a socket whose viewer holds `grants`, recording every seat
- * it watches and every inbox question it asks.
+ * it watches and every question it asks of what waits on them.
  */
 function shellAs(grants: string[]) {
   const store = new Store();
@@ -50,7 +50,7 @@ function shellAs(grants: string[]) {
   const socket = new LiveSocket(store);
   const watched: string[] = [];
   socket.watch = (seat: string) => void watched.push(seat);
-  const asks = { inbox: 0 };
+  const asks = { decisions: 0 };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     switch (what) {
       case "viewer":
@@ -62,14 +62,15 @@ function shellAs(grants: string[]) {
           name: "Ana Lee",
           kind: "human",
         });
-      case "inbox":
-        asks.inbox++;
+      case "decisions":
+        // WHAT WAITS ON THE READER, which the frame's count reads.
+        asks.decisions++;
         return Promise.resolve({
           handle: "ana",
-          notices: [],
-          primary_reasons: [],
-          unread: 0,
-          primary: 0,
+          items: [],
+          total: 0,
+          answerable: 0,
+          capped: false,
         });
       default:
         // Every other question the frame asks is beside the point here.
@@ -88,11 +89,11 @@ function shellAs(grants: string[]) {
   return { store, view, watched, asks };
 }
 
-test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
+test("the shell watches the viewer's seat and asks what waits on them again when it moves", async () => {
   const { store, view, watched, asks } = shellAs(["worklet"]);
   await afterMicrotasks();
   expect(watched).toEqual(["ana"]);
-  const before = asks.inbox;
+  const before = asks.decisions;
   expect(before).toBeGreaterThan(0);
 
   act(() => {
@@ -103,7 +104,7 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
   });
   // WELL INSIDE THE POLL, which is the point: the poll alone would not have
   // asked again for another minute.
-  expect(asks.inbox).toBe(before + 1);
+  expect(asks.decisions).toBe(before + 1);
 
   // AND THE WATCH ENDS WITH THE FRAME, so a tab that unmounts it leaves the
   // engine routing nothing to a socket nobody reads.
@@ -115,12 +116,12 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
 // domain's notices, each read under its own permission on the engine's side,
 // so a reader without Worklet is watched and asked their inbox all the same.
 // Mutation: gate the watch on Worklet again and the seat is not watched.
-test("a reader without Worklet is watched and asked their inbox", async () => {
+test("a reader without Worklet is watched and asked what waits on them", async () => {
   const { watched, asks } = shellAs(["doclet"]);
   await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
   expect(watched.filter(Boolean)).toEqual(["ana"]);
-  expect(asks.inbox).toBeGreaterThan(0);
+  expect(asks.decisions).toBeGreaterThan(0);
 });

@@ -16,7 +16,9 @@ import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import type { AtlasKind, AtlasVendor } from "~/contract/atlas.ts";
 import type { ActionTool } from "~/protocol/act.ts";
-import { useAct, type Act } from "~/lib/useAct.ts";
+import type { Act } from "~/lib/useAct.ts";
+import { useAct } from "~/lib/useAct.ts";
+import { useSeated } from "./access.tsx";
 import { EntryPicker, OwnerField, PageField } from "./pickers.tsx";
 import { KINDS, VENDORS } from "./words.ts";
 import { ADDABLE_KINDS, KEY_HINTS, addArgs, belongs, draftKey, type AddDraft } from "./writes.ts";
@@ -140,7 +142,7 @@ export function WriteDialog<T extends ActionTool>({
 }
 
 export function AddEntry({ onClose }: { onClose: () => void }) {
-  const write = useAct("atlas_add_entry");
+  const write = useSeated(useAct("atlas_add_entry"));
   const { open } = usePeekControls();
   const [draft, setDraft] = useState<AddDraft>(EMPTY);
   // THE KEY FOLLOWS A SERVICE'S NAME until somebody types a key of their own.

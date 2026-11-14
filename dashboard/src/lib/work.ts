@@ -630,7 +630,7 @@ export function secondAxisOptions(
   workspace: boolean,
 ): { value: string; label: string }[] {
   return [
-    { value: "", label: "No second grouping" },
+    { value: "", label: "No subgroups" },
     ...groupAxisOptions("board", workspace).filter((a) => a.value !== first),
   ];
 }
@@ -1697,6 +1697,14 @@ export interface TrackerFilters {
    */
   due: string;
   /**
+   * The other three dates a person narrows by: when the work is to start,
+   * when it was filed and when it last moved, each one of the engine's own
+   * aliases ([DATE_FILTERS]) on the key of the same name.
+   */
+  start: string;
+  created: string;
+  updated: string;
+  /**
    * The trash, AS A FILTER, because that is what the engine says it is.
    *
    * `internal/worklet/viewsread.go`: "what makes it the trash is `removed=true`
@@ -1736,6 +1744,9 @@ export const NO_FILTERS: TrackerFilters = {
   sort: "",
   blocked: false,
   due: "",
+  start: "",
+  created: "",
+  updated: "",
   removed: false,
   fields: {},
 };
@@ -1764,6 +1775,9 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.group !== undefined ||
     f.blocked ||
     f.due ||
+    f.start ||
+    f.created ||
+    f.updated ||
     f.removed ||
     Object.keys(f.fields).length > 0 ||
     f.scope !== "open",
@@ -1819,6 +1833,9 @@ export const URL_HOMES: Record<string, ControlHome> = {
   tag: "chip",
   unit: "chip",
   due: "chip",
+  start: "chip",
+  created: "chip",
+  updated: "chip",
   blocked: "chip",
   removed: "chip",
   // NARROWING A BOARD TO ONE COLUMN NARROWS THE WHOLE QUERY, totals included
@@ -1919,7 +1936,8 @@ export function clearFiltersPatch(fieldKeys: Iterable<string>): Record<string, n
  * the two, never both and never neither, which is what the union says: a lock
  * naming nobody would be the screen that is not a host, spelled a second way.
  */
-export type ItemsLock = { assignee: string } | { asked_by: string };
+export type ItemsLock =
+  { assignee: string } | { asked_by: string } | { watcher: string } | { collaborator: string };
 
 export function buildItemsParams(args: {
   container: string;
@@ -1941,8 +1959,19 @@ export function buildItemsParams(args: {
    * would blame a narrowing with no chip to take off.
    */
   lock?: ItemsLock;
+  /**
+   * The container is a project its lead ARCHIVED. The engine leaves an
+   * archived project's work out of every answer unless `archived` asks for
+   * it, scoped to that very project included, so its Tasks lens answered
+   * nothing over a project still counting its tasks: the work of a retired
+   * project is exactly what somebody opens it to read.
+   */
+  archivedContainer?: boolean;
 }): Record<string, unknown> {
   const params = itemsParams(args);
+  // A VIEW'S OWN `archived` IS ITS AUTHOR'S, and kept; otherwise the work of
+  // the archived project on screen is in the answer.
+  if (args.archivedContainer && params.archived === undefined) params.archived = "true";
   // LAST, ON EVERY BRANCH. Three of them return early — the calendar, the
   // timeline and the grid pair — so a lock written inside would have to be
   // written three times, and the one that was forgotten is the one nobody
@@ -1950,6 +1979,19 @@ export function buildItemsParams(args: {
   const lock = args.lock;
   if (lock && "assignee" in lock) params.assignee = lock.assignee;
   if (lock && "asked_by" in lock) Object.assign(params, askedByParams(lock.asked_by));
+  // WHAT A PERSON FOLLOWS, OR WAS BROUGHT ONTO, AND DOES NOT HOLD: the
+  // question the engine's own My work blocks ask, since what they hold is
+  // their Queue already. The leaving-out is ADDED to an assignee the reader
+  // picked rather than written over it, so "followed, and held by Ben" is
+  // still a question this list answers.
+  const follows = lock && "watcher" in lock ? lock.watcher : "";
+  const brought = lock && "collaborator" in lock ? lock.collaborator : "";
+  const person = follows || brought;
+  if (person) {
+    if (follows) params.watcher = follows;
+    if (brought) params.collaborator = brought;
+    params.assignee = [params.assignee, `!${person}`].filter(Boolean).join(",");
+  }
   return params;
 }
 
@@ -1968,6 +2010,56 @@ export function buildItemsParams(args: {
  */
 export function askedByParams(handle: string): { asked_by: string } {
   return { asked_by: handle };
+}
+
+/**
+ * How many rows each band of a grouped list, table or timeline carries; the
+ * rest of a band is its "N more", the list narrowed to that band.
+ */
+const BAND_ROWS = 100;
+
+/**
+ * The grouping a shape sends, written as ONE FAMILY OF KEYS.
+ *
+ * `group_by`, the column narrowing `group`, the rows per column
+ * `group_limit`, the second axis `group_by2` and its narrowing `subgroup` are
+ * one question, and the engine refuses every part of it that stands without
+ * the part it qualifies (`internal/worklet/query.go`'s grouping rules): a
+ * `group` or a `group_limit` with no `group_by`, a `subgroup` with no
+ * `group_by2`, a second axis with no first or equal to it. Each shape used to
+ * delete the keys it did not draw one at a time, and the ones it forgot rode
+ * in from a saved view and had the whole list refused: a view grouped by
+ * status and drawn with No grouping kept its `group_limit`, and a board, a
+ * timeline or a calendar dropped a view's `group_by2` and kept its
+ * `subgroup`.
+ *
+ * A NARROWING BELONGS TO ITS AXIS. The reader's `group` (`column`) is sent on
+ * its PRESENCE, never its truth: `""` is the unset column, which the engine
+ * reads with `Params.Has`. Absent, a view's own `group` keeps supplying the
+ * column only while the axis is still the view's own; on another axis it
+ * names a column that axis does not have. `null` is a shape that draws every
+ * column (a board), which sends no narrowing at all.
+ */
+function setGrouping(
+  params: Record<string, unknown>,
+  view: Record<string, string>,
+  grouping: { axis?: string; axis2?: string; limit?: number; column?: string | null },
+): void {
+  const { axis, axis2, limit, column } = grouping;
+  const viewColumn = axis && axis === view.group_by ? view.group : undefined;
+  const viewLane = axis2 && axis2 === view.group_by2 ? view.subgroup : undefined;
+  for (const key of ["group_by", "group", "group_limit", "group_by2", "subgroup"]) {
+    delete params[key];
+  }
+  if (!axis) return;
+  params.group_by = axis;
+  if (limit !== undefined) params.group_limit = limit;
+  // NULL IS A SHAPE THAT DRAWS EVERY COLUMN (a board): no narrowing at all.
+  const narrowed = column === null ? undefined : (column ?? viewColumn);
+  if (narrowed !== undefined) params.group = narrowed;
+  if (!axis2 || axis2 === axis) return;
+  params.group_by2 = axis2;
+  if (viewLane !== undefined) params.subgroup = viewLane;
 }
 
 /** [buildItemsParams] before its lock, which is every other rule it has. */
@@ -2011,14 +2103,6 @@ function itemsParams(args: {
 
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
-  };
-  // THE COLUMN NARROWING IS SENT ON ITS PRESENCE, never on its truth: `""` is
-  // the unset column and the engine reads the key with `Params.Has`, so an
-  // empty value has to reach the wire as `group: ""` rather than be dropped by
-  // the writer above. Absent, the key is left exactly as it was — which is how
-  // a saved view's own `group` keeps supplying the default nobody overrode.
-  const setGroup = () => {
-    if (filters.group !== undefined) params.group = filters.group;
   };
   set("q", filters.q);
   set("status", filters.status);
@@ -2086,6 +2170,7 @@ function itemsParams(args: {
   // assignment order, and why the Filter menu does not offer a due filter on
   // that shape at all.
   if (filters.due) params.due = filters.due;
+  for (const { param } of DATE_FILTERS) if (filters[param]) params[param] = filters[param];
 
   // A REMOVED TASK IS VERY OFTEN A FINISHED ONE, so this carries `show_closed`
   // exactly as the builtin trash view does — the group predicate is ANDed
@@ -2124,14 +2209,10 @@ function itemsParams(args: {
   // their explicit "default order" has to DELETE it — where an empty string
   // deleted the override instead and handed the view's sort back.
   const order = effectiveArrangement(filters.sort, view.sort);
-  const setSubAxis = () => {
-    if (axis && axis2 && axis2 !== axis) params.group_by2 = axis2;
-    else delete params.group_by2;
-  };
 
   if (shape === "board") {
-    params.group_by = axis || "status";
-    params.group_limit = BOARD_LANE_ROWS;
+    // NO SECOND AXIS ON A BOARD, and no column narrowing: see below.
+    setGrouping(params, view, { axis: axis || "status", limit: BOARD_LANE_ROWS, column: null });
     // THE CARD'S OWN FACTS, which no other shape draws: its labels, what it
     // blocks, the questions still open on it and what it has cost. OPT-IN on
     // the wire (`fields=`), because `list_work_items` — the row a model reads
@@ -2139,22 +2220,19 @@ function itemsParams(args: {
     params.fields = CARD_FIELDS;
     delete params.limit;
     delete params.cursor;
-    delete params.group;
+    // A BOARD DRAWS EVERY COLUMN, so a narrowing to one (`group`) is not
+    // sent: a lane's own foot is how one column is read further, as a list.
     // NO SECOND AXIS ON A BOARD. A board's second axis is a swimlane GRID —
     // cells, a cap that is the product of the two axes, and an overflow link
     // per cell — which is a different drawing rather than a deeper band, and
     // the Display menu does not offer it here. Sent anyway, by a view or by a
     // hand-edited URL, it would come back as `subgroups` this shape draws
     // nothing for: the rows would simply vanish from their columns.
-    delete params.group_by2;
   } else if (shape === "calendar") {
     // THE CALENDAR HAS ITS OWN AXIS, so a grouping brought in by a view is
     // dropped rather than sent: a grouped answer replaces the rows with
     // columns, and a month drawn from columns has nothing in its cells.
-    delete params.group_by;
-    delete params.group_by2;
-    delete params.group;
-    delete params.group_limit;
+    setGrouping(params, view, {});
     // AND ITS AXIS IS THE `due` KEY ITSELF, which the grammar has exactly one of
     // — so the grid's window and a due filter cannot both be asked for. The
     // window wins, and the filter is therefore not offered on this shape at all
@@ -2182,18 +2260,10 @@ function itemsParams(args: {
     // assignee or per status is one axis stacked on the other, which is the
     // arrangement the view is for — where a month drawn from columns has
     // nothing in its cells.
-    if (axis) {
-      params.group_by = axis;
-      params.group_limit = 100;
-      setGroup();
-    } else {
-      delete params.group_by;
-      delete params.group;
-    }
     // A BAND OF BANDS IS NOT A TIMELINE. Its own axis is the date, and a
     // second grouping would nest one band inside another down a shared axis —
     // which is a Gantt swimlane and not what this component draws.
-    delete params.group_by2;
+    setGrouping(params, view, { axis, limit: BAND_ROWS, column: filters.group });
     // MORE ROWS THAN A LIST, because a bar is one line where a list row is
     // three or four and the window is derived from the rows present: a
     // timeline paged at a hundred would draw a different axis on every page.
@@ -2213,17 +2283,9 @@ function itemsParams(args: {
     // of one answer — the same rows, the same grouping, the same page — and
     // the whole difference is where a field is drawn, so a second arm here
     // would be a second copy of one paging rule.
-    if (axis) {
-      params.group_by = axis;
-      params.group_limit = 100;
-      setGroup();
-    } else {
-      delete params.group_by;
-      delete params.group;
-    }
     // THE ONE SHAPE PAIR A SECOND AXIS IS DRAWN IN: a band inside a band, down
     // one column, which is what nesting means where every row is a line.
-    setSubAxis();
+    setGrouping(params, view, { axis, axis2, limit: BAND_ROWS, column: filters.group });
     // A PAGE, AND THE CURSOR IS FOLLOWED. This was a hundred with nothing
     // after it: the hundred-and-first task was unreachable from the list, and
     // the foot said only that more existed. `usePagedItems` asks for the next
@@ -2319,6 +2381,13 @@ export interface FilterChipSpec {
   verb?: string;
   /** What it was set to, in the company's own words. */
   value?: string;
+  /**
+   * Why this shape does not apply it, where it does not: a board draws every
+   * column, and a calendar's window is its own `due`. The narrowing stays in
+   * the address, so the shape that does apply it still has it, and the chip
+   * says it is set aside here rather than claiming a narrowing nothing sent.
+   */
+  inert?: string;
 }
 
 /**
@@ -2336,7 +2405,11 @@ export interface FilterChipSpec {
  * or absent on its default, which hides the one segment that decides whether
  * finished work is on screen at all.
  */
-export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterChipSpec[] {
+export function filterChips(
+  f: TrackerFilters,
+  ctx: LabelContext = {},
+  shape?: Shape,
+): FilterChipSpec[] {
   const out: FilterChipSpec[] = [];
   if (f.q) out.push({ param: "q", label: "Text", verb: "contains", value: f.q });
   if (f.status) {
@@ -2393,7 +2466,21 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
       value: axisLabel("unit", f.unit, ctx),
     });
   }
-  if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
+  if (f.due) {
+    out.push({
+      param: "due",
+      label: "Due",
+      verb: "is",
+      value: dueFilterLabel(f.due),
+      // [buildItemsParams] spends the one `due` on the calendar's own window.
+      ...(shape === "calendar" ? { inert: "not on the calendar" } : {}),
+    });
+  }
+  for (const { param, label } of DATE_FILTERS) {
+    if (f[param]) {
+      out.push({ param, label, verb: "is", value: dateFilterLabel(param, f[param]) });
+    }
+  }
   if (f.group !== undefined) {
     // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
     // resolver the column head uses, so the chip and the heading it came from
@@ -2405,6 +2492,13 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
       label: axisName(f.groupBy) || "Column",
       verb: "is",
       value: axisLabel(f.groupBy, f.group, ctx),
+      // A BOARD DRAWS EVERY COLUMN and a calendar draws none, so neither
+      // sends a narrowing to one ([setGrouping]).
+      ...(shape === "board"
+        ? { inert: "not on a board" }
+        : shape === "calendar"
+          ? { inert: "not on the calendar" }
+          : {}),
     });
   }
   // THE SWITCHES LAST, because they have no value to read: a chip that is only
@@ -2561,6 +2655,57 @@ export const DUE_FILTERS: { value: string; label: string }[] = [
   { value: "last7", label: "Last 7 days" },
   { value: "lastmonth", label: "Last month" },
 ];
+
+/**
+ * The three other dates a person narrows by, each with the engine's aliases
+ * that ask a question of that date (`internal/worklet/dates.go` expands every
+ * one on every date key): work not yet started, filed lately, left alone.
+ *
+ * NOT `overdue`, which is the due date's alone: it carries an open-status
+ * condition with it, and "started late" is not a question that sentence asks.
+ */
+export const DATE_FILTERS: readonly {
+  param: "start" | "created" | "updated";
+  label: string;
+  options: readonly { value: string; label: string }[];
+}[] = [
+  {
+    param: "start",
+    label: "Start",
+    options: [
+      { value: "earlier", label: "Before today" },
+      { value: "thisweek", label: "This week" },
+      { value: "next7", label: "Next 7 days" },
+      { value: "thismonth", label: "This month" },
+    ],
+  },
+  {
+    param: "created",
+    label: "Created",
+    options: [
+      { value: "last7", label: "Last 7 days" },
+      { value: "thisweek", label: "This week" },
+      { value: "thismonth", label: "This month" },
+      { value: "lastmonth", label: "Last month" },
+    ],
+  },
+  {
+    param: "updated",
+    label: "Updated",
+    options: [
+      { value: "last7", label: "Last 7 days" },
+      { value: "thisweek", label: "This week" },
+      { value: "earlier", label: "Before today" },
+      { value: "lastmonth", label: "Last month" },
+    ],
+  },
+];
+
+/** What one of [DATE_FILTERS] reads as, or the value itself for one written by hand. */
+export function dateFilterLabel(param: string, value: string): string {
+  const def = DATE_FILTERS.find((d) => d.param === param);
+  return def?.options.find((o) => o.value === value)?.label ?? value;
+}
 
 /** What a due filter reads as, or the value itself for one written by hand. */
 export function dueFilterLabel(value: string): string {

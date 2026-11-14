@@ -722,3 +722,42 @@ func (r *roundTrip) clearRetained() {
 		r.t.Fatalf("clear the retained records: %v", err)
 	}
 }
+
+// A PERSON'S OWN BOOKKEEPING IS NOT IN THE COMPANY'S HISTORY.
+//
+// Every pin, inbox mark and snooze writes a `person_updated` row on that
+// person's record. A feed of what the company did listed them between the real
+// changes, each with no item and a phrase that said nothing ("changed their own
+// bookkeeping"), and told every reader when a colleague marked their inbox
+// read. The rows are still recorded, and naming the kind still reads them.
+func TestAPersonsOwnBookkeepingIsNotTheCompanysHistory(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", statelog.Position{},
+		inbox.Gesture[worklet.Reason]{PrimaryReasons: &[]worklet.Reason{worklet.ReasonMention}},
+		worklet.PersonAuthority{}); err != nil {
+		t.Fatalf("MarkInbox: %v", err)
+	}
+	r.drain()
+
+	kinds := func(q worklet.ActivityQuery) []worklet.ChangeKind {
+		var out []worklet.ChangeKind
+		for _, record := range r.activity(q).Records {
+			out = append(out, record.Kind)
+		}
+		return out
+	}
+	if got := kinds(worklet.ActivityQuery{Workspace: true}); slices.Contains(got, worklet.ChangePersonUpdated) {
+		t.Fatalf("the company's history lists a person's own bookkeeping: %v", got)
+	}
+	if got := kinds(worklet.ActivityQuery{Workspace: true}); !slices.Contains(got, worklet.ChangeCreated) {
+		t.Fatalf("the company's history lost the task filed beside it: %v", got)
+	}
+	asked := kinds(worklet.ActivityQuery{
+		Workspace: true, Kinds: []worklet.ChangeKind{worklet.ChangePersonUpdated},
+	})
+	if len(asked) != 1 || asked[0] != worklet.ChangePersonUpdated {
+		t.Fatalf("asked for by its kind, the bookkeeping answered %v", asked)
+	}
+}

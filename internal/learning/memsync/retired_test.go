@@ -67,7 +67,7 @@ func TestARetiredTablesRowsArePurgedOnceForTheSeat(t *testing.T) {
 	ctx := context.Background()
 	owner := openStore(t)
 	seedMemory(t, owner)
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	publishRows(t, conn, seat.AgentID, "conversation_sessions", 120)
@@ -123,7 +123,7 @@ func TestANotesClassAndBuildTravelWithIt(t *testing.T) {
 		'capability', 'v1')`, seat.AgentID); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	taker := openStore(t)

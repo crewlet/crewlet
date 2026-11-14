@@ -627,6 +627,9 @@ type Sources struct {
 	// DeviceSignIns is the fleet's device sign-in records. Nil leaves
 	// `llm_device_sign_in` unregistered and `device_sign_in` null.
 	DeviceSignIns DeviceSignIns
+	// ModelChecks is each model entry's latest check, as any node reads it.
+	// Nil leaves `llm_check` unregistered.
+	ModelChecks ModelChecks
 
 	// Catalogue is the model catalogue a model step suggests from. Nil
 	// leaves `llm_models` unregistered.
@@ -840,6 +843,12 @@ func Register(r *Registry, s Sources) {
 	// one is.
 	if s.DeviceSignIns != nil {
 		r.Register("llm_device_sign_in", Requires(iam.GrantAdmin), s.llmDeviceSignIn)
+	}
+	// ONE MODEL'S LATEST CHECK WHILE ITS RECORD ANSWERS, the admin's, as
+	// asking for one is: its lines are the doctor's, a vendor's sentences
+	// among them (decision D7).
+	if s.ModelChecks != nil {
+		r.Register("llm_check", Requires(iam.GrantAdmin), s.llmCheck)
 	}
 	if s.Usage != nil {
 		// ONE SCHEDULE'S OWN HISTORY, gated on the USAGE DOMAIN rather

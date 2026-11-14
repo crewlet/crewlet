@@ -43,6 +43,14 @@ export type HomeRange = (typeof HOME_RANGES)[number];
 /** The default window: a week, the span the design draws. */
 export const DEFAULT_RANGE = "7d";
 
+/** The name Home's range is kept under for its reader (`lib/keptRange.ts`). */
+export const HOME_RANGE_SCREEN = "home";
+
+/** Whether `value` is one of Home's windows: what is kept, and read back. */
+export function isHomeRange(value: string): boolean {
+  return HOME_RANGES.some((r) => r.value === value);
+}
+
 /** A `range=` value as its window, and the default for anything else. */
 export function rangeOf(value: string): HomeRange {
   return (

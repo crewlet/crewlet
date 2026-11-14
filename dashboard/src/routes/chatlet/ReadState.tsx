@@ -48,6 +48,7 @@ export function ReadFailed({
   query: Pick<QueryResult<unknown>, "error" | "refusal" | "detail" | "loading" | "refetch">;
 }) {
   if (!query.error) return null;
+  const again = askedAgainByHand(query.error);
   return (
     <div className="chat-read-failed">
       <div className="chat-read-failed-reason">
@@ -56,9 +57,10 @@ export function ReadFailed({
           refusal={query.refusal}
           detail={query.detail}
           loading={false}
+          ownRetry={again}
         />
       </div>
-      {askedAgainByHand(query.error) && (
+      {again && (
         <Button
           variant="secondary"
           size="small"

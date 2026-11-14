@@ -198,6 +198,12 @@ type groupAxis struct {
 	// [labelsOf].
 	Labels func(key string) string
 
+	// ParentLabels marks the one axis whose stored value is another TASK's
+	// id: its columns are headed from that task's row ([labelParents]),
+	// which only the read's own transaction can reach, so it cannot be a
+	// [groupAxis.Labels] function over the key alone.
+	ParentLabels bool
+
 	// Canonical spells a value the way [groupAxis.Expr] spells it.
 	//
 	// Only the unit axes have one, and it is what lets `group=` and
@@ -346,7 +352,13 @@ func compileGroup(key string, fields map[string]resolvedField,
 	case "routing_unit":
 		return unitAxis("t.routing_unit", units), nil
 	case "parent":
-		return groupAxis{Expr: "COALESCE(t.parent_id, '')", Unset: "(no parent)"}, nil
+		// THE KEY IS AN ID, which nobody reads: each column is headed with
+		// its parent's key and title, read off the parent's own row
+		// ([labelParents]) rather than off any row in the column, since the
+		// parent itself need not be in the answer.
+		return groupAxis{
+			Expr: "COALESCE(t.parent_id, '')", Unset: "(no parent)", ParentLabels: true,
+		}, nil
 	case "tag":
 		// THE ONE MULTI-VALUED AXIS, and the join is what makes it one: a
 		// task with three labels is on three columns, which is what a
@@ -713,6 +725,43 @@ func groupLabels(groups []Group, axis groupAxis) {
 	}
 }
 
+// labelGroups heads every column of one answer: [groupLabels], and the
+// parent axis's own lookup where the axis is that one.
+func labelGroups(ctx context.Context, tx *sql.Tx, groups []Group, axis groupAxis) error {
+	groupLabels(groups, axis)
+	if axis.ParentLabels {
+		return labelParents(ctx, tx, groups)
+	}
+	return nil
+}
+
+// labelParents heads each column of the parent axis with its parent's key and
+// title: `ENG-12 · Rotate the build keys`.
+//
+// A COLUMN KEYED BY AN ID WAS HEADED BY THE ID, a uuid nobody reads, so a
+// board or a list grouped by parent could not say whose subtasks a column
+// held. Read per column through [readTaskRef], the one-row seek the plan test
+// already holds: a page has at most [MaxGroups] columns, and the parent is
+// read from its own row whether or not the answer holds it, since a filter
+// that admits a subtask need not admit its parent. A parent this node holds
+// no row for keeps the id, which is the honest heading for a task it cannot
+// name.
+func labelParents(ctx context.Context, tx *sql.Tx, groups []Group) error {
+	for i := range groups {
+		if groups[i].Key == "" || groups[i].Label != "" {
+			continue
+		}
+		ref, err := readTaskRef(ctx, tx, groups[i].Key)
+		if err != nil {
+			return err
+		}
+		if ref != nil {
+			groups[i].Label = ref.Key + " · " + ref.Title
+		}
+	}
+	return nil
+}
+
 // labelsOf renders a static table as an axis lookup, and nil for an empty
 // one — which is what [groupLabels] reads as "this axis stores the word".
 func labelsOf(table map[string]string) func(string) string {
@@ -898,7 +947,9 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	// of [groupAxis.Labels] from one list), so the two spellings of that
 	// one label cannot disagree.
 	groups = fillColumns(groups, admittedColumns(q, axis))
-	groupLabels(groups, axis)
+	if err := labelGroups(ctx, tx, groups, axis); err != nil {
+		return grouped{}, err
+	}
 
 	for i := range groups {
 		if groups[i].Count == 0 {
@@ -960,7 +1011,9 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return nil, 0, err
 	}
-	groupLabels(counts, inner)
+	if err := labelGroups(ctx, tx, counts, inner); err != nil {
+		return nil, 0, err
+	}
 	for i := range counts {
 		rows, err := groupRows(ctx, tx, inner, counts[i].Key, scoped,
 			terms, rowsPer, q.DayStart)
