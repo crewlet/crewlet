@@ -6,10 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
-	"github.com/crewlet/crewlet/internal/jsapi"
-	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -46,7 +43,7 @@ const rowCrossingRoom = 8 << 10
 //
 // Mutation: hold either change to its five seconds again, without the
 // crossing of a change of a row at its bound (sandbox.RowBudget), or read the
-// row without its reply's arrival, and its row goes red.
+// row without its reply's crossing, and its row goes red.
 func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) {
 	t.Parallel()
 	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
@@ -95,17 +92,15 @@ func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) 
 			c.write(t.Context(), sandbox.NewCoordStore(across.Leaf), turnID)
 			// READ BACK THROUGH THE MEMBER the moment the write returned: a
 			// write cut short is still crossing then, and the row does not
-			// hold it yet. Asked for as long as a leader read of a row at its
-			// bound is ever asked on a member's own connection — the lookup
-			// ceiling and the reply's handling — since its reply carries the
-			// row whole: a reply that long in the making is the runner's
-			// load, never what the case asks.
-			read, cancel := context.WithTimeout(t.Context(),
-				jsprovision.LookupBudget+jsapi.Handling(coord.MaxValueBytes))
-			defer cancel()
-			run, found, err := sandbox.NewCoordStore(across.Member).Get(read, turnID)
-			if err != nil || !found {
-				t.Fatalf("read the row back: found %t, %v", found, err)
+			// hold it yet. Read once, as the member holds it (kvtest's
+			// Across.Holds).
+			held, found := across.Holds(t, turnID)
+			if !found {
+				t.Fatalf("read the row back: the member holds no run %s", turnID)
+			}
+			var run sandbox.PendingRun
+			if err := json.Unmarshal(held.Value, &run); err != nil {
+				t.Fatalf("read the row back: %v", err)
 			}
 			if !c.landed(run) {
 				t.Errorf("the write of a row of %d bytes across a link carrying %d KiB a second "+

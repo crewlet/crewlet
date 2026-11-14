@@ -6,7 +6,7 @@
 // and its write's bytes take a while to cross, and sets up and reads back
 // through the member, whose own connection crosses nothing, so its setup costs
 // none of the link's time and its reads are never held behind a change still
-// crossing.
+// crossing ([Across.Holds]).
 //
 // ONE HELPER FOR EVERY PACKAGE whose writes of the store cross a leaf's link —
 // the sandbox's run rows, and the engine's writes of them — so the cases share
@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
@@ -121,6 +122,39 @@ func open(t testing.TB, c jetstream.JetStream, reach kv.Reach) *kv.FleetStore {
 		t.Fatalf("open the fleet store reaching its buckets %s: %v", reach, err)
 	}
 	return store
+}
+
+// Holds is what the member holds of turnID's run now — its record, and
+// whether it has one — read ONCE: the first state of a watch of the run's key
+// on the member's own connection ([kv.FleetStore.WatchSandboxRun]), which a
+// consumer delivers whole and raw, certified against the bucket's key index.
+// Asked for as long as the broker's longest silence (jsprovision's
+// LookupBudget), each of the watch's requests answered within it by a broker
+// that answers at all.
+//
+// NOT THE LEADER'S READ a change of the run makes. On a member's own
+// connection that read keeps the read term, asked again every two seconds
+// while nobody answers it, since a writer waits on it (internal/coord/kv's
+// holdingLarge); and its reply carries a row at its bound base64-encoded in
+// eight mebibytes, which a runner loaded and under the race detector takes
+// seconds to build and decode. Read back so, a case's row had another whole
+// reply built beside the first at every re-ask, and could run out the lookup
+// ceiling on the load the case is not about. A watch's first state is one
+// delivery of the record as it is.
+func (a Across) Holds(t testing.TB, turnID string) (coord.Record, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)
+	defer cancel()
+	updates, err := a.Member.WatchSandboxRun(ctx, turnID)
+	if err != nil {
+		t.Fatalf("read run %s back through the member: %v", turnID, err)
+	}
+	first, delivered := <-updates
+	if !delivered {
+		t.Fatalf("read run %s back through the member: the watch ended before its first state: %v",
+			turnID, context.Cause(ctx))
+	}
+	return first.Record, first.Found
 }
 
 // fleetAuth is the keyring a member serving leaves and every leaf joined to

@@ -747,16 +747,17 @@ type leaderReader struct {
 
 // newLeaderReader addresses the leader reads of kv's stream in the API js
 // speaks — given, for a bucket whose values are budgeted to what one key holds
-// ([holdingLarge]), the arrival of a reply that large at the pace the bucket
-// was opened with: its value and the most header a write leaves on it
-// ([kvHeaderBytes]), the largest message the bucket's stream holds.
+// ([holdingLarge]), the crossing of a reply that large at the pace the bucket
+// was opened with, as a read a writer waits on is (jsapi.Leader.Deciding): its
+// value and the most header a write leaves on it ([kvHeaderBytes]), the largest
+// message the bucket's stream holds — what [Reach.readCrossing] counts it at.
 func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderReader, error) {
 	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
 		return nil, err
 	}
 	if b, ok := kv.(settledBucket); ok && b.carries > 0 {
-		leader = leader.Carrying(b.carries+kvHeaderBytes, b.pace)
+		leader = leader.Deciding(b.carries+kvHeaderBytes, b.pace)
 	}
 	return &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}, nil
 }

@@ -5,11 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/executorkeep"
-	"github.com/crewlet/crewlet/internal/jsapi"
-	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // rowCrossingRate is the pace the cases below hold a leaf's link to, each way:
@@ -76,7 +73,7 @@ type rowCrossingCase struct {
 //
 // Mutation: hold any of these changes to its caller's flat budget again,
 // without the crossing of a change of a row at its bound (RowBudget), or read
-// the row without its reply's arrival, and its row goes red.
+// the row without its reply's crossing, and its row goes red.
 func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 	t.Parallel()
 	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
@@ -189,17 +186,15 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			}
 			// READ BACK THROUGH THE MEMBER the moment the path returned: a
 			// write its caller gave up on is still crossing then, and the
-			// row does not hold it yet. Asked for as long as a leader read of
-			// a row at its bound is ever asked on a member's own connection
-			// — the lookup ceiling and the reply's handling — since its reply
-			// carries the row whole: a reply that long in the making is the
-			// runner's load, never what the case asks.
-			read, cancel := context.WithTimeout(t.Context(),
-				jsprovision.LookupBudget+jsapi.Handling(coord.MaxValueBytes))
-			defer cancel()
-			run, found, err := NewCoordStore(across.Member).Get(read, c.row.TurnID)
-			if err != nil || !found {
-				t.Fatalf("read the row back: found %t, %v", found, err)
+			// row does not hold it yet. Read once, as the member holds it
+			// (kvtest's Across.Holds).
+			held, found := across.Holds(t, c.row.TurnID)
+			if !found {
+				t.Fatalf("read the row back: the member holds no run %s", c.row.TurnID)
+			}
+			run, err := decodeRun(held)
+			if err != nil {
+				t.Fatalf("read the row back: %v", err)
 			}
 			if ok, holds := c.landed(run); !ok {
 				t.Errorf("the path returned before its write of a row of %d bytes landed: the row holds %s",

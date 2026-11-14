@@ -129,9 +129,10 @@ type settledBucket struct {
 
 	// carries is how large a value of the bucket may be where its values are
 	// budgeted to what one key holds ([holdingLarge]), so that every read of
-	// one is given the time a leader's reply that large takes to arrive
-	// ([newLeaderReader]); none for every other bucket, whose values are a
-	// few kibibytes and whose replies are in far inside the read term.
+	// one is given the time a leader's reply that large takes to cross the
+	// connection ([newLeaderReader]); none for every other bucket, whose
+	// values are a few kibibytes and whose replies are in far inside the
+	// read term.
 	carries int
 }
 
@@ -197,10 +198,10 @@ func (r Reach) valueCrossing() time.Duration {
 // what one key holds takes to cross a connection that reaches the buckets as
 // r: the value and the most header a write leaves on it ([kvHeaderBytes]),
 // base64-encoded in the reply (internal/jsapi's Crossing), at r's pace — none
-// in process. The link's part of the arrival a read of such a value is given
-// ([newLeaderReader]); the rest, the reply's handling in the engine's own
-// processes, is CPU, which a caller's own reason for a bound covers in
-// milliseconds on any node not running under the race detector.
+// in process. Exactly what a read of such a value is given beyond the read term
+// ([newLeaderReader]): its crossing, and none of the reply's handling in the
+// engine's own processes, which is CPU that the read term covers on any node
+// not running under the race detector (internal/jsapi's Leader.Deciding).
 func (r Reach) readCrossing() time.Duration {
 	return jsapi.Crossing(coord.MaxValueBytes+kvHeaderBytes, r.pace())
 }
@@ -257,16 +258,22 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 // sandbox run's record and the parts beside it (internal/sandbox's RowBytes).
 // Every leader read of its keys — a key's own, a listing's certifying read, a
 // create's read of what holds the key — is given the time the leader's reply
-// of a value that large takes to arrive at this node's reach
-// ([newLeaderReader], internal/jsapi's Leader.Carrying): on a member's own
-// connection, which crosses nothing, its handling; across a link, its
-// crossing at the slowest pace a link is allowed besides.
+// of a value that large takes to cross this node's connection
+// ([newLeaderReader]): across a link, at the slowest pace a link is allowed;
+// on a member's own connection, which crosses nothing, none, so it is read at
+// the read term as a bucket of small values is.
 //
-// ONLY SUCH A BUCKET: a reader of small values keeps the read term, and a
-// request a member dropped across an election is asked again two seconds
-// later rather than after the arrival of a reply of megabytes. A bucket's
-// values are sized by its writers, so the bound is declared where the bucket
-// is opened ([OpenFleet]), as its reach is.
+// THE CROSSING ALONE, never the reply's handling: every read of a run's value
+// is one a caller waits on within a budget of its own — a change's
+// read-decide-write, a waiter's verdict, a read of the run before a write to
+// it — and a request a member dropped across an election is asked again two
+// seconds later, inside the shortest such budget, five seconds in the store's
+// own process, where the handling of a reply at the bound would ask it again
+// only once that budget had ended (internal/jsapi's Leader.Deciding).
+//
+// ONLY SUCH A BUCKET, since a reply of a few kibibytes crosses any link inside
+// the read term. A bucket's values are sized by its writers, so the bound is
+// declared where the bucket is opened ([OpenFleet]), as its reach is.
 func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
 	b, ok := kv.(settledBucket)
 	if !ok {

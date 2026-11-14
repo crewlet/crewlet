@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -368,13 +369,12 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 // (coord.SandboxRuns.ValueCrossing), since the store keeps a caller's deadline
 // as it is — and every change is a read and a write. So that figure is what
 // the store gives such a change itself: the read's reply crossing, read off
-// the term a read of the runs bucket is given beyond the read term less its
-// reply's handling in process, and the write's crossings, read off a settled
-// bucket's own budget for a put of a value at what one key holds under the
-// longest key a run's write is sent under beyond the request term — both at
-// the slowest pace a link is allowed, the contract's figure
-// (coord.MaxValueCrossing) — and none on a member's own connection, where
-// nothing crosses. Exact, in a bubble.
+// the term a read of the runs bucket is given beyond the read term, and the
+// write's crossings, read off a settled bucket's own budget for a put of a
+// value at what one key holds under the longest key a run's write is sent
+// under beyond the request term — both at the slowest pace a link is allowed,
+// the contract's figure (coord.MaxValueCrossing) — and none on a member's own
+// connection, where nothing crosses. Exact, in a bubble.
 //
 // Mutation: give an in-process store a crossing, and every budget a data node
 // holds a row's change to waits thirteen minutes past its reason; drop the
@@ -401,7 +401,7 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 			t.Fatalf("the put reached the client %d times, want once, with a deadline", len(d.writes))
 		}
 		written := d.writes[0].deadline.Sub(d.writes[0].at) - jsapi.RequestTerm
-		read := runsReadTerm(t, AcrossLink) - jsprovision.ReadTerm - jsapi.Handling(coord.MaxValueBytes+kvHeaderBytes)
+		read := runsReadTerm(t, AcrossLink) - jsprovision.ReadTerm
 		if given := read + written; given != coord.MaxValueCrossing {
 			t.Errorf("a settled bucket across a link gives a change of a run's value at what one key "+
 				"holds %v beyond the read term and the request term — %v for its read's reply and %v "+
@@ -422,38 +422,42 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	}
 }
 
-// A READ OF A RUN'S VALUE IS GIVEN THE ARRIVAL OF A REPLY AT ITS BOUND, AT
-// ITS NODE'S REACH — AND NO OTHER BUCKET'S IS.
+// A READ OF A RUN'S VALUE IS GIVEN THE CROSSING OF A REPLY AT ITS BOUND, AND
+// NONE OF ITS HANDLING — AND NO OTHER BUCKET'S READ IS GIVEN EITHER.
 //
 // Every change of a run's record or of a part beside it begins with the
 // stream leader's read of the value, whose reply carries it base64-encoded in
 // JSON: eight mebibytes at its bound. Held to the read term and the lookup
 // ceiling, that read was asked again at two seconds and at four while the
-// first reply was still being built or crossing — each another whole reply —
-// and across a link at the slowest pace allowed, which carries such a reply in
+// first reply was still crossing — each another whole reply on the link — and
+// across a link at the slowest pace allowed, which carries such a reply in
 // four minutes, it was never answered inside the thirty-second ceiling, so no
 // value past about 768 KiB could be read, nor changed (crewlet/crewlet#1149).
-// So the runs bucket's reads are given the arrival of a reply at its bound:
-// its handling in process, on a member's own connection, and its crossing at
-// the floor besides, across a link. A bucket of small values keeps the read
-// term, so a request a member dropped is asked again at two seconds. Read off
-// a store opened as the engine opens one.
+// So the runs bucket's reads are given the crossing of a reply at its bound
+// across a link — and on a member's own connection none, never the reply's
+// handling: a writer waits on every one of these reads within a reason of its
+// own, five seconds at the shortest, and a request a member dropped is asked
+// again at two seconds, inside it, where eight seconds of handling would ask
+// it again only after it (TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason).
+// A bucket of small values keeps the read term. Read off a store opened as the
+// engine opens one.
 //
 // Mutation: read the runs bucket as any other, open it without declaring its
-// values large, or drop the handling or the crossing from a read's arrival,
-// and its row goes red; declare every bucket large, and the leases' does.
-func TestARunsValueIsReadGivenTheArrivalOfAReplyAtItsBound(t *testing.T) {
+// values large, drop the crossing from its reads, or give them the reply's
+// handling, and its row goes red; declare every bucket large, and the
+// claims' does.
+func TestARunsValueIsReadGivenTheCrossingOfAReplyAtItsBoundAndNoHandling(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a value at its bound with the most
 	// header a write leaves on it, base64-encoded in its reply beside the
-	// reply's envelope, is a reply of exactly eight mebibytes — eight seconds
-	// handled at a second a mebibyte, and 240 crossing at thirty.
+	// reply's envelope, is a reply of exactly eight mebibytes — 240 seconds
+	// crossing at thirty a mebibyte.
 	if reply := jsapi.ReplyBytes(coord.MaxValueBytes + kvHeaderBytes); reply != 8<<20 {
 		t.Fatalf("the reply to a read of a run's value at its bound is %d bytes, want eight mebibytes", reply)
 	}
 	for reach, want := range map[Reach]time.Duration{
-		InProcess:  jsprovision.ReadTerm + 8*time.Second,
-		AcrossLink: jsprovision.ReadTerm + 8*time.Second + 240*time.Second,
+		InProcess:  jsprovision.ReadTerm,
+		AcrossLink: jsprovision.ReadTerm + 240*time.Second,
 	} {
 		if got := runsReadTerm(t, reach); got != want {
 			t.Errorf("a read of a run's value %s is given a term of %v, want %v", reach, got, want)
@@ -477,6 +481,55 @@ func TestARunsValueIsReadGivenTheArrivalOfAReplyAtItsBound(t *testing.T) {
 			t.Errorf("the fleet store's claims %s are read at a term of %v, want the read term %v",
 				reach, got, jsprovision.ReadTerm)
 		}
+	}
+}
+
+// A MEMBER'S CHANGE OF A RUN'S VALUE ASKS ITS READ AGAIN INSIDE THE SHORTEST
+// REASON IT IS BOUNDED BY.
+//
+// Every change of a run's record is a read-decide-write, and in the store's
+// own process its caller bounds it by its reason alone: five seconds at the
+// shortest — a resumed turn's record of what it carries (internal/sandbox's
+// resumeCarryRecordBudget), the session a job's box started and a job's first
+// pull of its notes (internal/engine's sessionStartRecordBudget and the
+// steer's pull mark). A member that still believes in a leader its group has
+// just lost drops a read without a word, and the new leader answers the one
+// asked again two seconds later. Read at a term of nine seconds — the read
+// term and the eight a reply at the bound is given to be handled — the read
+// would be asked once in those five, and every such change across an election
+// refused, its record unwritten, for a read the new leader would have
+// answered. Here nobody answers the reads, and the change, bounded by five
+// seconds, asks at none, two and four. Exact, in a bubble: the change runs in
+// one and the broker outside it, and its requests are counted behind a fence
+// on its own connection ([jsapitest.Held.Fence]).
+//
+// Mutation: give the runs bucket's reads the handling of a reply at its bound
+// on a member's own connection, and the change asks once.
+func TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason(t *testing.T) {
+	t.Parallel()
+	const reason = 5 * time.Second
+	ns, nc := embeddedServer(t)
+	store := openFleetVia(t, jsOf(nc), InProcess, fmt.Sprintf("x%d", bucketSeq.Add(1)))
+	held := jsapitest.Hold(t, ns, jsapitest.MsgGet(bucketStream(store.runs)))
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), reason)
+		defer cancel()
+		_, _, err := store.MutateSandboxRun(ctx, "t1", func(coord.Record) (coord.SandboxRunChange, error) {
+			return coord.SandboxRunChange{}, nil
+		})
+		if !errors.Is(err, coord.ErrUnavailable) {
+			t.Errorf("a change whose read nobody answered ended with %v, want the store unavailable", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	asked, err := held.Fence(ctx, nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != 3 {
+		t.Errorf("a change of a run's value bounded by %v asked its read %d times, want 3: at none, "+
+			"two and four seconds", reason, asked)
 	}
 }
 

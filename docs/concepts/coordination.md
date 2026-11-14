@@ -467,26 +467,28 @@ a link slower than the floor, a link busy with traffic ahead of the write, and
 the lease renewals a large write holds behind it
 ([Delivery Semantics](event-system.md#delivery-semantics)).
 
-A read of a **large value waits as long as its reply takes to arrive.** Every
+A read of a **large value waits as long as its reply takes to cross.** Every
 read of a key is its stream leader's, whose reply carries the value
 base64-encoded in JSON, a third larger, heard only once its last byte is in.
 A read is otherwise asked again two seconds after it was sent and every two
 after that, and never for longer than thirty seconds, the longest silence the
 broker keeps. For a bucket whose values are budgeted to what one key holds — a
 sandbox run's record and the parts beside it — a reply at the bound is eight
-mebibytes: four minutes across a link at the floor, and seconds to build and
-decode in the engine's own process on a loaded node. Held to the thirty
+mebibytes: four minutes across a link at the floor. Held to the thirty
 seconds, such a read across a slow link was never answered, so a record past
 about 768 KiB could not be read, nor changed by the read-decide-write every
-change of it is; and asked again while its reply was still being built, a
-loaded member built another whole reply beside the first for every re-ask,
-until none was answered in time. So a read of such a bucket is given the
-arrival of a reply at its bound — its handling at a second a mebibyte on
-every connection, and its crossing at the floor besides across a link —
+change of it is; and asked again every two seconds, each re-ask put another
+whole reply on the link the first was still crossing. So across a link a read
+of such a bucket is given the crossing of a reply at its bound at the floor,
 beyond the read term and beyond the thirty seconds: it is asked once while its
-reply can still be on its way, and a request a member dropped across an
-election costs it that arrival before it is asked again, rather than two
-seconds. A bucket of small values keeps the read term and the thirty seconds.
+reply can still be on its way. On a member's own connection, which crosses
+nothing, it keeps the read term: a caller waits on every such read within a
+reason of its own — five seconds at the shortest — and a request a member
+dropped across an election is asked again two seconds later, inside it,
+where the new leader answers it. Building and decoding a reply of eight
+mebibytes takes a node tens of milliseconds, well inside the read term. A
+bucket of small values keeps the read term and the thirty seconds wherever
+the node is.
 
 ---
 
