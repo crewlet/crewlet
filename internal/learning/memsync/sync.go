@@ -90,11 +90,12 @@ const consumerCleanupTimeout = 5 * time.Second
 // millisecond, waiting only for one of the pool's connections or for the
 // store's lock, which the store's own busy wait bounds (five seconds unless
 // store.Options.BusyTimeout says otherwise). A flat bound is right for such a
-// read alone. One that crossed a link to the broker would be held to the
-// crossing rule crewlet/crewlet#1005 gives every such read (jsapi.Budget), as
-// crewlet/crewlet#1065 and crewlet/crewlet#1075 hold theirs, rather than to a
-// flat figure, so a change that moves this read across a link replaces this
-// bound.
+// read alone. One that crossed a link to the broker would need a bound that
+// follows the link's pace rather than a flat figure: the crossing time
+// crewlet/crewlet#1005 gives an acknowledged write (jsapi.Budget), which
+// crewlet/crewlet#1075 proposes for a memory row's publish, or a bound by
+// progress, which crewlet/crewlet#1065 proposes for a hydration's reads. So
+// a change that moves this read across a link replaces this bound.
 //
 // BOUNDED, because it runs inside seat acquisition, possibly just past the
 // hydration's budget, on a context that budget does not cut, and an unbounded
