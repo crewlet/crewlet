@@ -720,11 +720,17 @@ func delivery(ctx context.Context, ev *events.Event) context.Context {
 // while such a delivery is in flight announces nothing afresh: the delivery
 // carries the completion, and a second announcement would make two in flight.
 //
+// And a re-fire whose claim lost to a delivery whose collection started the
+// clock meanwhile announces nothing either: that delivery, handed back, is in
+// flight, so a re-fire announces afresh only where its own attempt started the
+// clock, its claim having read the box.
+//
 // Mutation: acknowledge a refusal while the clock runs, and a clearing nothing
 // signals leaves the job unannounced for good; acknowledge an answer that
 // settled nothing while the clock runs, and a resume its row holds is never
-// announced again; renew a re-fire whenever the clock runs after it, and the
-// completion has two announcements in flight.
+// announced again; renew a re-fire whenever the clock runs after it, or
+// wherever it started after the re-fire began, and the completion has two
+// announcements in flight.
 func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 	t.Parallel()
 
@@ -788,6 +794,53 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 		}
 	})
 
+	t.Run("a re-fire whose claim lost to a delivery that started the clock", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		host := &heldRead{BoxReader: rig.coordinator.boxes, reading: make(chan struct{}), read: make(chan struct{})}
+		rig.coordinator.boxes = host
+		gate := &racingGate{gating: make(chan struct{}), pass: make(chan struct{}),
+			admitted: make(chan struct{}), proceed: make(chan struct{})}
+		rig.coordinator.gate = gate.gate
+		// THE GATE REFUSES A COMPLETION while no clock runs: acknowledged,
+		// and kept for its condition's signal.
+		payload, kept := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+		}
+		// THE CONDITION CLEARS, and the re-fire is held at its admission
+		// while a delivery of the completion claims the run, its read of the
+		// box held in turn; the re-fire's claim then loses to that
+		// delivery's.
+		rig.coordinator.Readmit(conditionDrain, "swe")
+		<-gate.gating
+		_, ev := rig.completion("t1")
+		handed := make(chan error, 1)
+		go func() { handed <- rig.coordinator.OnEvent(delivery(t.Context(), ev), ev) }()
+		<-host.reading
+		close(gate.pass)
+		<-gate.admitted
+		// THE DELIVERY'S READ FINDS THE HOST'S STORE SILENT, which starts the
+		// clock, and it is handed back, before the re-fire's attempt is done.
+		close(host.read)
+		if err := <-handed; !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("the delivery whose collection started the clock = %v; want it handed back as no "+
+				"waiter's to announce again", err)
+		}
+		if !clocked(rig) {
+			t.Fatal("the premise: the delivery's collection did not start the clock on the host")
+		}
+		close(gate.proceed)
+		rig.coordinator.inflight.Wait()
+		// ONE ANNOUNCEMENT IN FLIGHT: the delivery handed back, and nothing
+		// the re-fire announced beside it.
+		if renewed := renewedOn(rig); len(renewed) != 0 {
+			t.Fatalf("a re-fire whose claim lost to a delivery that started the clock announced the "+
+				"completion %d times; want none, that delivery in flight carrying it", len(renewed))
+		}
+	})
+
 	t.Run("a re-fire while its refused delivery is in flight", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
@@ -818,6 +871,55 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)
 		}
 	})
+}
+
+// racingGate is a [TurnGate] that refuses the first resume it is asked about
+// on [conditionDrain]; holds the second, saying so on gating, until pass, and
+// then admits it with a release that says so on admitted and waits for
+// proceed; and admits every other at once: a completion kept for its
+// condition, its re-fire, held at its admission and again as its attempt
+// returns, and a delivery of it that races that re-fire.
+type racingGate struct {
+	gating, pass, admitted, proceed chan struct{}
+
+	mu    sync.Mutex
+	asked int
+}
+
+func (g *racingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+	g.mu.Lock()
+	g.asked++
+	n := g.asked
+	g.mu.Unlock()
+	switch n {
+	case 1:
+		return nil, nil, &TurnRefused{Cause: errLeaving,
+			Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
+	case 2:
+		close(g.gating)
+		<-g.pass
+		return ctx, func() {
+			close(g.admitted)
+			<-g.proceed
+		}, nil
+	}
+	return ctx, func() {}, nil
+}
+
+// heldRead is the box's host as a case holds it: its first read says so on
+// reading and waits for read before the host makes it.
+type heldRead struct {
+	BoxReader
+	reading, read chan struct{}
+	once          sync.Once
+}
+
+func (h *heldRead) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	h.once.Do(func() {
+		close(h.reading)
+		<-h.read
+	})
+	return h.BoxReader.ReadBox(ctx, run, read)
 }
 
 // renewedOn is every completion the rig's coordinator announced on the seat's

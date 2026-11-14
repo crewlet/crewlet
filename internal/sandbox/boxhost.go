@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -555,11 +556,27 @@ func (c *Coordinator) noteHostStore(ctx context.Context, run PendingRun, err err
 			return
 		}
 		c.unsettled[run.TurnID] = hostUnsettled{handle: run.AgentHandle, launch: run.LaunchID, since: c.now()}
+		if started, ok := ctx.Value(clockStartKey{}).(*atomic.Bool); ok {
+			started.Store(true)
+		}
 	case errors.Is(err, ErrBoxHostSilent), ctx.Err() != nil:
 		// NO WORD OF THE HOST'S STORE: the clock stands as it is.
 	default:
 		delete(c.unsettled, run.TurnID)
 	}
+}
+
+// clockStartKey is the context key under which an attempt asks to be told
+// whether its own collection started the clock on the store of its box's host
+// ([startingClock]).
+type clockStartKey struct{}
+
+// startingClock is ctx carrying started, which [Coordinator.noteHostStore]
+// sets where a collection made under it starts the clock on the store of its
+// box's host, rather than finding one another attempt started: the one fact a
+// re-fire renews on at once ([Coordinator.refire]).
+func startingClock(ctx context.Context, started *atomic.Bool) context.Context {
+	return context.WithValue(ctx, clockStartKey{}, started)
 }
 
 // hostUnsettledFor is how long the host of run's box has answered this node's

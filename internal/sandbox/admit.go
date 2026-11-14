@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -376,9 +377,11 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
 // re-fire has no delivery in hand for the broker to bring back. Where its own
 // attempt started this node's clock on that host's store
-// ([Coordinator.hostClocked]), the delivery that carried the completion was
-// acknowledged when it was kept, no clock running then, so the re-fire's
-// completion is announced afresh at once, whatever the hand-back (renew.go),
+// ([Coordinator.hostClocked]), its claim won and its read of the box found
+// that store silent first ([startingClock]), the delivery that carried the
+// completion was acknowledged when it was kept, no clock running then, so the
+// re-fire's completion is announced afresh at once, whatever the hand-back
+// (renew.go),
 // and a renewal the broker does not take is said here, as what it leaves: no
 // delivery to make it again on, so this node makes it again on its own timer
 // until one lands or this node settles the run, whoever holds the seat by then
@@ -387,27 +390,32 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // IS ANNOUNCED: the delivery refused then was handed back, never acknowledged,
 // and is in flight still, renewed on its own budget, so an announcement made
 // here beside it would leave two in flight, and one more with every refusal
-// and re-fire after it.
+// and re-fire after it. NOR WHERE ANOTHER ATTEMPT STARTED THE CLOCK while this
+// one ran, its claim losing to that attempt's, or refused while that
+// attempt's release was out, or winning after it to find the clock running:
+// that attempt was a delivery's, handed back and in flight, which carries the
+// completion. Renewed wherever the clock ran once the attempt was done, such a
+// re-fire put a second announcement beside it.
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
 		return
 	}
 	before := c.unannouncedJob(ctx, kept.ev)
-	err := c.OnCompleted(ctx, kept.ev, kept.trigger)
-	after := c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID)
+	started := new(atomic.Bool)
+	err := c.OnCompleted(startingClock(ctx, started), kept.ev, kept.trigger)
 	switch {
-	case !before && after:
+	case !before && started.Load():
 		// RENEWED BELOW: nothing else carries it.
 	case err == nil:
 		return
-	case before:
+	case before, c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID):
 		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
 			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
 			"error", unannounced(kept.ev, err).Error(),
 			"detail", "the completion re-fired when its condition cleared was not settled; its box's host "+
-				"cannot read the coordination store, so no waiter announces it, and the delivery handed back "+
-				"when it was refused carries it on")
+				"cannot read the coordination store, so no waiter announces it, and a delivery of it handed "+
+				"back carries it on")
 		return
 	default:
 		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",

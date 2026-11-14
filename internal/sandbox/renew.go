@@ -108,7 +108,10 @@ import (
 // condition and re-fires once it clears ([Coordinator.refire]) was kept from a
 // delivery that was acknowledged where no clock ran then, and handed back
 // where one did. So a re-fire is renewed at once only where its own attempt
-// started the clock: nothing else carries it then. Where the clock ran before
+// started the clock, its claim having won and its read of the box found the
+// host's store silent: nothing else carries it then. A re-fire whose claim
+// lost to a delivery's, or that found the clock that delivery's collection
+// started, announces nothing: that delivery, handed back, carries it. Where the clock ran before
 // it, the delivery refused while the clock ran is in flight still, handed back
 // and renewed on its own budget, and a re-fire that announced it afresh beside
 // it would leave two announcements in flight, and more with every refusal and
