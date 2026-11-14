@@ -627,7 +627,9 @@ describe("the credentials table", () => {
       "Key id": 63,
       "Set by": 70,
       Updated: 76,
-      "": 80,
+      // The edit and remove buttons' head: it draws no word, and the kit names
+      // it "Actions" for a screen reader.
+      Actions: 80,
     };
     let box = 486;
     const real = globalThis.ResizeObserver;
@@ -700,7 +702,7 @@ describe("the credentials table", () => {
 
     test("beside a peek it gives way whole facts, and never cuts the name", async () => {
       const at = await drawn(486);
-      expect(at.heads).toEqual(["Name", "Read by", "Updated", ""]);
+      expect(at.heads).toEqual(["Name", "Read by", "Updated", "Actions"]);
       expect(at.hidden).toContain("Hidden to fit: Key id, Set by and Source");
     });
 

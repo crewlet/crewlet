@@ -989,13 +989,16 @@ test("a column chip takes its name from the effective axis", async () => {
  * The words each FIELD column's head DRAWS: a glyph column's name is said to a
  * screen reader (and on hover) rather than drawn, so it is not read here. The
  * row's picking box and its menu are no field and no column set names them:
- * the box's head holds a checkbox, and the menu's head has no name at all,
- * where a glyph column's carries its name on hover.
+ * the box's head holds a checkbox, and the menu's head draws no word and has
+ * no hover title (its name, "More", is read but not seen), where a glyph
+ * column's carries its name on hover.
  */
 const heads = (container: HTMLElement) =>
   [...container.querySelectorAll(".crewlet-data-grid__th")]
     .filter((el) => !el.querySelector('input[type="checkbox"]'))
-    .filter((el) => Boolean(el.textContent?.trim() || el.getAttribute("title")))
+    .filter((el) =>
+      Boolean(el.querySelector(".crewlet-data-grid__truncate") || el.getAttribute("title")),
+    )
     .map((el) => (el.querySelector(".crewlet-data-grid__truncate")?.textContent ?? "").trim());
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
