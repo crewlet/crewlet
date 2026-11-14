@@ -673,7 +673,7 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 		name:    "a seat's backlog cut with nothing acknowledged",
 		backlog: map[string]script{"a": cutAt(nothingAcknowledged)},
 		want: []string{"WARN seat_memory_not_carried seat=a pass=backlog next=(backlogs) " +
-			"not_reached= backlogs_next=b backlogs_not_reached=b,c"},
+			"not_reached= backlogs_next=a backlogs_not_reached=b,c"},
 	}, {
 		name:    "a seat's backlog cut with nothing acknowledged after another's moved marks",
 		backlog: map[string]script{"a": movedAll, "b": cutAt(nothingAcknowledged)},
@@ -1142,18 +1142,23 @@ func TestASeatThatRanOutBehindAnotherGoesFirstNextThoughTheBacklogsWereNotReache
 //
 // A backlogs' turn that a cycle reached late and cut before the changelog
 // acknowledged anything of it starts the next cycle, so that it has a whole
-// one: a backlog's next row can need more of a cycle than the seats' own
-// passes leave. Cut so with the whole cycle, it moved nothing for want of
-// something time does not give (a backlog's next row no cycle can carry, a
-// broker that acknowledges nothing), and the next cycle starts at the turn
-// after it, the first seat's. So the cycles alternate: one carries every
-// seat's own pass and reaches the backlogs late, the next is the backlogs'
-// alone. Started at the backlogs' turn again, no cycle would carry a seat's
-// own pass again; never started there, the backlogs would never have a whole
-// cycle.
+// one, and that whole cycle goes to the backlog it was cut in: a backlog's
+// next row can need more of a cycle than the seats' own passes leave. Cut so
+// with the whole cycle, it moved nothing for want of something time does not
+// give (a backlog's next row no cycle can carry, a broker that acknowledges
+// nothing), and the next cycle starts at the turn after it, the first seat's,
+// and the next backlogs' turn at the seat after the one it was cut in. So the
+// cycles alternate: one carries every seat's own pass and reaches a backlog
+// late, the next is that backlog's alone, and the backlogs move on a seat in
+// every two cycles. Started at the backlogs' turn again, no cycle would carry
+// a seat's own pass again; never started there, the backlogs would never have
+// a whole cycle; and a seat whose row no whole cycle carries, kept for the
+// next backlogs' turn, would hold every other seat's backlog back.
 //
 // Mutation: start the next cycle at a backlogs' turn that moved nothing
-// whether or not it had the whole cycle, or never there, and this goes red.
+// whether or not it had the whole cycle, or never there, or start the next
+// backlogs' turn at the seat a whole turn was cut in with nothing, or after
+// the seat a late one was, and this goes red.
 func TestABacklogsTurnThatHadAWholeCycleAndMovedNothingHandsTheNextCycleToTheSeats(t *testing.T) {
 	t.Parallel()
 	m := &scriptedMemory{play: completes, playBacklog: func(ctx context.Context, _ string,
@@ -1164,16 +1169,62 @@ func TestABacklogsTurnThatHadAWholeCycleAndMovedNothingHandsTheNextCycleToTheSea
 	loop := &memorySync{}
 	for cycle, want := range [][]string{
 		{"own:a", "own:b", "own:c", "backlog:a"},
+		{"backlog:a"},
+		{"own:a", "own:b", "own:c", "backlog:b"},
 		{"backlog:b"},
 		{"own:a", "own:b", "own:c", "backlog:c"},
-		{"backlog:a"},
+		{"backlog:c"},
 	} {
 		m.cycle(t, loop, "a", "b", "c")
 		if !slices.Equal(m.order, want) {
 			t.Fatalf("cycle %d called %s, want %s: a backlogs' turn that moved nothing goes "+
-				"first in the next cycle when it came late, and hands the one after to the "+
-				"seats when it had the whole cycle", cycle+1, words.And(m.order),
-				words.And(want))
+				"first in the next cycle, at the backlog it was cut in, when it came late, and "+
+				"hands the one after to the seats when it had the whole cycle", cycle+1,
+				words.And(m.order), words.And(want))
+		}
+	}
+}
+
+// A BACKLOG THAT NEEDS A WHOLE CYCLE HAS ONE WHILE ANOTHER SEAT'S DRAINS.
+//
+// A seat's backlog whose next row needs more than the seats' own passes leave
+// of a cycle moves only in a cycle the backlogs' turn starts. A late backlogs'
+// turn cut in it with nothing moved starts the next cycle for it, and the
+// next backlogs' turn starts at that same seat, though it was the late turn's
+// first. Passed for having had all the late turn had, as the rule within the
+// turn alone would pass it, the seat handed that whole cycle to the next
+// seat's backlog; while that one drained, every cycle after it went to the
+// seats' own passes and reached this backlog late again, and it moved in none
+// of them. Here a's backlog moves only as a cycle's first call, and b's
+// moves marks in every cycle that reaches it without ever draining, so a's
+// has a whole cycle in every three: one reaches it late, the next is its
+// own, and the one after carries b's.
+//
+// Mutation: start the next backlogs' turn after a late turn's first seat cut
+// with nothing, and a's backlog never moves.
+func TestABacklogThatNeedsAWholeCycleHasOneWhileAnotherSeatsDrains(t *testing.T) {
+	t.Parallel()
+	var m *scriptedMemory
+	m = &scriptedMemory{play: completes, playBacklog: func(ctx context.Context, seat string,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if seat == "a" && len(m.order) > 1 {
+			return runsOut(ctx, runOut, nothingAcknowledged)
+		}
+		return runsOut(ctx, runOut, draining)
+	}}
+	const cycles, round = 9, 3
+	loop := &memorySync{}
+	moved := make([]bool, cycles)
+	for i := range cycles {
+		m.cycle(t, loop, "a", "b")
+		moved[i] = slices.Equal(m.order, []string{"backlog:a"})
+	}
+	for from := 0; from+round <= cycles; from++ {
+		if !slices.Contains(moved[from:from+round], true) {
+			t.Errorf("a's backlog had a whole cycle in none of cycles %d to %d: a backlog "+
+				"whose next row needs one has it after a late backlogs' turn cut in it with "+
+				"nothing, whatever another seat's backlog does", from+1, from+round)
 		}
 	}
 }

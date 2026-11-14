@@ -146,26 +146,46 @@ type memorySync struct {
 	// seat when it took it, with what the cycle has left, the seats taking
 	// turns within it from backlogResume ([publishBacklogs]).
 	//
-	// THE RULE, over a lap's turns and over the seats within the backlogs'
-	// turn alike: the next starts at the turn the bound ran out inside,
-	// which had only part of a cycle, or, when that turn was the first and
-	// so had the whole cycle, at the turn after it, wrapping round, so the
-	// first seat's after the backlogs', a lone turn being its own next
-	// ([nextStart]); at the first turn not reached when the bound ran out
-	// between two; at the first when every turn was had. WITH ONE
-	// EXCEPTION: a backlogs' turn the bound cut after it moved a mark hands
-	// the next cycle to the first seat, wherever it stood in this one. So
-	// the backlogs take a cycle's start only after a turn of theirs that
-	// moved nothing while it was not the first, which had too little of the
-	// cycle to move a mark, or when the cycle ran out just before their
-	// turn. Without the exception, a backlog longer than a cycle, such as
-	// the whole store a restart leaves a data node to carry back for each
+	// THE RULE, over a lap's turns: the next starts at the turn the bound
+	// ran out inside, which had only part of a cycle, or, when that turn
+	// was the first and so had the whole cycle, at the turn after it,
+	// wrapping round, so the first seat's after the backlogs', a lone turn
+	// being its own next ([nextStart]); at the first turn not reached when
+	// the bound ran out between two; at the first when every turn was had.
+	// Within the backlogs' turn the seats follow the same rule over what the
+	// cycle left the turn: its first seat had all of that, which is the
+	// whole cycle only when the turn was the cycle's first.
+	//
+	// WITH ONE EXCEPTION: a backlogs' turn the bound cut after it moved a
+	// mark hands the next cycle to the first seat, wherever it stood in this
+	// one. So the backlogs take a cycle's start only after a turn of theirs
+	// that moved nothing while it was not the first, which had too little
+	// of the cycle to move a mark, or when the cycle ran out just before
+	// their turn. Without the exception, a backlog longer than a cycle, such
+	// as the whole store a restart leaves a data node to carry back for each
 	// seat it held, would take the start of every other cycle, and in those
 	// the seats' own rows would wait behind it, which is what carrying them
 	// first exists to end (crewlet/crewlet#1039). With it, while the seats'
 	// own passes leave the backlogs' turn the time to move a mark, every
 	// cycle starts at the first seat and carries every seat's own rows
 	// before any backlog.
+	//
+	// AND THE WHOLE CYCLE A LATE TURN EARNS IS THE SEAT'S IT WAS CUT IN. A
+	// backlogs' turn that moved nothing while it was not the cycle's first
+	// starts the next cycle so that it has a whole one, for the backlog it
+	// was cut in, whose next row needs more than the turn had; so the next
+	// backlogs' turn starts at that seat even when it was the turn's first,
+	// which the rule within the turn would pass for having had all the cycle
+	// left it. Passed, the seat lost that whole cycle to the next seat's
+	// backlog, and with it every whole cycle its cuts earned for as long as
+	// that backlog lasted: a backlog whose next row needs more than the
+	// seats' own passes leave of a cycle moved not at all while another
+	// seat's drained, which can be the whole store a restart leaves a data
+	// node to carry back for that seat. A first seat cut after it moved a
+	// mark is passed as the rule says, since it needs no whole cycle to move
+	// more, and so is one cut with nothing in a turn that had the whole
+	// cycle, whose next row no cycle carries: it holds no other seat's
+	// backlog back.
 	//
 	// THE BACKLOGS TAKE A TURN OF THEIR OWN, AND FOR GOOD, rather than what
 	// each cycle has left once every seat's own pass has returned. That
@@ -216,8 +236,12 @@ type memorySync struct {
 	// ([memorySyncInterval]). The backlogs' turn waits no longer between two
 	// cycles that reach it, and has the whole of the next after a cycle that
 	// reached it with too little left to move a mark, or ran out just before
-	// it. The bounds are reached. Of held seats a, b, c and d, in cycles
-	// from b's turn where the own passes run out in c's alone, twice, and
+	// it; that cycle starts with the backlog the turn was cut in, or the
+	// first it did not reach. So a seat whose backlog's next row needs more
+	// than the seats' own passes leave of a cycle, and fits a whole one, has
+	// a whole cycle at the latest in the second backlogs' turn after one that
+	// reaches it. The bounds are reached. Of held seats a, b, c and d, in
+	// cycles from b's turn where the own passes run out in c's alone, twice, and
 	// the backlogs' turn moves nothing in two: b completes and the first
 	// cycle runs out in c's turn, c has the whole second, d completes and
 	// the third runs out in the backlogs' turn, the backlogs have the whole
@@ -455,7 +479,7 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 			// released since the lap began is not called, and one taken
 			// since is: its boundary is set if its hydration has completed,
 			// and otherwise its backlog carries nothing.
-			backlogs := publishBacklogs(ctx, held.Held(), memory, backlogResume)
+			backlogs := publishBacklogs(ctx, held.Held(), memory, backlogResume, i == 0)
 			report.backlogResume = backlogs.resume
 			report.failed = append(report.failed, backlogs.failed...)
 			if !backlogs.ranOut {
@@ -506,10 +530,11 @@ func publishHeldMemory(ctx context.Context, held heldHandles, memory memoryPubli
 // the backlog of each seat held names ([memsync.Syncer.PublishBacklog]), one
 // after another in [cycleOrder] from resume, until every seat's has been
 // called or ctx runs out, by the rule a cycle's lap follows
-// ([memorySync.resume]). It reports what the turn did and where the next one
-// starts.
+// ([memorySync.resume]). first says the turn is the cycle's first, so the
+// first seat it calls has the whole cycle. It reports what the turn did and
+// where the next one starts.
 func publishBacklogs(ctx context.Context, held []string, memory memoryPublisher,
-	resume string,
+	resume string, first bool,
 ) backlogsReport {
 	var report backlogsReport
 	order := cycleOrder(held, resume)
@@ -535,6 +560,18 @@ func publishBacklogs(ctx context.Context, held []string, memory memoryPublisher,
 		}
 		report.ranOut, report.cut = true, call
 		report.resume, report.notReached = nextStart(order, i), order[i+1:]
+		if !first && report.marked == 0 {
+			// THE TURN CAME LATE AND MOVED NOTHING, so the lap starts the
+			// next cycle at the backlogs' turn, for a whole cycle
+			// ([publishHeldMemory]), and that cycle is this seat's: its
+			// backlog's next row needs more than the turn had. The rule
+			// starts the next turn here already for any seat but the turn's
+			// first, which it passes for having had all the cycle left the
+			// turn, and that was not the whole cycle ([memorySync.resume]).
+			// Judged by the turn's marks, as the lap judges it, rather than
+			// by this call's: a first seat's are the turn's.
+			report.resume = handle
+		}
 		return report
 	}
 	return report

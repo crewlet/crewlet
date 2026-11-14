@@ -463,7 +463,14 @@ the bound cut after it moved a mark hands the next cycle to the first seat, so
 a backlog longer than a cycle drains over as many cycles as it needs without
 ever going ahead of what the seats write. So while the seats' turns leave the
 backlogs' turn the time to move a mark, every cycle starts at the first seat
-and carries every seat's own rows before any backlog. Under overload, when the
+and carries every seat's own rows before any backlog. A backlogs' turn that
+came late and moved nothing starts the next cycle so that it has a whole one,
+and that whole cycle goes to the seat it was cut in, even when that seat was
+the turn's first, which the rule within the turn alone would pass for having
+had all the turn had: a backlog whose next row needs more than the seats'
+turns leave of a cycle then moves while another seat's drains, rather than
+handing every whole cycle its cuts earn to the seat after it. Under overload,
+when the
 seats' turns run cycles out (a burst a seat wrote, profiles and skills that
 outlast a cycle, seats still being taken, every row of each counting as its
 own until its hydration completes), the backlogs' turn still comes once in
