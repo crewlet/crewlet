@@ -92,13 +92,16 @@ import "context"
 // taken and moves nothing until then, and the run stays counted where the
 // moves made before the release left it, holding the seat as the claim does.
 // That is the recorded order's own rule, and the wait it makes is transient
-// and bounded: it ends with the first attempt at the release the store
-// answers, and the seat's mail is held behind the owed release throughout, so
-// no delivery is screened against the counts meanwhile, and a run counted as
-// the claim though its job has parked on a question is never missed by an
-// answer match. Moved ahead of the release instead, the later write's move
-// would be made before the move it follows, which is what this section's rule
-// refuses.
+// and bounded: it lasts only while the release is out, which the first
+// attempt at it the store answers ends at the latest. And the seat's mail is
+// held behind the owed release throughout ([Coordinator.owe]): what its inbox
+// has waits there, and a delivery that raced the hold, or found it refused,
+// waits as well, since the inbox's screening runs nothing on a seat it reads
+// held, and it reads this one held while the run is counted as the claim
+// ([Coordinator.SeatRuns]). So a run counted as the claim though its job has
+// parked on a question is never missed by an answer match. Moved ahead of the
+// release instead, the later write's move would be made before the move it
+// follows, which is what this section's rule refuses.
 //
 // # Where each write puts the run
 //
