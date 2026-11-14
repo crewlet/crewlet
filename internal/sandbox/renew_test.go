@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -114,6 +115,11 @@ type renewRig struct {
 
 	mu   sync.Mutex
 	seen []delivered
+	// before, where set, runs before the coordinator is handed each delivery,
+	// told how many the topic has delivered with this one: a case's way to
+	// change what the stores answer at a delivery rather than at a time, since
+	// a hand-back that reads no box moves no clock on.
+	before func(n int)
 }
 
 // newRenewRig builds a [renewRig]. Its host's every read waits a minute on the
@@ -156,7 +162,11 @@ func newRenewRig(t *testing.T) *renewRig {
 		left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
 		r.mu.Lock()
 		r.seen = append(r.seen, delivered{id: ev.ID, left: left, waiting: len(broker.Backlog(control, group))})
+		n, before := len(r.seen), r.before
 		r.mu.Unlock()
+		if before != nil {
+			before(n)
+		}
 		if err := rig.coordinator.OnEvent(ctx, ev); err != nil {
 			return queue.Nak(err)
 		}
@@ -176,6 +186,14 @@ func (r *renewRig) announce(t *testing.T) {
 	if err := r.broker.Publish(t.Context(), sweControl(), ev); err != nil {
 		t.Fatalf("announcing the completion: %v", err)
 	}
+}
+
+// atDelivery has before run ahead of each delivery the coordinator is handed
+// ([renewRig.before]).
+func (r *renewRig) atDelivery(before func(n int)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.before = before
 }
 
 // deliveries is every delivery of the control topic, in order.
@@ -422,6 +440,201 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)
 		}
 	})
+}
+
+// unansweredClaims is a run store whose coordination store answers the first
+// before claims of a completion, does not answer the silent after them, and has
+// answered run as the last of those goes unanswered; it answers every other call
+// as the store beneath it does.
+type unansweredClaims struct {
+	PendingStore
+	before, silent int
+	answered       func()
+
+	mu     sync.Mutex
+	claims int
+}
+
+func (s *unansweredClaims) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	s.mu.Lock()
+	s.claims++
+	n := s.claims
+	s.mu.Unlock()
+	if n > s.before && n <= s.before+s.silent {
+		if n == s.before+s.silent {
+			s.answered()
+		}
+		return PendingRun{}, false, errStoreUnavailable("claim the run", turnID)
+	}
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+// hostReads is the box's host as a case scripts it: from the from-th read of
+// the box on, for silent reads, the host does not answer at all
+// ([ErrBoxHostSilent]); answered runs before the read after them, which the
+// host makes as the reader beneath it does, as it makes every other.
+type hostReads struct {
+	BoxReader
+	from, silent int
+	answered     func()
+
+	mu    sync.Mutex
+	reads int
+}
+
+func (h *hostReads) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	h.mu.Lock()
+	h.reads++
+	n := h.reads
+	h.mu.Unlock()
+	switch {
+	case n >= h.from && n < h.from+h.silent:
+		return Result{}, false, fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)
+	case n == h.from+h.silent:
+		h.answered()
+	}
+	return h.BoxReader.ReadBox(ctx, run, read)
+}
+
+// EVERY HAND-BACK OF A COMPLETION IS RENEWED WHILE THE CLOCK ON ITS BOX'S HOST
+// RUNS, WHATEVER ITS KIND. The clock is this node's word that the host's
+// waiter, the one thing that would announce the job again, reads the run's row
+// through a coordination store that does not answer it: the broker's
+// redelivery is then all that asks again, and its budget is shorter than the
+// box timeout. A claim this node's own store does not answer, a claim refused
+// while a release this node owes is out, and a host that does not answer the
+// read at all are hand-backs within that same wait, and each one's delivery is
+// NAK'd and renewed before its last, never acknowledged: the completion
+// outlives one message's budget, and the turn resumes once the host's store
+// answers, each renewal leaving one announcement in flight. A re-fire, which has
+// no delivery in hand, is renewed at once whatever it hands back while the
+// clock runs.
+//
+// Mutation: renew only the host's own answer that its store did not answer,
+// and a claim the store did not answer, a claim refused for a release owed or
+// a host that did not answer runs one message's budget out to its dead letter;
+// acknowledge a host that did not answer while the clock runs, and nothing
+// announces the job again; renew a re-fire only for the host's own answer, and
+// a re-fire the host did not answer is left with nothing to carry it.
+func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
+	t.Parallel()
+	// past is how many deliveries a hand-back goes on for: past one message's
+	// whole budget, so one NAK'd and nothing more is dead-lettered first.
+	past := 2 * (renewBudget + 1)
+
+	resumedOnTheBroker := func(t *testing.T, r *renewRig) {
+		t.Helper()
+		if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
+			t.Fatalf("%d of the job's announcements were dead-lettered while the clock on its host ran", len(dead))
+		}
+		resumed := r.resumer.calls()
+		if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
+			t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account", len(resumed),
+				resumed)
+		}
+		if failed := r.failures(); len(failed) != 0 {
+			t.Fatalf("announced %+v", failed)
+		}
+		seen := r.deliveries()
+		for i, d := range seen {
+			if d.waiting != 0 {
+				t.Fatalf("delivery %d of %d was handed over with %d more announcements waiting; want one in "+
+					"flight", i+1, len(seen), d.waiting)
+			}
+		}
+		if order, _ := announcements(seen); len(order) < 2 {
+			t.Fatalf("%d deliveries carried %d announcement; want the completion renewed", len(seen), len(order))
+		}
+	}
+
+	t.Run("a claim this node's store does not answer", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE FIRST CLAIM LANDS, and its collection starts the clock on
+			// the host; the claims after it go unanswered past a budget.
+			r.coordinator.pending = &unansweredClaims{PendingStore: r.coordinator.pending, before: 1,
+				silent: past, answered: r.store.answer}
+			r.announce(t)
+			resumedOnTheBroker(t, r)
+		})
+	})
+
+	t.Run("a claim refused while a release this node owes is out", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE FIRST COLLECTION'S HAND-BACK GOES UNANSWERED, so this node
+			// owes its release and refuses every claim of the job meanwhile,
+			// past a budget, before the release is made again and lands.
+			mine := &unansweredRelease{silentStore: &silentStore{PendingStore: r.coordinator.pending,
+				silent: []string{"ReleaseClaim"}}}
+			r.coordinator.pending = mine
+			r.atDelivery(func(n int) {
+				if n == past {
+					mine.answer()
+					r.store.answer()
+					r.fireRetries()
+				}
+			})
+			r.announce(t)
+			resumedOnTheBroker(t, r)
+		})
+	})
+
+	t.Run("a host that does not answer the read", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE FIRST READ IS THE HOST'S ANSWER THAT ITS STORE DID NOT
+			// ANSWER, which starts the clock; the host then answers nothing
+			// for past one message's budget, a minute a read, inside the box
+			// timeout, and comes back with its store answering.
+			r.host.BoxReader = &hostReads{BoxReader: r.host.BoxReader, from: 2, silent: renewBudget + 2,
+				answered: r.store.answer}
+			r.announce(t)
+			resumedOnTheBroker(t, r)
+		})
+	})
+
+	t.Run("a re-fire a host does not answer", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		// KEPT FOR A CONDITION, the delivery acknowledged, and re-fired once
+		// it clears, into a host that does not answer: no delivery is in
+		// hand, and the clock on the host's store still runs.
+		gate := gated(rig)
+		gate.refuse(true)
+		payload, kept := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+		}
+		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
+		gate.refuse(false)
+		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.inflight.Wait()
+		if renewed := renewedOn(rig); len(renewed) != 1 {
+			t.Fatalf("the re-fire a host did not answer, the clock on its store running, announced the completion "+
+				"%d times; want it announced afresh once", len(renewed))
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)
+		}
+	})
+}
+
+// renewedOn is every completion the rig's coordinator announced on the seat's
+// control topic itself, in order.
+func renewedOn(rig *coordRig) []*events.Event {
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	var renewed []*events.Event
+	for _, p := range rig.queue.published {
+		if _, ok := p.event.Data.(*types.ExecutorFinished); ok && p.topic == sweControl() {
+			renewed = append(renewed, p.event)
+		}
+	}
+	return renewed
 }
 
 // A RENEWAL THE BROKER DOES NOT TAKE IS SAID BY WHAT IT LEAVES. On a delivery,

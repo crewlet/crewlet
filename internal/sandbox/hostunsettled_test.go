@@ -157,7 +157,9 @@ func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch st
 // and its pushed branch were there to carry on from. The clock is the host's
 // silence one answer after another: a host that answered in between starts it
 // again, and a host that did not answer at all says nothing of its store and
-// leaves it running. A step this node's own store did not answer is never
+// leaves it running, its collection handed back for the delivery's retry and
+// never acknowledged, since the host's own waiter reads the run through the
+// silent store. A step this node's own store did not answer is never
 // given up on it, the record of the loss included, which keeps the clock for
 // the next collection to record it at once; a collection this node itself cut
 // short is handed back uncounted, never judged lost; a claim the record finds
@@ -168,7 +170,7 @@ func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch st
 //
 // Mutation: drop the bound (collectGivenUp gives up no store's silence); keep
 // the clock through a host whose store answered; start it again at a host that
-// did not answer; judge a step this node's own store did not answer by the
+// did not answer, or acknowledge that host's collection; judge a step this node's own store did not answer by the
 // host's clock; end the run as unreachable past the bound, or hand it back
 // unlost; carry the round on with nothing recorded on the claim; forget the
 // clock before the loss lands; judge a collection this node cut short; carry a
@@ -247,8 +249,17 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		rig.now = rig.now.Add(timeout - time.Minute)
 		asks := rig.coordinator.boxes
 		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
-		if err := collectAgain(t, rig); err != nil {
-			t.Fatalf("a collection the host did not answer = %v; want it handed back and acknowledged", err)
+		// HANDED BACK FOR ITS RETRY, NEVER ACKNOWLEDGED: the clock on the
+		// host's store runs, so the host's own waiter, which reads the run
+		// through that store, announces nothing, and the delivery is all
+		// that asks again (renew.go).
+		if err := collectAgain(t, rig); !errors.Is(err, ErrBoxHostSilent) {
+			t.Fatalf("a collection the host did not answer = %v; want it handed back for its retry while "+
+				"the clock on the host's store runs", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.CollectFailures != 0 {
+			t.Fatalf("the collection the host did not answer left the run %s with %d failed collections; "+
+				"want it back in running, uncounted", got.Status, got.Launch.CollectFailures)
 		}
 		rig.coordinator.boxes = asks
 		rig.now = rig.now.Add(time.Minute)

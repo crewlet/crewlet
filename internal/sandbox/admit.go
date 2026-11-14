@@ -359,26 +359,27 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 //
 // BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
 // re-fire has no delivery in hand for the broker to bring back: the delivery
-// that carried the completion was acknowledged when it was kept. So a claim the
-// re-fire hands back for that silence is announced afresh at once (renew.go),
-// and a renewal the broker does not take is said here, as what it leaves: no
-// delivery to make it again on, and the completion waiting for that host's
-// store.
+// that carried the completion was acknowledged when it was kept. So a re-fire
+// that hands its completion back while this node keeps a clock on that host's
+// store ([Coordinator.hostClocked]) has it announced afresh at once, whatever
+// the hand-back (renew.go), and a renewal the broker does not take is said
+// here, as what it leaves: no delivery to make it again on, and the completion
+// waiting for that host's store.
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
 		return
 	}
 	err := c.OnCompleted(ctx, kept.ev, kept.trigger)
-	var unsettled *hostUnsettledHandBack
-	if !errors.As(err, &unsettled) {
-		if err != nil {
-			log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
-				"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
-				"error", err.Error(),
-				"detail", "the completion re-fired when its condition cleared was not settled; "+
-					"the waiter announces it again on its schedule")
-		}
+	if err == nil {
+		return
+	}
+	if !c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID) {
+		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+			"error", err.Error(),
+			"detail", "the completion re-fired when its condition cleared was not settled; "+
+				"the waiter announces it again on its schedule")
 		return
 	}
 	if refused := c.renew(ctx, kept.ev, kept.trigger); refused != nil {

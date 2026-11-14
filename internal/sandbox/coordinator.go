@@ -1490,10 +1490,10 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // condition, as it hands on a draining node's, rather than retrying it here
 // until the broker dead-letters it.
 //
-// A COMPLETION HANDED BACK FOR THE SILENCE OF ITS BOX'S HOST'S STORE ALONE IS
-// RENEWED here, where the delivery in hand is: announced afresh before that
-// delivery is the last its budget allows, and acknowledged once the fresh
-// announcement is out (renew.go).
+// A COMPLETION HANDED BACK WHILE THIS NODE KEEPS A CLOCK ON ITS BOX'S HOST'S
+// STORE IS RENEWED here, where the delivery in hand is, whatever the hand-back:
+// announced afresh before that delivery is the last its budget allows, and
+// acknowledged once the fresh announcement is out (renew.go).
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -2058,10 +2058,11 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // carries its round on ([Coordinator.loseWithHost]), and carries a lost job's
 // round on without the read ([Coordinator.carryOnLost]). Until then no waiter
 // announces the job again, since only that host's drives its box and it reads
-// the run's row through the silent store, so the hand-back is marked for its
-// completion to be RENEWED before the delivery in hand is its last (renew.go):
-// NAK'd and nothing more, it was dead-lettered before the bound, which the
-// broker's budget falls short of. A store's silence that reaches this
+// the run's row through the silent store, so while this node keeps its clock on
+// that host's store, the completion of every hand-back is RENEWED before the
+// delivery in hand is its last, whatever the hand-back (renew.go): NAK'd and
+// nothing more, it was dead-lettered before the bound, which the broker's
+// budget falls short of. A store's silence that reaches this
 // hand-back is handed back, whatever the bound, and never ends the run as a box
 // that could not be read. A step its delivery's deadline cut is the deadline's,
 // and counted as above ([storeSilent]).
@@ -2106,16 +2107,32 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// host's own waiter announces it again on its schedule once the
 		// host is back (reannounce.go), and one that never comes back is
 		// found gone by the fleet.
+		//
+		// UNLESS THIS NODE KEEPS A CLOCK ON THAT HOST'S STORE
+		// ([Coordinator.hostClocked]): the host last answered that its store
+		// did not answer its read of the run's row, and a host that did not
+		// answer since says nothing of that store, so its waiter, back or
+		// not, reads the row through a store that does not answer it and
+		// announces nothing. The delivery is then all that asks again: the
+		// completion is handed back for the queue's backoff, never
+		// acknowledged, and renewed before its last delivery as every
+		// hand-back is while that clock runs (renew.go).
+		clocked := c.hostClocked(run.TurnID, run.LaunchID)
 		log.WarnContext(ctx, "sandbox_collect_host_silent", "turn_id", run.TurnID,
-			"node", run.LaunchNode, "error", cause.Error(),
+			"node", run.LaunchNode, "store_silent", clocked, "error", cause.Error(),
 			"detail", "the node whose host the run's box is on did not answer the collection; "+
-				"the claim is handed back uncounted and that node announces the completion again")
-		// A hand-back the store refused ended and announced the run itself,
-		// and one it did not answer is this node's to make again
-		// ([Coordinator.unclaimAt]), so either way nothing is
-		// retried off this delivery.
-		_ = c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil)
-		return nil
+				"the claim is handed back uncounted and that node announces the completion again, "+
+				"or, where it last found its coordination store silent, the completion is asked "+
+				"again on the queue's backoff")
+		// A hand-back the store refused ended and announced the run
+		// itself, so nothing is retried off this delivery; and one it did
+		// not answer is this node's to make again ([Coordinator.unclaimAt]),
+		// after which only that host's waiter or this delivery asks again.
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil || !clocked {
+			//nolint:nilerr // As below: the run has been ended and announced.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
 	}
 	now := verdict.at
 	if errors.Is(cause, ErrStoreSilent) {
@@ -2149,11 +2166,15 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// WHERE THE SILENCE IS THE BOX'S HOST'S ALONE, NO WAITER ANNOUNCES THE
 		// JOB AGAIN: the host's own drives its box, and reads the row through
 		// the silent store. The broker's redelivery is all that asks again,
-		// and its budget falls short of the box timeout, so the hand-back is
-		// marked below and the completion renewed before the delivery in hand
-		// is its last: announced afresh, and the delivery acknowledged once
-		// that is out (renew.go). The wait goes on until the host's store
-		// answers or the bound records the job lost with that host.
+		// and its budget falls short of the box timeout, so while this node
+		// keeps its clock on that host's store, by the host's answer to this
+		// read or to one before it (a record of the job's loss with that
+		// host this node's own store did not take, [Coordinator.loseWithHost],
+		// among them), the completion is renewed before the delivery in
+		// hand is its last: announced afresh, and the delivery acknowledged
+		// once that is out, as every hand-back is while that clock runs
+		// (renew.go). The wait goes on until the host's store answers or the
+		// bound records the job lost with that host.
 		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the coordination store did not answer a step the collection cannot go on "+
@@ -2164,19 +2185,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
-		handedBack := fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
-		if verdict.unsettled || c.hostClocked(run) {
-			// THE BOX'S HOST'S STORE SILENT, by its answer to this read or
-			// by the clock this node keeps on it since (a record of the
-			// job's loss with that host this node's own store did not
-			// take, [Coordinator.loseWithHost]): no waiter announces the
-			// job again, since the host's own reads the run's row through
-			// that store. So the hand-back is marked for the delivery in
-			// hand to be renewed before it is its last, and a re-fire's
-			// at once (renew.go).
-			return &hostUnsettledHandBack{err: handedBack}
-		}
-		return handedBack
+		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
 	}
 	facts := run.Launch
 	attempts := facts.CollectFailures + 1
