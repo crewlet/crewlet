@@ -69,6 +69,13 @@
 # outer make's command line builds a different git under the same name — with NO_CURL exported, the build that
 # cleared only MAKEFLAGS published a git without git-remote-https at the pin's name.
 #
+# ONE C STANDARD, WHATEVER THE COMPILER'S DEFAULT (-std=gnu17). The flags pin the language as well as the
+# optimisation, because a compiler's default standard is the compiler's choice: GCC 15 moved its default to C23, whose
+# <stddef.h> defines an unreachable() macro, and the client floor's git 2.40 defines a function of that name in
+# reflog.c, so that build stopped at its first use. gnu17 is what the image's Debian gcc 14, CI's Ubuntu gcc 13 and
+# Apple's clang default to, so pinning it changes no build those make, and a newer compiler builds the same git
+# rather than none.
+#
 # A BUILD IN THE CACHE IS PUBLISHED, NEVER BUILT IN PLACE. It installs into a directory of its own beside the name
 # (<cache>/<version>-<recipe>.XXXXXX, git's baked prefix), writes .complete last, and publishes with `ln -s`, an
 # atomic create, at <cache>/<version>-<recipe>, where <recipe> is the first 12 hex digits of this script's own
@@ -294,7 +301,7 @@ fi
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 # shellcheck disable=SC2086 # $cross is the cross-compile's make variables, or nothing, word-split on purpose.
 if ! env -i PATH="$PATH" HOME="${HOME:-/}" TMPDIR="${TMPDIR:-/tmp}" make -C "$src" -j"$jobs" \
-	CC="$cc" AR="$ar" CFLAGS='-g -O2 -Wall' CPPFLAGS='' LDFLAGS='' $cross \
+	CC="$cc" AR="$ar" CFLAGS='-g -O2 -Wall -std=gnu17' CPPFLAGS='' LDFLAGS='' $cross \
 	prefix="$prefix" sysconfdir="$sysconfdir" DESTDIR="$destdir" \
 	NO_RUST=YesPlease NO_PERL=YesPlease NO_PYTHON=YesPlease NO_TCLTK=YesPlease \
 	NO_GETTEXT=YesPlease NO_EXPAT=YesPlease NO_OPENSSL=YesPlease BLK_SHA1_UNSAFE=YesPlease \
