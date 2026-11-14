@@ -127,3 +127,42 @@ describe("the sidebar's Pinned group", () => {
     expect(pinnedGroup()).toBeUndefined();
   });
 });
+
+// THE MARK IS WHERE THE READER IS. Principles is the Company landing, so its
+// row owns the group's prefix, and an address under Company that no row holds
+// is Not Found in the group: marking Principles there said the reader was on
+// a page they were not. Mutation: mark the row by `workspaceOf` and the
+// second case goes red.
+describe("the row the sidebar marks", () => {
+  const current = async () => {
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
+    return within(nav)
+      .queryAllByRole("link")
+      .filter((link) => link.getAttribute("aria-current") === "page")
+      .map((link) => link.textContent);
+  };
+  const open = async (hash: string) => {
+    location.hash = hash;
+    await mount((what) => (what === "viewer" ? viewer(["admin"]) : undefined));
+  };
+
+  test("marks Principles at the Company landing and at its own address", async () => {
+    await open("#/company");
+    expect(await current()).toEqual(["Principles"]);
+    cleanup();
+    await open("#/company/principles");
+    expect(await current()).toEqual(["Principles"]);
+  });
+
+  test("marks no row on a Company address that no row holds", async () => {
+    await open("#/company/structure");
+    await screen.findByText(/there is no such screen/);
+    expect(await current()).toEqual([]);
+  });
+
+  test("keeps a row marked on an address under its own path that names nothing", async () => {
+    await open("#/company/budgets/nothing");
+    await screen.findByText(/there is no such screen/);
+    expect(await current()).toEqual(["Budgets"]);
+  });
+});

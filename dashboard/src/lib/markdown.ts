@@ -329,6 +329,15 @@ export interface RenderOptions {
    */
   headings?: "sections" | "text";
   /**
+   * The level the document's SHALLOWEST heading takes, each deeper one
+   * stepping from it, for a body that is a page under the screen's `h1`.
+   * Unset, a heading keeps its own depth (`#` an `h2`, `##` an `h3`), which
+   * is right for a body inside a section of a page; a page whose first
+   * heading is `##` then opened on an `h3` straight under the `h1`, a level
+   * no heading stands at, which a screen reader's outline reads as a gap.
+   */
+  headingsFrom?: 2 | 3 | 4 | 5 | 6;
+  /**
    * Give each top-level heading the id [outline] points at, for a page with
    * an "On this page" list. Nothing to address under `headings: "text"`.
    */
@@ -689,10 +698,18 @@ function opening(options: RenderOptions): RenderOptions {
   };
 }
 
+/**
+ * The options a render carries down its blocks: the caller's, and how far a
+ * heading's own level moves to reach its element ([RenderOptions.headingsFrom]).
+ */
+interface Rendering extends RenderOptions {
+  headingShift?: number;
+}
+
 function renderBlock(
   block: MarkdownBlock,
   key: string,
-  options: RenderOptions,
+  options: Rendering,
   anchor?: string,
 ): ReactNode {
   switch (block.kind) {
@@ -712,7 +729,7 @@ function renderBlock(
       // it, and a body emitting a second h1 makes two documents claim the
       // same level to a screen reader.
       return createElement(
-        `h${Math.min(6, block.level + 1)}`,
+        `h${Math.max(2, Math.min(6, block.level + (options.headingShift ?? 1)))}`,
         anchor ? { key, id: anchor } : { key },
         renderInline(block.text, key, opening(options)),
       );
@@ -872,7 +889,14 @@ function renderBlock(
 export function renderMarkdown(source: string, given: RenderOptions = {}): ReactNode[] {
   const blocks = parseMarkdown(source ?? "");
   // THE MESSAGE IS THE SOURCE unless the caller names a larger one.
-  const options: RenderOptions = { message: source ?? "", ...given };
+  const options: Rendering = { message: source ?? "", ...given };
+  // THE SHALLOWEST HEADING THE PAGE HAS takes the level asked for, read off
+  // the same lines [outline] and the sections walk, so a fence's `#` is not a
+  // heading here either.
+  if (given.headingsFrom !== undefined) {
+    const levels = headingLines(source ?? "").map((h) => h.level);
+    if (levels.length > 0) options.headingShift = given.headingsFrom - Math.min(...levels);
+  }
   if (!options.anchors || options.headings === "text") {
     return blocks.map((block, i) => renderBlock(block, `b${i}`, options));
   }

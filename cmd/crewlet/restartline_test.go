@@ -4,16 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -34,7 +40,12 @@ import (
 //
 // THE CONTROL boots the same node on the stale file, as `crewlet run` used
 // to, and hears the line at that first tick: without it, a first tick that
-// said nothing for any reason would pass here.
+// said nothing for any reason would pass here. It is also the node a live
+// switch leaves behind, so it is where the answer its readers get is held:
+// the tracker named as awaiting a restart, and a question about it refused
+// as `native_backend_needs_restart` rather than as a tracker the company does
+// not run. Mutation: answer [queries.ErrUnknown] for every absent half again
+// (internal/api's `nativeAbsent`), and the control fails.
 //
 // NOT PARALLEL: it swaps the process-wide logger to hear the engine's line.
 // See [TestMain].
@@ -100,6 +111,35 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 			}
 			if got := logs.count(t, "native_backend_needs_restart") - before; got != tc.want {
 				t.Errorf("the first tick said %d restart lines, want %d", got, tc.want)
+			}
+
+			// AND WHAT THE LINE SAYS TO THE LOG, THE NODE SAYS TO ITS
+			// READERS: the service is named as awaiting a restart, which the
+			// org projection carries, and a question about it is refused
+			// under the line's own code with no wait, rather than as a
+			// tracker this company does not run. A node that serves it
+			// names nothing and answers.
+			awaiting := e.AwaitingRestart(e.Company().Config)
+			kept := api.NativeSources(e).Work.(queries.Keeper).Kept()
+			if !tc.fromFile {
+				if len(awaiting) != 0 || kept != nil {
+					t.Errorf("a node serving Worklet awaits %v and answers its "+
+						"questions %v, want neither", awaiting, kept)
+				}
+				return
+			}
+			if !slices.Equal(awaiting, []string{"tracker"}) {
+				t.Errorf("the node awaits a restart for %v, want the tracker alone", awaiting)
+			}
+			if !errors.Is(kept, queries.ErrUnavailable) || errors.Is(kept, queries.ErrUnknown) {
+				t.Fatalf("a Worklet question on a node built without it is %v, want "+
+					"unavailable and never unknown", kept)
+			}
+			said := stream.UnavailableOf(kept)
+			if said.Refusal != string(httpjson.CodeNativeBackendNeedsRestart) ||
+				said.RetryAfter != 0 || !strings.Contains(said.Detail, "Worklet") {
+				t.Errorf("the refusal reads %+v, want native_backend_needs_restart "+
+					"naming Worklet with no wait", said)
 			}
 		})
 	}

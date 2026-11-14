@@ -841,7 +841,7 @@ func New(opts Options) (*App, error) {
 		// the CONFIGURATION alone: what each seat is doing comes from the
 		// live projection over the placement below.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
-		Org:    func() any { return orgProjection(opts.Sources.Company) },
+		Org:    func() any { return orgProjection(opts.Sources.Company, opts.Sources.AwaitingRestart) },
 		Tools:  func() any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half

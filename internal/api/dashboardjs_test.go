@@ -1433,6 +1433,11 @@ const (
 	// reads) and a kept range 257 (the per-reader range store the page header
 	// reads), and main's own change and the kit 35 more. So it moved to 410
 	// KiB, 2.24 seconds.
+	// Kit 0.126.3 (a menu's header beside its items in the menu's panel, the
+	// scroller a palette's results and a modal's body take a Tab stop by, a
+	// card counting its titles) with the frame's own first-dial chip in the
+	// page bar and the sidebar's landing rule took it to 408.7 KiB: 409 KiB,
+	// 2.23 seconds.
 	initialBudget = 410 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2465,6 +2470,16 @@ const (
 	// delete and run controls with the clock its times are drawn on added
 	// 20.1 KiB more, nearly all script, and took it to 6036.1 KiB
 	// (6,180,959 bytes, 62,516 over the last): 6037 KiB.
+	// A person's Gitlet writes (a new repository, its branches and their
+	// rules, a file edited, added or deleted, a commit reverted or picked, a
+	// change rebased, taken out of the queue or reverted, a finding
+	// answered, a repository deleted and restored), a room's archive and an
+	// administrator's retention, prune and erase, and the notice for a
+	// service the node starts on its restart added 46,844 bytes, nearly all
+	// script, and took it to 6020.8 KiB (6,165,287 bytes): 6021 KiB.
+	// Kit 0.126.3, its grid's named action column, a menu's panel and the
+	// palette's and modal's scrollers, added 5,634 bytes and took it to
+	// 6026.3 KiB (6,170,921 bytes): 6027 KiB.
 	treeBudget = 5<<20 + 891<<10
 )
 

@@ -2526,29 +2526,63 @@ function DialogHost({
   }
 }
 
+/**
+ * What the engine said about the whole configuration, on no one node.
+ *
+ * A REFUSAL AND AN ADVISORY ARE TWO BANNERS. A check that passed still
+ * answers its advisories (a setting that is valid and carries a consequence),
+ * and the engine runs the company with them; drawn in the critical tone they
+ * read as a configuration the engine refused. So the refusals keep the danger
+ * tone, and the advisories are a warning under a plain title
+ * that says the engine runs this, each with the link to where it is set.
+ */
 function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) {
+  const refusals = problems.filter((p) => p.severity === "problem");
+  const advisories = problems.filter((p) => p.severity === "warning");
   return (
-    <Callout
-      variant="danger"
-      className="org-builder-problems"
-      role="group"
-      aria-label="Problems with the whole configuration"
-      icon={<CircleAlertGlyph size="sm" />}
-    >
-      <ul className="col gap-1">
-        {problems.map((p, i) => (
-          <li key={i}>
-            <span>{engineSentence(p.message)}</span>
-            {p.link !== null && (
-              <>
-                {" "}
-                <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-    </Callout>
+    <>
+      {refusals.length > 0 && (
+        <Callout
+          variant="danger"
+          className="org-builder-problems"
+          role="group"
+          aria-label="Problems with the whole configuration"
+          icon={<CircleAlertGlyph size="sm" />}
+        >
+          <ProblemItems problems={refusals} />
+        </Callout>
+      )}
+      {advisories.length > 0 && (
+        <Callout
+          variant="warning"
+          className="org-builder-problems"
+          role="group"
+          aria-label="Warnings about the whole configuration"
+          icon={<TriangleAlertGlyph size="sm" />}
+          title={`The engine runs this company, with ${plural(advisories.length, "warning")} to know about`}
+        >
+          <ProblemItems problems={advisories} />
+        </Callout>
+      )}
+    </>
+  );
+}
+
+function ProblemItems({ problems }: { problems: readonly PlacedProblem[] }) {
+  return (
+    <ul className="col gap-1">
+      {problems.map((p, i) => (
+        <li key={i}>
+          <span>{engineSentence(p.message)}</span>
+          {p.link !== null && (
+            <>
+              {" "}
+              <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 

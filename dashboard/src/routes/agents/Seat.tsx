@@ -9,12 +9,14 @@
  *
  * # The actions are the page bar's
  *
- * Message (a task that ASKS the seat, filed through the New task sheet),
- * Assign task (an existing task handed over conditionally, or a new one),
- * and the seat's Pause or Resume, the control its row and its panel carry
- * (`components/seatControls.tsx`). The bar's "More" holds the rest: Direct
- * message where the company runs the engine's own chat and the reader holds
- * it (a remark rather than an ask, `DirectMessage.tsx`), Pause and stop while
+ * Message (a direct conversation with the seat where the company runs the
+ * engine's own chat and the reader holds Chatlet, and elsewhere a task that
+ * ASKS the seat, filed through the New task sheet: `lib/seatMessage.ts`'
+ * `useSeatMessage`), Assign task (an existing task handed over conditionally,
+ * or a new one), and the seat's Pause or Resume, the control its row and its
+ * panel carry (`components/seatControls.tsx`). The bar's "More" holds the
+ * rest: Ask as a task where Message is the conversation (`AskTask.tsx`),
+ * Pause and stop while
  * a turn runs (a paused seat's still-finishing turn included), Steer, and the
  * secondary pair, "Events" (an agent's only: a person publishes no events
  * under a seat id for `seat=` to narrow by) and "Edit in org". All of them in
@@ -76,7 +78,7 @@
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { EDITOR_OPEN, STRUCTURE_PATH, STRUCTURE_TABLE_PATH } from "~/app/routes.ts";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { useDirectMessageEntry } from "./DirectMessage.tsx";
+import { useAskTaskEntry } from "./AskTask.tsx";
 import { holdScroll, placeOf, scrollerOf } from "~/lib/scroller.ts";
 import {
   Button,
@@ -114,8 +116,8 @@ import {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
-import { useOpenNewTask } from "~/app/newTask.ts";
 import { AnswerRunButton, AssignToSeatButton, MessageSeatButton } from "~/components/writes.tsx";
+import { useSeatMessage } from "~/lib/seatMessage.ts";
 import { SeatControlButtons, controlHeld, useSeatControls } from "~/components/seatControls.tsx";
 import { PAUSE_NOTE_WORDS, pauseNoteOf, useLiveOrg } from "~/lib/seatLive.ts";
 import { TechnicalDetails } from "~/components/common.tsx";
@@ -160,7 +162,7 @@ import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -292,7 +294,6 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   // WHAT THE PHONE'S "MORE" HOLDS: every action but the one the bar keeps in
   // view (see the file's doc), each opening what its inline control opens.
-  const openNewTask = useOpenNewTask();
   const [assigning, setAssigning] = useState(false);
   const live = useLiveOrg().live.get(seat?.handle ?? "");
   const controls = useSeatControls();
@@ -302,14 +303,14 @@ export function SeatScreen({ handle }: { handle: string }) {
   const watching = !human && activityOf(agent) === "working" ? turnIdOf(agent) : "";
   // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
   // held in the words the inline control is.
-  const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
+  const message = useSeatMessage(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   const steerAccess = useWriteAccess("steer_turn");
   // THE ENTRIES BOTH "MORE" MENUS HOLD: the header's, beside the actions it
   // keeps in view, and a phone's, which folds every action into it.
   const steerHeld = live ? controlHeld(steerAccess, live) : undefined;
-  const directEntry = useDirectMessageEntry(seat?.handle ?? "");
+  const askEntry = useAskTaskEntry(seat?.handle ?? "");
   const turnEntries =
     live && seat
       ? [
@@ -375,18 +376,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(paused && runs.tracker
+          ...(paused && message
             ? [
                 {
                   key: "message",
                   label: "Message",
                   icon: <MessageSquareGlyph size="sm" />,
-                  onSelect: () => openNewTask({ assignee: seat.handle, ask: seat.handle }),
-                  ...menuHold(messageAccess),
+                  onSelect: message.open,
+                  ...(message.held ? { disabled: true, description: message.held } : {}),
                 },
               ]
             : []),
-          ...directEntry,
+          ...askEntry,
           ...(runs.tracker
             ? [
                 {
@@ -453,13 +454,15 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        {/* WORKLET'S TWO WRITES, Message here and Assign task after
-            chat's door, and their wrappers with them: where the company runs
-            no Worklet the buttons draw nothing, and their empty spans
-            still took the bar's gap. */}
-        {runs.tracker && (
+        {/* MESSAGE AND ASSIGN TASK, and their wrappers with them: where
+            there is no Message (no Chatlet to open a conversation in and no
+            Worklet to file an ask in) or no Worklet for Assign task, the
+            buttons draw nothing, and their empty spans still took the bar's
+            gap. */}
+        {message && (
           <span className={paused ? "page-action-folds" : undefined}>
-            {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+            {/* A DIRECT CONVERSATION WHERE ONE CAN BE, the ask elsewhere, and
+                held on your own seat by itself (`useSeatMessage`), as
                 everywhere the button is drawn. */}
             <MessageSeatButton handle={seat.handle} />
           </span>
@@ -488,7 +491,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             icon={<EllipsisGlyph size="sm" />}
             triggerVariant="ghost"
             align="end"
-            items={[...directEntry, ...turnEntries, ...placeEntries]}
+            items={[...askEntry, ...turnEntries, ...placeEntries]}
           />
         </span>
       </PageActions>

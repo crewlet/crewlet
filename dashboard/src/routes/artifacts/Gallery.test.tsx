@@ -36,6 +36,7 @@ vi.mock("~/lib/viewer.ts", async () => {
     useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
     // THE GRANTS A GATED LINK WOULD ASK WITH, the same reader's.
     useHeldReading: () => ({ login: "token:review", grants: viewerAdmin ? ["admin"] : [] }),
+    useHeldGrants: () => (viewerAdmin ? ["admin"] : []),
   };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
@@ -568,8 +569,41 @@ test("a reader who cannot make an artifact is not told to start one above", () =
   items = [];
   mount("all");
   expect(screen.queryByRole("region", { name: "Start a new artifact" })).toBeNull();
-  expect(screen.getByText("Artifacts shared with you appear here.")).toBeTruthy();
+  expect(
+    screen.getByText("Artifacts shared with you, your team or the company appear here."),
+  ).toBeTruthy();
   expect(screen.queryByText(/Start one above/)).toBeNull();
+});
+
+// AN EMPTY ALL SAYS WHAT IT COVERS, never that nothing exists: the listing is
+// what the reader owns or is shared with, so it is empty for an administrator
+// who acts as no seat while the company holds artifacts. Mutation: say
+// "Nothing here yet" again and the first case goes red; drop the
+// administrator's way on and the second does.
+test("an empty All names what the list covers", () => {
+  items = [];
+  mount("all");
+  expect(screen.getByText("Nothing is yours or shared with you yet")).toBeTruthy();
+  expect(screen.queryByText("Nothing here yet")).toBeNull();
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
+});
+
+test("an empty All sends an administrator on to every artifact's history", () => {
+  viewerAdmin = true;
+  items = [];
+  mount("all");
+  expect(screen.getByText("Nothing is yours or shared with you yet")).toBeTruthy();
+  expect(screen.getByText(/the engine records each one you open/)).toBeTruthy();
+  const link = screen.getByRole("link", { name: "See every artifact in the audit log" });
+  expect(link.getAttribute("href")).toBe("#/settings/audit?kind=artifacts");
+  cleanup();
+  // ONLY ALL, and only while it is empty: Yours is about what the reader made.
+  mount("yours", "#/artifacts/yours");
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
+  cleanup();
+  items = [row({})];
+  mount("all");
+  expect(screen.queryByRole("link", { name: /audit log/ })).toBeNull();
 });
 
 // THE GALLERY ENDS ON ITS ARTIFACTS: the company's storage quotas are

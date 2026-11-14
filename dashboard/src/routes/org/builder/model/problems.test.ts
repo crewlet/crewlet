@@ -104,6 +104,24 @@ describe("placeProblems", () => {
     ]);
   });
 
+  // WHERE AN ENTRY RUNS IS CHOSEN ON SETTINGS › MODELS, so an advisory at a
+  // model entry or at the sandbox default links there.
+  test("a model entry's or the sandbox default's warning links to Settings › Models", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      warnings: [
+        warning(["providers", "llm", "claude", "run_in"]),
+        warning(["providers", "sandbox", "default_run_in"]),
+        warning(["providers", "embeddings", "model"]),
+      ],
+    });
+    expect(index.document.map((p) => [p.severity, p.link])).toEqual([
+      ["warning", "models"],
+      ["warning", "models"],
+      ["warning", null],
+    ]);
+  });
+
   test("what the builder cannot fix stays at document level, linked to where it is fixed", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {
@@ -118,7 +136,8 @@ describe("placeProblems", () => {
     expect(index.document.map((p) => [p.node, p.link])).toEqual([
       [null, "integrations"],
       [null, "schedules"],
-      [null, null],
+      // The model catalogue's entries are Settings › Models'.
+      [null, "models"],
       [null, null],
       [null, null],
     ]);

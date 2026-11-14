@@ -63,6 +63,7 @@ import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Commits, Notified, Provenance } from "./Facts.tsx";
+import { RevertChangePanel } from "./ChangeWrites.tsx";
 import { MergePanel } from "./Merge.tsx";
 import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
 
@@ -134,6 +135,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
       <header>
         <ChangeHeader change={change} />
         <MergePanel change={change} />
+        <RevertChangePanel change={change} />
         <Tabs
           overflow="menu"
           variant="underline"

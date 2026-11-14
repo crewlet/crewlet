@@ -43,15 +43,24 @@
  * chart, and an owner who acts as no seat by their login's words
  * (`lib/artifacts/people.ts`), never the credential's spelling.
  *
- * # Storage
+ * # What All covers, said when it is empty
  *
- * What the company holds against its quotas is an administrator's overview,
- * not a reader's question, so it is one quiet line at the foot of All rather
- * than a row of tiles above the work.
+ * The listing is the reader's own: what they own and what is shared with
+ * them, their team or the company. The engine shows no row by the admin path
+ * (an administrator's read of somebody's private artifact is an override it
+ * records, one artifact at a time), so an administrator who acts as no seat
+ * can hold an empty All in a company full of artifacts. The empty state says
+ * what the list covers rather than that nothing exists, and gives an
+ * administrator the way on they do have: the audit log's Artifacts trail,
+ * every artifact's history, whose rows open the artifact with that read
+ * recorded.
+ *
+ * What the company holds against its quotas is Settings › File storage's, and
+ * the gallery points nowhere at it.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArtifactMakeRow, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
+import { ArtifactMakeRow, ButtonLink, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import {
@@ -62,8 +71,8 @@ import {
 } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { useViewer } from "~/lib/viewer.ts";
-import { offeredKinds } from "~/app/nav.ts";
+import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
+import { offeredKinds, settingsSectionOpen } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
@@ -130,7 +139,10 @@ const MAKE_DETAILS: Readonly<Record<MakeKind, string>> = {
  * nothing.
  */
 const EMPTY_READER: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
-  all: { title: "Nothing here yet", hint: "Artifacts shared with you appear here." },
+  all: {
+    title: "No artifacts are shared with you yet",
+    hint: "Artifacts shared with you, your team or the company appear here.",
+  },
   yours: {
     title: "You have not made an artifact yet",
     hint: "Ask an agent to make one for you, and it appears here.",
@@ -141,11 +153,16 @@ const EMPTY_READER: Readonly<Record<ArtifactSection, { title: string; hint: stri
   },
 };
 
-/** What a section says when it holds nothing, and what to do about it. */
+/**
+ * What a section says when it holds nothing, and what to do about it.
+ *
+ * ALL NAMES WHAT IT COVERS. "Nothing here yet" read as "the company has no
+ * artifacts", which was untrue for every reader whose own list was empty.
+ */
 const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
   all: {
-    title: "Nothing here yet",
-    hint: "Start one above, or ask an agent to make one. Artifacts shared with you appear here too.",
+    title: "Nothing is yours or shared with you yet",
+    hint: "Start one above, or ask an agent to make one. Artifacts shared with you, your team or the company appear here too.",
   },
   yours: {
     title: "You have not made an artifact yet",
@@ -156,6 +173,33 @@ const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> 
     hint: "When somebody shares an artifact with you, your team or the company, it appears here.",
   },
 };
+
+/** Where an administrator reads every artifact's history: the audit log, cut to its Artifacts trail. */
+export const ARTIFACT_TRAIL_PATH: readonly string[] = ["settings", "audit"];
+export const ARTIFACT_TRAIL_QUERY: Readonly<Record<string, string>> = { kind: "artifacts" };
+
+/**
+ * An empty All for an administrator: the same claim, and the company's other
+ * artifacts where they can be reached. The link is offered by the audit log's
+ * own lock (`settingsSectionOpen`), so it is drawn for exactly the readers
+ * that page opens for.
+ */
+function emptyAllForAdmin(base: { title: string; hint: string }) {
+  return {
+    title: base.title,
+    hint: (
+      <>
+        {base.hint} As an administrator you can open any other artifact in the company from the
+        audit log, and the engine records each one you open.
+      </>
+    ),
+    action: (
+      <ButtonLink variant="secondary" href={href(ARTIFACT_TRAIL_PATH, ARTIFACT_TRAIL_QUERY)}>
+        See every artifact in the audit log
+      </ButtonLink>
+    ),
+  };
+}
 
 export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   const people = useArtifactPeople();
@@ -192,6 +236,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   const pinnedParams = useMemo(() => ({ ...params, pinned: true }), [params]);
   const pinned = useListing(pinnedParams, section === "all" && !trashed);
   const author = useArtifactAccess({ app: true });
+  // WHETHER THE AUDIT LOG OPENS FOR THIS READER, which is who an empty All
+  // can send on to every artifact's history.
+  const trail = settingsSectionOpen("audit", useHeldGrants() ?? []);
   const refetch = useCallback(() => {
     listing.refetch();
     pinned.refetch();
@@ -350,7 +397,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
                 ? noMatch(q.trim(), kind)
                 : // THE COPY FOLLOWS THE ROW: offered to make one only where
                   // the Make row is drawn, by the same access check.
-                  (author.can ? EMPTY : EMPTY_READER)[section]
+                  section === "all" && trail
+                  ? emptyAllForAdmin((author.can ? EMPTY : EMPTY_READER).all)
+                  : (author.can ? EMPTY : EMPTY_READER)[section]
             : undefined
         }
       >

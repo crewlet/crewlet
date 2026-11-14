@@ -258,10 +258,12 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
 export const OWN_SEAT_MESSAGE = "This is your own seat.";
 
 /**
- * Whether this browser may MESSAGE the seat `handle` — file an ask of it — and
- * why not: the act's own access, HELD on the reader's own seat.
+ * Whether this browser may ASK the seat `handle`, file a task that asks it,
+ * and why not: the act's own access, HELD on the reader's own seat. It is
+ * Message where no direct conversation can be, and "Ask as a task" where one
+ * can (`lib/seatMessage.ts`).
  *
- * A message files an ask the seat owes an answer on, and on your own seat that
+ * An ask is a task the seat owes an answer on, and on your own seat that
  * is a question only you could answer. THE RULE IS THE CONTROL'S, never each
  * screen's: the seat page wrapped its Message in a hold while the seat peek
  * drew the same button bare, so a person opening their own seat from the
@@ -300,14 +302,14 @@ export const NO_SEAT_DIRECT =
  * in the company's own chat — `open_dm`'s access, HELD on the reader's own
  * seat — or null where none is offered at all.
  *
- * OFFERED BESIDE Message, never instead of it, and only where it can mean
- * something: the company runs Chatlet (`runs.chat`; on a vendor's, the
- * conversation is there and this engine holds no room for it) and the reader
- * holds Chatlet. A person writes to a seat there as they would
- * to a colleague: a remark that obliges nothing, where Message files an ask
- * the seat owes an answer on. Held, as Message is, on the reader's own seat —
- * the engine adds the author to every direct conversation, so one with only
- * yourself in it is no conversation.
+ * IT IS MESSAGE where it can mean something (`lib/seatMessage.ts`): the
+ * company runs Chatlet (`runs.chat`; on a vendor's, the conversation is there
+ * and this engine holds no room for it) and the reader holds Chatlet. A
+ * person writes to a seat there as they would to a colleague: a remark that
+ * obliges nothing, where an ask files a task the seat owes an answer on.
+ * Held, as the ask is, on the reader's own seat: the engine adds the author
+ * to every direct conversation, so one with only yourself in it is no
+ * conversation.
  *
  * AND HELD FOR A READER WITH NO SEAT, in Chatlet's own words: chat is read and
  * written as a seat, so the engine serves `open_dm` to nobody acting as

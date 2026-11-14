@@ -15,7 +15,7 @@
  */
 
 import { useId, useMemo, useState, type ReactNode } from "react";
-import { Button, Card } from "@crewlethq/ui";
+import { Button, Card, HeadingLevelProvider } from "@crewlethq/ui";
 import { FileTextGlyph, FolderGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { StatusMark } from "~/components/work.tsx";
@@ -116,11 +116,16 @@ export function Connections({
       <h2 className="knowledge-section-title" id={id}>
         Connections
       </h2>
-      <div className="knowledge-connections-grid">
-        <LinkedFrom links={links} status={linksStatus} />
-        <ReadBy reads={reads} error={readsError} who={who} now={now} />
-        <UnderThisPage pages={under} total={underTotal} />
-      </div>
+      {/* ITS CARDS ARE PARTS OF IT, one level under its h2: a card's title
+          takes the level the surface declares, and a section of our own
+          declares none, so they stood beside Connections as its siblings. */}
+      <HeadingLevelProvider level={3}>
+        <div className="knowledge-connections-grid">
+          <LinkedFrom links={links} status={linksStatus} />
+          <ReadBy reads={reads} error={readsError} who={who} now={now} />
+          <UnderThisPage pages={under} total={underTotal} />
+        </div>
+      </HeadingLevelProvider>
     </section>
   );
 }

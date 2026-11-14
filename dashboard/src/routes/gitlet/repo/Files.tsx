@@ -93,6 +93,13 @@ import {
 import { commitHref, repoHref } from "../paths.ts";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import {
+  FileWriteButtons,
+  FirstFileButton,
+  NewFileButton,
+  targetOf,
+  type CommitTarget,
+} from "./FileWrites.tsx";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
 type PathPart = CodeTreeEntry | CodeBlobAnswer;
@@ -117,8 +124,18 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
   const [lens, setLens] = useParam("lens", "", "filter");
   const [lines, setLines] = useParam("lines", "", "filter");
   if (!repo.head && ref === "") {
+    // AN EMPTY REPOSITORY IS FILLED HERE TOO: its first file is the root
+    // commit that makes its default branch (`FileWrites.tsx`).
     return (
-      <p className="muted">Nobody has pushed a branch yet: {repo.default_branch} holds no file.</p>
+      <Stack gap={2}>
+        <p className="muted">
+          Nobody has pushed a branch yet: {repo.default_branch} holds no file. Add its first file
+          here, or push a branch from a clone.
+        </p>
+        <span>
+          <FirstFileButton repo={repo} />
+        </span>
+      </Stack>
     );
   }
   const place = { repo, revisions, rev: ref, path, onRev: setRef };
@@ -168,6 +185,8 @@ function RootListing({ repo, revisions, rev, path, onRev }: Place) {
         path={path}
         onRev={onRev}
         commit={commitOf(rev, first.data)}
+        target={targetOf(rev, first.data)}
+        dir
       />
       <PathBody repo={repo} rev={rev} path={path} first={first} paged={paged} />
     </Stack>
@@ -229,6 +248,9 @@ function PathView({
         commit={commit}
         lens={file ? { blame, onLens } : undefined}
         lines={picked}
+        target={targetOf(rev, first.data)}
+        file={file}
+        dir={Boolean(first.data?.tree)}
       />
       {file && blame ? (
         // THE BLAME IS READ AT THE COMMIT THE FILE WAS, where the file's read
@@ -519,10 +541,19 @@ function FilesBar({
   commit,
   lens,
   lines,
+  target,
+  file,
+  dir = false,
 }: Place & {
   commit: string;
   lens?: { blame: boolean; onLens: (blame: boolean) => void };
   lines?: LineRun | null;
+  /** Where a commit from here lands ([targetOf]). */
+  target: CommitTarget;
+  /** The file on screen, where the path names one: what Edit and Delete file write. */
+  file?: CodeBlobAnswer | undefined;
+  /** The path is a directory (or the root), which takes a new file. */
+  dir?: boolean;
 }) {
   const at = (p: string) => repoHref(repo.name, { tab: "files", ref: rev, path: p });
   return (
@@ -578,6 +609,8 @@ function FilesBar({
           Permalink
         </ButtonLink>
       )}
+      {file && <FileWriteButtons repo={repo} target={target} path={path} file={file} />}
+      {dir && <NewFileButton repo={repo} target={target} dir={path} />}
     </PageToolbar>
   );
 }

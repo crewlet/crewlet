@@ -462,11 +462,12 @@ export const ACTIONS = {
   update_channel: {
     // A ROOM'S TOPIC AND DESCRIPTION DIALOGS, and only what moved; the
     // template a person set them from, which the transcript records as one
-    // line; and an administrator's auto-join switch in Add people. Archiving
-    // is not offered there (it closes the room for everybody in it and is its
-    // creator's, its unit's lead's or an admin's), and neither is how long the
-    // room keeps what is said, which is an admin's own gesture.
-    args: ["channel", "topic", "purpose", "template", "auto_join"],
+    // line; an administrator's auto-join switch in Add people; and Archive
+    // room or Reopen room (`archived`), which closes the room to new messages
+    // for everybody in it and is its creator's, its unit's lead's or an
+    // admin's. How long the room keeps what is said is not this tool's: it is
+    // an admin's own route (`PUT /chatlet/channels/{id}/retention`).
+    args: ["channel", "topic", "purpose", "template", "auto_join", "archived"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
@@ -578,6 +579,102 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A NEW PROJECT REPOSITORY (`routes/gitlet/NewRepo.tsx`): its name, the unit
+  // that owns it, and what it is, which seats read it and its default branch
+  // where the person says so. A scratch repository is a seat's own and is
+  // never made here.
+  code_create_repo: {
+    args: ["name", "owner", "description", "default_branch", "visibility"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // DELETE AND RESTORE (`routes/gitlet/repo/RepoLife.tsx`): a delete asked
+  // only once its name is typed, restorable until its purge, with the reason
+  // the person gives; a restore as it was.
+  code_delete_repo: {
+    args: ["repo", "reason"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_restore_repo: {
+    args: ["repo"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A PROTECTION RULE (`routes/gitlet/repo/Protect.tsx`): who pushes to the
+  // refs a pattern names, whether a push may force or delete them, and the
+  // parts of its merge gate a form states; each field sent changes that field
+  // alone. `remove` takes the rule away and `remove_gate` its gate.
+  code_protect_branch: {
+    args: [
+      "repo",
+      "pattern",
+      "direct_push",
+      "allow_force",
+      "allow_delete",
+      "remove",
+      "merge_by",
+      "approvals",
+      "checks",
+      "owners_approve",
+      "delete_source",
+      "remove_gate",
+    ],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A BRANCH MADE AND DELETED (`routes/gitlet/repo/BranchWrites.tsx`): made
+  // at a revision, and deleted at the head the listing showed
+  // (`expected_head`), so one that moved since is refused rather than lost.
+  code_create_branch: {
+    args: ["repo", "branch", "at"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_branch: {
+    args: ["repo", "branch", "expected_head"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A FILE COMMITTED FROM THE BROWSER (`routes/gitlet/repo/FileWrites.tsx`): one
+  // commit on a branch, at the head the file was read at (`expected_head`),
+  // that writes, adds or deletes one file with the message the person gives.
+  code_commit_files: {
+    args: ["repo", "branch", "expected_head", "message", "files"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A COMMIT REVERTED OR PICKED ONTO A BRANCH
+  // (`routes/gitlet/commit/CommitWrites.tsx`): one commit on the branch
+  // chosen, at the head its listing showed.
+  code_revert: {
+    args: ["repo", "branch", "expected_head", "commit", "message"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_cherry_pick: {
+    args: ["repo", "branch", "expected_head", "commit", "message"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
   // A CHANGE'S PAGE (`routes/gitlet/change/`). Every one lands on the code log,
   // whose position raises this tab's code floor, and every question a change
   // page reads is in that domain's session set — its routing too — so none
@@ -681,6 +778,40 @@ export const ACTIONS = {
     // did not pass, each at its next attempt (`all_failed`), on the checks
     // log the change's checks tab reads.
     args: ["repo", "change", "all_failed"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A CHANGE'S LATER LIFE (`routes/gitlet/change/ChangeWrites.tsx`): its
+  // commits REBASED onto its target's tip from the head on screen; a queued
+  // change TAKEN OUT OF ITS QUEUE, which leaves it open; and a merged one
+  // REVERTED by a change of its own, merged as well where the person asks.
+  code_rebase_change: {
+    args: ["repo", "change", "expected_head"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_dequeue_change: {
+    args: ["repo", "change"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_revert_change: {
+    args: ["repo", "change", "merge"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A FINDING ANSWERED (`routes/gitlet/change/FindingAnswer.tsx`): an
+  // author's resolved, won't fix or disputed, or a dismissal, with a note.
+  code_resolve_finding: {
+    args: ["repo", "change", "findings", "resolution", "note"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
