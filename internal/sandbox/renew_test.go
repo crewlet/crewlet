@@ -932,12 +932,14 @@ func brokerTakes(rig *coordRig) {
 // node publishes it again on its own timer, on the hand-back's spacing (a
 // second, doubling to thirty), until one lands; and drops it once the run
 // settles or the seat is let go, when announcing the job is no longer this
-// node's to do.
+// node's to do, or once a later re-fire's own announcement afresh lands, which
+// carries the completion in its place, one announcement in flight.
 //
 // Mutation: leave a refused re-fire's announcement unmade, and nothing carries
 // the completion; arm it again at a fixed spacing; keep it past the seat's
 // release, or past the run's settle, and this node announces a completion that
-// is no longer its own to announce.
+// is no longer its own to announce; keep it past a later re-fire's
+// announcement that landed, and the completion has two in flight.
 func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 	t.Parallel()
 
@@ -997,6 +999,54 @@ func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 			rig.fireRetries()
 			if renewed := renewedOn(rig); len(renewed) != 0 {
 				t.Fatalf("a settled run still had its completion announced %d times", len(renewed))
+			}
+		})
+	})
+
+	t.Run("dropped when a later re-fire's announcement lands", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			rig, store := refusedRefire(t)
+			brokerTakes(rig)
+			// THE HOST'S STORE ANSWERS A COLLECTION whose resume then fails:
+			// the clock goes with that answer, and the run, handed back for
+			// its retry, has not settled, so the refused announcement is still
+			// owed.
+			store.answer()
+			rig.resumer.failWith(errors.New("the model provider did not answer"))
+			if err := collectAgain(t, rig); err == nil {
+				t.Fatal("the collection whose resume failed was not handed back")
+			}
+			if delays := rig.retries.delays(); clocked(rig) ||
+				!slices.Equal(delays, []time.Duration{answerRetryDelay(1)}) {
+				t.Fatalf("the premise: clocked %v with attempts armed after %v; want the clock gone with the "+
+					"host's answer and the refused announcement still owed", clocked(rig), delays)
+			}
+			// THE HOST'S STORE GOES SILENT AGAIN, and a completion the gate
+			// refuses meanwhile, no clock running, is kept and re-fired once
+			// its condition clears, into a collection that starts the clock
+			// again: that re-fire's own announcement afresh lands.
+			store.silence("Get")
+			rig.resumer.failWith(nil)
+			gate := gated(rig)
+			gate.refuse(true)
+			payload, kept := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+				t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+			}
+			gate.refuse(false)
+			rig.coordinator.Readmit(conditionDrain, "swe")
+			synctest.Wait()
+			if renewed := renewedOn(rig); len(renewed) != 1 || !clocked(rig) {
+				t.Fatalf("the later re-fire announced the completion %d times, clocked %v; want it announced "+
+					"afresh once, its own collection having started the clock", len(renewed), clocked(rig))
+			}
+			// ONE ANNOUNCEMENT IN FLIGHT: the one still owed is that one now.
+			if fired := rig.fireRetries(); fired != 0 {
+				t.Fatalf("%d attempts were still armed once a later re-fire's announcement landed", fired)
+			}
+			if renewed := renewedOn(rig); len(renewed) != 1 {
+				t.Fatalf("the completion was announced %d times; want once, the later re-fire's announcement "+
+					"standing for the one still owed", len(renewed))
 			}
 		})
 	})
