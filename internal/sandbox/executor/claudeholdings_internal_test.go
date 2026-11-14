@@ -677,37 +677,53 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // record of that reply or a plain results record, the result after that first
 // record, no result of the reply's calls before it, no compaction's boundary
 // at or after it, and no second Poll call in its reply; and its id names no
-// other call the request may fold it with. Each case is a thread of the
-// facility's records ([rcReply]), every reply of its own id and every record
-// of its own time, whose order the resume hands is stated beside it. Where the
-// request does pair a call the rule tells, the case is named an over-tell:
-// the rule is conservative there, knowingly.
+// other call the request may fold it with; a use whose reply carries no id
+// is its own test's ([TestACallWhoseUseCarriesNoReplyIDIsTold]). Each case is
+// a thread of the facility's records ([rcReply]), every reply of its own id
+// and every record of its own time, whose order the resume hands is stated
+// beside it. Where the request does pair a call the rule tells, the case is
+// named an over-tell: the rule is conservative there, knowingly.
 //
 // Told: a reply of another id between the use and its result, the result
 // recovered after it; another reply between the use's reply's first record
-// and the use, folded back past it; a prompt there, and one a retraction
+// and the use, folded back past it; another reply between the use and its
+// result, both recovered beside the reply's first record, which another of
+// its records folds back past it (R1b); a prompt there, and one a retraction
 // leaves there once it took the results record that kept the reply folding
 // together; a microcompaction's boundary and another reply; the result placed
 // before the use's reply by the walk's fallback past a parent naming no
-// record; a use with no reply id, carrying a requestId, merged back across
-// other messages, or carrying none; a result of another of the reply's calls
-// the walk's fallback places before it; a compaction's boundary handed after
-// it; a second Poll call in its reply; a batch naming the call; its id one
-// split from another call's, or another split from it; a withdrawn attempt
-// the walk does not hand, and a use the retraction filter takes beside its
-// reply's handed first record. And the over-tells: another reply, or a
-// prompt, between the reply's first record and the use with the result before
-// it; a prompt with another call's result between the reply's records; a
-// microcompaction's boundary before the use; an id-less use alone, with a
-// requestId or without; and a result marked meta. Held: each case's control,
-// a use of the reply's second record, a result recovered before the use but
-// after the reply's first record, and one written before the reply, which the
-// resume recovers after its first record all the same, as it does another
-// call's result written there; a record of the reply after the result, a
-// results record of another call between the reply's records, a
-// microcompaction's boundary before the reply, a result marked not meta, two
-// calls of one reply each with its own result, one Poll call alone, and an id
-// of a split one's form where no call carries the id it reads as split from.
+// record; a result of another of the reply's calls the walk's fallback places
+// before it; a compaction's boundary handed after it; a second Poll call in
+// its reply; a batch naming the call; its id one split from another call's,
+// or another split from it; a withdrawn attempt the walk does not hand, and a
+// use the retraction filter takes beside its reply's handed first record. And
+// the over-tells: another reply, or a prompt, between the reply's first record
+// and the use with the result before it; a prompt with another call's result
+// between the reply's records; a microcompaction's boundary before the use;
+// and a result marked meta. Held: each case's control, a use of the reply's
+// second record, a result recovered before the use but after the reply's
+// first record, and one written before the reply, which the resume recovers
+// after its first record all the same, as it does another call's result
+// written there; a record of the reply after the result, a results record of
+// another call between the reply's records, a microcompaction's boundary
+// before the reply, a result marked not meta, two calls of one reply each with
+// its own result, one Poll call alone, and an id of a split one's form where
+// no call carries the id it reads as split from. No reading, so told: a
+// result hung under a reply between it and its use (ADJ1, R1a, R1c), which
+// tengu_foamy_spring may hang under its call's record (whyResultByCall).
+//
+// ON A COMPACTED MAIN THREAD, the facility's own relink and leaf-set cases
+// read whole, the call x1 written after the boundary: held where the relinked
+// order hands it whole, under the summary the anchor (F1n and both its
+// controls), past a lagging checkpoint the resume does not start from (I3a,
+// I3d to I3i, R2b, R2c, S1), from a checkpoint the boundary or the last record
+// a stop hook's summary (S2, S3), and where an earlier boundary named what it
+// kept, a list of none stood beside a segment, or a segment alone relinked
+// (B1 to B3); told where a checkpoint in the leaf set leaves the call off the
+// conversation (I3b, I3c, R2a, and R3a by a segment alone); and no reading
+// where the anchor holds the call or lies between it and its result (F1a to
+// F1f).
+//
 // In a subagent's thread the rule reads each order the subagent's own load
 // hands (newThreadChain(agent)), its subagent reported: another reply inside
 // the use's reply is told, and the result written before its use and handed
@@ -715,17 +731,21 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 //
 // Mutation: pair a subagent's call by its records' lines in the file, and the
 // subagent's use inside a reply split by another is held, and the result
-// written before its use told; tell every call, and each held case is told; drop C0, and the
-// id-less uses alone are held; take F for the use's record, not its reply's
-// first, and the use folded back past another reply is held; drop the test of
-// another reply in the stretch, and so is that use; read every user record as
-// plain, and the prompts' cases are held; read every system record as plain,
-// and the microcompaction's boundary before the use is held; drop the result
-// after F with C5, which holds it too, and the result the fallback places
-// before the reply is held; drop C5 alone, and the early result is held; drop
-// C6, and the boundary after the use is held; drop C7, and the second Poll is
-// held; drop the batch's or the split ids' fold, and each is held; or drop C2
-// and the order's own test of the use, and the retracted use is held.
+// written before its use told; tell every call, and each held case is told;
+// take F for the use's record, not its reply's first, and the use folded back
+// past another reply is held; drop the test of another reply in the stretch,
+// and so is that use, and R1b's; read every user record as plain, and the
+// prompts' cases are held; read every system record as plain, and the
+// microcompaction's boundary before the use is held; drop the result after F
+// with C5, which holds it too, and the result the fallback places before the
+// reply is held; drop C5 alone, and the early result is held; drop C6, and the
+// boundary after the use is held; drop C7, and the second Poll is held; drop
+// the batch's or the split ids' fold, and each is held; drop C2 and the
+// order's own test of the use, and the retracted use is held; read on past a
+// main thread the model cannot place at its end, and each no-reading case is
+// read; take a system record for a turn record in the leaf set's pick, and
+// R2a's call is held; or read Y1t directly in that pick, and I3b's and I3c's
+// are.
 func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testing.T) {
 	t.Parallel()
 	const x, y = "toolu_pair_x", "toolu_pair_y"
@@ -736,16 +756,6 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 	results := func(parent, n int, ids ...string) string { return rcResults(parent, n, n*100, ids...) }
 	prompt := func(parent, n int) string { return rcPrompt(parent, n, n*100) }
 	micro := func(parent, n int) string { return rcSystem(parent, n, n*100, subtypeMicrocompactBoundary, "") }
-	// idless is a reply's record whose message carries no id, and a requestId
-	// where requested.
-	idless := func(t *testing.T, line string, requested bool) string {
-		t.Helper()
-		line = ctReplace(t, line, `"id":"","type":"message",`, `"type":"message",`)
-		if requested {
-			line = ctReplace(t, line, `"type":"assistant",`, `"type":"assistant","requestId":"req_pair",`)
-		}
-		return line
-	}
 	polls := func(ids ...string) string {
 		blocks := make([]string, len(ids))
 		for i, id := range ids {
@@ -757,13 +767,34 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 	for name, tc := range map[string]struct {
 		lines []string
 		// held is whether x is held, and y where pair; id is the call asked in
-		// x's place, where it is not "".
-		held, pair bool
-		id         string
+		// x's place, where it is not ""; unread is a thread the model cannot
+		// place, its result hung under another record than its call's
+		// (whyResultByCall), so no reading.
+		held, pair, unread bool
+		id                 string
 	}{
 		// [1, 2, 3, 4]
 		"the use, then its result": {lines: []string{brief, reply(1, 2, "msg_m", rcCalls(x)),
 			results(2, 3, x), reply(3, 4, "msg_after", said)}, held: true},
+		// ADJ1: the result under the reply between, all on the chain.
+		"another reply between the use and its result, the result under it": {lines: []string{brief,
+			reply(1, 2, "msg_m", rcCalls(x)), reply(2, 3, "msg_c", said), results(3, 4, x),
+			reply(4, 5, "msg_after", said)}, unread: true},
+		// R1a: the result under the first record of the use's reply, written
+		// before another reply, a prompt and the use.
+		"the result under its reply's first record, another reply and a prompt before the use": {lines: []string{
+			brief, reply(1, 2, "msg_m", said), results(2, 3, x), reply(2, 4, "msg_c", said), prompt(4, 5),
+			reply(5, 6, "msg_m", rcCalls(x)), reply(6, 7, "msg_after", said)}, unread: true},
+		// R1b, [1, 2, 3, 4, 5, 6, 7]: the use and its result recovered beside
+		// 2, 4 of msg_c between them, 6 folding back into 2 past it.
+		"another reply between the use and its result, its reply going on after it": {lines: []string{brief,
+			reply(1, 2, "msg_m", said), reply(2, 3, "msg_m", rcCalls(x)), reply(2, 4, "msg_c", said),
+			results(3, 5, x), reply(4, 6, "msg_m", said), reply(6, 7, "msg_after", said)}},
+		// R1c: the result under the reply between, the use its reply's only
+		// record.
+		"another reply between the use and its result, the use's reply one record": {lines: []string{brief,
+			reply(1, 2, "msg_m", rcCalls(x)), reply(2, 3, "msg_c", said), results(3, 4, x),
+			reply(4, 5, "msg_after", said)}, unread: true},
 		// [1, 2, 3, 4, 5, 6]: the result, recovered beside msg_m, before G.
 		"another reply between the use and its result": {lines: []string{brief,
 			reply(1, 2, "msg_m", rcCalls(x)), reply(2, 3, "msg_c", said), results(2, 4, x),
@@ -838,25 +869,6 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		"the result stamped after the walk's fallback": {lines: []string{brief,
 			rcReply(rcNowhere, 2, "msg_m", 1000, rcCalls(x)), rcResults(2, 3, 1500, x),
 			rcReply(2, 4, "msg_after", 2000, said)}, held: true},
-		// [1, 2, 3, 4, 5, 6, 7]
-		"a use of no reply id with a requestId, merged back across other messages": {lines: []string{brief,
-			idless(t, reply(1, 2, "", rcCalls("toolu_pair_z")), true), results(2, 3, "toolu_pair_z"),
-			reply(3, 4, "msg_q", said), idless(t, reply(4, 5, "", rcCalls(x)), true), results(5, 6, x),
-			reply(6, 7, "msg_after", said)}},
-		// [1, 2, 3, 4, 5, 6, 7]
-		"every reply with its id": {lines: []string{brief, reply(1, 2, "msg_z", rcCalls("toolu_pair_z")),
-			results(2, 3, "toolu_pair_z"), reply(3, 4, "msg_q", said), reply(4, 5, "msg_u", rcCalls(x)),
-			results(5, 6, x), reply(6, 7, "msg_after", said)}, held: true},
-		// [1, 2, 3, 4, 5]
-		"a use of no reply id and no requestId, another such record before its result": {lines: []string{brief,
-			idless(t, reply(1, 2, "", rcCalls(x)), false), idless(t, reply(2, 3, "", said), false),
-			results(2, 4, x), reply(3, 5, "msg_after", said)}},
-		// OVER-TELL: [1, 2, 3, 4]; the deserializer stamps an id of its own.
-		"a use of no reply id and no requestId": {lines: []string{brief, idless(t, reply(1, 2, "", rcCalls(x)), false),
-			results(2, 3, x), reply(3, 4, "msg_after", said)}},
-		// OVER-TELL: [1, 2, 3, 4]
-		"a use of no reply id with a requestId": {lines: []string{brief, idless(t, reply(1, 2, "", rcCalls(x)), true),
-			results(2, 3, x), reply(3, 4, "msg_after", said)}},
 		// [1, 2, 3, 4]
 		"its result marked not meta": {lines: []string{brief, reply(1, 2, "msg_m", rcCalls(x)),
 			ctReplace(t, results(2, 3, x), `"sourceToolAssistantUUID"`, `"isMeta":false,"sourceToolAssistantUUID"`),
@@ -918,11 +930,157 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 				ask = append(ask, callY)
 			}
 			got, err := hsRead(t, hsArchive(t, ctThread(tc.lines...)), ctSession, hsAsk(ask...))
+			if tc.unread {
+				hsNoReading(t, got, err)
+				if !strings.Contains(err.Error(), string(whyResultByCall)) {
+					t.Errorf("no reading for %v; want it the model's %s", err, whyResultByCall)
+				}
+				return
+			}
 			hsReadWhole(t, got, err)
 			for _, call := range ask {
 				if held, _ := got.Holds(call); held != tc.held {
 					t.Errorf("%s: Holds = %t, its records %+v; want %t", call.ID, held, got.Calls[call.ID], tc.held)
 				}
+			}
+		})
+	}
+	// ON A COMPACTED MAIN THREAD, by the same rule over the order the resume
+	// hands once it relinked what the last compaction kept under its anchor
+	// and took its leaf from the set of the relinked parents ([threadChain],
+	// THE RELINK and THE LEAF SET), each thread one of the facility's own
+	// cases, its call x1 asked, which its records answer "ok". Its call is
+	// written after the boundary, so the last restart does not tell it.
+	callK := hsLogged("x1", "ok")
+	keeping := rcKeeping(4, 1, 2)
+	// call is x1's use, its result and a reply after them, under the summary.
+	call := []string{rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+		rcReply(6, 7, "msg_after", 5000, rcSaid("after"))}
+	for name, tc := range map[string]struct {
+		lines []string
+		// held is whether x1 is held; unread is no reading, the model unable
+		// to place the thread (whyResultByCall).
+		held, unread bool
+	}{
+		"compacted, the summary the anchor of the call after it": {lines: rcCompacted(keeping, call...),
+			held: true},
+		"compacted, F1n: the summary the anchor, an attachment its other child": {lines: rcCompacted(keeping,
+			rcAttach(4, 5, 2500, rcNote), rcReply(5, 6, "msg_x", 3000, rcCalls("x1")), rcResults(6, 7, 4000, "x1"),
+			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))), held: true},
+		"compacted, a boundary keeping records the thread does not hold": {lines: []string{
+			rcBoundary(1, 0, rcKeeping(3, 98, 99)), rcSummary(1, 2, 100), rcReply(2, 3, "msg_x", 200, rcCalls("x1")),
+			rcResults(3, 4, 300, "x1"), rcReply(4, 5, "msg_after", 400, rcSaid("after"))}, held: true},
+		"compacted, F1a: the anchor makes the call, kept by a list and a segment": {lines: rcCompacted(
+			rcKeeping(5, 1, 2), call...), unread: true},
+		"compacted, F1b: the anchor makes the call, kept by a segment": {lines: rcCompacted(rcSegment(5, 1, 2),
+			call...), unread: true},
+		"compacted, F1c: the anchor makes the call and is the checkpoint": {lines: rcCompacted(rcKeeping(5, 1, 2),
+			append(slices.Clone(call), rcCheckpoint(5))...), unread: true},
+		"compacted, F1d: the anchor an attachment between the call and its result": {lines: rcCompacted(
+			rcKeeping(6, 1, 2), rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcAttach(5, 6, 3500, rcNote),
+			rcResults(6, 7, 4000, "x1"), rcReply(7, 8, "msg_after", 5000, rcSaid("after"))), unread: true},
+		"compacted, F1e: the anchor the first record of two calls at once": {lines: rcCompacted(
+			rcKeeping(5, 1, 2), rcReply(4, 5, "msg_p", 3000, rcCalls("x1")), rcReply(5, 6, "msg_p", 3001,
+				rcCalls("y1")), rcResults(5, 7, 4000, "x1"), rcResults(6, 8, 4100, "y1"),
+			rcReply(8, 9, "msg_after", 5000, rcSaid("after"))), unread: true},
+		"compacted, F1f: the anchor makes the call, its result under the reply's other record": {lines: rcCompacted(
+			rcKeeping(5, 1, 2), rcReply(4, 5, "msg_p", 3000, rcCalls("x1")), rcReply(5, 6, "msg_p", 3001,
+				rcCalls("y1")), rcResults(6, 7, 4000, "x1"), rcResults(6, 8, 4100, "y1"),
+			rcReply(8, 9, "msg_after", 5000, rcSaid("after"))), unread: true},
+		"compacted, I3a: a checkpoint no turn names, the call under its attachment": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
+			rcPrompt(7, 8, 5000), rcReply(8, 9, "msg_x", 6000, rcCalls("x1")), rcResults(9, 10, 7000, "x1")),
+			held: true},
+		"compacted, I3b: a checkpoint a terminal attachment puts in the set": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
+			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1"))},
+		"compacted, I3c: a checkpoint a terminal stop hook's summary puts in the set": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcStop(5, 7, 4000),
+			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1"))},
+		"compacted, R3a: I3b relinked by its segment alone": {lines: rcCompacted(rcSegment(4, 1, 2),
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
+			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1"))},
+		"compacted, I3d: I3b where the resume relinks nothing": {lines: []string{
+			rcBoundary(1, 0, rcKeeping(3, 98, 99)), rcSummary(1, 2, 100), rcReply(2, 3, "msg_before", 200,
+				rcSaid("before")), rcCheckpoint(3), rcAttach(3, 5, 300, rcNote), rcAttach(3, 6, 400, rcNote),
+			rcPrompt(6, 7, 500), rcReply(7, 8, "msg_x", 600, rcCalls("x1")), rcResults(8, 9, 700, "x1")},
+			held: true},
+		"compacted, I3e: the call before a checkpoint no turn names": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
+			rcPrompt(9, 10, 7000), rcReply(10, 11, "msg_last", 8000, rcSaid("last"))), held: true},
+		"compacted, I3f: the call before a checkpoint in the set": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
+			rcAttach(7, 10, 6100, rcNote), rcPrompt(10, 11, 7000), rcReply(11, 12, "msg_last", 8000,
+				rcSaid("last"))), held: true},
+		"compacted, I3g: the anchor the checkpoint": {lines: rcCompacted(keeping, rcReply(4, 5, "msg_before", 3000,
+			rcSaid("before")), rcCheckpoint(4), rcPrompt(5, 7, 4000), rcReply(7, 8, "msg_x", 5000, rcCalls("x1")),
+			rcResults(8, 9, 6000, "x1")), held: true},
+		"compacted, I3h: a call's result the checkpoint, the call under its reminder": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_y", 3000, rcCalls("y1")), rcResults(5, 6, 4000, "y1"), rcCheckpoint(6),
+			rcAttach(6, 8, 5000, rcNote), rcReply(8, 9, "msg_x", 6000, rcCalls("x1")), rcResults(9, 10, 7000, "x1")),
+			held: true},
+		"compacted, I3i: I3h under T9media's anchor": {lines: rcCompacted(keeping, rcAttach(4, 5, 2500, rcNote),
+			rcReply(5, 6, "msg_y", 3000, rcCalls("y1")), rcResults(6, 7, 4000, "y1"), rcCheckpoint(7),
+			rcAttach(7, 9, 5000, rcNote), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")), rcResults(10, 11, 7000, "x1")),
+			held: true},
+		"compacted, R2a: a checkpoint a summary and an attachment put in the set": {lines: []string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcCheckpoint(4),
+			rcStop(4, 6, 3000), rcAttach(4, 7, 3100, rcNote), rcPrompt(7, 8, 4000),
+			rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")}},
+		"compacted, R2b: the call right under the checkpoint's summary": {lines: []string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcStop(4, 5, 3000),
+			rcCheckpoint(5), rcReply(5, 7, "msg_x", 4000, rcCalls("x1")), rcResults(7, 8, 5000, "x1")}, held: true},
+		"compacted, R2c: the call under an attachment under the checkpoint's summary": {lines: []string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcStop(4, 5, 3000),
+			rcCheckpoint(5), rcAttach(5, 7, 3500, rcNote), rcPrompt(7, 8, 4000),
+			rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")}, held: true},
+		"compacted, S1: the checkpoint a stop hook's summary the call hangs off": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcStop(5, 6, 3500), rcCheckpoint(6),
+			rcPrompt(6, 8, 4000), rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")),
+			held: true},
+		"compacted, S2: the checkpoint the boundary": {lines: rcCompacted(keeping, rcCheckpoint(3),
+			rcReply(4, 6, "msg_x", 3000, rcCalls("x1")), rcResults(6, 7, 4000, "x1"),
+			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))), held: true},
+		"compacted, S3: a stop hook's summary the last record": {lines: rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"), rcStop(6, 7, 5000)),
+			held: true},
+		"compacted, B1: what it kept named by an earlier boundary alone": {lines: []string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_kept", 1000, rcSaid("kept")), rcBoundary(3, 2000, rcKeeping(4, 1, 2)),
+			rcSummary(3, 4, 2100), rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
+			rcBoundary(6, 4000, `{"trigger":"manual"}`), rcSummary(6, 7, 4100), rcReply(7, 8, "msg_b", 5000,
+				rcSaid("b")), rcCheckpoint(8), rcAttach(8, 10, 6000, rcNote), rcAttach(8, 11, 6100, rcNote),
+			rcPrompt(11, 12, 7000), rcReply(12, 13, "msg_x", 8000, rcCalls("x1")), rcResults(13, 14, 9000, "x1")},
+			held: true},
+		"compacted, B2: a list of none beside a segment": {lines: rcCompacted(ctReplace(t, keeping,
+			`"uuids":[`+rcQuoted(1, 2)+`]`, `"uuids":[]`), rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
+			rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote), rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000),
+			rcReply(9, 10, "msg_x", 6000, rcCalls("x1")), rcResults(10, 11, 7000, "x1")), held: true},
+		"compacted, B3: a relink by its segment alone, a lagging checkpoint a turn names": {lines: rcCompacted(
+			rcSegment(4, 1, 2), rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5),
+			rcPrompt(5, 7, 4000), rcReply(7, 8, "msg_x", 5000, rcCalls("x1")), rcResults(8, 9, 6000, "x1")),
+			held: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, ctThread(tc.lines...)), ctSession, hsAsk(callK))
+			if tc.unread {
+				hsNoReading(t, got, err)
+				if !strings.Contains(err.Error(), string(whyResultByCall)) {
+					t.Errorf("no reading for %v; want it the model's %s", err, whyResultByCall)
+				}
+				return
+			}
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(callK); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[callK.ID], tc.held)
 			}
 		})
 	}
@@ -955,6 +1113,88 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 			if records := got.Calls[hsSubCall]; held != tc.held || under != "" || !got.Subagents[ctAgent].Reported {
 				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it held %t, its subagent "+
 					"reported", held, under, records, got.Subagents[ctAgent], tc.held)
+			}
+		})
+	}
+}
+
+// A CALL WHOSE USE CARRIES NO REPLY ID IS TOLD (the pairing rule's C0,
+// [holdingsPairing]): the request's fold merges an assistant record into the
+// latest earlier message of its `message.id` as written, an absent id among
+// them, and its deserializer stamps a fresh id only on a record that carries
+// no `requestId` either (2.1.322's e_n @295266158, 2.1.310's TJt
+// @248494944). So an id-less use carrying a requestId merges back across
+// other messages into another id-less reply that carries one, and one
+// carrying none is a message apart from an id-less record beside it: neither
+// is a shape the rule can place. Told: an id-less use with a requestId after
+// another such reply, across a results message and another reply (N1). And
+// the over-tells, the rule conservative there, knowingly: an id-less use
+// alone, with no requestId (N2) or with one (N3), and one whose id is the
+// empty string, which the deserializer stamps as it does an absent one
+// (`!message.id`), each of which the request does pair. Held: N1 with every
+// reply of its own id. Each record is of its own time. Told before the rule
+// reaches C0: a use with no id and no requestId, another such record between
+// it and its result (N4), since the resume recovers a record beside a reply
+// by the reply's id (2.1.322's fWo @293749272, 2.1.310's Rpo @247134223,
+// each grouping only an assistant record whose `message.id` says something),
+// so it hands a result under the id-less use to no model (C2); under the
+// record between, the result would be one tengu_foamy_spring may hang under
+// its call's record (whyResultByCall).
+//
+// Mutation: drop C0, and each over-tell is held, each id-less record read as
+// of one reply; or tell every call at C0, and N1's control is told. N1 is
+// told by C3 as well (its fold's window holds msg_q's record), and N4 by C2,
+// so dropping C0 alone leaves each told.
+func TestACallWhoseUseCarriesNoReplyIDIsTold(t *testing.T) {
+	t.Parallel()
+	const x, z = "toolu_idless_x", "toolu_idless_z"
+	callX := hsLogged(x, "ok")
+	said := rcSaid("done")
+	reply := func(parent, n int, id, content string) string { return rcReply(parent, n, id, n*100, content) }
+	results := func(parent, n int, ids ...string) string { return rcResults(parent, n, n*100, ids...) }
+	// idless is a reply's record whose message carries no id, and a requestId
+	// where requested.
+	idless := func(t *testing.T, line string, requested bool) string {
+		t.Helper()
+		line = ctReplace(t, line, `"id":"","type":"message",`, `"type":"message",`)
+		if requested {
+			line = ctReplace(t, line, `"type":"assistant",`, `"type":"assistant","requestId":"req_idless",`)
+		}
+		return line
+	}
+	brief := rcPrompt(0, 1, 0)
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		// N1, [1, 2, 3, 4, 5, 6, 7]: 5 merges back into 2 across 3 and 4.
+		"a use of no reply id with a requestId, merged back across other messages": {lines: []string{brief,
+			idless(t, reply(1, 2, "", rcCalls(z)), true), results(2, 3, z), reply(3, 4, "msg_q", said),
+			idless(t, reply(4, 5, "", rcCalls(x)), true), results(5, 6, x), reply(6, 7, "msg_after", said)}},
+		// N1's control.
+		"every reply with its id": {lines: []string{brief, reply(1, 2, "msg_z", rcCalls(z)), results(2, 3, z),
+			reply(3, 4, "msg_q", said), reply(4, 5, "msg_u", rcCalls(x)), results(5, 6, x),
+			reply(6, 7, "msg_after", said)}, held: true},
+		// N4, [1, 2, 3, 4, 5]: 2 and 3 two messages, 4 after 3's.
+		"a use of no reply id and no requestId, another such record before its result": {lines: []string{brief,
+			idless(t, reply(1, 2, "", rcCalls(x)), false), idless(t, reply(2, 3, "", said), false),
+			results(2, 4, x), reply(3, 5, "msg_after", said)}},
+		// OVER-TELL: [1, 2, 3, 4]; stamped as N2's is.
+		"a use whose reply id is the empty string": {lines: []string{brief, reply(1, 2, "", rcCalls(x)),
+			results(2, 3, x), reply(3, 4, "msg_after", said)}},
+		// N2, OVER-TELL: [1, 2, 3, 4]; the deserializer stamps an id of its own.
+		"a use of no reply id and no requestId": {lines: []string{brief, idless(t, reply(1, 2, "", rcCalls(x)), false),
+			results(2, 3, x), reply(3, 4, "msg_after", said)}},
+		// N3, OVER-TELL: [1, 2, 3, 4]; nothing to merge into.
+		"a use of no reply id with a requestId": {lines: []string{brief, idless(t, reply(1, 2, "", rcCalls(x)), true),
+			results(2, 3, x), reply(3, 4, "msg_after", said)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := hsRead(t, hsArchive(t, ctThread(tc.lines...)), ctSession, hsAsk(callX))
+			hsReadWhole(t, got, err)
+			if held, _ := got.Holds(callX); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[x], tc.held)
 			}
 		})
 	}
@@ -1000,65 +1240,100 @@ func hsProgress(parent, uuid string) string {
 		`","timestamp":"` + ctStamp + `",` + ctTail("2.1.322") + `}`
 }
 
-// A RECORD A RETRACTION NAMES IS HANDED TO NO MODEL, as Claude Code's resume
-// drops it once it has walked the chain (2.1.310 and 2.1.322): a record whose
-// uuid's first 24 characters are those of a uuid a refused reply's fallback,
-// a malformed reply's retry or a reply names as taken back, on the chain or
-// beside it. So a call is told whose record a fallback names, or whose
-// result's; whose record, a sibling of the chain's reply, a fallback names;
-// whose record a retry names; whose record an entry names by its first 24
-// characters alone, another tail after them. (A subagent's thread holding
-// any retraction list is not whole: [TestARetractionListInASubagentsThreadLeavesItNotWhole].)
-// An entry no record's uuid can begin with names no record: the call is held
-// beside one naming the call's record in uppercase, or cut short, as with no
-// retraction at all (the chain critique's probes P1a to P1d).
+// A CALL WHOSE RECORD A RETRACTION NAMES IS TOLD: Claude Code's resume drops
+// every record whose uuid's first 24 characters are those of an entry of a
+// retraction list it hands, once it has walked the chain and recovered beside
+// each reply what it recovers ([threadChain], THE RETRACTION FILTER: 2.1.322
+// reads the list off a refused reply's fallback, a malformed reply's retry
+// and a reply's own; 2.1.310 off a fallback's alone). Each record has a uuid
+// of its own first 24 characters ([rcUUID]), so an entry names one record.
+// Told: a call whose use's record or whose result's record a fallback names;
+// whose use's record a retry names, which 2.1.310 hands, so the use is not
+// handed under every variant; whose use's record an entry names by its first 24
+// characters alone, by its first 30, or by its first 24 and another tail; and
+// whose use, a record of its reply beside the one on the chain and recovered
+// beside it, a fallback names. Held: no retraction; an entry of the use's
+// record's first 23 characters, which names no record; one naming it in
+// uppercase, which no record's lowercase uuid begins with; and a use beside
+// the record of its reply a fallback names on the chain, which the resume
+// recovered before it filtered, its result under the use. No reading: a
+// list in no shape Claude Code writes, a fallback's or a retry's; and a
+// result under the retracted record whose call its sibling made, which
+// tengu_foamy_spring may hang under that sibling (whyResultByCall). (A
+// subagent's thread holding any retraction list is not whole:
+// [TestARetractionListInASubagentsThreadLeavesItNotWhole].)
 //
-// Mutation: hand over a record a retraction names, and each told call is
-// held; read retractions off a refused reply's fallback alone, as 2.1.310
-// does, and the retried call is held; read only an entry of 24 characters
-// exactly, and each call a longer entry names, by its whole uuid or by its
-// first 24 characters and another tail, is held; or compare them in any case,
-// and the uppercase entry's call is told.
-func TestARecordARetractionNamesIsHandedToNoModel(t *testing.T) {
+// Mutation: retract nothing, and each told call is held; read a retry's list
+// in neither release, and the retried call is held; read no entry of 24
+// characters, and that entry's call is held; read none shorter than a whole
+// uuid, and the 24's and the 30's calls are; compare an entry's hex digits
+// in either case, and the uppercase entry's call is told; retract every
+// record of a reply one of whose records a list names, as a filter run before
+// the recovery would leave it, and the use beside the retracted record is
+// told; or read a malformed list past its bad entry, and each such thread is
+// read.
+func TestACallWhoseRecordARetractionNamesIsTold(t *testing.T) {
 	t.Parallel()
-	const x, outX = "toolu_retracted", "retracted done"
-	// call is the call's record's uuid, which holds letters an uppercase
+	const x = "toolu_retracted"
+	callX := hsLogged(x, "ok")
+	said := rcSaid("done")
+	// u is the use's record: a uuid holding letters, which an uppercase
 	// spelling changes.
-	const call = "abcdef12-0000-4000-8000-000000000002"
-	callX := hsLogged(x, outX)
-	text := `[{"type":"text","text":"done."}]`
-	result := func(parent, uuid string) string {
-		return ctResult(parent, uuid, hsAnswer(x, hsBlock(t, outX)), hsBlock(t, outX))
+	const u = 0xab
+	if !strings.ContainsAny(rcUUID(u), "abcdef") {
+		t.Fatalf("record %d's uuid %s holds no letter", u, rcUUID(u))
 	}
-	// on is the call, its result and a reply after them, all on the chain.
-	on := []string{hsReplyOf(t, ctUUID(1), call, "msg_x", hsUse(x)), result(call, ctUUID(3)),
-		hsReplyOf(t, ctUUID(3), ctUUID(5), "msg_after", text)}
-	with := func(lines ...string) []string { return append(slices.Clone(on), lines...) }
+	// on is the use, its result and a reply after them, all on the chain.
+	on := []string{rcPrompt(0, 1, 100), rcReply(1, u, "msg_x", 200, rcCalls(x)), rcResults(u, 3, 300, x),
+		rcReply(3, 4, "msg_after", 400, said)}
+	// with is on and a fallback under its last reply naming entries, and a
+	// reply after it.
+	with := func(entries string) []string {
+		return append(slices.Clone(on), rcFallback(4, 5, 500, entries), rcReply(5, 6, "msg_last", 600, said))
+	}
+	quoted := func(entry string) string { return `"` + entry + `"` }
 	for name, tc := range map[string]struct {
-		lines []string
-		held  bool
+		lines        []string
+		held, unread bool
 	}{
 		"no retraction": {lines: on, held: true},
-		"the call's record named by a refused reply's fallback": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
-			call))},
-		"the result's record named by a refused reply's fallback": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
-			ctUUID(3)))},
-		"a sibling of the chain's reply, holding the call, named by a fallback": {lines: []string{
-			hsReplyOf(t, ctUUID(1), ctUUID(2), "msg_pair", text), hsReplyOf(t, ctUUID(2), call, "msg_pair", hsUse(x)),
-			result(call, ctUUID(4)), hsReplyOf(t, ctUUID(2), ctUUID(5), "msg_after", text),
-			ctFallback(ctUUID(5), ctUUID(6), call)}},
-		"the call's record named by a malformed reply's retry": {lines: with(ctRetry(ctUUID(5), ctUUID(6), call),
-			hsReplyOf(t, ctUUID(6), ctUUID(7), "msg_last", text))},
-		"the call's record named by its first 24 characters": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
-			call[:24]+"ffffffffffff"))},
-		"an entry naming the call's record in uppercase": {lines: with(ctFallback(ctUUID(5), ctUUID(6),
-			strings.ToUpper(call))), held: true},
-		"an entry naming the call's record cut short": {lines: with(ctFallback(ctUUID(5), ctUUID(6), call[:23])),
+		"the use's record named by a refused reply's fallback":    {lines: with(rcQuoted(u))},
+		"the result's record named by a refused reply's fallback": {lines: with(rcQuoted(3))},
+		"the use's record named by a malformed reply's retry": {lines: append(slices.Clone(on),
+			rcRetry(4, 5, 500, rcQuoted(u)), rcReply(5, 6, "msg_last", 600, said))},
+		"the use's record named by its first 24 characters": {lines: with(quoted(rcUUID(u)[:24]))},
+		"the use's record named by its first 30 characters": {lines: with(quoted(rcUUID(u)[:30]))},
+		"the use's record named by its first 24 characters and another tail": {lines: with(
+			quoted(rcUUID(u)[:24] + "ffffffffffff"))},
+		"an entry of the use's record's first 23 characters": {lines: with(quoted(rcUUID(u)[:23])), held: true},
+		"an entry naming the use's record in uppercase": {lines: with(quoted(strings.ToUpper(rcUUID(u)))),
 			held: true},
+		// [1, u, 4, 5, 6, 7]: 2, msg_p's record on the chain, retracted; u,
+		// recovered beside it, and its result stay.
+		"the record of its reply on the chain named, the use beside it": {lines: []string{rcPrompt(0, 1, 100),
+			rcReply(1, 2, "msg_p", 200, said), rcReply(1, u, "msg_p", 250, rcCalls(x)), rcResults(u, 4, 300, x),
+			rcReply(2, 5, "msg_after", 400, said), rcFallback(5, 6, 500, rcQuoted(2)),
+			rcReply(6, 7, "msg_last", 600, said)}, held: true},
+		// [1, 2, 4, 5, 7]: u, recovered beside 2, retracted.
+		"the use beside the record of its reply on the chain named": {lines: []string{rcPrompt(0, 1, 100),
+			rcReply(1, 2, "msg_p", 200, said), rcReply(1, u, "msg_p", 250, rcCalls(x)), rcResults(u, 4, 300, x),
+			rcReply(2, 5, "msg_after", 400, said), rcFallback(5, 6, 500, rcQuoted(u)),
+			rcReply(6, 7, "msg_last", 600, said)}},
+		"the result under the record of its reply on the chain, which a fallback names": {lines: []string{
+			rcPrompt(0, 1, 100), rcReply(1, u, "msg_p", 150, rcCalls(x)), rcReply(1, 2, "msg_p", 200, said),
+			rcResults(2, 4, 300, x), rcReply(4, 5, "msg_after", 400, said), rcFallback(5, 6, 500, rcQuoted(2)),
+			rcReply(6, 7, "msg_last", 600, said)}, unread: true},
+		"a fallback's list in no shape Claude Code writes": {lines: with(`1`), unread: true},
+		"a retry's list in no shape Claude Code writes": {lines: append(slices.Clone(on),
+			rcRetry(4, 5, 500, rcQuoted(u)+`,null`), rcReply(5, 6, "msg_last", 600, said)), unread: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := hsRead(t, hsArchive(t, hsThread(tc.lines...)), ctSession, hsAsk(callX))
+			got, err := hsRead(t, hsArchive(t, ctThread(tc.lines...)), ctSession, hsAsk(callX))
+			if tc.unread {
+				hsNoReading(t, got, err)
+				return
+			}
 			hsReadWhole(t, got, err)
 			if held, _ := got.Holds(callX); held != tc.held {
 				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[x], tc.held)
@@ -2088,10 +2363,11 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // answer names another agent, is a background subagent's, is a failure, comes
 // twice, precedes a restart of the main thread, lies on the main thread's
 // chain beside its call's record off it, or lies off it under a record of no
-// reply; whose notification names
-// another agent, or a subagent that did not complete, or precedes a restart of
-// the main thread; or that was sent a message whose result refused it with
-// null, or left none, and no notification answered. A message its own result
+// reply; whose notification names another agent, or a subagent that did not
+// complete (one before a restart of the main thread is
+// [TestANoticeBeforeTheLastRestartAnswersNoLeg]'s); or that was sent a
+// message whose result refused it with null, or left none, and no
+// notification answered. A message its own result
 // refused with the literal false is no leg, and one answered by a notification
 // is answered; a subagent a Task call started reads as one an Agent call did;
 // a prompt whose parentUuid is the empty string or absent roots its thread's
@@ -2106,7 +2382,19 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // reply that finished its leg written last but handed before its call, the
 // leg ending on its result along the conversation (condition 5); and not a
 // leg's start off the conversation, under a reply its load recovers
-// (condition 4, over the whole file).
+// (condition 4, over the whole file). Not reported, its Agent call's answer
+// recovered beside the call's reply but placed after another reply written
+// inside that reply's records (R1i); reported, the answer right after the
+// call (R1j). And the shapes built against rule 2, each of its own records: not
+// whole where a reply that finished lies on a branch without the call (R2a,
+// with an own attachment on the call's branch; R2b, with an own stop hook's
+// summary there; V1, that attachment the leaf; V2, the finished branch
+// without the call written first and the leaf; V2b, both branches' replies
+// of one time, the first the leaf on the tie; R2c, two legs on it; R2d, two
+// legs interleaved with the call's result between them); reported where the
+// call lies in the first of two legs, in either order of the second's reply
+// and the attachment it names (2.1.310's resume), and where the call lies in
+// the second leg of 2.1.310's resume, its use under that attachment (R2g).
 //
 // Mutation: ignore a restart in a subagent's thread, and the restarted one is
 // reported; drop condition 4, and the second leg's subagent is reported; take
@@ -2123,12 +2411,16 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // handed), and the subagent its case built is reported; or read a prompt's
 // parentUuid that is empty or absent as naming no record, and the subagent
 // whose prompt carries it is not whole. Drop the strict rule, and the reply
-// that finished on another branch is reported; apply it to every own leaf,
+// that finished on another branch is reported, and so is each shape built
+// against rule 2 not whole; apply it to every own leaf,
 // the leaf aside or not, and the two calls at once are not whole; read
 // condition 5 in the file's order, and the reply handed before its call
 // reports its subagent while the one written before its result does not; or
 // count condition 4's leg starts along the conversation alone, and the leg's
-// start off it reports its subagent.
+// start off it reports its subagent. Exempt a leg's own answer from the
+// pairing rule, and the answer behind another reply (R1i) reports its
+// subagent; or tell every call, and R1j's subagent goes unanswered, and R2g's
+// call and each two-leg control's is told.
 func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryLeg(t *testing.T) {
 	t.Parallel()
 	// conversation is hsForeground's session whose subagent's thread is what
@@ -2153,6 +2445,20 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 			edit(t, &s)
 			return s
 		}
+	}
+	// legs is hsResumed's session, two legs of ctAgent's work, whose
+	// subagent's thread is what lines writes, each line ctAgent's own as it
+	// stands ([rcOwn] makes one of a record rcReply and its kin write).
+	legs := func(lines func(*testing.T) []string) func(*testing.T) hsSession {
+		return func(t *testing.T) hsSession {
+			s := hsResumed(t)
+			s.thread = lines(t)
+			return s
+		}
+	}
+	own := func(t *testing.T, line string) string {
+		t.Helper()
+		return rcOwn(t, line)
 	}
 	sent := func(result string) func(*testing.T, *hsSession) {
 		return func(t *testing.T, s *hsSession) {
@@ -2195,15 +2501,19 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 			s *hsSession) {
 			s.main = append(s.main, hsReplyOf(t, ctUUID(1), ctUUID(5), "msg_after", `[{"type":"text","text":"done."}]`))
 		}), hsUnanswered},
-		// The answer, recovered beside the call's reply, placed after another
-		// reply written before it inside that reply's records, so the request
-		// hands it after that reply's message, not the call's.
+		// R1i, [1, 2, 4, 3, 5]: the answer, recovered beside the call's reply
+		// (msg_a), placed by its place in the file after another reply written
+		// before it inside that reply's records (msg_a's 5 after it), so the
+		// request hands it after that reply's message, not the call's.
 		"its Agent call's answer behind another reply": {with(hsForeground, func(t *testing.T, s *hsSession) {
-			s.main = []string{s.main[0], s.main[1],
-				hsReplyOf(t, ctUUID(2), ctUUID(4), "msg_between", `[{"type":"text","text":"between."}]`),
-				hsAnswerOf(t, ctUUID(2), ctUUID(3), hsStarted, "the subagent's report", hsCompleted(ctAgent)),
-				ctAssistant(ctUUID(4), ctUUID(5), `[{"type":"text","text":"done."}]`)}
+			s.main = []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_a", 200, hsAgentCall),
+				rcReply(2, 4, "msg_between", 300, said), hsAgentAnswer(t, 400), rcReply(4, 5, "msg_a", 500, said)}
 		}), hsUnanswered},
+		// R1j, [1, 2, 3, 4]: its control.
+		"its Agent call's answer right after it": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.main = []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_a", 200, hsAgentCall),
+				hsAgentAnswer(t, 300), rcReply(3, 4, "msg_after", 400, said)}
+		}), ""},
 		// The request keeps the first use of an id: a call of another tool under
 		// the Agent call's id before it takes the answer's place.
 		"its Agent call's id a call of another tool carries first": {with(hsForeground, func(t *testing.T,
@@ -2274,9 +2584,6 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 		"its Agent call's answer, of a background subagent": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.meta = hsBackgroundMeta(t)
 		}), hsUnanswered},
-		"its notification before a restart of the main thread": {with(hsBackground, func(t *testing.T, s *hsSession) {
-			s.main = append(s.main, ctMicrocompactBoundary(ctUUID(4), ctUUID(5)))
-		}), hsUnanswered},
 		"its Agent call's answer before a restart of the main thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.main = append(s.main, ctMicrocompactBoundary(ctUUID(3), ctUUID(4)))
 		}), hsUnanswered},
@@ -2331,6 +2638,78 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_p", 200, rcSaid("first")),
 				rcReply(2, 3, "msg_u", 300, x), hsSubResult(t, 3, 4, 400), rcReply(2, 5, "msg_p", 250, said)}
 		}), hsUnfinished},
+		// THE SHAPES BUILT AGAINST RULE 2, each record of its own id and time.
+		// R2a, [1, 4]: 4, the latest own leaf, the leaf; 5, an own attachment
+		// under the call's result, an own leaf off the conversation.
+		"R2a: the reply that finished on a branch without the call, an own attachment on the call's": {
+			conversation(func(t *testing.T) []string {
+				return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
+					rcReply(1, 4, "msg_f", 500, said), rcAttach(3, 5, 450, rcNote)}
+			}), hsNotWhole},
+		// R2b: R2a with an own stop hook's summary in the attachment's place.
+		"R2b: as R2a, an own system record on the call's branch": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
+				rcReply(1, 4, "msg_f", 500, said), rcStop(3, 5, 450)}
+		}), hsNotWhole},
+		// V1, [1, 2, 3, 5]: R2a with its attachment the latest own leaf.
+		"V1: as R2a, the attachment the leaf": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
+				rcReply(1, 4, "msg_f", 400, said), rcAttach(3, 5, 500, rcNote)}
+		}), hsNotWhole},
+		// V2, [1, 5]: two finished branches off the prompt, the one without
+		// the call written first and the latest.
+		"V2: two finished branches, the leaf the one without the call, written first": {conversation(
+			func(t *testing.T) []string {
+				return []string{rcPrompt(0, 1, 100), rcReply(1, 5, "msg_fb", 900, said), rcReply(1, 2, "msg_u", 200, x),
+					hsSubResult(t, 2, 3, 300), rcReply(3, 4, "msg_fa", 400, said)}
+			}), hsNotWhole},
+		// V2b, [1, 5]: V2 with both leaves of one time, the first in the
+		// file the leaf on the tie.
+		"V2b: two finished branches of one time, the leaf the one without the call": {conversation(
+			func(t *testing.T) []string {
+				return []string{rcPrompt(0, 1, 100), rcReply(1, 5, "msg_fb", 400, said), rcReply(1, 2, "msg_u", 200, x),
+					hsSubResult(t, 2, 3, 300), rcReply(3, 4, "msg_fa", 400, said)}
+			}), hsNotWhole},
+		// [1, 2, 3, 4, 5, 6]: the call in the first of two legs.
+		"two legs of the load's own records, the call in the first": {legs(func(t *testing.T) []string {
+			return []string{own(t, rcPrompt(0, 1, 100)), own(t, rcReply(1, 2, "msg_u", 200, x)),
+				own(t, hsSubResult(t, 2, 3, 300)), own(t, rcReply(3, 4, "msg_f1", 400, said)),
+				hsCoordinatorAt(t, 500), own(t, rcReply(5, 6, "msg_f2", 600, said))}
+		}), ""},
+		// [1, 2, 3, 4, 5, 7, 6]: 2.1.310's resume, the second leg's reply
+		// naming the attachment its harness writes after it.
+		"two legs, the second's reply before the attachment it names (2.1.310's resume)": {legs(
+			func(t *testing.T) []string {
+				return []string{own(t, rcPrompt(0, 1, 100)), own(t, rcReply(1, 2, "msg_u", 200, x)),
+					own(t, hsSubResult(t, 2, 3, 300)), own(t, rcReply(3, 4, "msg_f1", 400, said)),
+					hsCoordinatorAt(t, 500), own(t, rcReply(7, 6, "msg_f2", 600, said)),
+					own(t, rcAttach(5, 7, 700, rcNote))}
+			}), ""},
+		// R2c, [1, 2, 3, 7]: both finished replies on a branch without the
+		// call, the attachment under its result the leaf.
+		"R2c: two legs, both finishing replies on a branch without the call": {legs(func(t *testing.T) []string {
+			return []string{own(t, rcPrompt(0, 1, 100)), own(t, rcReply(1, 2, "msg_u", 200, x)),
+				own(t, hsSubResult(t, 2, 3, 300)), own(t, rcReply(1, 4, "msg_f1", 400, said)),
+				hsCoordinatorAt(t, 500), own(t, rcReply(5, 6, "msg_f2", 600, said)),
+				own(t, rcAttach(3, 7, 700, rcNote))}
+		}), hsNotWhole},
+		// R2d, [1, 2, 3, 7]: R2c with the result written in the second leg's
+		// stretch.
+		"R2d: interleaved legs, the result written in the second leg's stretch": {legs(func(t *testing.T) []string {
+			return []string{own(t, rcPrompt(0, 1, 100)), own(t, rcReply(1, 2, "msg_u", 200, x)),
+				own(t, rcReply(1, 4, "msg_f1", 300, said)), hsCoordinatorAt(t, 400),
+				own(t, hsSubResult(t, 2, 3, 500)), own(t, rcReply(5, 6, "msg_f2", 600, said)),
+				own(t, rcAttach(3, 7, 700, rcNote))}
+		}), hsNotWhole},
+		// R2g, [1, 4, 5, 7, 2, 3, 6]: the call in the second leg of 2.1.310's
+		// resume, its use under the attachment written last.
+		"R2g: the call in a 2.1.310-resumed leg, the attachment its use names written last": {legs(
+			func(t *testing.T) []string {
+				return []string{own(t, rcPrompt(0, 1, 100)), own(t, rcReply(1, 4, "msg_f1", 200, said)),
+					hsCoordinatorAt(t, 300), own(t, rcReply(7, 2, "msg_u", 400, x)),
+					own(t, hsSubResult(t, 2, 3, 500)), own(t, rcReply(3, 6, "msg_f2", 600, said)),
+					own(t, rcAttach(5, 7, 700, rcNote))}
+			}), ""},
 		// [1, 2, 3, 5, 6]: 5, of msg_f, recovered beside 6; 4, a leg's start, off it.
 		"a leg's start off its conversation, under a reply its load recovers": {conversation(func(t *testing.T) []string {
 			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
@@ -2405,6 +2784,31 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 				held, under, got.Subagents["a0000000000000002"])
 		}
 	})
+}
+
+// hsAgentCall is the content of a reply making the Agent call hsStarted,
+// which starts ctAgent.
+const hsAgentCall = `[{"type":"tool_use","id":"` + hsStarted + `","name":"` + claudeToolAgent + `","input":` +
+	hsAgentInput + `}]`
+
+// hsAgentAnswer is record 3, written at ms, the result answering hsStarted
+// with ctAgent's report, its completion its own toolUseResult, chained to
+// record 2, which makes the call: [rcResults]'s, of the load's own records.
+func hsAgentAnswer(t *testing.T, ms int) string {
+	t.Helper()
+	return ctReplace(t, ctReplace(t, rcResults(2, 3, ms, hsStarted), `"content":"ok"`,
+		`"content":`+hsBlock(t, "the subagent's report")), `"sourceToolAssistantUUID"`,
+		`"toolUseResult":`+hsCompleted(ctAgent)+`,"sourceToolAssistantUUID"`)
+}
+
+// hsCoordinatorAt is record 5, written at ms, the message ctAgent's
+// coordinator sent it, which starts a leg of its work, chained to record 4,
+// the reply that finished the leg before: as ctCoordinator writes it, of the
+// load's own records.
+func hsCoordinatorAt(t *testing.T, ms int) string {
+	t.Helper()
+	return ctReplace(t, ctCoordinator(rcUUID(4), rcUUID(5)), `"timestamp":"`+ctStamp+`"`,
+		`"timestamp":"`+rcAt(ms)+`"`)
 }
 
 // hsAsked is a subagent's conversation of the load's own records: its
@@ -2641,6 +3045,51 @@ func TestAnAnswerCarryingAHandbackAnswersNoLeg(t *testing.T) {
 		}, hsUnanswered}
 	}
 	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hsReports(t, tc.session(t), tc.why)
+		})
+	}
+}
+
+// A NOTICE BEFORE THE LAST RESTART ANSWERS NO LEG (rule 2, condition 3):
+// what a resumed session is handed starts over at a restart, so a task
+// notification counts only where its line follows the main thread's last
+// one, as a result does ([TestAResultBeforeTheLastRestartIsNotLive]): the
+// reading's own forward guard, beside the model of Claude Code's resume,
+// which hands a microcompaction's boundary's records before it, since a
+// release after 2.1.322 that cut there would hand less. A background
+// subagent's notification before a microcompaction's boundary, or between
+// two, leaves it unreported, its call told under its heading; one after the
+// last answers its leg, and its subagent is reported.
+//
+// Mutation: hold a notification to no restart, and the one before the
+// boundary answers its leg; or compare its line with the main thread's first
+// restart, and the one between two does.
+func TestANoticeBeforeTheLastRestartAnswersNoLeg(t *testing.T) {
+	t.Parallel()
+	// restarted is hsBackground's session whose main thread goes on from its
+	// launch (3) with lines.
+	restarted := func(lines ...string) func(*testing.T) hsSession {
+		return func(t *testing.T) hsSession {
+			s := hsBackground(t)
+			s.main = append(s.main[:3:3], lines...)
+			return s
+		}
+	}
+	for name, tc := range map[string]struct {
+		session func(*testing.T) hsSession
+		why     string
+	}{
+		"its notification": {hsBackground, ""},
+		"its notification before a restart": {restarted(hsNotified(t, ctUUID(3), ctUUID(4), hsStarted),
+			ctMicrocompactBoundary(ctUUID(4), ctUUID(5))), hsUnanswered},
+		"its notification between two restarts": {restarted(ctMicrocompactBoundary(ctUUID(3), ctUUID(10)),
+			hsNotified(t, ctUUID(10), ctUUID(4), hsStarted), ctMicrocompactBoundary(ctUUID(4), ctUUID(11))),
+			hsUnanswered},
+		"its notification after the last restart": {restarted(ctMicrocompactBoundary(ctUUID(3), ctUUID(10)),
+			hsNotified(t, ctUUID(10), ctUUID(4), hsStarted)), ""},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			hsReports(t, tc.session(t), tc.why)
