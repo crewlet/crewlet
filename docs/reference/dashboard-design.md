@@ -5450,6 +5450,14 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
+| New repository | Gitlet › Repositories | `code_create_repo{name, owner, description?, default_branch?, visibility?}`: a project a unit owns; an applied create opens its page |
+| Delete repository · Restore repository | A repository's Settings tab; a deleted repository's page | `code_delete_repo{repo, reason?}`, asked once its name is typed · `code_restore_repo{repo}` |
+| Protect a branch · Edit · Remove (a rule) | A repository's Settings tab, and Protect on the row of a branch no rule names | `code_protect_branch{repo, pattern, …}`: only the fields moved; `remove` after a confirmation |
+| New branch · Delete (a branch) | A repository's Branches tab | `code_create_branch{repo, branch, at}` · `code_delete_branch{repo, branch, expected_head}` after a confirmation, at the head the row shows |
+| Edit · Delete file · New file · Add a file | A repository's Files tab, on a branch; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
+| Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
+| Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
+| Answer finding | A standing finding on a change's Files tab | `code_resolve_finding{change, findings, resolution, note?}` |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
 | Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
@@ -8326,7 +8334,18 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   against the head on screen), and every finding and thread a reply; a thread
   **Resolve**. **Request review** asks reviewers by handle with a note
   (`code_request_review`); **Close** and **Reopen** move the change against
-  the version on screen (`code_close_change`). Every write is the act
+  the version on screen (`code_close_change`). A finding that still stands
+  offers **Answer finding** (`code_resolve_finding`): Resolved, Won't fix or
+  Disputed, an author's answers, which leave a blocker standing for whoever
+  raised it, or Dismiss, its raiser's, a maintainer's or a person's, with a
+  note; the form says that a dismissal clears the finding for good, and the
+  engine says who may give which. Beside the merge controls, **Rebase**
+  (`code_rebase_change`, from the head on screen) and **Take out of the
+  queue** (`code_dequeue_change`, held unless the change is queued) are each
+  confirmed in the page, saying that a rebase moves the branch by one forced
+  push and that a change taken out loses its place and stays open; a merged
+  change offers **Revert** in their place (`code_revert_change`), confirmed
+  with what it opens and a box to merge the revert once it is open. Every write is the act
   transport's, through `useAct` and a `WriteButton` — drawn for every reader,
   held with the reason where it cannot act (a change no longer live takes no
   review; a merged one is neither closed nor reopened), and never optimistic:
@@ -8353,7 +8372,15 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   engine's own filter (`REPO_STATUSES`, held to `gitlet.RepoStatuses`). A row
   opens the repository's page. A declared repository's settings are the
   company document's `code.repos`, and an empty listing offers the
-  configuration to a reader who may open it. The listing's one write is
+  configuration to a reader who may open it. The listing makes two writes.
+  **New repository** (`code_create_repo`) makes an empty project: its name in
+  the engine's grammar, the unit that owns it picked from the chart, and,
+  only where the person says them, a description, a default branch and which
+  seats read it; left out, the engine's defaults stand. It is held for a
+  credential bound to nobody, and an applied create opens the new
+  repository's page. A scratch repository is a seat's own and is never made
+  here. A deleted repository is listed under the **Deleted** filter and
+  restored on its own page. The other write is
   **Import a repository**, a person's alone (`code_import_repo`, which the
   authority table refuses every seat): a new project, named in the engine's
   grammar and owned by a unit picked from the chart, filled from an https URL
@@ -8418,11 +8445,36 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   address names or of every path, with who pushed each commit where the
   answering node's index holds the push — who pushed, which the commit's own
   author line is not. **Pushes** is the repository's push history, as Gitlet ›
-  Pushes draws it. **Settings** shows the repository's settings, its
+  Pushes draws it. **Branches** lists the live branches and writes them:
+  **New branch** (`code_create_branch`, a name and where it starts, the
+  default branch when left empty), and on each row **Protect**, which opens
+  the protection form on that branch's ref (a branch a rule names already is
+  tagged protected and leads to its rule on Settings instead, where the form
+  opens on the rule and its gate as they stand), and **Delete**
+  (`code_delete_branch`), confirmed in the page and sent with the head the
+  row shows as `expected_head`, so a branch pushed to since is refused
+  rather than deleted unseen; the confirmation says its commits stay in the
+  history, that a change proposing it loses its source, and names the
+  default branch as one. A new branch takes write and a delete maintain, and
+  a repository that is archived, deleted, importing or a pull mirror takes
+  neither, each held with that sentence. **Files** commits from the browser
+  (`code_commit_files`) on the branch the page's read resolved (never the
+  address's spelling of it, which may name a branch bare, a tag, or nothing
+  for the default branch), at the commit it stood at (`expected_head`):
+  **Edit** opens the file's
+  every page read at that commit, joined, in an editor with the commit's
+  message (a text file of at most 256 KiB; a larger or a binary one is held,
+  saying to commit it from a clone), **Delete file** confirms with its
+  message, and a directory's **New file** takes a path and its text. Each is
+  one commit of one file; at a tag or a commit they are held, saying to
+  choose a branch. An empty repository's Files tab says nobody has pushed a
+  branch yet and offers **Add a file**: its first commit, a root commit that
+  makes its default branch, sent with no `expected_head` since nothing was
+  read, so a repository made with New repository is filled without a clone. **Settings** shows the repository's settings, its
   protection rules with their merge gates — a gate that requires a check
   with how its queue lands a change (each change tested merged on the branch
   before it lands) —
-  and its path owners, and makes three writes, each through `useAct` and a
+  and its path owners, and makes its writes, each through `useAct` and a
   WriteButton, never optimistic — the page is redrawn from the read the
   write's position brings — and each drawn for every reader, held with the
   sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
@@ -8447,9 +8499,27 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   repository's search mode and mirrors are the company document's, settled
   by every activation: they are held with that sentence and the tab leads to
   Settings › Configuration, while its purge, which changes none of its
-  settings, is offered. Its other settings are changed by the code tools'
-  lifecycle requests (`code_update_repo`, `code_protect_branch`), which a
-  seat or a person's assistant makes. Content is not polled: a reader reading a file reads
+  settings, is offered. **Protection rules** are written on a repository
+  the document does not declare (`code_protect_branch`): **Protect a
+  branch** adds a rule for a branch's name or a pattern (`refs/heads/<glob>`,
+  `refs/tags/<glob>`), and each rule's **Edit** changes it: who pushes
+  directly, whether a push may force or delete, and, behind **Gate merges
+  into it**, who merges, the approvals, the required checks, whether its path
+  owners approve and what becomes of a merged seat's branch. The form sends
+  only the fields the person moved from what the page read, and the required
+  checks item by item (`add`, `remove`), so nothing else of the rule is
+  restated; turning the gate off sends `remove_gate`. A gate's path classes
+  and its queue's depth and batch are shown on the rule's line and left as
+  they stand. **Remove** is confirmed in the page, saying what the refs
+  lose. **Delete repository** (`code_delete_repo`) opens a dialog that says
+  what stops and that it is restorable until its purge, takes an optional
+  reason, and is held until the repository's name is typed. A deleted
+  repository's page says so above its tabs, with when, and offers **Restore
+  repository** (`code_restore_repo`). A declared repository's rules, delete
+  and restore are the company document's, held with that sentence. Its
+  description, owner, default branch and path owners are changed by the code
+  tools (`code_update_repo`), which a seat or a person's assistant calls.
+  Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.
 - **A commit's page**, `#/gitlet/repos/{name}/commits/{sha}`, names its commit
@@ -8471,7 +8541,12 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   or not a page of files read so far lists it — a link to a file past the
   first page opens it — and is described by its patch's own answer (its
   status, its modes, whether git calls it binary). A change's revisions link
-  their heads here.
+  their heads here. Under the header, **Revert** and **Cherry-pick**
+  (`code_revert`, `code_cherry_pick`) each make one new commit on a branch
+  the person chooses from the repository's branches, with the head that
+  listing showed as `expected_head` and git's own message unless one is
+  typed; the dialog says that nothing is rewritten and that a conflict
+  commits nothing. Both are held as a commit to a branch is.
 - **A comparison**, `#/gitlet/repos/{name}/compare`, compares `head=` with
   `base=` (none is the default branch), each named as a revision on the
   repository's page; with no head it asks for one. `code_compare` resolves
@@ -8538,6 +8613,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   branch's queue holds up to 1 024 waiting, so **Load more** follows `next`
   through the pager every code listing shares, the newest page held still
   from its press; each page answers the trains of the targets it reaches.
+  Each live entry's **Take out** is the change page's Take out of the queue
+  (`code_dequeue_change`), confirmed in the page.
 - **Checks** is the window of `code_checks` naming no repository: the
   attempts that ended at or after the window's start and before its end
   (`since=`, `until=`), which the engine seeks from the end down, so a custom

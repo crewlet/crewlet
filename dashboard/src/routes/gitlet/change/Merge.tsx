@@ -2,7 +2,8 @@
  * A live change's merge controls, above its tabs: where its gate stands, and
  * Merge — or Add to queue, where its target's gate requires a check — with
  * how it merges, whether its branch goes and whether its work item closes;
- * Override, a person's merge past the gate; and Re-run checks.
+ * Override, a person's merge past the gate; Re-run checks; Rebase; and Take
+ * out of the queue (`ChangeWrites.tsx`), each confirmed in the page.
  *
  * # The engine decides, and the page says what it decided
  *
@@ -36,13 +37,14 @@ import { useState } from "react";
 import { Button, Callout, Modal, SegmentedControl, Textarea } from "@crewlethq/ui";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
-import { changeLive } from "~/lib/code.ts";
+import { changeLive, refName } from "~/lib/code.ts";
 import { useAct, type Act } from "~/lib/useAct.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { CodeChangeDetail, CodePrecondition } from "~/protocol/index.ts";
 import { preconditionSentence, readinessCount, readinessNext } from "../readinessWords.ts";
+import { DequeueButton, RebaseButton } from "./ChangeWrites.tsx";
 
 type MergeMethod = (typeof MERGE_METHODS)[number];
 type MergeRefusal = (typeof MERGE_REFUSALS)[number];
@@ -174,7 +176,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
   const readiness = change.readiness;
   if (!changeLive(change.state)) return null;
   const nameOf = (h: string) => seatBadge(h).name;
-  const { viaQueue, held } = mergeStanding(change, nameOf);
+  const { viaQueue, queued, held } = mergeStanding(change, nameOf);
   const line = readiness ? `${readinessCount(readiness)}. ${held ?? "It may merge."}` : held;
   // A DRAFT IS NOT OFFERED A MERGE: its method, branch and merge controls
   // wait until it is marked ready, which is the page bar's primary action.
@@ -182,6 +184,9 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
     return (
       <section className="col gap-2" aria-label="Merge">
         <p className="muted">{line}</p>
+        <div className="row gap-2 wrap">
+          <RebaseButton change={change} />
+        </div>
       </section>
     );
   }
@@ -278,6 +283,12 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
         >
           Re-run checks
         </WriteButton>
+        <RebaseButton change={change} />
+        <DequeueButton
+          changeRef={change.ref}
+          target={refName(change.target_ref).name}
+          queued={queued !== undefined}
+        />
       </div>
       {!overriding && <MergeRefusalNote write={merge} />}
       {overriding && (

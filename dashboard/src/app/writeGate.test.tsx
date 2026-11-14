@@ -195,6 +195,44 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
+  "routes/gitlet/NewRepo.tsx": {
+    why: "the repositories' New repository, one code_create_repo, and the dialog it opens",
+    suite: "routes/gitlet/Repositories.test.tsx",
+  },
+  "routes/gitlet/repo/RepoLife.tsx": {
+    why:
+      "a repository's Delete repository (code_delete_repo, held until its name is " +
+      "typed) and a deleted repository's Restore (code_restore_repo)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/Protect.tsx": {
+    why: "a repository's branch rules: Protect a branch, and a rule's Edit and Remove (code_protect_branch)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/BranchWrites.tsx": {
+    why: "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/FileWrites.tsx": {
+    why:
+      "a branch's files: Edit, New file, Delete file, and an empty repository's Add a " +
+      "file, each one code_commit_files",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/commit/CommitWrites.tsx": {
+    why: "a commit's Revert and Cherry-pick (code_revert, code_cherry_pick) and their dialogs",
+    suite: "routes/gitlet/commit/CommitPage.test.tsx",
+  },
+  "routes/gitlet/change/ChangeWrites.tsx": {
+    why:
+      "a change's Rebase, Take out of the queue and a merged change's Revert " +
+      "(code_rebase_change, code_dequeue_change, code_revert_change)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/FindingAnswer.tsx": {
+    why: "a standing finding's Answer finding (code_resolve_finding)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/commit/ComparePage.tsx": {
     why:
       "a comparison's Open change — one code_open_change of the branch compared into " +
