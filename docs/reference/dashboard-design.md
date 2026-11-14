@@ -9403,10 +9403,14 @@ filters do not narrow it. *The company runs on* is a `StackedRing` round the cou
 filters leave, split Quiet, Needs a look and Alerting (`atlas_facets`), beside
 its `Legend`. *Needs attention now* names the two most urgent entries
 (`atlas_entries` in the health order), each with
-its disc, its name and the engine's one sentence of reason (the card is a
-button that selects the entry on the map; a name or a reason cut on a narrow
-card carries the whole of it as its title), and how many need attention in
-all. *Recorded this
+its disc, its name and the engine's one sentence of reason on two lines (the
+card is a button that selects the entry on the map; a name or a reason cut on
+a narrow card carries the whole of it as its title), and how many need
+attention as links, one per health (*Alerting 2*, *Needs a look 4*), each to
+the catalogue and the map narrowed to it (`health=`), so the entries past the
+two cards are one press away. The count and the cards are two reads: the cards
+are a skeleton until theirs answers, and "Nothing needs attention." is said
+only where the count agrees. *Recorded this
 week* is the atlas log's lines of the last seven days as one figure over an
 `ActivityStrip` of its fourteen (`atlas_activity`). *Where it comes from* is
 the marks of the vendors the entries come from over a `StackedBar` of
