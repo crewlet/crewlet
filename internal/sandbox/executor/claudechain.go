@@ -96,6 +96,18 @@ const (
 	// whyRecoveredResult is a result whose parent is a record of a reply on
 	// the walk, recovered beside it.
 	whyRecoveredResult chainWhy = "recovered_result"
+	// whyHookChain is a record the recovery hangs off a reply on the walk that
+	// made a call: one of a run of records that hang off a reply, each the one
+	// child not met yet of the one before, under a record of the reply, a
+	// result beside it, or a record of its window on the walk that hangs off a
+	// reply itself ([threadChain], THE RECOVERY), as a batch's hooks write
+	// their records under its results.
+	whyHookChain chainWhy = "hook_chain"
+	// whyLeafTail is a record the tails hang under the leaf: neither a user
+	// nor an assistant record, under the leaf through records that are neither
+	// ([threadChain], THE TAILS), as a Stop hook writes its records under the
+	// turn's last reply.
+	whyLeafTail chainWhy = "leaf_tail"
 )
 
 // Not handed: why the resume hands a record under no variant.
@@ -108,10 +120,10 @@ const (
 	// the last compaction's boundary, where a boundary names what it kept,
 	// and not among the records it kept ([threadChain], THE RELINK).
 	whyRelinkDeleted chainWhy = "relink_deleted"
-	// whyAnotherAgent is a record a subagent's own load walks, recovers or may
-	// hang as a tail whose agentId is not that subagent's, none among it: the
-	// load hands on the records of the subagent's own id alone ([threadChain],
-	// A SUBAGENT'S OWN LOAD).
+	// whyAnotherAgent is a record a subagent's own load walks, recovers, hangs
+	// or tails whose agentId is not that subagent's, none among it: the load
+	// hands on the records of the subagent's own id alone ([threadChain], A
+	// SUBAGENT'S OWN LOAD).
 	whyAnotherAgent chainWhy = "another_agent"
 	// whyNoConversation is every record of a thread the resume, or a
 	// subagent's own load, finds no conversation in, and so hands nothing of,
@@ -131,15 +143,6 @@ const (
 	// whyRelease is a record one release's retraction filter drops and the
 	// other's does not.
 	whyRelease chainWhy = "release"
-	// whyTail is a record the tails hang or may hang under the conversation
-	// (in a subagent's thread, one of the subagent's own id): one the
-	// recovery hangs off a reply (a hook's records), which this model finds
-	// but does not hand yet, and one that may hang under the leaf, which it
-	// does not follow yet; or, in the main thread, one only such a record's
-	// retraction list names. Gone once a later commit of this change models
-	// the tails (`feat(executor): model what a resume hangs off a reply and
-	// its leaf`).
-	whyTail chainWhy = "tail"
 	// whyAttachmentDrop is a handed attachment the resume's drop of malformed
 	// attachments may take, which this model does not follow yet; gone once a
 	// later commit of this change models that drop (`feat(executor): model the
@@ -216,6 +219,12 @@ const (
 	// whyResultByCall is a result 2.1.322's and 2.1.310's flag
 	// tengu_foamy_spring may hang elsewhere than under its parent.
 	whyResultByCall chainWhy = "result_by_call"
+	// whyTailTime is a sort the tails make by time that holds a record of no
+	// time beside two records of different times: the resume's comparison
+	// reads the record of no time as equal to each of them, which orders none,
+	// so its engine's sort algorithm decides their order ([threadChain], THE
+	// TAILS).
+	whyTailTime chainWhy = "tail_time"
 	// whyForkContext is a fork's reference in a subagent's thread, any
 	// agent's: where it names the subagent, its own load hands the parent's
 	// conversation before its own ([threadChain], A SUBAGENT'S OWN LOAD).
@@ -233,12 +242,13 @@ const (
 const whyUndecided chainWhy = "undecided"
 
 // chainWhys is every reason, the place each answer stores its reason by.
-var chainWhys = [...]chainWhy{"", whyChain, whyRecoveredReply, whyRecoveredResult, whyOffConversation,
-	whyRetracted, whyRelinkDeleted, whyAnotherAgent, whyNoConversation, whyNoRecord, whyLeafFlag, whyRelease,
-	whyTail, whyAttachmentDrop, whyBound, whyLine, whyLineGap, whyProgress, whyUUID, whyDuplicateUUID,
-	whySidechain, whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape, whyAdmission,
-	whyReplyID, whyCallID, whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape,
-	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyForkContext, whyAgent, whyUndecided}
+var chainWhys = [...]chainWhy{"", whyChain, whyRecoveredReply, whyRecoveredResult, whyHookChain, whyLeafTail,
+	whyOffConversation, whyRetracted, whyRelinkDeleted, whyAnotherAgent, whyNoConversation, whyNoRecord,
+	whyLeafFlag, whyRelease, whyAttachmentDrop, whyBound, whyLine, whyLineGap, whyProgress, whyUUID,
+	whyDuplicateUUID, whySidechain, whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape,
+	whyAdmission, whyReplyID, whyCallID, whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape,
+	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyTailTime, whyForkContext, whyAgent,
+	whyUndecided}
 
 // Valid reports whether w is one of the reasons.
 func (w chainWhy) Valid() bool { return w != "" && slices.Contains(chainWhys[:], w) }
@@ -269,6 +279,9 @@ const (
 	// variantsMetcalfe is 2.1.322's with foamy_spring and sorted_metcalfe on,
 	// the variants q1t moves the leaf in.
 	variantsMetcalfe = variant322SpringMetcalfe | variant322SpringMochiMetcalfe
+	// variantsMochi is those with warm_mochi on, whose tails are a walk by
+	// depth; every other sorts the records of a walk by breadth (THE TAILS).
+	variantsMochi = variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe
 	// variantDefault is 2.1.322 as no flag server answers it, the variant a
 	// definite answer's reason is given for.
 	variantDefault = variant322SpringMochi
@@ -381,12 +394,14 @@ const chainPrefixBytes = 10
 // tengu_warm_mochi (2.1.322's ota() @287013832, 2.1.310's Fri() @240966974,
 // on, and off wherever foamy_spring is) and, in 2.1.322 alone,
 // tengu_sorted_metcalfe (Upe("tengu_sorted_metcalfe") @293811649, off). Eight
-// variants in all ([chainVariants]). Within this model they part in two
+// variants in all ([chainVariants]). Within this model they part in three
 // places: the leaf, where q1t moves it (2.1.322 with foamy_spring and
-// sorted_metcalfe on), and the retraction filter, whose names each release
-// reads off other records. Both are the main thread's: no variant parts a
-// subagent's thread. A record handed under some variants and not others
-// is handedUnknown (whyLeafFlag, whyRelease); each distinct order is handed
+// sorted_metcalfe on); the retraction filter, whose names each release reads
+// off other records, both of them the main thread's; and the order of the
+// tails, which warm_mochi turns from a walk by breadth sorted by time into a
+// walk by depth (THE TAILS), in a subagent's thread as well, over the same
+// records either way. A record handed under some variants and not others is
+// handedUnknown (whyLeafFlag, whyRelease); each distinct order is handed
 // once, with the variants that hand it ([threadChain.EachOrder]).
 // foamy_spring's other effect, a result hung under a call it names rather than
 // under its parent, is refused wherever it could hang one (whyResultByCall).
@@ -687,44 +702,78 @@ const chainPrefixBytes = 10
 // code): for each reply on the walk, in its order, the first time its id is
 // met (`message.id` truthy), every other record of that id anywhere in the
 // thread and every result (a user record holding a tool_result block) whose
-// parent is one of them, neither walked nor recovered before, is recovered;
-// its window runs from the reply to past the last record of its id on the
-// walk and on over every record X_e reads as part of it (2.1.322 @293748740,
-// 2.1.310's Yce @247133691: a reply of its id, a meta user record or one of
-// results, any attachment, a system record but a compaction's boundary).
-// Where a record of the reply made a call (2.1.322's bVe @293748333, 2.1.310's
-// xMt @247133284), the recovery then HANGS records off it (`co`): under each
-// record of the reply, then each result under one of them walked or
-// recovered by now, then each walked record of the window past the reply's
-// first that is UF (2.1.322 @293588888, 2.1.310's l0 @246995738: an
-// attachment, a system record but a compaction's boundary, a meta user record
-// holding no result), it takes from each child in turn what pye hands
-// (2.1.322 @293588633, 2.1.310's cce @246995483): the child and, after each,
-// its one child not met yet, every one a UF record whose isSidechain, as
-// written, is that of the record the chain hangs under (absent, false and
-// true apart) and none met, or nothing where one is not or has two children
-// not met; each record hung is
-// met at once, so it blocks what a later window would hang. A window OPENS
-// where it recovered or hung a record (`xn.length===0&&Tn.size===0` skips the
-// rest), one of hung records alone among them. Windows that overlap merge, so
-// a window of hung records alone moves where a window before it places its
-// records; each places its recovered records among the walked ones of its
-// window by their place in the file, the rest at its end. This commit hands
-// no record the recovery hangs: each is handedUnknown (whyTail), as is every
-// attachment, system record and meta user record holding no result that the
-// walk and the recovery do not hand; an order holds the records it hands for
-// certain in the place the resume gives them. A result whose ids are not all
-// of calls its parent made, where a reply other than its parent made one of
+// parent is one of them, neither walked nor recovered before, is recovered
+// (whyRecoveredReply, whyRecoveredResult); its window runs from the reply to
+// past the last record of its id on the walk and on over every record X_e
+// reads as part of it (2.1.322 @293748740, 2.1.310's Yce @247133691: a reply
+// of its id, a meta user record or one of results, any attachment, a system
+// record but a compaction's boundary). Where a record of the reply made a
+// call (2.1.322's bVe @293748333, 2.1.310's xMt @247133284), the recovery then
+// HANGS records off it (`co`, whyHookChain): under each record of the reply,
+// then each result under one of them walked or recovered by now, then each
+// walked record of the window past the reply's first that is UF (2.1.322
+// @293588888, 2.1.310's l0 @246995738: an attachment, a system record but a
+// compaction's boundary, a meta user record holding no result), it takes from
+// each child in turn, in the file's order, what pye hands (2.1.322
+// @293588633, 2.1.310's cce @246995483): the child and, after each, its one
+// child not met yet, every one a UF record whose isSidechain, as written, is
+// that of the record the chain hangs under (absent, false and true apart) and
+// none met, or nothing where one is not or has two children not met; each
+// record hung is met at once (`r.add(Bo.uuid)` @293752104, @247137051), so it
+// blocks what a later window would hang. A window OPENS where it recovered or
+// hung a record (`xn.length===0&&Tn.size===0` @293752359, @247137306 skips
+// the rest), one of hung records alone among them. Each places its records
+// among the walked ones of its window: what it recovered, and what it hung
+// under a record of the reply or a result (`co(uo,xn)` @293752239,
+// @247137186), by their place in the file (`xn.sort(_t)` @293752430,
+// @247137377), each before the first walked record written after it, the
+// rest at the window's end; what it hung under a walked record right after
+// that record, in the order hung (`Ot.push(...an.get(so.uuid)??[])`
+// @293753212, @247138159). Windows that overlap merge (@293752828,
+// @247137775), their recovered records sorted together and the records each
+// hung under one walked record joined, the earlier window's first
+// (@293752913, @247137860), so a window of hung records alone moves where a
+// window before it places its records. A result whose ids are not all of
+// calls its parent made, where a reply other than its parent made one of
 // them, or its sourceToolAssistantUUID names a record other than its parent,
 // is one foamy_spring may hang elsewhere: whyResultByCall, the whole thread.
 // And where a window exists and the walk is longer than
 // [threadChainMaxSpread], or the records hung under one walked record are,
 // whySpread: the recovery spreads stretches of the walk, and each walked
-// record's hung records, into one call's arguments.
+// record's hung records, into one call's arguments. MEASURED by the design's
+// census of the 432 main threads the probes kept: 13 records of a reply and
+// 66 results recovered beside it, and 104 records hung under a reply's
+// records or results (a prompt's snapshot, a token reminder), none under a
+// walked record; none recovered by a call's id.
 //
-// THE TAILS (2.1.322's lWo @293747057, 2.1.310's kpo @247131650): the records
-// hanging under the leaf that are neither user nor assistant ones, which this
-// commit does not model either (whyTail).
+// THE TAILS (2.1.322's lWo @293747057 with XGt @293746868, 2.1.310's kpo
+// @247131650 with CMt @247131461, the same code, run after the recovery with
+// what the walk and the recovery met, `lWo(n,w,h,r??XGt(e))` @293745892,
+// @247130444): every record under the leaf that is neither a user nor an
+// assistant record (`r.type!=="user"&&r.type!=="assistant"` @293746939,
+// @247131532), a compaction's boundary among them and whatever its side,
+// through records that are neither, a record met already ending its branch,
+// is handed after all the walk and the recovery hand (whyLeafTail). Their
+// order turns on warm_mochi. With it, a walk by depth from the leaf
+// (@293747195, @247131788): each record's children sorted by time, the
+// earliest taken first (`K.length>1?[...K].sort(S):K` @293747281,
+// @247131874). Without it, a walk by breadth (@293747466, @247132054) whose
+// records are then sorted by time together (@293747532, @247132120): the
+// same records, in another order only where the tails run two deep and their
+// times interleave. Each sort is stable, of the timestamp compared as a
+// string (`H.timestamp<K.timestamp` @293747102, `D.timestamp<K.timestamp`
+// @247131695), which reads a record of no time as equal to every record, so
+// a sort holding one beside two records of different times orders none of
+// them, and its engine's sort algorithm does (whyTailTime, the whole
+// thread); one beside records of one time leaves them all as they came. The
+// walk by depth sorts each record's every child, met or not. And the walk by
+// breadth spreads what it found into one call's arguments (`n.push(...h)`
+// @293747616, @247132204): more records than [threadChainMaxSpread] are
+// whySpread. MEASURED by the design's census of the 432 main threads the
+// probes kept: 78 and 74 tails under the leaf, 2.1.310's and 2.1.322's (a
+// Stop hook's records, those the compact command leaves, a prompt's
+// snapshot), none with two children, both orders one on every one of them;
+// and no record of the probes' 397 thread files lacks a timestamp.
 //
 // THE RETRACTION FILTER (2.1.322's eGe @295286851, 2.1.310's qGn
 // @248511058), main mode alone, over each variant's list: every record but a
@@ -732,9 +781,8 @@ const chainPrefixBytes = 10
 // its retractedMessageUuids is dropped (whyRetracted); 2.1.322 reads the names
 // off user, assistant and model_refusal_fallback records, 2.1.310 off the
 // last alone, so a record only one release drops is whyRelease. An entry of
-// fewer than 24 characters retracts nothing. Where a record whose retraction
-// list is read is itself one the tails may hang, what its list names is
-// whyTail.
+// fewer than 24 characters retracts nothing. The list is every record the
+// walk, the recovery and the tails hand, those hung and the tails among them.
 //
 // THE MALFORMED-ATTACHMENT DROP (2.1.322's Fce @295256716 with SCr
 // @295255626, 2.1.310's dne with cJo @248486136), main mode alone, after the
@@ -1940,13 +1988,6 @@ func (c *threadChain) partOf(h chainHandle, id chainReplyID) bool {
 	return false
 }
 
-// tailable reports whether record h is one the tails may hang: one that is
-// neither a user nor an assistant record, under the leaf, or a UF record
-// under a reply ([threadChain], THE RECOVERY and THE TAILS).
-func (c *threadChain) tailable(h chainHandle) bool {
-	return c.recs[h-1].kind&(kindAttachment|kindSystem) != 0 || c.uf(h)
-}
-
 // readsRetractions reports whether the release of variants reads record h's
 // retraction list: 2.1.322's eGe a user, assistant or fallback record's,
 // 2.1.310's qGn a fallback's alone.
@@ -2406,13 +2447,13 @@ func (c *threadChain) decide(ctx context.Context) error {
 		leaves = append(leaves, leaf1)
 	}
 	for _, leaf := range leaves {
-		base, how, listErr := c.listFrom(ctx, w, leaf)
+		list, listErr := c.listFrom(ctx, w, leaf)
 		if listErr != nil || c.why != "" {
 			return listErr
 		}
 		for i := range groups {
 			if groups[i].leaf == leaf {
-				groups[i].base, groups[i].how = base, how
+				groups[i].list = list
 			}
 		}
 	}
@@ -2429,18 +2470,20 @@ func (c *threadChain) decide(ctx context.Context) error {
 }
 
 // chainGroup is the variants that walk from one leaf under one release's
-// retraction filter, what they hand, and why.
+// retraction filter, what they hand, and why. The tails' order parts the
+// group's variants once more, warm_mochi's from the rest, but never what they
+// hand: the two orders hold the same records.
 type chainGroup struct {
 	leaf     chainHandle
 	variants chainVariants
-	// base is the walk and the recovery from the leaf, the handed list before
-	// the filter, and how each record of it was reached, by handle.
-	base []chainHandle
-	how  []uint8
-	// verdicts is each record's answer under these variants, by handle - 1,
-	// and order the records they hand for certain.
-	verdicts []chainVerdict
-	order    []chainHandle
+	// list is what the walk, the recovery and the tails hand from the leaf,
+	// before the filter.
+	list chainList
+	// verdicts is each record's answer under these variants, by handle - 1;
+	// order the records they hand for certain, in warm_mochi's order of the
+	// tails, and bfs in the order without it, nil where the two are one.
+	verdicts   []chainVerdict
+	order, bfs []chainHandle
 }
 
 // whyAt is w's place in chainWhys.
@@ -3056,19 +3099,146 @@ func (c *threadChain) resultsOf(h chainHandle) []chainCallID {
 	return c.callsOf(h)
 }
 
-// listFrom is what the resume's walk and recovery hand from leaf, and how
-// each record of it was reached, by handle: none where leaf is none.
-func (c *threadChain) listFrom(ctx context.Context, w *chainWork, leaf chainHandle) ([]chainHandle, []uint8, error) {
+// chainList is what the resume's walk, recovery and tails hand from one leaf,
+// before the retraction filter: base, the walk with what the recovery reached
+// placed in it; tails, what the tails hang under the leaf in warm_mochi's
+// order, and bfs the same records in the order without it, nil where the two
+// are one; and how each record of them was reached, by handle.
+type chainList struct {
+	base, tails, bfs []chainHandle
+	how              []uint8
+}
+
+// listFrom is what the resume's walk, recovery and tails hand from leaf: none
+// where leaf is none.
+func (c *threadChain) listFrom(ctx context.Context, w *chainWork, leaf chainHandle) (chainList, error) {
 	if leaf == noChainRecord {
-		return nil, nil, nil
+		return chainList{}, nil
 	}
 	chain, err := c.walk(ctx, w, leaf)
 	if err != nil {
-		return nil, nil, err
+		return chainList{}, err
 	}
-	how := make([]uint8, len(c.recs)+1)
-	base, err := c.recover(ctx, w, chain, how)
-	return base, how, err
+	list := chainList{how: make([]uint8, len(c.recs)+1)}
+	if list.base, err = c.recover(ctx, w, chain, list.how); err != nil || c.why != "" {
+		return chainList{}, err
+	}
+	if list.tails, list.bfs, err = c.tails(ctx, w, leaf); err != nil || c.why != "" {
+		return chainList{}, err
+	}
+	tail := whyAt(whyLeafTail)
+	for _, h := range list.tails {
+		list.how[h] = tail
+	}
+	return list, nil
+}
+
+// tails is what the resume hangs under leaf after the walk and the recovery,
+// with what they met in w.met ([threadChain], THE TAILS; 2.1.322's lWo
+// @293747057, 2.1.310's kpo @247131650): dfs in warm_mochi's order, a walk by
+// depth whose every record's children are sorted by time; bfs in the order
+// without it, the records a walk by breadth finds, sorted by time together,
+// nil where the two orders are one. Both walks take the records under leaf
+// that are neither user nor assistant records, through records that are
+// neither, and pass over a record met and what lies under it, so they find
+// the same records: each record has one parent, so each is found from it
+// alone. Where a sort holds no order, the thread is whyTailTime; where the
+// walk by breadth finds more than threadChainMaxSpread records, whySpread.
+func (c *threadChain) tails(ctx context.Context, w *chainWork, leaf chainHandle) ([]chainHandle, []chainHandle, error) {
+	// The walk by breadth first, w.a holding what it found, so w.met is still
+	// what the walk and the recovery left for the walk by depth.
+	w.a.clear()
+	var dfs, bfs []chainHandle
+	queue := []chainHandle{leaf}
+	for q := 0; q < len(queue); q++ {
+		for _, k := range w.children(queue[q]) {
+			if err := w.tick(ctx); err != nil {
+				return nil, nil, err
+			}
+			if c.turn(k) || w.met.has(int(k)) || w.a.has(int(k)) {
+				continue
+			}
+			w.a.set(int(k))
+			bfs = append(bfs, k)
+			queue = append(queue, k)
+		}
+	}
+	switch {
+	case !c.byTime(bfs):
+		c.cannotTell(whyTailTime)
+		return nil, nil, nil
+	case len(bfs) > threadChainMaxSpread:
+		c.cannotTell(whySpread)
+		return nil, nil, nil
+	}
+	// The walk by depth, as the resume makes it: a record popped and met
+	// already is passed over with what lies under it, and each record's
+	// children are pushed latest first, so the earliest pops first.
+	stack := []chainHandle{leaf}
+	var kids []chainHandle
+	for len(stack) > 0 {
+		if err := w.tick(ctx); err != nil {
+			return nil, nil, err
+		}
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if h != leaf {
+			if w.met.has(int(h)) {
+				continue
+			}
+			w.met.set(int(h))
+			dfs = append(dfs, h)
+		}
+		kids = kids[:0]
+		for _, k := range w.children(h) {
+			if !c.turn(k) {
+				kids = append(kids, k)
+			}
+		}
+		if len(kids) > 1 && !c.byTime(kids) {
+			c.cannotTell(whyTailTime)
+			return nil, nil, nil
+		}
+		for i := len(kids) - 1; i >= 0; i-- {
+			if !w.met.has(int(kids[i])) {
+				stack = append(stack, kids[i])
+			}
+		}
+	}
+	if slices.Equal(dfs, bfs) {
+		bfs = nil
+	}
+	return dfs, bfs, nil
+}
+
+// byTime sorts records by time as the tails' sorts do, a stable sort of each
+// record's timestamp compared as a string, and reports whether that
+// comparison orders them at all: it reads a record of no time as equal to
+// every record, so beside two records of different times such a record leaves
+// their order to the engine's sort algorithm, and beside records of one time
+// it leaves every record as it came. On the one form of a time the chain
+// admits, the string's order is its milliseconds'.
+func (c *threadChain) byTime(records []chainHandle) bool {
+	untimed, times := false, 0
+	var first int64
+	for _, h := range records {
+		switch r := c.recs[h-1]; {
+		case r.kind&kindTimed == 0:
+			untimed = true
+		case times == 0:
+			first, times = r.ms, 1
+		case r.ms != first:
+			times = 2
+		}
+	}
+	switch {
+	case untimed && times > 1:
+		return false
+	case untimed:
+		return true
+	}
+	slices.SortStableFunc(records, func(x, y chainHandle) int { return cmp.Compare(c.recs[x-1].ms, c.recs[y-1].ms) })
+	return true
 }
 
 // walk is the chain from leaf to its root, root first, its records met
@@ -3183,37 +3353,32 @@ func sideOf(k chainKind) int {
 }
 
 // chainWindow is a reply's window of the walk, chain[start:end], and the
-// records the recovery placed in it among the walked ones: those it hands,
-// never the ones it hangs ([threadChain.hang]).
+// records the recovery places among its walked ones by their place in the
+// file: those it recovered beside the reply, and those it hung under a record
+// of the reply or a result beside it ([threadChain.hang]).
 type chainWindow struct {
 	start, end int
 	recovered  []chainHandle
 }
 
-// chainAnchors counts the records the recovery hangs under each walked record
-// of a window, summed over every window holding that record, which all merge
-// into one: the list the resume spreads into one call's arguments as it
-// places them (`Ot.push(...an.get(so.uuid))`).
-type chainAnchors struct {
-	// under is the count by handle - 1, made at the first record hung.
-	under []int32
-	// most is the largest count.
-	most int32
-}
-
-// add counts n records hung under u, a record of a thread of records.
-func (a *chainAnchors) add(u chainHandle, n, records int) {
-	if a.under == nil {
-		a.under = make([]int32, records)
-	}
-	a.under[u-1] += int32(n)
-	a.most = max(a.most, a.under[u-1])
+// chainAnchored is a record the recovery hung under the walked record at
+// chain[at], which the resume places right after that record
+// (`Ot.push(...an.get(so.uuid))`).
+type chainAnchored struct {
+	at     int32
+	record chainHandle
 }
 
 // recover is chain with the records the recovery reaches placed in it
 // ([threadChain], THE RECOVERY), and how each record of it was reached, into
-// how by handle. The records it hangs open windows and are met, as the
-// resume's are, but are no record of the list it answers.
+// how by handle: those it recovers beside a reply, and those it hangs off one.
+//
+// THE RECORDS HUNG UNDER A WALKED RECORD ARE KEPT IN ONE LIST FOR THE THREAD,
+// in the order hung, rather than in a list a window: every window whose
+// walked records hold that record merges with the others into one (the later
+// starts before the earlier ends), so the list a walked record gathers
+// across the thread is the one the resume joins as it merges them, the
+// earlier window's first.
 func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHandle, how []uint8) ([]chainHandle, error) {
 	for i := range w.pos {
 		w.pos[i] = -1
@@ -3225,8 +3390,8 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 	}
 	w.replied.clear()
 	var (
-		windows []chainWindow
-		anchors chainAnchors
+		windows  []chainWindow
+		anchored []chainAnchored
 	)
 	for i, d := range chain {
 		if err := w.tick(ctx); err != nil {
@@ -3264,11 +3429,12 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 		for end < len(chain) && c.partOf(chain[end], id) {
 			end++
 		}
-		hung, err := c.hang(ctx, w, chain, id, i, end, &anchors)
-		if err != nil {
+		hung := len(anchored)
+		var err error
+		if recovered, anchored, err = c.hang(ctx, w, chain, id, i, end, recovered, anchored, how); err != nil {
 			return nil, err
 		}
-		if len(recovered) > 0 || hung {
+		if len(recovered) > 0 || len(anchored) > hung {
 			slices.Sort(recovered)
 			windows = append(windows, chainWindow{start: i, end: end, recovered: recovered})
 		}
@@ -3276,12 +3442,25 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 	if len(windows) == 0 {
 		return chain, nil
 	}
-	if len(chain) > threadChainMaxSpread || anchors.most > threadChainMaxSpread {
+	// Each walked record's hung records together, in the order hung: the
+	// lists of the windows that merge, joined.
+	slices.SortStableFunc(anchored, func(x, y chainAnchored) int { return cmp.Compare(x.at, y.at) })
+	longest := 0
+	for i := 0; i < len(anchored); {
+		run := i + 1
+		for run < len(anchored) && anchored[run].at == anchored[i].at {
+			run++
+		}
+		longest, i = max(longest, run-i), run
+	}
+	if len(chain) > threadChainMaxSpread || longest > threadChainMaxSpread {
 		c.cannotTell(whySpread)
 		return nil, nil
 	}
 	merged := make([]chainWindow, 0, len(windows))
+	placed := len(chain) + len(anchored)
 	for _, win := range windows {
+		placed += len(win.recovered)
 		if n := len(merged); n > 0 && win.start < merged[n-1].end {
 			last := &merged[n-1]
 			last.end = max(last.end, win.end)
@@ -3291,8 +3470,8 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 		}
 		merged = append(merged, win)
 	}
-	out := make([]chainHandle, 0, len(chain)+len(windows))
-	prev := 0
+	out := make([]chainHandle, 0, placed)
+	prev, a := 0, 0
 	for _, win := range merged {
 		out = append(out, chain[prev:win.start+1]...)
 		j := 0
@@ -3302,6 +3481,10 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 				j++
 			}
 			out = append(out, chain[k])
+			for a < len(anchored) && anchored[a].at == int32(k) {
+				out = append(out, anchored[a].record)
+				a++
+			}
 		}
 		out = append(out, win.recovered[j:]...)
 		prev = win.end
@@ -3315,73 +3498,70 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 // then under each result whose parent is one of them and that is met by now,
 // then under each walked record of the window past its first that is UF, what
 // [threadChain.pye] hangs from each of the record's children in turn, every
-// record hung met at once. It reports whether it hung any record, and counts
-// into anchors those it hung under the window's walked records.
+// record hung met at once and reached as whyHookChain into how. What it hangs
+// under a record of the reply or a result it appends to recovered, which the
+// window places by the file's order; what it hangs under a walked record, to
+// anchored, at that record's place on the walk.
 //
 // Each window takes its records' children afresh, as the resume does, rather
 // than once a thread: a chain one window leaves, a record with two children
 // not met, can hang in a later one once a recovery between them met one.
 func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandle, id chainReplyID, start, end int,
-	anchors *chainAnchors) (bool, error) {
+	recovered []chainHandle, anchored []chainAnchored, how []uint8) ([]chainHandle, []chainAnchored, error) {
 	group := w.records(id)
 	if !slices.ContainsFunc(group, func(g chainHandle) bool { return c.is(g, kindUse) }) {
-		return false, nil
+		return recovered, anchored, nil
 	}
-	var hung []chainHandle
-	// under hangs under u what pye hands from each of u's children, and
-	// answers how many records it hung.
-	under := func(u chainHandle) (int, error) {
-		n := 0
+	hook := whyAt(whyHookChain)
+	// under appends to into what pye hands from each of u's children, every
+	// record of it met at once.
+	under := func(u chainHandle, into []chainHandle) ([]chainHandle, error) {
 		for _, y := range w.children(u) {
+			from := len(into)
 			var err error
-			if hung, err = c.pye(ctx, w, y, u, hung[:0]); err != nil {
-				return 0, err
+			if into, err = c.pye(ctx, w, y, u, into); err != nil {
+				return nil, err
 			}
-			for _, x := range hung {
+			for _, x := range into[from:] {
 				w.met.set(int(x))
+				how[x] = hook
 			}
-			n += len(hung)
 		}
-		return n, nil
+		return into, nil
 	}
-	opens := false
+	var err error
 	for _, g := range group {
-		n, err := under(g)
-		if err != nil {
-			return false, err
+		if recovered, err = under(g, recovered); err != nil {
+			return nil, nil, err
 		}
-		opens = opens || n > 0
 	}
 	for _, g := range group {
 		for _, x := range w.children(g) {
 			if !c.is(x, kindUser|kindResult) || !w.met.has(int(x)) {
 				continue
 			}
-			n, err := under(x)
-			if err != nil {
-				return false, err
+			if recovered, err = under(x, recovered); err != nil {
+				return nil, nil, err
 			}
-			opens = opens || n > 0
 		}
 	}
+	var hung []chainHandle
 	for k := start + 1; k < end; k++ {
-		if err := w.tick(ctx); err != nil {
-			return false, err
+		if err = w.tick(ctx); err != nil {
+			return nil, nil, err
 		}
 		u := chain[k]
 		if !c.uf(u) {
 			continue
 		}
-		n, err := under(u)
-		if err != nil {
-			return false, err
+		if hung, err = under(u, hung[:0]); err != nil {
+			return nil, nil, err
 		}
-		if n > 0 {
-			anchors.add(u, n, len(c.recs))
-			opens = true
+		for _, x := range hung {
+			anchored = append(anchored, chainAnchored{at: int32(k), record: x})
 		}
 	}
-	return opens, nil
+	return recovered, anchored, nil
 }
 
 // pye is what the recovery hangs under u from y, one of u's children,
@@ -3418,12 +3598,13 @@ func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 }
 
 // judge decides each record's answer under g's variants: the records the
-// relink deleted not handed, g's base handed, the records the tails may hang
-// cannot tell; then, in the main thread, the retraction filter of g's release
-// and the attachments the malformed-attachment drop may take cannot tell, and
-// in a subagent's thread the hand-off to the subagent's own id ([threadChain],
-// THE RELINK, THE TAILS, THE RETRACTION FILTER, THE MALFORMED-ATTACHMENT DROP
-// and A SUBAGENT'S OWN LOAD).
+// relink deleted not handed, what the walk, the recovery and the tails hand
+// handed; then, in the main thread, the retraction filter of g's release, read
+// off every record of that list, and the attachments the malformed-attachment
+// drop may take cannot tell, and in a subagent's thread the hand-off to the
+// subagent's own id ([threadChain], THE RELINK, THE RETRACTION FILTER, THE
+// MALFORMED-ATTACHMENT DROP and A SUBAGENT'S OWN LOAD). Its orders are the
+// records it hands for certain, in each order of the tails.
 func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) error {
 	g.verdicts = make([]chainVerdict, len(c.recs))
 	off, deleted := chainVerdict{handed: verdictNo, why: whyAt(whyOffConversation)},
@@ -3440,54 +3621,41 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 	if g.leaf == noChainRecord {
 		return nil
 	}
-	tail := chainVerdict{handed: verdictUnknown, why: whyAt(whyTail)}
-	for _, h := range g.base {
-		g.verdicts[h-1] = chainVerdict{handed: verdictYes, why: g.how[h]}
+	// handed is the list, the tails in warm_mochi's order: the same records in
+	// either.
+	handed := slices.Concat(g.list.base, g.list.tails)
+	for _, h := range handed {
+		g.verdicts[h-1] = chainVerdict{handed: verdictYes, why: g.list.how[h]}
 	}
 	main := c.agent == ""
-	var names, tails map[[chainPrefixBytes]byte]bool
-	for i := range g.verdicts {
-		if err := w.tick(ctx); err != nil {
-			return err
-		}
-		h := chainHandle(i + 1)
-		v := &g.verdicts[i]
-		if v.handed == verdictNo && c.tailable(h) && !c.is(h, kindDeleted) {
-			*v = tail
-		}
-		if !main || v.handed == verdictNo || !c.readsRetractions(h, g.variants) {
-			continue
-		}
-		for _, p := range c.prefixesOf(h) {
-			switch {
-			case v.handed == verdictYes:
+	if main {
+		var names map[[chainPrefixBytes]byte]bool
+		for _, h := range handed {
+			if err := w.tick(ctx); err != nil {
+				return err
+			}
+			if !c.readsRetractions(h, g.variants) {
+				continue
+			}
+			for _, p := range c.prefixesOf(h) {
 				if names == nil {
 					names = map[[chainPrefixBytes]byte]bool{}
 				}
 				names[p] = true
-			default:
-				if tails == nil {
-					tails = map[[chainPrefixBytes]byte]bool{}
-				}
-				tails[p] = true
+			}
+		}
+		for _, h := range handed {
+			if c.is(h, kindSystem) {
+				continue
+			}
+			var p [chainPrefixBytes]byte
+			copy(p[:], c.recs[h-1].uuid[:chainPrefixBytes])
+			if names[p] {
+				g.verdicts[h-1] = chainVerdict{handed: verdictNo, why: whyAt(whyRetracted)}
 			}
 		}
 	}
-	for _, h := range g.base {
-		v := &g.verdicts[h-1]
-		if c.is(h, kindSystem) {
-			continue
-		}
-		var p [chainPrefixBytes]byte
-		copy(p[:], c.recs[h-1].uuid[:chainPrefixBytes])
-		switch {
-		case names[p]:
-			*v = chainVerdict{handed: verdictNo, why: whyAt(whyRetracted)}
-		case tails[p]:
-			*v = tail
-		}
-	}
-	for _, h := range g.base {
+	for _, h := range handed {
 		if v := &g.verdicts[h-1]; v.handed == verdictYes && c.is(h, kindAttachment|kindIllFormed) {
 			*v = chainVerdict{handed: verdictUnknown, why: whyAt(whyAttachmentDrop)}
 		}
@@ -3502,10 +3670,10 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 			}
 		}
 	}
-	for _, h := range g.base {
-		if g.verdicts[h-1].handed == verdictYes {
-			g.order = append(g.order, h)
-		}
+	uncertain := func(h chainHandle) bool { return g.verdicts[h-1].handed != verdictYes }
+	g.order = slices.DeleteFunc(handed, uncertain)
+	if g.list.bfs != nil {
+		g.bfs = slices.DeleteFunc(slices.Concat(g.list.base, g.list.bfs), uncertain)
 	}
 	return nil
 }
@@ -3515,7 +3683,8 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 // variant's reason; handedUnknown where a group cannot tell, with its reason,
 // or where the groups part, whyLeafFlag where q1t's leaf parts them and else
 // whyRelease. Each distinct order is kept once, with the variants that hand
-// it, the default variant's first.
+// it, the default variant's first: a group's warm_mochi variants hand its
+// order, the rest its order with the tails sorted after a walk by breadth.
 func (c *threadChain) merge(groups []chainGroup) {
 	def := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants&variantDefault != 0 })
 	metcalfe := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants == variantsMetcalfe })
@@ -3548,18 +3717,32 @@ func (c *threadChain) merge(groups []chainGroup) {
 	}
 	ordered := append([]chainGroup{groups[def]}, slices.Delete(slices.Clone(groups), def, def+1)...)
 	for _, g := range ordered {
-		at := slices.IndexFunc(c.orders, func(o chainOrder) bool { return slices.Equal(o.records, g.order) })
-		if at >= 0 {
-			c.orders[at].variants |= g.variants
-			continue
+		bfs := g.order
+		if g.bfs != nil {
+			bfs = g.bfs
 		}
-		o := chainOrder{records: g.order, at: make([]int32, len(c.recs)), variants: g.variants}
-		for i := range o.at {
-			o.at[i] = -1
-		}
-		for i, h := range g.order {
-			o.at[h-1] = int32(i)
-		}
-		c.orders = append(c.orders, o)
+		c.order(g.order, g.variants&variantsMochi)
+		c.order(bfs, g.variants&^variantsMochi)
 	}
+}
+
+// order files records as the order variants hand, where any does: added to
+// the variants of an order of the same records in the same order, else a
+// distinct order of its own.
+func (c *threadChain) order(records []chainHandle, variants chainVariants) {
+	if variants == 0 {
+		return
+	}
+	if at := slices.IndexFunc(c.orders, func(o chainOrder) bool { return slices.Equal(o.records, records) }); at >= 0 {
+		c.orders[at].variants |= variants
+		return
+	}
+	o := chainOrder{records: records, at: make([]int32, len(c.recs)), variants: variants}
+	for i := range o.at {
+		o.at[i] = -1
+	}
+	for i, h := range records {
+		o.at[h-1] = int32(i)
+	}
+	c.orders = append(c.orders, o)
 }

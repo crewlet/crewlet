@@ -92,13 +92,28 @@ func rcAttach(parent, n, ms int, attachment string) string {
 }
 
 // rcHook is a hook's success that followed call id.
-func rcHook(id string) string {
-	return `{"type":"hook_success","hookName":"PostToolUse","toolUseID":"` + id + `","hookEvent":"PostToolUse",` +
-		`"content":"","stdout":"","stderr":"","exitCode":0}`
+func rcHook(id string) string { return rcHookOf("PostToolUse", id) }
+
+// rcHookOf is the success of a hook of event, of the firing whose records
+// carry id.
+func rcHookOf(event, id string) string {
+	return `{"type":"hook_success","hookName":"` + event + `","toolUseID":"` + id + `","hookEvent":"` + event +
+		`","content":"","stdout":"","stderr":"","exitCode":0}`
 }
 
-// rcNote is an attachment that follows no call.
-const rcNote = `{"type":"total_tokens_reminder","text":"tokens left"}`
+// rcContextOf is the context a hook of event added, of the firing whose
+// records carry id.
+func rcContextOf(event, id string) string {
+	return `{"type":"hook_additional_context","content":["a note"],"hookName":"` + event + `","toolUseID":"` + id +
+		`","hookEvent":"` + event + `"}`
+}
+
+// rcNote is an attachment that follows no call, and rcSnapshot the snapshot
+// of a prompt its harness writes after a batch's results.
+const (
+	rcNote     = `{"type":"total_tokens_reminder","text":"tokens left"}`
+	rcSnapshot = `{"type":"prompt_snapshot","prompt":"a prompt"}`
+)
 
 // rcSystem is record n, a system record of subtype, its keys beside (each
 // ending in a comma) before its own.
@@ -481,13 +496,13 @@ func TestTheResumeHandsTheChainFromItsLeafRootFirst(t *testing.T) {
 // THE LEAF IS THE LAST ROW'S NEAREST TURN RECORD: where no checkpoint moves
 // it, the resume walks from the nearest user or assistant record up from the
 // last record it keeps a row of, so a stop hook's summary or an attachment
-// written last is no leaf, and what hangs under the leaf is a tail this
-// commit does not model yet (whyTail). Where that turn record carries no time,
-// which no leaf the resume takes is, and where the thread holds no record at
-// all, the resume finds no conversation and hands nothing, in every variant.
+// written last is no leaf: it is handed after the leaf, a tail of it (THE
+// TAILS). Where that turn record carries no time, which no leaf the resume
+// takes is, and where the thread holds no record at all, the resume finds no
+// conversation and hands nothing, in every variant.
 //
 // Mutation: start the walk at the last row itself, and the summary and the
-// attachment read as handed; take a turn record of no time for the leaf, and
+// attachment read as walked; take a turn record of no time for the leaf, and
 // a thread the resume finds no conversation in hands its records; or hand no
 // order of a thread of no record, and its readers cannot tell that every
 // variant hands it nothing.
@@ -498,8 +513,8 @@ func TestTheLeafIsTheLastRowsNearestTurnRecord(t *testing.T) {
 		"an attachment last":         rcAttach(2, 3, 2000, rcNote),
 	} {
 		read := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("done")), last)
-		read.expect(t, name, map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: cannot(whyTail)},
-			rcOrder{[]int{1, 2}, allVariants})
+		read.expect(t, name, map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyLeafTail)},
+			rcOrder{[]int{1, 2, 3}, allVariants})
 		read.expectLeaf(t, name, 2)
 	}
 	read := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("done")),
@@ -596,7 +611,10 @@ func TestTheResumeStartsFromACheckpointTheLastRowDoesNotDescendFrom(t *testing.T
 // checkpoint's leaf; the reply's run up from it goes on over its result, so
 // a last row below the reply's earlier record keeps its leaf; and a
 // compaction's boundary hangs off no reply, so a checkpoint naming one leads
-// to the nearest turn above it rather than through its batch.
+// to the nearest turn above it rather than through its batch, and is handed
+// after the leaf, a tail of it. Whichever leaf the resume takes, the hook's
+// records the checkpoint names hang off the batch's reply or a result of it,
+// and are handed with it (THE RECOVERY).
 //
 // Mutation: skip the descent through the batch, and the resume starts from
 // the checkpoint in the first; skip the reply's other record below or above
@@ -617,51 +635,51 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 		rcResults(2, 3, 2000, "x1"), rcAttach(3, 4, 2100, rcHook("x1")), rcResults(2, 5, 3000, "x2"),
 		rcReply(5, 6, "msg_b", 4000, rcSaid("done")), rcCheckpoint(4))
 	batch.expect(t, "a batch's results", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
-		3: yes(whyRecoveredResult), 4: cannot(whyTail), 5: yes(whyChain), 6: yes(whyChain)},
-		rcOrder{[]int{1, 2, 3, 5, 6}, allVariants})
+		3: yes(whyRecoveredResult), 4: yes(whyHookChain), 5: yes(whyChain), 6: yes(whyChain)},
+		rcOrder{[]int{1, 2, 3, 4, 5, 6}, allVariants})
 	batch.expectLeaf(t, "a batch's results", 6)
 
 	below := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcReply(2, 3, "msg_a", 1001, rcCalls("x2")), rcResults(2, 4, 2000, "x1"), rcAttach(4, 5, 2100, rcHook("x1")),
 		rcResults(3, 6, 3000, "x2"), rcReply(6, 7, "msg_b", 4000, rcSaid("done")), rcCheckpoint(5))
 	below.expect(t, "a batch a record a call, its other record below", map[int]rcAnswer{1: yes(whyChain),
-		2: yes(whyChain), 3: yes(whyChain), 4: yes(whyRecoveredResult), 5: cannot(whyTail), 6: yes(whyChain),
-		7: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 4, 6, 7}, allVariants})
+		2: yes(whyChain), 3: yes(whyChain), 4: yes(whyRecoveredResult), 5: yes(whyHookChain), 6: yes(whyChain),
+		7: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 4, 5, 6, 7}, allVariants})
 	above := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcReply(2, 3, "msg_a", 1001, rcCalls("x2")), rcResults(3, 4, 2000, "x2"), rcAttach(4, 5, 2100, rcHook("x2")),
 		rcResults(2, 6, 3000, "x1"), rcReply(6, 7, "msg_b", 4000, rcSaid("done")), rcCheckpoint(5))
 	above.expect(t, "a batch a record a call, its other record above", map[int]rcAnswer{1: yes(whyChain),
-		2: yes(whyChain), 3: yes(whyRecoveredReply), 4: yes(whyRecoveredResult), 5: cannot(whyTail),
-		6: yes(whyChain), 7: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 4, 6, 7}, allVariants})
+		2: yes(whyChain), 3: yes(whyRecoveredReply), 4: yes(whyRecoveredResult), 5: yes(whyHookChain),
+		6: yes(whyChain), 7: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 4, 5, 6, 7}, allVariants})
 
 	two := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
 		rcAttach(2, 3, 1500, rcHook("x1")), rcResults(2, 4, 2000, "x2"), rcReply(4, 5, "msg_b", 3000, rcSaid("done")),
 		rcCheckpoint(3))
 	two.expect(t, "a hook's call, of a reply that made two", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
-		3: cannot(whyTail), 4: yes(whyChain), 5: yes(whyChain)}, rcOrder{[]int{1, 2, 4, 5}, allVariants})
+		3: yes(whyHookChain), 4: yes(whyChain), 5: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 4, 5}, allVariants})
 	two.expectLeaf(t, "a hook's call, of a reply that made two", 5)
 
 	one := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcAttach(2, 3, 1500, rcHook("x1")), rcResults(2, 4, 2000, "x1"), rcReply(4, 5, "msg_b", 3000, rcSaid("done")),
 		rcCheckpoint(3))
 	one.expect(t, "a hook's call, of a reply that made one", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
-		3: cannot(whyTail), 4: yes(whyRecoveredResult), 5: no(whyOffConversation)},
-		rcOrder{[]int{1, 2, 4}, allVariants})
+		3: yes(whyHookChain), 4: yes(whyRecoveredResult), 5: no(whyOffConversation)},
+		rcOrder{[]int{1, 2, 3, 4}, allVariants})
 	one.expectLeaf(t, "a hook's call, of a reply that made one", 2)
 
 	unshared := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
 		rcResults(2, 3, 2000, "x9"), rcAttach(3, 4, 2100, rcNote), rcResults(2, 5, 3000, "x2"),
 		rcReply(5, 6, "msg_b", 4000, rcSaid("done")), rcCheckpoint(4))
 	unshared.expect(t, "a checkpoint's results answering none of the reply's calls", map[int]rcAnswer{
-		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 5: yes(whyRecoveredResult),
-		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
+		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyHookChain), 5: yes(whyRecoveredResult),
+		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 4, 5}, allVariants})
 	unshared.expectLeaf(t, "a checkpoint's results answering none of the reply's calls", 3)
 	again := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
 		rcResults(2, 3, 2000, "x1"), rcAttach(3, 4, 2100, rcNote), rcResults(2, 5, 3000, "x1"),
 		rcReply(5, 6, "msg_b", 4000, rcSaid("done")), rcCheckpoint(4))
 	again.expect(t, "a checkpoint's results whose call the last row's result answers again", map[int]rcAnswer{
-		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 5: yes(whyRecoveredResult),
-		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
+		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyHookChain), 5: yes(whyRecoveredResult),
+		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 4, 5}, allVariants})
 
 	between := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcResults(2, 3, 2000, "x1"), rcCheckpoint(3), rcPrompt(2, 5, 2500), rcReply(5, 6, "msg_a", 2600, rcCalls("x3")),
@@ -682,8 +700,8 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 		rcSystem(3, 4, 2100, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`), rcCheckpoint(4),
 		rcResults(2, 6, 3000, "x2"), rcReply(6, 7, "msg_z", 4000, rcSaid("z")))
 	boundary.expect(t, "a compaction's boundary the checkpoint names", map[int]rcAnswer{1: yes(whyChain),
-		2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 6: yes(whyRecoveredResult),
-		7: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 6}, allVariants})
+		2: yes(whyChain), 3: yes(whyChain), 4: yes(whyLeafTail), 6: yes(whyRecoveredResult),
+		7: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 6, 4}, allVariants})
 	boundary.expectLeaf(t, "a compaction's boundary the checkpoint names", 3)
 }
 
@@ -859,11 +877,13 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 // the hanging alone opens merges with the one before it and moves where that
 // one's records land: a hook's record under a walked system record of a reply
 // that made a call, one under the reply's own record, and one under the
-// reply's walked result, each hung (whyTail, out of the order) and opening
-// the reply's window. The hanging hangs nothing, and opens no window, where
-// the hook's record hangs under a walked prompt, has two children not met, is
-// of another isSidechain as written, hangs under a reply that made no call,
-// or is a record walked already.
+// reply's walked result, each hung, handed (whyHookChain), and opening the
+// reply's window; the first lands right after the system record, ahead of the
+// result the earlier window recovered, and the other two by their place in
+// the file. The hanging hangs nothing, and opens no window, where the hook's
+// record hangs under a walked prompt, has two children not met, is of another
+// isSidechain as written, hangs under a reply that made no call, or is a
+// record walked already: what it does not hang is off the conversation.
 //
 // Mutation: place a window's records after it, and the reply's other record
 // comes after its result; stop a window at its reply's last record, and the
@@ -880,7 +900,9 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 // a walked record that hangs off no reply, past a record with two children
 // not met, from one of another isSidechain, under a reply that made no call,
 // or from a record walked already, and a window opens where the resume opens
-// none, moving that result after them.
+// none, moving that result after them. Place a record hung under a walked
+// record by its place in the file, and the first hanging case's lands after
+// the recovered result.
 func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 	t.Parallel()
 	// hooked is a prompt, two replies whose windows overlap, each of which
@@ -894,8 +916,12 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 	hooked := func(tail ...string) []string { return append(slices.Clone(head), tail...) }
 	uncalled := slices.Clone(head)
 	uncalled[2] = rcReply(2, 3, "msg_b", 1100, rcSaid("b1"))
-	walkedTwo := map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
-		5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: cannot(whyTail), 9: yes(whyChain)}
+	// hung and unhung are what the cases of a hook's record on line 8 expect,
+	// the record hung, or left off the conversation.
+	hung := map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
+		5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: yes(whyHookChain), 9: yes(whyChain)}
+	unhung := rcHanding(whyChain, []int{1, 2, 3, 4, 5, 6, 9}, map[int]rcAnswer{7: yes(whyRecoveredResult),
+		8: no(whyOffConversation)})
 	for name, tc := range map[string]struct {
 		lines []string
 		want  map[int]rcAnswer
@@ -940,38 +966,120 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyRecoveredResult),
 				5: yes(whyChain)}, []int{1, 2, 4, 3, 5}},
 		"a window a hook's record under a walked record alone opens": {hooked(rcAttach(6, 8, 1600, rcNote),
-			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), walkedTwo, []int{1, 2, 3, 4, 5, 6, 7, 9}},
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), hung, []int{1, 2, 3, 4, 5, 6, 8, 7, 9}},
 		"a window a hook's record under the reply alone opens": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
 			rcReply(3, 4, "msg_a", 1200, rcSaid("a2")), rcReply(4, 5, "msg_b", 1300, rcSaid("b2")),
 			rcResults(2, 6, 1400, "x1"), rcAttach(3, 7, 1500, rcNote), rcReply(5, 8, "msg_z", 1600, rcSaid("z"))},
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
-				5: yes(whyChain), 6: yes(whyRecoveredResult), 7: cannot(whyTail), 8: yes(whyChain)},
-			[]int{1, 2, 3, 4, 5, 6, 8}},
+				5: yes(whyChain), 6: yes(whyRecoveredResult), 7: yes(whyHookChain), 8: yes(whyChain)},
+			[]int{1, 2, 3, 4, 5, 6, 7, 8}},
 		"a window a hook's record under the reply's walked result alone opens": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
 			rcResults(3, 4, 1200, "y1"), rcReply(4, 5, "msg_a", 1300, rcSaid("a2")),
 			rcReply(5, 6, "msg_b", 1400, rcSaid("b2")), rcResults(2, 7, 1500, "x1"), rcAttach(4, 8, 1600, rcNote),
-			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))}, walkedTwo, []int{1, 2, 3, 4, 5, 6, 7, 9}},
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))}, hung, []int{1, 2, 3, 4, 5, 6, 7, 8, 9}},
 		"no window from a hook's record under a walked prompt": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
 			rcReply(3, 4, "msg_a", 1200, rcSaid("a2")), rcPrompt(4, 5, 1300), rcReply(5, 6, "msg_b", 1400, rcSaid("b2")),
 			rcResults(2, 7, 1500, "x1"), rcAttach(5, 8, 1600, rcNote), rcReply(6, 9, "msg_z", 1700, rcSaid("z"))},
-			walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+			unhung, []int{1, 2, 3, 4, 7, 5, 6, 9}},
 		"no window where the hook's record has two children": {hooked(rcAttach(6, 8, 1600, rcNote),
 			rcAttach(8, 9, 1610, rcNote), rcAttach(8, 10, 1620, rcNote), rcReply(6, 11, "msg_z", 1700, rcSaid("z"))),
-			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
-				5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: cannot(whyTail),
-				9: cannot(whyTail), 10: cannot(whyTail), 11: yes(whyChain)}, []int{1, 2, 3, 4, 7, 5, 6, 11}},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5, 6, 11}, map[int]rcAnswer{7: yes(whyRecoveredResult)},
+				rcAll(no(whyOffConversation), 8, 9, 10)), []int{1, 2, 3, 4, 7, 5, 6, 11}},
 		"no window where the hook's record is of another isSidechain": {hooked(ctReplace(t,
 			rcAttach(6, 8, 1600, rcNote), `"isSidechain":false,`, ""), rcReply(6, 9, "msg_z", 1700, rcSaid("z"))),
-			walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+			unhung, []int{1, 2, 3, 4, 7, 5, 6, 9}},
 		"no window under a reply that made no call": {append(uncalled, rcAttach(6, 8, 1600, rcNote),
-			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), unhung, []int{1, 2, 3, 4, 7, 5, 6, 9}},
 		"no window through a record walked already": {hooked(rcReply(6, 8, "msg_z", 1700, rcSaid("z"))),
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
 				5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: yes(whyChain)},
 			[]int{1, 2, 3, 4, 7, 5, 6, 8}},
+	} {
+		rcChain(t, "", tc.lines...).expect(t, name, tc.want, rcOrder{tc.order, allVariants})
+	}
+}
+
+// A HOOK CHAIN UNDER A CALLING REPLY IS RECOVERED WITH IT: where a record of a
+// reply on the walk made a call, the recovery hangs off it what pye hands, a
+// run of records that hang off a reply each under the one before, and hands
+// them (whyHookChain): under the reply's own record, placed by its place in
+// the file among what the window recovered; under a result recovered beside
+// the reply, as a batch's hooks write their records under its first result
+// when the session is cut before the next request; under the reply's walked
+// result, as a batch's hooks write them when cut so (probe R r6 cut after its
+// token reminder); and under a walked record of the window that hangs off a
+// reply, right after that record though written after the next reply. Two
+// windows that hang under one walked record join what they hung, the earlier's
+// first, each record hung once: the first window's record is met at once, and
+// a record whose second child was not met when the first window looked hangs
+// in the second, whose recovery met it. The recovery hangs nothing where the
+// hook's record has two children not met, where it is of another isSidechain
+// as written than the record it hangs under, or where the reply made no call:
+// those are off the conversation.
+//
+// Mutation: hang a record past a branch of two, and the hook's record with two
+// children is handed; compare sides as `?? false`, and the one of no
+// isSidechain is; hang under a reply that made no call, and its hook's record
+// is; hang nothing under the reply's results, and the batch's pairs are not
+// hung but off the conversation, or the leaf's tails; place what hangs under a
+// reply's record after what the window recovered, and the hook lands after the
+// result written after it; place what hangs under a walked record by its place
+// in the file, and it lands after the walked record that follows it; join two
+// windows' lists the later's first, and the second window's records come first;
+// meet no record hung at once, and the first window's record is handed twice;
+// or take a record's children once a thread, and the record whose second child
+// the second window met hangs in neither.
+func TestAHookChainUnderACallingReplyIsRecoveredWithIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		lines []string
+		want  map[int]rcAnswer
+		order []int
+	}{
+		"under the reply's record, before a result recovered beside it": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")), rcAttach(2, 3, 1100, rcHook("x1")),
+			rcResults(2, 4, 1200, "x1"), rcResults(2, 5, 1300, "x2"), rcReply(5, 6, "msg_b", 2000, rcSaid("done"))},
+			rcHanding(whyChain, []int{1, 2, 5, 6}, map[int]rcAnswer{3: yes(whyHookChain),
+				4: yes(whyRecoveredResult)}), []int{1, 2, 3, 4, 5, 6}},
+		"a batch's pair under a result recovered beside the reply, cut before the next request": {[]string{
+			rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")), rcResults(2, 3, 1100, "x1"),
+			rcAttach(3, 4, 1200, rcHookOf("PostToolBatch", "b1")),
+			rcAttach(4, 5, 1300, rcContextOf("PostToolBatch", "b1")), rcResults(2, 6, 1400, "x2")},
+			rcHanding(whyChain, []int{1, 2, 6}, map[int]rcAnswer{3: yes(whyRecoveredResult)},
+				rcAll(yes(whyHookChain), 4, 5)), []int{1, 2, 3, 4, 5, 6}},
+		"a batch's pair under the reply's walked result, cut before the next request": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"), rcAttach(3, 4, 1200, rcSnapshot),
+			rcAttach(4, 5, 1300, rcHookOf("PostToolBatch", "b1")),
+			rcAttach(5, 6, 1400, rcContextOf("PostToolBatch", "b1")), rcAttach(6, 7, 1500, rcNote)},
+			rcHanding(whyChain, []int{1, 2, 3}, rcAll(yes(whyHookChain), 4, 5, 6, 7)), []int{1, 2, 3, 4, 5, 6, 7}},
+		"under a walked record of the window, right after it though written after the next reply": {[]string{
+			rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+			rcAttach(3, 4, 1200, rcSnapshot), rcAttach(4, 5, 1300, rcNote),
+			rcReply(5, 6, "msg_b", 2000, rcSaid("done")), rcCheckpoint(6), rcAttach(4, 8, 2100, rcNote)},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5, 6}, map[int]rcAnswer{8: yes(whyHookChain)}),
+			[]int{1, 2, 3, 4, 8, 5, 6}},
+		"two windows hanging under one walked record": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
+			rcSystem(3, 4, 1200, "informational", ""), rcAttach(4, 5, 1300, rcNote), rcAttach(4, 6, 1400, rcNote),
+			rcAttach(6, 7, 1500, rcNote), rcReply(6, 8, "msg_b", 1600, rcSaid("b2")),
+			rcReply(4, 9, "msg_a", 1700, rcSaid("a2")), rcReply(9, 10, "msg_z", 1800, rcSaid("z"))},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 9, 10}, map[int]rcAnswer{8: yes(whyRecoveredReply)},
+				rcAll(yes(whyHookChain), 5, 6, 7)), []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
+		"none past a hook's record of two children": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcAttach(2, 3, 1100, rcNote), rcAttach(3, 4, 1150, rcNote),
+			rcAttach(3, 5, 1160, rcNote), rcResults(2, 6, 1200, "x1"), rcReply(6, 7, "msg_b", 2000, rcSaid("done"))},
+			rcHanding(whyChain, []int{1, 2, 6, 7}, rcAll(no(whyOffConversation), 3, 4, 5)), []int{1, 2, 6, 7}},
+		"none of another isSidechain": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+			ctReplace(t, rcAttach(2, 3, 1100, rcNote), `"isSidechain":false,`, ""), rcResults(2, 4, 1200, "x1"),
+			rcReply(4, 5, "msg_b", 2000, rcSaid("done"))},
+			rcHanding(whyChain, []int{1, 2, 4, 5}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2, 4, 5}},
+		"none under a reply that made no call": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcAttach(2, 3, 1100, rcNote), rcPrompt(2, 4, 1200),
+			rcReply(4, 5, "msg_b", 2000, rcSaid("done"))},
+			rcHanding(whyChain, []int{1, 2, 4, 5}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2, 4, 5}},
 	} {
 		rcChain(t, "", tc.lines...).expect(t, name, tc.want, rcOrder{tc.order, allVariants})
 	}
@@ -1023,17 +1131,20 @@ func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 // in 2.1.322 alone, which reads the list off user and assistant records, so it
 // is cannot tell (whyRelease), each release's order handed; a system record
 // named is never dropped; a list on a record off the conversation drops
-// nothing, but one on a retry the tails may hang (whyTail) leaves what it
-// names cannot tell too; and an entry drops by its first 24 characters, so
-// one of 24 or 30 drops its record, and one of 23 nothing.
+// nothing, and one on a record the recovery hangs or the tails hand drops what
+// it names: a retry hung off a reply's result, in 2.1.322 alone, and a
+// refusal's fallback under the leaf, which names the leaf itself, in both; and
+// an entry drops by its first 24 characters, so one of 24 or 30 drops its
+// record, and one of 23 nothing.
 //
 // Mutation: read no entry of 24 characters, or none shorter than a uuid, and
 // the record it names is handed; read the names off every record, and the
 // list off the conversation drops; read no reply's list, and the reply's own
-// drops nothing; pass over a list the tails may hand, or read no meta mark,
-// and what the retry off the conversation names reads as handed; drop a
-// system record too, and the one named is not handed; or read 2.1.310's names
-// as 2.1.322's, and the retry's record reads as dropped in both.
+// drops nothing; read the names off the walk and the recovery's records alone,
+// and the leaf the fallback under it names is handed; read no meta mark, and
+// the retry hangs off nothing, so what it names is handed; drop a system
+// record too, and the one named is not handed; or read 2.1.310's names as
+// 2.1.322's, and the retry's record reads as dropped in both.
 func TestARetractionTakesBackWhatTheRecordsItHandsName(t *testing.T) {
 	t.Parallel()
 	prompt, reply := rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("refused"))
@@ -1051,11 +1162,14 @@ func TestARetractionTakesBackWhatTheRecordsItHandsName(t *testing.T) {
 	own.expect(t, "a reply's own list", map[int]rcAnswer{1: yes(whyChain), 2: cannot(whyRelease),
 		3: yes(whyChain), 4: yes(whyChain)}, rcOrder{[]int{1, 3, 4}, allVariants &^ variants310},
 		rcOrder{[]int{1, 2, 3, 4}, variants310})
-	tail := rcChain(t, "", prompt, reply, rcRetry(1, 3, 1500, rcQuoted(2)), rcReply(2, 4, "msg_b", 2000,
-		rcSaid("done")))
-	tail.expect(t, "a retry the tails may hang", map[int]rcAnswer{1: yes(whyChain), 2: cannot(whyTail),
-		3: cannot(whyTail), 4: yes(whyChain)}, rcOrder{[]int{1, 4}, allVariants &^ variants310},
-		rcOrder{[]int{1, 2, 4}, variants310})
+	hung := rcChain(t, "", prompt, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+		rcRetry(3, 4, 1500, rcQuoted(2)), rcReply(3, 5, "msg_b", 2000, rcSaid("done")))
+	hung.expect(t, "a retry hung off a reply's result", map[int]rcAnswer{1: yes(whyChain), 2: cannot(whyRelease),
+		3: yes(whyChain), 4: yes(whyHookChain), 5: yes(whyChain)},
+		rcOrder{[]int{1, 3, 4, 5}, allVariants &^ variants310}, rcOrder{[]int{1, 2, 3, 4, 5}, variants310})
+	tail := rcChain(t, "", prompt, reply, rcFallback(2, 3, 1500, rcQuoted(2)))
+	tail.expect(t, "a fallback under the leaf naming the leaf", map[int]rcAnswer{1: yes(whyChain),
+		2: no(whyRetracted), 3: yes(whyLeafTail)}, rcOrder{[]int{1, 3}, allVariants})
 	system := rcChain(t, "", prompt, reply, rcSystem(2, 3, 1200, "informational", ""),
 		rcFallback(3, 4, 1500, rcQuoted(3)), rcReply(4, 5, "msg_b", 2000, rcSaid("done")))
 	system.expect(t, "a system record named", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
@@ -1210,20 +1324,35 @@ func rcHungChain(records int) []string {
 	return append(lines, rcReply(3, 4+records, "msg_z", 2000, rcSaid("z")))
 }
 
-// A RECOVERY SPREADING A LIST PAST A CALL'S ARGUMENTS IS CANNOT TELL: a walk
-// of more than threadChainMaxSpread records whose recovery spreads it is
-// whySpread, one of that many records not, as are more records than that
-// hung under one walked record, which the recovery spreads too, and that many
-// not. A subagent's own load spreads its walk alike, and its thread then
-// hands no own leaves, though the chain chose its leaf among them before the
-// recovery.
+// rcTailed is a thread of records tails under its leaf: a prompt, a reply,
+// and that many attachments under the reply, of no time, so it stays under
+// 5,242,880 bytes, and its tails' sorts, of records all of one time, order
+// them as they came.
+func rcTailed(records int) []string {
+	lines := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a"))}
+	for n := 3; n < 3+records; n++ {
+		lines = append(lines, `{"parentUuid":"`+rcUUID(2)+`","type":"attachment","attachment":{"type":"x"},"uuid":"`+
+			rcUUID(n)+`"}`)
+	}
+	return lines
+}
+
+// A LIST THE RESUME SPREADS PAST A CALL'S ARGUMENTS IS CANNOT TELL: a walk of
+// more than threadChainMaxSpread records whose recovery spreads it is
+// whySpread, one of that many records not, as are more records than that hung
+// under one walked record, which the recovery spreads too, and that many not;
+// and so are more tails than that under the leaf, which the walk by breadth
+// spreads, and that many not. A subagent's own load spreads its walk alike,
+// and its thread then hands no own leaves, though the chain chose its leaf
+// among them before the recovery.
 //
 // Mutation: drop the walk's spread check, and the long walk reads; or take
 // its bound for past it, and the walk of threadChainMaxSpread records is
 // cannot tell. Drop the hung records' spread check, and the long hung chain
-// reads. Answer OwnLeaves of a thread cannot tell, and the subagent's long
-// walk hands its leaf.
-func TestARecoverySpreadingPastACallsArgumentsIsCannotTell(t *testing.T) {
+// reads. Drop the tails' spread check, and the many tails read, or take its
+// bound for past it, and that many are cannot tell. Answer OwnLeaves of a
+// thread cannot tell, and the subagent's long walk hands its leaf.
+func TestAListTheResumeSpreadsPastACallsArgumentsIsCannotTell(t *testing.T) {
 	t.Parallel()
 	rcChain(t, "", rcLongChain(threadChainMaxSpread+1)...).expectCannotTell(t, "a walk past a call's arguments",
 		whySpread)
@@ -1240,6 +1369,12 @@ func TestARecoverySpreadingPastACallsArgumentsIsCannotTell(t *testing.T) {
 		"records hung under a walked record past a call's arguments", whySpread)
 	if why, unknown := rcChain(t, "", rcHungChain(threadChainMaxSpread)...).c.Unknown(); unknown {
 		t.Errorf("as many records hung under a walked record as a call takes are cannot tell (%s)", why)
+	}
+
+	rcChain(t, "", rcTailed(threadChainMaxSpread+1)...).expectCannotTell(t, "tails past a call's arguments",
+		whySpread)
+	if why, unknown := rcChain(t, "", rcTailed(threadChainMaxSpread)...).c.Unknown(); unknown {
+		t.Errorf("as many tails as a call takes are cannot tell (%s)", why)
 	}
 }
 
@@ -1638,7 +1773,7 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 		"a list of no uuids past the bound by itself", whyBound)
 	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords/2), listing(3, absent, threadChainMaxRecords/2),
 		rcPrompt(3, 4, 2000)).expect(t, "a later boundary's list counted in place of the earlier's",
-		map[int]rcAnswer{1: no(whyOffConversation), 2: cannot(whyTail), 3: yes(whyChain), 4: yes(whyChain)},
+		map[int]rcAnswer{1: no(whyOffConversation), 2: no(whyOffConversation), 3: yes(whyChain), 4: yes(whyChain)},
 		rcOrder{[]int{3, 4}, allVariants})
 	none := `{"preservedMessages":{"anchorUuid":"","uuids":[]}}`
 	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords-2), rcBoundary(3, 2000, none),
@@ -1689,10 +1824,12 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 // EACH DISTINCT ORDER IS HANDED ONCE, with the variants that hand it, which
 // part the eight among them: one order where nothing parts the variants; two
 // where a retraction does, or q1t's leaf; and two where q1t's leaf hands the
-// same records in another order.
+// same records in another order, or the tails' order does, warm_mochi's walk
+// by depth from the walk by breadth sorted by time, every record handed in
+// both.
 //
 // Mutation: fold orders that hand the same records, whatever their order, and
-// the last case hands one; or leave a variant out of an order's, and the
+// the last two cases hand one; or leave a variant out of an order's, and the
 // variants no longer part the eight.
 func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 	t.Parallel()
@@ -1709,6 +1846,9 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 		"a leaf parting them over the same records": {[]string{rcPlain[0], rcReply(1, 2, "msg_a", 1000,
 			rcCalls("x1")), rcCheckpoint(2), rcReply(1, 4, "msg_a", 3000, rcSaid("later"))},
 			[][]int{{1, 2, 4}, {1, 4, 2}}},
+		"the tails' order parting them over the same records": {[]string{rcPlain[0],
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 3000, rcNote), rcAttach(2, 4, 2000, rcNote),
+			rcAttach(4, 5, 5000, rcNote)}, [][]int{{1, 2, 4, 5, 3}, {1, 2, 4, 3, 5}}},
 	} {
 		read := rcChain(t, "", tc.lines...)
 		var got [][]int
@@ -1739,7 +1879,8 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 // hangs the anchor's other children from the last of them, and deletes every
 // record written before the boundary that it did not keep (whyRelinkDeleted).
 // So it hands probe S's two runs and probe T's T9media: a head a trim left
-// naming no record until the relink hangs it, and whole turns deleted. Where it
+// naming no record until the relink hangs it, whole turns deleted, and each S
+// run's last Stop hook's pair after the leaf, its tails. Where it
 // deleted a user record's parent, it hangs that record from the last kept one
 // too; an attachment keeps that parent, which then names none, so the walk
 // takes its fallback there. Where the anchor holds a call, or lies between a
@@ -1768,6 +1909,8 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 		rcReply(3, 4, "msg_k", 3000, rcSaid("k")), rcBoundary(5, 4000, rcKeeping(6, 3, 4)), rcSummary(5, 6, 4100)}
 	kept := []int{3, 4, 1, 2, 5, 6}
 	t9 := []int{8, 9, 10, 11, 5, 6, 7, 12, 13, 15}
+	// s1 and s2 are probe S's runs' walks; their Stop hook's pairs after the
+	// last reply follow them, its tails.
 	s1 := []int{11, 12, 7, 8, 9, 13, 14, 15, 17, 18, 19}
 	s2 := []int{4, 5, 1, 2, 3, 6, 7, 8, 10, 11, 12}
 	for name, tc := range map[string]rcCase{
@@ -1791,22 +1934,22 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 			rcPrompt(13, 14, 1200), rcAttach(14, 15, 1300, rcNote), rcCheckpoint(15), rcPrompt(15, 17, 1400),
 			rcAttach(17, 18, 1500, rcNote), rcReply(18, 19, "msg_c", 1600, rcSaid("c")), rcAttach(19, 20, 1700, rcNote),
 			rcStop(20, 21, 1800), rcCheckpoint(21)},
-			rcHanding(whyChain, s1, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4, 5, 6), rcAll(cannot(whyTail), 20, 21)),
-			s1, 19},
+			rcHanding(whyChain, s1, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4, 5, 6), rcAll(yes(whyLeafTail), 20, 21)),
+			append(slices.Clone(s1), 20, 21), 19},
 		"probe S's s2, whose head names no record": {[]string{rcReply(rcNowhere, 1, "msg_a", 0, rcSaid("a")),
 			rcAttach(1, 2, 100, rcNote), rcStop(2, 3, 200), rcBoundary(4, 300, rcKeeping(5, 1, 2, 3)),
 			rcSummary(4, 5, 400), rcMeta(5, 6, 500), rcPrompt(6, 7, 600), rcAttach(7, 8, 700, rcNote), rcCheckpoint(8),
 			rcPrompt(8, 10, 800), rcAttach(10, 11, 900, rcNote), rcReply(11, 12, "msg_b", 1000, rcSaid("b")),
 			rcAttach(12, 13, 1100, rcNote), rcStop(13, 14, 1200), rcCheckpoint(14)},
-			rcHanding(whyChain, s2, rcAll(cannot(whyTail), 13, 14)), s2, 12},
+			rcHanding(whyChain, s2, rcAll(yes(whyLeafTail), 13, 14)), append(slices.Clone(s2), 13, 14), 12},
 		"a user record whose parent the relink deleted": {append(slices.Clone(head), rcPrompt(2, 7, 5000),
 			rcReply(7, 8, "msg_b", 6000, rcSaid("b"))),
 			rcHanding(whyChain, []int{5, 6, 3, 4, 7, 8}, rcAll(no(whyRelinkDeleted), 1, 2)), []int{5, 6, 3, 4, 7, 8},
 			8},
 		"an attachment whose parent the relink deleted": {append(slices.Clone(head), rcAttach(2, 7, 20000, rcNote),
 			rcReply(7, 8, "msg_b", 21000, rcSaid("b"))),
-			rcHanding(whyChain, []int{7, 8}, rcAll(no(whyRelinkDeleted), 1, 2), rcAll(no(whyOffConversation), 3, 4, 6),
-				rcAll(cannot(whyTail), 5)), []int{7, 8}, 8},
+			rcHanding(whyChain, []int{7, 8}, rcAll(no(whyRelinkDeleted), 1, 2),
+				rcAll(no(whyOffConversation), 3, 4, 5, 6)), []int{7, 8}, 8},
 		"the summary the anchor of a call after it": {rcCompacted(rcKeeping(4, 1, 2), call...),
 			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7}), []int{3, 4, 1, 2, 5, 6, 7}, 7},
 		"the summary the anchor, an attachment its other child (F1n)": {rcCompacted(rcKeeping(4, 1, 2),
@@ -1871,13 +2014,13 @@ func TestARelinkThatDoesNotResolveDeletesOnlyWhatItsBoundaryCuts(t *testing.T) {
 				rcSaid("b")), rcCheckpoint(8), rcAttach(8, 10, 6000, rcNote), rcAttach(8, 11, 6100, rcNote),
 			rcPrompt(11, 12, 7000), rcReply(12, 13, "msg_x", 8000, rcCalls("x1")), rcResults(13, 14, 9000, "x1")},
 			rcHanding(whyChain, []int{6, 7, 8, 11, 12, 13, 14}, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4, 5),
-				rcAll(cannot(whyTail), 10)), []int{6, 7, 8, 11, 12, 13, 14}, 14},
+				rcAll(no(whyOffConversation), 10)), []int{6, 7, 8, 11, 12, 13, 14}, 14},
 		"a list of none beside a segment": {rcCompacted(ctReplace(t, rcKeeping(4, 1, 2),
 			`"uuids":[`+rcQuoted(1, 2)+`]`, `"uuids":[]`), rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
 			rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote), rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000),
 			rcReply(9, 10, "msg_x", 6000, rcCalls("x1")), rcResults(10, 11, 7000, "x1")),
 			rcHanding(whyChain, []int{3, 4, 5, 8, 9, 10, 11}, rcAll(no(whyRelinkDeleted), 1, 2),
-				rcAll(cannot(whyTail), 7)), []int{3, 4, 5, 8, 9, 10, 11}, 11},
+				rcAll(no(whyOffConversation), 7)), []int{3, 4, 5, 8, 9, 10, 11}, 11},
 		"a list of none, of no anchor": {append(slices.Clone(rcPlain),
 			rcBoundary(3, 2000, `{"preservedMessages":{"anchorUuid":"","uuids":[]}}`), rcPrompt(3, 4, 3000)),
 			rcHanding(whyChain, []int{3, 4}, rcAll(no(whyRelinkDeleted), 1, 2)), []int{3, 4}, 4},
@@ -1972,7 +2115,7 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 	t.Parallel()
 	keeping := rcKeeping(4, 1, 2)
 	off := func(lines ...int) map[int]rcAnswer { return rcAll(no(whyOffConversation), lines...) }
-	tails := func(lines ...int) map[int]rcAnswer { return rcAll(cannot(whyTail), lines...) }
+	tails := func(lines ...int) map[int]rcAnswer { return rcAll(yes(whyLeafTail), lines...) }
 	for name, tc := range map[string]rcCase{
 		"I3a: a checkpoint no turn names, a turn under its attachment": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
@@ -1982,17 +2125,17 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
 			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
 			rcResults(10, 11, 7000, "x1")),
-			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5}, 5},
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5, 7, 8}, 5},
 		"I3c: a checkpoint a terminal stop hook's summary puts in the set": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcStop(5, 7, 4000),
 			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
 			rcResults(10, 11, 7000, "x1")),
-			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5}, 5},
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5, 7, 8}, 5},
 		"I3d: I3b where the resume relinks nothing": {[]string{rcBoundary(1, 0, rcKeeping(3, 98, 99)),
 			rcSummary(1, 2, 100), rcReply(2, 3, "msg_before", 200, rcSaid("before")), rcCheckpoint(3),
 			rcAttach(3, 5, 300, rcNote), rcAttach(3, 6, 400, rcNote), rcPrompt(6, 7, 500),
 			rcReply(7, 8, "msg_x", 600, rcCalls("x1")), rcResults(8, 9, 700, "x1")},
-			rcHanding(whyChain, []int{1, 2, 3, 6, 7, 8, 9}, tails(5)), []int{1, 2, 3, 6, 7, 8, 9}, 9},
+			rcHanding(whyChain, []int{1, 2, 3, 6, 7, 8, 9}, off(5)), []int{1, 2, 3, 6, 7, 8, 9}, 9},
 		"I3e: a call before a checkpoint no turn names": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
 			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
@@ -2003,7 +2146,7 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
 			rcAttach(7, 10, 6100, rcNote), rcPrompt(10, 11, 7000), rcReply(11, 12, "msg_last", 8000, rcSaid("last"))),
 			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7}, tails(9, 10), off(11, 12)),
-			[]int{3, 4, 1, 2, 5, 6, 7}, 7},
+			[]int{3, 4, 1, 2, 5, 6, 7, 9, 10}, 7},
 		"I3g: the anchor the checkpoint": {rcCompacted(keeping, rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
 			rcCheckpoint(4), rcPrompt(5, 7, 4000), rcReply(7, 8, "msg_x", 5000, rcCalls("x1")),
 			rcResults(8, 9, 6000, "x1")),
@@ -2021,7 +2164,7 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcCheckpoint(4),
 			rcStop(4, 6, 3000), rcAttach(4, 7, 3100, rcNote), rcPrompt(7, 8, 4000),
 			rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")},
-			rcHanding(whyChain, []int{2, 3, 1, 4}, tails(6, 7), off(8, 9, 10)), []int{2, 3, 1, 4}, 4},
+			rcHanding(whyChain, []int{2, 3, 1, 4}, tails(6, 7), off(8, 9, 10)), []int{2, 3, 1, 4, 6, 7}, 4},
 		"R2b: a turn right under the checkpoint's summary": {[]string{
 			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
 			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcStop(4, 5, 3000),
@@ -2043,7 +2186,8 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcHanding(whyChain, []int{3, 4, 1, 2, 6, 7, 8}), []int{3, 4, 1, 2, 6, 7, 8}, 8},
 		"S3: a stop hook's summary the last record": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"), rcStop(6, 7, 5000)),
-			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6}, tails(7)), []int{3, 4, 1, 2, 5, 6}, 6},
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6}, map[int]rcAnswer{7: yes(whyHookChain)}),
+			[]int{3, 4, 1, 2, 5, 6, 7}, 6},
 		"B3: a relink by its segment alone, a lagging checkpoint a turn names": {rcCompacted(rcSegment(4, 1, 2),
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcPrompt(5, 7, 4000),
 			rcReply(7, 8, "msg_x", 5000, rcCalls("x1")), rcResults(8, 9, 6000, "x1")),
@@ -2052,11 +2196,11 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcReply(4, 5, "msg_a", 3000, rcCalls("x1", "x2")), rcResults(5, 6, 4000, "x1"), rcCheckpoint(6),
 			rcAttach(6, 8, 4500, rcNote), rcResults(5, 9, 5000, "x2"), rcReply(9, 10, "msg_b", 6000, rcSaid("b"))),
 			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 9, 10}, map[int]rcAnswer{6: yes(whyRecoveredResult),
-				8: cannot(whyTail)}), []int{3, 4, 1, 2, 5, 6, 9, 10}, 10},
+				8: yes(whyHookChain)}), []int{3, 4, 1, 2, 5, 6, 8, 9, 10}, 10},
 		"a terminal attachment under a record a turn names, no member": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 3500, rcNote),
 			rcPrompt(5, 8, 4000), rcReply(8, 9, "msg_after", 5000, rcSaid("after"))),
-			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 8, 9}, tails(7)), []int{3, 4, 1, 2, 5, 8, 9}, 9},
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 8, 9}, off(7)), []int{3, 4, 1, 2, 5, 8, 9}, 9},
 		"a checkpoint a turn names, outside a set of two": {rcCompacted(keeping,
 			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcPrompt(5, 7, 3500),
 			rcAttach(5, 8, 4000, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
@@ -2065,11 +2209,11 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 		"a set of two the last row's walk leaves, its newest member": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 9000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
 			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
-			rcHanding(whyChain, []int{1, 2}, off(3, 4), tails(5, 6)), []int{1, 2}, 2},
+			rcHanding(whyChain, []int{1, 2}, off(3, 4, 5, 6)), []int{1, 2}, 2},
 		"a set of two of one time, its first member": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 2000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
 			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
-			rcHanding(whyChain, []int{1, 2}, off(3, 4), tails(5, 6)), []int{1, 2}, 2},
+			rcHanding(whyChain, []int{1, 2}, off(3, 4, 5, 6)), []int{1, 2}, 2},
 	} {
 		tc.check(t, name)
 	}
@@ -2096,10 +2240,10 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 		"no turn record: the newest, an attachment": {[]string{system, rcAttach(1, 2, 1000, rcNote)},
 			rcHanding(whyChain, []int{1, 2}), []int{1, 2}, 2},
 		"two newest of one time: the first in the file": {[]string{system, rcAttach(1, 2, 1000, rcNote),
-			rcAttach(1, 3, 1000, rcNote)}, rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}),
-			[]int{1, 2}, 2},
+			rcAttach(1, 3, 1000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2}, 2},
 		"the newest not the last": {[]string{system, rcAttach(1, 2, 5000, rcNote), rcAttach(1, 3, 1000, rcNote)},
-			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2}, 2},
 		"turn records only a loop holds": {[]string{rcPrompt(2, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
 			rcSystem(0, 3, 2000, "informational", ""), rcAttach(3, 4, 3000, rcNote)},
 			rcHanding(whyChain, []int{3, 4}, map[int]rcAnswer{1: no(whyOffConversation), 2: no(whyOffConversation)}),
@@ -2143,8 +2287,8 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 // leaves, and the answers and own leaves part from the load's; skip the
 // relink, and the turn it deletes is handed; filter on isSidechain as well as
 // agentId, and the record of the subagent's id that is no sidechain's is not
-// handed; hand another agent's records, or keep the tails' cannot tell for
-// them, and they are not answered not handed; run the retraction filter, and
+// handed; hand another agent's records, or another agent's tails, and they
+// are not answered not handed; run the retraction filter, and
 // the reply its fallback names is taken back; run the malformed-attachment
 // drop, and the hook's success it takes is cannot tell, and the thread of the
 // skill listing it cannot judge; refuse a fork's briefing, and its thread is
@@ -2202,7 +2346,7 @@ func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 			[]int{1, 5}},
 		"its own id's latest record no sidechain's, which leads nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
 			own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), rcIn(t, rcAttach(2, 3, 2000, rcNote), ctAgent, false)},
-			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2}, []int{2}},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: yes(whyLeafTail)}), []int{1, 2, 3}, 2}, []int{2}},
 		"no record of its own: no conversation": {rcCase{[]string{rcIn(t, rcPrompt(0, 1, 0), ctAgent, false),
 			rcIn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")), ctAgent, false)},
 			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, nil},
@@ -2211,7 +2355,7 @@ func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, []int{2}},
 		"a compaction's boundary, which leads nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
 			own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), own(rcBoundary(3, 2000, `{"trigger":"manual"}`))},
-			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2}, []int{2}},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2}, 2}, []int{2}},
 		"its own relink": {rcCase{relinked, rcHanding(whyChain, []int{5, 6, 3, 4, 7, 8},
 			rcAll(no(whyRelinkDeleted), 1, 2)), []int{5, 6, 3, 4, 7, 8}, 8}, []int{8}},
 		"a retraction, which takes back nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
@@ -2276,6 +2420,141 @@ func TestASubagentShapeTheLoadCannotBeModelledOnIsCannotTell(t *testing.T) {
 	}
 	rcChain(t, ctAgent, plain...).expect(t, "a thread holding none", rcHanding(whyChain, []int{1, 2}),
 		rcOrder{[]int{1, 2}, allVariants})
+}
+
+// THE LEAF'S TAILS ARE HANDED LAST, IN EITHER ORDER: after all the walk and
+// the recovery hand, the resume hands every record under the leaf that is
+// neither a user nor an assistant record, through records that are neither
+// (whyLeafTail): probe R r6's Stop hook's pair after the turn's last reply,
+// its batch's hook records on the walk; a batch's pair cut before the next
+// request, where the recovery hangs it off nothing (a reply of no id, which
+// the recovery passes over, or a hook's record of two children, which pye
+// refuses); the attachments probe S's compact command leaves under its
+// output, five of one time written before it, in the order they hang; a
+// compaction's boundary; and one of another isSidechain, which the tails take
+// whatever its side. A record met already ends its branch: one the walk took
+// by the fallback leaves what hangs under it off the conversation, and a
+// call's hooks under a leaf that made it are the recovery's, not the tails'.
+// A user record under the leaf is no tail. Where the tails run two deep and
+// their times interleave, warm_mochi's walk by depth, each record's children
+// earliest first, hands them in one order, and the walk by breadth sorted by
+// time in another, in the main thread and a subagent's alike, the same
+// records in both. A sort that holds a record of no time beside two of
+// different times orders none of them (whyTailTime): the walk by depth's
+// sort of the leaf's children, the walk by breadth's of every tail though
+// each record's children are of one time, and the walk by depth's of
+// children one of which the recovery hung; one beside records of one time
+// leaves them all in the file's order.
+//
+// Mutation: hand the tails before the walk and the recovery's records, and
+// r6's Stop pair leads; take the tails before the recovery, and the call's
+// hooks under the leaf read as tails; pass over no record met, and what
+// hangs under the walked record is handed, and the call's hooks twice; hand
+// one order only, and the variants without warm_mochi hand warm_mochi's;
+// leave a warm_mochi variant out of those that walk by depth, and it hands
+// the walk by breadth's order; leave a record's children unsorted, or take
+// the latest first, or leave the walk by breadth unsorted, and the two-deep
+// tails come in another order;
+// take a user record for a tail, and the abandoned prompt is handed; take
+// the tails through UF records alone, and the boundary is not; hold a tail to
+// its parent's side, and the one of no isSidechain is not; refuse no sort of
+// a record of no time, or only the walk by depth's, or only of children not
+// met, and each disordered thread reads; or refuse every sort holding one,
+// and the attachments of one time are cannot tell.
+func TestTheLeafsTailsAreHandedLastInEitherOrder(t *testing.T) {
+	t.Parallel()
+	untimed := func(line string, ms int) string { return ctReplace(t, line, `,"timestamp":"`+rcAt(ms)+`"`, "") }
+	sideless := func(line string) string { return ctReplace(t, line, `"isSidechain":false,`, "") }
+	for name, tc := range map[string]rcCase{
+		"probe R r6: a Stop hook's pair after the turn's last reply": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_p1", 1000, rcSaid("probing")), rcReply(2, 3, "msg_p1", 1001, rcCalls("x1")),
+			rcReply(3, 4, "msg_p1", 1002, rcCalls("x2")), rcResults(3, 5, 1100, "x1"), rcCheckpoint(5),
+			rcResults(4, 7, 1200, "x2"), rcAttach(7, 8, 1300, rcSnapshot),
+			rcAttach(8, 9, 1400, rcHookOf("PostToolBatch", "b1")), rcAttach(9, 10, 1500, rcNote),
+			rcReply(10, 11, "msg_p2", 2000, rcSaid("done")), rcAttach(11, 12, 2100, rcHookOf("Stop", "s1")),
+			rcStop(12, 13, 2200), rcCheckpoint(13)},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 7, 8, 9, 10, 11}, map[int]rcAnswer{5: yes(whyRecoveredResult)},
+				rcAll(yes(whyLeafTail), 12, 13)), []int{1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13}, 11},
+		"a batch's pair cut before the next request, under a result of a reply of no id": {[]string{
+			rcPrompt(0, 1, 0), rcReply(1, 2, "", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+			rcAttach(3, 4, 1200, rcSnapshot), rcAttach(4, 5, 1300, rcHookOf("PostToolBatch", "b1")),
+			rcAttach(5, 6, 1400, rcContextOf("PostToolBatch", "b1"))},
+			rcHanding(whyChain, []int{1, 2, 3}, rcAll(yes(whyLeafTail), 4, 5, 6)), []int{1, 2, 3, 4, 5, 6}, 3},
+		"a batch's pair cut before the next request, its hook's record of two children": {[]string{
+			rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+			rcAttach(3, 4, 1200, rcHookOf("PostToolBatch", "b1")), rcAttach(4, 5, 1400, rcNote),
+			rcAttach(4, 6, 1300, rcContextOf("PostToolBatch", "b1"))},
+			rcHanding(whyChain, []int{1, 2, 3}, rcAll(yes(whyLeafTail), 4, 5, 6)), []int{1, 2, 3, 4, 6, 5}, 3},
+		"probe S's compact command's attachments, of one time, before its output": {[]string{
+			rcBoundary(1, 0, `{"trigger":"manual"}`), rcSummary(1, 2, 1000), rcMeta(2, 3, 900), rcPrompt(3, 4, 900),
+			rcPrompt(4, 5, 2000), rcAttach(5, 6, 1500, rcNote), rcAttach(6, 7, 1500, rcNote),
+			rcAttach(7, 8, 1500, rcNote), rcAttach(8, 9, 1500, rcNote), rcAttach(9, 10, 1500, rcNote)},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5}, rcAll(yes(whyLeafTail), 6, 7, 8, 9, 10)),
+			[]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 5},
+		"a compaction's boundary under the leaf": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")),
+			rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: yes(whyLeafTail)}), []int{1, 2, 3}, 2},
+		"a tail of no isSidechain": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("done")),
+			sideless(rcAttach(2, 3, 2000, rcNote))},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: yes(whyLeafTail)}), []int{1, 2, 3}, 2},
+		"what hangs under a record the walk took by the fallback": {[]string{rcPrompt(0, 1, 0),
+			rcReply(rcNowhere, 2, "msg_a", 5000, rcSaid("done")), rcAttach(2, 3, 4000, rcNote),
+			rcAttach(3, 4, 6000, rcNote)},
+			rcHanding(whyChain, []int{1, 2, 3}, map[int]rcAnswer{4: no(whyOffConversation)}), []int{1, 3, 2}, 2},
+		"a call's hooks under a leaf that made it, cut before its result": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcAttach(2, 3, 1100, rcHookOf("PreToolUse", "x1")),
+			rcAttach(3, 4, 1200, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, rcAll(yes(whyHookChain), 3, 4)), []int{1, 2, 3, 4}, 2},
+		"an abandoned prompt under the leaf": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 2000, rcNote), rcPrompt(2, 4, 2500),
+			rcPrompt(1, 5, 3000), rcCheckpoint(2)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: yes(whyLeafTail)},
+				rcAll(no(whyOffConversation), 4, 5)), []int{1, 2, 3}, 2},
+		"a tail of no time beside two of one time": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 2000, rcNote),
+			untimed(rcAttach(2, 4, 3000, rcNote), 3000), rcAttach(2, 5, 2000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, rcAll(yes(whyLeafTail), 3, 4, 5)), []int{1, 2, 3, 4, 5}, 2},
+	} {
+		tc.check(t, name)
+	}
+
+	// deep is a two-deep tail whose times interleave: off the leaf (2) an
+	// attachment (3) written after its sibling (4), which another (5) hangs
+	// under later than both. In a subagent's thread the prompt and the reply
+	// are its own, and the tails of its id, no sidechain's, so none leads.
+	deep := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 3000, rcNote),
+		rcAttach(2, 4, 2000, rcNote), rcAttach(4, 5, 5000, rcNote)}
+	// mochi is the variants warm_mochi is on in, stated as THE VARIANTS has
+	// them rather than read off the chain's own constant.
+	mochi := variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe
+	for name, agent := range map[string]string{"in the main thread": "", "in a subagent's thread": ctAgent} {
+		lines := slices.Clone(deep)
+		if agent != "" {
+			for i := range lines {
+				lines[i] = rcIn(t, lines[i], agent, i < 2)
+			}
+		}
+		name = "a two-deep tail whose times interleave, " + name
+		read := rcChain(t, agent, lines...)
+		read.expect(t, name, rcHanding(whyChain, []int{1, 2}, rcAll(yes(whyLeafTail), 3, 4, 5)),
+			rcOrder{[]int{1, 2, 4, 5, 3}, mochi}, rcOrder{[]int{1, 2, 4, 3, 5}, allVariants &^ mochi})
+		read.expectLeaf(t, name, 2)
+	}
+
+	for name, lines := range map[string][]string{
+		"a tail of no time beside two of different times": {rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 3000, rcNote),
+			untimed(rcAttach(2, 4, 4000, rcNote), 4000), rcAttach(2, 5, 2000, rcNote)},
+		"a tail of no time the walk by breadth sorts beside two of different times": {rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 2000, rcNote), rcAttach(2, 4, 3000, rcNote),
+			untimed(rcAttach(3, 5, 4000, rcNote), 4000)},
+		"a child of no time the recovery hung beside two tails of different times": {rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), sideless(rcAttach(2, 3, 3000, rcNote)),
+			untimed(rcAttach(2, 4, 4000, rcNote), 4000), sideless(rcAttach(2, 5, 2000, rcNote))},
+	} {
+		rcChain(t, "", lines...).expectCannotTell(t, name, whyTailTime)
+	}
 }
 
 // A CHAIN ANSWERS WHAT ITS RECORDS CARRY: every record of one reply id shares
