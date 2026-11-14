@@ -98,7 +98,9 @@ type Message struct {
 // [jsprovision.ReAsk] later with every earlier one still outstanding, the
 // first answer from any of them taken, none outliving the call, and none
 // asked past the longest silence the server keeps
-// ([jsprovision.LookupBudget]). An ANSWER ends it whatever it says — a
+// ([jsprovision.LookupBudget]) — each of the three beyond the time a reply
+// as large as the stream's messages may be takes to arrive, for a reader of
+// large ones ([Leader.Carrying]). An ANSWER ends it whatever it says — a
 // message, no message, a group with no leader ([server.JSClusterNotAvailErr]).
 // "No responders" is no answer: a node whose link to the broker is down hears
 // it at once, and its read is asked again every [jsprovision.ReAsk], where it
@@ -127,16 +129,18 @@ type Leader struct {
 	// the API the client speaks.
 	msgGet string
 	info   string
-	// term is how long one request for a message is given before it is
-	// presumed lost: [jsprovision.ReadTerm], and the time a whole message
-	// takes to cross a link where the stream's messages are large
-	// ([Leader.Carrying]).
-	term time.Duration
+	// arrival is how long the reply to one of this reader's message reads
+	// takes to reach it whole once the leader takes the request, where the
+	// stream's messages may be large ([Leader.Carrying], [Arrival]), and
+	// none for a reader of small ones: what each request is given beyond
+	// the read term before it is presumed lost, and the read beyond the
+	// lookup ceiling ([jsprovision.Timing.Arriving]).
+	arrival time.Duration
 	// timeout bounds a read whose context has no deadline — the client's
 	// OWN default, taken from the client, the bound the read had while it
-	// was one request ([jsprovision.ReadBoundedWith]), and the time a whole
-	// message takes to cross a link where the term grows by it
-	// ([Leader.Carrying]).
+	// was one request ([jsprovision.ReadBoundedWith]): a page's and the
+	// stream's info's as it is, and a message read's beside the arrival of
+	// its reply ([Leader.Carrying]).
 	timeout time.Duration
 	// paged is how long the last subjects page this reader asked took to
 	// be answered — or, raised by a page nobody answered, at least how
@@ -161,28 +165,45 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 		return nil, err
 	}
 	return &Leader{conn: js.Conn(), stream: stream, msgGet: msgGet, info: info,
-		term: jsprovision.ReadTerm, timeout: js.Options().DefaultTimeout,
-		paged: new(atomic.Int64)}, nil
+		timeout: js.Options().DefaultTimeout, paged: new(atomic.Int64)}, nil
 }
 
 // Carrying is l for a stream whose messages may be as large as messageBytes,
-// over a link that may carry a mebibyte in as long as pace: every message read
-// is presumed lost only once a reply of that size has had time to cross the
-// link, beyond the read term — and a read whose caller set no deadline is held
-// to the client's own bound AND that crossing, since a reply that takes the
-// crossing to land is never answered inside the bound alone.
+// on a connection that may carry a mebibyte in as long as pace across a link —
+// none on a member's own connection, which crosses nothing: every message read
+// is given the time a reply of that size takes to ARRIVE ([Arrival]) — its
+// handling on every connection, and its crossing where there is a link —
+// beyond the read term before it is presumed lost, beyond the client's own
+// bound where its caller set no deadline, and beyond the lookup ceiling every
+// read is held to ([jsprovision.Timing.Arriving]). The ONE rule for a leader
+// read of a message that may be large, on every connection: a reader of the
+// coordination store's large values (internal/coord/kv's runs), of dead
+// letters (internal/queue/jetstream) and of an object's pieces across a link
+// (internal/objstore/natsobj) each read through it, sized at the largest
+// message the stream may hold, since a reader cannot know how large the
+// message it asks for is until its reply is in.
 //
 // # Why the bound grows with the term
 //
 // The bound a deadline-less caller is held to is what its one request was
 // given to be answered in ([jsprovision.ReadBoundedWith]): the broker's
-// answer, with no crossing in it. Held there, a read whose term said its
+// answer, with no arrival in it. Held there, a read whose term said its
 // reply took longer than five seconds to cross was cut at five every time,
 // whatever its term: a dead letter's frame read across a link by a feed's
 // replay, which sets no deadline, failed at every start for an entry whose
 // reply took that long — about six megabytes below about 13 Mbit/s — and was
-// left until it expired, its wake lost. The ceiling every read is held to
-// ([jsprovision.LookupBudget]) still bounds it, as it bounds every read.
+// left until it expired, its wake lost.
+//
+// # Why the ceiling grows with it too
+//
+// The ceiling ([jsprovision.LookupBudget]) is the broker's longest silence,
+// and a reply on its way is no silence. Held to the ceiling alone, a read
+// whose reply took longer than thirty seconds to arrive failed at every ask,
+// whatever its term: a value of more than about 768 KiB, read across a link
+// at the object store's floor, could not be read at all, and every
+// read-decide-write of one — a run's record of six megabytes, rewritten by
+// every change of it — failed on its read, whatever its write was given
+// (crewlet/crewlet#1149).
 //
 // # Why a large reply gets a longer term
 //
@@ -198,20 +219,80 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 // mebibyte ([objstore/natsobj]'s window) — three pieces on the link for one
 // read. Given the transfer, a read on a link at the floor asks once; one
 // asked again is a read whose reply could not have been on its way.
+//
+// AND ON A MEMBER'S OWN CONNECTION, which crosses nothing, a reply of
+// megabytes is still built by the leader and decoded by its reader, in the
+// engine's own process ([Handling]): a dead letter at the transport's
+// ceiling, its reply eleven megabytes, read at the bare read term under
+// load, was asked again at two seconds and at four while the leader was
+// still building the first — every re-ask another whole reply built beside
+// it, more of the work that made the first one late — and ran out its bound
+// with none of them answered (crewlet/crewlet#1153).
 func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 	c := *l
-	crossing := Crossing(messageBytes, pace)
-	c.term = jsprovision.ReadTerm + crossing
-	c.timeout = l.timeout + crossing
+	c.arrival = Arrival(messageBytes, pace)
 	return &c
 }
 
+// Arrival is how long the reply to a message read that carries a message of
+// messageBytes ([ReplyBytes]) takes to reach its reader whole once the leader
+// takes the request, heard only once its last byte is in: its [Handling] in
+// the engine's own processes, on every connection, and its [Crossing] of a
+// link carrying a mebibyte in as long as pace — none for a pace of zero, a
+// member's own connection. The one figure such a reply is given beyond the
+// read term and the lookup ceiling ([jsprovision.Timing.Arriving]), whoever
+// reads ([Leader.Carrying], and a state log's read of a record by its
+// position).
+func Arrival(messageBytes int, pace time.Duration) time.Duration {
+	return Handling(messageBytes) + Crossing(messageBytes, pace)
+}
+
+// Handling is how long the reply to a message read that carries a message of
+// messageBytes ([ReplyBytes]) is given to be built by the stream's leader,
+// carried in process and decoded by its reader, at [HandlingPace]: what every
+// connection costs such a reply, a member's own included, beside whatever
+// link it crosses ([Crossing]).
+func Handling(messageBytes int) time.Duration {
+	return time.Duration(float64(HandlingPace) * float64(ReplyBytes(messageBytes)) / mebibyte)
+}
+
+// HandlingPace is how long a mebibyte of a leader's reply is given to be
+// built, carried in process and decoded: a SECOND — so the largest reply a
+// leader's read carries, a state log's record at the transport's ceiling
+// (eleven megabytes, 10.7 MiB), is given 10.7 seconds, and a coordination
+// value at its bound (an 8 MiB reply) eight.
+//
+// # Why a second
+//
+// The reply is CPU, not a link: the leader reads the message and encodes it
+// into JSON, base64 inside, each server it passes parses it whole, and the
+// reader decodes it. Read back on a member's own connection
+// (BenchmarkADomainLogReadOfItsLargestRecord, -benchtime 10x, two E-cores of
+// a Core Ultra 7 265U), the largest reply took 36.9 ms without the race
+// detector — 3.5 ms a mebibyte — and 0.79 s under it, and with two, four and
+// eight threads more kept busy beside it on those two cores 1.26, 2.24 and
+// 5.77 seconds: a load of five runnable threads a core under the race
+// detector, inside the ten to thirty-three on four cores this repository's
+// runners were measured at (internal/config's MinLeaseTTL), is half a second
+// a mebibyte. A second a mebibyte is twice that, and nearly three hundred
+// times what the reply costs a node that is not running under the race
+// detector.
+//
+// It is a TERM, never a deadline: a reply that is answered in milliseconds
+// ends the read as soon as it is in. What the second a mebibyte costs is the
+// wait before a request presumed lost is asked again — only for a reader of
+// messages that may be that large ([Leader.Carrying]), and a request a member
+// dropped across an election is asked again eight seconds later for a
+// coordination value at its bound rather than two — which is what keeps a
+// leader from building one reply twice while the first is still being built.
+const HandlingPace = time.Second
+
 // Crossing is how long the reply to a message read that carries a message of
 // messageBytes ([ReplyBytes]) takes to cross a link carrying a mebibyte in as
-// long as pace, heard only once its last byte is in: the one rule for how long
-// such a reply is given before a read is presumed lost, whoever reads
-// ([Leader.Carrying], and a state log's read of a record by its position). A
-// write's request crosses the other way, raw ([Sending]).
+// long as pace, heard only once its last byte is in — the link's part of a
+// reply's [Arrival], whoever reads ([Leader.Carrying], and a state log's read
+// of a record by its position). A write's request crosses the other way, raw
+// ([Sending]).
 func Crossing(messageBytes int, pace time.Duration) time.Duration {
 	return time.Duration(float64(pace) * float64(ReplyBytes(messageBytes)) / mebibyte)
 }
@@ -302,8 +383,9 @@ const requestOverhead = 1 << 10
 const mebibyte = 1 << 20
 
 // Term is how long one of l's message reads is given before it is presumed
-// lost and asked again ([Leader.Carrying]).
-func (l *Leader) Term() time.Duration { return l.term }
+// lost and asked again: the read term, and the arrival of a reply as large as
+// l's messages may be ([Leader.Carrying]).
+func (l *Leader) Term() time.Duration { return jsprovision.ReadTerm + l.arrival }
 
 // Last answers the newest message on subject, or [ErrNoMessage]. Subject may
 // be a FILTER — `$O.<bucket>.M.>` — and the answer is then the newest message
@@ -411,7 +493,7 @@ func (l *Leader) get(ctx context.Context, q server.JSApiMsgGetRequest) (Message,
 	if err != nil {
 		return Message{}, fmt.Errorf("jsapi: encode the read: %w", err)
 	}
-	reply, err := ask(ctx, l.conn, l.msgGet, req, l.term, l.timeout)
+	reply, err := ask(ctx, l.conn, l.msgGet, req, l.arrival, l.timeout+l.arrival)
 	if err != nil {
 		return Message{}, fmt.Errorf("jsapi: read %s from its leader: %w", l.stream, err)
 	}
