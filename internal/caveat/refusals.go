@@ -355,6 +355,14 @@ func AtlasEntryExists(retired bool) Refusal {
 		"and correct it there."}
 }
 
+// AtlasSourceUnread is an atlas write about an entry that a source the atlas
+// could not read just now may describe. what names the source as a person
+// reads it ("Gitlet's repositories").
+func AtlasSourceUnread(what string) Refusal {
+	return Refusal{person: fmt.Sprintf("The atlas could not read %s just now, and this change is "+
+		"about something it describes, so nothing was recorded. Try again in a moment.", what)}
+}
+
 // AtlasChangedMeanwhile is an atlas write decided on an entry somebody
 // changed since it was read.
 func AtlasChangedMeanwhile() Refusal {

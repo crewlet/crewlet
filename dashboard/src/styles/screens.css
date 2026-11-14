@@ -3247,6 +3247,14 @@ a.prof-row:hover {
 .knowledge-connection {
   min-width: 0;
 }
+/* A SPACE'S TRASH, under its outline: a heading and the trashed pages as
+   links, set apart from the outline by the same gap the outline keeps. */
+.knowledge-trash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-6);
+}
 .knowledge-links,
 .knowledge-readers,
 .knowledge-revision-list {

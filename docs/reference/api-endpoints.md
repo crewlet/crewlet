@@ -2739,7 +2739,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state. SSH's also carries `ssh`: the authority's public line (`ca_public_key`, and `next_ca_public_key` during a rotation), the lines rotations retired (`retired_ca_public_keys`, newest last, which each server drops when its setup runs again), the `setup_version` this engine renders, the closed set of commands the engine runs on a server that lets the atlas read it (`inventory_commands`: `{"command", "containers"}`, `containers` marking the one run only where a server's container reads are on), and each server with its key fingerprints, users, whether the atlas reads it (`inventory`), the agents naming it and its latest Test connection with the current authority, as the server is now (a test from before its fields changed is not shown) |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `POST` | `/setup/integrations/{kind}/verify` | Check one typed credential at its vendor with a read-only call, before anything stores it. Writes nothing: no secret, no config, no revision and no reconcile state. See [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored) |
-| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block, turning off the agents that were on there in the same revision |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
@@ -3942,6 +3942,24 @@ account with nothing left to authenticate a second attempt. Until the teardown
 succeeds the surface reports phase `disconnecting`, labelled **Disconnecting**,
 and a failure holds it there and retries rather than letting it drift back to
 looking connected.
+
+**The block and the agents on through it leave in one revision.** The company
+document refuses an agent turned on at an integration the company has not
+connected (Mattermost, Jira, Confluence, SSH), so the revision that removes the
+block also turns off every seat that was on there: `enabled` becomes `false`
+and the rest of the seat's block (its roles, channels, projects, servers) is
+kept, so connecting again and turning the agent on restores what it was given.
+A seat already off, or with no block, is left as it is. The block alone used to
+be the whole revision, which those rules refused: the teardown retried it for
+ever and `force` answered `400`, until somebody turned every agent off by hand.
+A forced disconnect answers the handles it turned off as `seats_off`.
+
+A failed teardown pass is recorded on the surface's reconcile row with
+`teardown_held_by`: `vendor` where the third-party app's half failed, and
+`settings` where that half finished and the company's settings refused the
+revision that removes the block (some other rule the removal breaks, which
+`last_error` names by path). Forcing writes the same revision, so a disconnect
+the settings hold is moved by changing the setting, then disconnecting again.
 
 ```json
 { "remove_seats": false, "force": false }
@@ -6968,6 +6986,12 @@ owner) and the `outcome` and `position` every write carries, or `unchanged`
 where what it asked for already held and nothing was recorded. Over MCP each
 also takes back the `op_id` its answer carried, as the tracker's writes do.
 
+A write is refused `unavailable` (`503`, with a `Retry-After`) only while a
+source that could state a fact of an entry it touches did not answer in full,
+and the `detail` names that source in a person's words; a source that
+describes none of its entries, or that only reports health and use, never
+holds it ([how a write is decided](../concepts/atlas.md)).
+
 | Tool | Arguments |
 |---|---|
 | `atlas_add_entry` | `kind`, `key` in its kind's grammar, and optionally what is known of it: a `name`, a one-line `purpose`, the vendor account it belongs to (`belongs_to`, an entry), its owner (`seat` or `unit`) and the Doclet page that documents it (`doclet_page`, the page's id). Each is a record of its own after the entry's, and the same call made again finishes one that stopped part of the way. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
@@ -7928,7 +7952,7 @@ route.
 | `PUT` | `/worklet/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `worklet` |
 | `PUT` | `/worklet/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `admin`, with `worklet`; never a seat reordering a colleague |
 | `POST` | `/doclet/pages` | `write_page` | `doclet`, and only in a space the company declares ([Who may write where](../concepts/knowledge-system.md#who-may-write-where)) |
-| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved` | `doclet`; a `title` in the body is a rename, and asks what a rename asks |
+| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved`. A `status` of `published` publishes a draft and `draft` takes a published page back to one; a page in the trash is refused (`422`), since a restore brings it back | `doclet`; a `title` in the body is a rename, and asks what a rename asks; a `status` other than the page's own is a publish (`pages.publish`): the page's **creator**, the lead of its container, or `admin` |
 | `POST` | `/doclet/pages/{id}/rename` | Move the page to a new title (its address): `{"title": …, "quiet": false}` | the page's **creator**, the lead of the page's container, or `admin`, with `doclet` |
 | `POST` | `/doclet/pages/{id}/comments` | `comment_on_page` | `doclet` |
 | `PATCH` | `/doclet/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `doclet`, for the work comment's reason |

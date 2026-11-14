@@ -2450,6 +2450,12 @@ const (
 	// bytes): 5977 KiB.
 	// The release train merged with that poll, on kit 0.126.2, measures
 	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
+	// A page tidied from its own screen (Rename, Labels, Move, the trash with
+	// Restore and Delete permanently, a space's trash list), a draft's
+	// Publish on the page, in More and in the editor, an empty space's header,
+	// a disconnect the settings hold said as theirs, and the seat gestures'
+	// dialog held by the screen added 12,312 bytes, nearly all script, and
+	// took it to 5987.1 KiB (6,130,755 bytes): 5988 KiB.
 	treeBudget = 5<<20 + 891<<10
 )
 

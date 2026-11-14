@@ -163,6 +163,18 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a page's eye, a save_page carrying only the person's own watch",
     suite: "routes/doclet/page/PageView.test.tsx",
   },
+  "routes/doclet/page/PageView.tsx": {
+    why:
+      "a draft's Publish and a published page's Move back to draft, a save_page carrying " +
+      "only the status, from the draft's notice and from More",
+    suite: "routes/doclet/page/PageView.test.tsx",
+  },
+  "routes/doclet/page/Tidy.tsx": {
+    why:
+      "a page's Labels and Move (save_page with its labels or its parent), beside the " +
+      "rename, trash, restore and purge its own routes take",
+    suite: "routes/doclet/page/PageView.test.tsx",
+  },
   "routes/artifacts/new/fileTask.ts": {
     why:
       "a create page's ask an agent: one create_work_item filed to the chosen seat, " +

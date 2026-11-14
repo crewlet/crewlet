@@ -33,6 +33,15 @@
  * the same lines, the base stays where it is and each clash is shown, their
  * text beside the draft's, for the person to settle: keep theirs, keep yours,
  * or keep both. Nothing is saved until they press Save.
+ *
+ * # A draft is saved as one, or published
+ *
+ * Editing a draft, Save keeps it a draft ("Save draft") and Publish saves
+ * what is written and publishes it in the same write (`status: published`).
+ * Publish needs no edit: a finished draft is published as it stands. It is
+ * held by the same things a save is (a merge to settle, a newer revision, a
+ * note past its limit), so it never sends a write the engine could only
+ * refuse.
  */
 
 import { useState, type ReactNode } from "react";
@@ -75,6 +84,7 @@ export function PageEditor({
 }) {
   const page = detail.page;
   const save = useAct("save_page");
+  const publish = useAct("save_page");
   // WHAT THIS EDIT IS AGAINST, its version and that version's body, held
   // apart from the page the screen polls. See the header.
   const [base, setBase] = useState({ version: page.version, body: page.body ?? "" });
@@ -95,6 +105,7 @@ export function PageEditor({
 
   const moved = page.version > base.version;
   const dirty = draft !== base.body;
+  const isDraft = page.status === "draft";
 
   // --- assistant page actions (WP12) ---
   // THE OPEN DRAFT, declared once (`useAssistantDraft`): its body reaches the
@@ -130,7 +141,7 @@ export function PageEditor({
     blocked: () =>
       merging
         ? "Settle where both edits changed the same lines first."
-        : save.busy
+        : save.busy || publish.busy
           ? "The page is being saved."
           : null,
   });
@@ -157,7 +168,33 @@ export function PageEditor({
         body: draft,
         ...(message.trim() ? { message: message.trim() } : {}),
       },
-      { done: `Saved “${page.title}”` },
+      { done: isDraft ? `Saved the draft of “${page.title}”` : `Saved “${page.title}”` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) onDone();
+  };
+
+  // PUBLISH IS THE SAVE AND THE STATUS IN ONE WRITE, so a draft is never
+  // published as the text before the last edit. The body goes only where it
+  // changed: a publish with no edit moves the status and writes no revision.
+  const publishBlocked = merging
+    ? "Settle where both edits changed the same lines first."
+    : moved
+      ? `Revision ${page.version} was saved since you started. Keep editing on top of it first.`
+      : messageBudget.over
+        ? messageBudget.line
+        : save.busy
+          ? "The draft is being saved."
+          : undefined;
+  const pressPublish = async () => {
+    const result = await publish.run(
+      {
+        page: page.id,
+        base_version: base.version,
+        status: "published",
+        ...(dirty ? { body: draft } : {}),
+        ...(message.trim() ? { message: message.trim() } : {}),
+      },
+      { done: `Published “${page.title}”` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onDone();
   };
@@ -174,20 +211,32 @@ export function PageEditor({
           nothing else: the search the bar holds while reading is not what an
           edit is for, and on a phone it pushed Save out of the bar. */}
       <PageActions>
-        <EditingStatus dirty={dirty} saving={save.busy} />
-        <Button size="small" variant="ghost" onClick={leave} disabled={save.busy}>
+        <EditingStatus dirty={dirty} saving={save.busy || publish.busy} />
+        <Button size="small" variant="ghost" onClick={leave} disabled={save.busy || publish.busy}>
           Cancel
         </Button>
         <WriteButton
           write={save}
           size="small"
-          variant="primary"
+          variant={isDraft ? "secondary" : "primary"}
           showRefusal={false}
-          blocked={blocked}
+          blocked={blocked ?? (publish.busy ? "The page is being published." : undefined)}
           onPress={() => void press()}
         >
-          Save
+          {isDraft ? "Save draft" : "Save"}
         </WriteButton>
+        {isDraft && (
+          <WriteButton
+            write={publish}
+            size="small"
+            variant="primary"
+            showRefusal={false}
+            blocked={publishBlocked}
+            onPress={() => void pressPublish()}
+          >
+            Publish
+          </WriteButton>
+        )}
       </PageActions>
       <section className="knowledge-editor" aria-label={`Editing “${page.title}”`}>
         {moved && !merging && (
@@ -306,6 +355,7 @@ export function PageEditor({
         {/* A REFUSAL FOR RACING A NEWER REVISION is the callout above, which
             says what to do about it; the sentence would say it twice. */}
         {!moved && <RefusalNote write={save} />}
+        {!moved && <RefusalNote write={publish} />}
 
         {discard && (
           <ConfirmModal

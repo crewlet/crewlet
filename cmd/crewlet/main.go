@@ -3782,6 +3782,17 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary str
 	return err
 }
 
+// Disconnect is the one write of a disconnect: the block gone and the agents
+// on through it turned off, as one revision ([configapi.Service.Disconnect]).
+func (w engineConfigWriter) Disconnect(ctx context.Context, kind integration.Kind, summary string,
+	by iam.Actor) ([]string, error) {
+
+	done, err := w.surface.Disconnect(ctx, configapi.DisconnectRequest{
+		Kind: string(kind), Summary: summary, By: by, Engine: true,
+	})
+	return done.SeatsOff, err
+}
+
 // Reload re-activates the current document, which is how a pass that sealed a
 // credential gets everything built at apply time rebuilt against it.
 //

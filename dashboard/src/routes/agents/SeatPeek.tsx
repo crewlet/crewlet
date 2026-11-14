@@ -75,7 +75,7 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   Callout,
@@ -104,10 +104,9 @@ import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
-  SeatGestureDialog,
+  useSeatGesture,
   seatGestures,
   useHumanSeats,
-  type SeatGesture,
 } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import {
@@ -293,8 +292,9 @@ function SeatPeekBody({
   const directory = useHumanSeats(readsDirectory);
   const holding = directory.data?.find((row) => row.handle === seat.handle);
   const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
-  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
-  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
+  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED, and held by the peek
+  // itself so the dialog outlives what the write does to the listing.
+  const seatGesture = useSeatGesture(viewer.grants);
   // ITS CONTROLS, as on its row and its page: the engine's own, for whoever it admits.
   const live = useLiveOrg().live.get(seat.handle);
   const controls = useSeatControls();
@@ -574,7 +574,7 @@ function SeatPeekBody({
                 size="small"
                 variant="secondary"
                 leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
-                onClick={() => setOpening({ gesture, row: holding })}
+                onClick={() => seatGesture.open(gesture, holding)}
               >
                 {SEAT_GESTURE_WORDS[gesture].button}
               </Button>
@@ -595,14 +595,7 @@ function SeatPeekBody({
         </footer>
       )}
       {controls.dialog}
-      {opening && (
-        <SeatGestureDialog
-          gesture={opening.gesture}
-          seat={opening.row}
-          held={viewer.grants}
-          onClose={() => setOpening(null)}
-        />
-      )}
+      {seatGesture.dialog}
     </div>
   );
 }

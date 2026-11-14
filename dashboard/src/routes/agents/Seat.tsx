@@ -148,7 +148,13 @@ import { runStanding } from "~/lib/runStanding.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, GITLET, WORKLET } from "~/lib/access.ts";
 import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
-import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
+import {
+  canManagePeople,
+  SeatHolding,
+  useHumanSeats,
+  useSeatGesture,
+  type SeatGesture,
+} from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
@@ -277,6 +283,12 @@ export function SeatScreen({ handle }: { handle: string }) {
   const humanSeats = useHumanSeats(readsSeats);
   const holding = humanSeats.data?.find((s) => s.handle === seat?.handle);
   const unheld = holding !== undefined && !holding.holder;
+  // ONE DIALOG FOR THE PAGE'S TWO HOLDING STATES. The open seat's empty state
+  // (in the Overview) and the held seat's notice (above the tabs) are drawn in
+  // different places, and adding a person moves the seat from the first to
+  // the second: the dialog that shows their first password link is the
+  // page's, so that move cannot close it.
+  const seatGesture = useSeatGesture(viewer.grants);
 
   // WHAT THE PHONE'S "MORE" HOLDS: every action but the one the bar keeps in
   // view (see the file's doc), each opening what its inline control opens.
@@ -514,7 +526,11 @@ export function SeatScreen({ handle }: { handle: string }) {
             the ways to fill it; the notice is for a seat somebody holds, a
             listing that could not say, and the seat's other tabs. */}
         {readsSeats && seat.handle && (!unheld || tab !== "overview") && (
-          <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
+          <Holder
+            seat={{ handle: seat.handle, name: seat.name }}
+            seats={humanSeats}
+            onGesture={seatGesture.open}
+          />
         )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
         {/* THEIR STRIP, OUR PANEL: the kit's `TabPanel` spreads nothing, so
@@ -539,6 +555,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               now={now}
               unheld={unheld}
               humanSeats={humanSeats}
+              onSeatGesture={seatGesture.open}
             />
           )}
           {tab === "work" && (
@@ -610,6 +627,7 @@ export function SeatScreen({ handle }: { handle: string }) {
         </div>
       </div>
       {controls.dialog}
+      {seatGesture.dialog}
     </div>
   );
 }
@@ -733,9 +751,11 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
 function Holder({
   seat,
   seats,
+  onGesture,
 }: {
   seat: { handle: string; name: string };
   seats: RestResult<HumanSeat[]>;
+  onGesture: (gesture: SeatGesture, row: HumanSeat) => void;
 }) {
   const viewer = useViewer();
   return (
@@ -744,8 +764,8 @@ function Holder({
         seat={seat}
         seats={seats}
         manages={canManagePeople(viewer.grants)}
-        held={viewer.grants}
         you={isOwnSeat(viewer, seat.handle)}
+        onGesture={onGesture}
       />
     </div>
   );

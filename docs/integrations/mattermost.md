@@ -59,6 +59,11 @@ each bot token itself, and a server whose token is unset is a failure naming
 the variable. See
 [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
+A disconnect finishes while agents are still turned on at Mattermost: the
+revision that removes `integrations.mattermost` turns every agent's
+`integrations.mattermost.enabled` off in the same write, and keeps its roles
+and channels, so connecting again and turning the agent on restores them.
+
 Disconnecting with **"also remove the accounts this engine created"** revokes
 each seat's bot token and then disables its bot, in that order. The revoke is
 what makes the disable stand up: a disabled account keeps its username and its

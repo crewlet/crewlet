@@ -213,6 +213,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/seatControls.tsx": "modal: a pause's reason, in the dialog a seat's Pause opens",
   "routes/account/Account.tsx": "modal: a password, a second factor or a token, in its dialog",
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
+  "routes/doclet/page/Tidy.tsx":
+    "modal: a page's new title, labels, place, or a purge's typed title and reason, each in its dialog",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
   "routes/atlas/AddEntry.tsx": "modal: a new atlas entry, in its dialog",

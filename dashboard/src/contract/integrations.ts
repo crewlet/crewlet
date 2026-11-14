@@ -121,6 +121,12 @@ export interface ReconcileStatus {
   outcome?: string;
   attempts?: number;
   last_error?: string;
+  /**
+   * What the last failed disconnect pass was held by: `vendor` (the
+   * third-party app's half) or `settings` (the company's settings refused the
+   * revision that removes the integration). Empty where none failed.
+   */
+  teardown_held_by?: string;
   last_attempt_at?: string | null;
   settled_at?: string | null;
   next_attempt_at?: string | null;

@@ -100,6 +100,41 @@ var SourceNames = []SourceName{
 	SourceSeatAccess, SourceServerTests, SourceSettings, SourceToolServers, SourceUsage,
 }
 
+// recordsOf is the record families each source's read is turned into CLAIMS
+// from. A source with none here states no fact: what it answers is joined to
+// the view as health, holders and use. The nodes' presence also decides which
+// tool server listings count, and a read of the nodes that failed reports the
+// tool servers as unread itself.
+var recordsOf = map[SourceName][]atlas.Record{
+	SourceGitlet:       {atlas.RecordGitlet},
+	SourceIntegrations: {atlas.RecordIntegrations},
+	SourceToolServers:  {atlas.RecordToolServers},
+	SourceNodes:        {atlas.RecordFleet},
+}
+
+// Claims reports whether the source can state a fact of the entry ref names,
+// whether or not this read reached it: the settings and what people recorded
+// of any entry, a record source of the entries its families name
+// ([atlas.Record.Claims]), and a source that only joins health and use of
+// none.
+//
+// A WRITE IS DECIDED ON THE SOURCES THIS ANSWERS TRUE FOR, never on every
+// source: one that could not be read and says nothing of the entries a change
+// touches holds nothing the change could collide with.
+func (n SourceName) Claims(ref atlas.Ref) bool {
+	if n == SourceSettings || n == SourceLog {
+		return true
+	}
+	return slices.ContainsFunc(recordsOf[n], func(r atlas.Record) bool { return r.Claims(ref) })
+}
+
+// StatesFacts reports whether the source can state a fact of any entry at
+// all, for a decision made over the whole view rather than about named
+// entries.
+func (n SourceName) StatesFacts() bool {
+	return n == SourceSettings || n == SourceLog || len(recordsOf[n]) > 0
+}
+
 // Coverage is one source's part in a read: whether it was read in full, and
 // why not where it was not.
 type Coverage struct {
