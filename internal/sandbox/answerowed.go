@@ -666,6 +666,20 @@ type answerRetry struct {
 	// series.
 	release *claimRelease
 
+	// unread is a series whose release gave its claim back to running and
+	// has landed, and which has not read the row since ([Coordinator.retryOwed]).
+	// Such a run owes the series no answer, only what a read of it says (a
+	// decline's copies it still owes the seat, say), so a read the store does
+	// not answer is no failed attempt at an answer, and is made again on the
+	// hand-back's spacing until one is answered. Counted, a store that took
+	// the release and answered no read after it ran the series of a
+	// completion's claim through an answer's attempts, each logged as an
+	// answer's failed resume, and gave up as unreadable an answer the run
+	// never had. A release that gave an answer's claim back leaves it false:
+	// that series is the answer's, and from its second read after the release
+	// a read the store does not answer counts as an answer series' reads do.
+	unread bool
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
@@ -1437,11 +1451,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 	var kept *ending
 	var revive *revival
 	var release *claimRelease
+	var unread bool
 	if r != nil {
 		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
 		spent = r.spent(c.now())
-		kept, revive, release = r.ending, r.revive, r.release
+		kept, revive, release, unread = r.ending, r.revive, r.release, r.unread
 	}
 	c.mu.Unlock()
 	if r == nil {
@@ -1491,13 +1506,21 @@ func (c *Coordinator) retryOwed(turnID string) {
 		if c.releasing(turnID, release.run.LaunchID) {
 			return
 		}
+		unread = release.release.To != StatusAnswered
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
+	c.mu.Lock()
+	if series := c.retries[turnID]; series != nil {
+		series.unread = unread && err != nil
+	}
+	c.mu.Unlock()
 	if err != nil {
-		if kept != nil || revive != nil || release != nil {
+		if kept != nil || revive != nil || release != nil || unread {
 			// A READ IS NOT A RESUME, and neither an ending, a revival nor
-			// a release just settled owes an attempt: the row is read again
-			// on the hand-back's own spacing.
+			// a release just settled owes an attempt, nor does a run a
+			// release put back in running ([answerRetry.unread]), however
+			// many reads after it the store leaves unanswered: the row is
+			// read again on the hand-back's own spacing.
 			c.scheduleOwed(turnID, answerRetryCeiling)
 			return
 		}

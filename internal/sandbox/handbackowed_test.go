@@ -482,3 +482,78 @@ func TestAnAnswerIsNeverClaimedOverAReleaseOfItsJobStillOut(t *testing.T) {
 		})
 	}
 }
+
+// A RELEASE THAT PUT ITS RUN BACK IN RUNNING COUNTS NO READ AFTER IT. Once an
+// owed release lands, its series reads the row to find what it still owes: the
+// answer an answer's release returned to its run, or copies a decline left
+// there. A completion's release returns its run to running, which owes the
+// series no answer, so a read the store does not answer is no failed attempt
+// at one. Only the read just after the landing went uncounted: every read
+// after it was counted as an answer's failed resume, retried on the answer's
+// backoff, and once the answer's attempts were spent, an answer the run never
+// had was given up as unreadable. Each is read again on the hand-back's
+// spacing, uncounted, until the row is read. An answer's release keeps its
+// answer's bound: its second unanswered read counts as an answer series' does.
+//
+// Mutation: count the reads after the first wherever the release put the run,
+// and the completion's next read comes on the answer's backoff; or count none
+// wherever it put it, and the answer's comes on the hand-back's spacing.
+func TestAReleaseThatPutItsRunBackInRunningCountsNoReadAfterIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// handBack hands t1's claim back with its release owed.
+		handBack func(t *testing.T, rig *coordRig)
+		// waits is the retry waiting after each read the store leaves
+		// unanswered once the release has landed, one per read.
+		waits []time.Duration
+	}{
+		{name: "a completion's resume that failed", handBack: func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "the box's account"})
+			rig.resumer.failWith(errors.New("the model provider did not answer"))
+			_ = collectAgain(t, rig) // the resume's own answer to its delivery
+		}, waits: slices.Repeat([]time.Duration{answerRetryCeiling}, MaxAnswerAttempts+1)},
+		{name: "an answer's resume that failed", handBack: func(t *testing.T, rig *coordRig) {
+			parkOnAQuestion(t, rig)
+			rig.resumer.failWith(errors.New("the model provider did not answer"))
+			reply := chatReply(answerOnTheDM, "use main",
+				replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute)))
+			if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); err != nil ||
+				d != AnswerConsumed {
+				t.Fatalf("the reply = %q, %v; want it recorded as the answer", d, err)
+			}
+		}, waits: []time.Duration{answerRetryCeiling, answerRetryDelay(2)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.withHold()
+			store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.pending,
+				silent: []string{"ReleaseClaim"}}}
+			rig.coordinator.pending = store
+			tc.handBack(t, rig)
+			if got := rig.get("t1"); got.Status != StatusResumed {
+				t.Fatalf("the premise: the hand-back left the run %s; want the claim kept, its release owed",
+					got.Status)
+			}
+
+			// THE STORE TAKES THE RELEASE, and answers no read after it.
+			store.answer()
+			store.silence("Get")
+			for read, want := range tc.waits {
+				if fired := rig.fireRetries(); fired != 1 {
+					t.Fatalf("read %d: %d retries fired; want the series' one", read+1, fired)
+				}
+				if delays := rig.retries.delays(); !slices.Equal(delays, []time.Duration{want}) {
+					t.Fatalf("after %d reads the store did not answer, the retries waiting are %v; want %v",
+						read+1, delays, want)
+				}
+			}
+			if failed := rig.failures(); len(failed) != 0 {
+				t.Fatalf("announced %+v for a run whose reads the store only did not answer", failed)
+			}
+		})
+	}
+}
