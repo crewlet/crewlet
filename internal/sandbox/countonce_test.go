@@ -317,6 +317,44 @@ func TestAnAnswersWriteMovesItsSeatsCountOnce(t *testing.T) {
 	})
 }
 
+// parkAndRecordOut has t1's park and the record of an answer to its question
+// both land on the row, each still out on this node, recorded in the order an
+// answer by turn to a question whose park has not heard back yet makes them:
+// the park's (the claim to the question), then the record's (the question to
+// the answer).
+func parkAndRecordOut(t *testing.T, rig *coordRig) (park, record *countWrite) {
+	t.Helper()
+	parkOnAQuestion(t, rig)
+	run := rig.get("t1")
+	words, answer := chatReply(answerOnTheDM, "use main",
+		replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+		sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
+		t.Fatalf("RecordAnswer = %v, %v", won, err)
+	}
+	return rig.coordinator.writingCount(run, StatusResumed, StatusAwaiting),
+		rig.coordinator.writingCount(run, StatusAwaiting, StatusAnswered)
+}
+
+// answerLanded takes the answer to w, a write that landed, as its caller does:
+// under the lock, with what it returns run once the lock is let go.
+func answerLanded(rig *coordRig, w *countWrite) {
+	rig.coordinator.mu.Lock()
+	moved := rig.coordinator.wroteCountLocked(w, true)
+	rig.coordinator.mu.Unlock()
+	moved()
+}
+
+// wantSeatCounts fails t unless the rig's seat counts holding and awaiting,
+// saying when and what was wanted.
+func wantSeatCounts(t *testing.T, rig *coordRig, when, want string, holding, awaiting int) {
+	t.Helper()
+	if got := seatCounts(rig); got.holding != holding || got.awaiting != awaiting {
+		t.Fatalf("%s the seat counts %d holding and %d awaiting; want %s", when, got.holding,
+			got.awaiting, want)
+	}
+}
+
 // TWO WRITES OUT ON ONE RUN MOVE ITS SEAT'S COUNT IN THE ORDER THEY WERE
 // RECORDED, whatever order their answers come back in (countwrite.go). Here a
 // park's question has landed, and an answer by turn has been recorded to it,
@@ -332,40 +370,50 @@ func TestAnAnswersWriteMovesItsSeatsCountOnce(t *testing.T) {
 func TestTwoWritesOutOnOneRunMoveItsSeatsCountInTheOrderTheyWereRecorded(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	parkOnAQuestion(t, rig)
-	run := rig.get("t1")
 	// BOTH WRITES HAVE LANDED: the question is on the row, and its answer.
-	words, answer := chatReply(answerOnTheDM, "use main",
-		replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
-	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-		sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
-		t.Fatalf("RecordAnswer = %v, %v", won, err)
-	}
-	park := rig.coordinator.writingCount(run, StatusResumed, StatusAwaiting)
-	record := rig.coordinator.writingCount(run, StatusAwaiting, StatusAnswered)
-	answered := func(w *countWrite) {
-		rig.coordinator.mu.Lock()
-		moved := rig.coordinator.wroteCountLocked(w, true)
-		rig.coordinator.mu.Unlock()
-		moved()
-	}
-	counts := func(when, want string, holding, awaiting int) {
-		t.Helper()
-		if got := seatCounts(rig); got.holding != holding || got.awaiting != awaiting {
-			t.Fatalf("%s the seat counts %d holding and %d awaiting; want %s", when, got.holding,
-				got.awaiting, want)
-		}
-	}
+	park, record := parkAndRecordOut(t, rig)
 
 	rig.coordinator.syncSeat(t.Context(), "swe")
-	counts("recounted with both writes out,", "the run as the claim it was before either", 1, 0)
-	answered(record)
-	counts("with the record's answer taken first,", "the run still the claim, its move waiting for the park's",
-		1, 0)
+	wantSeatCounts(t, rig, "recounted with both writes out,", "the run as the claim it was before either", 1, 0)
+	answerLanded(rig, record)
+	wantSeatCounts(t, rig, "with the record's answer taken first,",
+		"the run still the claim, its move waiting for the park's", 1, 0)
 	rig.coordinator.syncSeat(t.Context(), "swe")
-	counts("recounted with the park still out,", "the run still the claim", 1, 0)
-	answered(park)
-	counts("with both answers taken,", "the answered run in neither set", 0, 0)
+	wantSeatCounts(t, rig, "recounted with the park still out,", "the run still the claim", 1, 0)
+	answerLanded(rig, park)
+	wantSeatCounts(t, rig, "with both answers taken,", "the answered run in neither set", 0, 0)
 	rig.coordinator.syncSeat(t.Context(), "swe")
-	counts("recounted once both are answered,", "the answered run in neither set", 0, 0)
+	wantSeatCounts(t, rig, "recounted once both are answered,", "the answered run in neither set", 0, 0)
+}
+
+// A RECOUNT COUNTS A RUN WITH A WRITE STILL OUT WHERE THE MOVES ALREADY MADE
+// LEAVE IT (countwrite.go), a move made by an earlier write's answer included.
+// Here a park's question and an answer by turn recorded to it have both landed,
+// and their answers come back in the order the writes were made: the park's
+// first, which moves the run off the claim and onto its question, while the
+// record's is still out. A recount then counts the run on its question, and
+// the record's answer moves it from there to the answer, which is in neither
+// set. Counted where the run stood before the park's answer, the recount put
+// the run back on the claim, and the record's move then took the run out of a
+// question set it was no longer counted in: the seat held for a run that holds
+// nothing, its mail waiting behind it until the next recount.
+//
+// Mutation: leave a write's move out of what a recount counts its run as while
+// a later write on it is still out.
+func TestARecountCountsARunWithAWriteOutWhereTheMovesAlreadyMadeLeaveIt(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	park, record := parkAndRecordOut(t, rig)
+
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "recounted with both writes out,", "the run as the claim it was before either", 1, 0)
+	answerLanded(rig, park)
+	wantSeatCounts(t, rig, "with the park's answer taken first,", "the run on its question", 0, 1)
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "recounted with the record still out,",
+		"the run on its question, where the park's move left it", 0, 1)
+	answerLanded(rig, record)
+	wantSeatCounts(t, rig, "with both answers taken,", "the answered run in neither set", 0, 0)
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "recounted once both are answered,", "the answered run in neither set", 0, 0)
 }
