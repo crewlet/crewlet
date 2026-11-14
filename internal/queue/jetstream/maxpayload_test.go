@@ -123,7 +123,7 @@ func TestALimitTheSigningInAccountStatesIsTheOneRead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
+			dir := brokertest.TempDir(t)
 			conf := filepath.Join(dir, "nats.conf")
 			// The server's own limit in the spelling the refusal tells an
 			// operator to type, so this also certifies that the remedy it
@@ -377,7 +377,7 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 
 	t.Run("it is the handler every connection is given", func(t *testing.T) {
 		t.Parallel()
-		server, err := StartServer(t.Context(), Config{StoreDir: t.TempDir(),
+		server, err := StartServer(t.Context(), Config{StoreDir: brokertest.TempDir(t),
 			StoreMaxBytes: brokertest.StoreMaxBytes})
 		if err != nil {
 			t.Fatalf("StartServer: %v", err)

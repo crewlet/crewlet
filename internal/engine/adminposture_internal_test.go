@@ -43,7 +43,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	serving := testBootstrap(t)
 	serving.Node.Roles = []string{"data", "seats", "workers", "ingress"}
 	serving.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&serving.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&serving.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	serving.API.Port = 8080
 	serving.API.ExternalURL = "https://crewlet.example.com"
 	serving.API.Auth.Admin = iam.AdminRefuse

@@ -85,7 +85,7 @@ func probeCheck(
 	}
 	ctx, cancel := context.WithTimeout(ctx, setup.VerifyBudget)
 	defer cancel()
-	if _, err = client.token(ctx); err != nil {
+	if _, err = client.token(ctx, client.provisioner); err != nil {
 		return reachRefusal(ctx, client, company, err), nil
 	}
 	identity := client.IdentityProject()

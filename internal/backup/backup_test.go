@@ -51,7 +51,7 @@ func natsBroker(t *testing.T, domain string) (*server.Server, *nats.Conn) {
 		JetStreamDomain:   domain,
 		Port:              -1,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 		// THE TRANSPORT'S CEILING, as a real node's broker sets it, so a
 		// record at the ceiling is one a case can append.

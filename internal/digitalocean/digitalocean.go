@@ -28,6 +28,15 @@
 // The seat's token is sealed as DIGITALOCEAN_TOKEN_<HANDLE>. doctl reads it as
 // DIGITALOCEAN_ACCESS_TOKEN from the seat's `role.sandbox.env`, and the
 // curated DigitalOcean MCP server reads it as a bearer header.
+//
+// # The atlas reads with a token of its own
+//
+// The company's half holds no credential, so the atlas reads the team's
+// resources only where a person made one more token for it alone
+// (`integrations.digitalocean.atlas.token`, ADR-0146): eight read scopes,
+// proven before every read to change nothing and to be no agent's
+// ([CheckAtlas]). Each listing is decoded into closed fields, so a database's
+// connection and an app's environment are dropped with the answer.
 package digitalocean
 
 // Backend is the integration's name: the config block's key, the integration

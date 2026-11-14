@@ -76,7 +76,7 @@ type wiredNode struct {
 // property the framework rests on is about a stream that survives.
 func soloBroker(tb testing.TB, cfg js.Config) *js.Queue {
 	tb.Helper()
-	cfg.StoreDir = tb.TempDir()
+	cfg.StoreDir = brokertest.TempDir(tb)
 	if cfg.StoreMaxBytes == 0 {
 		cfg.StoreMaxBytes = brokertest.StoreMaxBytes
 	}

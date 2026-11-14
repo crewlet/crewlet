@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -53,7 +54,7 @@ func bootstrapWithKeys(t *testing.T, dir string, keys ...string) string {
 // configuration unreadable on every node, at the next apply.
 func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	old := bootstrapWithKeys(t, dir, "k1")
 	company := companyFile(t, dir, "company.yaml", nil)
 	if _, errs, err := configCmd(t, old, "import", company); err != nil {
@@ -93,7 +94,7 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 // A SECOND RUN IS A NO-OP, which is what makes this safe in a deploy script.
 func TestConfigRekeyIsIdempotent(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, cfg, "import",
 		companyFile(t, dir, "company.yaml", nil)); err != nil {
@@ -118,7 +119,7 @@ func TestConfigRekeyIsIdempotent(t *testing.T) {
 // the pass it previews.
 func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	old := bootstrapWithKeys(t, dir, "k1")
 	if _, errs, err := configCmd(t, old, "import",
 		companyFile(t, dir, "company.yaml", nil)); err != nil {
@@ -194,7 +195,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 // the plaintext rather than replacing it would write nothing either.
 func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	plantPlaintextRevision(t, dir)
 	keyed := bootstrapWithKeys(t, dir, "k1")
 
@@ -237,7 +238,7 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 // calls it unsealed.
 func TestAConfigSealedInAFormThisBuildDoesNotReadIsNeverReplaced(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	newer := plantPlaintext(t, dir,
 		[]byte(`{"__encrypted__":"enc:v2:k2:QUJDREVGR0hJSktMTU5PUA=="}`))
 	keyed := bootstrapWithKeys(t, dir, "k1")
@@ -269,7 +270,7 @@ func TestAConfigSealedInAFormThisBuildDoesNotReadIsNeverReplaced(t *testing.T) {
 // refused like the rest, because every node holds one.
 func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	plain := bootstrapWithKeys(t, dir)
 	for _, args := range [][]string{
 		{"import", companyFile(t, dir, "company.yaml", nil)},

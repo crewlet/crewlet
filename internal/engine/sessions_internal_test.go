@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // The engine's tool sessions: ONE directory per process, made at boot and
@@ -43,7 +45,7 @@ func sessionDirs(t *testing.T, dir string) []string {
 func TestABootOnATMPDIRTooLongForASocketIsRefusedNamingIt(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	b.Stream.StoreDir = filepath.Join(brokertest.TempDir(t), "stream")
 	long := filepath.Join(t.TempDir(), strings.Repeat("a", 60), strings.Repeat("b", 60))
 	if err := os.MkdirAll(long, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -73,7 +75,7 @@ func TestABootOnATMPDIRTooLongForASocketIsRefusedNamingIt(t *testing.T) {
 func TestABootThatFailsEarlyRemovesItsSessionDirectory(t *testing.T) {
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	b.Stream.StoreDir = filepath.Join(brokertest.TempDir(t), "stream")
 	// A SHORT temp root of its own: one under t.TempDir() carries the test's
 	// name and is itself past the bound a socket's path has.
 	tmp, err := os.MkdirTemp("", "crewlet-boot-") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound

@@ -73,6 +73,12 @@ type fakeCloudflare struct {
 	records     map[string][]map[string]any
 	packs       map[string][]map[string]any
 
+	// workers, pages, buckets and tunnels are what the account's optional
+	// listings answer, each row as Cloudflare would send it, undecoded
+	// fields included; r2PageSize caps a page of buckets below what is asked.
+	workers, pages, buckets, tunnels []map[string]any
+	r2PageSize                       int
+
 	provisionerStatus  string
 	provisionerExpires string
 	provisionerOwn     []cloudflare.Policy
@@ -109,6 +115,8 @@ var (
 	accountGroups = []string{
 		"Account Analytics Read", "Account Settings Read", "Account API Tokens Write", "Account API Tokens Read",
 		"Account Rule Lists Read", "Account Rule Lists Write",
+		// What the atlas reads more with, which the provisioner may hold.
+		"Workers Scripts Read", "Pages Read", "Workers R2 Storage Read", "Cloudflare Tunnel Read",
 	}
 )
 
@@ -206,6 +214,10 @@ func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if status := f.refuseID[id]; id != "" && status != 0 {
 		f.fail(w, status, 10001, "Internal error")
+		return
+	}
+	if _, optional := optionalGroups[route]; optional {
+		f.serveOptional(w, r, route)
 		return
 	}
 	switch route {
@@ -340,6 +352,9 @@ func (f *fakeCloudflare) route(method, path string) (string, string) {
 		case "ssl/certificate_packs":
 			return "packs", zone
 		}
+	}
+	if route, ok := optionalRoutes[strings.TrimPrefix(path, "/accounts/"+testAccount)]; ok && method == http.MethodGet {
+		return route, ""
 	}
 	rest, ok := strings.CutPrefix(path, "/accounts/"+testAccount+"/tokens")
 	if !ok {

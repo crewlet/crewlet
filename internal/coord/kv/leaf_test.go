@@ -125,7 +125,7 @@ func leafMember(t testing.TB) int {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: leafFleetAuth()})
 	if err != nil {
 		t.Fatalf("start a member serving leaves: %v", err)

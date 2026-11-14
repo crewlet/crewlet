@@ -217,7 +217,7 @@ func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Backends) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)

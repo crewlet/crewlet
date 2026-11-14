@@ -67,13 +67,6 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
-			// The twin keeps no ack window: a delivery stays in flight
-			// until its handler's return is settled, however long that
-			// takes, so WithDeliveryAttempts's queue already outlasts a
-			// keep.
-			WithKeepingAckWindow: func(_ *testing.T, attempts int) queue.EventQueue {
-				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
-			},
 			// Total, so there is no failure to report — which is the
 			// point of the signature rather than an exemption from it: the
 			// twin cannot fail to answer, and the backend that can must say
@@ -176,6 +169,19 @@ func TestConformance(t *testing.T) {
 			// its mail outlive it, so Start serves again.
 			Restartable: true,
 		})
+}
+
+// A COPY A PASS RETIRED AT THE TRANSPORT'S CEILING IS KEPT WHOLE WHERE ITS
+// GROUP FINDS IT, on the twin: queuetest's ceiling case, which every backend
+// runs apart from the parallel suite (queuetest.RunCeilingCopy). The twin keeps
+// no ack window, so its queue already outlasts a keep.
+//
+// Mutation: count a pass as a failure of its message, and its copy is kept
+// with the pair's poison while the unhandled subject holds nothing.
+func TestAPassedCopyAtTheTransportsCeilingIsKeptWhole(t *testing.T) {
+	queuetest.RunCeilingCopy(t, func(_ *testing.T, attempts int) queue.EventQueue {
+		return memory.New(memory.WithMaxRedeliveries(attempts - 1))
+	})
 }
 
 // TestDefaultDeliveryBudgetMatchesJetStream pins the DEFAULT budget, which the

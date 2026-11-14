@@ -40,7 +40,12 @@ const jwksEnd = "CREWLET_JWKS"
 // exists is updated with the company's issuer, subject pin and current key,
 // which is how a changed key or a hand edit is put right. It runs in a
 // subshell, so a failed step stops the block without closing Cloud Shell.
-func CloudShellBlock(company, provisioner, key string) (string, error) {
+//
+// WITH ATLAS, it also makes the atlas's service account, lets Crewlet's
+// subject act as it, and grants it the one-permission role on every project
+// the provisioner holds a role in ([AtlasRoleID]); a project the person
+// running it may not change is named and skipped.
+func CloudShellBlock(company, provisioner, key string, atlas bool) (string, error) {
 	identity, ok := config.GoogleCloudServiceAccount(provisioner)
 	if !ok {
 		return "", errors.New("googlecloud: the provisioner is not a service account's email")
@@ -120,18 +125,65 @@ func CloudShellBlock(company, provisioner, key string) (string, error) {
 		`  --member="` + Principal(ProviderName("${NUMBER}"), company) + `" ||`,
 		`  fail "let Crewlet act as the provisioner"`,
 		"",
-		`gcloud iam workload-identity-pools providers describe ` + ProviderID + ` ` + provider + ` \`,
+	}
+	if atlas {
+		lines = append(lines, atlasLines(Principal(ProviderName("${NUMBER}"), company))...)
+	}
+	lines = append(lines,
+		`gcloud iam workload-identity-pools providers describe `+ProviderID+` `+provider+` \`,
 		`  --format='value(name)'`,
 		")",
-	}
+	)
 	return strings.Join(lines, "\n") + "\n", nil
+}
+
+// atlasLines make the atlas's service account and grant it on the
+// provisioner's projects, for the Crewlet subject principal.
+func atlasLines(principal string) []string {
+	return []string{
+		"# Atlas (integrations.google_cloud.provisioning.atlas_read): a service account that may only search",
+		"# what each of Crewlet's projects runs, by name and type.",
+		"ATLAS=" + AtlasAccountID + `@"$IDENTITY".iam.gserviceaccount.com`,
+		`gcloud services enable cloudasset.googleapis.com --project="$IDENTITY" --format=none ||`,
+		`  fail "enable the Cloud Asset API in the identity project"`,
+		`if ! gcloud iam service-accounts describe "$ATLAS" --project="$IDENTITY" --format='value(email)' >/dev/null 2>&1; then`,
+		`  gcloud iam service-accounts create ` + AtlasAccountID + ` --project="$IDENTITY" \`,
+		`    --display-name="Crewlet atlas" \`,
+		`    --description="Searches what Crewlet's projects run, by name and type, for the atlas" --format=none ||`,
+		`    fail "create Atlas's service account"`,
+		`fi`,
+		`grant gcloud projects add-iam-policy-binding "$IDENTITY" --member="serviceAccount:$ATLAS" \`,
+		`  --role=roles/serviceusage.serviceUsageConsumer --condition=None --format=none ||`,
+		`  fail "let Atlas's service account call the Cloud Asset API"`,
+		`grant gcloud iam service-accounts add-iam-policy-binding "$ATLAS" --project="$IDENTITY" \`,
+		`  --role=roles/iam.workloadIdentityUser --format=none --member="` + principal + `" ||`,
+		`  fail "let Crewlet act as Atlas's service account"`,
+		`for P in $(gcloud projects list --filter=lifecycleState:ACTIVE --format='value(projectId)'); do`,
+		`  [ "$P" = "$IDENTITY" ] && continue`,
+		`  gcloud projects get-iam-policy "$P" --flatten='bindings[].members' \`,
+		`    --filter="bindings.members:serviceAccount:$PROV" --format='value(bindings.role)' 2>/dev/null | grep -q . ||`,
+		`    continue`,
+		`  if gcloud iam roles describe ` + AtlasRoleID + ` --project="$P" >/dev/null 2>&1; then`,
+		`    gcloud iam roles update ` + AtlasRoleID + ` --project="$P" --permissions=` + AtlasPermission + ` --format=none`,
+		`  else`,
+		`    gcloud iam roles create ` + AtlasRoleID + ` --project="$P" --title="Crewlet Atlas reader" \`,
+		`      --description="Search resources by name and type, for Crewlet's atlas. Do not add permissions." \`,
+		`      --stage=GA --permissions=` + AtlasPermission + ` --format=none`,
+		`  fi &&`,
+		`  gcloud projects add-iam-policy-binding "$P" --member="serviceAccount:$ATLAS" \`,
+		`    --role="projects/$P/roles/` + AtlasRoleID + `" --condition=None --format=none &&`,
+		`  echo "Atlas reads $P" >&2 ||`,
+		`  echo "Atlas could not be granted on $P: an Owner of $P can run this block again" >&2`,
+		`done`,
+		"",
+	}
 }
 
 // cloudShellView is the block as the federation key's row shows it, nil where
 // it cannot be drawn yet: the provisioner or the key not held, or a key that
 // is not one the engine mints, which the Test reports.
-func cloudShellView(company, provisioner, key string) *setup.PublicView {
-	block, err := CloudShellBlock(company, provisioner, key)
+func cloudShellView(company, provisioner, key string, atlas bool) *setup.PublicView {
+	block, err := CloudShellBlock(company, provisioner, key, atlas)
 	if err != nil {
 		return nil
 	}

@@ -265,17 +265,6 @@ type Capabilities struct {
 	// it can actually see.
 	WithDeliveryAttempts func(t *testing.T, attempts int) queue.EventQueue
 
-	// WithKeepingAckWindow is WithDeliveryAttempts's queue with the ack
-	// window production gives a delivery, rather than the short one a
-	// harness gives its redelivery cases: one that outlasts the keep of a
-	// dead letter at the transport's ceiling. A case whose handler retires a
-	// message of megabytes keeps its copy inside the delivery's window, as
-	// production does, and a window a harness shortened does not redeliver
-	// the message mid-keep — a redelivery production never makes, which
-	// keeps a copy at the ceiling twice, since it has no room for the
-	// identity that collapses a second keep.
-	WithKeepingAckWindow func(t *testing.T, attempts int) queue.EventQueue
-
 	// READ-YOUR-OWN-WRITE, required of every inspection function below.
 	//
 	// A backend supplying these must have them reflect an operation that has
@@ -1697,18 +1686,6 @@ func (s *suite) needAttempts(t *testing.T) func(t *testing.T, attempts int) queu
 		return s.caps.WithDeliveryAttempts
 	}
 	t.Skip("backend cannot be built with a specific delivery-attempt limit")
-	return nil
-}
-
-// needKeepingAckWindow returns a constructor for a queue like needAttempts's
-// whose ack window outlasts a keep at the transport's ceiling
-// ([Capabilities.WithKeepingAckWindow]).
-func (s *suite) needKeepingAckWindow(t *testing.T) func(t *testing.T, attempts int) queue.EventQueue {
-	t.Helper()
-	if s.caps.WithKeepingAckWindow != nil {
-		return s.caps.WithKeepingAckWindow
-	}
-	t.Skip("backend cannot be built with an ack window that outlasts a keep")
 	return nil
 }
 

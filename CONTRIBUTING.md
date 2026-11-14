@@ -200,12 +200,12 @@ one file, `npm run test:watch` for the watch loop), and its benchmarks (a
 fresh directory under the system temp directory and never removes it — 16 to
 48 MB a run, which over a day of gate runs left 11.9 GB on the machine that
 runs the engine's suites. The Go suites keep their stores and broker streams
-under that same temp directory (`t.TempDir()`), and a write that finds the
-disk full fails a case for a reason nothing in the change explains. It used
-to fail every node boot first, while the test brokers still sized their
-storage from the volume's free space; they declare a fixed size now
-(`internal/queue/jetstream/brokertest`), which ended that failure and not the
-leak. All three scripts run Vitest through
+under that same temp directory (`t.TempDir()`, and `brokertest.TempDir` for a
+broker's store), and a write that finds the disk full fails a case for a
+reason nothing in the change explains. It used to fail every node boot first,
+while the test brokers still sized their storage from the volume's free
+space; they declare a fixed size now (`internal/queue/jetstream/brokertest`),
+which ended that failure and not the leak. All three scripts run Vitest through
 `dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
 creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
 started without it.
@@ -753,6 +753,25 @@ the declared broker leaves on the runner's disk, so a node on a smaller
 runner refuses to host code, and a test binary's node refuses to build Gitlet
 with either unset (`engine.ErrUndeclaredCodeCache`) unless the case
 stands in for the cache's volume or boots under `engine.SizedByTheMachine`.
+
+A test broker keeps its store in a directory from `brokertest.TempDir`, never
+from `t.TempDir`: a node fixture's `brokertest.StoreIn` directory, a broker a
+case opens or starts itself, and a server it builds from nats-server's options
+alike. A stopped nats-server can still land a consumer's last state flush after
+`Shutdown` and `WaitForShutdown` have returned, since its stop polls for the
+flush for 100 ms rather than joining it, and `t.TempDir`'s single removal then
+fails the case on a file the case never wrote. `brokertest.TempDir`'s removal
+tries again while, and only while, the directory comes back not empty, a
+bounded number of times and with no pause between; the retry goes once a
+pinned nats-server joins the flush loop. So a test binary refuses to start an
+embedded broker whose store lies in no `brokertest.TempDir`
+(`jetstream.ErrStoreOutsideTempDir`, told by the name it gives its
+directories), however the case reached it, and `brokertest`'s
+`TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir` fails a server built
+from nats-server's options whose store is a test's own temporary directory (a
+`testing.TB`'s `TempDir`, or `os.MkdirTemp` in a test file). A store
+directory a case only validates, with no broker started on it, may stay a
+`t.TempDir`.
 
 A case that starts an engine never runs below `internal/engine`'s
 `startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`

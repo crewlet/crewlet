@@ -38,6 +38,10 @@ type GoogleCloudProvisioning struct {
 	// the audience of every token the engine signs.
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty" desc:"Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made."`
 
+	// AtlasRead lets the atlas read what each of the provisioner's projects
+	// runs, as a service account of its own the identity block makes.
+	AtlasRead bool `yaml:"atlas_read,omitempty" json:"atlas_read,omitempty" desc:"Let the atlas list what each project the provisioner reads runs (instances, databases, Cloud Run services, functions, buckets and topics) through Cloud Asset Inventory, as the service account crewlet-atlas in the identity project, which may only search resources by name and type. Off by default. Turning it on changes the Cloud Shell block: run it again."`
+
 	// FederationKey is the engine's own ES256 private key (PKCS#8 PEM). Google
 	// holds only its public half, and it signs nothing but a ten-minute token
 	// for the one provider.

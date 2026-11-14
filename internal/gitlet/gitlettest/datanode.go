@@ -758,9 +758,12 @@ func (d *DataNode) Writer(ctx context.Context, at statelog.Position) (string, er
 }
 
 // LogStats is the code log's stream as the broker holds it — its ends, its
-// records and its BYTES, every record's signed frame included: what a
-// benchmark reads the bytes a kind of record costs the log off, before and
-// after it appends one.
+// records and its BYTES, every record's signed frame included — read through
+// this node's own client: the read its committer's admission makes before
+// every ordinary append (statelog.Reserve), which a fleet's case waits for its
+// members' brokers to answer after a member's death (Cluster.AwaitElection),
+// and what a benchmark reads the bytes a kind of record costs the log off,
+// before and after it appends one.
 func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
 	p := d.proc()
 	if p == nil {
