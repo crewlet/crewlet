@@ -2399,10 +2399,11 @@ const (
 	// What waits on a person in one place (the engine's standing on every
 	// parked run read by Home, the Inbox, Live and a seat's page, the Inbox's
 	// group of what a reader may answer for somebody else, a badge counting
-	// what waits on them alone, and a platform notice's fix and put-off
-	// marks) added 6,355 bytes, nearly all script, and took it to 5980.8 KiB
-	// (6,124,382 bytes): 5981 KiB.
-	treeBudget = 5<<20 + 861<<10
+	// what waits on them alone, a platform notice's fix and put-off marks,
+	// which standing alarms are in Needs you, and a failed read said with its
+	// Try again on every screen that drew it as empty) added 8,775 bytes,
+	// nearly all script, and took it to 5983.2 KiB (6,126,802 bytes): 5984 KiB.
+	treeBudget = 5<<20 + 864<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
