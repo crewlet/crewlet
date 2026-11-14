@@ -43,7 +43,7 @@
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ClientContext } from "./store-hooks.ts";
-import { useAskedAgainOnFailure } from "./useQuery.ts";
+import { useAskedAgainOnFailure } from "./failedReads.ts";
 import { EVERY_QUESTION, session } from "~/protocol/session.ts";
 import {
   isAbort,

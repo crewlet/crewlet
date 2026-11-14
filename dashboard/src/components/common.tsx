@@ -44,7 +44,7 @@ import {
   queryErrorCode,
 } from "~/protocol/index.ts";
 import { goSignIn, page } from "~/lib/session.ts";
-import { retryFailedReads } from "~/lib/useQuery.ts";
+import { retryFailedReads } from "~/lib/failedReads.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {

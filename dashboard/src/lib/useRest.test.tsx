@@ -12,7 +12,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { restErrorCode, useRest } from "./useRest.ts";
-import { retryFailedReads } from "./useQuery.ts";
+import { retryFailedReads } from "./failedReads.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { LiveSocket, RestError, Store } from "~/protocol/index.ts";
 import { EVERY_QUESTION, session } from "~/protocol/session.ts";
