@@ -794,7 +794,8 @@ func fewestAllocations(read func()) uint64 {
 // led by a NUL or a byte order mark, faultLead; and a value nested past the
 // decoder's 10,000 levels, which the load may read whole, faultDepth, where
 // one nested 10,000 deep reads as a record. Each says the bytes it takes, its
-// break included, a carriage return before it among them. NO LINE'S
+// break included, a carriage return before it among them, and hands its
+// reader those bytes but the break, as a record's line does. NO LINE'S
 // ACCEPTANCE CHANGES: a line the decode takes is decoded once, at the cost
 // of that one decode and its head, the classifier never run on it.
 //
@@ -806,8 +807,10 @@ func fewestAllocations(read func()) uint64 {
 // led by a NUL reads as a syntax error; drop the depth check, and a value
 // nested too deep reads as yielding nothing; hold a refused head's type as
 // written, and a summary's names a kind; count a line's size without its
-// break; or classify every line, refused or not, and a line the decode takes
-// costs the classifier's decoder too.
+// break; hand a refused line's reader none of its bytes, from any one of the
+// three refusals, and the lines it refuses there hand none; or classify every
+// line, refused or not, and a line the decode takes costs the classifier's
+// decoder too.
 func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	brief := ctBrief(ctUUID(1))
 	deep := func(levels int) string {
@@ -854,6 +857,10 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 			!e.Fault.Valid() || (e.Type != "") != e.Type.Valid() {
 			t.Errorf("%s: the load reads it as %q, a record of the kind %q, of %d bytes; want %q, %q and %d", name,
 				e.Fault, e.Type, e.Size, tc.fault, tc.kind, len(tc.line)+1)
+		}
+		if e := got.broken[0]; !bytes.Equal(e.Raw, []byte(tc.line)) {
+			t.Errorf("%s hands its reader %d bytes of it, %.40q; want the line's own %d, its break dropped", name,
+				len(e.Raw), e.Raw, len(tc.line))
 		}
 	}
 	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {

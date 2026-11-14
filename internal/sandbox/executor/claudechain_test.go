@@ -1500,15 +1500,21 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // others, the one at depth one of two before their times, whether it is the
 // first of them or the last, or the last of those before their times where
 // none is at depth one; one whose abandoned prompt hangs off an attachment,
-// which hands it on alone; and one whose reply hangs off a walked result, X_e
-// reading it as part of the reply above that result. Every other thread past
-// the bound is whyLargeFile, and under it answers as its small path does with
-// AnySize false: one whose reply of an id hangs off another branch, whose
-// abandoned prompt hangs off a result off the walk, whose result is written
-// before the walked call it answers, or whose result hangs off a prompt an
-// attachment hands on alone, none of which the dispatch from the last record
-// alone reaches; one holding a compaction's boundary; a line the layer
-// refuses; a line of no record that carries `"parentUuid":` at its depth one,
+// which hands it on alone; one whose reply hangs off a walked result, X_e
+// reading it as part of the reply above that result; and one holding a line
+// the layer refuses that yields the load nothing and that no reader takes for
+// a slot by its bytes: one value that is no object, a line a later write tore
+// into, an object of no kind the load reads. Every other thread past the bound
+// is whyLargeFile, and under it answers as its small path does with AnySize
+// false: one whose reply of an id hangs off another branch, whose abandoned
+// prompt hangs off a result off the walk, whose result is written before the
+// walked call it answers, or whose result hangs off a prompt an attachment
+// hands on alone, none of which the dispatch from the last record alone
+// reaches; one holding a compaction's boundary; a refused line a reader may
+// take for the slot it starts from, the record a torn write put in it keying
+// it, and one that says it is a sidechain's right after its parent, which a
+// reader may still walk through in a main thread, held so conservatively; a
+// line of no record that carries `"parentUuid":` at its depth one,
 // past a string holding a brace and an escaped quote; a record whose line does
 // not begin `{"parentUuid":`, its keys in another order, or another key's
 // value where the parent's would be; a last record holding a sidechain's bytes
@@ -1524,11 +1530,18 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // and that holds no line that binds it to the small path, is path-free, a
 // branch the main thread's dispatch from the last record would not reach among
 // it, since no reader has a slot to start from there: it answers alike under
-// the bound, at it and past it. Any other is whyLargeFile past the bound, and
-// answers as its small path does under it and at it, AnySize false: one whose
-// record says so after another key, or that holds a boundary, a line whose
-// JSON fails that a reader takes for its start, or a line of no record that
-// carries `"parentUuid":` at its depth one.
+// the bound, at it and past it, holding a line a torn write left, or a line of
+// no record, that says it is a sidechain's right after its parent, a record's
+// or null, as every record there does. Any other is whyLargeFile past the
+// bound, and answers as its small path does under it and at it, AnySize
+// false: one whose torn line's head names its parent by bytes of no
+// lowercase canonical uuid's form, held so conservatively, as a record's
+// head is; one whose record says so after another key, or that holds a
+// boundary, a line whose JSON fails that a reader takes for its start, a torn
+// line that says it is a sidechain's after another key, held so
+// conservatively as a record that does is, or a line of no record that
+// carries `"parentUuid":` at its depth one. A refused line handed with no
+// bytes of its Size binds the thread.
 //
 // Mutation: take the bound itself for past it, and the thread of 5,242,880
 // bytes is cannot tell; drop the dispatch's coverage, and the threads it never
@@ -1553,8 +1566,19 @@ func rcBytesAt(t *testing.T, line string, within bool) string {
 // record as handing the load every line, as the dispatch alone does, and the
 // record above it reads; read a refused line, or a line of no record carrying
 // the key, as binding a main thread alone, and the subagent's thread holding
-// one reads; or hold a subagent's thread to the main thread's dispatch from
-// its last record, and its branch costs it the bound.
+// one reads; hold a subagent's thread to the main thread's dispatch from its
+// last record, and its branch costs it the bound; read every refused line as
+// binding, whatever its bytes, and the main threads holding one of no slot,
+// and the subagent's threads holding a torn line that says it is a
+// sidechain's, cost the bound; trust a refused line handed with no bytes, or
+// fewer than its Size, and that thread is path-free; spare a sidechain's head
+// in a main thread too, and the main thread holding one reads; read such a
+// head's parent as null alone, or as a uuid alone, and the torn line under the
+// other costs its thread the bound; read a sidechain's mark anywhere in the
+// line, and the torn line marked after another key reads; take a head's
+// parent of any 36 bytes, and the torn line under an uppercase uuid reads;
+// or hold a line of no record to the key alone in a subagent's thread, and
+// the one headed as a sidechain's costs its thread the bound.
 func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
 	t.Parallel()
 	past := claudeResumeLargeFile + 1
@@ -1608,6 +1632,11 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			rcReply(3, 4, "msg_a", 1200, rcSaid("more")), rcReply(3, 5, "msg_b", 1300, rcSaid("done"))}, 4,
 			`"text":"more`, rcHanding(whyChain, []int{1, 2, 3, 5}, map[int]rcAnswer{4: yes(whyRecoveredReply)}),
 			[]int{1, 2, 3, 4, 5}, 5},
+		"a refused line of one value that is no object": shaped(append(slices.Clone(t4), "[1,2]")),
+		"a refused line a later write tore into, of no slot": shaped(append(slices.Clone(t4),
+			`{"type":"queue-operation","operation":"enq`+ctDequeue)),
+		"a refused line of no kind the load reads": shaped(append(slices.Clone(t4),
+			`{"type":"queue-operation","agentId":5}`)),
 	} {
 		for _, size := range []int{0, past} {
 			lines := tc.lines
@@ -1629,6 +1658,15 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 		rcReply(4, 5, "msg_b", 1300, rcSaid("done"))}
 	branchAnswers := rcHanding(whyChain, []int{1, 3, 4, 5}, map[int]rcAnswer{2: yes(whyRecoveredReply)})
 	plain := rcHanding(whyChain, []int{1, 2})
+	// turns is two turns, each a prompt and its reply, after which a refused
+	// line below names the first reply as its parent, and holds a record of
+	// its own, uuid 8, after the record a write tore (9): to a reader of its
+	// bytes a slot keyed by uuid 8 under the first reply, which, where no
+	// sidechain's bytes mark it, is the last slot, the one every reader starts
+	// from, and walks up to the first turn alone.
+	turns := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("first")), rcPrompt(2, 3, 1100),
+		rcReply(3, 4, "msg_b", 1200, rcSaid("second"))}
+	turnsAnswers := rcHanding(whyChain, []int{1, 2, 3, 4})
 	for name, tc := range map[string]sized{
 		"a reply of an id on another branch": {branch, 2, `"text":"first`, branchAnswers, []int{1, 3, 2, 4, 5}, 5},
 		"an abandoned prompt under a result off the walk": {[]string{rcPrompt(0, 1, 0),
@@ -1640,8 +1678,12 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
 			rcPrompt(3, 4, 3000)}, 4, `"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 3, 4}),
 			[]int{1, 2, 3, 4}, 4},
-		"a line the layer refuses": {[]string{rcPrompt(0, 1, 0), "[1,2]", rcReply(1, 3, "msg_a", 1000,
-			rcSaid("done"))}, 1, `"content":"a prompt`, rcHanding(whyChain, []int{1, 3}), []int{1, 3}, 3},
+		"a refused line a reader may take for its start": {append(slices.Clone(turns),
+			rcPrompt(2, 9, 1300)[:70]+rcPrompt(2, 8, 1400)), 1, `"content":"a prompt`, turnsAnswers,
+			[]int{1, 2, 3, 4}, 4},
+		"a refused line that says it is a sidechain's right after its parent": {append(slices.Clone(turns),
+			rcIn(t, rcPrompt(2, 9, 1300), "", true)[:80]+rcPrompt(2, 8, 1400)), 1, `"content":"a prompt`,
+			turnsAnswers, []int{1, 2, 3, 4}, 4},
 		"a parentUuid key at the depth one of a line of no record": {[]string{rcPrompt(0, 1, 0),
 			`{"type":"queue-operation","operation":"enqueue","content":"\"{","parentUuid":null,"sessionId":"` +
 				ctSession + `"}`, rcReply(1, 3, "msg_a", 1000, rcSaid("done"))}, 1, `"content":"a prompt`,
@@ -1706,8 +1748,14 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 		rcOrder{[]int{1, 3, 2, 4, 5}, allVariants})
 
 	// agent is a subagent's thread every record of which says it is a
-	// sidechain's right after its parent, and hands both.
+	// sidechain's right after its parent, and hands both. tore is line, a
+	// record of the subagent's, cut inside its key at, and the record a later
+	// write put after it, of uuid 8: a line whose JSON fails, as a torn write
+	// leaves one (probe P2's run d), which says what line said first.
 	agent := []string{rcOwn(t, rcPrompt(0, 1, 0)), rcOwn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
+	tore := func(line, at string) string {
+		return line[:strings.Index(line, at)+len(at)-3] + rcOwn(t, rcMeta(2, 8, 1600))
+	}
 	for name, tc := range map[string]struct {
 		lines []string
 		free  bool
@@ -1732,6 +1780,22 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 		"a subagent's thread holding a line of no record that carries parentUuid at its depth one": {append(
 			slices.Clone(agent), `{"type":"queue-operation","operation":"enqueue","parentUuid":null,"uuid":"`+
 				rcUUID(9)+`","timestamp":"`+rcAt(3000)+`","sessionId":"`+ctSession+`"}`), false, plain, []int{1, 2}, 2},
+		"a subagent's thread holding a torn line that says it is a sidechain's right after its parent": {append(
+			slices.Clone(agent), tore(rcOwn(t, rcReply(2, 9, "msg_b", 1500, rcCalls("x9"))), `"stop_reason"`)),
+			true, plain, []int{1, 2}, 2},
+		"a subagent's thread holding a torn line that says it is a sidechain's right after its null parent": {
+			append(slices.Clone(agent), tore(rcOwn(t, rcPrompt(0, 9, 1500)), `"content"`)), true, plain,
+			[]int{1, 2}, 2},
+		"a subagent's thread holding a torn line headed as a sidechain's under a parent no uuid of its form": {
+			append(slices.Clone(agent), tore(ctReplace(t, rcOwn(t, rcReply(2, 9, "msg_b", 1500, rcCalls("x9"))),
+				rcUUID(2), strings.ToUpper(rcUUID(10))), `"stop_reason"`)), false, plain, []int{1, 2}, 2},
+		"a subagent's thread holding a torn line that says it is a sidechain's after another key": {append(
+			slices.Clone(agent), tore(ctReplace(t, rcOwn(t, rcPrompt(0, 9, 1500)), `{"parentUuid":null,`,
+				`{"entrypoint":"cli","parentUuid":null,`), `"content"`)), false, plain, []int{1, 2}, 2},
+		"a subagent's thread holding a line of no record that says it is a sidechain's right after its parent": {
+			append(slices.Clone(agent), `{"parentUuid":null,"isSidechain":true,"type":"queue-operation",`+
+				`"operation":"enqueue","uuid":"`+rcUUID(9)+`","timestamp":"`+rcAt(3000)+`","sessionId":"`+ctSession+
+				`"}`), true, plain, []int{1, 2}, 2},
 	} {
 		for _, size := range []int{0, claudeResumeLargeFile, past} {
 			lines := tc.lines
@@ -1749,6 +1813,26 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			if read.c.AnySize() != tc.free {
 				t.Errorf("%s is path-free %t, want %t", at, read.c.AnySize(), tc.free)
 			}
+		}
+	}
+
+	// A refused line handed with no bytes of its Size binds the thread: the
+	// chain cannot say what a reader of bytes it was not handed makes of them.
+	prompt, reply := ctLine(t, rcPlain[0]), ctLine(t, rcPlain[1])
+	reply.N = 3
+	for name, fault := range map[string]*threadLineError{
+		"no bytes":                {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 1},
+		"bytes short of its Size": {N: 2, Fault: faultNotObject, Size: len("[1,2]") + 2, Raw: []byte("[1,2]")},
+	} {
+		bare := newThreadChain("")
+		bare.See(prompt)
+		bare.Unread(fault)
+		bare.See(reply)
+		if err := bare.End(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if bare.AnySize() {
+			t.Errorf("a thread holding a refused line handed with %s is path-free", name)
 		}
 	}
 }

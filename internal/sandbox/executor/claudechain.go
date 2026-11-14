@@ -585,10 +585,14 @@ const chainPrefixBytes = 10
 //   - no record is a compaction's boundary, at which the dispatch forgets the
 //     slots before it and indexes those after it otherwise, and from which
 //     the side file starts;
-//   - no line is one the layer refuses ([threadChain.Unread]), which a reader
-//     may take for a slot by its bytes;
-//   - no line of no record carries `"parentUuid":` at its depth one, so no
-//     such line is a slot;
+//   - no line the chain files no record of, one of no record or one the layer
+//     refuses that yields the load nothing ([threadChain.Unread]), carries
+//     `"parentUuid":` at its depth one, judged by its bytes, so no such line
+//     is a slot; in a subagent's thread such a line may carry it where it
+//     says it is a sidechain's right after its parent, as every record there
+//     must, a slot every reader marks a sidechain's and none starts from
+//     (every other line the layer refuses leaves the thread cannot tell:
+//     whyLine);
 //   - every record's line begins `{"parentUuid":`, then null or the quoted
 //     lowercase canonical uuid of the parent its decode names, and the 36
 //     bytes every reader keys it by are its own uuid's;
@@ -629,7 +633,11 @@ const chainPrefixBytes = 10
 // bound among them, and no record line of them holds `"isSidechain":true`;
 // every record line of them and of the 89 subagent threads begins
 // `{"parentUuid":`, and each of the subagent threads' 1,353 says it is a
-// sidechain's right after its parent.
+// sidechain's right after its parent. MEASURED by the facility's census of
+// them: the only lines of them the layer refuses, a torn write's in two
+// copies of one subagent's thread (line 25 of each, probe P2's run d), say so
+// too, so both copies are path-free, as the 410 are and the other 87
+// subagent threads.
 //
 // THE RELINK, End's first step after that (2.1.322's iWo @293743389 with aWo
 // @293744710, 2.1.310's ypo @247128053 with _po @247129357, the same code),
@@ -1200,7 +1208,7 @@ func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 // replacement say, and whether a large-file reader may take the line for a
 // slot all the same (THE LARGE FILE).
 func (c *threadChain) another(line threadLine) {
-	if slotKeyed(line.Raw) {
+	if c.binds(line.Raw) {
 		c.smallOnly = true
 	}
 	switch line.Head.Type {
@@ -1222,25 +1230,65 @@ func (c *threadChain) another(line threadLine) {
 // Unread files a whole line [threadReader.Next] answered as no record: its N
 // is held as See holds line.N, and its Size counted with the lines' bytes. A
 // line that yields the load no value is skipped; any other is whyLine
-// ([threadChain], THE LINES THAT ARE NO RECORD). Either way the thread is not
-// path-free, since a large-file reader may take the line for a slot by its
-// bytes (THE LARGE FILE). Unread panics after End.
+// ([threadChain], THE LINES THAT ARE NO RECORD). A skipped line is judged by
+// its bytes as a line of no record is, since a large-file reader may take it
+// for a slot by them all the same (THE LARGE FILE): it binds the thread to
+// the small path where a reader may, but for a subagent's sidechain head. A
+// line handed with no bytes of its Size binds it. Unread panics after End.
 func (c *threadChain) Unread(fault *threadLineError) {
 	c.filing("Unread")
-	c.smallOnly = true
 	if fault == nil {
+		c.smallOnly = true
 		c.cannotTell(whyLine)
 		return
 	}
 	c.inTurn(fault.N)
 	c.bytes += int64(fault.Size)
 	switch {
-	case fault.Fault == faultSyntax, fault.Fault == faultNotObject:
-		return
-	case fault.Fault == faultHead && fault.Type == "":
+	case fault.Fault == faultSyntax, fault.Fault == faultNotObject, fault.Fault == faultHead && fault.Type == "":
+		if len(fault.Raw)+1 != fault.Size || c.binds(fault.Raw) {
+			c.smallOnly = true
+		}
 		return
 	}
+	c.smallOnly = true
 	c.cannotTell(whyLine)
+}
+
+// binds reports whether raw, a line the chain files no record of (one of no
+// record, or one the layer refuses that yields the load nothing), binds the
+// thread to the small path (THE LARGE FILE): where a large-file reader may
+// take it for a slot ([slotKeyed]), which may be the slot that reader starts
+// from or one on its walk; but not, in a subagent's thread, where it says it
+// is a sidechain's right after its parent ([sidechainHeaded]), as every record
+// there must: every reader reads such a slot as a sidechain's, none starts
+// from it, and in a thread where none starts from any, each hands the load
+// every line.
+func (c *threadChain) binds(raw []byte) bool {
+	return slotKeyed(raw) && (c.agent == "" || !sidechainHeaded(raw))
+}
+
+// sidechainHeaded reports whether raw says it is a sidechain's right after
+// its parent: `{"parentUuid":`, then null or a quoted lowercase canonical
+// uuid, then `,"isSidechain":true`. Every large-file reader marks such a line
+// a sidechain's: 2.1.322's dispatch by the first `"isSidechain":` within its
+// first 256 bytes, which these are (kl @293794950, `Ci`), 2.1.310's by those
+// bytes within its first 256 (@247178300), and both prunes by those bytes
+// anywhere in it (@293788960, @247172642).
+func sidechainHeaded(raw []byte) bool {
+	rest, ok := bytes.CutPrefix(raw, slotPrefix)
+	switch {
+	case !ok:
+		return false
+	case bytes.HasPrefix(rest, jsonNull):
+		return bytes.HasPrefix(rest[len(jsonNull):], slotSidechainHead)
+	case len(rest) < 36+2 || rest[0] != '"' || rest[37] != '"':
+		return false
+	}
+	if _, canonical := uuidBytes(string(rest[1:37])); !canonical {
+		return false
+	}
+	return bytes.HasPrefix(rest[38:], slotSidechainHead)
 }
 
 // checkpointOf files what a last-prompt record says of the leaf (the
@@ -1532,11 +1580,13 @@ func keyedBy(raw []byte, id string) bool {
 	return string(raw[at:at+36]) == id
 }
 
-// slotKeyed reports whether raw, a line the load keeps no record of, is one a
-// large-file dispatch may take for a slot all the same: it carries
-// `"parentUuid":` at its object's depth one, outside every string (2.1.322's
-// N1t @293787634, 2.1.310's Ipo @247171334), as a line that begins
-// `{"parentUuid":`, the prune's slot, does too.
+// slotKeyed reports whether raw, a line the chain files no record of (one the
+// load keeps no record of, or one the layer refuses), is one a large-file
+// dispatch may take for a slot all the same: it carries `"parentUuid":` at its
+// object's depth one, outside every string (2.1.322's N1t @293787634, 2.1.310's
+// Ipo @247171334), as a line that begins `{"parentUuid":`, the prune's slot,
+// does too. A line whose JSON fails is scanned by its bytes as the readers
+// scan it, so its depth is theirs.
 func slotKeyed(raw []byte) bool {
 	if !bytes.Contains(raw, slotParentKey) {
 		return false

@@ -433,6 +433,12 @@ type threadLineError struct {
 	// included, so a reader that sums them with its records' sums the bytes
 	// the load reads.
 	Size int
+	// Raw is the line, its break dropped, valid until the reader's next Next,
+	// as a record's line is ([threadLine]): the bytes a reader judges a line
+	// by where it reads lines by their bytes as Claude Code's large-file
+	// readers do, whether the load reads a record off the line or not
+	// ([threadChain.Unread]). Error does not say it.
+	Raw []byte
 }
 
 // lineFault is how Claude Code's load reads a whole line this layer reads as
@@ -518,8 +524,9 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
 // the line's Raw, a hook's Content and Stdout, a call's Input and Content, and
-// ToolUseResult. A reader that keeps any of them past that copies it, since
-// the layer may hand out a line's own bytes rather than a copy of them.
+// ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
+// keeps any of them past that copies it, since the layer may hand out a
+// line's own bytes rather than a copy of them.
 //
 // AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
 // the shape that reader reads (a SendMessage's `input.to`, a result's text, a
@@ -597,16 +604,17 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	// HELD TO AN OBJECT BEFORE IT IS DECODED: a JSON null decodes into a struct
 	// as nothing at all, with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
-		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1}
+		return threadLine{}, &threadLineError{N: n, Err: errNotOneRecord, Fault: refusedFault(raw), Size: len(raw) + 1,
+			Raw: raw}
 	}
 	var w threadWire
 	if err := wireDecode(raw, &w); err != nil {
-		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1}
+		return threadLine{}, &threadLineError{N: n, Err: err, Fault: refusedFault(raw), Size: len(raw) + 1, Raw: raw}
 	}
 	head, err := w.head()
 	if err != nil {
 		return threadLine{}, &threadLineError{N: n, Err: err, Fault: faultHead, Type: kindOf(w.Type),
-			Size: len(raw) + 1}
+			Size: len(raw) + 1, Raw: raw}
 	}
 	return threadLine{
 		N: n, Raw: raw, Head: head,
