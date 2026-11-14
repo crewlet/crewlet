@@ -17,6 +17,7 @@ import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useSeated } from "./access.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AdvisorAtlasEntry, AdvisorFinding } from "~/protocol/advisor.ts";
 import { ClaimList, DecisionButtons } from "./Decisions.tsx";
@@ -129,7 +130,7 @@ function EntryLine({ entry }: { entry: AdvisorAtlasEntry }) {
 
 /** Name the seat or the unit that answers for one entry. */
 function OwnerRow({ entry }: { entry: AdvisorAtlasEntry }) {
-  const write = useAct("atlas_set_owner");
+  const write = useSeated(useAct("atlas_set_owner"));
   const [owner, setOwner] = useState<OwnerChoice>(null);
   return (
     <>
@@ -156,7 +157,7 @@ function OwnerRow({ entry }: { entry: AdvisorAtlasEntry }) {
 
 /** Record the monitor, or the monitoring account, that watches one service. */
 function MonitorRow({ entry }: { entry: AdvisorAtlasEntry }) {
-  const write = useAct("atlas_relate");
+  const write = useSeated(useAct("atlas_relate"));
   const [to, setTo] = useState({ id: "", name: "" });
   return (
     <>

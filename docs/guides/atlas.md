@@ -73,8 +73,12 @@ and one selection.
   into Quiet, Needs a look and Alerting, each with its count.
 - **Needs attention now**: the two most urgent entries, each with the reason in
   one sentence ("A standing alarm is raised", "Two sources disagree, and nobody
-  has settled it"), and how many need attention in all. Pressing a card
-  selects that entry on the map.
+  has settled it") on up to two lines, the whole of it on hover where it is
+  longer. Pressing a card selects that entry on the map. Beside the title,
+  how many are **Alerting** and how many **Need a look**, each a link that
+  narrows the map and the catalogue to them, so the entries past the two cards
+  are one press away. The tile shows a placeholder until its list has been
+  read, and says "Nothing needs attention." only when nothing does.
 - **Recorded this week**: how many lines the atlas's own log took in the last
   seven days, over its lines a day for the last fourteen. It is a count of what
   people, integrations and agents recorded. What the engine reads from the
@@ -288,6 +292,14 @@ On an entry's sheet and page, under its header:
 
 What the company's settings, Gitlet or the engine's own records declare is
 changed where it is declared: the engine refuses it here and says where.
+
+Every one of these is recorded under the seat of the person who made it, so
+a sign-in that holds no seat (an API token, or an account bound to none)
+changes nothing in the atlas, whatever access it holds. The controls stay
+drawn and are held with that sentence, and a note under them says it once
+with a link to Company › Structure, where a person joins and takes a seat.
+Asking a source to be read now (Sources › Refresh now) is the one exception:
+any sign-in with Atlas access may ask.
 
 ## Review
 
