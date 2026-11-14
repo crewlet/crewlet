@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -33,17 +34,29 @@ import (
 // recorded lost, and the seat was held behind a run nothing drove again until
 // the host's store answered.
 //
-// SO EVERY HAND-BACK OF THE COMPLETION IS RENEWED WHILE THE CLOCK RUNS,
-// WHATEVER ITS KIND ([Coordinator.renewing]): the host's own answer that its
-// store did not answer; a claim this node's own store does not answer, or
-// refuses while a release this node owes is out ([errReleaseOwed]); a host that
-// does not answer the read at all ([ErrBoxHostSilent]), which is acknowledged
-// only where no clock runs; a record of the job's loss this node's store did
-// not take ([Coordinator.loseWithHost]); and any other step that fails. KEYED
-// ON THE CLOCK, NEVER ON THE HAND-BACK'S KIND: renewed for the host's answer
-// alone, a claim or a release the store did not answer meanwhile was NAK'd
-// until its budget was spent, and a host that did not answer for a minute had
-// its completion acknowledged, and each left the job with nothing to drive it.
+// SO NO DELIVERY OF THE COMPLETION IS ACKNOWLEDGED WHILE THE CLOCK RUNS,
+// unless the run settled, which drops the clock ([hostUnsettled]): every other
+// answer hands it back, marked [ErrUnannounced], and renews it, WHATEVER ITS
+// KIND ([Coordinator.renewing]). The host's own answer that its store did not
+// answer; a claim this node's own store does not answer, or refuses while a
+// release this node owes is out ([errReleaseOwed]); a host that does not
+// answer the read at all ([ErrBoxHostSilent]), which is acknowledged only where
+// no clock runs; a record of the job's loss this node's store did not take
+// ([Coordinator.loseWithHost]), or a carry of its round that fails after it;
+// a refusal of the node's gate, or a completion this node holds off itself
+// ([Coordinator.keepRefused]), which is kept for its condition's signal
+// besides; and an answer that settled nothing, a claim another attempt holds
+// or a resume the run's row holds for the seat's budget ([HeldError]), whose
+// host's waiter would announce the job once that hold lifts. This node's
+// memory of the job, a completion it keeps for a condition included, outlives
+// neither its restart nor its letting go of the seat, so while the clock runs
+// the delivery is the one copy of the completion that does. KEYED ON THE
+// CLOCK, NEVER ON THE HAND-BACK'S KIND: renewed for the host's answer alone, a
+// claim or a release the store did not answer meanwhile was NAK'd until its
+// budget was spent, and a host that did not answer for a minute, a refusal
+// whose condition nothing signals clearing, and a resume held on its row each
+// had their completion acknowledged, and each left the job with nothing to
+// drive it.
 // Before the delivery in hand is the last its budget allows ([renewReserve],
 // [queue.DeliveriesLeftFor]), the completion is announced afresh: a new event
 // of the same completion ([events.New]: a fresh id, which the stream's
@@ -56,14 +69,18 @@ import (
 // made once.
 //
 // A RE-FIRE HAS NO DELIVERY IN HAND. A completion this node kept for a
-// condition and re-fires once it clears ([Coordinator.refire]) was
-// acknowledged when it was kept, so a re-fire that hands its completion back
-// while the clock runs is renewed at once: nothing else would carry it. Nor
-// does anything bring back a re-fire whose renewal the broker does not take,
-// so its own line says the completion waits for that host's store, and never
-// that a delivery was handed back to make the renewal again: WHAT A REFUSED
-// RENEWAL LEAVES IS ITS CALLER'S TO SAY ([Coordinator.renewing],
-// [Coordinator.refire]).
+// condition and re-fires once it clears ([Coordinator.refire]) was kept from a
+// delivery that was acknowledged where no clock ran then, and handed back
+// where one did. So a re-fire is renewed at once only where its own attempt
+// started the clock: nothing else carries it then. Where the clock ran before
+// it, the delivery refused while the clock ran is in flight still, handed back
+// and renewed on its own budget, and a re-fire that announced it afresh beside
+// it would leave two announcements in flight, and more with every refusal and
+// re-fire after. Nor does anything bring back a re-fire whose renewal the
+// broker does not take, so its own line says the completion waits for that
+// host's store, and never that a delivery was handed back to make the renewal
+// again: WHAT A REFUSED RENEWAL LEAVES IS ITS CALLER'S TO SAY
+// ([Coordinator.renewing], [Coordinator.refire]).
 //
 // NOTHING IS RENEWED WHILE NO CLOCK RUNS: a step this node's own store did not
 // answer is NAK'd and nothing more, since the waiter that drives the box, whose
@@ -88,21 +105,49 @@ import (
 // the broker's budget, for the reason [AnswerDeliveryReserve] gives.
 const renewReserve = 5
 
+// ErrUnannounced marks a delivery of a job's completion handed back because
+// nothing announces the completion again but that delivery: this node keeps a
+// clock on the store of the host of the job's box ([Coordinator.hostClocked]),
+// whose waiter reads the run's row through that store and announces nothing,
+// and the run has not settled, which would have dropped the clock. A delivery
+// so marked is never acknowledged, whatever refusal it carries
+// (internal/engine's controlOutcome): it is handed back, and renewed before
+// its last (renew.go).
+var ErrUnannounced = errors.New("sandbox: no waiter announces the job's completion again, so its delivery " +
+	"is handed back")
+
+// unannounced is err, the coordinator's answer to a delivery of ev's
+// completion while the clock on the host of its box runs, marked
+// [ErrUnannounced]; and for a nil answer, which settled nothing (a claim
+// another attempt holds, or a resume the run's row holds), the mark alone with
+// what it is.
+func unannounced(ev types.ExecutorFinished, err error) error {
+	if err == nil {
+		return fmt.Errorf("%w: the delivery of %s settled nothing, and its run has not settled",
+			ErrUnannounced, ev.TurnID)
+	}
+	return fmt.Errorf("%w: %w", ErrUnannounced, err)
+}
+
 // renewing is what a delivery of ev's completion leaves with the broker, err
 // being what the coordinator made of it ([Coordinator.OnCompleted]): err as it
 // is, unless this node keeps a clock on the store of the host of the job's box
-// ([Coordinator.hostClocked]) and trigger, the delivery in hand, has at most
-// [renewReserve] deliveries left, when the completion is announced afresh
-// ([Coordinator.renew]) and nil is answered, so the delivery is acknowledged
-// and the fresh one carries the completion on. A renewal the broker does not
-// take answers err beside why, so the delivery is NAK'd and comes back to make
-// it again, which its line says (sandbox_completion_renew_failed).
+// ([Coordinator.hostClocked]) once that answer is in. Then the run has not
+// settled, which drops the clock, so the delivery is handed back marked
+// [ErrUnannounced], err or no err; and where trigger, the delivery in hand, has
+// at most [renewReserve] deliveries left, the completion is announced afresh
+// ([Coordinator.renew]) and nil is answered instead, so the delivery is
+// acknowledged and the fresh one carries the completion on. A renewal the
+// broker does not take answers the hand-back beside why, so the delivery is
+// NAK'd and comes back to make it again, which its line says
+// (sandbox_completion_renew_failed).
 func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
 	err error,
 ) error {
-	if err == nil || trigger == nil || !c.hostClocked(ev.TurnID, ev.LaunchID) {
+	if trigger == nil || !c.hostClocked(ev.TurnID, ev.LaunchID) {
 		return err
 	}
+	err = unannounced(ev, err)
 	left, stated := queue.DeliveriesLeftFor(ctx, trigger.ID)
 	if !stated || left > renewReserve {
 		return err

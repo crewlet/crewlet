@@ -155,9 +155,7 @@ func newRenewRig(t *testing.T) *renewRig {
 		}
 	}
 	rig.coordinator.boxes = r.host
-	// THE ENGINE'S CONTROL HANDLER, for what these cases meet: an error that
-	// names no condition is NAK'd and nil is acknowledged (internal/engine's
-	// controlOutcome).
+	// THE ENGINE'S CONTROL HANDLER, for what these cases meet ([controlResult]).
 	if err := broker.Subscribe(t.Context(), control, group, func(ctx context.Context, ev *events.Event) queue.Result {
 		left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
 		r.mu.Lock()
@@ -167,14 +165,27 @@ func newRenewRig(t *testing.T) *renewRig {
 		if before != nil {
 			before(n)
 		}
-		if err := rig.coordinator.OnEvent(ctx, ev); err != nil {
-			return queue.Nak(err)
-		}
-		return queue.Ack()
+		return controlResult(rig.coordinator.OnEvent(ctx, ev))
 	}); err != nil {
 		t.Fatalf("subscribing to the seat's control topic: %v", err)
 	}
 	return r
+}
+
+// controlResult is what the engine's control handler leaves a delivery with,
+// for what these cases meet (internal/engine's controlOutcome): nil is
+// acknowledged, and so is a refusal on a condition that clears by waiting,
+// unless the coordinator marks it as a completion no waiter announces again
+// ([ErrUnannounced]); every other error is NAK'd.
+func controlResult(err error) queue.Result {
+	if err == nil {
+		return queue.Ack()
+	}
+	var refused *TurnRefused
+	if errors.As(err, &refused) && refused.Condition != "" && !errors.Is(err, ErrUnannounced) {
+		return queue.Ack()
+	}
+	return queue.Nak(err)
 }
 
 // announce publishes t1's completion as the host's waiter did before its store
@@ -230,6 +241,34 @@ func (r *renewRig) lostWithItsHostOnTheBroker(t *testing.T) {
 	}
 	if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
 		t.Fatalf("%d of the job's announcements were dead-lettered", len(dead))
+	}
+}
+
+// resumedOnTheBroker holds the rig to a turn resumed once on its box's
+// account, its completion renewed through the wait, one announcement in flight
+// at every delivery, and nothing ended or dead-lettered.
+func (r *renewRig) resumedOnTheBroker(t *testing.T) {
+	t.Helper()
+	if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
+		t.Fatalf("%d of the job's announcements were dead-lettered while the clock on its host ran", len(dead))
+	}
+	resumed := r.resumer.calls()
+	if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
+		t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account", len(resumed),
+			resumed)
+	}
+	if failed := r.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v", failed)
+	}
+	seen := r.deliveries()
+	for i, d := range seen {
+		if d.waiting != 0 {
+			t.Fatalf("delivery %d of %d was handed over with %d more announcements waiting; want one in "+
+				"flight", i+1, len(seen), d.waiting)
+		}
+	}
+	if order, _ := announcements(seen); len(order) < 2 {
+		t.Fatalf("%d deliveries carried %d announcement; want the completion renewed", len(seen), len(order))
 	}
 }
 
@@ -564,46 +603,18 @@ func (h *hostReads) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (
 // read at all are hand-backs within that same wait, and each one's delivery is
 // NAK'd and renewed before its last, never acknowledged: the completion
 // outlives one message's budget, and the turn resumes once the host's store
-// answers, each renewal leaving one announcement in flight. A re-fire, which has
-// no delivery in hand, is renewed at once whatever it hands back while the
-// clock runs.
+// answers, each renewal leaving one announcement in flight.
 //
 // Mutation: renew only the host's own answer that its store did not answer,
 // and a claim the store did not answer, a claim refused for a release owed or
 // a host that did not answer runs one message's budget out to its dead letter;
 // acknowledge a host that did not answer while the clock runs, and nothing
-// announces the job again; renew a re-fire only for the host's own answer, and
-// a re-fire the host did not answer is left with nothing to carry it.
+// announces the job again.
 func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
 	t.Parallel()
 	// past is how many deliveries a hand-back goes on for: past one message's
 	// whole budget, so one NAK'd and nothing more is dead-lettered first.
 	past := 2 * (renewBudget + 1)
-
-	resumedOnTheBroker := func(t *testing.T, r *renewRig) {
-		t.Helper()
-		if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
-			t.Fatalf("%d of the job's announcements were dead-lettered while the clock on its host ran", len(dead))
-		}
-		resumed := r.resumer.calls()
-		if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
-			t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account", len(resumed),
-				resumed)
-		}
-		if failed := r.failures(); len(failed) != 0 {
-			t.Fatalf("announced %+v", failed)
-		}
-		seen := r.deliveries()
-		for i, d := range seen {
-			if d.waiting != 0 {
-				t.Fatalf("delivery %d of %d was handed over with %d more announcements waiting; want one in "+
-					"flight", i+1, len(seen), d.waiting)
-			}
-		}
-		if order, _ := announcements(seen); len(order) < 2 {
-			t.Fatalf("%d deliveries carried %d announcement; want the completion renewed", len(seen), len(order))
-		}
-	}
 
 	t.Run("a claim this node's store does not answer", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -613,7 +624,7 @@ func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
 			r.coordinator.pending = &unansweredClaims{PendingStore: r.coordinator.pending, before: 1,
 				silent: past, answered: r.store.answer}
 			r.announce(t)
-			resumedOnTheBroker(t, r)
+			r.resumedOnTheBroker(t)
 		})
 	})
 
@@ -634,7 +645,7 @@ func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
 				}
 			})
 			r.announce(t)
-			resumedOnTheBroker(t, r)
+			r.resumedOnTheBroker(t)
 		})
 	})
 
@@ -648,31 +659,154 @@ func TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns(t *testing.T) {
 			r.host.BoxReader = &hostReads{BoxReader: r.host.BoxReader, from: 2, silent: renewBudget + 2,
 				answered: r.store.answer}
 			r.announce(t)
-			resumedOnTheBroker(t, r)
+			r.resumedOnTheBroker(t)
+		})
+	})
+}
+
+// refusingGate is a [TurnGate] that admits the first admit resumes it is asked
+// about, refuses the refuse after them on [conditionLimit], has cleared run as
+// the last of those is refused, and admits every resume after them.
+type refusingGate struct {
+	admit, refuse int
+	cleared       func()
+
+	mu    sync.Mutex
+	asked int
+}
+
+func (g *refusingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+	g.mu.Lock()
+	g.asked++
+	n := g.asked
+	g.mu.Unlock()
+	if n > g.admit && n <= g.admit+g.refuse {
+		if n == g.admit+g.refuse {
+			g.cleared()
+		}
+		return nil, nil, &TurnRefused{Refusal: Refusal{Condition: conditionLimit,
+			Reason: "every model of the seat's chain is at its usage limit"}}
+	}
+	return ctx, func() {}, nil
+}
+
+// delivery is the context ev's first control-topic delivery is handed to its
+// handler under: the broker's count of the deliveries ev has left after it, a
+// whole budget's, as the queue states it.
+func delivery(ctx context.Context, ev *events.Event) context.Context {
+	return queue.WithHeadroom(ctx, []queue.Headroom{{ID: ev.ID, Left: renewBudget}})
+}
+
+// A REFUSAL WHILE THE CLOCK ON ITS BOX'S HOST RUNS IS HANDED BACK, NEVER
+// ACKNOWLEDGED. A completion the node's gate refuses on a condition that clears
+// by waiting is acknowledged where the waiter that drives its box stands behind
+// it, announcing the job again on its schedule, and is kept for the signal that
+// the condition cleared. While this node keeps a clock on the store of the
+// box's host, that waiter reads the run's row through the silent store and
+// announces nothing, and the kept completion is this node's memory alone,
+// which a restart or a seat let go of forgets and a clearing nothing signals
+// never re-fires. So the refusal's delivery is handed back, marked as no
+// waiter's to announce again ([ErrUnannounced]), and renewed before its last,
+// beside being kept. So is a completion this node holds off itself after its
+// resume met a limit, and an answer that settled nothing while the clock runs:
+// a resume the run's row holds for the seat's budget, whose host's waiter
+// would announce it again once the hold lifts and cannot. And a re-fire made
+// while such a delivery is in flight announces nothing afresh: the delivery
+// carries the completion, and a second announcement would make two in flight.
+//
+// Mutation: acknowledge a refusal while the clock runs, and a clearing nothing
+// signals leaves the job unannounced for good; acknowledge an answer that
+// settled nothing while the clock runs, and a resume its row holds is never
+// announced again; renew a re-fire whenever the clock runs after it, and the
+// completion has two announcements in flight.
+func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a refusal of the node's gate that nothing signals", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE FIRST RESUME IS ADMITTED, and its collection starts the
+			// clock on the host; the gate then refuses past one message's
+			// budget, and nothing signals that its condition cleared.
+			gate := &refusingGate{admit: 1, refuse: 2 * (renewBudget + 1), cleared: r.store.answer}
+			r.coordinator.gate = gate.gate
+			r.announce(t)
+			r.resumedOnTheBroker(t)
 		})
 	})
 
-	t.Run("a re-fire a host does not answer", func(t *testing.T) {
+	t.Run("a completion this node holds off itself", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
 		unsettledHost(t, rig)
 		handedBackUnsettled(t, rig, "the host's store did not answer")
-		// KEPT FOR A CONDITION, the delivery acknowledged, and re-fired once
-		// it clears, into a host that does not answer: no delivery is in
-		// hand, and the clock on the host's store still runs.
+		payload, ev := rig.completion("t1")
+		rig.coordinator.keepRefused(payload, ev, Refusal{Condition: conditionLimit,
+			Reason: "the review's models are at their limit", Until: rig.now.Add(time.Hour)}, true,
+			rig.coordinator.signalsSeen())
+		err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
+		var refused *TurnRefused
+		if !errors.As(err, &refused) || refused.Condition != conditionLimit || !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("a held completion while the clock on its host runs = %v; want its hold handed back as "+
+				"no waiter's to announce again", err)
+		}
+		if got := controlResult(err); got.Outcome != queue.OutcomeNak {
+			t.Fatalf("the held completion's delivery was left %s; want it handed back", got.Outcome)
+		}
+	})
+
+	t.Run("a resume its row holds, which settles nothing", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		// THE JOB IS LOST WITH ITS HOST at the bound, and the resume that
+		// carries its round on is held for the seat's budget: the round is
+		// not carried on, so the clock runs on.
+		rig.now = rig.now.Add(DefaultBoxTimeout)
+		rig.resumer.failWith(budgetHeld(rig.now.Add(time.Hour)))
+		_, ev := rig.completion("t1")
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("the carry its row holds for the seat's budget = %v; want its delivery handed back as no "+
+				"waiter's to announce again", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.HeldFor != "budget" || got.Lost == nil {
+			t.Fatalf("the row is %s, held for %q, lost %+v; want it running, lost with its host, its resume "+
+				"held for the budget", got.Status, got.HeldFor, got.Lost)
+		}
+		// AND SO IS THE NEXT DELIVERY, whose claim the hold refuses.
+		_, again := rig.completion("t1")
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), again), again); !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("a delivery while the row holds the resume = %v; want it handed back as no waiter's to "+
+				"announce again", err)
+		}
+	})
+
+	t.Run("a re-fire while its refused delivery is in flight", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
 		gate := gated(rig)
 		gate.refuse(true)
-		payload, kept := rig.completion("t1")
-		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
-			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+		_, ev := rig.completion("t1")
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err,
+			errLeaving) || !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("a refusal while the clock on the host runs = %v; want it handed back as no waiter's to "+
+				"announce again", err)
 		}
-		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
+		// THE CONDITION CLEARS while that delivery is in flight, and the
+		// re-fire's own collection is handed back as the host's store
+		// still does not answer.
 		gate.refuse(false)
 		rig.coordinator.Readmit(conditionDrain, "swe")
 		rig.coordinator.inflight.Wait()
-		if renewed := renewedOn(rig); len(renewed) != 1 {
-			t.Fatalf("the re-fire a host did not answer, the clock on its store running, announced the completion "+
-				"%d times; want it announced afresh once", len(renewed))
+		if asked, granted, _ := gate.counts(); asked != 2 || granted != 1 {
+			t.Fatalf("the gate was asked %d times and admitted %d; want the re-fire admitted", asked, granted)
+		}
+		if renewed := renewedOn(rig); len(renewed) != 0 {
+			t.Fatalf("a re-fire made while its refused delivery was in flight announced the completion %d "+
+				"times; want none, that delivery carrying it", len(renewed))
 		}
 		if got := rig.get("t1"); got.Status != StatusRunning {
 			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)

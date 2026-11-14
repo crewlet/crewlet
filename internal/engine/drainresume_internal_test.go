@@ -354,18 +354,27 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 // announces it again on its schedule (TestAnUnclaimedCompletionIsAnnouncedAgain).
 // A condition this build names nowhere yet, a provider's limit here, takes the
 // waiting rule with no change to the hand-back, which is the point of keying it
-// on the condition. Only a failure the refusal does not explain is a Nak.
+// on the condition. Only a failure the refusal does not explain is a Nak. And a
+// completion the coordinator marks as no waiter's to announce again
+// (sandbox.ErrUnannounced: the clock on its box's host runs, and that host's
+// waiter reads the run through a store that does not answer it) is never
+// acknowledged, whatever its refusal waits on: it is a Nak, but where a drain or
+// a seat let go of hands it on, which still defers it.
 //
 // Mutation: key the hand-back on node.ErrDraining again and the provider limit
 // is a Nak, walking a healthy completion to the dead-letter boundary one
 // delivery at a time; defer every refusal and a seat whose ownership merely
-// blipped quiesces its control topic for as long as this node holds it.
+// blipped quiesces its control topic for as long as this node holds it;
+// acknowledge a refusal no waiter announces again, and nothing does.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
 		return errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: cause,
 			Refusal: sandbox.Refusal{Condition: cond, Reason: cause.Error()}})
 	}
+	// unannounced is err as the coordinator hands back a delivery while the
+	// clock on its box's host runs.
+	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
@@ -379,6 +388,16 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 		"the seat was let go of":     {err: refusal(sandbox.SeatLost, sandbox.ErrSeatNotHeld), want: queue.OutcomeDefer},
 		"a newer lease, unconfirmed": {err: fmt.Errorf("record: %w", sandbox.ErrSeatNotHeld), want: queue.OutcomeNak},
 		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
+		"a wait no waiter announces again": {err: unannounced(refusal(waitOwnership, node.ErrSeatNotOwned)),
+			want: queue.OutcomeNak},
+		"a limit no waiter announces again": {err: unannounced(refusal("provider_limit",
+			errors.New("provider limit reached"))), want: queue.OutcomeNak},
+		"a drain no waiter announces again": {err: unannounced(refusal(waitDrain, node.ErrDraining)),
+			want: queue.OutcomeDefer},
+		"a seat let go of, no waiter announcing again": {err: refusal(sandbox.SeatLost,
+			unannounced(sandbox.ErrSeatNotHeld)), want: queue.OutcomeDefer},
+		"nothing settled while no waiter announces again": {err: fmt.Errorf("%w: its run is not settled",
+			sandbox.ErrUnannounced), want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

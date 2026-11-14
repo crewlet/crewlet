@@ -3843,10 +3843,11 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // # A refusal is handed back by the condition it names
 //
 // A completion the node's admission refused ([Engine.admitResume]) left its run
-// unclaimed and running, so the delivery carries nothing that is lost with it:
-// the waiter announces a finished run again on its schedule for as long as its
-// row is running and unheld, at most twenty poll intervals apart, five minutes
-// at the default cadence ([sandbox.Waiter]). What a refusal does to the
+// unclaimed and running, so the delivery carries nothing that is lost with it,
+// wherever a waiter can announce the run again (below): the waiter announces a
+// finished run again on its schedule for as long as its row is running and
+// unheld, at most twenty poll intervals apart, five minutes at the default
+// cadence ([sandbox.Waiter]). What a refusal does to the
 // delivery is therefore keyed on the condition it names ([sandbox.TurnRefused]),
 // never on which error caused it, so a condition a later change adds is handed
 // back by the rule for its kind with nothing here to edit:
@@ -3873,6 +3874,21 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     one delivery each, and an answer walked to the dead-letter subject; the
 //     deferral hands it to the holder for one, and the release that follows
 //     detaches the quiesced attachment, so a later claim attaches a fresh one.
+//
+// # Unless no waiter can announce it
+//
+// THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
+// BROKER IS WHILE IT DOES NOT. While the coordinator keeps a clock on the store
+// of the host of a run's box, that host's waiter reads the run's record through
+// a store that does not answer it and announces nothing, and a completion the
+// coordinator keeps for its condition is in this node's memory alone, which a
+// restart or a seat let go of forgets. So the coordinator marks every delivery
+// it hands back meanwhile [sandbox.ErrUnannounced], and a refusal so marked is
+// NAKED, whatever condition clears it, never acked: the coordinator still keeps
+// it for the signalled re-fire, and renews the delivery before its last, so a
+// restart, a release or a clearing nothing signals loses nothing, and the two
+// arriving together resume the run once. A drain's and a seat let go of still
+// DEFER it, which hands it on rather than acknowledging it.
 //
 // # Everything else NAKs
 //
@@ -3916,11 +3932,13 @@ func controlOutcome(err error) queue.Result {
 	if !errors.As(err, &refused) || refused.Condition == "" {
 		return queue.Nak(err)
 	}
-	switch refused.Condition {
-	case waitDrain:
+	switch {
+	case refused.Condition == waitDrain:
 		return queue.Defer(queue.DeferDraining, err.Error())
-	case sandbox.SeatLost:
+	case refused.Condition == sandbox.SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
+	case errors.Is(err, sandbox.ErrUnannounced):
+		return queue.Nak(err)
 	}
 	return queue.Ack()
 }

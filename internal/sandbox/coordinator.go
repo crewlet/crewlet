@@ -1489,10 +1489,13 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // condition, as it hands on a draining node's, rather than retrying it here
 // until the broker dead-letters it.
 //
-// A COMPLETION HANDED BACK WHILE THIS NODE KEEPS A CLOCK ON ITS BOX'S HOST'S
-// STORE IS RENEWED here, where the delivery in hand is, whatever the hand-back:
-// announced afresh before that delivery is the last its budget allows, and
-// acknowledged once the fresh announcement is out (renew.go).
+// WHILE THIS NODE KEEPS A CLOCK ON THE STORE OF ITS BOX'S HOST, A COMPLETION'S
+// DELIVERY IS ACKNOWLEDGED ONLY WHERE ITS RUN SETTLED, which drops the clock:
+// every other answer, a refusal's and one that settled nothing included, hands
+// it back marked [ErrUnannounced], and it is RENEWED here, where the delivery in
+// hand is, whatever the hand-back: announced afresh before that delivery is the
+// last its budget allows, and acknowledged once the fresh announcement is out
+// (renew.go).
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -1698,15 +1701,18 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	// waiter that drives its box announces its completion again on its
 	// schedule (reannounce.go), and keeps the box meanwhile; the error
 	// carries the refusal, whose condition decides what the caller does with
-	// this delivery. What was signalled is read first, for the reason
+	// this delivery, unless no waiter can announce the job (the clock on its
+	// box's host running), when the delivery is handed back whatever the
+	// condition (renew.go). What was signalled is read first, for the reason
 	// [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
 	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
 	// met a refusal after its claim that lifts at an instant, which the gate
 	// cannot see and would admit into again ([Coordinator.keepRefused]).
 	// Refused as the gate refuses, so the announcement is acknowledged and
-	// the waiter's next one asks again; quietly, since the hold itself was
-	// said when it was taken and the waiter repeats it on its schedule.
+	// the waiter's next one asks again, or, while no waiter can announce the
+	// job, handed back and renewed (renew.go); quietly, since the hold itself
+	// was said when it was taken and its announcements repeat it.
 	if refusal, held := c.stillRefused(ev); held {
 		if c.pastDeadline(ctx, ev) {
 			return c.completeAtDeadline(ctx, ev, fence, refusal.Reason)
@@ -1726,7 +1732,8 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
 			"detail", "this node may not start the turn the completion resumes, so the "+
-				"run is left unclaimed for the waiter to announce again, here once the "+
+				"run is left unclaimed for the waiter to announce again, or for this delivery "+
+				"where the box's host cannot read the coordination store, here once the "+
 				"condition clears or on the seat's next holder")
 		c.keepRefused(ev, trigger, refusalOf(err), false, seen)
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
@@ -1783,7 +1790,9 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		// that job asked, replaced by the turn's next launch, or over —
 		// or a newer lease than this node's owns it, or its resume is
 		// held on it (a duplicate queued behind the resume that held it,
-		// which the poll announces again once the hold lifts).
+		// which the poll announces again once the hold lifts). Where no
+		// poll can announce it (the clock on its box's host running), the
+		// delivery is handed back instead (renew.go).
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
@@ -4146,7 +4155,9 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				return AnswerNotMine, nil
 			}
 			// THE COMPLETION IS SPENT: the hold is on the row, and the poll
-			// announces the job again when it lifts.
+			// announces the job again when it lifts. Where no poll can (the
+			// clock on its box's host running), its caller hands the
+			// delivery back instead (renew.go).
 			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -6698,7 +6709,9 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// on its next holder from here.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
 	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
-	// and the waiter that drives its box announces it to the successor.
+	// and the waiter that drives its box announces it to the successor, or,
+	// while that waiter cannot, the delivery handed back for it does
+	// (renew.go).
 	for turnID, kept := range c.refused {
 		if kept.ev.AgentHandle == handle {
 			delete(c.refused, turnID)
