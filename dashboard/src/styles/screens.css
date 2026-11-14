@@ -4386,6 +4386,12 @@ a.knowledge-reader-how:hover {
   border-radius: var(--radius-pill);
   background: var(--color-brand-accent);
 }
+/* THE BAR OVER A PICKED LIST (`routes/worklet/taskMenu.tsx`), a gap above the
+   grid it acts on so its sticky edge does not sit on the head row. */
+.task-selection-bar {
+  margin-block-end: var(--spacing-2);
+}
+
 /* A NARROWING THE SHAPE SETS ASIDE (`lib/work.ts` filterChips' `inert`): its
    words are muted, and its sentence says why. */
 .work-chip-inert {
