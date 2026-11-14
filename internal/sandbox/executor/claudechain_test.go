@@ -612,12 +612,42 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 // written before it; two replies' windows overlapping, merged; and a result
 // written after every record of its window, at the window's end.
 //
+// A WINDOW OPENS WHEREVER THE RECOVERY RECOVERS OR HANGS A RECORD, so a window
+// the hanging alone opens merges with the one before it and moves where that
+// one's records land: a hook's record under a walked system record of a reply
+// that made a call, one under the reply's own record, and one under the
+// reply's walked result, each hung (whyTail, out of the order) and opening
+// the reply's window. The hanging hangs nothing, and opens no window, where
+// the hook's record hangs under a walked prompt, has two children not met, is
+// of another isSidechain as written, hangs under a reply that made no call,
+// or is a record walked already.
+//
 // Mutation: place a window's records after it, and the reply's other record
 // comes after its result; stop a window at its reply's last record, and the
 // later result comes before the walked one; or keep two overlapping windows
-// apart, and their records are placed twice over.
+// apart, and their records are placed twice over. Open a window only where it
+// recovered a record, and the result the window before it recovered lands
+// before the second reply's records in the first two hanging cases; hang
+// nothing under the reply's results, and it does in the third; or hang under
+// a walked record that hangs off no reply, past a record with two children
+// not met, from one of another isSidechain, under a reply that made no call,
+// or from a record walked already, and a window opens where the resume opens
+// none, moving that result after them.
 func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 	t.Parallel()
+	// hooked is a prompt, two replies whose windows overlap, each of which
+	// made a call, and the second's system record, then tail: the first
+	// recovers a result, written after the second's records, and tail may hang
+	// a hook's record under the system record.
+	head := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+		rcReply(2, 3, "msg_b", 1100, rcCalls("y1")), rcReply(3, 4, "msg_a", 1200, rcSaid("a2")),
+		rcReply(4, 5, "msg_b", 1300, rcSaid("b2")), rcSystem(5, 6, 1400, "informational", ""),
+		rcResults(2, 7, 1500, "x1")}
+	hooked := func(tail ...string) []string { return append(slices.Clone(head), tail...) }
+	uncalled := slices.Clone(head)
+	uncalled[2] = rcReply(2, 3, "msg_b", 1100, rcSaid("b1"))
+	walkedTwo := map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
+		5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: cannot(whyTail), 9: yes(whyChain)}
 	for name, tc := range map[string]struct {
 		lines []string
 		want  map[int]rcAnswer
@@ -645,6 +675,39 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 			rcReply(3, 4, "msg_b", 3000, rcSaid("done")), rcResults(2, 5, 4000, "x1"), rcCheckpoint(4)},
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
 				5: yes(whyRecoveredResult)}, []int{1, 2, 3, 5, 4}},
+		"a window a hook's record under a walked record alone opens": {hooked(rcAttach(6, 8, 1600, rcNote),
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), walkedTwo, []int{1, 2, 3, 4, 5, 6, 7, 9}},
+		"a window a hook's record under the reply alone opens": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
+			rcReply(3, 4, "msg_a", 1200, rcSaid("a2")), rcReply(4, 5, "msg_b", 1300, rcSaid("b2")),
+			rcResults(2, 6, 1400, "x1"), rcAttach(3, 7, 1500, rcNote), rcReply(5, 8, "msg_z", 1600, rcSaid("z"))},
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
+				5: yes(whyChain), 6: yes(whyRecoveredResult), 7: cannot(whyTail), 8: yes(whyChain)},
+			[]int{1, 2, 3, 4, 5, 6, 8}},
+		"a window a hook's record under the reply's walked result alone opens": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
+			rcResults(3, 4, 1200, "y1"), rcReply(4, 5, "msg_a", 1300, rcSaid("a2")),
+			rcReply(5, 6, "msg_b", 1400, rcSaid("b2")), rcResults(2, 7, 1500, "x1"), rcAttach(4, 8, 1600, rcNote),
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))}, walkedTwo, []int{1, 2, 3, 4, 5, 6, 7, 9}},
+		"no window from a hook's record under a walked prompt": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcReply(2, 3, "msg_b", 1100, rcCalls("y1")),
+			rcReply(3, 4, "msg_a", 1200, rcSaid("a2")), rcPrompt(4, 5, 1300), rcReply(5, 6, "msg_b", 1400, rcSaid("b2")),
+			rcResults(2, 7, 1500, "x1"), rcAttach(5, 8, 1600, rcNote), rcReply(6, 9, "msg_z", 1700, rcSaid("z"))},
+			walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+		"no window where the hook's record has two children": {hooked(rcAttach(6, 8, 1600, rcNote),
+			rcAttach(8, 9, 1610, rcNote), rcAttach(8, 10, 1620, rcNote), rcReply(6, 11, "msg_z", 1700, rcSaid("z"))),
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
+				5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: cannot(whyTail),
+				9: cannot(whyTail), 10: cannot(whyTail), 11: yes(whyChain)}, []int{1, 2, 3, 4, 7, 5, 6, 11}},
+		"no window where the hook's record is of another isSidechain": {hooked(ctReplace(t,
+			rcAttach(6, 8, 1600, rcNote), `"isSidechain":false,`, ""), rcReply(6, 9, "msg_z", 1700, rcSaid("z"))),
+			walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+		"no window under a reply that made no call": {append(uncalled, rcAttach(6, 8, 1600, rcNote),
+			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), walkedTwo, []int{1, 2, 3, 4, 7, 5, 6, 9}},
+		"no window through a record walked already": {hooked(rcReply(6, 8, "msg_z", 1700, rcSaid("z"))),
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
+				5: yes(whyChain), 6: yes(whyChain), 7: yes(whyRecoveredResult), 8: yes(whyChain)},
+			[]int{1, 2, 3, 4, 7, 5, 6, 8}},
 	} {
 		rcChain(t, "", tc.lines...).expect(t, name, tc.want, rcOrder{tc.order, allVariants})
 	}
@@ -866,17 +929,38 @@ func rcLongChain(records int) []string {
 	return append(lines, rcReply(parent, records+1, "msg_a", 1000, rcSaid("b")))
 }
 
+// rcHungChain is a thread whose recovery hangs records records under one
+// walked record of a window: a prompt, a reply that made a call, a system
+// record under it, a chain of attachments under that, each under the one
+// before, and a reply last under the system record. Its system record and
+// attachments carry no isSidechain and its attachments no time, so it stays
+// under 5,242,880 bytes.
+func rcHungChain(records int) []string {
+	lines := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+		`{"parentUuid":"` + rcUUID(2) + `","type":"system","subtype":"informational","content":"x","uuid":"` +
+			rcUUID(3) + `","timestamp":"` + rcAt(1100) + `"}`}
+	parent := 3
+	for n := 4; n < 4+records; n++ {
+		lines = append(lines, `{"parentUuid":"`+rcUUID(parent)+`","type":"attachment","attachment":{"type":"x"},`+
+			`"uuid":"`+rcUUID(n)+`"}`)
+		parent = n
+	}
+	return append(lines, rcReply(3, 4+records, "msg_z", 2000, rcSaid("z")))
+}
+
 // A THREAD PAST FIVE MEBIBYTES, OR SPREADING A WALK PAST A CALL'S ARGUMENTS,
 // IS CANNOT TELL in this commit: the load reads a thread past 5,242,880 bytes
 // with a large-file reader, so one of 5,242,881 is whyLargeFile and one of
 // 5,242,880 is read as its small path reads it; and a walk of more than
 // threadChainMaxSpread records whose recovery spreads it is whySpread, one of
-// that many records not.
+// that many records not, as are more records than that hung under one walked
+// record, which the recovery spreads too, and that many not.
 //
 // Mutation: read a thread at the bound as past it, and the thread of
 // 5,242,880 bytes is cannot tell; drop the check, and the one past it reads;
 // drop the walk's spread check, and the long walk reads; or take its bound
 // for past it, and the walk of threadChainMaxSpread records is cannot tell.
+// Drop the hung records' spread check, and the long hung chain reads.
 func TestAThreadPastTheLoadsSmallPathIsCannotTell(t *testing.T) {
 	t.Parallel()
 	at := rcChain(t, "", rcPadded(t, claudeResumeLargeFile))
@@ -888,6 +972,12 @@ func TestAThreadPastTheLoadsSmallPathIsCannotTell(t *testing.T) {
 		whySpread)
 	if why, unknown := rcChain(t, "", rcLongChain(threadChainMaxSpread)...).c.Unknown(); unknown {
 		t.Errorf("a walk of as many records as a call takes is cannot tell (%s)", why)
+	}
+
+	rcChain(t, "", rcHungChain(threadChainMaxSpread+1)...).expectCannotTell(t,
+		"records hung under a walked record past a call's arguments", whySpread)
+	if why, unknown := rcChain(t, "", rcHungChain(threadChainMaxSpread)...).c.Unknown(); unknown {
+		t.Errorf("as many records hung under a walked record as a call takes are cannot tell (%s)", why)
 	}
 }
 

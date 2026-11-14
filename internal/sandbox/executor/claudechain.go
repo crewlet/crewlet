@@ -121,11 +121,13 @@ const (
 	// whyRelease is a record one release's retraction filter drops and the
 	// other's does not.
 	whyRelease chainWhy = "release"
-	// whyTail is a record the resume's tails may hang under the conversation
-	// (a reply's hook records, the leaf's own), which this model does not
-	// follow yet, or one only such a record's retraction list names; gone
-	// once a later commit of this change models the tails (`feat(executor):
-	// model what a resume hangs off a reply and its leaf`).
+	// whyTail is a record the resume's tails hang or may hang under the
+	// conversation: one the recovery hangs off a reply (a hook's records),
+	// which this model finds but does not hand yet, and one that may hang
+	// under the leaf, which it does not follow yet; or one only such a
+	// record's retraction list names. Gone once a later commit of this change
+	// models the tails (`feat(executor): model what a resume hangs off a reply
+	// and its leaf`).
 	whyTail chainWhy = "tail"
 	// whyAttachmentDrop is a handed attachment the resume's drop of malformed
 	// attachments may take, which this model does not follow yet; gone once a
@@ -488,19 +490,34 @@ const chainPrefixBytes = 10
 // walk and on over every record X_e reads as part of it (2.1.322 @293748740,
 // 2.1.310's Yce @247133691: a reply of its id, a meta user record or one of
 // results, any attachment, a system record but a compaction's boundary).
-// Windows that overlap merge; each places its recovered records among the
-// walked ones of its window by their place in the file, the rest at its end.
-// The recovery also hangs single-child chains of UF records under a reply
-// that made a call, its recovered results and its window's UF records
-// (2.1.322's pye @293588633), which this commit does not model: every
+// Where a record of the reply made a call (2.1.322's bVe @293748333, 2.1.310's
+// xMt @247133284), the recovery then HANGS records off it (`co`): under each
+// record of the reply, then each result under one of them walked or
+// recovered by now, then each walked record of the window past the reply's
+// first that is UF (2.1.322 @293588888, 2.1.310's l0 @246995738: an
+// attachment, a system record but a compaction's boundary, a meta user record
+// holding no result), it takes from each child in turn what pye hands
+// (2.1.322 @293588633, 2.1.310's cce @246995483): the child and, after each,
+// its one child not met yet, every one a UF record of the parent's
+// isSidechain as written (absent, false and true apart) and none met, or
+// nothing where one is not or has two children not met; each record hung is
+// met at once, so it blocks what a later window would hang. A window OPENS
+// where it recovered or hung a record (`xn.length===0&&Tn.size===0` skips the
+// rest), one of hung records alone among them. Windows that overlap merge, so
+// a window of hung records alone moves where a window before it places its
+// records; each places its recovered records among the walked ones of its
+// window by their place in the file, the rest at its end. This commit hands
+// no record the recovery hangs: each is handedUnknown (whyTail), as is every
 // attachment, system record and meta user record holding no result that the
-// walk and the recovery above do not hand is handedUnknown (whyTail). A
-// result whose ids are not all of calls its parent made, where a reply other
-// than its parent made one of them, or its sourceToolAssistantUUID names a
-// record other than its parent, is one foamy_spring may hang elsewhere:
-// whyResultByCall, the whole thread. And where a window exists and the walk is
-// longer than [threadChainMaxSpread], whySpread: the recovery spreads
-// stretches of it into one call's arguments.
+// walk and the recovery do not hand; an order holds the records it hands for
+// certain in the place the resume gives them. A result whose ids are not all
+// of calls its parent made, where a reply other than its parent made one of
+// them, or its sourceToolAssistantUUID names a record other than its parent,
+// is one foamy_spring may hang elsewhere: whyResultByCall, the whole thread.
+// And where a window exists and the walk is longer than
+// [threadChainMaxSpread], or the records hung under one walked record are,
+// whySpread: the recovery spreads stretches of the walk, and each walked
+// record's hung records, into one call's arguments.
 //
 // THE TAILS (2.1.322's lWo @293747057, 2.1.310's kpo @247131650): the records
 // hanging under the leaf that are neither user nor assistant ones, which this
@@ -2115,16 +2132,38 @@ func sideOf(k chainKind) int {
 	return 0
 }
 
-// chainWindow is a reply's window of the walk, the records the recovery
-// placed in it among the walked ones.
+// chainWindow is a reply's window of the walk, chain[start:end], and the
+// records the recovery placed in it among the walked ones: those it hands,
+// never the ones it hangs ([threadChain.hang]).
 type chainWindow struct {
 	start, end int
 	recovered  []chainHandle
 }
 
+// chainAnchors counts the records the recovery hangs under each walked record
+// of a window, summed over every window holding that record, which all merge
+// into one: the list the resume spreads into one call's arguments as it
+// places them (`Ot.push(...an.get(so.uuid))`).
+type chainAnchors struct {
+	// under is the count by handle - 1, made at the first record hung.
+	under []int32
+	// most is the largest count.
+	most int32
+}
+
+// add counts n records hung under u, a record of a thread of records.
+func (a *chainAnchors) add(u chainHandle, n, records int) {
+	if a.under == nil {
+		a.under = make([]int32, records)
+	}
+	a.under[u-1] += int32(n)
+	a.most = max(a.most, a.under[u-1])
+}
+
 // recover is chain with the records the recovery reaches placed in it
 // ([threadChain], THE RECOVERY), and how each record of it was reached, into
-// how by handle.
+// how by handle. The records it hangs open windows and are met, as the
+// resume's are, but are no record of the list it answers.
 func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHandle, how []uint8) ([]chainHandle, error) {
 	for i := range w.pos {
 		w.pos[i] = -1
@@ -2135,7 +2174,10 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 		how[h] = walked
 	}
 	w.replied.clear()
-	var windows []chainWindow
+	var (
+		windows []chainWindow
+		anchors chainAnchors
+	)
 	for i, d := range chain {
 		if err := w.tick(ctx); err != nil {
 			return nil, err
@@ -2172,7 +2214,11 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 		for end < len(chain) && c.partOf(chain[end], id) {
 			end++
 		}
-		if len(recovered) > 0 {
+		hung, err := c.hang(ctx, w, chain, id, i, end, &anchors)
+		if err != nil {
+			return nil, err
+		}
+		if len(recovered) > 0 || hung {
 			slices.Sort(recovered)
 			windows = append(windows, chainWindow{start: i, end: end, recovered: recovered})
 		}
@@ -2180,7 +2226,7 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 	if len(windows) == 0 {
 		return chain, nil
 	}
-	if len(chain) > threadChainMaxSpread {
+	if len(chain) > threadChainMaxSpread || anchors.most > threadChainMaxSpread {
 		c.cannotTell(whySpread)
 		return nil, nil
 	}
@@ -2211,6 +2257,114 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 		prev = win.end
 	}
 	return append(out, chain[prev:]...), nil
+}
+
+// hang is what the recovery hangs off reply id's window, chain[start:end],
+// where a record of the reply made a call ([threadChain], THE RECOVERY; the
+// `co` of 2.1.322's fWo and 2.1.310's Rpo): under each record of the reply,
+// then under each result whose parent is one of them and that is met by now,
+// then under each walked record of the window past its first that is UF, what
+// [threadChain.pye] hangs from each of the record's children in turn, every
+// record hung met at once. It reports whether it hung any record, and counts
+// into anchors those it hung under the window's walked records.
+//
+// Each window takes its records' children afresh, as the resume does, rather
+// than once a thread: a chain one window leaves, a record with two children
+// not met, can hang in a later one once a recovery between them met one.
+func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandle, id chainReplyID, start, end int,
+	anchors *chainAnchors) (bool, error) {
+	group := w.records(id)
+	if !slices.ContainsFunc(group, func(g chainHandle) bool { return c.is(g, kindUse) }) {
+		return false, nil
+	}
+	var hung []chainHandle
+	// under hangs under u what pye hands from each of u's children, and
+	// answers how many records it hung.
+	under := func(u chainHandle) (int, error) {
+		n := 0
+		for _, y := range w.children(u) {
+			var err error
+			if hung, err = c.pye(ctx, w, y, u, hung[:0]); err != nil {
+				return 0, err
+			}
+			for _, x := range hung {
+				w.met.set(int(x))
+			}
+			n += len(hung)
+		}
+		return n, nil
+	}
+	opens := false
+	for _, g := range group {
+		n, err := under(g)
+		if err != nil {
+			return false, err
+		}
+		opens = opens || n > 0
+	}
+	for _, g := range group {
+		for _, x := range w.children(g) {
+			if !c.is(x, kindUser|kindResult) || !w.met.has(int(x)) {
+				continue
+			}
+			n, err := under(x)
+			if err != nil {
+				return false, err
+			}
+			opens = opens || n > 0
+		}
+	}
+	for k := start + 1; k < end; k++ {
+		if err := w.tick(ctx); err != nil {
+			return false, err
+		}
+		u := chain[k]
+		if !c.uf(u) {
+			continue
+		}
+		n, err := under(u)
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
+			anchors.add(u, n, len(c.recs))
+			opens = true
+		}
+	}
+	return opens, nil
+}
+
+// pye is what the recovery hangs under u from y, one of u's children,
+// appended to into (2.1.322's pye @293588633, 2.1.310's cce @246995483): y
+// and, after each record, its one child not met, while each is a UF record of
+// u's isSidechain as written and not met; none at all where one is not, or
+// where one has two or more children not met. A record has one parent, so the
+// chain runs down u's subtree and meets no record twice: a cycle through y
+// would run through u, which is met, and so never the child taken next.
+func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
+	into []chainHandle) ([]chainHandle, error) {
+	side, from := sideOf(c.recs[u-1].kind), len(into)
+	for y != noChainRecord {
+		if err := w.tick(ctx); err != nil {
+			return nil, err
+		}
+		if w.met.has(int(y)) || sideOf(c.recs[y-1].kind) != side || !c.uf(y) {
+			return into[:from], nil
+		}
+		into = append(into, y)
+		next := noChainRecord
+		for _, kid := range w.children(y) {
+			if w.met.has(int(kid)) {
+				continue
+			}
+			if next != noChainRecord {
+				return into[:from], nil
+			}
+			next = kid
+		}
+		y = next
+	}
+	return into, nil
 }
 
 // judge decides each record's answer under g's variants: g's base handed,
