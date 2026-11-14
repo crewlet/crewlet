@@ -279,7 +279,11 @@ export const ACTIONS = {
     //
     // AND A PAGE'S WATCH EYE: `watch` alone, against the version on screen,
     // follows the page as the person or stops following it.
-    args: ["page", "base_version", "body", "message", "watch"],
+    //
+    // AND PUBLISH: `status` moves a draft to `published`, alone from the
+    // page's bar or with the body from the editor, and takes a published
+    // page back to `draft`. The one way a draft is published.
+    args: ["page", "base_version", "body", "message", "watch", "status"],
     domain: "pages",
     apps: ["doclet"],
     refreshes: ["knowledge"],

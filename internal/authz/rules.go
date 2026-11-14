@@ -325,6 +325,13 @@ const (
 	ActionWorkMove    Action = "move_work_item"
 	ActionPageTrash   Action = "pages.trash"
 	ActionPageRestore Action = "pages.restore"
+	// A PAGE PUBLISHED, OR TAKEN BACK TO A DRAFT, is the same kind of move:
+	// a draft is listed marked as one and no search returns it, so the
+	// status decides whether the company reads the page at all. DOTTED,
+	// because no tool is named for it: save_page asks it when a `status`
+	// names another one than the page has, as it asks the rename for a
+	// `title`.
+	ActionPagePublish Action = "pages.publish"
 	// REMOVING A FILE TAKES IT OUT OF ITS PROJECT, and is decided as
 	// removing an item is: by the project's lead, because a colleague may
 	// add a report to a project and may not take somebody else's away.
@@ -1554,13 +1561,16 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	ActionPageComment: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
-	// A PAGE'S CREATOR TIDIES IT — renames, trashes, restores — beside its
+	// A PAGE'S CREATOR TIDIES IT (renames, trashes, restores, publishes or
+	// takes back to a draft) beside its
 	// container's lead and admin. See [ClassTidy].
 	ActionPageRename: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionPageTrash: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionPageRestore: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPagePublish: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// A REMARK IS ITS AUTHOR'S, as a work item's is; the store refuses
 	// anybody but the author an edit, and takes a moderator's removal.

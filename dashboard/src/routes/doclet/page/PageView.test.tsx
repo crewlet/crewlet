@@ -30,6 +30,7 @@ import type { PageDetail } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { loadRichEditor, readOnly, retype } from "~/test/richEditor.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
@@ -532,6 +533,83 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
   expect(followersOf({ watchers: ["jane", "swe"], muted: ["jane"] })).toEqual(["swe"]);
 });
 
+// A DRAFT HAS A WAY OUT: the page says it is one, above its body, with Publish
+// beside it, and the press is `save_page` with the status alone against the
+// version on screen. A page saved as a draft used to stay one for good: the
+// editor saved a body and nothing else, and nothing in the product named a
+// status. A published page draws no notice. Mutation: send the press without
+// `status` and the engine saves nothing; draw the notice for every page and
+// the control below goes red.
+test("a draft says it is one and is published by one press, against the version on screen", async () => {
+  mount(<PageView id={ID} />, { page: detail({}, { status: "draft" }), page_reads: reads() });
+  await settle();
+  const notice = screen.getByText("This page is a draft").closest(".crewlet-callout") as HTMLElement;
+  expect(notice.textContent).toMatch(/no search finds it until it is published/);
+  fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, status: "published" } },
+  ]);
+  cleanup();
+
+  posted = [];
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  expect(screen.queryByText("This page is a draft")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+});
+
+// THE SAME PRESS IS IN MORE, where a phone folds the bar, and a published
+// page's More holds the way back to a draft.
+test("More publishes a draft, and takes a published page back to one", async () => {
+  mount(<PageView id={ID} />, { page: detail({}, { status: "draft" }), page_reads: reads() });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: /^More for/ }));
+  expect(screen.queryByRole("menuitem", { name: /Move back to draft/ })).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Publish/ }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, status: "published" } },
+  ]);
+  cleanup();
+
+  posted = [];
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: /^More for/ }));
+  expect(screen.queryByRole("menuitem", { name: /^Publish/ })).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: /Move back to draft/ }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, status: "draft" } },
+  ]);
+});
+
+// THE ENGINE DECIDES WHO PUBLISHES (the page's creator, its space's lead, an
+// admin), and its refusal is said in the notice the press was made from.
+test("a publish the engine refuses says why, in the notice", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: "forbidden",
+          message: "Not allowed.",
+          detail: "Only the page's creator, the lead of its space or an admin publishes it.",
+        }),
+        { status: 403, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
+      ),
+    ),
+  );
+  mount(<PageView id={ID} />, { page: detail({}, { status: "draft" }), page_reads: reads() });
+  await settle();
+  const notice = screen.getByText("This page is a draft").closest(".crewlet-callout") as HTMLElement;
+  fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
+  await settle();
+  expect(within(notice).getByText(/Only the page's creator/)).toBeTruthy();
+  expect(screen.getByText("This page is a draft")).toBeTruthy();
+});
+
 // A WATCH IS FILED UNDER A SEAT, and a credential bound to none subscribes
 // nobody (`internal/doclet` `Actor.subscriber`): the eye says so rather than
 // offering a press the engine answers by moving nothing.
@@ -564,8 +642,9 @@ function Stars() {
   return <output aria-label="stars">{stars.map((s) => s.path.join("/")).join(",")}</output>;
 }
 
-// THE STAR IS IN THE PAGE'S MORE MENU, beside its other page actions.
-test("More stars the page, and offers the sub-page, History and the address", async () => {
+// THE STAR IS IN THE PAGE'S MORE MENU, beside its other page actions, and a
+// published page's way back to a draft.
+test("More stars the page, and offers the sub-page, a draft, History and the address", async () => {
   noteReader("p-1");
   mount(
     <>
@@ -584,6 +663,7 @@ test("More stars the page, and offers the sub-page, History and the address", as
   ).toEqual([
     "Star this pagePinned on Doclet and kept in the sidebar",
     "New sub-page",
+    "Move back to draftNo search finds a draft",
     "History",
     "Copy the page's address",
   ]);
@@ -608,11 +688,11 @@ test("More offers no star on a tab no reader has claimed", async () => {
 // meanwhile is SEEN before the person presses Save, and Save waits until they
 // have chosen to keep editing on top of it, which MERGES their change into
 // the draft before the base moves.
-function racing(bodies: Record<number, string>) {
+function racing(bodies: Record<number, string>, page: Record<string, unknown> = {}) {
   let version = 14;
   location.hash = `#/doclet/pages/${ID}?edit=1`;
   mount(<PageView id={ID} />, {
-    page: () => Promise.resolve(detail({}, { version, body: bodies[version] })),
+    page: () => Promise.resolve(detail({}, { ...page, version, body: bodies[version] })),
     page_reads: reads(),
   });
   return {
@@ -674,6 +754,78 @@ test("keeping on top of somebody else's save keeps their change in the draft", a
       },
     },
   ]);
+  vi.useRealTimers();
+});
+
+// EDITING A DRAFT, Save keeps it a draft and Publish is the save and the
+// status in ONE write, so a draft is never published as the text before the
+// last edit. A publish with no edit sends no body: the status moves and no
+// revision is written. Mutation: publish with a second write after the save
+// and two requests are posted; always send the body and the unedited publish
+// writes a revision that changed nothing.
+test("editing a draft saves it as a draft, or publishes what is written in one write", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  racing({ 14: "## Steps\n\nold" }, { status: "draft" });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  // NOTHING EDITED: Save is held, Publish is not.
+  expect(screen.getByRole("button", { name: "Save draft" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, status: "published" } },
+  ]);
+  cleanup();
+
+  posted = [];
+  racing({ 14: "## Steps\n\nold" }, { status: "draft" });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await retype(box(), "old", "mine");
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, body: "## Steps\n\nmine" } },
+  ]);
+  cleanup();
+
+  posted = [];
+  racing({ 14: "## Steps\n\nold" }, { status: "draft" });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await retype(box(), "old", "mine");
+  fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(posted).toEqual([
+    {
+      tool: "save_page",
+      args: { page: ID, base_version: 14, status: "published", body: "## Steps\n\nmine" },
+    },
+  ]);
+  vi.useRealTimers();
+});
+
+// A PUBLISHED PAGE'S EDITOR IS AS IT WAS: one Save, no Publish.
+test("editing a published page offers Save alone", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  racing({ 14: "## Steps\n\nold" });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
   vi.useRealTimers();
 });
 

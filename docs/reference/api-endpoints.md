@@ -7899,7 +7899,7 @@ route.
 | `PUT` | `/worklet/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `worklet` |
 | `PUT` | `/worklet/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `admin`, with `worklet`; never a seat reordering a colleague |
 | `POST` | `/doclet/pages` | `write_page` | `doclet`, and only in a space the company declares ([Who may write where](../concepts/knowledge-system.md#who-may-write-where)) |
-| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved` | `doclet`; a `title` in the body is a rename, and asks what a rename asks |
+| `PUT` | `/doclet/pages/{id}` | `save_page`. `If-Match` is its required `base_version`, and a page saved since is `412 version_moved`. A `status` of `published` publishes a draft and `draft` takes a published page back to one; a page in the trash is refused (`422`), since a restore brings it back | `doclet`; a `title` in the body is a rename, and asks what a rename asks; a `status` other than the page's own is a publish (`pages.publish`): the page's **creator**, the lead of its container, or `admin` |
 | `POST` | `/doclet/pages/{id}/rename` | Move the page to a new title (its address): `{"title": …, "quiet": false}` | the page's **creator**, the lead of the page's container, or `admin`, with `doclet` |
 | `POST` | `/doclet/pages/{id}/comments` | `comment_on_page` | `doclet` |
 | `PATCH` | `/doclet/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `doclet`, for the work comment's reason |

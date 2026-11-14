@@ -5447,7 +5447,9 @@ a tool arrives in it with the control that sends it. The controls
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
 | Create › Folder | A space's outline, at the end of an open level | `write_page{title, body: "", container, parent?}`: a page with an empty body is a folder |
-| Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
+| Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from; on a draft it reads Save draft and keeps it one |
+| Publish | A draft's notice and More, and its editor | `save_page{page, base_version, status: published}`, with the `body` beside it from the editor where it was edited: the save and the status in one write |
+| Move back to draft | A published page's More | `save_page{page, base_version, status: draft}` |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
@@ -9046,7 +9048,8 @@ page is one column and the outline is not drawn.
   is kept under the seat the person acts as, because a wake reaches a seat and
   nothing else, so for a credential the directory binds to no seat the eye is
   drawn disabled with that reason (the engine subscribes it to nothing). More
-  holds **Star this page**, **New sub-page**, **History** and **Copy the
+  holds **Star this page**, **New sub-page**, **Publish** on a draft or
+  **Move back to draft** on a published page, **History** and **Copy the
   page's address**. The star lives in More beside the page's other actions,
   and the page tells the frame to draw none of its own (`useOwnStar`), so the
   action is never in two places at once.
@@ -9062,6 +9065,15 @@ page is one column and the outline is not drawn.
   the roster holds is that seat, which is how a person appears, since they
   write as the seat they hold, and anything else is the login of a
   credential bound to no seat.
+- **A draft says so above its body**, in a neutral notice ("This page is a
+  draft": listed in its space, found by no search) with **Publish** beside it,
+  a `save_page` carrying nothing but `status`. In the editor a draft's Save
+  reads **Save draft** and **Publish** sits beside it, saving what is written
+  and publishing it in one write; with nothing edited it sends the status
+  alone, so no revision is written. Without these a draft stayed one for good:
+  the editor saved a body and nothing else named a status. Who may publish is
+  the engine's to decide (`pages.publish`: the page's creator, its space's
+  lead, an administrator), and its refusal is said in the notice.
 - **The body** is the design system's `Document` over the dashboard's
   renderer, with anchors on its headings, and a first heading that repeats the
   title is not drawn twice. A FOLDER says it groups pages and lists what is

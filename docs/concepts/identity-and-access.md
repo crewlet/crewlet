@@ -324,9 +324,10 @@ Three narrow rules sit beside the apps, each the owner's own decision:
   more: the call made again after it landed is admitted and answered from the
   answer that landed, and writes nothing. The dashboard opens a work item's
   own page (`#/worklet/{KEY}-{n}`) to somebody it was put to for exactly this.
-- **Authors tidy their own work.** Whoever created a page may rename, trash
-  and restore it, and whoever reported a work item may remove and restore it —
-  beside the container's lead and an administrator, and with the app. An
+- **Authors tidy their own work.** Whoever created a page may rename, publish
+  or take back to a draft, trash and restore it, and whoever reported a work
+  item may remove and restore it, beside the container's lead and an
+  administrator, and with the app. An
   author tidies only their own item: removing or restoring the items beneath
   it stays the project lead's or an administrator's, and a **purge**, which
   nothing undoes, stays an administrator's, asks for a [recent

@@ -532,8 +532,8 @@ func TestAPageCreatorRenamesTrashesAndRestoresIt(t *testing.T) {
 	}
 
 	page := doclet.Page{ID: "p1", Container: "ENG", Author: "ana"}
-	for _, action := range []authz.Action{authz.ActionPageRename, authz.ActionPageTrash,
-		authz.ActionPageRestore} {
+	for _, action := range []authz.Action{authz.ActionPageRename, authz.ActionPagePublish,
+		authz.ActionPageTrash, authz.ActionPageRestore} {
 		for name, c := range map[string]struct {
 			caller iam.Principal
 			want   bool
