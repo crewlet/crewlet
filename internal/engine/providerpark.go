@@ -68,8 +68,8 @@ import (
 //
 //   - the call answers, or fails for a reason that is not a limit: each hold
 //     is lifted, `seat_provider_released` says why, and each seat's mail is
-//     delivered again in order, once, the held head first, having spent only
-//     the one delivery its park did;
+//     delivered again once, its priority lane first and then the held head,
+//     having spent only the one delivery its park did;
 //   - every member refuses for a limit again: the alarm is armed for the new
 //     instant, `seat_provider_parked` is published again for each seat with
 //     what the vendors now say, and no inbox is touched.

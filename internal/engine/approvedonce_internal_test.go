@@ -117,7 +117,7 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 		Asked: &sandbox.AskedRun{Question: "May swe call vendor_post on the vendor MCP server?",
 			By: "founder", SessionID: "sess-ask", BoxKept: true,
 			Held: &sandbox.HeldResume{TurnID: turnID, Call: *claimed.HeldCall, Choice: sandbox.HeldOnce,
-				By: "founder"}}}, nil, seal))
+				By: "founder"}}}, nil, seal, nil))
 
 	if strings.Count(brief, "The call was made, and returned:") != 1 ||
 		!strings.Contains(brief, "posted to the vendor") {

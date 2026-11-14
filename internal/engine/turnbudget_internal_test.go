@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -231,5 +234,73 @@ func TestATurnWhoseContextFitsItsDayLaunchesItsExecutor(t *testing.T) {
 	}
 	if n := len(rig.started()); n != 1 {
 		t.Errorf("the turn launched %d executor runs on a day with room left, want one", n)
+	}
+}
+
+// A DISPATCHED TURN'S LAUNCH READS ITS OWN DELIVERY'S WAIT, end to end through
+// the turn's frame: the frame hands its executor's launcher the ids of the
+// events the turn was dispatched for, under which a park of the seat recorded
+// the window a launch of that delivery was refused below its floor in. In a
+// day that leaves the launch its static floor and less than its brief beside
+// it, the delivery that waited a turnover goes out held at the static floor,
+// and another delivery of the seat, in the same window, never waited and is
+// refused at its floor.
+//
+// Mutation: build the turn's launcher without the events it was dispatched
+// for, and the delivery that waited is refused at its floor.
+func TestADispatchedTurnsLaunchReadsItsOwnDeliverysWait(t *testing.T) {
+	t.Parallel()
+	const ceiling, aux = 100_000, 1600
+	for name, waited := range map[string]bool{
+		"the delivery its seat's park recorded": true,
+		"another delivery of the seat":          false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newBudgetedTurn(t, ceiling, aux)
+			rig := rigRuns(t, r.e, nil)
+			// HALF THE DAY SPENT, and the turn's own context the aux more
+			// before its launch reads the day: the launch is left half the
+			// ceiling less the aux, and the static floor is a token below
+			// that, so a launch held at it goes out and one with its brief
+			// beside it is refused.
+			id, ok := r.org.AgentIDFor(r.seat)
+			if !ok {
+				t.Fatal("the seat has no agent id")
+			}
+			if _, err := r.fleet.PostCharge(t.Context(), coord.AgentScope(id.String()), ceiling/2,
+				coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+				t.Fatalf("PostCharge: %v", err)
+			}
+			static := ceiling/2 - aux - 1
+			r.e.Company().Config.TurnEngine.ExecutorMinBudgetTokens = &static
+			trigger := events.New(types.TaskAssigned{
+				TaskID: "t-1", RoleName: "SWE", Description: "answer Ana", Schedule: "s",
+			}, events.TraceContext{})
+			// THE PARK'S RECORD of a launch refused below its floor the day
+			// before: the trigger's own, or another delivery's.
+			recorded := trigger.ID
+			if !waited {
+				recorded = uuid.New()
+			}
+			day := r.e.meterFor(r.e.Company(), "swe").windows()[0]
+			r.e.floorWaits.parked(id, []uuid.UUID{recorded},
+				sandbox.BudgetWindow{Period: day.Period, Label: day.Shift(-1).Label})
+			res, err := r.e.runTurn(t.Context(), Request{
+				RunID: newRunID(), Handle: "swe", WorkKey: "wk-1", Events: []*events.Event{trigger},
+			})
+			if waited {
+				if err != nil || !res.Suspended || len(rig.started()) != 1 {
+					t.Fatalf("the delivery that waited: runTurn = %+v, %v, %d runs started; want its launch out, "+
+						"held at the static floor %d", res, err, len(rig.started()), static)
+				}
+				return
+			}
+			var refused *floorRefusal
+			if !errors.As(err, &refused) || refused.floor.held() || len(rig.started()) != 0 {
+				t.Fatalf("another delivery's turn = %v, %d runs started; want its launch refused at its own "+
+					"floor, held at nothing", err, len(rig.started()))
+			}
+		})
 	}
 }

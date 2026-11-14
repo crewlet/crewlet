@@ -85,9 +85,10 @@ func (r *Runner) resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// the seeding reads the universe every later call is admitted against.
 	bridged := inAdmissionOrder(r.cfg.Resume.Bridged)
 
-	// A PERSON'S ANSWER CARRIES THE RUN ON, and so do a job lost with its host
-	// and one refused on a sign-in replaced while it ran, each unless its
-	// round was already submitted: see [Resume.carriedRound].
+	// A PERSON'S ANSWER CARRIES THE RUN ON, and so do a job lost with its host,
+	// one refused on a sign-in replaced while it ran and one whose continued
+	// session its provider refused, each unless its round was already
+	// submitted: see [Resume.carriedRound].
 	if carry := r.cfg.Resume.carriedRound(); carry != nil {
 		return r.continueAgentRun(ctx, history, state, carry, bridged)
 	}

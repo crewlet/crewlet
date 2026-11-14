@@ -451,6 +451,15 @@ func (c *Company) budgetWarnings() []Warning {
 // A ceiling below one token is not judged here: [TokenBudget.validate] and the
 // seat's own validation refuse it, and a second refusal of the same key would
 // be advice about a value that has to go anyway.
+//
+// AND IT IS WHAT THE ENGINE'S HOLD LEANS ON. A launch counts its brief beside
+// this floor, and one whose fresh brief takes it past the most room a window
+// can leave it (each ceiling less what the launch's own turn spent there
+// before it) is held rather than refused in every window for ever
+// (internal/engine's launchFloor): at this floor alone where this floor fits
+// in that room, and at the room otherwise. With every ceiling at or above this
+// floor, the room is below it only where the turn's own spend took the
+// difference, and the engine takes no hold under a ceiling this rule refuses.
 func (c *Company) validateExecutorFloor() error {
 	floor := c.TurnEngine.ExecutorFloor()
 	if floor <= 0 {
@@ -477,7 +486,7 @@ func (c *Company) validateExecutorFloor() error {
 					"window has less than that left, and this one never has more, so the seat "+
 					"parks as starved before its first run and never launches one. Raise this "+
 					"ceiling to at least %d, or lower turn_engine.executor_min_budget_tokens to "+
-					"at most %d (0 turns the floor off)",
+					"at most %d (0 turns the floor off for a launch whose session context is unknown)",
 				handle, window, ceiling, floor, floor, ceiling)
 		}
 	}
@@ -504,7 +513,7 @@ func (c *Company) validateExecutorFloor() error {
 				"than the floor left, which this one always has, so %s would park as starved "+
 				"before a first run and never launch one. Raise this ceiling to at least %d, "+
 				"or lower turn_engine.executor_min_budget_tokens to at most %d (0 turns the "+
-				"floor off)",
+				"floor off for a launch whose session context is unknown)",
 			window, ceiling, floor, who, floor, ceiling)
 	}
 	return p.err()

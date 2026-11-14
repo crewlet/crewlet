@@ -17,8 +17,8 @@ import (
 //
 // # Why a share, and why these give way
 //
-// The state rides the run's row in the coordination store, which is one broker
-// message and held to a byte budget every field of the row has a share of
+// The state rides the run's row in the coordination store, held to what a key
+// holds and to a byte budget every field of the row has a share of
 // (internal/sandbox's ExecuteStateBytes, rowbytes.go). What grows in a state is
 // its CLOSED ROUNDS: each round's intent, text and review, and every call its
 // executor's run made — up to two hundred a round, and a turn's rounds are
@@ -99,7 +99,7 @@ import (
 // turn's own context — what it was asked, its trigger's words, its turn-start
 // blocks and its conversation's endings — which no resume can do without and
 // no condensing touches, beside the one count per tool its closed rounds came
-// down to. A park that big would be refused by the broker on its write and
+// down to. A park that big would be refused by the store on its write and
 // every write of the row after it; a turn's closed rounds alone never are,
 // however many it ran.
 

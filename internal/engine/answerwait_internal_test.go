@@ -231,7 +231,7 @@ func TestABudgetRefusalNamesTheEndOfItsWindow(t *testing.T) {
 			t.Parallel()
 			r := newFlooredParkRig(t, tc.cap, tc.floor)
 			r.spend(t, tc.spent)
-			refusal, held := r.e.budgetHold(t.Context(), r.e.Company(), "lead", staticFloor(r.e.Company()))
+			refusal, held := r.e.budgetHold(t.Context(), r.e.Company(), "lead", nil)
 			if !held || refusal.Reason == "" || refusal.Condition != waitBudget {
 				t.Fatalf("budgetHold = %+v, %v, want the window holding the resume", refusal, held)
 			}

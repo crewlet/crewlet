@@ -195,3 +195,51 @@ const (
 // ReleaseAtLeast reports whether a Claude Code release is at or after floor,
 // as every gate on the engine's side reads one ([releaseAtLeast]).
 func ReleaseAtLeast(version, floor string) bool { return releaseAtLeast(version, floor) }
+
+// SkippedLine, handed to [StreamRequest] as a line, is one past the stream's
+// bound ([MaxLineBytes]) rather than a line read.
+const SkippedLine = "\x00a line past the stream's bound"
+
+// StreamRequest is what h's decoder reads off a stream of lines of the newest
+// request of the session its run worked in ([contextReader]): the measure, and
+// where there is none, why, and whether that is a reading that failed, as the
+// collection logs it at warning.
+func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, bool) {
+	dec := h.Events()
+	for _, line := range lines {
+		if line == SkippedLine {
+			dec.Skipped(int64(maxLineBytes)+1, maxLineBytes)
+			continue
+		}
+		dec.Line([]byte(line))
+	}
+	reader, ok := dec.(contextReader)
+	if !ok {
+		return sandbox.RequestMeasure{}, "the harness's decoder reads no request", false
+	}
+	read := reader.request()
+	return read.measure, read.why, read.failed
+}
+
+// FollowedNames is how many message ids an OpenCode decoder holds while a live
+// reading follows it ([openCodeEvents.named]): first read before the reading
+// first takes its entries, and the rest after, counted before it takes them
+// again.
+func FollowedNames(first string, rest ...string) int {
+	d := &openCodeEvents{}
+	d.Line([]byte(first))
+	_ = d.Entries()
+	for _, line := range rest {
+		d.Line([]byte(line))
+	}
+	return len(d.named)
+}
+
+// OpenCodeContextPages and OpenCodeContextBytes are the most pages, and bytes
+// in all, a run's script asks of its session's message list; and
+// OpenCodeContextEvent the type of the lines it prints them in.
+const (
+	OpenCodeContextPages = openCodeContextPages
+	OpenCodeContextBytes = openCodeContextBytes
+	OpenCodeContextEvent = openCodeContextEvent
+)

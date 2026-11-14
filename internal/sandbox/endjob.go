@@ -110,6 +110,10 @@ const JobKillWait = 2 * JobStopGrace
 // calls do; and the script's own stops of its login exporter and its server,
 // a grace each. A job not over by then has a pack that is stuck, or an `api`
 // call that is wedged, and is killed — its session then packed by the read.
+// NOTHING ELSE: the pages of its session's message list an OpenCode script asks
+// for the measure of its session's newest request (internal/sandbox/executor's
+// openCodeContext) are never asked on an end request, whose round no relaunch
+// continues in place, so they spend none of this wait.
 const JobEndWait = SessionPackWait + 3*JobStopGrace
 
 // JobEndBudget is the most an end adds to the read it is made in: the wait for

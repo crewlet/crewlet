@@ -163,8 +163,8 @@ func continuingKept(kept SessionCapture) LaunchRequest {
 func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req LaunchRequest) (LaunchResult, error) {
 	t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(),
-		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Answers: rigAnswers(), Leads: rigLeads(),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Pushes: &pushSpy{},
 		Lease:    leased(rigLease),
 		Restore:  restore,

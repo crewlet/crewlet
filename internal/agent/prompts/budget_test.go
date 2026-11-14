@@ -147,6 +147,13 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 // every review carries it where it used to render for the few seats offered
 // a box. Measured at ~572 with the gate on, so ~8% headroom: the next rule
 // should have to justify itself here, not slip in.
+// 620 -> 640 when the evidence rule stopped saying that every `→ error` call
+// did not take effect: one whose line says its outcome is unknown, a call its
+// run's log still held in flight when the round was read, may have, which the
+// rule now says in the line's own terms (~16 tokens), since a reviewer told
+// otherwise would send the round back to make the call again. A correction of
+// a rule every review carries, so on every review. Measured at ~589, so ~8%
+// headroom again.
 //
 // The roster allowance does not reach this prompt and the number is unmoved
 // by it: review renders [BuildIdentityLine], which names the reviewer's
@@ -156,7 +163,7 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 // roster.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{OffersA2A: true}).Text, 620)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{OffersA2A: true}).Text, 640)
 }
 
 // sectionText is sections rendered as one prompt renders them: their lines
@@ -264,6 +271,14 @@ func referenceWorkers() string {
 // 2585 -> 2625 for the code search guidance (~45 tokens), the same exception
 // once more: rendered only for a seat holding `code_search`. ~2,577 with it,
 // ~2% headroom again.
+//
+// 2625 stands for the review's exception to its evidence rule for a call whose
+// outcome is unknown (~16 tokens, on every review; see TestReviewPromptIsSmall):
+// the turn measures ~2,604 with it, ~0.8% under the budget, the room coming
+// out of the headroom rather than out of the allowance, which a correction
+// this small does not warrant retuning. So the next thing that wants room here
+// takes it out of the allowance, or raises this budget with its reason
+// recorded here.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)

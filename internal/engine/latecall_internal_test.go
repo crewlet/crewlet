@@ -66,7 +66,7 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 	}
 	// AND A RESUME OF THE NEXT JOB HANDS THE RUNNER THE CALL MARKED, which no
 	// save point of the round then holds (runner.BridgedCall.Late).
-	if resumed := runnerResume(resumeInput{Run: next, Bridged: logged}, nil, nil); len(resumed.Bridged) != 1 ||
+	if resumed := runnerResume(resumeInput{Run: next, Bridged: logged}, nil, nil, nil); len(resumed.Bridged) != 1 ||
 		!resumed.Bridged[0].Late {
 		t.Errorf("the next job's resume hands the runner %+v, want the late call marked", resumed.Bridged)
 	}
@@ -122,7 +122,7 @@ func TestAResumeHandsTheRunnerHowManyLateCallsItsLogDropped(t *testing.T) {
 		t.Fatalf("the round's log counts %d of the calls it dropped late, want the %d it dropped",
 			logged.LateElided, dropped)
 	}
-	if resumed := runnerResume(resumeInput{Run: next, Bridged: logged}, nil, nil); resumed.LateElided != dropped {
+	if resumed := runnerResume(resumeInput{Run: next, Bridged: logged}, nil, nil, nil); resumed.LateElided != dropped {
 		t.Errorf("the next job's resume hands the runner %d late calls its log dropped, want %d",
 			resumed.LateElided, dropped)
 	}

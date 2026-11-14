@@ -111,7 +111,7 @@ func TestACollectionRecordsHowItsJobsHarnessEnded(t *testing.T) {
 				rig.launchUntil("t1", deadline)
 				if tc.before != "" {
 					if _, err := rig.pending.MarkHarnessEnd(t.Context(), "t1", rig.get("t1").LaunchID,
-						tc.before); err != nil {
+						EndRead{End: tc.before}); err != nil {
 						t.Fatalf("MarkHarnessEnd: %v", err)
 					}
 				}
@@ -258,7 +258,8 @@ func TestAReadIsNeverRecordedOverAWordThisBuildDoesNotKnow(t *testing.T) {
 		t.Fatalf("writing a later build's end: %v", err)
 	}
 	for _, end := range HarnessEnds {
-		if marked, err := rig.pending.MarkHarnessEnd(t.Context(), "t1", launch, end); err != nil || marked {
+		if marked, err := rig.pending.MarkHarnessEnd(t.Context(), "t1", launch, EndRead{End: end}); err != nil ||
+			marked {
 			t.Errorf("MarkHarnessEnd(%q) over a later build's end = %v, %v, want nothing changed", end, marked,
 				err)
 		}
@@ -288,7 +289,7 @@ type heldMark struct {
 	bounded  bool
 }
 
-func (h *heldMarks) MarkHarnessEnd(ctx context.Context, _, _ string, _ HarnessEnd) (bool, error) {
+func (h *heldMarks) MarkHarnessEnd(ctx context.Context, _, _ string, _ EndRead) (bool, error) {
 	deadline, bounded := ctx.Deadline()
 	h.mu.Lock()
 	h.marks = append(h.marks, heldMark{takes: h.taken(), deadline: deadline, bounded: bounded})

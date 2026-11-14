@@ -3,6 +3,7 @@ package ledger
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -160,6 +161,106 @@ func TestOneReadCapServesEveryGroup(t *testing.T) {
 			t.Errorf("read %d is shown out of the order its calls come in:\n%s", n, told)
 		}
 		at, inOne = next, nextInOne
+	}
+}
+
+// THE SHOWN GROUPS ARE WHAT THE RENDER PRINTS. A caller that must name the calls
+// a render of several groups counted without listing them (internal/agent/
+// runner's leftOut, which records the reads a brief left out for the next brief
+// to tell) reads them off [ShownCallGroups], never off a rule of its own, so
+// what it names and what the brief counted can never part. Each group's shown
+// calls are exactly the calls its render prints a line for, the very values
+// given, in the group's order; the reads past the one cap, counted across the
+// groups in order, are each group's LAST reads and as many as its omitted line
+// counts; a write and a call nobody counts as a read are never left out, a
+// skipped name never shown; and a group whose every read falls past the cap
+// shows its writes alone.
+//
+// Mutation: count each group's reads from zero, and the groups show more reads
+// than the one cap; show a skipped name, leave out a write, or leave out a
+// group's first reads rather than its last, and a group's shown calls are not
+// what its render is to print.
+func TestTheShownGroupsAreWhatTheRenderPrints(t *testing.T) {
+	t.Parallel()
+	read := func(n int) Call { return Call{Name: "get", Args: map[string]any{"n": n}} }
+	write := func(group int) Call { return Call{Name: "post", Args: map[string]any{"group": group}} }
+	opts := Format([]string{"activate_tool"}, []string{"get"})
+	var groups [][]Call
+	made := 0
+	for g, reads := range []int{8, 8, 3} {
+		calls := []Call{write(g)}
+		for range reads {
+			made++
+			calls = append(calls, read(made), Call{Name: "activate_tool", Args: map[string]any{"n": made}})
+		}
+		groups = append(groups, append(calls, write(g+10)))
+	}
+	groups = append(groups, nil)
+
+	shown := ShownCallGroups(groups, opts)
+	rendered := FormatCallGroups(groups, opts)
+	if len(shown) != len(groups) || len(rendered) != len(groups) {
+		t.Fatalf("%d shown groups and %d renders for %d groups", len(shown), len(rendered), len(groups))
+	}
+	reads := 0
+	for g, group := range groups {
+		lines := 0
+		for _, line := range strings.Split(rendered[g], "\n") {
+			if strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "- (+") {
+				lines++
+			}
+		}
+		if lines != len(shown[g]) {
+			t.Errorf("group %d prints %d call lines and shows %d calls:\n%s", g, lines, len(shown[g]), rendered[g])
+		}
+		// IN THE GROUP'S ORDER, THE VERY VALUES: a walk beside the group finds
+		// every shown call where it comes, and what it passes over is left out.
+		next, leftOut := 0, 0
+		for _, call := range group {
+			if next < len(shown[g]) && reflect.DeepEqual(call, shown[g][next]) {
+				if !strings.Contains(rendered[g], FormatCalls([]Call{call}, opts)) {
+					t.Errorf("group %d shows %+v and prints no line of it:\n%s", g, call, rendered[g])
+				}
+				if slices.Contains(opts.Skip, call.Name) {
+					t.Errorf("group %d shows %+v, a name the render skips", g, call)
+				}
+				if call.Name == "get" {
+					reads++
+					if leftOut > 0 {
+						t.Errorf("group %d shows read %+v after a read it left out: the reads past the cap "+
+							"are not its last", g, call)
+					}
+				}
+				next++
+				continue
+			}
+			switch call.Name {
+			case "activate_tool":
+				continue
+			case "get":
+				leftOut++
+			default:
+				t.Errorf("group %d leaves out %+v, which is no read", g, call)
+			}
+		}
+		if next != len(shown[g]) {
+			t.Errorf("group %d shows calls that are not the group's own, in its order: %+v", g, shown[g])
+		}
+		if omitted := fmt.Sprintf("(+%d further read call(s) omitted)", leftOut); leftOut > 0 &&
+			!strings.Contains(rendered[g], omitted) || leftOut == 0 && strings.Contains(rendered[g], "omitted") {
+			t.Errorf("group %d leaves out %d reads, and its render does not count them so:\n%s", g, leftOut,
+				rendered[g])
+		}
+	}
+	if reads != MaxReadCalls {
+		t.Errorf("the groups show %d reads in all, want the one cap of %d", reads, MaxReadCalls)
+	}
+	if want := []Call{write(2), write(12)}; !reflect.DeepEqual(shown[2], want) {
+		t.Errorf("a group whose every read falls past the cap shows %+v, want its writes alone, %+v", shown[2],
+			want)
+	}
+	if len(shown[3]) != 0 {
+		t.Errorf("an empty group shows %+v", shown[3])
 	}
 }
 

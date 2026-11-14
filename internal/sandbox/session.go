@@ -594,6 +594,20 @@ type SessionCapture struct {
 	// one no read places, which reads no log.
 	Through *int `json:"bridge_through,omitempty"`
 
+	// Omitted is the reads at or below Through that the session holds only as
+	// a count, by their places in the round's log ([BridgeCall.Appended]):
+	// the reads the brief its job's run read counted without listing them, its
+	// read cap spent ([BriefTold], [LaunchRecord.OmittedCalls]). A capture
+	// placed by its own read states its job's; one placed at an earlier
+	// capture's point states that capture's, with the point
+	// ([SessionCapture.placeAtNewest]). A launch that continues the session
+	// tells each of them (internal/agent/runner's keptSession): placed by its
+	// read, the session counts every call the log had taken as held, and
+	// without this would never be told a read its brief only counted. Nil
+	// where its brief left none out, and on a stamp an older build wrote.
+	// Held to [MaxBridgeCalls] ([SessionCapture.Bounded]).
+	Omitted []int `json:"bridge_omitted,omitempty"`
+
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
 	// READS IT — copied off the capture whose save point Through takes, where
 	// the capture is placed by an earlier read — written for a fleet
@@ -643,6 +657,18 @@ type SessionCapture struct {
 	// launch's budget floor is made of. Zero where the transcript recorded
 	// none this build reads.
 	ContextTokens int64 `json:"context_tokens,omitempty"`
+
+	// ResumedCount is what Claude Code counts the session at before its next
+	// request, as the take read its archive's main thread whole
+	// ([TakenSession.Count], resumed.go), with the least window the run that
+	// left it reported ([Result.ReportedWindow]): what a launch that continues
+	// the capture judges its first request by (internal/agent/runner's
+	// firstRequest). Nil where the take counted nothing (a harness whose taker
+	// counts none, a stamp settled off the executor log, which carries the
+	// context alone, a stamp an older build wrote), each read as a session
+	// that may compact. Its mark is held to [maxCountMarkBytes]
+	// ([SessionCapture.Bounded]).
+	ResumedCount *ResumedCount `json:"resumed_count,omitempty"`
 
 	// At is when it was taken, on this node's clock.
 	At time.Time `json:"at"`
@@ -759,6 +785,20 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
 	}
+	if len(c.Omitted) > MaxBridgeCalls {
+		return fmt.Errorf("sandbox: it names %d reads its brief left out, past the %d a round's log lists: %w",
+			len(c.Omitted), MaxBridgeCalls, ErrCaptureUnbounded)
+	}
+	if count := c.ResumedCount; count != nil {
+		if len(count.Mark) > maxCountMarkBytes {
+			return fmt.Errorf("sandbox: its count's mark is %d bytes, past the %d it may be: %w",
+				len(count.Mark), maxCountMarkBytes, ErrCaptureUnbounded)
+		}
+		if count.Restart != nil && len(*count.Restart) > RestartIDMaxBytes {
+			return fmt.Errorf("sandbox: its count's restart is %d bytes, past the %d it may be: %w",
+				len(*count.Restart), RestartIDMaxBytes, ErrCaptureUnbounded)
+		}
+	}
 	return nil
 }
 
@@ -782,11 +822,14 @@ const maxIncarnationBytes = 128
 // placeAt places c's session in its round's calls as read — one read of the
 // run's log, made before the take — holds them: its save point
 // ([SessionCapture.Through]) and, off the same read, the places an older build
-// reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]).
-func (c *SessionCapture) placeAt(read BridgeLog) {
+// reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]); and
+// omitted, the reads at or below that point its session holds only as its
+// job's brief's count ([SessionCapture.Omitted], [LaunchRecord.OmittedCalls]).
+func (c *SessionCapture) placeAt(read BridgeLog, omitted []int) {
 	c.Through = new(read.Appends())
 	c.BridgeSeq = read.LastSeq()
 	c.BridgeOpen = openPlaces(read, c.BridgeSeq)
+	c.Omitted = slices.Clone(omitted)
 }
 
 // SavePoint is the save point c states ([SessionCapture.Through]), and whether
@@ -1094,6 +1137,11 @@ type capturePoint struct {
 	// refused says the job's provider refused the request its session makes
 	// ([requestRefused]), so its capture is refused untaken too.
 	refused bool
+	// window is the least context window the job's run reported
+	// ([Result.ReportedWindow]), stamped beside the capture's count
+	// ([SessionCapture.ResumedCount]); 0 where it reported none, or nothing
+	// was collected, as a loss's read collects nothing.
+	window int64
 }
 
 // readCapture is the capture a box read takes of a job that is OVER — by
@@ -1110,7 +1158,8 @@ type capturePoint struct {
 // told to stop mid-step whatever its exit.
 func readCapture(read BoxRead, result Result, over bool) capturePoint {
 	return capturePoint{name: string(read), pack: !over, final: over,
-		cutOff: !over || result.Captured == nil || result.HarnessCutOff || result.JobEnd != ""}
+		cutOff: !over || result.Captured == nil || result.HarnessCutOff || result.JobEnd != "",
+		window: result.ReportedWindow}
 }
 
 // exhaustedNotKept is why a job that ran out of its model's context left no
@@ -1487,8 +1536,11 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// written. So the calls the log had taken before the pack are no measure of
 	// what such an archive holds, and a continuation told only the calls after
 	// them was never told those (savepoint.go).
+	// AND THE READS ITS JOB'S BRIEF COUNTED WITHOUT LISTING THEM, off the job's
+	// record by the brief its run read ([LaunchRecord.OmittedCalls]): placed by
+	// its read, the session holds every call the log had taken but those.
 	if calls != nil {
-		stamp.placeAt(*calls)
+		stamp.placeAt(*calls, current.Launch.OmittedCalls())
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})
 	}
@@ -1521,7 +1573,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			if err != nil {
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 			}
-			c.spooledWhole(ctx, by, run, spooled, taken)
+			c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 			return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
 		}
 		// ANOTHER READ OF THE SAME RUN HOLDS THIS PLACE — a stop's and a
@@ -1570,14 +1622,25 @@ func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp S
 
 // spooledWhole is what a take does once its session is spooled: the last
 // request's context read off the archive as it was spooled, for the floor of
-// the launch that continues it — stamped with the capture's outcome, which is
-// the stamp that launch reads — and the kept archive's digest left in its box
+// the launch that continues it, and what Claude Code counts the archive at with
+// window, the least window the run reported ([capturePoint.window]), for its
+// telling, both stamped with the capture's outcome, which is the stamp that
+// launch reads; and the kept archive's digest left in its box
 // ([TakenSession.Keep]).
 func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run PendingRun, spooled *spooledCapture,
-	taken TakenSession) {
+	taken TakenSession, window int64) {
 
 	if taken.Context != nil {
 		spooled.stamp.ContextTokens = taken.Context()
+	}
+	// AND WHAT CLAUDE CODE COUNTS THE ARCHIVE AT, as the take read its main
+	// thread whole, beside the least window the run reported: what a launch
+	// that continues this capture judges its first request by.
+	if taken.Count != nil {
+		if count := taken.Count(); count != nil {
+			count.Window = window
+			spooled.stamp.ResumedCount = count.bounded()
+		}
 	}
 	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
@@ -1641,7 +1704,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 		return nil, nil
 	}
 	spooled.standby = true
-	c.spooledWhole(ctx, by, run, spooled, taken)
+	c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 	log.InfoContext(ctx, "executor_session_standing_by", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "bytes", spooled.spool.Size,
 		"detail", "another read of the run holds the capture's place; this one keeps the session it took, "+
@@ -2342,7 +2405,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
-		stamp.placeAt(*calls)
+		stamp.placeAt(*calls, current.Launch.OmittedCalls())
 	}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)

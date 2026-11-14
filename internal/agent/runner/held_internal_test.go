@@ -77,12 +77,14 @@ func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
 	return l.prior(), nil
 }
 
-func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
+func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult,
+	answered toolloop.ToolResult) (sandbox.HeldKept, error) {
+
 	if l.result == nil {
 		l.result, l.answered = &result, answered
 	}
 	l.recorded++
-	return nil
+	return sandbox.HeldKept{}, nil
 }
 
 // heldSurface is an executor's surface holding tool, filed at Needs approval.
