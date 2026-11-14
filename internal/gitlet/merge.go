@@ -135,7 +135,7 @@ type Merge struct {
 	// an asker sends none. nil for a merge made for nobody — the seat's own
 	// work — and for a person's. The apply keeps it on the merge's push row
 	// (code_pushes.working_for), which the home's record of a change that
-	// push landed reads it back from (crewlet#798's piece 4c-ii).
+	// push landed reads it back from ([landingPusher]).
 	//
 	// VERSION 2, as every payload's working_for is ([versionedFields]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`

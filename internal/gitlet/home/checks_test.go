@@ -48,11 +48,16 @@ func newCheckEstate() *checkEstate {
 	return &checkEstate{files: map[string]string{}}
 }
 
+// QueueDue answers the queue's due work: the check work's cases hold none.
+func (e *checkEstate) QueueDue(context.Context, gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	return gitlet.QueueDueAnswer{}, nil
+}
+
 func (e *checkEstate) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
-	case q.Kind == gitlet.ReadChangesDue || q.Kind == gitlet.ReadQueueDue:
+	case q.Kind == gitlet.ReadChangesDue:
 		return gitlet.ReadAnswer{}, nil
 	case q.Kind != gitlet.ReadChecksDue:
 		return gitlet.ReadAnswer{}, errors.New("the check work asked a read that is not its listing")

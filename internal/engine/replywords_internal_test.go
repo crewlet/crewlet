@@ -167,13 +167,16 @@ func TestOnlyWordsAddressedToTheConversationAnswerAParkedQuestion(t *testing.T) 
 }
 
 // A REPLY CARRIES WHOM ITS AGENT WROTE IT FOR (ADR-0109), read off the newest
-// event by the rule a wake is read by: an agent's carrier; nil for a person's,
-// a credential's or the engine's writer even with a carrier forged on, and
-// for a vendor's notice, which states no writer. It is read whether or not
-// there is a party registry: it is stated on the write, never looked up.
+// event by the rule a wake is read by: an agent's carrier, and the engine's on
+// its record about an agent's earlier act made for somebody (the merge queue's
+// ejection, a close it could not make), which answers no parked question, its
+// writer holding no seat; nil for a person's or a credential's writer even
+// with a carrier forged on, and for a vendor's notice, which states no writer.
+// It is read whether or not there is a party registry: it is stated on the
+// write, never looked up.
 //
-// Mutation: read the carrier off any writer kind, or off the oldest event, and
-// a row goes red.
+// Mutation: read the carrier off any writer kind, off no engine's, or off the
+// oldest event, and a row goes red.
 func TestAReplyCarriesWhomItsAgentWroteItFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
@@ -198,7 +201,7 @@ func TestAReplyCarriesWhomItsAgentWroteItFor(t *testing.T) {
 		{"an agent's write for nobody else", []*events.Event{by(iam.ActorAgent, nil, at)}, nil},
 		{"a person's, a carrier forged on", []*events.Event{by(iam.ActorHuman, ada, at)}, nil},
 		{"a credential's, a carrier forged on", []*events.Event{by(iam.ActorOperator, ada, at)}, nil},
-		{"the engine's, a carrier forged on", []*events.Event{by(iam.ActorSystem, ada, at)}, nil},
+		{"the engine's record about an act made for ada", []*events.Event{by(iam.ActorSystem, ada, at)}, ada},
 		{"a vendor's notice", []*events.Event{vendor}, nil},
 		{"two events, the newer written for omar",
 			[]*events.Event{by(iam.ActorAgent, ada, at), by(iam.ActorAgent, omar, at.Add(time.Second))}, omar},

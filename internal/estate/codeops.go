@@ -43,6 +43,7 @@ type CodeServer interface {
 	Snapshot(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error)
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error)
 	TurnsMovedCode(ctx context.Context, q gitlet.TurnsMovedQuery) (map[string]bool, error)
 	ResolveRef(ctx context.Context, q gitlet.RefQuery) (gitlet.RefAnswer, error)
 	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
@@ -441,12 +442,13 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // of their checks (checks_due); the live entries of a repository's merge queues
 // — of one target, or of every readable repository — with their trains, a
 // target's landings above its green and a repository's green rows, each held to
-// the grant on its repository; and the repositories holding a live entry, or
-// one repository's entries, which its home's queue works from (queue_due); and
-// a repository's push mirror with the green rows it publishes, read in one
-// snapshot by the home that pushes it (mirror_push). A seat's read on a node
-// that holds no chart is that node's gitlet.ErrNotServing — it ran nothing — so
-// the walk asks the next.
+// the grant on its repository; and a repository's push mirror with the green
+// rows it publishes, read in one snapshot by the home that pushes it
+// (mirror_push). A seat's read on a node that holds no chart is that node's
+// gitlet.ErrNotServing — it ran nothing — so the walk asks the next. The queue
+// work a repository's home owes is no kind of it: its home carries what it
+// reads on, so it is read whole or refused, by an operation of its own
+// ([opCodeQueueDue]).
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: gitlet.JudgeRead) — and the
@@ -457,7 +459,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // asker at all — a `run_pushes` page, an `introduced` page, a `branch_changes`
 // read, a repository's `expunge_tips`, the `compaction_due`, `publication_due`,
 // `expunge_due`, `imports_due`, `mirrors_due`, `indexed`, `changes_due`,
-// `checks_due`, `checks_queued`, `checks_running` and `queue_due` listings, a
+// `checks_due`, `checks_queued` and `checks_running` listings, a
 // check's box's admission's `check_box` and a push mirror's `mirror_push` — so
 // each is answered there as a last resort: a check's box's admission among
 // them, which a node behind the company's configuration may therefore answer,
@@ -472,6 +474,39 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
 	}).judgesGrant(func(q gitlet.ReadQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
+
+// opCodeQueueDue is a page of the queue work a repository's HOME Gitlet node
+// owes (gitlet.QueueDueQuery): the repositories owing any, or one repository's
+// queue work a target a page, its first page with the given-up trains'
+// attempts its home cancels and the closes it owes — the read the home's merge
+// queue works from (internal/gitlet/home). The engine's own, as every duty
+// listing is: it names no asker and judges no grant, so a node behind the
+// company's configuration answers it as a last resort too. And the engine's
+// alone: its answer hands over whom each entry's enqueue was made for, so no
+// package that serves a person or a model reaches it ([CodeSeam.QueueDue]).
+//
+// ANSWERED WHOLE ([op.answeredWhole]), because the home carries what it reads
+// into the records it asks next: it lands, ejects and settles each entry as the
+// entry it read, closes its change's work item as its enqueuer, and states the
+// page's position as what it saw. A member a newer data node put in a page
+// that this build would drop refuses the page instead, so the home's turn
+// fails, stepping on nothing, and its queue waits until the home runs a build
+// that declares the member. AN OPERATION OF ITS OWN, never a kind of
+// [opCodeRead], whose answers a caller only shows and so reads for what its
+// build declares. Across a roll the queue waits rather than step on less than
+// it was answered: a home of a build that predates the operation asks
+// code.read for `queue_due`, which a data node of this build refuses as a
+// member it does not declare (`args.queue_due`), and a data node of such a
+// build answers this operation unserved, as one it does not know, so the walk
+// asks the next data node and the queue waits for one that serves it.
+var opCodeQueueDue = define("code.queue_due", opRead, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+		if b.Code == nil {
+			return gitlet.QueueDueAnswer{}, errNoHalf
+		}
+		answer, err := b.Code.QueueDue(ctx, q)
+		return answer, ranNothing(err)
+	}).answeredWhole()
 
 // opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
 // a review: the advisor's read, which names no asker.
