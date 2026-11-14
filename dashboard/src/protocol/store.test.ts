@@ -763,6 +763,8 @@ describe("a live_call answer the socket delivers late", () => {
     prompt_messages: [],
     response: "",
     tool_executions: [],
+    calls_elided: 0,
+    elided_calls: [],
     rounds: [],
     invocations: [],
     round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),

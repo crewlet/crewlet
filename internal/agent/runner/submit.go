@@ -306,5 +306,55 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 		// catch it, but only after spending the rounds.
 		return r, fmt.Errorf("self_iterate needs notes saying what the next round should do differently")
 	}
+	if err := reviewWithinBounds(r); err != nil {
+		return r, err
+	}
 	return r, nil
+}
+
+// The most a review's words may weigh, in bytes. See [reviewWithinBounds].
+const (
+	// finalArtifactBytes is what a run's own report may weigh
+	// (sandbox.MaxRunTextBytes): the final artifact is what the turn hands
+	// back in place of its executor's output, and is never longer than that
+	// output may be.
+	finalArtifactBytes = sandbox.MaxRunTextBytes
+
+	// reviewProseBytes is what each of a review's notes and its account of
+	// what landed may weigh: what an executor's whole submission may
+	// (sandbox.MaxSubmissionBytes). A correction the next round can act on
+	// is a few paragraphs; one longer is a document, which belongs where the
+	// work was delivered.
+	reviewProseBytes = sandbox.MaxSubmissionBytes
+)
+
+// reviewWithinBounds refuses a review whose words are past their bounds,
+// naming the field, its size and its bound, while the reviewer can still
+// shorten them.
+//
+// REFUSED WHERE THEY ARE MADE, never cut where they are read. The final
+// artifact is the turn's answer: its record's response and its
+// `plan_summary`, the reply a colleague who asked is handed, and the episode
+// the seat's memory keeps. The notes are the next round's brief and every
+// later round's prior-work ledger, and both ride the review's own record. Cut
+// at each of those, every reader would hold a different opening of one
+// answer, and none could ask for the rest.
+func reviewWithinBounds(r reviewPayload) error {
+	for _, field := range []struct {
+		name  string
+		text  string
+		bound int
+		fix   string
+	}{
+		{"final_artifact", r.FinalArtifact, finalArtifactBytes,
+			"put the long form where you delivered the work and hand back what it says"},
+		{"notes", r.Notes, reviewProseBytes, "say what the next round should do differently in fewer words"},
+		{"completed_work", r.CompletedWork, reviewProseBytes, "say in a sentence what already landed"},
+	} {
+		if n := len(field.text); n > field.bound {
+			return fmt.Errorf("%s is %s, and a review's %s is kept up to %s: %s, and submit again", field.name,
+				kept.SizeUp(n), field.name, kept.Size(field.bound), field.fix)
+		}
+	}
+	return nil
 }

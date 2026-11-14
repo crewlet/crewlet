@@ -2,9 +2,11 @@ package runner
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/kept"
 )
 
 // The submission schema's enum and the decoder's validation are ONE list, and
@@ -74,5 +76,33 @@ func TestTheReviewSchemaNeverOffersSkipped(t *testing.T) {
 	}
 	if _, err := decodeReview(map[string]any{"decision": "skipped"}); err == nil {
 		t.Error("the decoder accepted skipped from a reviewer")
+	}
+}
+
+// A REVIEW'S WORDS PAST THEIR BOUNDS ARE REFUSED WHERE THEY ARE MADE, naming
+// the field, its size and its bound, while the reviewer can still shorten
+// them. The final artifact is the turn's answer — its record's response, its
+// plan summary, the reply a colleague is handed — and never longer than a
+// run's own report may be; the notes and the account of what landed are the
+// next round's brief, held to what an executor's whole submission may weigh.
+// Words within their bounds are taken as they are.
+//
+// Mutation: take the words whatever their size, and every reader of the
+// answer holds a different cut of it, or none.
+func TestAReviewsWordsPastTheirBoundsAreRefusedWhereTheyAreMade(t *testing.T) {
+	t.Parallel()
+	for field, bound := range map[string]int{"final_artifact": finalArtifactBytes, "notes": reviewProseBytes,
+		"completed_work": reviewProseBytes} {
+		args := map[string]any{"decision": "self_iterate", "notes": "fix the title", field: strings.Repeat("a",
+			bound+1)}
+		if _, err := decodeReview(args); err == nil || !strings.Contains(err.Error(), field+" is ") ||
+			!strings.Contains(err.Error(), "kept up to "+kept.Size(bound)) {
+			t.Errorf("a review whose %s is past its %d bytes was answered %v, want it refused by name and bound",
+				field, bound, err)
+		}
+		args[field] = strings.Repeat("a", bound)
+		if _, err := decodeReview(args); err != nil {
+			t.Errorf("a review whose %s is at its bound was refused: %v", field, err)
+		}
 	}
 }

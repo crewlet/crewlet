@@ -894,10 +894,26 @@ describe("what a collected run's record did not keep", () => {
     ]);
   });
 
+  test("a host phase's record says the rounds and tool names it did not list", () => {
+    const record = fromPhaseEvent(
+      phaseEvent({
+        rounds_elided: 12,
+        tools_available_elided: 41,
+        tool_catalogue_elided: 7,
+        calls_elided: 30,
+      }),
+    )!;
+    expect(record.roundsElided).toBe(12);
+    expect(record.toolsAvailableElided).toBe(41);
+    expect(record.toolCatalogueElided).toBe(7);
+    expect(record.callsElided).toBe(30);
+  });
+
   test("a record that kept every call says none", () => {
     const record = fromPhaseEvent(phaseEvent({ sandbox_id: "box-1" }))!;
     expect(record.callsElided).toBe(0);
     expect(record.elidedCalls).toEqual([]);
+    expect(record.roundsElided).toBe(0);
   });
 });
 

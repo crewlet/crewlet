@@ -976,7 +976,8 @@ half — on the `agent` and `live_call` questions, the `agents`, `snapshot` and
 `executors` — and the body goes only to an administrator, to whoever leads
 that seat (`audit.seat.read`), and, for an executor's parked question, to the
 person it is put to. The body is a call's `trigger`, `prompt`,
-`prompt_messages`, `response`, `tool_executions`, `round_narration`,
+`prompt_messages`, `response`, `tool_executions` with its `calls_elided` and
+`elided_calls`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
 `question_context`, `decision`, `held_call`, `held_arguments`, `reply`, `bridge_calls` and `bridge_elided_calls` (`held_call` also
@@ -4768,7 +4769,10 @@ renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `partial_round`,
 `total_tokens` — plus the envelope's `timestamp` and `failed`. It is the
-stored record, so it also carries the phase's price where its own harness
+stored record, its payloads held to their shares of one message, so a long
+phase's row may list some of its calls and say the rest (`calls_elided`,
+`elided_calls`, `rounds_elided`; see
+[what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)), so it also carries the phase's price where its own harness
 reported one (`cost_usd`), which the dashboard never reads
 ([rule 19](dashboard-design.md#rules-a-change-has-to-keep)). Each launch of an
 executor's run is a row of its own, an `executor_collected`, published when it
@@ -5713,8 +5717,8 @@ counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
-tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
-invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
+tool_executions, calls_elided, elided_calls, round_narration, partial_round,
+round_num, rounds_used, rounds, invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
 running_calls, steers,
 cache_read_tokens, cache_write_tokens, work_item, node, in_progress, versions }`
 while an LLM call is under
@@ -5732,7 +5736,7 @@ way. The fields are these:
 - `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a harness may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id, boundary}` — the round whose provider call first saw it, and the kind of step that read it (`round`, or `brief`, `tool_batch`, `finish` or `step` for a read by the phase's executor in its box, which is round 1). What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
-- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
+- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` with its `calls_elided` and `elided_calls` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
 Beside `live_call`, each seat carries `live_call_seq`: the node projection's
 own sequence — the one `versions` are taken from — read when the seat's call
@@ -5779,11 +5783,15 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   publish is refused outright and the live row simply stops); a tool result
   and the joined `response` are sent **tail-bounded** on a live frame, because
   they are what a reader is watching the end of. The durable
-  `agent_phase_completed` record keeps every one of them verbatim, which is
-  what a reader opens the finished card for.
+  `agent_phase_completed` record keeps every one of them whole within its
+  share of one message, which is what a reader opens the finished card for,
+  and says what it left out past it
+  ([what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)):
+  a failed phase's call is frozen with that record's list, and carries its
+  `calls_elided` and `elided_calls`, zero and empty on a running call.
 - **Out to a tab**, an `agents` push carries a call's HEAVY fields — `prompt`
-  and `prompt_messages`, `response`, `round_narration`, `tool_executions` and
-  `rounds` — only when their version (`versions`) moved since the last push for
+  and `prompt_messages`, `response`, `round_narration`, `tool_executions` with
+  its `calls_elided` and `elided_calls`, and `rounds` — only when their version (`versions`) moved since the last push for
   the same call, and leaves them out otherwise: the key is ABSENT, never empty,
   and the tab keeps the copy it holds. They move once a round or once a tool
   call; between those moments a push is the round being written

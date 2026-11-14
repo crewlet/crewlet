@@ -1,5 +1,10 @@
 package runner
 
+import (
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/kept"
+)
+
 // The JSON Schemas the two structured-output tools publish.
 //
 // Hand-written rather than reflected off the payload structs, deliberately.
@@ -18,8 +23,6 @@ package runner
 //
 // The struct tags and these schemas must agree; the tests assert a submission
 // shaped by the schema decodes into the struct.
-
-import "github.com/crewlet/crewlet/internal/agent/phase"
 
 var workSchema = map[string]any{
 	"type": "object",
@@ -94,18 +97,19 @@ var reviewSchema = map[string]any{
 			"description": "Required on self_iterate: an actionable correction for " +
 				"the next round — what was wrong, which tool, who to reach. Never " +
 				"a naked problem: include what was tried, the options, and your " +
-				"recommendation.",
+				"recommendation. At most " + kept.Size(reviewProseBytes) + ".",
 		},
 		"completed_work": map[string]any{
 			"type": "string",
 			"description": "On self_iterate, one sentence on what ALREADY landed " +
 				"this turn — posts, comments, status changes — so the next round " +
-				"adds to it instead of firing it a second time.",
+				"adds to it instead of firing it a second time. At most " +
+				kept.Size(reviewProseBytes) + ".",
 		},
 		"final_artifact": map[string]any{
 			"type": "string",
 			"description": "On done, the final text to return. Empty reuses " +
-				"the executor's own output.",
+				"the executor's own output. At most " + kept.Size(finalArtifactBytes) + ".",
 		},
 	},
 	"required": []any{"decision"},

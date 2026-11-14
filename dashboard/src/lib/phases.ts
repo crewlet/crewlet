@@ -308,14 +308,28 @@ export interface PhaseRecord {
    */
   deliveredRefsElided: number;
   /**
-   * The calls a collected executor's run made that its run's record did not
-   * keep — a long run's dropped middle — and those calls by tool. `tools`
-   * lists only the kept ones, and the run's own record is gone once it ends,
-   * so this is where a reader of the turn learns what the rest were. Zero and
-   * empty on every other phase, and on a run that kept every call.
+   * The phase's calls `tools` does not list, and those calls by tool: a
+   * record past its share of one message keeps a long list's first and
+   * newest calls, and a collected executor's run made calls its run's own
+   * record did not keep, a long run's dropped middle. The run's record is
+   * gone once it ends, so this is where a reader of the turn learns what the
+   * rest were. Zero and empty on a record that lists every call.
    */
   callsElided: number;
   elidedCalls: DroppedCalls[];
+  /**
+   * The phase's rounds the record does not list: a phase past the most
+   * rounds a record lists keeps its first and newest, each with its prose,
+   * runs and calls, and counts the rest's calls in `callsElided`. Zero on a
+   * record that lists every round.
+   */
+  roundsElided: number;
+  /**
+   * How many more tool names `toolsAvailable` and `toolCatalogue` held than
+   * they list: each list is held to its share of the record's one message.
+   */
+  toolsAvailableElided: number;
+  toolCatalogueElided: number;
   /**
    * The refs a launch moved on Gitlet, as ITS PUSH RECORD
    * says — the engine's account, where `deliveredRefs` are the launch's own —
@@ -822,8 +836,13 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
-    callsElided: 0,
-    elidedCalls: [],
+    // WHAT ITS RECORD LEFT OUT, on a failed phase's call, frozen with the
+    // record's list; a running phase's frame lists every call so far.
+    callsElided: num(call.calls_elided),
+    elidedCalls: droppedCalls(call.elided_calls),
+    roundsElided: 0,
+    toolsAvailableElided: 0,
+    toolCatalogueElided: 0,
     pushedRefs: [],
     pushedRefsElided: 0,
     pushedRefsUnread: "",
@@ -929,9 +948,13 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
-    // THE CALLS THE RUN'S RECORD DID NOT KEEP, absent the same way.
+    // THE CALLS, ROUNDS AND TOOL NAMES THE RECORD DOES NOT LIST, absent the
+    // same way.
     callsElided: num(p.calls_elided),
     elidedCalls: droppedCalls(p.elided_calls),
+    roundsElided: num(p.rounds_elided),
+    toolsAvailableElided: num(p.tools_available_elided),
+    toolCatalogueElided: num(p.tool_catalogue_elided),
     pushedRefs: pushedRefs(p.pushed_refs),
     pushedRefsElided: num(p.pushed_refs_elided),
     pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
@@ -1041,6 +1064,9 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     // executor's record that collected it.
     callsElided: 0,
     elidedCalls: [],
+    roundsElided: 0,
+    toolsAvailableElided: 0,
+    toolCatalogueElided: 0,
     // THE LAUNCH'S PUSHES ARE ON ITS OWN RECORD: one that parks on a question
     // is resumed by an answer, which collects nothing, so they are here or
     // nowhere.

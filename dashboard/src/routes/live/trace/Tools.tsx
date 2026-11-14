@@ -133,17 +133,18 @@ export function ToolsTab({
       order: order++,
     })),
   );
-  // THE CALLS NO RECORD LISTS, said above the ones that are: a collected
-  // executor's record keeps its run's head and tail and counts the middle it
-  // dropped, by tool, and a tab that listed two hundred rows of a run that
-  // made more would read as the whole run.
+  // THE CALLS NO RECORD LISTS, said above the ones that are: a record keeps a
+  // long phase's head and tail within its share of one message, and a
+  // collected executor's record its run's, each counting the middle it
+  // dropped by tool, and a tab that listed two hundred rows of a phase that
+  // made more would read as the whole phase.
   const dropped = phases.reduce((n, p) => n + p.callsElided, 0);
   return (
     <div className="col gap-2">
       {dropped > 0 && (
         <span className="t-caption">
-          {plural(dropped, "more call")} {dropped === 1 ? "isn’t" : "aren’t"} listed: the executor’s
-          record didn’t keep {dropped === 1 ? "it" : "them"}.
+          {plural(dropped, "more call")} {dropped === 1 ? "isn’t" : "aren’t"} listed: the phases’
+          records didn’t keep {dropped === 1 ? "it" : "them"}.
           {droppedWords(phases.flatMap((p) => p.elidedCalls))}
         </span>
       )}

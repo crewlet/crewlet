@@ -399,10 +399,10 @@ var wireTags = map[string][]string{
 	"seat_provider_parked":          {"agent_handle", "agent_id", "harness", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
 	"seat_provider_released":        {"agent_handle", "agent_id", "reason", "role"},
 	"agent_turn_started":            {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_file", "error_function", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "conversation_key", "decision", "elided_calls", "error", "error_file", "error_function", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                {"acted", "agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "pickup_answer", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":           {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":         {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "harness", "conversation_key", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "elided_calls", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_phase_completed":         {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "harness", "conversation_key", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "elided_calls", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_elided", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_catalogue_elided", "tool_executions", "tools_available", "tools_available_elided", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
 	"agent_turn_progress":           {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
 	"subagent_batched":              {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":               {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
@@ -730,6 +730,31 @@ func TestDescribeTriggerNamesTheIntegration(t *testing.T) {
 		if descriptor[key] != value {
 			t.Errorf("descriptor[%q] = %v, want %v", key, descriptor[key], value)
 		}
+	}
+}
+
+// A TRIGGER'S SUMMARY IS ONE LINE WITHIN ITS BOUND. It rides every record of
+// the turn it woke, each one event of one message, and an integration's
+// subject is any length: a subject past MaxTriggerSummaryBytes keeps its
+// opening, the sender before it, cut on a character with the cut marked, and
+// a subject within it is kept as it is.
+//
+// Mutation: take the event's summary whole, and a mail with a megabyte of
+// subject puts a megabyte on every record of its turn.
+func TestATriggersSummaryIsOneLineWithinItsBound(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("ü", MaxTriggerSummaryBytes)
+	summary := DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+		Subject: long}, events.TraceContext{})).Summary
+	if len(summary) > MaxTriggerSummaryBytes || !strings.HasPrefix(summary, "Message from alice: ü") ||
+		!strings.HasSuffix(summary, "…") || !utf8.ValidString(summary) {
+		t.Errorf("a subject of %d bytes is summarised in %d bytes as %.40q…, want the opening within %d, cut on "+
+			"a character and marked", len(long), len(summary), summary, MaxTriggerSummaryBytes)
+	}
+	short := DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+		Subject: "Need a hand"}, events.TraceContext{})).Summary
+	if short != "Message from alice: Need a hand" {
+		t.Errorf("a short subject is summarised as %q, want it whole", short)
 	}
 }
 

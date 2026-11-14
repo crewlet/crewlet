@@ -642,10 +642,11 @@ func NewTrace() TraceContext {
 
 // MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.
 //
-// Not a content budget — the prompts, responses, artifacts and tool results
-// events carry are verbatim, deliberately. This is a delivery guarantee for
-// the one field whose length is set by something outside the engine: an
-// error string. A provider chain that exhausted can carry every attempt's
+// A delivery guarantee for a field whose length is set by something outside
+// the engine, an error string, which a record carries beside the payloads it
+// holds to their own shares (internal/agent/runner's recordbytes.go: the
+// prompts, responses and tool calls an agent's records carry are whole within
+// those shares, and their openings past them). A provider chain that exhausted can carry every attempt's
 // body, and a decode failure can carry the whole undecodable document.
 //
 // The failure it prevents is worse than a cut. An event over the queue's

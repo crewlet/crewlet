@@ -770,8 +770,13 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
   );
   // Asked for: the calls that answered and the ones still running alike — and
   // the calls a collected executor's record counts without listing, which are
-  // its one round's too, as its Model detail counts them.
-  const asked = (round?.tools.length ?? 0) + (round?.running.length ?? 0) + record.callsElided;
+  // its one round's too, as its Model detail counts them. A host phase's
+  // record counts the calls it drops by tool alone, across its rounds, so no
+  // one round's figure can claim them: the card says them.
+  const asked =
+    (round?.tools.length ?? 0) +
+    (round?.running.length ?? 0) +
+    (record.harness ? record.callsElided : 0);
   const why = round?.content.trim() ?? "";
   // THE CALL THIS SPAN IS, by its own index: a round runs its calls side by
   // side, so its round alone no longer says which one is running.
