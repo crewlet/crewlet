@@ -332,8 +332,10 @@ type Carried struct {
 // written, and then the tables sent whole, and says what the changelog
 // acknowledged: the seat's OWN PASS.
 //
-// Called for the seats this node HOLDS, on a cadence (see the worker), and
-// once more as a seat is released, each time ahead of [Syncer.PublishBacklog].
+// Called for the seats this node HOLDS: by the engine's memory sync cycle,
+// which places every held seat's own pass ahead of the turn the seats'
+// backlogs share, and once more as a seat is released, ahead of the seat's
+// [Syncer.PublishBacklog].
 // A table with a watermark is carried above the larger of its own mark and the
 // seat's boundary ([Syncer.Hydrate], "Where this holding's writes begin"), a
 // page at a time ([exportPage]: at most exportPageBytes and one row in
@@ -374,12 +376,13 @@ func (s *Syncer) PublishOwn(ctx context.Context, handle string) (Carried, error)
 // what this node held for it when its hydration here completed, which the
 // hydration wrote from the changelog or found already present.
 //
-// Called after [Syncer.PublishOwn], by a memory sync cycle and by a release's
-// flush, while their bound has time, so a cut drops this first of a turn, and
-// it is what the changelog mostly holds already. It is the republish node
-// migration 0041 keeps: it puts this node's rows back on a changelog an
-// operator accepted after a recreation, or one restored while the node ran,
-// and carries what an earlier holding's flush did not reach.
+// Called after [Syncer.PublishOwn]: by a release's flush, while its bound has
+// time, so the bound cuts this first, and by the engine's memory sync cycle,
+// in a turn the held seats' backlogs share after their own passes. It is what
+// the changelog mostly holds already, the republish node migration 0041
+// keeps: it puts this node's rows back on a changelog an operator accepted
+// after a recreation, or one restored while the node ran, and carries what an
+// earlier holding's flush did not reach.
 //
 // Each table with a watermark, in the registry's order ([backlogPassOrder]), is
 // carried above its backlog mark and up to the boundary, a page at a time

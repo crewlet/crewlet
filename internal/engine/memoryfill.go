@@ -79,9 +79,10 @@ import (
 // ([memorySyncInterval]), and a provider having a slow minute must not widen
 // it: a fill waits on an embeddings API, a publish on the broker. So the two
 // run apart. A filled row is stamped again, so the memory sync carries it like
-// a new row the seat wrote: in its next own pass, ahead of the seat's backlog,
-// whether the row was the seat's own or one this node held for it when it
-// took it.
+// a new row the seat wrote: in its next own pass, which a cycle carries ahead
+// of every seat's backlog while the seats' own passes fit it
+// ([memorySync.resume]), whether the row was the seat's own or one this node
+// held for it when it took it.
 
 const (
 	// memoryFillInterval is how often the holder looks for rows to fill.
