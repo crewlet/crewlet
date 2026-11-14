@@ -112,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,034,666
-//	to spare, measured .............. measuredSpare             561,242
+//	every other field, measured ..... measuredOtherFields     2,034,824
+//	to spare, measured .............. measuredSpare             561,084
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -299,8 +299,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_034_666
-	measuredSpare       = 561_242
+	measuredOtherFields = 2_034_824
+	measuredSpare       = 561_084
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

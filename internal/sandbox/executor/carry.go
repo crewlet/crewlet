@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +63,17 @@ type sessionRecord struct {
 	id string
 	// continued says it is the session the run was asked to continue.
 	continued bool
+	// began says the run started a session of its own — the record's
+	// `continued` line reads `no` — so the whole session is the run's
+	// ([sandbox.RunStart]). False for a record whose line is missing or reads
+	// anything else: such a record is not known to have begun its session.
+	began bool
+	// from is where a run that continued its session began in it: the newest
+	// message the session held before the run, its id decoded off the cursor
+	// the run's script recorded (`from`, [runStartOf]) — "" where the record
+	// names none this build reads, and for a run that did not continue its
+	// session.
+	from string
 	// why is why a run asked to continue a session started a new one in its
 	// place, as its script said it ([sandbox.Result.FellBack]), the line as
 	// the box holds it: held to its bound where the run's result is built
@@ -72,14 +85,20 @@ type sessionRecord struct {
 
 // parseSessionRecord reads a run's record of its session: `id <id>`,
 // `continued <yes|no>`, `why <why it started anew>` and `release <what
-// --version printed>`, a line each, `why` empty for a run that did not.
+// --version printed>`, a line each, `why` empty for a run that did not — and,
+// for an OpenCode run that continued its session, `from <cursor>` before the
+// release, where the run began in the session ([openCodeRunStart]).
 //
 // THE FIRST LINE OF EACH KEY IS THE RECORD'S. The script writes the release
 // last, as the harness printed it, and a harness that printed more than one line runs
 // on into lines of its own — an `id` there is the harness's text, never the
-// script's. The script writes `why` on one line, whatever the words it
+// script's, and so is a `from`, which is read only where it lies before the
+// release. The script writes `why` on one line, whatever the words it
 // quotes held. An id that is not one a harness mints
-// ([sandbox.ValidSessionID]) is no id.
+// ([sandbox.ValidSessionID]) is no id. `from` is read only where `continued`
+// reads `yes`, and only whole ([runStartOf]); `continued` reading `no` is a
+// run that began its session, and anything else, or no such line, says
+// neither: a start not known, never the whole session.
 //
 // READ WHERE IT LIES, AND NO FURTHER THAN ITS FOUR KEYS. The record is a file
 // the run's own agent can write, as long as the 32 MiB the engine reads whole
@@ -96,8 +115,9 @@ type sessionRecord struct {
 // read of the record and thrown away by all but one.
 func parseSessionRecord(text string) sessionRecord {
 	var (
-		rec                                         sessionRecord
-		readID, readContinued, readWhy, readRelease bool
+		rec                                                   sessionRecord
+		readID, readContinued, readWhy, readFrom, readRelease bool
+		from                                                  string
 	)
 	for text != "" && (!readID || !readContinued || !readWhy || !readRelease) {
 		var line string
@@ -113,15 +133,85 @@ func parseSessionRecord(text string) sessionRecord {
 		case key == "continued" && !readContinued:
 			readContinued = true
 			rec.continued = value == "yes"
+			rec.began = value == "no"
 		case key == "why" && !readWhy:
 			readWhy = true
 			rec.why = value
+		case key == "from" && !readFrom && !readRelease:
+			readFrom = true
+			from = value
 		case key == "release" && !readRelease:
 			readRelease = true
 			rec.release = value
 		}
 	}
+	if rec.continued {
+		rec.from = runStartOf(from)
+	}
 	return rec
+}
+
+// runStartCursorMax is the longest cursor [runStartOf] reads: the unpadded
+// base64url of a cursor naming a message whose id is at its bound
+// ([sandbox.MaxMessageIDBytes]), with the longer of the two directions a cursor
+// names. A longer one names no message this build keeps, and is never decoded.
+var runStartCursorMax = base64.RawURLEncoding.EncodedLen(
+	len(`{"id":"","order":"desc","direction":"previous"}`) + sandbox.MaxMessageIDBytes)
+
+// errNoRunStart is a cursor that names no start [runStartOf] reads.
+var errNoRunStart = errors.New("executor: no start")
+
+// runStartOf is the id of the message cursor names, where cursor is a `next`
+// cursor of a session's message list asked newest first: what an OpenCode
+// run's script records as where the run began ([openCodeRunStart]). "" for
+// anything else.
+//
+// READ WHOLE OR NOT AT ALL, each step refusing what fails. OpenCode's cursor is
+// the unpadded base64url of `JSON.stringify({id, order, direction})` of the
+// page's message (read in the 2.0.32, 2.1.4 and 2.2.7 bundles; measured on
+// 2.0.32 and 2.2.7, testdata/opencode/<version>/context): held to
+// [runStartCursorMax] before it is decoded, decoded strictly, then walked as
+// one object ([eachKey]) whose keys are `id`, `order` and `direction` and no
+// other, each once, each a string. Its order must be `desc` and its direction
+// `next`: a cursor of another order or direction names the session's OLDEST
+// message, from which the whole session would read as the run's. And its id
+// must be one a box may name ([sandbox.ValidMessageID]), whole: two ids cut
+// alike would name one message.
+func runStartOf(cursor string) string {
+	if cursor == "" || len(cursor) > runStartCursorMax {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
+	if err != nil {
+		return ""
+	}
+	var id, order, direction string
+	var seen [3]bool
+	err = eachKey(raw, func(name []byte, value json.RawMessage, _ int) error {
+		var into *string
+		var at int
+		switch string(name) {
+		case "id":
+			into, at = &id, 0
+		case "order":
+			into, at = &order, 1
+		case "direction":
+			into, at = &direction, 2
+		default:
+			return errNoRunStart
+		}
+		if seen[at] {
+			return errNoRunStart
+		}
+		seen[at] = true
+		return wireDecode(value, into)
+	})
+	// A KEY MISSING is one of these refusals too: no order is not `desc`, no
+	// direction not `next`, and no id no message id.
+	if err != nil || order != "desc" || direction != "next" || !sandbox.ValidMessageID(id) {
+		return ""
+	}
+	return id
 }
 
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
@@ -188,6 +278,7 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
 		Version: releaseOf(rec.release), Size: end.Size, Path: path,
+		RunStart: sandbox.RunStart{Began: rec.began, After: rec.from},
 	}, nil
 }
 

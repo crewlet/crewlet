@@ -648,6 +648,12 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		line(`done`)
 	}
 
+	// WHERE THE RUN BEGAN IN THE SESSION IT CONTINUES, recorded before the
+	// run takes it up: see [openCodeRunStart].
+	if session.Continues {
+		b.WriteString(openCodeRunStart(paths, times, ans))
+	}
+
 	// WHAT THE CONTINUED SESSION HAD SPENT, asked of the server that runs it
 	// just before the run takes it up ([openCodeUsageBefore]) — after an
 	// import, so the totals it restored are among what is taken off. A run
@@ -679,6 +685,44 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeRunStart is the part of a run's script that records, for a run that
+// continues its session (`continued yes`), WHERE THE RUN BEGAN IN IT: the
+// newest message the session holds before the run takes it up, asked of the
+// run's own server once it listens and its MCP servers are ready — never on an
+// end request, which the bounded call refuses before the run
+// ([openCodeBounded]) — and written into the session's record as a `from` line
+// ([Paths.SessionRecord], [parseSessionRecord]), which the run's capture keeps
+// ([sandbox.RunStart]). Every message after it is then the run's own, and the
+// message itself, and every one before it, was there before the run.
+//
+// ONE MESSAGE, NEWEST FIRST, SAID SO: `session.message.list` with
+// `order=desc` and `limit=1`, the list read in the 2.0.32, 2.1.4 and 2.2.7
+// bundles as ordered by each message's place in its session, newest first
+// where no order is named; named here rather than left to a default. Its
+// answer goes through a file, never a variable: one message is bounded in
+// count, not in bytes. The message is named by the cursor the answer ends
+// with ([openCodeCursor]), its `next`, which encodes that message's id: so
+// nothing of the message itself is read.
+//
+// THE RECORD WRITTEN ANEW, `from` before `release`, beside the record and moved
+// over it whole, so a reader finds the old record or the new one: the reader
+// reads the record only as far as its release, which the script writes last,
+// and a release printed over several lines runs on after it, where no line of
+// it is read as `from`. A run that began its session writes none: its
+// `continued no` says the whole session is its own.
+//
+// AND ANYTHING THAT FAILS WRITES NO `from`: no answer, an answer with no
+// cursor, a call past its bound ([openCodeSessionCallWait], [openCodeBounded])
+// or one an end request ended, a record that could not be written. The
+// capture then names no start, which is "not known", never "the whole
+// session".
+func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
+	rec := sandbox.ShellQuote(paths.SessionRecord())
+	next := sandbox.ShellQuote(paths.SessionRecord() + ".next")
+	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s; }; fi; rm -f %[2]s %[4]s
+`, secs(times.sessionCall), ans, rec, next)
 }
 
 // openCodeSessionGate is the part of a run's script that decides, before the
