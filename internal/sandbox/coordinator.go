@@ -1819,22 +1819,33 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		return nil
 	}
 
-	if run.Lost != nil {
-		// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this
-		// completion is the waiter's announcement of that: what it left is
-		// no result, and its round is carried on, resumed here under this
-		// frame's admission.
-		return c.carryOn(adm, run, trigger)
+	// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this completion
+	// is the waiter's announcement of that: what it left is no result. Or the
+	// collection below finds it LOST WITH THE HOST ITS BOX IS ON, and records
+	// that on the claim ([Coordinator.loseWithHost]). Either way its round is
+	// carried on, resumed here under this frame's admission, and HERE ALONE:
+	// the resume under an admission is this frame's and resumeOwedAdmitted's,
+	// so a helper between them would be a road to a turn that
+	// internal/node's admission guard refuses (ADR-0063).
+	lost := run.Lost != nil
+	var result Result
+	if !lost {
+		var collected bool
+		run, result, collected, err = c.collectClaimed(ctx, run)
+		switch {
+		case !collected && run.Lost != nil:
+			lost = true
+		case !collected:
+			return err
+		}
 	}
-
-	run, result, collected, err := c.collectClaimed(ctx, run)
-	switch {
-	case !collected && run.Lost != nil:
-		// LOST WITH THE HOST ITS BOX IS ON, as this collection found it and
-		// recorded on the claim ([Coordinator.loseWithHost]): its round is
-		// carried on as a job the row held lost is, under the same admission.
-		return c.carryOn(adm, run, trigger)
-	case !collected:
+	if lost {
+		var carry *lostCarry
+		carry, err = c.carryOnLost(ctx, run)
+		if err != nil || carry == nil {
+			return err
+		}
+		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
 		return err
 	}
 
@@ -1865,18 +1876,6 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
 			Success: result.Success, At: run.Launch.CollectedAt, Refused: requestRefused(run, result)},
 	})
-	return err
-}
-
-// carryOn carries the round of a lost job's claim on under adm
-// ([Coordinator.carryOnLost]): the turn resumed with the carry, or the claim as
-// the carry settled it, handed back or parked on the job's question.
-func (c *Coordinator) carryOn(adm admitted, run PendingRun, trigger *events.Event) error {
-	carry, err := c.carryOnLost(adm.ctx, run)
-	if err != nil || carry == nil {
-		return err
-	}
-	_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
 	return err
 }
 
