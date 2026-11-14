@@ -46,7 +46,10 @@
 //     reconstructs timing from event arrival subtracts two publishers' clocks
 //     and a queue's latency, and a request's cache tokens exist nowhere else:
 //     the harness's record reports them and this is the one frame that sees every
-//     request.
+//     request. Every instant on the record is read off ONE clock,
+//     [Config.Now]: a request's start is the latest of its run's start, the
+//     response before it and the calls that returned, so one stamp read off
+//     another clock would place the request wrongly.
 //   - THE SEAT FENCE RUNS BEFORE EVERY RUN, before any tokens are spent and
 //     before anything fires, AND BEFORE AND AFTER EACH TOOL CALL, because a
 //     round is one model request but many calls and the calls are what reach
@@ -1204,6 +1207,23 @@ type Config struct {
 	// coalescing deterministic, which is the one honest reason to vary it.
 	PartialInterval time.Duration
 
+	// Now is the clock the loop's record reads: each harness run's, each
+	// round's and each tool call's start and span ([Invocation], [Round],
+	// [Execution]), and the run and the round in flight on the live view
+	// ([Result.RunStartedAt], [Result.RoundStartedAt]). Nil takes time.Now,
+	// whose monotonic reading every span is measured on.
+	//
+	// A caller sets it only to decide a span exactly: a test's clock that
+	// moves only as its scripted model and tools say makes the model's half
+	// of a round exactly what the model was scripted to take, where the wall
+	// clock adds whatever a loaded runner spends scheduling the harness and
+	// its socket. The loop's bounded waits are not on it — the park ahead of
+	// a harness's own tool timeout, the wait for the record to show a call's
+	// response, the wait for a response's other calls to arrive, the live
+	// text's pace — because each bounds how long the loop waits on another
+	// process, which no caller's clock moves.
+	Now func() time.Time
+
 	// StreamPartials asks the provider to stream, so a response's text
 	// reaches OnProgress WHILE it is being written rather than only once it
 	// is finished. Off leaves the provider's text unstreamed.
@@ -1340,7 +1360,7 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 			// THE ROUND IN FLIGHT, and when it began: the request a run's
 			// harness is making while the model answers, or the round whose
 			// calls are running — see [Result.RoundStartedAt].
-			round, started := d.inFlight(time.Now())
+			round, started := d.inFlight(d.now())
 			out.RoundsUsed, out.RoundStartedAt = round, started.UTC()
 		}
 		return out
@@ -1424,7 +1444,7 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 		}
 		onDelta := streamTo(cfg, &rec, &partial, d, publish)
 
-		began := time.Now()
+		began := d.now()
 		rec.Lock()
 		runStarted = began.UTC()
 		rec.Unlock()
@@ -1440,7 +1460,7 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 			Agent:   !cfg.OwnPrompt,
 			OnDelta: onDelta,
 		})
-		took := time.Since(began)
+		took := d.now().Sub(began)
 
 		// The run is over, and an end it reached is taken; then EVERY CALL
 		// OF THE RUN HAS SETTLED before anything is read: a call answered
@@ -1626,7 +1646,7 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 		// host already knows; else the request in flight.
 		round, known := d.roundOfRequest(delta.Request)
 		if !known {
-			round, _ = d.inFlight(time.Now())
+			round, _ = d.inFlight(d.now())
 		}
 		rec.Lock()
 		p := *partial
