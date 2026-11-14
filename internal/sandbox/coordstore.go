@@ -235,9 +235,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 }
 
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
-// there — a second launch in this turn, or a redelivered kick-off —
-// reporting the row as it reset it and whether it did; a row that is gone is
-// neither.
+// there, a relaunch its turn's resumed frame makes, reporting the row as it
+// reset it and whether it did; a row that is gone is neither. A kick-off
+// delivered again never reaches it: it runs under a turn id of its own
+// ([TurnRef.TurnID], ADR-0017), and its launch creates a row of its own.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
 // row's, and so do the turn's read of its conversation ([PendingRun.Base]),

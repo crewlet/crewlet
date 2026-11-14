@@ -576,16 +576,18 @@ type LaunchResult struct {
 // its resumed turn holds for a relaunch that turn makes ([Coordinator.framing]),
 // which holds the seat already: counted in a second time, the claim and the
 // job it relaunched held the seat twice until the turn's frame recounted it.
-// A launch that resets a row no frame of this node holds, a kick-off
-// delivered again after the turn had launched, is counted as a new row, and
-// the recount its own announcement makes reads it once. It used to be counted when its
-// [types.ExecutorLaunched] was processed off the seat's control topic, which
-// is a separate subscription the launching turn does not wait for: mail
-// already drained beside the launching delivery (the next partition of the
-// same batch) and mail fetched after the turn returned both reached a seat the
-// screening called free, and ran a turn beside the job. The announcement still
-// RECOUNTS the seat from the store wherever it is processed — that is what
-// carries a held seat across a restart or a handoff — but nothing waits for it.
+// THERE IS NO THIRD: a launch outside a resumed frame of its turn is the
+// turn's first, and finds no row, since a turn id names one execution
+// ([TurnRef.TurnID], ADR-0017): a kick-off delivered again runs under an id
+// of its own, and its launch opens a row of its own. A run used to be
+// counted when its [types.ExecutorLaunched] was processed off the seat's
+// control topic, which is a separate subscription the launching turn does not
+// wait for: mail already drained beside the launching delivery (the next
+// partition of the same batch) and mail fetched after the turn returned both
+// reached a seat the screening called free, and ran a turn beside the job. The
+// announcement still RECOUNTS the seat from the store wherever it is processed
+// — that is what carries a held seat across a restart or a handoff — but
+// nothing waits for it.
 //
 // A launch that fails after the row is written gives the count back as the
 // delete that abandons the row lands ([Coordinator.abandon]); one that fails to
