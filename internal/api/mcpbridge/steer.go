@@ -86,7 +86,9 @@ type SteerInbox interface {
 	// confirms them again. An inbox that serves no job, not yet bound or
 	// closed, takes no read and answers [ErrInboxNotServing], and so does one
 	// whose job the run's record takes no read of any more, for a note named
-	// that still waits.
+	// that still waits. So does one that cannot open a note named that still
+	// waits for the job, its node not holding the key the note is sealed
+	// under, once it has taken every other note named.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
@@ -96,19 +98,24 @@ type SteerInbox interface {
 }
 
 // ErrInboxNotServing is what a [SteerInbox] answers a [SteerInbox.Read] with
-// where it serves no job that takes notes: closed, the opening that served it
-// having ended; not yet bound to its job, which no opening serves (the engine
-// binds a run's inbox before the bridge files the opening that serves it, so a
-// box that reaches the opening the moment it is filed finds the inbox
-// serving); or bound to a job the run's record takes no read of any more, a
-// note the read names still waiting there: the job's completion claimed the
-// run while its opening still serves, the run's ending is decided, or a later
-// job carries it on. It recorded nothing. Declared here, by the consumer,
-// which tells it from a write that could not be confirmed: the read is turned
-// away to ask again, as one reaching its opening as it ends is
+// where it left a note the read names untaken that the read made again can
+// have taken. One that serves no job that takes notes recorded nothing:
+// closed, the opening that served it having ended; not yet bound to its job,
+// which no opening serves (the engine binds a run's inbox before the bridge
+// files the opening that serves it, so a box that reaches the opening the
+// moment it is filed finds the inbox serving); or bound to a job the run's
+// record takes no read of any more, a note the read names still waiting
+// there: the job's completion claimed the run while its opening still serves,
+// the run's ending is decided, or a later job carries it on. And one whose
+// node does not hold the key a note the read names is sealed under, that note
+// still waiting for the job, recorded every other note named, as ever, and
+// not that one, which no read of that node's can take. Declared here, by the
+// consumer, which tells it from a write that could not be confirmed: the read
+// is turned away to ask again, as one reaching its opening as it ends is
 // ([Bridge.serveSteer]), and its next try reaches the inbox that serves the
-// job now, or the run that goes on once a claim is handed back.
-var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox serves no job that takes notes, and recorded nothing")
+// job now, the run that goes on once a claim is handed back, or a node that
+// holds the key.
+var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox left a note the read names untaken, for the read made again")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -356,13 +363,14 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with, and a read that reached its opening as it ended, or that a run
-// whose tools are closed takes no more ([Bridge.serveSteer], [readNotes]): the
-// pace the bridge's own relay reads a seat's lease again at while it waits for
-// the seat's next holder ([holderRetryCeiling]), because that holder is what
-// serves the session's next opening: a node that is going hands its seats on,
-// and an opening that ended was replaced, moved with its seat, or ended with
-// its run, whose route then answers 401.
+// away with, and a read that reached its opening as it ended, that its inbox
+// did not take ([ErrInboxNotServing]), or that a run whose tools are closed
+// takes no more ([Bridge.serveSteer], [readNotes]): the pace the bridge's own
+// relay reads a seat's lease again at while it waits for the seat's next
+// holder ([holderRetryCeiling]), because that holder is what serves the
+// session's next opening: a node that is going hands its seats on, and an
+// opening that ended was replaced, moved with its seat, or ended with its run,
+// whose route then answers 401.
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
@@ -399,7 +407,10 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 //     no read of any more, though it still serves: the job's completion
 //     claimed the run before the reclaim closes its session, so the read
 //     made again is recorded where the claim is handed back and the run goes
-//     on in its box, and refused once the run is over.
+//     on in its box, and refused once the run is over. And so does an inbox
+//     whose node does not hold the key a note the read names is sealed
+//     under, once it has taken the rest: the read made again is recorded
+//     where it reaches a node that holds the key.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))

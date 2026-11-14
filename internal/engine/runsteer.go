@@ -58,7 +58,10 @@ import (
 // does not open is never delivered, carried or attributed (logged at ERROR as
 // steer_note_unverified), and one sealed under a key this node does not hold
 // waits, with a WARN naming the keys it holds — the precedent is a person's
-// answer to a parked run (internal/sandbox, answerseal.go). An anchor this node
+// answer to a parked run (internal/sandbox, answerseal.go). The run's harness
+// confirming such a note here is turned away to ask again, for a node that
+// holds the key to record, and that is said once too, at WARN
+// (steer_read_key_unknown, [runSteers.waitsForItsKey]). An anchor this node
 // cannot open decides nothing, and one sealed under a key it does not hold is a
 // WARN naming the keys it holds (steer_seat_key_unknown), and steer_turn says
 // only who fixes it, as a condition of the fleet ([runSteers.openSeat]).
@@ -256,6 +259,13 @@ type runSteers struct {
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
 	warned sync.Map
+
+	// turnedAway is every note a confirmation named that this node has logged
+	// it turned away, the note sealed under a key it does not hold
+	// ([runSteers.waitsForItsKey]), so a harness that confirms it again on its
+	// own backoff for as long as its run lasts does not have it said at every
+	// try.
+	turnedAway sync.Map
 
 	// stopped is closed when this node's teardown begins
 	// ([Engine.teardownSignal]), and stopWindow ends [steerSettleStopBudget]
@@ -1809,6 +1819,21 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 // claim is handed back and the run goes on in its box, and refused once the
 // run is over. A note named that no longer waits is no such note, whoever
 // read it: answered done, reported where this job's earlier read holds it.
+//
+// NOR DOES A NOTE THIS NODE CANNOT OPEN FOR WANT OF ITS KEY, and the read says
+// so the same way: a note named that still waits on the record for the job,
+// sealed under a key this node does not hold, in a fleet whose nodes hold
+// different keys ([runSteers.waitsForItsKey]). A take hands over only a note
+// it opened, so this node's took no read of it, and the note waits for a node
+// that holds its key, as it does for every reader ([runSteers.open]).
+// Answered done, the plugin never confirmed it again and the read was
+// recorded nowhere. Turned away, the plugin confirms it again on its own
+// backoff, and the confirmation is recorded once it reaches a node that holds
+// the key, the run's seat having moved or its session opened again there; a
+// run that ends first leaves the note served and unread on its record, as its
+// ending reports it. Every other note the read names is taken and reported
+// before it is turned away, as ever. A note this node cannot open that waits
+// no more, or waits for another job, is no such note.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
 	switch {
@@ -1855,10 +1880,45 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 		return nil
 	}
 	i.confirmedBefore(ctx, run, launch, ids, taken)
-	if waitsUntaken(run, candidates) {
+	// ASKED FIRST, so a note waiting for its key is said wherever the
+	// confirmation is turned away.
+	keyless := i.steers.waitsForItsKey(ctx, run, launch, ids)
+	if keyless || waitsUntaken(run, candidates) {
 		return mcpbridge.ErrInboxNotServing
 	}
 	return nil
+}
+
+// waitsForItsKey reports whether run's record, read after a confirmation's
+// take by job launch ([runInbox.Read]), still holds waiting a note the
+// confirmation names, one that job is handed ([sandbox.RunNote.IsFor]),
+// sealed under a key this node does not hold ([recordseal.KeyUnknown]). No
+// take of this node's records such a note, since a take hands over only a
+// note it opened, and a node that holds the key takes it as it takes any
+// ([runSteers.open]). Each is said once, at WARN with the keys this node
+// holds, as its open is ([runSteers.turnedAway]): the harness confirms it
+// again on its own backoff, for as long as its run lasts.
+func (s *runSteers) waitsForItsKey(ctx context.Context, run sandbox.PendingRun, launch string,
+	ids []string) bool {
+	found := false
+	for _, n := range run.Steer.Notes {
+		if !n.Waiting() || !n.IsFor(launch) || !slices.Contains(ids, n.ID) {
+			continue
+		}
+		if _, verdict := s.note.verifier.Open(n.Sealed); verdict != recordseal.KeyUnknown {
+			continue
+		}
+		found = true
+		if _, said := s.turnedAway.LoadOrStore(run.TurnID+"/"+n.ID, struct{}{}); !said {
+			log.WarnContext(ctx, "steer_read_key_unknown", "turn_id", run.TurnID, "note_id", n.ID,
+				"held_keys", s.note.verifier.KeyIDs(),
+				"detail", "the run's harness confirmed delivering a note sealed under a key this node "+
+					"does not hold, which no read of this node's can take: the confirmation is turned "+
+					"away to ask again until the run's session reaches a node that holds the key, and a "+
+					"run that ends first leaves the note unconfirmed; add the key to secrets.keys")
+		}
+	}
+	return found
 }
 
 // waitsUntaken reports whether run's record, read after a confirmation's take

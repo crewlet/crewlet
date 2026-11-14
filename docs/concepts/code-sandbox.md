@@ -1235,7 +1235,15 @@ it:
     so is a read that reaches the notes once the job's completion has claimed
     the run, whose record then takes no read of the job while its session still
     serves: the read made again is recorded where the claim is handed back and
-    the run goes on in its box, and refused once the run is over. Each
+    the run goes on in its box, and refused once the run is over. And so is a
+    read naming a note that still waits, sealed under a key the node serving
+    the run's session does not hold, in a fleet whose nodes hold different
+    keys: that node records the read's other notes, turns it away, and logs
+    `steer_read_key_unknown` once for the note, which waits for a node that
+    holds its key. The read made again is recorded once it reaches such a
+    node, the run's seat moved or its session opened again there; a run that
+    ends first leaves the note served and never confirmed, as its ending
+    reports it. Each
     note carries an id the harness admits it under, unique to the note and the
     job, so a poller that admits it twice admits it once.
 

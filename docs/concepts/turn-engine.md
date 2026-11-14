@@ -947,7 +947,8 @@ sequenceDiagram
   A note whose seal does not open is never handed to a model, carried or
   recorded as anybody's (`steer_note_unverified`, at ERROR); one under a key a
   node does not hold waits for a node that holds it (`steer_note_key_unknown`,
-  naming the keys this node holds).
+  naming the keys this node holds), and the run's harness confirming it to
+  such a node is turned away to ask again (`steer_read_key_unknown`).
 - **A note is one note.** Its id is the person's request id, so a retry of one
   request is answered `accepted` without being read twice. A turn holds at most
   **five** unread notes and takes at most **ten** in all — refused past them
