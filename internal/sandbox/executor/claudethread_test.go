@@ -3021,7 +3021,7 @@ func ctRetry(parent, uuid string, retracted ...string) string {
 // Mutation: read the key off every record, and a stop hook's summary or an
 // attachment carrying it retracts; read it off a refusal's fallback alone, as
 // 2.1.310 does, and a retry's names nothing; pass an entry that is no string
-// over, as 2.1.322 does, and a list 2.1.310's resume throws on reads; read a
+// over, as the resume does, and a list the layer refuses reads; read a
 // null list as none, and it reads; drop an entry of 24 characters or fewer, or
 // of fewer than a uuid's 36, and the entries the resume cuts at 24 retract
 // nothing; or walk on past each's error, and the walk hands the entry after

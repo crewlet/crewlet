@@ -2492,10 +2492,16 @@ func (l threadLine) ReplacementCount() (int, error) {
 // HELD TO ITS SHAPE HERE, AND HERE ALONE, as a key one reader reads is: a
 // list of strings where present, walked an element at a time ([eachElement]).
 // Anything else, null and an entry that is no string among it, is this
-// accessor's error, never the line's: 2.1.322 passes such an entry over,
-// where 2.1.310's resume throws on one a refusal's fallback carries, so no
-// reader can say what a resume hands its model past it. An error each returns
-// ends the walk and is returned as it is.
+// accessor's error, never the line's. No release's resume throws on such a
+// list: each one's load repairs a refusal's fallback before its filter reads
+// it, keeping a list's strings and dropping a value that is no list (2.1.322's
+// UWt @293630140 through M2 @293633304, 2.1.310's cPt @247026592 through m1
+// @247029756), and 2.1.322's filter reads a user's or an assistant's list for
+// its strings alone, and a value that is no list as none (eGe @295286851).
+// The error is conservative: its readers refuse a list the harness wrote in
+// no shape it writes rather than follow it through those repairs, and no
+// thread the probes kept holds one. An error each returns ends the walk and
+// is returned as it is.
 //
 // Read off the line's one decode, its raw `retractedMessageUuids`, never a
 // second read of the line.
@@ -2781,9 +2787,16 @@ type threadPreserved struct {
 // walked an element at a time ([eachElement]); else its `preservedSegment`,
 // where present and not null, an object of the strings `headUuid`,
 // `anchorUuid` and `tailUuid`. Anything else is this accessor's error, never
-// the line's: a resume throws on some such shapes, and relinks or drops
-// records by others in ways no reader follows. An error each returns ends the
-// walk and is returned as it is.
+// the line's. No such shape makes a resume throw: each release's load
+// repairs a boundary's metadata before its relink reads it, putting an object
+// in place of a value that is none and dropping a `preservedMessages` that is
+// no object holding a list of `uuids` (2.1.322's pjo @293631807 with mjo
+// @293632499, 2.1.310's xfo @247028259 with Afo @247028951), and the relink
+// reads a segment of any shape without throwing (2.1.322's aWo @293744710,
+// 2.1.310's _po @247129357). The error is conservative: its readers refuse a
+// boundary the harness wrote in no shape it writes rather than follow it
+// through those repairs, and each boundary the probes kept is of its shape.
+// An error each returns ends the walk and is returned as it is.
 //
 // Read off the line's one decode, its raw `compactMetadata`, never a second
 // read of the line.
