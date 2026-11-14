@@ -1873,17 +1873,24 @@ type PendingRun struct {
 	// fleet's waiter's, whoever launched it.
 	LaunchNode string `json:"launch_node,omitempty"`
 
-	// Lost is the verdict that this RUNNING job was lost with the host it
-	// ran on before anything could see it end ([JobLoss]): killed with its
-	// engine by a restart, its box gone from its host, or its launch node
-	// gone from the fleet for good. Nil for every other run.
+	// Lost is the verdict that this job was lost with the host it ran on
+	// ([JobLoss]): a RUNNING job, before anything could see it end, killed
+	// with its engine by a restart, its box gone from its host, or its launch
+	// node gone from the fleet for good; or a job, finished or not, whose box
+	// only its node's host can read, on a node that could not read the run's
+	// row off the coordination store for the box timeout
+	// ([LossLaunchNodeStoreSilent]). Nil for every other run.
 	//
-	// A VERDICT, RECORDED, because the one who reaches it is not the one who
-	// acts on it: the waiter that drives the job's box finds the loss, and
-	// the seat's holder carries the job's round on from the completion the
-	// waiter announces for it ([Coordinator.carryOnLost]) — which waits on
-	// the seat's control topic for the seat's next holder where no node
-	// holds it, and is announced again on every pass until a claim takes it.
+	// A VERDICT, RECORDED, because the one who reaches it is not always the
+	// one who acts on it: the waiter that drives the job's box finds the
+	// first three, and the seat's holder carries the job's round on from the
+	// completion the waiter announces for it ([Coordinator.carryOnLost]) —
+	// which waits on the seat's control topic for the seat's next holder
+	// where no node holds it, and is announced again on the waiter's
+	// schedule until a claim takes it (reannounce.go). The fourth the seat's
+	// holder finds itself, and records on the claim its collection holds
+	// before it carries the round on ([Coordinator.loseWithHost]), so a claim
+	// of the job that comes after carries it on rather than collecting it.
 	// On the row rather than in that announcement, so a completion anybody
 	// could put on the broker cannot have a run's round started again.
 	// Cleared by a relaunch: the verdict was about the job before it.

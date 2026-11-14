@@ -2045,8 +2045,8 @@ func (r *coordRig) failPublishes(err error) {
 }
 
 // A COMPLETION THAT OUTLIVED ITS JOB. A failed resume leaves two completions in
-// flight for one job, the NAK'd delivery and the one the next poll tick
-// publishes, and the retry that wins resumes the turn, which may relaunch its
+// flight for one job, the NAK'd delivery and the waiter's next announcement of
+// it, and the retry that wins resumes the turn, which may relaunch its
 // executor. The other then arrived at a row holding the NEXT job,
 // still running, and claimed it: it collected a half-written result, resumed
 // the turn on it and tore the new job's box down.

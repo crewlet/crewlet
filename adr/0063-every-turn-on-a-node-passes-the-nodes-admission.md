@@ -26,22 +26,25 @@ node defers it, which quiesces the control topic for the rest of the drain and
 costs the one delivery every handoff costs. A condition that clears by waiting
 (the seat's ownership not yet proven again, or any limit a later change adds)
 acknowledges it, spending none of its deliveries and quiescing nothing, because
-the waiter that drives the run's box announces a finished run again on every
-poll until a node claims it: the fleet's for an `e2b` box, the box host's own
-for a `direct` or `container` one
+the waiter that drives the run's box announces a finished run again until a
+node claims it, on a schedule that doubles from one poll interval to twenty: the
+fleet's for an `e2b` box, the box host's own for a `direct` or `container` one
 ([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
 Only a failure the refusal does not explain is a Nak. A new condition is
 handed back by the rule for its kind with no change to the hand-back.
 
-**An acknowledged completion resumes when its condition clears, within one
-poll at worst.** The coordinator keeps each completion its gate refused on a
-condition, and re-fires it when the engine signals that condition cleared for
-the seat (`Engine.readmitResumes`, the same `sandbox.Coordinator.Readmit` that
-wakes an answer waiting on it, and the hook whatever ends a new condition
-calls). That waiter is the backstop for a clearing nothing signals: it lists
-the active runs on every pass and polls each one it drives, whatever its seat
-is doing, so the wait is bounded by its poll interval (`sandbox.DefaultPollInterval`, 15 seconds). The
-claim is at-most-once, so the two arriving together resume the run once. A
+**An acknowledged completion resumes when its condition clears, at the
+waiter's next announcement of it at worst.** The coordinator keeps each
+completion its gate refused on a condition, and re-fires it when the engine
+signals that condition cleared for the seat (`Engine.readmitResumes`, the same
+`sandbox.Coordinator.Readmit` that wakes an answer waiting on it, and the hook
+whatever ends a new condition calls). That waiter is the backstop for a
+clearing nothing signals: it lists the active runs on every pass and polls each
+one it drives, whatever its seat is doing, and announces a finished run nobody
+has claimed again on its schedule, each announcement due at most twenty poll
+intervals after the last (`sandbox.DefaultPollInterval`, 15 seconds, so five
+minutes), which bounds the wait. The claim is at-most-once, so the two arriving
+together resume the run once. A
 seat this node lets go of drops its kept completions, for the waiter that
 drives each run's box to announce to the seat's next holder.
 

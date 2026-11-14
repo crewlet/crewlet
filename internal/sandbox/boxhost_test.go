@@ -186,9 +186,9 @@ func TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost(t *testing.T) {
 }
 
 // A HOST THAT DOES NOT ANSWER HANDS THE CLAIM BACK UNCOUNTED, and the
-// completion is acknowledged: the host announces it again from its own next
-// poll once it is back. Counted, a host that restarted for a minute would have
-// its runs given up as unreadable.
+// completion is acknowledged: the host's own waiter announces it again on its
+// schedule once the host is back. Counted, a host that restarted for a minute
+// would have its runs given up as unreadable.
 //
 // Mutation: count a silent host as a box that could not be read, and the
 // row's run of failed collections starts.

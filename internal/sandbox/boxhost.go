@@ -198,8 +198,8 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // bound, must not be taken for. Ordinary reads answer in seconds, a job ending
 // in a few and a session of a day's work being a mebibyte or two. A read that
 // has not finished in that is a host that is not answering, and is answered as
-// one ([ErrBoxHostSilent]); it announces the completion again from its own next
-// poll.
+// one ([ErrBoxHostSilent]); the host's own waiter announces the completion again
+// on its schedule once the host is back (reannounce.go).
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	held := SessionTakeBudget + 2*discardGrace
 	if read.mayEnd(run) {

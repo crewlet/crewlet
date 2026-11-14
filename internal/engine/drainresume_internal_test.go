@@ -400,8 +400,9 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 //
 //   - the signal (readmitResumes, the hook whatever ends a condition calls),
 //     with both waiters stopped so nothing else could have brought it back;
-//   - the waiter's next poll alone, with no signal, which bounds the wait by
-//     one poll interval;
+//   - the waiter's next announcement alone, with no signal, which its schedule
+//     makes at most twenty poll intervals after its last, a second at this
+//     rig's cadence;
 //   - both at once, racing, which the at-most-once claim settles.
 //
 // Mutation: drop the kept completion from the coordinator's Readmit and the

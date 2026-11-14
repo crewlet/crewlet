@@ -16,7 +16,8 @@ import (
 // collected as a job that ended: the waiter that drives its box finds it lost
 // ([JobLost]) and writes the verdict on the row before the completion goes out
 // — the seat's holder acts on the row, not on the announcement — and announces
-// it again on the next pass, as a finished job's is, until a claim takes it.
+// it again on its schedule, as a finished job's is, until a claim takes it: the
+// first time on the pass an interval later.
 //
 // Mutation: read a lost job as an ended one in the poll, and the row carries no
 // verdict, so its partial output is collected as the round's result.

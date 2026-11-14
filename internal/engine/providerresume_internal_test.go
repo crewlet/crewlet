@@ -406,7 +406,7 @@ func (lr *limitedResume) probe(t *testing.T) {
 }
 
 // announce offers the run's completion to the coordinator as the waiter's
-// next poll would, and returns what the coordinator answered.
+// next announcement would, and returns what the coordinator answered.
 func (lr *limitedResume) announce(t *testing.T) error {
 	t.Helper()
 	run := lr.r.run(t, lr.e, "t1")
