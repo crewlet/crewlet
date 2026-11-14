@@ -112,7 +112,7 @@ import {
   settingsSectionOpen,
   workspaceShown,
   workspaceMissing,
-  workspaceOf,
+  sidebarRowOf,
   type WorkspaceRow,
 } from "~/app/nav.ts";
 import { useCompanyName, useServicesKnown, useServicesRun } from "~/lib/services.ts";
@@ -198,7 +198,9 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
   const shown = (place: WorkspaceRow["place"]) =>
     WORKSPACES.filter((ws) => ws.place === place && workspaceShown(ws, runs));
-  const here = workspaceOf(route.path);
+  // THE ROW THE ADDRESS IS ON, which under a group's landing row is not
+  // every address the row's prefix covers ([sidebarRowOf]).
+  const here = sidebarRowOf(route.path);
   const at = route.path.join("/");
 
   // THE ENGINE'S WORD for working, off the agents push — never a projection's

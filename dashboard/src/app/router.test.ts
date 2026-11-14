@@ -29,7 +29,9 @@ import {
   isSidebarRow,
   landingPath,
   listsLanding,
+  groupLanding,
   ownedBy,
+  sidebarRowOf,
   personalPath,
   sectionOf,
   sectionOpen,
@@ -133,6 +135,27 @@ describe("navigation identity", () => {
     expect(workspaceOf(["worklet", "ENG-42"])).toBe("worklet");
     // THE EMPTY FRAGMENT IS HOME, the landing screen.
     expect(workspaceOf([])).toBe("home");
+  });
+
+  // A GROUP'S LANDING ROW IS MARKED WHERE THE ADDRESS IS ITS OWN. Principles
+  // owns `#/company` so the bare address lands on it; an address under that
+  // prefix that no row holds is in the group, and on no row's page.
+  test("the sidebar marks a group's landing row only at its own addresses", () => {
+    expect(sidebarRowOf(["company"])).toBe("company");
+    expect(sidebarRowOf(["company", "principles"])).toBe("company");
+    expect(sidebarRowOf(["company", "principles", "x"])).toBe("company");
+    expect(sidebarRowOf(["company", "structure"])).toBe("");
+    expect(sidebarRowOf(["company", "structure", "deep"])).toBe("");
+    // EVERY OTHER ROW IS [workspaceOf]'s: a row that owns its whole prefix
+    // holds whatever is under it, found or not.
+    expect(sidebarRowOf(["company", "org", "nothing"])).toBe("org");
+    expect(sidebarRowOf(["settings", "nothing"])).toBe("settings");
+    expect(sidebarRowOf(["gitlet", "nothing"])).toBe("gitlet");
+    expect(sidebarRowOf(["nowhere"])).toBe("");
+    expect(sidebarRowOf([])).toBe("home");
+    // And the trail still names the GROUP for it, by the same rule.
+    expect(groupLanding(workspaceRow("company")!)).toBe(true);
+    expect(groupLanding(workspaceRow("settings")!)).toBe(false);
   });
 
   // A ROUTE NOTHING OWNS RESOLVES TO NOTHING rather than to the first row: a
