@@ -455,7 +455,13 @@ states how its connection reaches the store when it opens it, from its
 broker's kind, since the store cannot see how the connection was made. A
 node's MCP listings are written on a pass of their own beside its fifteen-second
 beat, each write waiting as long as its bytes take, so a slow listing holds up
-no beat. What this does not cover is the event system's to say, and the same:
+no beat. A caller that bounds a write of a value of megabytes for a reason of
+its own — a sandbox run's record and the parts beside it — adds the crossing
+itself: the store says how long a value at what one key holds takes to cross
+the node's connection, for every send it may make (`coord.MaxValueCrossing`,
+nine minutes, across a link at the floor; none in the store's own process),
+and the caller's bound is its reason and that
+([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)). What this does not cover is the event system's to say, and the same:
 a link slower than the floor, a link busy with traffic ahead of the write, and
 the lease renewals a large write holds behind it
 ([Delivery Semantics](event-system.md#delivery-semantics)).

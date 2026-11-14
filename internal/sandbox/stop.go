@@ -118,54 +118,64 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	if err != nil {
 		return fmt.Errorf("sandbox: listing seat %s's runs to stop them: %w", handle, err)
 	}
-	// A CONTEXT OF ITS OWN, as every teardown takes ([detached]): the caller
-	// is a watch whose context ends with the node, and a stop it started must
-	// still reach the box it is reclaiming.
-	endCtx, cancel := detached(ctx)
-	defer cancel()
 	for _, run := range runs {
 		if run.Ending != nil || !slices.Contains(Stoppable, run.Status) {
 			continue
 		}
-		if run.Launch.Collected {
-			heldHere := c.endCollectedWait(endCtx, run)
-			log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,
-				"launch_id", run.LaunchID, "held", run.HeldFor != "", "held_here", heldHere,
-				"detail", "the run's job is over and was collected; whatever its turn's resume "+
-					"waited on is ended, and the resume is stopped by the seat's fence at its "+
-					"first round")
-			continue
-		}
-		stop := by
-		decided, err := c.endRecord(endCtx, run, ending{
-			fence: fence, whileIn: Stoppable, launch: run.LaunchID, reclaim: true, stop: &stop,
-		})
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "sandbox_stop_kept", "turn_id", run.TurnID, "seat", handle,
-				"error", err.Error(),
-				"detail", "the run's stop could not be finished yet; this node finishes it, "+
-					"with the seat's mail held behind it, and the seat's next holder does if "+
-					"the seat moves first")
-		case decided == nil:
-			// MOVED ON SINCE THE LISTING: claimed by its completion, parked
-			// on a question, relaunched, or fenced by a newer lease — see
-			// above for who stops each.
-			log.InfoContext(ctx, "sandbox_stop_declined", "turn_id", run.TurnID, "seat", handle,
-				"detail", "the run moved on before it could be stopped; the turn's own fence "+
-					"or the pause itself holds it from here")
-			continue
-		default:
-			log.InfoContext(ctx, "executor_stopped", "turn_id", run.TurnID, "seat", handle,
-				"launch_id", run.LaunchID, "status", run.Status, "by", by.By,
-				"by_kind", by.ByKind, "operator_id", by.OperatorID)
-		}
-		// THE SEAT GOES BACK out of the set the run held it in, as every
-		// ending this node made gives it back ([Coordinator.settleFailed]):
-		// the run is over, or ending under this node's retry.
-		c.uncountRun(handle, run.Status)
+		c.stopRun(ctx, handle, fence, by, run)
 	}
 	return nil
+}
+
+// stopRun stops one of the seat's runs [Coordinator.StopSeat] listed, as a
+// person's stop by asks.
+//
+// UNDER A CONTEXT OF ITS OWN, as every teardown's writes of a row take
+// ([Coordinator.detachedRecord]): the caller is a watch whose context ends with
+// the node, and a stop it started must still reach the box it is reclaiming.
+// ONE FOR EACH RUN, since each run's row is a write of its own: one grace
+// shared by every run of the seat gave whichever row crossed first the time
+// every other's needed.
+func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, by RunStop, run PendingRun) {
+	endCtx, cancel := c.detachedRecord(ctx)
+	defer cancel()
+	if run.Launch.Collected {
+		heldHere := c.endCollectedWait(endCtx, run)
+		log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,
+			"launch_id", run.LaunchID, "held", run.HeldFor != "", "held_here", heldHere,
+			"detail", "the run's job is over and was collected; whatever its turn's resume "+
+				"waited on is ended, and the resume is stopped by the seat's fence at its "+
+				"first round")
+		return
+	}
+	stop := by
+	decided, err := c.endRecord(endCtx, run, ending{
+		fence: fence, whileIn: Stoppable, launch: run.LaunchID, reclaim: true, stop: &stop,
+	})
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_stop_kept", "turn_id", run.TurnID, "seat", handle,
+			"error", err.Error(),
+			"detail", "the run's stop could not be finished yet; this node finishes it, "+
+				"with the seat's mail held behind it, and the seat's next holder does if "+
+				"the seat moves first")
+	case decided == nil:
+		// MOVED ON SINCE THE LISTING: claimed by its completion, parked
+		// on a question, relaunched, or fenced by a newer lease — see
+		// [Coordinator.StopSeat] for who stops each.
+		log.InfoContext(ctx, "sandbox_stop_declined", "turn_id", run.TurnID, "seat", handle,
+			"detail", "the run moved on before it could be stopped; the turn's own fence "+
+				"or the pause itself holds it from here")
+		return
+	default:
+		log.InfoContext(ctx, "executor_stopped", "turn_id", run.TurnID, "seat", handle,
+			"launch_id", run.LaunchID, "status", run.Status, "by", by.By,
+			"by_kind", by.ByKind, "operator_id", by.OperatorID)
+	}
+	// THE SEAT GOES BACK out of the set the run held it in, as every
+	// ending this node made gives it back ([Coordinator.settleFailed]):
+	// the run is over, or ending under this node's retry.
+	c.uncountRun(handle, run.Status)
 }
 
 // endCollectedWait ends whatever the resume of run's collected job waits on, for

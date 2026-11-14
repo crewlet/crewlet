@@ -169,7 +169,10 @@ var (
 )
 
 // steerPublishBudget bounds one publish of what became of a note, made off the
-// path that read it.
+// path that read it; and it is the reason a job's pull mark on its run's row is
+// bounded by ([runInbox.recordPulled]), beside the time the row takes to cross
+// to the store (sandbox.RowBudget), which a publish of a note's record never
+// carries.
 const steerPublishBudget = 5 * time.Second
 
 // steerSettlePatience is how long a settle the store has not answered is taken
@@ -186,10 +189,15 @@ const steerPublishBudget = 5 * time.Second
 // name.
 const steerSettlePatience = 30 * time.Second
 
-// steerSettleAttempt bounds one attempt at a settle: an attempt the store has
-// not answered in TEN SECONDS — past a leader election's nine at worst — is
-// asked again, so a request that hangs never holds a run's settle, nor keeps
-// it from hearing that its node has stopped.
+// steerSettleAttempt is the reason one attempt at a settle is bounded by,
+// beside the time the run's row takes to cross to the store
+// (sandbox.RowBudget), since a settle writes the row whole: an attempt the
+// store has not answered in TEN SECONDS beyond that — past a leader election's
+// nine at worst — is asked again, so a request that hangs never holds a run's
+// settle, nor keeps it from hearing that its node has stopped, which ends an
+// attempt at once ([runSteers.settleOnce]). Held to the ten alone, a row of
+// megabytes across a slow link was cut while its bytes were still crossing and
+// asked again from its first byte, never settled (crewlet/crewlet#1076).
 const steerSettleAttempt = 10 * time.Second
 
 // steerSettleRetryBase and steerSettleRetryCeiling space a run's rounds of
@@ -734,7 +742,8 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 	}
 }
 
-// settleOnce is one attempt at settle, held to [steerSettleAttempt] and to the
+// settleOnce is one attempt at settle, held to [steerSettleAttempt] and the time
+// the run's row takes to cross to the store (sandbox.RowBudget), and to the
 // window this node's teardown opens ([runSteers.stopWindow]): the teardown
 // waits for it ([runSteers.waitSettles]), and a store that does not answer must
 // hold the stop no longer than that window — never on the stop's allowance,
@@ -744,7 +753,7 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 // confirmation's answers ([runInbox.confirm]).
 func (s *runSteers) settleOnce(base context.Context, turnID string, settle sandbox.NoteSettle) (
 	[]sandbox.RunNote, error) {
-	ctx, cancel := context.WithTimeout(base, steerSettleAttempt)
+	ctx, cancel := context.WithTimeout(base, sandbox.RowBudget(s.store, steerSettleAttempt))
 	defer cancel()
 	if window := s.stopWindow; window != nil {
 		//nolint:contextcheck // the window is the node's teardown's, never base's: it ends the attempt beside base's own bound, and is ended by nothing base holds
@@ -1605,18 +1614,23 @@ func (i *runInbox) markPulled(ctx context.Context, launch string) {
 	}
 	i.pulled = true
 	i.mu.Unlock()
-	base := context.WithoutCancel(ctx)
-	go func() {
-		ctx, cancel := context.WithTimeout(base, steerPublishBudget)
-		defer cancel()
-		if _, err := i.steers.store.MarkPulled(ctx, i.ident.turn.TurnID, launch); err != nil {
-			log.WarnContext(ctx, "steer_pull_unrecorded", "turn_id", i.ident.turn.TurnID,
-				"error", err.Error())
-			i.mu.Lock()
-			i.pulled = false
-			i.mu.Unlock()
-		}
-	}()
+	go i.recordPulled(context.WithoutCancel(ctx), launch)
+}
+
+// recordPulled is the write [runInbox.markPulled] makes off the path that
+// asked, under base, within [steerPublishBudget] and the time the run's row
+// takes to cross to the store (sandbox.RowBudget): a mark the store does not
+// take is said, and asked for again at the job's next pull.
+func (i *runInbox) recordPulled(base context.Context, launch string) {
+	ctx, cancel := context.WithTimeout(base, sandbox.RowBudget(i.steers.store, steerPublishBudget))
+	defer cancel()
+	if _, err := i.steers.store.MarkPulled(ctx, i.ident.turn.TurnID, launch); err != nil {
+		log.WarnContext(ctx, "steer_pull_unrecorded", "turn_id", i.ident.turn.TurnID,
+			"error", err.Error())
+		i.mu.Lock()
+		i.pulled = false
+		i.mu.Unlock()
+	}
 }
 
 // Wait is the waiting notes past the cursor after, each served to the job on

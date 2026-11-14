@@ -209,6 +209,13 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 	return result, changed, nil
 }
 
+// ValueCrossing is how long a write of a run's value at what one key holds
+// takes to cross this node's connection to the buckets, for every send the
+// store gives it — see [coord.SandboxRuns.ValueCrossing]: the crossing at the
+// slowest pace a link is allowed where the node reaches the buckets across
+// one, and none in process ([Reach]).
+func (f *FleetStore) ValueCrossing() time.Duration { return f.reach.valueCrossing() }
+
 // WatchSandboxRun streams one run's record, its first state certified.
 //
 // A KV watcher over the run's own KEY, so the broker sends this record and no

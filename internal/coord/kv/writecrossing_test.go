@@ -356,3 +356,39 @@ func TestAStoreRefusesToOpenWithoutItsReach(t *testing.T) {
 		}
 	}
 }
+
+// A RUN'S VALUE IS GIVEN ITS CROSSING BY WHOEVER BOUNDS ITS WRITE, AND ONLY
+// ACROSS A LINK.
+//
+// A caller that bounds a write of a run's row for a reason of its own adds the
+// time a value at what one key holds takes to cross its node's connection
+// (coord.SandboxRuns.ValueCrossing), since the store keeps a caller's deadline
+// as it is: the store's own rule for a write — every send the client may make
+// of it, its value and the most header a write carries behind the request's
+// protocol line — at the slowest pace a link is allowed, which is the
+// contract's figure (coord.MaxValueCrossing), and none on a member's own
+// connection, where a write crosses nothing.
+//
+// Mutation: give an in-process store a crossing, and every budget a data node
+// holds a row's write to waits nine minutes past its reason; drop a send or
+// the header from the derivation, or move the contract's figure, and the
+// figure and the store's own rule part.
+func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
+	t.Parallel()
+	want := jsapi.WriteSends * jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, objstore.MiBPace)
+	if coord.MaxValueCrossing != want {
+		t.Errorf("coord.MaxValueCrossing = %v, want the store's own rule for a value at what one key "+
+			"holds across a link at the slowest pace allowed, %v", coord.MaxValueCrossing, want)
+	}
+	nc := embeddedNATS(t)
+	for reach, crossing := range map[Reach]time.Duration{
+		InProcess:  0,
+		AcrossLink: coord.MaxValueCrossing,
+	} {
+		store := openFleetVia(t, jsOf(nc), reach, fmt.Sprintf("x%d", bucketSeq.Add(1)))
+		if got := store.ValueCrossing(); got != crossing {
+			t.Errorf("a store reaching its buckets %s gives a run's value a crossing of %v, want %v",
+				reach, got, crossing)
+		}
+	}
+}

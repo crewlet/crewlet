@@ -161,6 +161,18 @@ func (r Reach) pace() time.Duration {
 	return 0
 }
 
+// valueCrossing is how long a write of a value at what one key holds
+// ([coord.MaxValueBytes]) takes to cross a connection that reaches the buckets
+// as r, for every send the client may make of it: what the store's own rule
+// gives such a write beyond the request term ([settledBucket.budget], every
+// one of [jsapi.WriteSends] crossings of its value and the most header a
+// write carries, [kvHeaderBytes], behind the request's protocol line, which
+// [jsapi.Sending] counts and the key rides), at r's pace — none in process.
+// coord.MaxValueCrossing is this across a link, and a test holds it so.
+func (r Reach) valueCrossing() time.Duration {
+	return jsapi.WriteSends * jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, r.pace())
+}
+
 // checkReach refuses a configuration that does not say how its connection
 // reaches the buckets, naming the field.
 func checkReach(config string, r Reach) error {

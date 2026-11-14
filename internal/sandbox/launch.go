@@ -1183,20 +1183,24 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
 // box running to its TTL with nobody to collect it, and a row nobody settles.
+// One for the kill, within a box call's grace, and one for the ending, which
+// writes the row and is given its crossing too ([Coordinator.detachedRecord]).
 func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
-	defer cancel()
 	if sandboxID != "" {
+		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 		provider, err := m.Provider(req.Spec.Placement)
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_no_backend",
 				"sandbox_id", sandboxID, "placement", string(req.Spec.Placement),
 				"error", err.Error())
-		} else if err := provider.Kill(ctx, sandboxID); err != nil {
+		} else if err := provider.Kill(killCtx, sandboxID); err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
+		cancel()
 	}
+	ctx, cancel := c.detachedRecord(ctx)
+	defer cancel()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
 	// the one party that can name it. The launch's own is killed above,

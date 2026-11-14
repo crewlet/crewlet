@@ -2283,15 +2283,15 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 // ([PendingStore.MarkEndedAtDeadline]): what every later collection of the job
 // reads as the cap's verdict ([Coordinator.readBox]).
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]), as the kill that may follow it is:
-// the read can be cut short as it ends the job, and this record is what says
-// to the collection made after it that the job its kill left over was one the
-// cap stopped. A record that does not land is said, and costs only that later
-// collection's sight of it: this read still says the cap ended the run, and
-// the job's own record of the request ([Result.JobEnd]) says so to the next
-// where its script left one.
+// UNDER A CONTEXT OF ITS OWN ([Coordinator.detachedRecord]), as the kill that
+// may follow it is: the read can be cut short as it ends the job, and this
+// record is what says to the collection made after it that the job its kill
+// left over was one the cap stopped. A record that does not land is said, and
+// costs only that later collection's sight of it: this read still says the cap
+// ended the run, and the job's own record of the request ([Result.JobEnd])
+// says so to the next where its script left one.
 func (c *Coordinator) markEndedAtDeadline(ctx context.Context, run PendingRun) {
-	markCtx, cancel := detached(ctx)
+	markCtx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	if _, err := c.pending.MarkEndedAtDeadline(markCtx, run.TurnID, run.LaunchID); err != nil {
 		log.WarnContext(ctx, "sandbox_deadline_end_unrecorded", "turn_id", run.TurnID,
@@ -3696,7 +3696,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			}
 			// DETACHED, bounded: the panic may be the cancellation's own,
 			// and an ending on a dead context would write nothing.
-			settle, cancel := detached(ctx)
+			settle, cancel := c.detachedRecord(ctx)
 			defer cancel()
 			c.settleAbandoned(settle, run, note)
 			panic(p)
@@ -4014,15 +4014,16 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 // begins ([ResumeRequest.Begin]), under the claimant's lease, which the claim
 // stamped on the row. A carry the resumer did not say is none to record.
 //
-// BEST EFFORT, AND BOUNDED ([resumeCarryRecordBudget]): nothing the turn does
-// reads it — it is every reader's of whether a relaunch would continue the
-// job's session — so a record the store does not take is logged and the turn
-// goes on, read as one that has not said, which is undecided, never either way.
+// BEST EFFORT, AND BOUNDED ([resumeCarryRecordBudget], and the time the run's
+// row takes to cross to the store, [RowBudget]): nothing the turn does reads
+// it — it is every reader's of whether a relaunch would continue the job's
+// session — so a record the store does not take is logged and the turn goes
+// on, read as one that has not said, which is undecided, never either way.
 func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry ResumeCarry) {
 	if !carry.Valid() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, resumeCarryRecordBudget)
+	ctx, cancel := context.WithTimeout(ctx, RowBudget(c.pending, resumeCarryRecordBudget))
 	defer cancel()
 	if _, err := c.pending.MarkResumeBegun(ctx, run.TurnID, run.LaunchID, fenceOf(run), carry); err != nil {
 		log.WarnContext(ctx, "sandbox_resume_carry_unrecorded", "turn_id", run.TurnID,
@@ -4032,14 +4033,20 @@ func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry
 	}
 }
 
-// resumeCarryRecordBudget bounds the write that records what a resumed turn
-// does with its job's round ([Coordinator.markResumeBegun]): FIVE SECONDS, as
-// the write recording which session a job's box started is given
-// (internal/engine's sessionStartRecordBudget), and for its reason — one
+// resumeCarryRecordBudget is the reason the write that records what a resumed
+// turn does with its job's round ([Coordinator.markResumeBegun]) is bounded by,
+// beside the time the run's row takes to cross to the store ([RowBudget]):
+// FIVE SECONDS, as the write recording which session a job's box started is
+// given (internal/engine's sessionStartRecordBudget), and for its reason — one
 // compare-and-swap of one row, which a healthy coordination store answers in
 // milliseconds, and a store that has not answered in five is in an outage this
 // write waits out no better. It is on the resume's path, before its turn runs,
-// so a store's slow moment holds the turn back by no more than that.
+// so a store's slow moment holds the turn back by no more than that beyond the
+// row's bytes: none in the store's own process, and across a link at the
+// slowest pace allowed the nine minutes a row at its bound takes to cross,
+// which a store that answers ends as soon as the row is in. Held to the five
+// alone, a row of megabytes across a slow link was cut while its bytes were
+// still crossing, and the carry went unrecorded (crewlet/crewlet#1076).
 const resumeCarryRecordBudget = 5 * time.Second
 
 // claimedAnswer reports whether a claimed run carries a RECORDED answer its
@@ -4200,8 +4207,9 @@ func (c *Coordinator) endClaim(ctx context.Context, run PendingRun, e ending) (b
 	// DETACHED, like every other teardown: this is reached from a failure
 	// path and from a queue handler a drain cancels, so the context that
 	// got here is very often already dead — and a settle that no-ops is the
-	// stranded row all over again.
-	endCtx, cancel := detached(ctx)
+	// stranded row all over again. Within the time the row's bytes take to
+	// cross besides ([Coordinator.detachedRecord]).
+	endCtx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	e.fence, e.whileIn, e.launch, e.reclaim = fenceOf(run), claimedOnly, run.LaunchID, true
 	decided, err := c.endRecord(endCtx, run, e)
@@ -4368,7 +4376,7 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
 	failed failure, hold *Refusal,
 ) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	ctx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
@@ -4643,12 +4651,16 @@ func endingEventID(run PendingRun) uuid.UUID {
 // a run that goes on without its box: one parked straight into reseed.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	killCtx, cancel := detached(ctx)
-	defer cancel()
 	_ = c.reclaimBox(ctx, killCtx, run)
+	cancel()
 	if run.SandboxID == "" {
 		return
 	}
-	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
+	// THE RECORD'S OWN CONTEXT, never the kill's: the kill's grace is a box
+	// call's, and the release writes the row whole.
+	releaseCtx, release := c.detachedRecord(ctx)
+	defer release()
+	if err := c.pending.ReleaseBox(releaseCtx, run.TurnID); err != nil {
 		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 }
@@ -5390,7 +5402,7 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*Re
 			"owner_epoch", run.OwnerEpoch, "epoch", e.fence.Epoch)
 		return nil, false
 	}
-	endCtx, cancel := detached(ctx)
+	endCtx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	e.whileIn, e.launch, e.reclaim = Active, EveryLaunch, true
 	decided, err := c.endRecord(endCtx, run, e)
@@ -5425,6 +5437,17 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*Re
 // values.
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+}
+
+// detachedRecord is the context a teardown's writes of a run's row are made
+// under: one of its own, for [detached]'s reason, within the teardown's grace
+// and the time a row at its bound takes to cross this node's connection to the
+// store ([RowBudget]). The grace alone is a box call's, and a row of megabytes
+// sent across a slow link outlasts it while its bytes are still crossing, which
+// left the ending undecided, the claim unreleased and the turn's end unowed
+// (crewlet/crewlet#1076). A teardown's box calls keep [detached].
+func (c *Coordinator) detachedRecord(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), RowBudget(c.pending, discardGrace))
 }
 
 // reclaimBox kills a run's box under killCtx and closes the run's credentials,

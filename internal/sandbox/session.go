@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -915,9 +916,20 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // ([SessionCaptureBudget]), which began no later; then one more read of the
 // run's row ([captureWaitTick]), the one in which the read standing by sees how
 // that capture came out; and the one record its taking of the next place asks
-// for ([sessionRecordBudget]). Past it, a wait reads the read as gone; one
-// whose taker lease has lapsed is withdrawn sooner ([Coordinator.standDownGone]).
-var standbyBudget = SessionCaptureBudget + captureWaitTick + sessionRecordBudget
+// for — the record's budget ([sessionRecordBudget]) and the time the run's row
+// takes to cross to the store ([RowBudget]), counted at the slowest node's
+// (coord.MaxValueCrossing), since the read standing by may be any node's and
+// the wait reading its age any other. Past it, a wait reads the read as gone;
+// one whose taker lease has lapsed is withdrawn sooner
+// ([Coordinator.standDownGone]).
+//
+// AT TODAY'S BOUNDS twenty-one minutes for the capture, two seconds for the
+// read, and thirty seconds and nine minutes for the record: thirty minutes and
+// thirty-two seconds and a fraction. Counted without the crossing, a standby
+// across a slow link whose record of its place was still crossing would be
+// read as gone, now that the record is no longer cut at its thirty seconds
+// (crewlet/crewlet#1076).
+var standbyBudget = SessionCaptureBudget + captureWaitTick + sessionRecordBudget + coord.MaxValueCrossing
 
 // endCaptureWait is the most a turn's end waits for its captures to settle
 // ([Coordinator.awaitCapture]), on this node's clock: as long as the last of
@@ -928,7 +940,9 @@ var standbyBudget = SessionCaptureBudget + captureWaitTick + sessionRecordBudget
 // session there ([SessionKeepBudget]). The end waits from no earlier than the
 // capture it waits on began, so this is the whole of it: at today's bounds a
 // capture's budget is twenty-one minutes (four for the take, seventeen for
-// the keep), and this thirty-eight minutes and thirty-two seconds.
+// the keep), and this forty-seven minutes and thirty-two seconds and a
+// fraction — the standby's record counted with the nine minutes a row at its
+// bound takes to cross the slowest node's link ([standbyBudget]).
 //
 // AN END THAT WAITED A CAPTURE'S BUDGET ALONE gave up on a standby's session
 // still uploading — the read holding the place refused at the end of its
@@ -973,7 +987,10 @@ func (c *SessionCapture) UnmarshalJSON(raw []byte) error {
 }
 
 // sessionRecordBudget bounds one record of a capture or an end: every attempt
-// at it, under its one operation, together.
+// at it, under its one operation, together. And it is the reason a stamp of a
+// capture on its run's row is asked again within ([Coordinator.askStamp]),
+// beside which a stamp is given the time the row takes to cross to the store
+// ([RowBudget]): a stamp writes the run's row whole.
 //
 // THIRTY SECONDS. A write the log takes is answered in milliseconds; one its
 // serving node has published and not yet applied is answered within the
@@ -1811,10 +1828,27 @@ func recordsBy(ctx context.Context) time.Time {
 // ([Coordinator.settleContext]).
 func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
 	stamp, cancel := detached(ctx)
+	return before(stamp, cancel, by)
+}
+
+// recordContext is [stampContext] for a record a read makes once on the run's
+// row — how its job's harness ended ([Coordinator.markHarnessEnd]): one of its
+// own within the grace and the time the row takes to cross to the store
+// ([Coordinator.detachedRecord]), never past by. The grace alone was a box
+// call's, which a row of megabytes across a slow link outlasts while its bytes
+// are still crossing (crewlet/crewlet#1076).
+func (c *Coordinator) recordContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	record, cancel := c.detachedRecord(ctx)
+	return before(record, cancel, by)
+}
+
+// before is ctx, whose cancel is cancel, held to end no later than by as well;
+// ctx itself for by zero.
+func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (context.Context, context.CancelFunc) {
 	if by.IsZero() {
-		return stamp, cancel
+		return ctx, cancel
 	}
-	bounded, cancelBounded := context.WithDeadline(stamp, by)
+	bounded, cancelBounded := context.WithDeadline(ctx, by)
 	return bounded, func() {
 		cancelBounded()
 		cancel()
@@ -2385,10 +2419,16 @@ type stampWrite func(ctx context.Context, turnID string, stamp SessionCapture) (
 
 // askStamp stamps a capture on its run's row through write, asked again while
 // the coordination store does not answer, spaced by a doubling wait, within one
-// record's budget ([sessionRecordBudget]) and under a context of its own, never
-// past by ([Coordinator.settleContext]): whether the row took it, how many times
-// it was asked, and the store's last error where it never answered — the one
-// way of asking every stamp of a capture takes.
+// record's budget ([sessionRecordBudget]) and the time the row takes to cross
+// to the store ([RowBudget]), under a context of its own, never past by
+// ([Coordinator.settleContext]): whether the row took it, how many times it was
+// asked, and the store's last error where it never answered — the one way of
+// asking every stamp of a capture takes.
+//
+// THE CROSSING TOO, because every stamp sends the row whole: held to the
+// record's thirty seconds alone, a row of megabytes across a slow link was cut
+// while its bytes were still crossing, and asked again from its first byte
+// until the budget ended, never taken (crewlet/crewlet#1076).
 func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 	stamp SessionCapture, write stampWrite) (bool, int, error) {
 
@@ -2410,12 +2450,13 @@ func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 }
 
 // settleContext is the context a stamp asked again is made under: one of its
-// own, which outlives the caller's, within one record's budget — and never past
-// by, where the read a take is part of needs the rest of its time for the box's
+// own, which outlives the caller's, within one record's budget and the time the
+// run's row takes to cross to the store ([RowBudget]) — and never past by,
+// where the read a take is part of needs the rest of its time for the box's
 // pause, as [stampContext] bounds a take's single record. by zero, a stamp made
-// off the read, is bounded by the record's budget alone.
+// off the read, is bounded by the record's budget and the crossing alone.
 func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
-	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), RowBudget(c.pending, c.recordBudget))
 	if by.IsZero() {
 		return settle, cancel
 	}
@@ -3044,10 +3085,10 @@ func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
 // DECIDED ONCE: a turn that owes an end already keeps it, and this one is
 // dropped, which is what lets two paths that end one turn end it once.
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]): a frame that ends a turn is often
-// one a drain is cancelling, and an end that frame could not owe was recorded
-// at once instead — before the turn's captures settled, and without what they
-// came to.
+// UNDER A CONTEXT OF ITS OWN ([Coordinator.detachedRecord]): a frame that ends
+// a turn is often one a drain is cancelling, and an end that frame could not
+// owe was recorded at once instead — before the turn's captures settled, and
+// without what they came to.
 //
 // FITTED TO THE EXECUTOR LOG'S BOUNDS BEFORE IT RIDES THE ROW
 // ([executorkeep.Ending.Fit]): its prose is a model's and a guard's — a
@@ -3061,7 +3102,7 @@ func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executor
 	if err != nil {
 		return false, err
 	}
-	ctx, cancel := detached(ctx)
+	ctx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	owing, _, err := c.pending.OweEnd(ctx, turnID, raw)
 	if err != nil {
