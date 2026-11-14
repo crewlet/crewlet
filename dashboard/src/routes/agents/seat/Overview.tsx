@@ -1188,9 +1188,10 @@ function HumanOverview({
     { handle: seat.handle },
     { enabled: mayRead && seat.handle !== "", pollMs: 60_000 },
   );
-  // WHAT IS WAITING ON THEM is the inbox's own count — the sidebar badge's
-  // reading when it is the viewer's own day — never the person record's
-  // `unread`, which holds only the EXCEPTIONS below their read mark.
+  // WHAT IS WAITING ON THEM is the badge's count (`lib/useInboxCounts.ts`) —
+  // the sidebar's reading when it is the viewer's own day — never the person
+  // record's `unread`, which holds only the EXCEPTIONS below their read mark,
+  // and never their unread updates, which ask nothing of them.
   const inbox = useInboxCountsOf(seat.handle, mayRead);
   // WHAT THEY MEAN TO DO FIRST, COUNTED BY THE ENGINE: the resolved list's
   // total, the figure My work and this profile's Work tab both read. The
@@ -1254,7 +1255,7 @@ function HumanOverview({
               {person.data && (
                 <StatGroup columns={3}>
                   <StatCard
-                    label="Unread"
+                    label="Waiting"
                     loading={inbox.waiting === null}
                     value={inboxFigure(inbox)}
                     sub={

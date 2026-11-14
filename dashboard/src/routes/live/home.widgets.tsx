@@ -21,7 +21,8 @@ import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Executors.tsx";
+import { RunStatus, runTitle } from "~/routes/live/Executors.tsx";
+import { mergeRuns } from "~/lib/runs.ts";
 import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
 
 const ROWS = 5;

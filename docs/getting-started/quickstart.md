@@ -1072,13 +1072,14 @@ each), then wire them in:
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
-- Explore the [Nimbus example](../../examples/) — a seven-seat company on
-  Mattermost, running on Claude Code with your Claude plan rather than an API
-  key (`nimbus-claude-code`), every seat running that harness as its own agentic
-  loop, in a `direct` box on the engine host — a first run on your own
-  machine while its seats take work from you alone, like this page's.
-  It is the next step up from this page and still needs nothing but the chat
-  server in this repo's compose file; every integration above adds on top of
-  it
+- Explore the [Nimbus example](../../examples/) — a seven-seat company with
+  no outside account: Chatlet, Worklet, Doclet and Gitlet for its chat, work,
+  pages and code, running on Claude Code with your Claude plan rather than an
+  API key, every seat running that harness as its own agentic loop, in a
+  `direct` box on the engine host — a first run on your own machine while its
+  seats take work from you alone, like this page's. It is the next step up
+  from this page and needs nothing this page did not; every integration
+  above adds on top of it, and every setting carries its reasoning in a
+  comment
 - Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options

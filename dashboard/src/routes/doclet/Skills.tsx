@@ -49,6 +49,7 @@ import {
   Button,
   Card,
   EmptyState,
+  Skeleton,
   EmptyValue,
   SegmentedControl,
   Select,
@@ -148,6 +149,11 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
   const loads = (row: PageSummary): SkillLoad[] | null =>
     listing.loadedBy ? (listing.loadedBy[row.id] ?? []) : null;
 
+  // THE FIRST PAGE IN FLIGHT IS A SKELETON: `QueryState` draws nothing while
+  // it waits, and the screen was its two tabs over an empty page.
+  if (listing.loading && rows.length === 0 && !listing.error) {
+    return <Skeleton variant="text" rows={6} label="Loading tool skills" />;
+  }
   return (
     <QueryState
       error={listing.error}
@@ -289,6 +295,11 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
   const skills = memory.data?.skills ?? [];
   const total = memory.data?.skills_total ?? 0;
   const who = index.byHandle.get(seat);
+  // NO ANSWER AND NO REFUSAL IS A WAIT, whichever read it is waiting on: the
+  // question is asked only once the viewer's answer admits it, and a
+  // question not yet asked reports neither loading nor data, which read as
+  // "has learned no skills yet" before anything had been asked.
+  const waiting = !memory.data && !memory.error;
 
   if (agents.length === 0) {
     return (
@@ -317,9 +328,10 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
         <QueryState
           error={memory.error}
           refusal={memory.refusal}
-          loading={memory.loading}
+          loading={false}
           empty={
-            skills.length
+            // NOT EMPTY UNTIL THE READ SAYS SO: the grid below draws the wait.
+            skills.length || waiting
               ? undefined
               : {
                   title: `${who?.name ?? seat} has learned no skills yet`,
@@ -329,6 +341,9 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
         >
           <DataGrid
             rows={skills}
+            // IN FLIGHT, THE GRID'S OWN SKELETON under the card's head, where
+            // `QueryState` drew nothing at all.
+            loading={waiting}
             rowKey={(r) => r.id}
             {...engineOrder(
               LEARNED_SORT[order],

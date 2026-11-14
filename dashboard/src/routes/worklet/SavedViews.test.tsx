@@ -85,6 +85,44 @@ test("an owner outside the chart is named by their handle", async () => {
 
 // A SHARED VIEW IS NOT AN UNOWNED ONE — empty is a setting somebody chose, and
 // it is a sentence rather than a blank.
+// A VIEW'S PAGE SAYS WHAT IT SHOWS IN THE SCREEN'S OWN WORDS. It printed the
+// engine's grammar as code chips (`show_closed true`, `sort -updated`,
+// `subtasks separate`, `Container project:ENG`), which is the wire rather
+// than anything a reader set.
+test("a view's settings and where it lives read as words, never as parameters", async () => {
+  serving({
+    work_saved_views: {
+      views: [
+        view({
+          container: { kind: "project", id: "ENG" },
+          params: {
+            show_closed: "true",
+            sort: "-updated",
+            subtasks: "separate",
+            priority: "high,urgent",
+          },
+        }),
+      ],
+      complete: true,
+    },
+    work_project: { key: "ENG", name: "Core platform" },
+  });
+  const { container } = mount("v-1");
+  const shows = await screen.findByRole("list", { name: "What this view shows" });
+  expect([...shows.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Every task, finished or not",
+    "Priority ≥ High",
+    "Sorted by Recently updated",
+    "Sub-tasks as their own rows",
+  ]);
+  await waitFor(() => expect(container.textContent).toContain("ENG · Core platform"));
+  for (const raw of ["show_closed", "-updated", "subtasks", "project:ENG"]) {
+    expect(container.textContent).not.toContain(raw);
+  }
+  // AND ITS OWN MANAGEMENT, where it is read: its name and who sees it.
+  expect(screen.getByRole("button", { name: /Edit view/ })).toBeTruthy();
+});
+
 test("a shared view says what shared means", async () => {
   serving({ work_saved_views: { views: [view()], complete: true } });
   const { container } = mount("v-1");

@@ -132,7 +132,9 @@ import {
 import { unitPath } from "~/lib/orgchart.ts";
 import { answersAddress, itemAddress, turnItem } from "~/lib/work.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
+import { useRuns } from "~/lib/runs.ts";
 import { useExecutors } from "~/lib/store-hooks.ts";
+import { runStanding } from "~/lib/runStanding.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
@@ -233,7 +235,12 @@ function SeatPeekBody({
   const viewer = useViewer();
   const org = useOrg();
   const health = useEngineHealth();
-  const executors = useExecutors();
+  // THE SEAT'S RUN AS EVERY SCREEN FOLDS IT (`lib/runs.ts`).
+  // THE DURABLE ROW IS ASKED FOR ONCE THE PUSH SHOWS THE SEAT'S RUN PARKED:
+  // it is what says whether the question waits on this reader and whether
+  // they may answer it, and it wins over a push that has not caught up.
+  const pushed = seatRun(useExecutors(), seat);
+  const shared = seatRun(useRuns(pushed !== null && awaitingPerson(pushed.status)).runs, seat);
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const status = human ? undefined : statusOf(state);
@@ -277,7 +284,8 @@ function SeatPeekBody({
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
-  const sandbox = seatRun(executors, seat);
+  const sandbox = shared;
+  const standing = sandbox ? runStanding(sandbox, nameOf) : null;
   const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
   // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.
@@ -367,11 +375,17 @@ function SeatPeekBody({
       {agent?.last_error && (
         <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
-      {sandbox && awaitingPerson(sandbox.status) && (
+      {sandbox && standing && awaitingPerson(sandbox.status) && (
         // THE ONE THING A READER CAN ACT ON from here: an executor parked on
         // a question holds the seat until somebody answers it, so the answer
-        // is beside the question (a held call's Allow and Deny included).
-        <Callout variant="warning" action={<AnswerRunButton run={sandbox} seat={seat.name} />}>
+        // is beside the question (a held call's Allow and Deny included) for
+        // a reader the engine says may give it, and whom it waits on is said
+        // where that is somebody else.
+        <Callout
+          variant="warning"
+          action={standing.answers ? <AnswerRunButton run={sandbox} seat={seat.name} /> : undefined}
+        >
+          {!standing.needs && <strong>{standing.word}. </strong>}
           {sandbox.held_call ? (
             <>
               This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}

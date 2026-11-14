@@ -11,7 +11,7 @@ import { apiKeyEntry, modelsData } from "~/routes/settings/models/fixtures.ts";
 import { TestDialog, failureWords } from "./TestDialog.tsx";
 
 const checkModel = vi.hoisted(() => vi.fn());
-vi.mock("../api.ts", () => ({ checkModel }));
+vi.mock("../useCheckModel.ts", () => ({ useCheckModel: () => checkModel }));
 
 afterEach(() => {
   cleanup();

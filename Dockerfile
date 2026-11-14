@@ -26,10 +26,11 @@
 #   - The local sandbox backend (`providers.sandbox: {type: local}`) runs a
 #     seat's executor as a child process tree and applies setup steps that are
 #     shell commands out of the company config.
-#   - Those setup recipes are config, not engine code, and the one this repo
-#     ships (`examples/nimbus.company.yaml`) configures a git credential
-#     helper — so `git` is part of the surface an operator gets, not an
-#     optional extra.
+#   - Those setup recipes are config, not engine code, and a seat's executor
+#     clones and pushes with `git` — the box's git, configured by the engine
+#     for a repository on Gitlet and by a credential-helper recipe for a
+#     vendor code host — so `git` is part of the surface an operator gets,
+#     not an optional extra.
 #   - stdio MCP servers are child processes too, launched by whatever command
 #     the config names.
 #   - Gitlet (code.backend: gitlet, on a node with the gitlet role) runs git

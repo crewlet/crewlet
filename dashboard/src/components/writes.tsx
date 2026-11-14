@@ -547,21 +547,77 @@ export function SaveViewButton({
   );
 }
 
+/**
+ * A saved view's name and who sees it, changed on its own page.
+ *
+ * THE SAME WRITE AS SAVING ONE, naming the view it replaces (`id`) and sending
+ * the rest of it as it stands, so a rename changes the name and nothing the
+ * view asks. Whether the reader may is the engine's (a protected personal
+ * view is its owner's alone), said in its own words. There is no delete: the
+ * engine offers none.
+ */
+export function EditViewButton({
+  view,
+}: {
+  /** The view as the inventory answered it, its container spelled as the tool takes it. */
+  view: {
+    id: string;
+    name: string;
+    container: string;
+    type: string;
+    params: Record<string, string>;
+    personal: boolean;
+  };
+}) {
+  const write = useAct("save_work_view");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        leadingIcon={<PencilGlyph />}
+        showRefusal={false}
+        onPress={() => setOpen(true)}
+      >
+        Edit view
+      </WriteButton>
+      {open && (
+        <SaveViewDialog
+          container={view.container}
+          type={view.type}
+          params={view.params}
+          editing={view}
+          write={write}
+          onClose={() => {
+            write.dismiss();
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function SaveViewDialog({
   container,
   type,
   params,
+  editing,
   write,
   onClose,
 }: {
   container: string;
   type: string;
   params: Record<string, string>;
+  /** The view this replaces, for an edit; absent for a new one. */
+  editing?: { id: string; name: string; personal: boolean };
   write: ReturnType<typeof useAct<"save_work_view">>;
   onClose: (id?: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [mine, setMine] = useState(false);
+  const [name, setName] = useState(editing?.name ?? "");
+  const [mine, setMine] = useState(editing?.personal ?? false);
   const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
   const blocked = !name.trim()
     ? "Give the view a name first."
@@ -574,8 +630,15 @@ function SaveViewDialog({
     if (!pressable(write, blocked)) return;
     const title = name.trim();
     const result = await write.run(
-      { container, name: title, type, params, ...(mine ? { personal: true } : {}) },
-      { done: `Saved the view ${title}` },
+      {
+        ...(editing ? { id: editing.id } : {}),
+        container,
+        name: title,
+        type,
+        params,
+        ...(mine ? { personal: true } : {}),
+      },
+      { done: editing ? `Saved ${title}` : `Saved the view ${title}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const id = (result.receipt as { id?: unknown } | null)?.id;
@@ -586,8 +649,8 @@ function SaveViewDialog({
     <Modal
       open
       size="sm"
-      title="Save this view"
-      icon={<PinGlyph />}
+      title={editing ? "Edit view" : "Save this view"}
+      icon={editing ? <PencilGlyph /> : <PinGlyph />}
       onClose={() => onClose()}
       onSubmit={() => void submit()}
       closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
@@ -603,7 +666,7 @@ function SaveViewDialog({
             onPress={() => void submit()}
             blocked={blocked}
           >
-            Save view
+            {editing ? "Save changes" : "Save view"}
           </WriteButton>
         </>
       }

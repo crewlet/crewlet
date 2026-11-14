@@ -17,7 +17,14 @@
  */
 
 import { useMemo } from "react";
-import { Button, Document, EmptyState, TableEntityCell, VersionCompare } from "@crewlethq/ui";
+import {
+  Button,
+  Document,
+  EmptyState,
+  Skeleton,
+  TableEntityCell,
+  VersionCompare,
+} from "@crewlethq/ui";
 import { CheckGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -174,6 +181,10 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
         Changes
         <span className="knowledge-count">{changes.length}</span>
       </h2>
+      {/* IN FLIGHT, A SKELETON beside `QueryState`, which draws nothing while it waits. */}
+      {feed.loading && changes.length === 0 && (
+        <Skeleton variant="text" rows={4} label="Loading changes" />
+      )}
       <QueryState
         error={feed.error}
         refusal={feed.refusal}

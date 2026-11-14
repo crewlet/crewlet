@@ -81,6 +81,13 @@ export interface UrlActionKey {
    * and shown as the current value where the address holds none.
    */
   fallback?: string;
+  /**
+   * Set for a key a screen KEEPS for its reader (`lib/keptRange.ts`): an
+   * address without it opens the reader's own last choice, so the fallback is
+   * written in full like any other value, never as a clear, or asking for it
+   * would show whatever the reader chose last instead.
+   */
+  kept?: true;
 }
 
 /** A change to the address: a key to its new value, or null to clear it. */
@@ -183,7 +190,7 @@ export function parseUrlPatch(
     }
     const refused = key.check?.(value) ?? null;
     if (refused !== null) return { ok: false, reason: refused };
-    out[name] = value === "" || value === key.fallback ? null : value;
+    out[name] = value === "" || (value === key.fallback && !key.kept) ? null : value;
   }
   return { ok: true, value: out };
 }
@@ -334,7 +341,8 @@ export function urlAction(
  * The `window=` key a screen's time range writes, held to the screen's own
  * offer: a window the screen would silently replace with its fallback is
  * refused, since the card would otherwise promise a window the page will not
- * show. A section, as `useTimeRange` writes it.
+ * show. A section, as `useTimeRange` writes it, and written in full, since
+ * the screen keeps its reader's window (`kept`).
  */
 export function windowKey(offer: Offer, now: () => number): UrlActionKey {
   const named: string[] = [...offer.ranges, ...(offer.today ? [TODAY] : [])];
@@ -342,6 +350,7 @@ export function windowKey(offer: Offer, now: () => number): UrlActionKey {
     label: "Window",
     history: "section",
     fallback: offer.fallback,
+    kept: true,
     // A FIXED OFFER IS LISTED WHOLE; one that also takes a custom window
     // says how one is written, and `check` stays the rule either way.
     ...(offer.custom

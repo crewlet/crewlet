@@ -207,11 +207,14 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		executordomain.Domain{}.Name():  new(150),
 		// The tracker's figure: a seat's code tools read at linearizable.
 		gitlet.Domain{}.Name(): new(125),
-		// One dispatch read a turn, at thirty turns a seat a day.
-		accessdomain.Domain{}.Name(): new(30),
-		// No read takes a barrier: a person's edit decides from the entry's
+		// Two reads a turn, the dispatch's and the prefetch's of what the seat
+		// was last told, at thirty turns a seat a day.
+		accessdomain.Domain{}.Name(): new(60),
+		// One barrier a turn that reads the atlas, at thirty turns a seat a
+		// day: an agent's atlas tools read at the seat surface's
+		// linearizable, while a person's edit decides from the entry's
 		// version in its own snapshot.
-		atlasdomain.Domain{}.Name(): new(0),
+		atlasdomain.Domain{}.Name(): new(30),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()

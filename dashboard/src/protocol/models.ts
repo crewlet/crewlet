@@ -11,6 +11,7 @@
 
 import type {
   ModelAlarmKind,
+  ModelCheckState,
   ModelDeviceStatus,
   ModelHealth,
   ModelJob,
@@ -225,6 +226,29 @@ export interface CheckAnswer {
   ok: boolean;
   failure?: string;
   lines: CheckLine[];
+}
+
+/**
+ * A model's test, as `POST /llm/providers/{key}/check` and `llm_check` answer
+ * it: running on the node that took it, ended, or lost with a node that
+ * stopped. It runs on that node's own time, so the page asks `llm_check` again
+ * while it is running.
+ */
+export interface ModelCheck {
+  id: string;
+  entry: string;
+  node: string;
+  state: ModelCheckState;
+  draft: boolean;
+  smoke: boolean;
+  started_at: string;
+  deadline: string;
+  ended_at: string | null;
+  by: string;
+  /** What an ended test found. */
+  check?: CheckAnswer;
+  /** Why the test ended, or was lost, finding nothing. */
+  failure?: string;
 }
 
 /** A vendor limit a candidate credential met: it authenticated, and the vendor is limiting it. */

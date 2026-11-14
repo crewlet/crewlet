@@ -130,6 +130,13 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "gesture with no button, so the reason it cannot act is one line above the lanes",
     suite: "routes/worklet/shapes/Board.test.tsx",
   },
+  "routes/worklet/taskMenu.tsx": {
+    why:
+      "a task's Move to project, Move to trash, Restore and Delete permanently — menu entries on its page, " +
+      "its peek and each row of every shape, and a selection's bar — each held with the " +
+      "sentence that says why where the reader cannot act",
+    suite: "routes/worklet/taskMenu.test.tsx",
+  },
   "routes/doclet/page/Editor.tsx": {
     why:
       "a page's Save (save_page against the revision it opened) and its conflict's " +
@@ -379,6 +386,20 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     notServed: ANSWER_SEAT_HELD,
     seatRule: true,
   },
+  EditViewButton: {
+    props: {
+      view: {
+        id: "v1",
+        name: "Triage",
+        container: "project:ENG",
+        type: "board",
+        params: { priority: "high,urgent" },
+        personal: false,
+      },
+    },
+    name: /^Edit view$/,
+    tool: "save_work_view",
+  },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
     name: /^View$/,
@@ -478,6 +499,8 @@ const NOBODY: ViewerState = {
   anonymous: true,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",

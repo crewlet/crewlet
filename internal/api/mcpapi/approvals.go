@@ -17,9 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
@@ -215,30 +215,10 @@ func (s *Service) serveApproval(w http.ResponseWriter, r *http.Request, rec *typ
 // window; every other call is the seat's lead's or an administrator's, on the
 // seat's own record, as answering its run's question is.
 func (s *Service) approverPolicy(run sandbox.PendingRun) authz.Policy {
-	if run.HeldCall.Approvers == sandbox.HeldApproversRelease {
-		var named []string
-		if company := s.company(); company != nil {
-			named = company.DelegatedDecisions.EscalateFor(delegated.Kind(run.HeldCall.Act))
-		}
-		return authz.Policy{Action: authz.ActionReleaseApprove,
-			Object: func(*http.Request) authz.Object {
-				return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle, Named: named}
-			}}
-	}
-	if run.HeldCall.Approvers == sandbox.HeldApproversSSH {
-		var named []string
-		if company := s.company(); company != nil {
-			named = company.SSHMayApprove()
-		}
-		return authz.Policy{Action: authz.ActionSSHOperateApprove,
-			Object: func(*http.Request) authz.Object {
-				return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Named: named}
-			}}
-	}
-	return authz.Policy{Action: authz.ActionToolsApprove,
-		Object: func(*http.Request) authz.Object {
-			return authz.Object{Kind: authz.KindPerson, ID: run.AgentID, Owner: run.AgentHandle}
-		}}
+	// [runanswer.HeldCall] STATES IT, so the screens that offer this answer
+	// read the same verb and object the route decides on.
+	who := runanswer.HeldCall(run, s.company())
+	return authz.Policy{Action: who.Action, Object: func(*http.Request) authz.Object { return who.Object }}
 }
 
 // allowAlways writes the held call's tool to allow on its server's entry, by

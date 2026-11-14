@@ -1086,6 +1086,12 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 		clause, values := handleClause(on.col("assignee"), handles)
 		add(clause, values...)
 	}
+	if len(q.AssigneeNot) > 0 {
+		// THE SAME CLAUSE, NEGATED, so `!none` leaves out exactly the rows
+		// `none` admits and a handle exactly the rows it names.
+		clause, values := handleClause(on.col("assignee"), q.AssigneeNot)
+		add("NOT ("+clause+")", values...)
+	}
 	if len(q.Reporter) > 0 {
 		clause, values := handleClause(on.col("reporter"), q.Reporter)
 		add(clause, values...)

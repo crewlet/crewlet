@@ -5,6 +5,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -97,6 +98,12 @@ type SecretRows interface {
 // after their end.
 type DeviceSignIns interface {
 	ListDeviceSignIns(ctx context.Context) ([]coord.DeviceSignIn, error)
+}
+
+// ModelChecks reads each model entry's latest check, false where none still
+// answers ([coord.ModelCheck.Lapsed]).
+type ModelChecks interface {
+	ModelCheck(ctx context.Context, entry string) (coord.ModelCheck, bool, error)
 }
 
 // ModelCatalogue is the model catalogue a model step suggests from
@@ -265,6 +272,63 @@ func DeviceOf(d coord.DeviceSignIn) ModelDevice {
 		Status: string(d.Status), Detail: d.Detail, StartedAt: d.StartedAt, ExpiresAt: d.ExpiresAt}
 	if d.RevisionID != "" {
 		out.Reload = &DeviceReload{RevisionID: d.RevisionID, Epoch: d.Epoch}
+	}
+	return out
+}
+
+// ModelCheckState is where a model check is, as an answer names it.
+type ModelCheckState string
+
+const (
+	// ModelCheckRunning is a check its node is still running.
+	ModelCheckRunning ModelCheckState = "running"
+	// ModelCheckEnded is a check that ended: with what it found, or why it
+	// found nothing.
+	ModelCheckEnded ModelCheckState = "ended"
+	// ModelCheckLost is a check still running past its deadline: the node
+	// running it stopped, and nothing will end it.
+	ModelCheckLost ModelCheckState = "lost"
+)
+
+// ModelCheckStates is every state this build names, the closed set
+// [ModelCheckState.Valid] reads and a client's copy of the words is held to.
+var ModelCheckStates = []ModelCheckState{ModelCheckRunning, ModelCheckEnded, ModelCheckLost}
+
+// Valid reports whether the state is one this build names.
+func (s ModelCheckState) Valid() bool { return slices.Contains(ModelCheckStates, s) }
+
+// ModelCheck is a model check, as `POST /llm/providers/{key}/check` and the
+// `llm_check` question answer it.
+type ModelCheck struct {
+	ID        uuid.UUID       `json:"id"`
+	Entry     string          `json:"entry"`
+	Node      string          `json:"node"`
+	State     ModelCheckState `json:"state"`
+	Draft     bool            `json:"draft"`
+	Smoke     bool            `json:"smoke"`
+	StartedAt time.Time       `json:"started_at"`
+	Deadline  time.Time       `json:"deadline"`
+	// EndedAt is when it ended, null while it runs or once it is lost.
+	EndedAt *time.Time `json:"ended_at"`
+	By      string     `json:"by"`
+	// Check is what an ended check found, as the check's lines; Failure is
+	// why one ended, or was lost, without finding anything.
+	Check   json.RawMessage `json:"check,omitempty"`
+	Failure string          `json:"failure,omitempty"`
+}
+
+// ModelCheckOf is a check's record as the answers render it at now.
+func ModelCheckOf(c coord.ModelCheck, now time.Time) ModelCheck {
+	out := ModelCheck{ID: c.ID, Entry: c.Entry, Node: c.Node, State: ModelCheckRunning, Draft: c.Draft,
+		Smoke: c.Smoke, StartedAt: c.StartedAt, Deadline: c.Deadline, By: c.By}
+	switch {
+	case !c.Running():
+		ended := c.EndedAt
+		out.State, out.EndedAt, out.Check, out.Failure = ModelCheckEnded, &ended, c.Answer, c.Failure
+	case c.Lost(now):
+		out.State = ModelCheckLost
+		out.Failure = fmt.Sprintf("the check did not end on node %s by its deadline: the node may have "+
+			"stopped; check again", c.Node)
 	}
 	return out
 }
@@ -867,4 +931,21 @@ func (s Sources) llmDeviceSignIn(ctx context.Context, p Params) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("%w: no device sign-in %s is in progress or recently ended", ErrNotFound, id)
+}
+
+// llmCheck answers a model's latest check by its entry's key, while its record
+// answers.
+func (s Sources) llmCheck(ctx context.Context, p Params) (any, error) {
+	key := p.String("key")
+	if key == "" {
+		return nil, fmt.Errorf("%w: key must name a model entry", ErrBadParams)
+	}
+	check, found, err := s.ModelChecks.ModelCheck(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: no check of %q is running or recently ended", ErrNotFound, key)
+	}
+	return ModelCheckOf(check, s.clock()), nil
 }

@@ -33,14 +33,15 @@ import {
   type ServicesRun,
 } from "~/app/nav.ts";
 import type { Grant } from "~/lib/access.ts";
-import { href, useParam } from "~/app/router.tsx";
+import { href } from "~/app/router.tsx";
+import { useKeptRange } from "~/lib/keptRange.ts";
 import { QueryState } from "~/components/common.tsx";
 import { missingFrom } from "~/components/CoverageNote.tsx";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import type { LogRefusal, QueryRefusal } from "~/protocol/index.ts";
-import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
+import { DEFAULT_RANGE, HOME_RANGE_SCREEN, isHomeRange, rangeOf } from "~/routes/home/model.ts";
 
 /** One choice a widget's setting offers: a saved view, a project, a seat. */
 export interface WidgetOption {
@@ -290,7 +291,7 @@ export function WidgetCard({
  * page's one range control moves every such widget at once.
  */
 export function useHomeRange() {
-  const [value] = useParam("range", DEFAULT_RANGE);
+  const [value] = useKeptRange("range", HOME_RANGE_SCREEN, DEFAULT_RANGE, isHomeRange, "filter");
   return rangeOf(value);
 }
 

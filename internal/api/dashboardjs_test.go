@@ -1417,7 +1417,23 @@ const (
 	// wording for the count. The rail's group, the link dialog, the Work tab
 	// and the marks are the Worklet and atlas chunks'. So it moved to 408
 	// KiB, 2.23 seconds.
-	initialBudget = 408 << 10
+	// The Inbox badge counting what waits on the reader, and nothing else,
+	// took it to 408.5 KiB: the frame now reads the engine's decisions and
+	// counts the stopped seats the reader can act on and the conditions they
+	// decide, so the stopped-seat rule left a lazy row module for the entry's
+	// decisions module, and the attention queue gained each platform notice's
+	// fix destination and the reader's put-off marks (a small store beside
+	// the Home board's). Every list that draws these rows stays lazy. So it
+	// moved to 409 KiB, 2.23 seconds.
+	// The Inbox badge, a task's own menu and a kept range, built together on
+	// kit 0.126.1, took it to 409.8 KiB (419,627 bytes), 811 bytes past it.
+	// Each fit its own budget alone: over the 407.3 KiB they were built on,
+	// the badge added 1,628 bytes, a task's own menu 656 (its rules ride the
+	// one sheet, and it widened the write and work helpers the entry already
+	// reads) and a kept range 257 (the per-reader range store the page header
+	// reads), and main's own change and the kit 35 more. So it moved to 410
+	// KiB, 2.24 seconds.
+	initialBudget = 410 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2392,7 +2408,49 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// A task's own menu on every Worklet shape and its page (Move to project,
+	// Move to trash with the subtask question and Undo, Restore and Delete
+	// permanently with its confirmation), a list's selection and its bar, the
+	// Start, Created and Updated filters, group by parent, and one writer for
+	// the grouping keys added 14,693 bytes, nearly all script, and took it to
+	// 5989.0 KiB (6,132,720 bytes): 5990 KiB.
+	// My work's Watching and Collaborating as the work list with its toolbar,
+	// the Queue's order folded into a phone's More, a saved view's settings
+	// in words with its Edit view, and Subgroup by placed with the grouping
+	// added 3,450 bytes, nearly all script, and took it to 5992.4 KiB
+	// (6,136,170 bytes): 5993 KiB.
+	// What waits on a person in one place (the engine's standing on every
+	// parked run read by Home, the Inbox, Live and a seat's page, the Inbox's
+	// group of what a reader may answer for somebody else, a badge counting
+	// what waits on them alone, a platform notice's fix and put-off marks,
+	// which standing alarms are in Needs you, and a failed read said with its
+	// Try again on every screen that drew it as empty) added 8,775 bytes,
+	// nearly all script, and took it to 5983.2 KiB (6,126,802 bytes): 5984 KiB.
+	// A range kept for its reader (the per-reader store and its hook), a
+	// model wizard that names its wait and returns to where it was opened, an
+	// atlas that says why a change is held and links what needs attention,
+	// and a skeleton on the screens that drew nothing while their read was
+	// out added 4,142 bytes, nearly all script, and took it to 5979.1 KiB
+	// (6,122,607 bytes): 5980 KiB.
+	// Kit 0.126.0 (a map's three levels of detail with its held titles, and a
+	// pill row that scrolls with its ring inside the tab), less this tree's
+	// own copy of the pill row's scroll rule, added 2,540 bytes, script and
+	// sheet, and took it to 5981.6 KiB (6,125,147 bytes): 5982 KiB.
+	// Built together on kit 0.126.1, a task's own menu, what waits on a person
+	// in one place and a kept range measure 6008.7 KiB (6,152,941 bytes), 409
+	// bytes over the three and the running phase's card added to the tree
+	// they were built on: 6009 KiB.
+	// The train's own fixes (one Try again where a screen draws its own, and a
+	// failed REST read asked again by the shared one) added 318 bytes, all
+	// script, and took it to 6009.0 KiB (6,153,259 bytes), 43 bytes past it:
+	// 6010 KiB.
+	// A model's test polled while it runs on its node's own time (the
+	// `llm_check` question, and what a test that found nothing says) added
+	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
+	// bytes): 5977 KiB.
+	// The release train merged with that poll, on kit 0.126.2, measures
+	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
+	treeBudget = 5<<20 + 891<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

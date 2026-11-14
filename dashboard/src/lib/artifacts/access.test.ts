@@ -24,6 +24,8 @@ const PERSON: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: false,
   configManagedBy: [],
   assistant: "disabled",

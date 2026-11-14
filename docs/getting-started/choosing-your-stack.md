@@ -241,7 +241,7 @@ their **own identities** — so MRs/PRs come from the agent, not from you.
 Per-agent identities are API-provisionable end to end, so one CLI run sets up
 the whole fleet — the same property that makes Mattermost the easiest chat to
 start on. [GitLab Integration](../integrations/gitlab.md#walkthrough-nimbus-against-local-gitlab)
-walks the bundled Nimbus example onto a local GitLab end to end:
+adds a local GitLab to a copy of the bundled Nimbus example end to end:
 
 1. **Create the top-level group** (you) — e.g. `gitlab.com/your-group` — or run
    a self-hosted GitLab (any modern GitLab; a local instance ships as the
@@ -369,9 +369,10 @@ and the reason is this row rather than any of the others.
 **Mattermost is the quickest vendor to try.** It ships in this repo's
 `docker-compose.yml`, provisioning is one non-interactive command, and nothing
 has to reach the engine — so you can go from nothing to an agent answering in a
-channel on a laptop, with no account to create and no tunnel. It is what the
-bundled example runs on, which makes it the path with the least between you and
-a working loop.
+channel on a laptop, with no account to create and no tunnel. Adding it to a
+copy of the bundled example ([First run, end to
+end](../integrations/mattermost.md#first-run-end-to-end)) is the path with the
+least between you and a working vendor loop.
 
 **Slack is where most companies already are.** If yours is one of them, that is
 the answer regardless of anything above: the agents show up where the
@@ -539,52 +540,43 @@ network.
 
 ## Putting it together
 
-Two bundled **Nimbus examples** model the same seven-seat company at opposite
-ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
-is the **reference**: a pick from every row — GitLab, Mattermost, open models
-through OpenCode on an OpenRouter key, a sandbox its engineers push merge
-requests from, Worklet and Doclet rather than a vendor's, and two repositories
-on Gitlet beside GitLab's. Read it to
-see what a full stack looks like written out, and
-[Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
-for the blocks that move those two halves to Atlassian.
-
-`examples/nimbus-claude-code.company.yaml` + `examples/nimbus-claude-code.config.yaml`
-is the **short path**: every pick that costs nothing extra to stand up — chat
-on **Mattermost**, the model **Claude Code on your own Claude plan**, the
-tracker and knowledge base the **engine's own**, and the code sandbox on the
-**engine host** (`run_in: direct`), which reuses that same plan login
-rather than needing an account of its own — a first run on your own machine
-while its seats take work from you alone. Every seat runs that harness's
+The bundled **Nimbus example** models a seven-seat company that makes the
+pick on every row of this page that needs **no outside account**.
+`examples/nimbus.company.yaml` + `examples/nimbus.config.yaml` is that
+**reference**: chat on **Chatlet**, work items on **Worklet**, pages on
+**Doclet** and every repository on **Gitlet** — the engine's own, each — the
+model **Claude Code on your own Claude plan**, and a sandbox on the **engine
+host** (`run_in: direct`) that reuses that same plan login, where its
+engineers check repositories out of Gitlet and propose their work as changes.
+Every seat runs that harness's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
-its executor, so the executor *is* the harness's own agentic loop with a real shell. The rows that need
-somebody else's service are deliberately empty, which is what lets the whole
-thing run from one compose profile and one `crewlet llm login`:
+its executor, so the executor *is* the harness's own agentic loop with a real
+shell — a first run on your own machine while its seats take work from you
+alone. The one other key it reads is `OPENAI_API_KEY`, for embeddings. Read it
+to see a whole stack written out; it comes up from the binary and one
+`crewlet llm login`:
 
 ```bash
-docker compose --profile mattermost up -d --wait
-COMPANY=examples/nimbus-claude-code.company.yaml scripts/mattermost-dev-bootstrap.sh
+export CREWLET_SECRET_KEY_2026_01="<the key `crewlet secrets keygen -key-id 2026-01` prints>"
+export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 crewlet llm login default -from-host \
-    -company examples/nimbus-claude-code.company.yaml \
-    -config examples/nimbus-claude-code.config.yaml
-crewlet run -config examples/nimbus-claude-code.config.yaml \
-            -company examples/nimbus-claude-code.company.yaml
+    -company examples/nimbus.company.yaml \
+    -config examples/nimbus.config.yaml
+export OPENAI_API_KEY="<for-embeddings>"
+export CREWLET_BOX_GIT_URL="http://localhost:8000/box/git"   # where a box reaches Gitlet
+crewlet run -config examples/nimbus.config.yaml \
+            -company examples/nimbus.company.yaml
 ```
 
-**Both examples run chat on a vendor, and that is now the deliberate part
-rather than the free one.** Chatlet costs less to stand up than either —
-nothing at all — so an example that used it would demonstrate no chat
-configuration whatsoever. These two keep Mattermost because the vendor path is
-the one with blocks to show: a bot token per seat, a provisioning command, the
-working-indicator settings and the thread routing. To run either example on
-the engine's own chat instead, delete its `integrations.mattermost` block,
-each seat's own `integrations.mattermost` block, and the `mattermost` MCP
-server with each seat's `mcp_env` for it, and drop `--profile mattermost` and
-the bootstrap script from the commands above: `chat.backend` then derives
-`chatlet` on its own. The short path's units already name a `channel`, which
-opens each unit's room; the reference example's units name none, so give
-them one (`channel: product`, `channel: engineering`) or no team has a room
-until somebody opens one.
+**Every vendor row is additive, and each page shows the blocks to add to a
+copy of it.** A code host — [GitLab](../integrations/gitlab.md) or
+[GitHub](../integrations/github.md) — runs beside Gitlet. Chat, the tracker
+and the wiki are each one axis, so a vendor there *replaces* the engine's own
+in the same edit: [Mattermost](../integrations/mattermost.md#first-run-end-to-end)
+or [Slack](../integrations/slack.md) means `chat.backend: vendor` (Chatlet
+beside a vendor chat is refused), and [Jira](../integrations/jira.md) /
+[Confluence](../integrations/confluence.md) mean `tracker.backend: jira` /
+`knowledge.backend: confluence`.
 
 Reading it top to bottom is the fastest way to see the choices on this page
 made concretely — each block carries the rationale in comments, including the

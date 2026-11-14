@@ -33,6 +33,7 @@ import {
   Callout,
   Card,
   EmptyState,
+  Skeleton,
   EmptyValue,
   InlineCode,
   TableNumberCell,
@@ -97,6 +98,12 @@ export function Diaries() {
           many: "Their agents are listed without counts",
         }}
       />
+      {/* LOADING IS DRAWN HERE, beside `QueryState` and never inside it: it
+          draws nothing while a read is in flight and hides its children, so
+          a screen that left the wait to it was a blank page. */}
+      {overview.loading && !overview.data && (
+        <Skeleton variant="text" rows={6} label="Loading diaries" />
+      )}
       <QueryState
         error={overview.error}
         refusal={overview.refusal}
@@ -259,6 +266,11 @@ export function Diary({ handle }: { handle: string }) {
           No agent is called <InlineCode>{handleLabel(handle)}</InlineCode>. Showing memory left
           under that handle.
         </Callout>
+      )}
+      {/* A DIARY IN FLIGHT IS A SKELETON, drawn beside `QueryState`, which
+          draws nothing while it waits: the page was blank under its trail. */}
+      {memory.loading && !data && (
+        <Skeleton variant="text" rows={8} label={`Loading ${name}'s diary`} />
       )}
       <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
         {data?.held_by === "none" ? (

@@ -62,7 +62,7 @@ import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
-import type { DecisionSubject } from "~/lib/decisions.ts";
+import { splitDecisions, type DecisionSubject } from "~/lib/decisions.ts";
 import {
   checkStateWord,
   classCount,
@@ -220,19 +220,26 @@ export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
   return out;
 }
 
-/** The two groups the list always draws. */
+/** The groups the list always draws. */
 export interface InboxRows {
   needs: InboxRow[];
+  /** The runs the reader may answer that wait on somebody else. */
+  others: InboxRow[];
   updates: InboxRow[];
 }
 
 /**
- * Needs you and Updates.
+ * Needs you, Waiting on others and Updates.
  *
  * NEEDS YOU IS NEWEST FIRST with the conditions after the decisions, the order
  * `decisionSubjects` hands the decisions in: a condition is the engine's own
  * reading of the company and stays until it clears, while a decision is
  * somebody waiting on an answer.
+ *
+ * WAITING ON OTHERS is what the engine says the reader may answer though it
+ * is put to somebody else (`lib/decisions.ts`' `splitDecisions`): a group of
+ * its own after Needs you, drawn and answered the same way, and counted by
+ * nothing.
  */
 export function inboxRows(input: {
   subjects: readonly DecisionSubject[];
@@ -249,16 +256,19 @@ export function inboxRows(input: {
     byAsk.set(ask, [...(byAsk.get(ask) ?? []), n.extra]);
   }
   const attached = new Set<string>();
-  const needs: InboxRow[] = subjects.map((subject) => {
+  const row = (subject: DecisionSubject): InboxRow => {
     const held = subject.kind === "ask" ? (byAsk.get(subject.ask.comment) ?? []) : [];
     for (const n of held) attached.add(n.record_id);
     return { kind: "decision", key: subjectKey(subject), at: subject.at, subject, notices: held };
-  });
+  };
+  const { yours, others } = splitDecisions(subjects);
+  const needs: InboxRow[] = yours.map(row);
   for (const item of conditions) {
     needs.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
   }
   return {
     needs,
+    others: others.map(row),
     updates: noticeRows(notices.filter((n) => !attached.has(n.record_id))),
   };
 }
