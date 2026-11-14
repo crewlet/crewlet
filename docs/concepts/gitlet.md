@@ -4988,11 +4988,12 @@ the tip, since a push on top of the merge may have moved the target since; the
 landing names whoever made that push, and the change's other authors told it
 merged read for that pusher's grant too or, where the pusher made it for
 somebody, for that somebody. So with the merge queue's records: its landing
-names whoever queued the change, and its removal of a change from the queue
-and a close of the landed change's work item it could not make name nobody,
-but each carries whom the change was queued for, so a seat any of them wakes
-reads for the enqueuer's grant too or, where the enqueuer queued it for
-somebody, for that somebody. A
+names whoever queued the change, so a seat it wakes reads for the enqueuer's
+grant too or, where the enqueuer queued it for somebody, for that somebody;
+its removal of a change from the queue and a close of the landed change's
+work item it could not make name nobody, so a seat they wake reads for its own
+grant, but where the enqueuer queued the change for somebody each carries
+them, and the seat reads for that somebody. A
 credential acting as no seat is the requester by its own login: it reads every
 repository itself and pushes to none, so the turn its change wakes reads as the
 seat may and writes only the seat's own work
@@ -6687,10 +6688,15 @@ queue waits rather than step on the rest. During a rolling upgrade a home
 reads its queue only from a data node of its own build: a data node of the
 newer build refuses an older home's read, which that build asks in its old
 form, and a data node of an older build answers a newer home's as a read it
-does not know, so the next data node is asked. Where none is left, the queue
-waits, losing nothing, until the home or the data nodes catch up. Upgrading
-the data nodes first, as crewlet-operator does, leaves only an older home's
-queue waiting, for the rest of the roll.
+does not know, so the next data node is asked. So a home of the newer build
+closes each landed change's work item for whom its enqueue was made, and a
+home of the older build, which reads no requester off its queue, closes it for
+its enqueuer alone, as before, until the roll completes. Where no data node of a
+home's build is left, its queue waits, losing nothing: a newer home's until a
+data node of its build serves it, which only a roll that upgrades the homes
+before the data nodes meets, and an older home's until the home is upgraded,
+which upgrading the data nodes first, as crewlet-operator does, leaves for the
+rest of the roll.
 
 #### What the home does with a queue
 
@@ -6806,7 +6812,8 @@ holds.
   refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
   under `merged`, why the item was left open (`Change … was merged through
   its queue, and its work item was not closed: …`), in turns worked for whom
-  the enqueue was made for. A close whose requester the closing home's build
+  a seat's enqueue was made for where it was made for somebody, and for their
+  own seats otherwise. A close whose requester the closing home's build
   cannot read — named by a kind only a newer build writes, during a rolling
   upgrade — is decided not at all and stays owed for a home of that build. A
   close no home could make for `gitlet.QueueHistory` is given up with its
@@ -7246,11 +7253,12 @@ stops after its record committed loses no wake.
   the change's head into its target, each the pusher's errand or, where the
   pusher made that push in a turn it worked for somebody, that somebody's,
   which the routing carries beside the pusher as it does beside a writer; a
-  queue's landing is whoever queued the change, and its removal of a change
-  from the queue and a close it could not make are the engine's, each the
-  enqueuer's errand or, where the enqueuer queued it in a turn it worked for
-  somebody, that somebody's, which the routing carries beside the enqueuer, or
-  beside nobody on the engine's two.
+  queue's landing is whoever queued the change, the enqueuer's errand or,
+  where the enqueuer queued it in a turn it worked for somebody, that
+  somebody's, which the routing carries beside the enqueuer; and its removal
+  of a change from the queue and a close it could not make are the engine's,
+  nobody's errand unless the change was queued in a turn worked for somebody,
+  then that somebody's, which the routing carries beside nobody.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

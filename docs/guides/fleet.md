@@ -825,8 +825,10 @@ The consequences worth stating plainly:
   upgraded is refused the answers it would carry into another request — a
   publish keeping a version's files, a view save and the views listed to make
   one, the catalogue, a project's fields or a datastore's schema sent back
-  whole, a list's query, a Gitlet node's sync of a repository — and answers
-  `fleet_builds_differ` for those until it is upgraded too. See
+  whole, a list's query, a Gitlet node's sync of a repository, the queue work
+  a repository's home Gitlet node lands its merge queue from — and answers
+  `fleet_builds_differ` for those until it is upgraded too, while such a home's
+  merge queues wait, losing nothing. See
   [A build reads what it is asked whole](../concepts/scaling.md#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it).
 - **A roll finishes within the hour, or its wakes are dead-lettered.**
   Every node pulls each domain's wake feed from one durable consumer, so a

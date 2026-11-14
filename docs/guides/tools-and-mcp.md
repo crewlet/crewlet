@@ -573,8 +573,8 @@ Gitlet permission woke reads nothing: every code tool is refused before
 anything is read, and the seat is told why and that an administrator can give
 the person Gitlet
 ([Reads made for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else)).
-The bound is that turn's alone: a colleague the seat asks reads for the seat,
-and the turn the answer wakes is the seat's own work.
+The bound follows the turn's work: a colleague the seat asks reads for the same
+somebody, and so does the turn the answer wakes.
 An operator's own assistant calls the tools in no turn, for its caller alone.
 
 **A repository's text is fenced.** A file's lines — a blame's among them —

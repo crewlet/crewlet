@@ -451,9 +451,13 @@ a page is decided for that credential: it opens what is shared with it or that
 it owns, and nothing else; a turn nobody woke (a
 schedule, a watch, the engine's own notice, the outcome of the agent's own act
 such as a workflow its own push failed) is bounded by the agent alone. The
-bound is the turn's and no later one's: a colleague the agent asks reads for
-the agent, the turn the colleague's answer wakes is the agent's own, and what
-the agent already knows is no read at all ([Sharing](artifacts.md#sharing)).
+bound is the turn's and every turn it hands its work on to: a colleague the
+agent asks, the turn the colleague's answer wakes, and a colleague woken by the
+agent's writes on Worklet, Doclet, Chatlet or Gitlet, or by what the engine
+records on Gitlet about those writes, all read for the same somebody ([An agent
+uses only the apps of the person it works
+for](#an-agent-uses-only-the-apps-of-the-person-it-works-for)), and what the
+agent already knows is no read at all ([Sharing](artifacts.md#sharing)).
 
 The decision is
 [ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),
@@ -712,7 +716,11 @@ and an agent on a node of the older build reads no requester off those two. A
 merge queue's home reads its queue only from a data node of its own build, so
 a home of the newer build closes each landed change's item within the apps of
 whom its enqueue was made for, and a home of the older build closes it for the
-agent that enqueued alone, as before, until the roll completes.
+agent that enqueued alone, as before, until the roll completes. Where no data
+node of a home's build is left, its queue waits, losing nothing: an older
+home's once every data node is upgraded, which crewlet-operator does first,
+until the home is upgraded too, and a newer home's only in a roll that
+upgrades the homes first, until a data node of its build serves it.
 
 - **The person asked still answers.** A work item's open ask lets the person it
   names read the item and answer without Worklet
