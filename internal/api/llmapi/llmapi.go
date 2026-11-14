@@ -27,6 +27,11 @@
 // home for one one-turn call (decision D2), and sealed only if the vendor
 // signed it in; a 429 proves it authenticated. A refused value is never
 // stored, so the credential the model signs in with keeps signing it in.
+// That call is the whole test: the doctor's local-tool and web probes are
+// left to the model's own check, since they say nothing about a credential.
+// A write that follows a dry run of the same values for the same entry, by
+// the same principal on the same node within [TestedWindow], is answered by
+// that dry run's pass rather than by a second run of the harness ([tested]).
 // Then, in the setup writer's order, the value is sealed and the revision
 // that reads it re-activated (ADR-0070), so the answer can name the epoch
 // every node reads it at.
@@ -244,6 +249,9 @@ type Service struct {
 	node    string
 	now     func() time.Time
 	guard   authz.Guard
+	// tested is the candidates that passed their test on this node of
+	// late, so the write after a dry run does not test again.
+	tested *tested
 }
 
 // New builds the service, refusing a missing dependency by name.
@@ -271,7 +279,8 @@ func New(opts Options) (*Service, error) {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
 	return &Service{engine: opts.Engine, config: opts.Config, secrets: opts.Secrets,
-		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now, guard: guard}, nil
+		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now, guard: guard,
+		tested: newTested()}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through

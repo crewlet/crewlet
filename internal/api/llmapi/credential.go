@@ -110,7 +110,8 @@ func limitedOf(sit *coord.ModelSitOut) *Limited {
 //     overwrites a credential another model reads.
 //  4. `config.write` when a re-activation will follow, before anything is
 //     tested or sealed.
-//  5. The test: the harness itself, with only these values.
+//  5. The test: the harness itself, with only these values, unless these
+//     values passed it for this entry moments ago ([tested]).
 //  6. With `dry_run=true`, the answer and nothing else.
 //  7. The seal, then the one re-activation, held to `If-Match`. A create
 //     seals each value only where none is stored, in one step of the
@@ -204,17 +205,31 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	if req.Entity != nil {
 		testDraft = draft
 	}
-	checked, err := s.engine.CheckModel(ctx, key, testDraft, req.Values, false)
-	switch {
-	case errors.Is(err, ErrNoSuchModel):
-		notFound(w, key)
-		return
-	case err != nil:
-		s.fail(w, "test the credential", err)
-		return
+	//
+	// ONCE, NOT ONCE A REQUEST: the write that follows a dry run of these
+	// values for this entry is answered by that run's pass ([tested]).
+	id, digested := s.tested.digest(by.OperatorID, key, draft, req.Values, names)
+	checked, recalled := Check{}, false
+	if digested && !dryRun {
+		checked, recalled = s.tested.recall(id, s.now())
 	}
-	if !s.passed(w, key, names, checked, wordsFor(draft, key, names)) {
-		return
+	if !recalled {
+		var err error
+		checked, err = s.engine.CheckModel(ctx, key, testDraft, req.Values, false)
+		switch {
+		case errors.Is(err, ErrNoSuchModel):
+			notFound(w, key)
+			return
+		case err != nil:
+			s.fail(w, "test the credential", err)
+			return
+		}
+		if !s.passed(w, key, names, checked, wordsFor(draft, key, names)) {
+			return
+		}
+		if digested {
+			s.tested.remember(id, checked, s.now())
+		}
 	}
 	verified := fmt.Sprintf("Answered a one-turn %s run in %.1f s with only %s.",
 		agentName(draft), checked.Elapsed.Seconds(), plural(len(names), "this value", "these values"))

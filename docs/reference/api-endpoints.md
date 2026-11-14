@@ -3046,6 +3046,12 @@ provider the catalogue does not list.
    anything is tested or sealed.
 5. The candidate values are handed to the model's own harness, in an isolated home,
    for one one-turn call, within the entry's `timeout_seconds` capped at 120 s.
+   That call is the whole test: the check's `shell` and `web` lines say their
+   probes were skipped, since they report on the harness and its profile, not
+   on a credential ([`POST .../check`](#post-llmproviderskeycheck) runs them).
+   A write that follows a `dry_run=true` of the same values for the same entry,
+   by the same caller on the same node within ten minutes, is answered by that
+   test's pass and does not run the harness again; any other write tests.
    A refusal is `422 credential_rejected` at the value, and nothing is stored.
    Its `detail` says what the failure meant rather than quoting the harness: the
    vendor refused the credential (wrong, expired or revoked, with the command
