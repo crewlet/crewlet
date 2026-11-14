@@ -4296,7 +4296,8 @@ var ACTIONS = {
 			"topic",
 			"purpose",
 			"template",
-			"auto_join"
+			"auto_join",
+			"archived"
 		],
 		domain: "chat",
 		apps: ["chatlet"],
@@ -4383,6 +4384,114 @@ var ACTIONS = {
 			"visibility",
 			"default_branch",
 			"mirror"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_create_repo: {
+		args: [
+			"name",
+			"owner",
+			"description",
+			"default_branch",
+			"visibility"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_repo: {
+		args: ["repo", "reason"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_restore_repo: {
+		args: ["repo"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_protect_branch: {
+		args: [
+			"repo",
+			"pattern",
+			"direct_push",
+			"allow_force",
+			"allow_delete",
+			"remove",
+			"merge_by",
+			"approvals",
+			"checks",
+			"owners_approve",
+			"delete_source",
+			"remove_gate"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_create_branch: {
+		args: [
+			"repo",
+			"branch",
+			"at"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_branch: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_commit_files: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"message",
+			"files"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_revert: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"commit",
+			"message"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_cherry_pick: {
+		args: [
+			"repo",
+			"branch",
+			"expected_head",
+			"commit",
+			"message"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4506,6 +4615,48 @@ var ACTIONS = {
 			"repo",
 			"change",
 			"all_failed"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_rebase_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_head"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_dequeue_change: {
+		args: ["repo", "change"],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_revert_change: {
+		args: [
+			"repo",
+			"change",
+			"merge"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_resolve_finding: {
+		args: [
+			"repo",
+			"change",
+			"findings",
+			"resolution",
+			"note"
 		],
 		domain: "code",
 		apps: ["gitlet"],

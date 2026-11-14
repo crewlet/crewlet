@@ -2392,7 +2392,14 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// A person's Gitlet writes (a new repository, its branches and their
+	// rules, a file edited, added or deleted, a commit reverted or picked, a
+	// change rebased, taken out of the queue or reverted, a finding
+	// answered, a repository deleted and restored), a room's archive and an
+	// administrator's retention, prune and erase, and the notice for a
+	// service the node starts on its restart added 46,844 bytes, nearly all
+	// script, and took it to 6020.8 KiB (6,165,287 bytes): 6021 KiB.
+	treeBudget = 5<<20 + 901<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
