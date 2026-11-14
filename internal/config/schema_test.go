@@ -1491,8 +1491,9 @@ func TestAKeyringKeyIDIsBoundedWhereASealedStreamCanNameIt(t *testing.T) {
 func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	t.Parallel()
 	schema := compileSchema(t, TierCompany)
-	// Every one: the reference sets every integration block, a signed-in
-	// harness and the cell its entry's `run_in` places executor runs in.
+	// Every one: the reference sets the engine's own surface on every axis,
+	// declared repositories with their protection, a signed-in harness and
+	// the cell its entry's `run_in` places executor runs in.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

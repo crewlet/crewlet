@@ -11,10 +11,10 @@ it is how the two of you stay aligned.
 ## Channel — use A2A, keep it private
 
 Open the 1:1 on a **private A2A channel** with `a2a_ask`. A 1:1 is private,
-so it does **not** go in Mattermost or on a work item — those are for things the whole team
+so it does **not** go in a chat room or on a work item — those are for things the whole team
 should see. (This is the one review-type conversation that belongs on A2A
 *because* it is private.) If your manager is a **human teammate**, they are
-not on A2A: reach them in a Mattermost DM / thread instead, leave the full
+not on A2A: reach them in a chat direct message or thread instead, leave the full
 context in your message, and end your turn — they reply asynchronously.
 
 **One channel is one exchange.** Your ask is delivered, the other side's
@@ -44,7 +44,7 @@ worse ending than agreeing on the action items and stopping.
 ## If you are the manager
 
 1. **Review before you respond.** Look at the report's recent work (their
-   the board, the team channel, the MRs) so your feedback is specific, not
+   the board, the team channel, the changes) so your feedback is specific, not
    generic.
 2. **Give actionable feedback** — concrete, tied to real work, balanced
    between what went well and what to change.

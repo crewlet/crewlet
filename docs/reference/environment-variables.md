@@ -2,7 +2,7 @@
 
 All environment variables used by Crewlet and its integrations.
 
-Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions the bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) uses — rename them freely as long as the config references match.
+Two kinds of variable appear below. A few names are **read directly by the engine or CLI** (marked as such). Everything else is a **`${VAR}` reference convention**: any string value in the YAML config can reference any environment variable (see [Usage in YAML](#usage-in-yaml)), and the names listed here are simply the conventions each integration's own page uses — rename them freely as long as the config references match. The bundled [`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml) runs on no vendor, so of these conventions it references only `OPENAI_API_KEY`; the engine itself reads the `CREWLET_*` names below, `CREWLET_BOX_GIT_URL` among them, which a node running its seats needs for their checkouts of Gitlet.
 
 ---
 
@@ -114,7 +114,7 @@ MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), the
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `TAVILY_API_KEY` | Key for the shared Tavily web-search MCP server the example org declares | <https://tavily.com> |
+| `TAVILY_API_KEY` | Key for a shared Tavily web-search MCP server, for a company that declares one. The bundled example does not: its seats search with their harness's own web tools | <https://tavily.com> |
 
 ---
 

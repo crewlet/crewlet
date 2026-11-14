@@ -54,7 +54,8 @@ func readRepoFile(t *testing.T, parts ...string) []byte {
 // servers' — so an example added to examples/ is held to all of them by one
 // line here rather than by each case remembering it.
 var shippedCompanies = []string{
-	// The reference: the full stack, on Claude Code on a subscription.
+	// The reference: Chatlet, Worklet, Doclet and Gitlet, on Claude Code on a
+	// subscription — no outside account.
 	"nimbus.company.yaml",
 }
 

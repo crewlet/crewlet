@@ -202,15 +202,14 @@ first turn with no integrations at all, then wiring in the real ones.
 
 > **Want a whole company to run?** A complete seven-seat reference org ships
 > in `examples/`: `nimbus.company.yaml` with its Tier A file
-> `nimbus.config.yaml` — GitLab, Mattermost, and Worklet and Doclet, the
-> engine's own work tracker and knowledge base, with its model Claude Code on
-> the Claude plan you already pay for and every seat running that same harness
-> as its own agentic run in a box on the engine host, on that same login. It
-> needs no tracker or wiki account: [Jira](docs/integrations/jira.md) /
-> [Confluence](docs/integrations/confluence.md) are the blocks that move those
-> halves to Atlassian. It talks on Mattermost; a company that declares no chat
-> surface gets the engine's own [chat](docs/concepts/chatlet.md) instead, with its
-> rooms in the dashboard. Every setting carries its reasoning in a comment.
+> `nimbus.config.yaml`, and it needs **no outside account**. Its chat, work
+> items, pages and code are the engine's own — [Chatlet](docs/concepts/chatlet.md),
+> Worklet, Doclet and [Gitlet](docs/concepts/gitlet.md) — and its model is
+> Claude Code on the Claude plan you already pay for, every seat running that
+> same harness as its own agentic run in a box on the engine host, on that same
+> login. Each vendor is a block added to a copy of it, on its own
+> [integration page](docs/integrations/). Every setting carries its reasoning
+> in a comment.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see

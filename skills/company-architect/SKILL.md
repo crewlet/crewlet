@@ -284,12 +284,13 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with GitLab + Mattermost + sandbox on
-  Worklet and Doclet, its model Claude Code on the founder's Claude plan
-  rather than a metered key. For a founder with no code host yet, keep its
-  Mattermost, Worklet and Doclet halves and drop `integrations.gitlab` and
-  everything that names GitLab: the `gitlab` MCP server, the seats'
-  `mcp_env` and `GITLAB_TOKEN` entries, and the git-auth setup step.
+  a complete seven-seat company with no outside account: Chatlet, Worklet,
+  Doclet and Gitlet for its chat, work, pages and code, a sandbox on the
+  engine host, and its model Claude Code on the founder's Claude plan rather
+  than a metered key. The shape to start a founder on; each vendor a founder
+  already uses is added from its integration page, and chat, the tracker and
+  the wiki each move to a vendor by changing that axis's `backend` in the
+  same edit, since the engine's own and a vendor's are never both live.
 
 ## Invariants
 
