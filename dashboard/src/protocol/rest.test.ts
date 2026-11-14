@@ -321,6 +321,20 @@ describe("what a request sends", () => {
     ).rejects.toThrow(TypeError);
   });
 
+  // A HEADER IS BYTES: text a person wrote (a revision's summary) is sent as
+  // its UTF-8 bytes, which the engine reads back whole; `fetch` refused a
+  // character past U+00FF and sent "ü" as a byte no UTF-8 reader reads.
+  test("a header's text is sent as its UTF-8 bytes, and ASCII as it is", async () => {
+    const sent = stub(() => json({}, 201));
+    await rest.request("POST", "/config/reload", {
+      headers: { "X-Summary": "zurück \u{1F600}", "If-Match": '"r7"' },
+    });
+    const headers = sent[0]!.init.headers as Record<string, string>;
+    expect(headers["If-Match"]).toBe('"r7"');
+    expect(headers["X-Summary"]).toBe("zur\u00c3\u00bcck \u00f0\u009f\u0098\u0080");
+    expect(() => new Headers(headers)).not.toThrow();
+  });
+
   test("a file's bytes are sent as the Blob, under the file's own type", async () => {
     const sent = stub(() => new Response(null, { status: 204 }));
     const png = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });

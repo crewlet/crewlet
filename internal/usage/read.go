@@ -211,7 +211,8 @@ type ScheduleRunsQuery struct {
 	Target string
 
 	// Outcome narrows to the fires under one outcome as the history reports
-	// it ([fireOutcomeSQL]): `fired`, `skipped_catchup`, `skipped_paused`, or
+	// it ([fireOutcomeSQL]): `fired`, `fired_manually` for a run a person
+	// asked for now, `skipped_catchup`, `skipped_paused`, or
 	// `skipped_superseded` for a fire its seat did not run because a later
 	// fire of the schedule ran in its place. Empty is every one.
 	Outcome string
@@ -221,11 +222,17 @@ type ScheduleRunsQuery struct {
 	Limit int
 }
 
-// scheduleOutcomeFired is the dispatch ledger's word for a fire it sent
-// (schedule.OutcomeFired), spelled here because this package does not depend
-// on the scheduler's; TestAFireItsSeatDidNotRunReadsAsSkipped holds the two
+// scheduleOutcomeFired and scheduleOutcomeFiredManually are the dispatch
+// ledger's words for a fire it sent, by the cron and on a person's ask
+// (schedule.OutcomeFired, schedule.OutcomeFiredManually), spelled here because
+// this package does not depend on the scheduler's;
+// TestAFireItsSeatDidNotRunReadsAsSkipped and
+// TestARunAPersonAskedForReadsAsOneUntilALaterFireRanInItsPlace hold them
 // together.
-const scheduleOutcomeFired = "fired"
+const (
+	scheduleOutcomeFired         = "fired"
+	scheduleOutcomeFiredManually = "fired_manually"
+)
 
 // fireOutcomeSQL is a fire's outcome as the schedule's history reports it, over
 // a `usage_schedule_runs` row aliased `r`, with [fireOutcomeArgs] bound to it.
@@ -237,15 +244,16 @@ const scheduleOutcomeFired = "fired"
 // different nodes, and the second is filed on the day the seat came back
 // rather than the day of the fire, so they are joined here, by the fire's
 // trace, at read time: the one place both halves are, whichever nodes and
-// days published them. Only a FIRED row can be superseded; a skip was never
-// sent.
-const fireOutcomeSQL = `CASE WHEN r.outcome = ? AND r.trace_id != '' AND EXISTS (
+// days published them. Only a SENT row can be superseded, by the cron or on a
+// person's ask: both wait in the seat's inbox under the schedule's one
+// partition, and the seat runs the latest of them. A skip was never sent.
+const fireOutcomeSQL = `CASE WHEN r.outcome IN (?, ?) AND r.trace_id != '' AND EXISTS (
 		SELECT 1 FROM usage_schedule_superseded AS s WHERE s.trace_id = r.trace_id)
 	THEN ? ELSE r.outcome END`
 
 // fireOutcomeArgs are [fireOutcomeSQL]'s arguments, in its order.
 func fireOutcomeArgs() []any {
-	return []any{scheduleOutcomeFired, types.ScheduleOutcomeSuperseded}
+	return []any{scheduleOutcomeFired, scheduleOutcomeFiredManually, types.ScheduleOutcomeSuperseded}
 }
 
 // ScheduleRuns reads one page of the schedule fires every data node recorded,

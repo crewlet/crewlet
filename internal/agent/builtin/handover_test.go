@@ -484,6 +484,12 @@ func newSweepRig(t *testing.T) *sweepRig {
 	op.Code.Actor = builtin.PrincipalActor
 	op.Health.Code = op.Code
 	op.Pauses.Org = op.Org
+	// A SCHEDULE TO RUN NOW, on the seat the sweep names, and a runner that
+	// sends it: what the answer carries is the seats it reached.
+	company.Role("agent-ceo").Schedules = append(company.Role("agent-ceo").Schedules,
+		org.Schedule{Name: "standup", Cron: "0 9 * * *", Task: "plain"})
+	op.ScheduleRuns = builtin.ScheduleRunDeps{Runner: sendingRunner{}, Org: op.Org,
+		Actor: builtin.PrincipalActor}
 	// THE RUN RECORDS the operator's steer_turn reads first, where a note
 	// waits once the turn has launched its executor: "turn-1" has none,
 	// so the note goes to the fleet's scatter.
@@ -576,6 +582,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 		builtin.ReflectAndPersistTool:   {"content": "a plain fact"},
 		worklet.RemoveProjectFileTool:   {"project": "ENG", "path": "notes.md"},
 		builtin.ResumeSeatTool:          {"handle": "agent-ceo"},
+		builtin.RunScheduleTool:         {"scope_type": "role", "scope": "agent-ceo", "name": "standup"},
 		builtin.SearchKnowledgeTool:     {"query": "deploy"},
 		builtin.SearchMessagesTool:      {"text": "backoff"},
 		builtin.SearchWorkItemsTool:     {"text": "checkout"},

@@ -386,6 +386,10 @@ const (
 	ActionSeatResume     Action = "resume_seat"
 	ActionTurnSteer      Action = "steer_turn"
 	ActionExecutorAnswer Action = "answer_executor"
+	// ActionScheduleRun is the tool `run_schedule`: a person running one
+	// schedule now, off its cron. It wakes the schedule's runner seats, so
+	// it is decided on each of them, as a pause of one is.
+	ActionScheduleRun Action = "run_schedule"
 
 	// ActionKnowledgeAnswer is a person's question answered from what the
 	// company has written down, by a model, at the company's expense. A
@@ -1737,6 +1741,12 @@ var rules = map[Action]rule{
 	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionTurnSteer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// WHEN A SEAT'S SCHEDULED WORK RUNS IS ITS LEAD'S TOO: running a
+	// schedule now starts a turn on every seat it wakes, which is the
+	// decision a pause is the other half of. The tool asks this row about
+	// each of those seats.
+	ActionScheduleRun: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or the run's seat's
 	// lead's: the tool asks this row about the REQUESTER's seat when the

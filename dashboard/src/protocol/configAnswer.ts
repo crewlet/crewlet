@@ -107,7 +107,45 @@ export type ConfigRefusal =
       readonly derived: Derived | null;
       readonly code: string;
       readonly hint: string;
+      /**
+       * The revision the refusal is ABOUT, where it named one: the active
+       * revision a node cannot open ([UNREADABLE_REVISION_CODES]), which a
+       * whole document replaces where it is unsealed.
+       */
+      readonly revisionId?: string;
     };
+
+/**
+ * The `409`s that refuse a revision THIS NODE CANNOT OPEN: stored without a
+ * seal (`unsealed_*`), sealed under a key the node's keyring does not hold
+ * (`unreadable_*`), or in a form this build does not read. None of them is a
+ * race: no re-read changes the answer, and reading one as `revision_advanced`
+ * offered a reload that met the same refusal for ever. Each carries the
+ * engine's own sentence (`detail`) and remedy (`hint`), and names the revision
+ * (`revision_id`).
+ */
+export const UNREADABLE_REVISION_CODES: ReadonlySet<string> = new Set([
+  "unsealed_revision",
+  "unsealed_fleet_revision",
+  "unreadable_revision",
+  "unreadable_fleet_revision",
+  "unknown_seal_revision",
+]);
+
+/**
+ * Whether a refusal is the active revision stored WITHOUT A SEAL: the one
+ * unreadable revision a write can replace, with a whole document that reads
+ * nothing from it (`PUT /config`).
+ */
+export function isUnsealedRefusal(refusal: {
+  readonly kind: string;
+  readonly code?: string;
+}): boolean {
+  return (
+    refusal.kind === "problems" &&
+    (refusal.code === "unsealed_revision" || refusal.code === "unsealed_fleet_revision")
+  );
+}
 
 /**
  * An answer that does not say whether a write landed: never answered, or a
@@ -131,6 +169,21 @@ export interface ConfigUnsettled {
   readonly status: number;
   /** The engine's own sentence where it answered, else what the transport knows. */
   readonly detail: string;
+  /**
+   * The revision the write STORED, where the engine said so: a `503` with
+   * `outcome: "unknown"` is a write that stored this revision and got no
+   * answer to its activation. Whether it is the company is then a read of
+   * `/config` away, and if it is not, a revert of this revision makes it so;
+   * sending the write again makes a second revision over it. Absent for every
+   * other unsettled answer, which names nothing it stored.
+   */
+  readonly storedRevisionId?: string;
+  /**
+   * The node whose history alone holds `storedRevisionId`: a revision whose
+   * activation did not land is in no other node's history, so its revert is
+   * answered by that node and `404` by any other.
+   */
+  readonly node?: string;
 }
 
 /**
@@ -279,6 +332,19 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
       hint: text(body.hint),
     };
   }
+  // A REVISION THIS NODE CANNOT OPEN, which no re-read changes: a problem
+  // in the engine's own words, never a race ([UNREADABLE_REVISION_CODES]).
+  if (answer.status === 409 && UNREADABLE_REVISION_CODES.has(code)) {
+    const revisionId = text(body.revision_id);
+    return {
+      kind: "problems",
+      problems: [{ path: "", segments: null, kind: code, message: text(body.detail) || code }],
+      derived: null,
+      code,
+      hint: text(body.hint),
+      ...(revisionId ? { revisionId } : {}),
+    };
+  }
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"
@@ -302,8 +368,19 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   // might have landed, for a write nothing ever read.
   if (answer.status === 503 && code === "draining") return { kind: "draining", detail };
   if (answer.status === 503 && code === "starting") return { kind: "starting", detail };
-  if (answer.status >= 500)
-    return { kind: "unsettled", answered: true, status: answer.status, detail };
+  if (answer.status >= 500) {
+    // A WRITE THAT STORED ITS REVISION and got no answer to its activation
+    // says which revision, and on which node: what a screen needs to tell a
+    // person to look rather than send it again.
+    const stored = body.outcome === "unknown" ? text(body.stored_revision_id) : "";
+    return {
+      kind: "unsettled",
+      answered: true,
+      status: answer.status,
+      detail,
+      ...(stored ? { storedRevisionId: stored, node: text(body.node) } : {}),
+    };
+  }
   // Every other refusal is about the document or the request that carried it:
   // a validation error, a patch the engine could not apply, a body too large.
   const problems = Array.isArray(body.problems) ? (body.problems as ConfigProblem[]) : [];

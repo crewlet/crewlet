@@ -422,6 +422,15 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
   -H "$AUTH" -H "X-Summary: revert — bootstrap was missing role X"
 ```
 
+The dashboard sends the same request from a revision's page in Settings ›
+Configuration (**Revert to this revision**), after showing what it changes in
+the active revision: `GET /config/revisions/$REV/diff`, the comparison against
+`active`. Its **Reload** is `POST /config/reload`, and its **Edit** reads the
+document as YAML, checks a draft with `PUT /config?dry_run=true` under the
+read's `ETag` and saves it with `PUT /config`, as above. A revert and a reload
+read no body, so their summary travels in `X-Summary` alone, sent as its UTF-8
+bytes, which is how the engine reads every header's text.
+
 ---
 
 ## When another system manages the document
@@ -478,7 +487,8 @@ The dashboard shows the document as managed by `gitops`: the org builder opens
 read-only and every control that writes the document is disabled with that
 sentence. What stays open is the break-glass for a leaked credential, which the
 managing system cannot know about — write the new value and re-publish the
-unchanged document:
+unchanged document (Settings › Configuration's **Reload** sends the same
+request):
 
 ```bash
 printf %s "$NEW_VALUE" | curl -X PUT $CREWLET_URL/secrets/GITLAB_TOKEN -H "$AUTH" --data-binary @-

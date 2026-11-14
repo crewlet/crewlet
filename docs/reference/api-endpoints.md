@@ -6019,7 +6019,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `diagnostics_insights` | `{}` | `GET /diagnostics/insights`: Settings › Diagnostics. **Takes `admin`**. A store that cannot be read raises rather than answering an empty list |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each, and each agent's MCP tools against the tool budget. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
-| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
+| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off, settable}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. `settable` says whether `key` is a setting of the company document, which a `PATCH /config` of that path changes: true for every row but `schedules.timeout_seconds`, a constant of the engine's that each schedule overrides for itself. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `executors` | `{audience?}` | `GET /executors`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `executor_tail` is asked by |
@@ -6911,13 +6911,14 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-seven no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-eight no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
 [`answer_executor`](#answering-a-parked-executor),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
+[`run_schedule`](#running-a-schedule-now),
 [`steer_turn`](#steering-a-running-turn),
 [`answer_knowledge`](#answering-a-question-from-the-companys-knowledge),
 [`atlas_refresh`](#asking-for-a-read-of-an-atlas-source), and
@@ -6945,9 +6946,11 @@ seat moves work between lanes with `update_work_item`. And an executor's questio
 that could answer its own executor would be guessing on its own behalf. Whether a
 seat works at all is a person's decision about it too: a seat that could pause
 a colleague, or resume itself, would be overruling the people who run the
-company. And a note to a running turn is a person redirecting the work: a seat
-that could steer a colleague's turn would be directing it past the person who
-asked for the work. And who read a unit's code is an audit of the people who
+company. And when a seat's scheduled work runs is a person's decision too: a
+seat that could run a schedule would be starting its colleagues' turns, or its
+own, outside the times the people who run the company set. And a note to a
+running turn is a person redirecting the work: a seat that could steer a
+colleague's turn would be directing it past the person who asked for the work. And who read a unit's code is an audit of the people who
 read it — an admin's, which no other person is answered either: a seat that
 could ask would be a model watching the people it works for.
 
@@ -7172,6 +7175,44 @@ They refuse `not_found` for a handle that names no agent seat (a person's seat
 takes no work a pause could hold), `invalid` for a reason past its bound,
 and `conflict` after losing four compare-and-sets in a row to other changes to
 the same pause.
+
+### Running a schedule now
+
+`run_schedule` runs one schedule now, off its cron: its task goes to every seat
+the schedule wakes, as one more fire of the schedule's own conversation, and
+its next scheduled fire is unchanged. See
+[Scheduling § Running a schedule now](../concepts/scheduling.md#running-a-schedule-now).
+
+| Tool | Arguments |
+|---|---|
+| `run_schedule` | `scope_type`: `role` or `unit`; `scope`: the seat's handle for a role schedule, the unit's key for a unit one (a `scope_id` from [`GET /schedules`](#get-schedules) is taken too); `name`: the schedule's name |
+
+**Who may**: whoever may pause every seat the schedule wakes (each seat's
+holder, whoever leads it, or `admin`), asked about each of them, so a team's
+standup is its lead's to run and not any one member's. Never an agent. A
+caller who may not is refused `forbidden` whether or not the schedule exists;
+only one who may is told `not_found`.
+
+It answers `{"name", "scope_type", "scope_id", "outcome", "changed", "runs"}`,
+`runs` holding `{"handle", "status", "trace_id"}` for each seat: `fired` (sent
+now), `already_fired` (the same request again: the run it already made),
+`paused` (a person paused the seat, so it was not woken), `not_ready` (the
+seat's inbox could not be readied, nothing was claimed, and asking again is
+safe) or `unknown` (the claim could not be read, or the publish after it failed:
+the schedule's runs say whether it arrived). `applied` means at least one seat
+was sent the run; `changed` is false when this request sent nothing new. The
+operation is the request's `Idempotency-Key`, so the same request sent again
+sends nothing twice. Each run is recorded in the schedule's history as
+`fired_manually`.
+
+It refuses `conflict` for a schedule switched off (`enabled: false`), a
+company with `scheduling.enabled: false` or with no model, a schedule nothing
+can run (a `lead` schedule on a unit no agent leads, an `each` one on a unit
+with no agent member) and a run every one of whose seats is paused, each in a
+sentence that says so; and `unavailable` on a node that publishes nothing (a
+[maintenance mode](../guides/retention.md#the-three-modes)) or where every
+seat's inbox could not be readied. It writes no state log, so its answer
+carries no `position`.
 
 ### Steering a running turn
 
@@ -13738,13 +13779,15 @@ own fires are [`schedule_runs`](#queries).
 }
 ```
 
-A run's `outcome` is `fired`, `skipped_catchup` (a missed tick outside the
+A run's `outcome` is `fired`, `fired_manually` (a person
+[ran it now](#running-a-schedule-now), off its cron; its `fire_label` is the
+ask's own, never a minute), `skipped_catchup` (a missed tick outside the
 catchup window), `skipped_paused` (the runner seat was
 [paused](../concepts/agent-runtime.md#pausing-a-seat) when the fire came due),
-or `skipped_superseded`: the fire waited in its seat's inbox while the seat
-could not work, and a later fire of the same schedule
+or `skipped_superseded`: the fire, by the cron or by hand, waited in its seat's
+inbox while the seat could not work, and a later fire of the same schedule
 [ran in its place](../concepts/scheduling.md#fires-that-wait-in-a-seats-inbox).
-The first three are what the scheduler recorded; the last is recorded by the
+The first four are what the scheduler recorded; the last is recorded by the
 seat's node, usually a different node and often a later day, and joined to
 the fire by `trace_id`, so a fire reads the same on every node. `scheduled_at`
 and `fire_label` are the tick the fire stands for (the label is the schedule's

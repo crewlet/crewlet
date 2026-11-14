@@ -402,12 +402,15 @@ var subjectOf = map[string]subject{
 	// TURN, whose seat only the node running it can say, so steer_turn
 	// asks that node first (a probe that offers nothing). And a run's
 	// answer is decided on the run's own row: its requester through the
-	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
-	// answerexecutor.go.
+	// self arm, its seat's lead otherwise. And a schedule run now names a
+	// schedule, whose seats only the org resolves, and is decided on every
+	// one of them. See seatpause.go, steer.go, answerexecutor.go and
+	// runschedule.go.
 	PauseSeatTool:      {kind: authz.KindPerson, inTool: true},
 	ResumeSeatTool:     {kind: authz.KindPerson, inTool: true},
 	SteerTurnTool:      {kind: authz.KindPerson, inTool: true},
 	AnswerExecutorTool: {kind: authz.KindPerson, inTool: true},
+	RunScheduleTool:    {kind: authz.KindPerson, inTool: true},
 
 	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
 	// whether an agent owns it), which no argument states, and inside a

@@ -332,6 +332,8 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Steer: builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: builtin.PrincipalActor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget,
 			Actor: builtin.PrincipalActor},
+		ScheduleRuns: builtin.ScheduleRunDeps{Runner: stillRunner{}, Org: orgOf,
+			Actor: builtin.PrincipalActor},
 		Authorize: builtin.Decide(chartLeads),
 	}
 }

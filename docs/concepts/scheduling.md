@@ -285,8 +285,10 @@ week. The node derives every fire in it into the replicated usage history
 when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and whether anybody started a
 given minute. Its
-`outcome` is `fired`, `skipped_catchup` or `skipped_paused`, and the schedule's
-history reports a fired run its seat did not run as `skipped_superseded`
+`outcome` is `fired`, `fired_manually` (a person
+[ran it now](#running-a-schedule-now)), `skipped_catchup` or `skipped_paused`,
+and the schedule's history reports a sent run its seat did not run as
+`skipped_superseded`
 (see *Fires that wait in a seat's inbox* below); the downstream turn result
 (done, failed or timed out) lives in the normal turn telemetry
 (`agent_turn_completed`, and `turn.guard_breach` when a guard fired) under
@@ -569,6 +571,51 @@ judges what its run did by then.
 
 ---
 
+## Running a schedule now
+
+A person can run one schedule **now**, off its cron: the dashboard's **Run
+now** on the schedule's page, or the operator tool `run_schedule`
+([Running a schedule now](../reference/api-endpoints.md#running-a-schedule-now))
+from their own assistant. The schedule's task goes to every seat it wakes, as
+one more fire of the schedule's own conversation, so the run continues the
+session its last fire left and is told how the earlier fires ended, under the
+schedule's wall-clock cap. The seat's brief says who asked for the run and that
+it comes outside the schedule's own times. Its next scheduled fire is
+unchanged.
+
+- **Its own claim.** The run is claimed in the fleet's `fires` slot like any
+  fire, under the same scope, schedule and runner, but under a `fire_label` of
+  its own derived from the request (`manual-` and a digest), never a local
+  minute. So it never takes the claim the cron's tick of the same minute
+  needs, a tick never refuses it, and the catchup pass's question about a
+  minute is never answered by it. The same request sent again (a retry after
+  a lost answer, the dashboard's `Idempotency-Key`) is the same claim, and
+  sends nothing twice.
+- **Recorded as one.** The ledger records it as `fired_manually`, and the
+  schedule's history shows it so; one that waited in the seat's inbox while a
+  later fire ran in its place reads `skipped_superseded`, as a tick's fire
+  does. `scheduled_task_fired` and the seat's `task_assigned` carry who asked,
+  as `requested_by`.
+- **From any node.** The scheduler is a singleton duty, and a run by hand is not
+  the duty's: it evaluates no window. The node the person reached claims it on
+  the fleet and publishes it to each seat's inbox, which the node holding the
+  seat consumes, as it does a tick's. Its row is in that node's own
+  `scheduled_runs` and reaches the history through that node's usage day.
+- **Refused, in the engine's words,** with nothing claimed or sent: on a
+  company with `scheduling.enabled: false` or no model provider (the
+  conditions the loop is armed under, [When the loop runs](#when-the-loop-runs));
+  for a schedule switched off (`enabled: false`), since running it would
+  overrule that decision without changing it, so switch it on first; for a
+  schedule nothing can run; and where every seat it wakes is
+  [paused](agent-runtime.md#pausing-a-seat). A seat paused among others is
+  not woken, and the answer names it while the rest run.
+- **Decided on every seat it wakes.** Waking a seat is a decision its lead
+  makes, as pausing it is: the run is allowed to whoever may pause every seat
+  the schedule wakes (each one's lead, or an administrator), asked about each,
+  so a team's standup is its lead's to run, and an agent never runs one.
+
+---
+
 ## Configuration
 
 System-level knobs live under a top-level `scheduling:` block:
@@ -833,7 +880,12 @@ holds the `scheduler` fleet duty.
   next-run times, projected from the current organization on each request)
   and `recent_runs` (the company's 50 most recent fires). The next-fire times
   tick as you watch: every relative time in the product reads one shared
-  clock rather than being baked at render.
+  clock rather than being baked at render. A schedule's times are drawn on
+  the clock it fires on, the zone named, with the reader's own time beside
+  them where it differs. **New schedule**, and on a schedule's page **Edit**,
+  **Pause** or **Resume** and **Delete**, rewrite the seat or team that
+  declares it through the configuration routes (Admin, or a lead inside their
+  own team); **Run now** is [running it now](#running-a-schedule-now).
 - **The history is the replicated usage domain's**
   ([ADR-0020](../../adr/0020-a-nodes-own-day-is-a-compacted-domain.md)), not
   the ledger of whichever node answers. Each data node derives the fires its
@@ -841,9 +893,11 @@ holds the `scheduler` fleet duty.
   day, and every data node applies every node's days, so the history is the
   whole fleet's, outlives a node that leaves and is kept 181 days. Each fire
   carries the tick it stands for (`scheduled_at`, `fire_label`) and what
-  became of it: `fired`, `skipped_catchup`, `skipped_paused`, or
-  `skipped_superseded` for a fire its seat did not run because a later fire
-  ran in its place (see *Fires that wait in a seat's inbox*). A node publishes
+  became of it: `fired`, `fired_manually` for a run a person asked for now
+  ([Running a schedule now](#running-a-schedule-now)), `skipped_catchup`,
+  `skipped_paused`, or `skipped_superseded` for a fire its seat did not run
+  because a later fire ran in its place (see *Fires that wait in a seat's
+  inbox*). A node publishes
   its day every 15 seconds while it moves, so a fire reaches the history
   within about that long of being sent; the screen asks again every 30
   seconds.
@@ -860,8 +914,8 @@ holds the `scheduler` fleet duty.
   `executor_conversation_unread`.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `scope_name`,
-  `schedule_name`, `target_handle`, and `scheduled_at` — surfaced in the
-  dashboard / event store.
+  `schedule_name`, `target_handle`, and `scheduled_at`, and `requested_by` for
+  a run a person asked for now, surfaced in the dashboard and the event store.
 - The coordination store's `fires` slot is the at-most-once claim; the
   node's `scheduled_runs` table is its own record of what it dispatched, kept
   a week, which its usage day is derived from.

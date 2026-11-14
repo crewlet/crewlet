@@ -85,6 +85,8 @@ import {
 } from "./listing.tsx";
 import { useGallerySelection } from "./selection.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
+import { NewFolderDialog, useNewFolderAccess } from "./FolderDialogs.tsx";
+import { useFolderTree } from "~/lib/artifacts/folders.ts";
 import type { ArtifactListScope, ArtifactListSort } from "~/protocol/index.ts";
 import { BrandMakeChip } from "~/components/brand.tsx";
 
@@ -217,6 +219,10 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   );
   const selectRef = useRef<HTMLButtonElement>(null);
   const [moving, setMoving] = useState(false);
+  // A FOLDER IS MADE FROM NEW HERE TOO, at the top level, where the reader
+  // may make one: the gallery is where most readers look for it first.
+  const folderHeld = useNewFolderAccess(null);
+  const [newFolder, setNewFolder] = useState(false);
   useKeymap({
     "gallery.select": { run: () => selection.setToggled(!selection.selecting), when: !trashed },
   });
@@ -269,8 +275,12 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
   return (
     <LivePreviewBudgetProvider>
       <GalleryBar q={q} onQ={setQ}>
-        <NewArtifactButton held={author.can ? null : author.reason} />
+        <NewArtifactButton
+          held={author.can ? null : author.reason}
+          {...(folderHeld === null ? { onNewFolder: () => setNewFolder(true) } : {})}
+        />
       </GalleryBar>
+      {newFolder && <NewTopFolder onClose={() => setNewFolder(false)} />}
       {showMake && <MakeRow />}
       <GalleryToolbar
         kind={kind}
@@ -363,6 +373,16 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
  * The Make row: one item per kind, each opening that kind's own create page,
  * under a heading as quiet as the groups' below it.
  */
+/**
+ * New folder from the gallery's New: a top-level folder, opened once it is
+ * made so the reader lands in it. The tree is read only while the dialog is
+ * open, for the names already taken at the top level.
+ */
+function NewTopFolder({ onClose }: { onClose: () => void }) {
+  const tree = useFolderTree();
+  return <NewFolderDialog parent={null} index={tree.index} onClose={onClose} open />;
+}
+
 function MakeRow() {
   const runs = useServicesRun();
   return (
