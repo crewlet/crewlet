@@ -947,3 +947,101 @@ func TestAWriteThatLandsPutsItsRunWhereItsOwnStatusSays(t *testing.T) {
 	wantSeatCounts(t, rig, "with the park's answer lost and the record's taken,",
 		"t1's answer in neither set and t3's question still open", 0, 1)
 }
+
+// seatMovesOnLanding is a run store that, once a park's question or an
+// answer's record has landed on it, has the seat let go of and taken back by
+// this node, at a newer epoch, before the write's answer is returned: a seat
+// that moved while the write was out, and came back.
+type seatMovesOnLanding struct {
+	PendingStore
+	moved func(ctx context.Context)
+}
+
+func (s *seatMovesOnLanding) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	err := s.PendingStore.MarkAwaiting(ctx, turnID, q)
+	if err == nil {
+		s.moved(ctx)
+	}
+	return err
+}
+
+func (s *seatMovesOnLanding) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.RecordAnswer(ctx, turnID, launch, answer, fence)
+	if err == nil && won {
+		s.moved(ctx)
+	}
+	return run, won, err
+}
+
+// A MOVE FOR A SEAT THIS NODE NO LONGER HOLDS MOVES NOTHING (countwrite.go), as
+// a release's has not since R3-4. A write this node had out on a seat it lets
+// go of is answered after the seat's counts have gone ([Coordinator.ReleaseSeat]),
+// and a recovery of the seat by this node, taking it back, counts the write's
+// run where it finds it. Moved all the same, the write counted the run a second
+// time on top of the recovery's count: a park's question counted twice, the
+// seat's mail offered to an answer match with nothing more to answer, and an
+// answer's record took the seat's other question out of the question set, so
+// its answer ran as an unrelated turn. And until the write's answer came, the
+// recovery's own count of the run waited behind it, where the write had left
+// it: the parked run held the seat.
+//
+// Mutation: keep a seat's writes out when the seat is let go of; the run is
+// counted where the write was recorded from while its answer is out, and twice
+// once it comes.
+func TestAMoveForASeatThisNodeNoLongerHoldsMovesNothing(t *testing.T) {
+	t.Parallel()
+	takeBack := func(t *testing.T, rig *coordRig, during *seatRuns) func(context.Context) {
+		return func(ctx context.Context) {
+			rig.coordinator.ReleaseSeat("swe")
+			if err := rig.recoverSeat(ctx, "node-a:2", 2); err != nil {
+				t.Errorf("RecoverSeat: %v", err)
+			}
+			*during = seatCounts(rig)
+		}
+	}
+
+	t.Run("a park's answer", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.coordinator.syncSeat(t.Context(), "swe")
+		rig.ask("t1", whichBranch())
+		rig.runner.Finish(Result{})
+		var during seatRuns
+		rig.coordinator.pending = &seatMovesOnLanding{PendingStore: rig.coordinator.pending,
+			moved: takeBack(t, rig, &during)}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		if during.holding != 0 || during.awaiting != 1 {
+			t.Fatalf("once this node took the seat back the seat counted %d holding and %d awaiting; want "+
+				"t1's question awaiting, where the recovery found it", during.holding, during.awaiting)
+		}
+		wantSeatCounts(t, rig, "once the park's answer was taken,", "t1's question awaiting once", 0, 1)
+	})
+
+	t.Run("an answer's record", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		parkElsewhere(t, rig, "t3")
+		rig.coordinator.syncSeat(t.Context(), "swe")
+		run := rig.get("t1")
+		words, answer := chatReply(answerOnTheDM, "use main",
+			replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+		var during seatRuns
+		rig.coordinator.pending = &seatMovesOnLanding{PendingStore: rig.coordinator.pending,
+			moved: takeBack(t, rig, &during)}
+		if _, won, err := rig.coordinator.record(t.Context(), run, words, answer); err != nil || !won {
+			t.Fatalf("record = %v, %v; want t1's answer recorded", won, err)
+		}
+		if during.holding != 0 || during.awaiting != 1 {
+			t.Fatalf("once this node took the seat back the seat counted %d holding and %d awaiting; want "+
+				"t3's question awaiting and t1's answer in neither set", during.holding, during.awaiting)
+		}
+		wantSeatCounts(t, rig, "once the record's answer was taken,", "t3's question still awaiting", 0, 1)
+	})
+}

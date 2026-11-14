@@ -6578,6 +6578,11 @@ func seatLabel(seat uuid.UUID, handle string) string {
 // NOTHING IS TORN DOWN. A detached run belongs to its row, not to this
 // process, and the seat's next owner recovers it through RecoverSeat. Reaping
 // the box here would destroy work the successor is about to resume.
+//
+// AND NOTHING IT HAS OUT MOVES THE SEAT'S COUNTS AFTER IT: the writes out on
+// its runs go with its counts, so an answer taken after the release moves
+// nothing, and a recovery of the seat by this node counts each run once, where
+// it finds it (countwrite.go).
 func (c *Coordinator) ReleaseSeat(handle string) {
 	// The seat's answer-attempt counts go with it, for the reason they are
 	// per node at all: the successor gets a clean set of attempts at every
@@ -6589,6 +6594,11 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	c.releaseOwed(handle)
 	c.mu.Lock()
 	delete(c.runs, handle)
+	// AND THE WRITES IT HAS OUT ON THE SEAT'S RUNS, in the same step: an
+	// answer taken after it moves nothing, as a release's has not since it
+	// was dropped above, and a recovery of the seat by this node counts each
+	// run afresh where it finds it (countwrite.go).
+	maps.DeleteFunc(c.writing, func(_ string, w *runWrites) bool { return w.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: the seat's turns run
 	// on its next holder from here.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })

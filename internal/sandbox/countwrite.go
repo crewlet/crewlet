@@ -97,6 +97,23 @@ import "context"
 // from is where a recount counts a run with no other write out, until a move
 // is made ([Coordinator.writingCount]).
 //
+// # A move for a seat this node no longer holds moves nothing
+//
+// A seat's release drops every write this node has out on its runs, in the
+// step that drops the seat's counts ([Coordinator.ReleaseSeat]), as it drops the
+// claims' releases it was making or owed, and a write's answer taken after it
+// moves nothing. Moved all the same, an answer taken after the release counted
+// its run for a seat this node no longer held, and once this node took the
+// seat back its recovery counted the run where it found it: a park's question
+// counted twice, the seat's mail offered to an answer match with nothing more
+// to answer, and an answer's record taking the seat's other question out of
+// the question set. Kept in its entry instead, the write held the recovery's
+// takeover of its run behind it, the run counted where the write was recorded
+// from until the write's answer came. A write recorded after the release, by a
+// frame of the earlier holding still running here, moves a count nothing reads
+// for a seat this node does not hold, and the recovery that takes the seat back
+// starts its counts afresh ([Coordinator.takingOver]).
+//
 // THE WRITES OF ONE RUN ARE KEYED BY ITS TURN, whatever job each names: a turn
 // has one row, which the store holds once, and a recount that counted a run's
 // row apart from a write out on another job of it would count the one row twice.
@@ -119,6 +136,11 @@ type countWrite struct {
 	handle       string
 	from, to     string
 	done, landed bool
+
+	// entry is the run's entry the write was recorded in: one the seat's
+	// release dropped is no longer the run's ([Coordinator.ReleaseSeat]),
+	// and the write's answer then moves nothing.
+	entry *runWrites
 }
 
 // countOf is a run's part of its seat's counts in status: one in the set the
@@ -150,6 +172,7 @@ func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *count
 		writes = &runWrites{handle: run.AgentHandle, counted: countOf(from)}
 		c.writing[w.turn] = writes
 	}
+	w.entry = writes
 	writes.out = append(writes.out, w)
 	return w
 }
@@ -213,12 +236,18 @@ func (c *Coordinator) takeoverAnswered(w *countWrite, status string) {
 // came first, in the order they were all recorded, each landed one putting the
 // run in its own to's set. A write that did not land, or whose answer the store
 // did not give, moves nothing, and once the run's last write is answered a
-// recount reads the run off the store's listing again.
+// recount reads the run off the store's listing again. Nor does a write whose
+// seat this node let go of while it was out.
 // Under mu; the caller runs what it returns once it has let go of the lock,
 // which frees the seat and has its inbox hold follow the move.
 func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	w.done, w.landed = true, landed
 	writes := c.writing[w.turn]
+	if writes != w.entry {
+		// A SEAT THIS NODE NO LONGER HOLDS: see "A move for a seat this
+		// node no longer holds moves nothing" above.
+		return func() {}
+	}
 	before := writes.counted
 	for len(writes.out) > 0 && writes.out[0].done {
 		next := writes.out[0]

@@ -2424,13 +2424,10 @@ func (c *Coordinator) releaseOwed(handle string) {
 	// AND THE RELEASES OF ITS CLAIMS THIS NODE WAS GIVING BACK OR OWED: the
 	// successor reaps those claims, and a record of them kept here would
 	// refuse this node every later claim of their jobs. Each one's write in
-	// its run's entry goes with it, answered as one that did not land: no
-	// answer of it is taken here again (countwrite.go). What that answer
-	// lets go is not run: the seat's counts and its inbox hold go next.
+	// its run's entry goes with the seat's other writes ([Coordinator.ReleaseSeat]).
 	for turnID, cr := range c.releases {
 		if cr.run.AgentHandle == handle {
 			delete(c.releases, turnID)
-			_ = c.wroteCountLocked(cr.write, false)
 		}
 	}
 	delete(c.owed, handle)
