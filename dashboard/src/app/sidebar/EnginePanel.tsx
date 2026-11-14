@@ -91,7 +91,13 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href, useOpenHere } from "~/app/router.tsx";
-import { alarmKindTitle, alarmPlace, alarmPlaceWords, alarmsLink, namedAlarms } from "~/lib/alarms.ts";
+import {
+  alarmKindTitle,
+  alarmPlace,
+  alarmPlaceWords,
+  alarmsLink,
+  namedAlarms,
+} from "~/lib/alarms.ts";
 import { useAlarmPlaces } from "~/lib/useInboxCounts.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtElapsed, fmtUptime, relTime, tsKey } from "~/lib/format.ts";

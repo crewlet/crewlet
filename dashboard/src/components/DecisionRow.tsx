@@ -557,7 +557,11 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
       line={holdLine(run, now)}
       actions={
         standing.answers ? (
-          <AnswerRunButton run={run} seat={who.name} variant={standing.needs ? "primary" : "secondary"} />
+          <AnswerRunButton
+            run={run}
+            seat={who.name}
+            variant={standing.needs ? "primary" : "secondary"}
+          />
         ) : null
       }
     />

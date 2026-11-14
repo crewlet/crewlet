@@ -6,7 +6,13 @@
 
 import { describe, expect, test } from "vitest";
 
-import { alarmKindTitle, alarmLogLines, alarmPlace, alarmPlaceWords, namedAlarms } from "./alarms.ts";
+import {
+  alarmKindTitle,
+  alarmLogLines,
+  alarmPlace,
+  alarmPlaceWords,
+  namedAlarms,
+} from "./alarms.ts";
 
 describe("an alarm kind is read as words", () => {
   // EVERY KIND THE ENGINE'S TABLE RAISES TODAY (`statelog.Kinds`), so the rule

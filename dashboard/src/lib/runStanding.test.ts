@@ -8,7 +8,11 @@ import { expect, test } from "vitest";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { runStanding } from "./runStanding.ts";
 
-const names: Record<string, string> = { "release-manager": "Release Manager", ana: "Ana", bo: "Bo" };
+const names: Record<string, string> = {
+  "release-manager": "Release Manager",
+  ana: "Ana",
+  bo: "Bo",
+};
 const nameOf = (h: string) => names[h] ?? h;
 
 function run(over: Partial<ExecutorRow>): ExecutorRow {
@@ -37,7 +41,10 @@ function run(over: Partial<ExecutorRow>): ExecutorRow {
 
 test("a run put to the reader needs them, and offers the answer the engine allows", () => {
   expect(
-    runStanding(run({ put_to: ["ana"], put_to_you: true, may_answer: true, needs_you: true }), nameOf),
+    runStanding(
+      run({ put_to: ["ana"], put_to_you: true, may_answer: true, needs_you: true }),
+      nameOf,
+    ),
   ).toEqual({ needs: true, answers: true, word: "Needs you" });
 });
 

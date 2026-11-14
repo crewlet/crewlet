@@ -315,8 +315,9 @@ test("an unbound reader's own day is the one kept under their login", async () =
   // reporting a fault, which is a person's (`Inbox.test.tsx`).
   // A TOKEN THE NODE'S CONFIG DECLARES cannot be bound, so it is told the two
   // ways that hold a seat instead.
-  expect(screen.getByText(/sign in as yourself, or use a service account bound to an open seat:/))
-    .toBeTruthy();
+  expect(
+    screen.getByText(/sign in as yourself, or use a service account bound to an open seat:/),
+  ).toBeTruthy();
   const command = screen.getByText("crewlet iam bind <id> <seat>");
   // THE COMMAND IS NEVER INSIDE PARENTHESES, which a line break split from it.
   const line = command.parentElement?.textContent ?? "";

@@ -1652,8 +1652,8 @@ function PutOffControls({ item, now }: { item: Attention; now: number }) {
   return (
     <Stack gap={2} align="start">
       <Text as="p" variant="caption">
-        Accept it for now: put it off on this browser. It comes back when the time is up, or sooner if
-        it worsens.
+        Accept it for now: put it off on this browser. It comes back when the time is up, or sooner
+        if it worsens.
       </Text>
       <Inline gap={2}>
         {PUT_OFF_CHOICES.map((choice) => (

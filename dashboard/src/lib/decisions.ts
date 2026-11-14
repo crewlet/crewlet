@@ -251,7 +251,10 @@ export function useNeedsYouCount(enabled: boolean, pollMs: number, owner = ""): 
         }
       : null;
     return enabled
-      ? { ...needsYouCount(decisions.data, seats.mine.length, conditionsToDecide(shown).length), alarms }
+      ? {
+          ...needsYouCount(decisions.data, seats.mine.length, conditionsToDecide(shown).length),
+          alarms,
+        }
       : { waiting: null, capped: false, alarms };
   }, [enabled, decisions.data, seats.mine.length, shown, putOff, readsNotices]);
 }

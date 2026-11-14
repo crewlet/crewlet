@@ -572,7 +572,14 @@ describe("the list", () => {
         decisions: {
           handle: "jane",
           items: [
-            { kind: "run", at: theirs.paused_at, run: theirs, put_to_you: false, may_answer: true, needs_you: false },
+            {
+              kind: "run",
+              at: theirs.paused_at,
+              run: theirs,
+              put_to_you: false,
+              may_answer: true,
+              needs_you: false,
+            },
           ],
           total: 0,
           answerable: 1,
@@ -971,7 +978,9 @@ describe("an update's row", () => {
     mount({
       answers: {
         inbox: inboxes({
-          unread: [notice("r-7", { reason: "reporter", primary: true, excerpt: "The fix is merged." })],
+          unread: [
+            notice("r-7", { reason: "reporter", primary: true, excerpt: "The fix is merged." }),
+          ],
         }),
       },
     });

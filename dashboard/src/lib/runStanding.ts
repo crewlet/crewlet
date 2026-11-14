@@ -36,5 +36,9 @@ export function runStanding(run: ExecutorRow, nameOf: (handle: string) => string
   const answers = run.may_answer === true;
   if (needs) return { needs, answers, word: "Needs you" };
   const who = (run.put_to?.length ? run.put_to : (run.audience_handles ?? [])).map(nameOf);
-  return { needs, answers, word: who.length > 0 ? `Waiting on ${andList(who)}` : "Waiting on a person" };
+  return {
+    needs,
+    answers,
+    word: who.length > 0 ? `Waiting on ${andList(who)}` : "Waiting on a person",
+  };
 }

@@ -100,10 +100,14 @@ export function useInboxCountsOf(handle: string, enabled: boolean): InboxCounts 
   // record is kept under their seat, and a profile names them by it.
   const own = handle !== "" && (handle === viewer.owner || handle === viewer.handle);
   const frame = useInboxCounts();
-  const theirs = useQuery("decisions", { handle }, {
-    enabled: enabled && !own && handle !== "",
-    pollMs: 60_000,
-  });
+  const theirs = useQuery(
+    "decisions",
+    { handle },
+    {
+      enabled: enabled && !own && handle !== "",
+      pollMs: 60_000,
+    },
+  );
   if (own) return frame;
   const data = theirs.data;
   return data ? { waiting: data.total, capped: data.capped } : { waiting: null, capped: false };

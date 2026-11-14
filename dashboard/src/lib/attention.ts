@@ -307,7 +307,9 @@ function driftRow(item: AtlasReviewItem): Attention {
  * dialog (`take=backup` opens it), and a bucket near its ceiling is freed or
  * moved on File storage, which shows its usage and its collector.
  */
-const NOTICE_FIXES: Readonly<Record<string, { path: string[]; query?: Record<string, string>; action: string; clears: string }>> = {
+const NOTICE_FIXES: Readonly<
+  Record<string, { path: string[]; query?: Record<string, string>; action: string; clears: string }>
+> = {
   backup_age: {
     path: ["settings", "backups"],
     query: { take: "backup" },

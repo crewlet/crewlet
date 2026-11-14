@@ -31,9 +31,9 @@ test("a condition standing on more nodes than when it was put off comes back", (
 
 test("never for good: a mark past the longest choice, written by hand, does not hold", () => {
   const longest = Math.max(...PUT_OFF_CHOICES.map((c) => c.hours)) * 3_600_000;
-  expect(putOffHolds(mark({ until: new Date(NOW + longest + DAY).toISOString() }), notice, NOW)).toBe(
-    false,
-  );
+  expect(
+    putOffHolds(mark({ until: new Date(NOW + longest + DAY).toISOString() }), notice, NOW),
+  ).toBe(false);
 });
 
 test("only a platform notice can be put off: a row that names no spread is always shown", () => {

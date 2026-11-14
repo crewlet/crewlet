@@ -6,7 +6,11 @@
  * A fixture that states any of them is passed through untouched.
  */
 export function asReaders(answer: unknown): unknown {
-  if (typeof answer !== "object" || answer === null || !Array.isArray((answer as { items?: unknown }).items)) {
+  if (
+    typeof answer !== "object" ||
+    answer === null ||
+    !Array.isArray((answer as { items?: unknown }).items)
+  ) {
     return answer;
   }
   const a = answer as { items: Record<string, unknown>[]; answerable?: number };
