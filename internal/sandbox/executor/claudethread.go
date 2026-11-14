@@ -1888,6 +1888,11 @@ const threadTime = "2006-01-02T15:04:05.000Z"
 // model, which orders records by these milliseconds wherever the resume
 // orders them by either reading.
 //
+// MILLISECONDS, NOT A time.Time, as CLAUDE.md would have a time held: on the
+// one form this admits, the resume's two orders are the milliseconds' order,
+// exact, so a time.Time would add nothing its reader compares, and its reader
+// keeps one a record at its bound, in 8 bytes rather than a time.Time's 24.
+//
 // HELD TO THAT ONE FORM HERE, AND HERE ALONE, as a key one reader reads is:
 // anything else is this accessor's error, never the line's. That is a value
 // that is no string, and a string of another form or of no real time, such
@@ -1991,6 +1996,12 @@ func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
 // string, one of an uppercase digit among them: Claude Code keys a thread's
 // records by their uuids as written, so only this form maps a uuid's 16 bytes
 // to one string and back.
+//
+// BYTES, NOT CLAUDE.md'S uuid.UUID, though they are as wide: uuid.Parse also
+// reads a uuid of uppercase digits, of no hyphens, in braces or behind a
+// urn:uuid: prefix, each a string Claude Code's load holds apart from the
+// lowercase one, so a type whose parse its readers would reach for would
+// merge records the load keeps apart.
 func uuidBytes(s string) ([16]byte, bool) {
 	var u [16]byte
 	if len(s) != 36 {

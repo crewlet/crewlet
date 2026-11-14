@@ -669,9 +669,19 @@ const (
 
 // chainRecord is what the chain files of one record.
 type chainRecord struct {
-	// uuid is the record's own uuid's 16 bytes.
+	// uuid is the record's own uuid, as the 16 bytes of its lowercase
+	// canonical form ([uuidBytes]). Not CLAUDE.md's uuid.UUID, though it is as
+	// wide: the load keys its map by the uuid as written, so two strings
+	// uuid.Parse reads as one UUID are two records to it, and these bytes
+	// stand for the one canonical string alone, in 16 bytes rather than its
+	// 36.
 	uuid [16]byte
-	// ms is its timestamp's milliseconds, where kindTimed.
+	// ms is its timestamp's milliseconds since the Unix epoch, where kindTimed
+	// ([threadLine.Timestamp]). Not CLAUDE.md's time.Time: the resume orders
+	// records by the timestamp string and by Date.parse's milliseconds, which
+	// on the one form the chain admits are one order and exact to the
+	// millisecond, so a time.Time would hold nothing more, in three times the
+	// bytes a record.
 	ms int64
 	// parent is the record its parent names, as End resolves it:
 	// noChainRecord for a root and for a parent naming no record (kindNowhere).
