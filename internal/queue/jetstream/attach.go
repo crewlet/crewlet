@@ -144,9 +144,9 @@ func (q *Queue) nakSpacing(n uint64) time.Duration {
 // LeastTimeToDeadLetter is the least time this backend carries a failing
 // message, at its defaults, from its first delivery to its dead letter: its
 // budget's deliveries ([maxDeliver]), every one but the last returned as a
-// failure on one node, each return spaced by [Queue.nakBackoff] at the floor of
-// its jitter. The spacings are 1, 2, 4, 8 and 16 s, then nineteen at the 30 s
-// ceiling, 601 s in all; at four fifths of each, about 481 s.
+// failure to one attachment, each return spaced by [Queue.nakBackoff] at the
+// floor of its jitter. The spacings are 1, 2, 4, 8 and 16 s, then nineteen at
+// the 30 s ceiling, 601 s in all; at four fifths of each, about 481 s.
 //
 // FOR A LAYER ABOVE THAT LEANS ON A FAILING MESSAGE OUTLIVING A WAIT OF ITS
 // OWN, and holds the two apart in a test rather than in prose. internal/sandbox
@@ -156,11 +156,12 @@ func (q *Queue) nakSpacing(n uint64) time.Duration {
 // be out before the last one is dead-lettered.
 //
 // THE LEAST ON THE FAILURE PATH, NOT ON EVERY PATH. A hand-back returns at
-// once ([attachment.handBack]), and a failure on a node the message had not
-// failed on yet is spaced from the first return again ([attachment.failures]),
-// so a message handed from node to node is dead-lettered sooner; and a
-// handler's own time adds to it. [Config.MaxDeliver], NakDelay and NakCeiling,
-// which only tests set, change it too.
+// once ([attachment.handBack]), and a failure to an attachment the message had
+// not failed on yet, another node's or this node's own after a re-attach, is
+// spaced from the first return again ([attachment.failures]), so a message
+// handed from node to node, or met by a re-attach, is dead-lettered sooner; and
+// a handler's own time adds to it. [Config.MaxDeliver], NakDelay and
+// NakCeiling, which only tests set, change it too.
 func LeastTimeToDeadLetter() time.Duration {
 	// THE DEFAULTS: a queue configured with nothing, whose spacing reads
 	// nothing else ([Queue.nakSpacing]). The floor is what [backoff.Jitter]
