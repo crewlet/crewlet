@@ -125,7 +125,7 @@ func opencodePoll() {
 func opencodeReport(script fakeScript) {
 	opencodeServerOrExit()
 	pid, _ := strconv.Atoi(strings.TrimPrefix(argAfter("--server"), "http://fake-"))
-	if pid <= 0 || syscall.Kill(pid, 0) != nil {
+	if !serverRunning(pid) {
 		fmt.Fprintln(os.Stderr, "fake opencode: connection refused")
 		os.Exit(4)
 	}
