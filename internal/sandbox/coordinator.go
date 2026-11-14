@@ -2954,6 +2954,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// BEING WRITTEN FROM HERE, so a recount counts the run as the claim it
 	// still is until the write's answer moves it (countwrite.go).
 	write := c.writingCount(run, StatusResumed, StatusAwaiting)
+	defer c.settleWrite(write)
 	err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
@@ -5437,21 +5438,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			c.nameDeletedInFlight(ctx, run)
 			named = true
 		}
-		// OUT OF THE SEAT'S SETS AS THE DELETE'S ANSWER IS TAKEN, for a run
-		// this node counts: recorded before the delete is sent, so a recount
-		// meanwhile counts the run where it is, its row listed or not, and
-		// a delete that did not land moves nothing (countwrite.go).
-		var write *countWrite
-		if counted {
-			write = c.writingCount(run, run.Status, "")
-		}
-		settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
-		if write != nil {
-			c.mu.Lock()
-			moved := c.wroteCountLocked(write, err == nil && deleted)
-			c.mu.Unlock()
-			moved()
-		}
+		settled, deleted, err := c.deleteRecord(ctx, run, counted)
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
@@ -5473,6 +5460,27 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 	}
 	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply, or the log its turn's "+
 		"end, after recording one", run.TurnID)
+}
+
+// deleteRecord is an ending's delete of run's record ([PendingStore.Finish]).
+// For an ending whose run this node counts ([ending.counted]) it moves the run
+// out of the seat's sets as its answer is taken: recorded before it is sent, so
+// a recount meanwhile counts the run where it is, its row listed or not, and
+// settled on every way out, a panic included, so that one whose answer was
+// never taken moves nothing (countwrite.go).
+func (c *Coordinator) deleteRecord(ctx context.Context, run PendingRun, counted bool,
+) (PendingRun, bool, error) {
+	if !counted {
+		return c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+	}
+	write := c.writingCount(run, run.Status, "")
+	defer c.settleWrite(write)
+	settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && deleted)
+	c.mu.Unlock()
+	moved()
+	return settled, deleted, err
 }
 
 // endingOfRun is how the turn of run — a loss or a stop — ended, from the
@@ -5814,6 +5822,13 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
 	}
 	takeovers := c.takingOver(ctx, handle, active)
+	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
+	// out holds every later move on its run (countwrite.go).
+	defer func() {
+		for _, w := range takeovers {
+			c.settleWrite(w)
+		}
+	}()
 	if len(active) == 0 {
 		return nil
 	}

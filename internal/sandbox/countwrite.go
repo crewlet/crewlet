@@ -114,6 +114,19 @@ import "context"
 // for a seat this node does not hold, and the recovery that takes the seat back
 // starts its counts afresh ([Coordinator.takingOver]).
 //
+// # Every write is settled on every way out
+//
+// A write is answered on every way out of its store call, a panic included
+// ([Coordinator.settleWrite], deferred where the write is recorded): the
+// queue's handler recovers a panic and the process lives on, and a write left
+// out held every later write's move on its run behind it, the run counted
+// where the write was recorded from until the seat moved. A panic is no answer
+// from the store, so such a write moves nothing. So is a claim's release,
+// whose record refused every claim of its job, and kept its run counted as
+// the claim, for as long as it stood ([Coordinator.unclaimOwing]), and the
+// count of a job's claims on their way, which held an owed release of the job
+// back while it was above nothing ([Coordinator.claimCompletion]).
+//
 // THE WRITES OF ONE RUN ARE KEYED BY ITS TURN, whatever job each names: a turn
 // has one row, which the store holds once, and a recount that counted a run's
 // row apart from a write out on another job of it would count the one row twice.
@@ -141,6 +154,23 @@ type countWrite struct {
 	// release dropped is no longer the run's ([Coordinator.ReleaseSeat]),
 	// and the write's answer then moves nothing.
 	entry *runWrites
+}
+
+// settleWrite answers w as a write that did not land, unless its answer was
+// taken already: deferred on every way out of a write, a panic included, so that
+// one whose store call panicked is not left out on its run. The queue's handler
+// recovers a panic and the process lives on: left out, the write held every
+// later write's move on its run behind it, the run counted where it was
+// recorded from until the seat moved. A panic is no answer from the store, and
+// a write whose answer the store did not give moves nothing.
+func (c *Coordinator) settleWrite(w *countWrite) {
+	moved := func() {}
+	c.mu.Lock()
+	if !w.done {
+		moved = c.wroteCountLocked(w, false)
+	}
+	c.mu.Unlock()
+	moved()
 }
 
 // countOf is a run's part of its seat's counts in status: one in the set the

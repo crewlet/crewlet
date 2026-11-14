@@ -1045,3 +1045,260 @@ func TestAMoveForASeatThisNodeNoLongerHoldsMovesNothing(t *testing.T) {
 		wantSeatCounts(t, rig, "once the record's answer was taken,", "t3's question still awaiting", 0, 1)
 	})
 }
+
+// panicsOn is a run store whose call named method panics, once, before it
+// reaches the store: a store call that panics, which the queue's handler
+// recovers and the process outlives.
+type panicsOn struct {
+	PendingStore
+	method string
+
+	mu       sync.Mutex
+	panicked bool
+}
+
+// panics reports whether method is the call to panic, and marks it panicked.
+func (s *panicsOn) panics(method string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.panicked || s.method != method {
+		return false
+	}
+	s.panicked = true
+	return true
+}
+
+// raised reports whether the store's call panicked.
+func (s *panicsOn) raised() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.panicked
+}
+
+func (s *panicsOn) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
+	if s.panics("BeginLaunch") {
+		panic("the store's BeginLaunch panicked")
+	}
+	return s.PendingStore.BeginLaunch(ctx, run, fence)
+}
+
+func (s *panicsOn) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+	if s.panics("ClaimOwnership") {
+		panic("the store's ClaimOwnership panicked")
+	}
+	return s.PendingStore.ClaimOwnership(ctx, turnID, owner, epoch)
+}
+
+func (s *panicsOn) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if s.panics("MarkAwaiting") {
+		panic("the store's MarkAwaiting panicked")
+	}
+	return s.PendingStore.MarkAwaiting(ctx, turnID, q)
+}
+
+func (s *panicsOn) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
+) (PendingRun, bool, error) {
+	if s.panics("RecordAnswer") {
+		panic("the store's RecordAnswer panicked")
+	}
+	return s.PendingStore.RecordAnswer(ctx, turnID, launch, answer, fence)
+}
+
+func (s *panicsOn) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	if s.panics("ClaimForResume") {
+		panic("the store's ClaimForResume panicked")
+	}
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+func (s *panicsOn) DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+	handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	if s.panics("DeclineAnswer") {
+		panic("the store's DeclineAnswer panicked")
+	}
+	return s.PendingStore.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
+}
+
+func (s *panicsOn) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if s.panics("ReleaseClaim") {
+		panic("the store's ReleaseClaim panicked")
+	}
+	return s.PendingStore.ReleaseClaim(ctx, turnID, release)
+}
+
+func (s *panicsOn) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
+	if s.panics("Finish") {
+		panic("the store's Finish panicked")
+	}
+	return s.PendingStore.Finish(ctx, turnID, ending)
+}
+
+// recovered runs f, recovering a panic out of it as the queue's handler does.
+func recovered(f func()) {
+	defer func() { _ = recover() }()
+	f()
+}
+
+// A WRITE WHOSE STORE CALL PANICS LEAVES NOTHING OUT ON ITS RUN (countwrite.go).
+// Every write that moves a run's count is recorded before its store call, and
+// answered on every way out of it, a panic included, as one that did not land;
+// so is the record of a claim's release, which refuses every claim of its job
+// while it stands, and the count of claims on their way, which holds an owed
+// release back while it is above nothing. The queue's handler recovers a panic
+// and the process lives on: a write left out held every later write's move on
+// its run behind it, the run counted where the write was recorded from until
+// the seat moved; a release left recorded refused the job's completion, and
+// left it counted as the claim, for as long; and a claim's count left up never
+// let an owed release be made again.
+//
+// Mutation: drop any one write's settle on its way out, the release's or the
+// claims' count's; its case leaves it out.
+func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, method string
+		// arrange puts t1 where the write finds it; write makes it, under
+		// the panic's recovery.
+		arrange func(t *testing.T, rig *coordRig)
+		write   func(t *testing.T, rig *coordRig)
+	}{
+		{name: "a launch's open", method: "BeginLaunch",
+			arrange: func(*testing.T, *coordRig) {},
+			write: func(t *testing.T, rig *coordRig) {
+				_, _ = rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1"))
+			}},
+		{name: "a recovery's takeover", method: "ClaimOwnership",
+			arrange: func(_ *testing.T, rig *coordRig) { rig.launch("t1") },
+			write: func(t *testing.T, rig *coordRig) {
+				_ = rig.recoverSeat(t.Context(), "node-b:1", 2)
+			}},
+		{name: "a completion's claim", method: "ClaimForResume",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.launch("t1")
+				rig.runner.Finish(Result{Success: true})
+			},
+			write: func(t *testing.T, rig *coordRig) {
+				payload, ev := rig.completion("t1")
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			}},
+		{name: "a park's question", method: "MarkAwaiting",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.launch("t1")
+				rig.ask("t1", whichBranch())
+				rig.runner.Finish(Result{})
+			},
+			write: func(t *testing.T, rig *coordRig) {
+				payload, ev := rig.completion("t1")
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			}},
+		{name: "a claim's release", method: "ReleaseClaim",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.launch("t1")
+				rig.runner.Finish(Result{Success: true})
+				rig.resumer.failWith(errors.New("the model provider did not answer"))
+			},
+			write: func(t *testing.T, rig *coordRig) {
+				payload, ev := rig.completion("t1")
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			}},
+		{name: "an answer's record", method: "RecordAnswer",
+			arrange: func(t *testing.T, rig *coordRig) { parkOnAQuestion(t, rig) },
+			write: func(t *testing.T, rig *coordRig) {
+				run := rig.get("t1")
+				words, answer := chatReply(answerOnTheDM, "use main",
+					replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+				_, _, _ = rig.coordinator.record(t.Context(), run, words, answer)
+			}},
+		{name: "the claim that resumes an answer", method: "ClaimForResume",
+			arrange: func(t *testing.T, rig *coordRig) { parkOnAQuestion(t, rig) },
+			write: func(t *testing.T, rig *coordRig) {
+				reply := chatReply(answerOnTheDM, "use main",
+					replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute)))
+				_, _ = rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply)
+			}},
+		{name: "an unopened answer's decline", method: "DeclineAnswer",
+			arrange: func(t *testing.T, rig *coordRig) {
+				parkOnAQuestion(t, rig)
+				run := rig.get("t1")
+				words, answer := chatReply(answerOnTheDM, "use main",
+					replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+				// SEALED FOR ANOTHER RUN, so it does not open as t1's answer
+				// and is declined.
+				other := run
+				other.TurnID = "t2"
+				if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+					sealedOnto(t, rigAnswers(), other, words, answer), rigLease); err != nil || !won {
+					t.Fatalf("RecordAnswer = %v, %v", won, err)
+				}
+				rig.coordinator.queueOwed(t.Context(), rig.get("t1"))
+			},
+			write: func(*testing.T, *coordRig) {}},
+		{name: "a spent answer's decline", method: "DeclineAnswer",
+			arrange: func(t *testing.T, rig *coordRig) { owedAnAnswerItCannotResume(t, rig) },
+			write:   func(*testing.T, *coordRig) {}},
+		{name: "an ending's delete", method: "Finish",
+			arrange: func(_ *testing.T, rig *coordRig) { rig.launching("t1") },
+			write: func(t *testing.T, rig *coordRig) {
+				_ = rig.coordinator.FailRun(t.Context(), "t1", types.ExecutorFailureSuspensionUnrecorded,
+					"the turn could not write its parked state onto the run")
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			tc.arrange(t, rig)
+			store := &panicsOn{PendingStore: rig.coordinator.pending, method: tc.method}
+			rig.coordinator.pending = store
+			recovered(func() {
+				tc.write(t, rig)
+				rig.fireRetries()
+			})
+			if !store.raised() {
+				t.Fatalf("the premise: the store's %s never panicked", tc.method)
+			}
+			rig.coordinator.mu.Lock()
+			out, release, claiming := rig.coordinator.writing["t1"], rig.coordinator.releases["t1"],
+				rig.coordinator.claiming["t1"]
+			rig.coordinator.mu.Unlock()
+			if out != nil {
+				t.Errorf("a write is left out on t1 (%d of them), holding every later move on it", len(out.out))
+			}
+			if release != nil {
+				t.Error("t1's claim's release is left recorded, refusing every claim of its job")
+			}
+			if claiming != 0 {
+				t.Errorf("%d claims of t1's job are left counted as on their way, holding its release back",
+					claiming)
+			}
+		})
+	}
+}
+
+// A WRITE LEFT OUT BY A PANIC HOLDS NO LATER MOVE ON ITS RUN: the record of an
+// answer whose store call panicked is answered as one that did not land, so the
+// record that follows moves the run out of the question set. Left out, the
+// panicked record held the second record's move behind it, and the seat read a
+// question open that had its answer.
+//
+// Mutation: drop the record's settle on its way out.
+func TestARecordAfterOneThatPanickedMovesItsRun(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	store := &panicsOn{PendingStore: rig.coordinator.pending, method: "RecordAnswer"}
+	rig.coordinator.pending = store
+	run := rig.get("t1")
+	words, answer := chatReply(answerOnTheDM, "use main",
+		replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+	recovered(func() { _, _, _ = rig.coordinator.record(t.Context(), run, words, answer) })
+	if !store.raised() {
+		t.Fatal("the premise: the record's store call never panicked")
+	}
+	if _, won, err := rig.coordinator.record(t.Context(), run, words, answer); err != nil || !won {
+		t.Fatalf("the record made again = %v, %v; want it recorded", won, err)
+	}
+	wantSeatCounts(t, rig, "once the answer was recorded,", "t1's answer in neither set", 0, 0)
+}

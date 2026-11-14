@@ -645,6 +645,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}
 	write := c.writingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle},
 		from, StatusLaunching)
+	defer c.settleWrite(write)
 	opened, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		WorkSince:   req.Turn.WorkSince,

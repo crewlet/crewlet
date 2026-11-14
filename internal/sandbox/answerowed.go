@@ -1039,6 +1039,7 @@ func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWo
 	// already has its answer. Recorded before the write, so a recount meanwhile
 	// counts the run as the question it is still counted as (countwrite.go).
 	write := c.writingCount(run, run.Status, StatusAnswered)
+	defer c.settleWrite(write)
 	var recorded PendingRun
 	var won bool
 	if words.Refusal != nil {
@@ -1183,6 +1184,7 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	// before the write, so a recount meanwhile counts the run as the answer it
 	// is still counted as (countwrite.go).
 	write := c.writingCount(run, StatusAnswered, StatusResumed)
+	defer c.settleWrite(write)
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	c.mu.Lock()
 	moved := c.wroteCountLocked(write, err == nil && won)
@@ -1328,6 +1330,7 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 	// before the write, so a recount meanwhile counts the run as the answer it
 	// is still counted as (countwrite.go).
 	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
+	defer c.settleWrite(write)
 	_, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID, answer.EventIDs, nil, fenceOf(run))
 	c.mu.Lock()
 	moved := c.wroteCountLocked(write, err == nil && let)
@@ -2202,6 +2205,7 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 	// before the write, so a recount meanwhile counts the run as the answer it
 	// is still counted as (countwrite.go).
 	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
+	defer c.settleWrite(write)
 	declined, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID,
 		answer.EventIDs, handBackOf(*answer), fenceOf(run))
 	c.mu.Lock()

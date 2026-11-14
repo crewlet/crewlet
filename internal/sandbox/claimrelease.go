@@ -78,7 +78,10 @@ import (
 // after it would collect and resume the job a second time beside the first. So
 // the release is RECORDED AS OUT BEFORE IT IS SENT, and kept recorded while it
 // is owed ([Coordinator.releases]), and no claim of the job is taken here while
-// it is.
+// it is. One whose answer is never taken, its store call panicking, is dropped
+// on the way out ([Coordinator.dropRelease]): the queue's handler recovers the
+// panic, and a record left standing refused every claim of the job for as long
+// as this node held the seat.
 //   - A COMPLETION'S CLAIM is refused ([Coordinator.claimCompletion],
 //     [errReleaseOwed]): the completion comes back on the queue's backoff, as
 //     one whose claim the store does not take does, and the waiter announces
@@ -107,7 +110,9 @@ import (
 // only then, so ITS WIN IS PROOF THE RELEASE LANDED, whatever the release's own
 // answer said: the release is settled there and never made again, and a
 // release owed is not made again while a claim of its job is still on its way
-// ([Coordinator.claiming]), which decides first.
+// ([Coordinator.claiming]), which decides first, and which counts each claim
+// off on every way out of it, a panic included ([Coordinator.claimDoneLocked]):
+// a count left up held the owed release back for good.
 
 // errReleaseOwed is a completion refused because this node is still giving
 // back, or still owes, the release of the claim it took on the same job
@@ -158,7 +163,18 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	turnID := cr.run.TurnID
+	// A RELEASE WHOSE ANSWER IS NEVER TAKEN, its store call panicking, is
+	// dropped on the way out: left recorded, it refused every claim of its
+	// job and kept its run counted as the claim, and nothing would make it
+	// again (countwrite.go).
+	answered := false
+	defer func() {
+		if !answered {
+			c.dropRelease(cr)
+		}
+	}()
 	released, err := c.pending.ReleaseClaim(ctx, turnID, cr.release)
+	answered = true
 	unanswered := errors.Is(err, coord.ErrUnavailable)
 	moved := func() {}
 	c.mu.Lock()
@@ -201,6 +217,20 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 				"is back where the claim found it, for its retry")
 	}
 	return c.releaseAnswered(ctx, *cr, released, err)
+}
+
+// dropRelease drops cr from the releases out, where it still is, with its write
+// in its run's entry answered as one that did not land: a release whose answer
+// was never taken ([Coordinator.unclaimOwing]).
+func (c *Coordinator) dropRelease(cr *claimRelease) {
+	moved := func() {}
+	c.mu.Lock()
+	if c.releases[cr.run.TurnID] == cr {
+		delete(c.releases, cr.run.TurnID)
+		moved = c.wroteCountLocked(cr.write, false)
+	}
+	c.mu.Unlock()
+	moved()
 }
 
 // oweRelease keeps a claim's release the store did not answer for this node's
@@ -279,6 +309,14 @@ func (c *Coordinator) leaveToRelease(ctx context.Context, run PendingRun) bool {
 	return true
 }
 
+// claimDoneLocked counts a claim of turnID's job off the claims on their way
+// ([Coordinator.claiming]). Under mu.
+func (c *Coordinator) claimDoneLocked(turnID string) {
+	if c.claiming[turnID]--; c.claiming[turnID] <= 0 {
+		delete(c.claiming, turnID)
+	}
+}
+
 // claimCompletion claims ev's job for this node's collection of it, as
 // [PendingStore.ClaimForResume] does, unless this node is giving back or owes
 // the release of the job's last claim: refused then, with [errReleaseOwed],
@@ -303,11 +341,20 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 	}
 	c.claiming[turnID]++
 	c.mu.Unlock()
+	// AND UNCOUNTED ON EVERY WAY OUT, a panic in the claim included: a count
+	// left up held an owed release of the job back for good.
+	answered := false
+	defer func() {
+		if !answered {
+			c.mu.Lock()
+			c.claimDoneLocked(turnID)
+			c.mu.Unlock()
+		}
+	}()
 	run, won, err := c.pending.ClaimForResume(ctx, turnID, CompletionTail(launch), fence)
+	answered = true
 	c.mu.Lock()
-	if c.claiming[turnID]--; c.claiming[turnID] <= 0 {
-		delete(c.claiming, turnID)
-	}
+	c.claimDoneLocked(turnID)
 	landed, owed := false, false
 	moved := func() {}
 	if cr := c.releases[turnID]; won && cr != nil && cr.run.LaunchID == launch {
