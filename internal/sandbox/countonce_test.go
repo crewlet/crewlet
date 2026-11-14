@@ -1002,8 +1002,8 @@ func onLogLine(t *testing.T, level slog.Level, msg string, step func()) {
 // the claim: the seat counted a question nobody had answered as open beside
 // the claim's hold it no longer counted, and a write recorded behind the
 // release later moved by the difference from the claim. Here the recount is
-// made where the park logs that its write did not land, which today's code
-// does between the two.
+// made where the park logs that its write did not land, which it did between
+// the two steps and now does after the one.
 //
 // Mutation: take the park's answer and record its hand-back in two steps of
 // the lock; the recount between them counts t1's question.
