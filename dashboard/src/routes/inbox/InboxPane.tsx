@@ -66,6 +66,8 @@ import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
+import { runStanding } from "~/lib/runStanding.ts";
+import { PUT_OFF_CHOICES, putOffHolds, usePutOff } from "~/lib/putOff.ts";
 import type { McpHeldCall } from "~/contract/mcp.ts";
 import {
   EscalationNote,
@@ -325,6 +327,7 @@ function OpenPane({
             <RunPane
               run={row.subject.run}
               frame={frame}
+              index={index}
               now={now}
               answered={answered}
               onSettled={onSettled}
@@ -1071,12 +1074,14 @@ function Conversation({
 function RunPane({
   run,
   frame,
+  index,
   now,
   answered,
   onSettled,
 }: {
   run: ExecutorRow;
   frame: Frame;
+  index: OrgIndex;
   now: number;
   /**
    * The answer given here before, which the executor took ([PaneProps.answered]):
@@ -1275,6 +1280,7 @@ function RunPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
+        <StandingLine run={run} index={index} />
         {question ? (
           <RunQuestion question={question} />
         ) : (
@@ -1423,6 +1429,22 @@ function RunPane({
 }
 
 /**
+ * WHOM A RUN WAITS ON, where it is not the reader: a run they may answer that
+ * is put to somebody else (the Inbox's "Waiting on others" group) says so
+ * before anything else, so the controls under it read as stepping in rather
+ * than as a question put to them. Nothing for a run that waits on the reader.
+ */
+function StandingLine({ run, index }: { run: ExecutorRow; index: OrgIndex }) {
+  const standing = runStanding(run, (h) => index.byHandle.get(h)?.name ?? h);
+  if (standing.needs) return null;
+  return (
+    <Text as="p" variant="caption">
+      {standing.answers ? `${standing.word}. You can answer it.` : `${standing.word}.`}
+    </Text>
+  );
+}
+
+/**
  * An executor parked on a call held for approval: the call as its question
  * describes it, then the call's own answers (`HeldCallButtons`, through
  * `POST /mcp-approvals/{id}`, which asks for a step-up when one is due). No
@@ -1467,6 +1489,7 @@ function HeldRunPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
+        <StandingLine run={run} index={index} />
         {escalated && (
           <EscalationNote delegation={escalated} name={(h) => index.byHandle.get(h)?.name ?? h} />
         )}
@@ -1601,7 +1624,50 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
       <Text as="p" variant="caption">
         {item.clears}
       </Text>
+      {item.spread !== undefined && <PutOffControls item={item} now={now} />}
     </>
+  );
+}
+
+/**
+ * A PLATFORM NOTICE THE READER ACCEPTS FOR NOW is put off on this browser for
+ * a stated time, and comes back by itself when its condition worsens
+ * (`lib/putOff.ts`). One put off says until when, with the way back now.
+ */
+function PutOffControls({ item, now }: { item: Attention; now: number }) {
+  const { marks, putOff, bringBack } = usePutOff();
+  const mark = marks[item.id];
+  if (putOffHolds(mark, item, now)) {
+    return (
+      <Stack gap={2} align="start">
+        <Text as="p" variant="caption">
+          {`Put off on this browser until ${fmtAt(mark!.until, now)}. It comes back sooner if it worsens.`}
+        </Text>
+        <Button variant="secondary" size="small" onClick={() => bringBack(item.id)}>
+          Bring back now
+        </Button>
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap={2} align="start">
+      <Text as="p" variant="caption">
+        Accept it for now: put it off on this browser. It comes back when the time is up, or sooner
+        if it worsens.
+      </Text>
+      <Inline gap={2}>
+        {PUT_OFF_CHOICES.map((choice) => (
+          <Button
+            key={choice.hours}
+            variant="ghost"
+            size="small"
+            onClick={() => putOff(item, choice.hours, now)}
+          >
+            {`Put off ${choice.label.toLowerCase()}`}
+          </Button>
+        ))}
+      </Inline>
+    </Stack>
   );
 }
 

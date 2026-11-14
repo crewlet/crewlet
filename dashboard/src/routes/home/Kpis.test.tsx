@@ -44,6 +44,8 @@ const VIEWER: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",

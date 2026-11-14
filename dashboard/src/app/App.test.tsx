@@ -1329,8 +1329,12 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   );
   await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
+  // AND THE TASK'S OWN GESTURES (move, trash), held with the sentence for a
+  // reader the engine does not serve them to, as every write control is.
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",
+    "Move to project…This can’t be changed from here.",
+    "Move to trashThis can’t be changed from here.",
     "Keep in Starred",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));

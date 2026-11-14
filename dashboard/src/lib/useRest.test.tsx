@@ -12,6 +12,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { restErrorCode, useRest } from "./useRest.ts";
+import { retryFailedReads } from "./failedReads.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { LiveSocket, RestError, Store } from "~/protocol/index.ts";
 import { EVERY_QUESTION, session } from "~/protocol/session.ts";
@@ -183,6 +184,26 @@ describe("a retry is the engine's to schedule", () => {
 });
 
 describe("what makes it read again", () => {
+  // THE BANNER'S TRY AGAIN ASKS A FAILED REST READ TOO: `QueryState` draws it
+  // for a REST read's failure as for a question's, and the set it asks held
+  // only questions, so on a REST screen it asked nothing. Mutation: leave the
+  // REST read out of that set, and the second read never goes out.
+  test("Try again asks a failed read again, loudly, and nothing once it answered", async () => {
+    const { read, calls } = scripted<string>();
+    const { result } = renderHook(() => useRest("/starters", read));
+    await act(async () => calls[0]!.reject(refused(500)));
+    expect(result.current.error).not.toBeNull();
+
+    act(() => retryFailedReads());
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => calls[1]!.resolve("themes"));
+    expect(result.current.data).toBe("themes");
+    act(() => retryFailedReads());
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   test("a poll re-reads quietly, keeping what is on screen", async () => {
     vi.useFakeTimers();
     const { read, calls } = scripted<string>();

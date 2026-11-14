@@ -6,7 +6,13 @@
 
 import { describe, expect, test } from "vitest";
 
-import { alarmKindTitle, alarmLogLines, namedAlarms } from "./alarms.ts";
+import {
+  alarmKindTitle,
+  alarmLogLines,
+  alarmPlace,
+  alarmPlaceWords,
+  namedAlarms,
+} from "./alarms.ts";
 
 describe("an alarm kind is read as words", () => {
   // EVERY KIND THE ENGINE'S TABLE RAISES TODAY (`statelog.Kinds`), so the rule
@@ -190,5 +196,23 @@ describe("the logs an alarm stands on", () => {
       { domains: ["tracker", "pages", "usage"], detail: missing },
       { domains: ["iam"], detail: "the newest verified backup is 30h old" },
     ]);
+  });
+});
+
+// THE ENGINE'S COUNT AND NEEDS YOU COUNT TWO THINGS, and the panel says which
+// alarm is which: the status counts this node's table as it fires now, Needs
+// you an alarm once it has stood the grace. Read side by side they were three
+// numbers that disagreed with nothing to say why.
+describe("where a standing alarm is for a reader", () => {
+  const places = { needs: ["census_drift"], putOff: ["objects_bucket_near_ceiling"] };
+  test("in Needs you, put off, or not there yet", () => {
+    expect(alarmPlace("census_drift", places)).toBe("needs");
+    expect(alarmPlace("objects_bucket_near_ceiling", places)).toBe("put-off");
+    expect(alarmPlace("backup_age", places)).toBe("waiting");
+    expect(alarmPlaceWords("waiting")).toBe("Reaches your Inbox once it has stood 30 minutes");
+  });
+  test("a reader who is told no notice is told nothing about the Inbox", () => {
+    expect(alarmPlace("census_drift", null)).toBe("unseen");
+    expect(alarmPlaceWords("unseen")).toBe("");
   });
 });

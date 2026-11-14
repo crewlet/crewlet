@@ -338,7 +338,7 @@ describe("a seat's holding", () => {
     failure = json(500, { error: "internal", message: "boom" });
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
-    expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
+    expect(await screen.findByText(/the engine failed to answer/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   });
 
@@ -980,7 +980,7 @@ test("the unbound remedy says where each argument of its command comes from", as
 test("the unbound remedy for a config token says it holds no seat, and how to get one", async () => {
   const remedy = await remedyFor("token:ops");
   expect(remedy.textContent).toMatch(
-    /^To read and write here, sign in as a person, or use a service account/,
+    /^A token from the node’s config can’t hold a seat\. To read and write here, sign in as yourself, or use a service account/,
   );
   expect(remedy.textContent).not.toMatch(/iam people/);
 });

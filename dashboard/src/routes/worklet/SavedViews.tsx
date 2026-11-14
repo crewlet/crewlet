@@ -48,8 +48,6 @@ import {
   EmptyValue,
   Skeleton,
   Tag,
-  InlineCode,
-  TableKeyCell,
   TableEntityCell,
   TableTextCell,
   PageNote,
@@ -59,9 +57,10 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 
-import { PinButton } from "~/components/writes.tsx";
+import { EditViewButton, PinButton } from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 import { viewRun } from "~/lib/work.ts";
+import { viewSettingWords } from "./viewSettings.ts";
 
 /**
  * How a view's container is written, everywhere it is written.
@@ -166,6 +165,13 @@ export function SavedViews({ id }: { id?: string }) {
   );
   const one = id ? saved.find((v) => v.id === id) : undefined;
   usePageLabels(one ? { [one.id as string]: one.name } : {});
+  // THE PROJECT A VIEW LIVES ON, BY NAME, for its page's Where fact: its key
+  // alone is what a reader types rather than what the project is called.
+  const projectKey = one?.container.kind === "project" ? one.container.id : "";
+  const project = useQuery("work_project", projectKey ? { key: projectKey } : undefined, {
+    enabled: projectKey !== "",
+    pollMs: 300_000,
+  });
 
   // ONE VIEW IS THE BOARD RUNNING IT. There is no second renderer: a view is
   // a set of parameters for the tracker, so the page for one is the tracker
@@ -218,9 +224,9 @@ export function SavedViews({ id }: { id?: string }) {
           icon="columns-3"
           identifier={one.key}
           title={one.name}
-          facts={viewFacts(one, index)}
+          facts={viewFacts(one, index, who, project.data?.name)}
         />
-        <ViewFacts view={one} />
+        <ViewFacts view={one} index={index} />
         <div className="row gap-2 wrap">
           <Button
             variant="primary"
@@ -240,6 +246,17 @@ export function SavedViews({ id }: { id?: string }) {
             view={one.id as string}
             name={one.name}
             pinned={Boolean(one.pinned)}
+          />
+          {/* ITS NAME AND WHO SEES IT, changed where the view is read. */}
+          <EditViewButton
+            view={{
+              id: one.id as string,
+              name: one.name,
+              container: containerRef(one),
+              type: one.type,
+              params: one.params ?? {},
+              personal: Boolean(one.owner),
+            }}
           />
         </div>
       </>
@@ -394,7 +411,12 @@ function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
   );
 }
 
-function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
+function viewFacts(
+  view: WorkView,
+  index: OrgIndex,
+  who: (handle: string) => { name: string },
+  projectName?: string,
+): Fact[] {
   const marks = viewMarks(view);
   return [
     { label: "Shape", value: view.type },
@@ -403,13 +425,17 @@ function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
       // company sees it, which is a setting somebody chose rather than a
       // field nobody filled in — so it is a word and never a dash.
       label: "Owner",
-      value: view.owner ? (
-        <OwnerCell owner={view.owner} index={index} />
-      ) : (
-        <span className="t-caption">shared</span>
-      ),
+      value: view.owner ? <OwnerCell owner={view.owner} index={index} /> : "Shared with everyone",
     },
-    { label: "Container", value: <TableKeyCell value={containerRef(view)} /> },
+    {
+      // WHERE IT LIVES, as a person reads it: the project by its key and
+      // name, never the grammar's `project:KEY`.
+      label: "Where",
+      value:
+        view.container.kind === "project" && projectName
+          ? `${view.container.id} · ${projectName}`
+          : containerLabel(view, who),
+    },
     {
       // NO DASH HERE, which is the opposite of the grid's answer to the same
       // absence and is exactly why [viewMarks] decides neither: [FactLine] drops
@@ -422,24 +448,26 @@ function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
   ];
 }
 
-/** What one view actually asks for, as the parameters it carries. */
-function ViewFacts({ view }: { view: WorkView }) {
-  const params = Object.entries(view.params ?? {});
+/**
+ * What one view actually asks for, in the words its controls use
+ * ([viewSettingWords]): "Sorted by Recently updated", never `sort -updated`.
+ */
+function ViewFacts({ view, index }: { view: WorkView; index: OrgIndex }) {
+  const settings = viewSettingWords(view.params ?? {}, {
+    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+  });
   return (
     <div className="col gap-2">
-      {params.length === 0 ? (
+      {settings.length === 0 ? (
         <p className="t-caption">No filters saved.</p>
       ) : (
-        <div className="list">
-          {params.map(([key, value]) => (
-            <div key={key} className="thread-entry">
-              <InlineCode>{key}</InlineCode>
-              <span className="truncate t-cell" style={{ flex: 1 }}>
-                {String(value)}
-              </span>
-            </div>
+        <ul className="list" aria-label="What this view shows">
+          {settings.map((words) => (
+            <li key={words} className="thread-entry t-cell">
+              {words}
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );

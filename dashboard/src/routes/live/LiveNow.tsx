@@ -79,7 +79,8 @@ import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveRoom, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
+import { RunStatus, runTitle } from "./Executors.tsx";
+import { mergeRuns } from "~/lib/runs.ts";
 import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -107,6 +108,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
  * a sixty-cell strip would not be.
  */
 const STRIP_OFFER: Offer = {
+  screen: "live.now",
   ranges: ["15m", "1h", "6h"],
   custom: false,
   fallback: "1h",

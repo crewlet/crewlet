@@ -273,6 +273,77 @@ test("the credential is tested, then stored with its draft before the document t
 });
 
 /**
+ * AN EDIT SAVED RETURNS TO WHERE IT WAS OPENED, as Cancel does. Renew token
+ * or Replace API key from a row's menu on the list is opened over the list
+ * (here on its By job lens), and the save hands the page back to it through
+ * the wizard's own close; it does not travel to the model's page, which took
+ * a person working down the list away from it. Mutation: send every save to
+ * the model's page, and both readings are red.
+ */
+test("an edit saved returns to where it was opened, never to the model's page", async () => {
+  location.hash = "#/settings/models?view=jobs&flow=edit&entry=sonnet&step=signin&focus=credential";
+  const { onClose } = show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
+  press("Review changes");
+  await screen.findByText("The engine accepts this change");
+  press("Save changes");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  expect(location.hash).not.toContain("settings/models/sonnet");
+  expect(location.hash).toContain("view=jobs");
+});
+
+/**
+ * A SAVE SAYS WHICH WRITE IS RUNNING. Storing a credential can run the harness
+ * on the engine, which takes seconds: the form names the write it is waiting
+ * on and counts the wait, so it never reads as stopped. Mutation: leave the
+ * button's spinner as the only sign, and this is red.
+ */
+test("a save names the write it is waiting on while it runs", async () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
+  press("Review changes");
+  await screen.findByText("The engine accepts this change");
+  let stored!: (value: unknown) => void;
+  vi.mocked(api.storeCredential).mockImplementationOnce(() => {
+    calls.push("store");
+    return new Promise((resolve) => (stored = resolve)) as never;
+  });
+  let written!: (value: unknown) => void;
+  vi.mocked(api.writeDocument).mockImplementationOnce(() => {
+    calls.push("write");
+    return new Promise((resolve) => (written = resolve)) as never;
+  });
+  press("Save changes");
+  const storing = await screen.findByRole("status");
+  expect(storing.textContent).toMatch(/^Storing the key and re-activating the company/);
+  expect(document.querySelector(".models-waiting__elapsed")?.textContent).toMatch(/^\d+ s$/);
+  await act(async () =>
+    stored({
+      kind: "ok",
+      status: 200,
+      value: {
+        verified: "",
+        check: { at: "", node: "node-1", ok: true, lines: [] },
+        names: [],
+        hints: {},
+        entries: [],
+        reload: null,
+        cleared: [],
+        running_runs: 0,
+        limited: null,
+      },
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("Saving the model as one revision."),
+  );
+  await act(async () =>
+    written({ kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null }),
+  );
+});
+
+/**
  * A SAVE THAT HAS STARTED RUNS TO ITS END, whatever happens to the wizard:
  * left between the credential and the document, it still reads the revision
  * the credential re-activated and writes the document, so no sealed secret is

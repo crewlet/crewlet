@@ -24,7 +24,7 @@ import {
   mcpData,
   withOAuth,
 } from "./fixtures.ts";
-import { McpTools } from "./McpTools.tsx";
+import { McpTools, savedLanding } from "./McpTools.tsx";
 
 let current: McpData;
 let detail: ServerDetail | null;
@@ -441,4 +441,14 @@ test("with no server the page draws no figures, and leads with the empty state",
     screen.queryByText(/every one enabled|every enabled server answers|every one offered/),
   ).toBeNull();
   expect(screen.getByText("No MCP server yet")).toBeDefined();
+});
+
+// AN EDIT SAVED RETURNS TO WHERE IT WAS OPENED; only a server that is new, or
+// one a person signs in next, lands on the server's own page. Mutation: send
+// every save to the server's page, and the first reading is red.
+test("a saved edit returns to its opener, and a new or sign-in-next server to its page", () => {
+  expect(savedLanding(true, false)).toBe("origin");
+  expect(savedLanding(true, true)).toBe("server");
+  expect(savedLanding(false, false)).toBe("server");
+  expect(savedLanding(false, true)).toBe("server");
 });

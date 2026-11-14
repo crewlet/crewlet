@@ -400,17 +400,20 @@ function notice(reason: string, n: number) {
 }
 
 describe("the Inbox badge", () => {
-  // A BADGE NOBODY CAN DRIVE DOWN IS A BROKEN COUNTER. Every unread notice
-  // counted, most of a busy company's notices are things it merely told you,
-  // and nobody answers those — so the ENGINE is asked for the unread primary
-  // ones only, and the badge is the page it answers.
-  test("asks the engine for unread primary notices, and counts what it answers", async () => {
+  // THE BADGE COUNTS WHAT WAITS ON THE READER, AND NOTHING ELSE: the engine's
+  // `decisions` total (the asks and runs put to them, and those they may
+  // answer that their delegates escalated). A mention or an update that only
+  // informs is listed in the Inbox and counted here by nothing: counted, a
+  // busy company's badge never reached zero however diligent the reader was.
+  // Mutation: count the unread notices again, and the first case goes red.
+  test("counts what the engine says waits on the reader, never their unread updates", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
       {
+        decisions: { handle: "ada", items: [], total: 1, answerable: 2, capped: false },
         inbox: {
           handle: "ada",
-          notices: [notice("assignee", 1)],
+          notices: [notice("mention", 1), notice("assignee", 2), notice("reporter", 3)],
           primary_reasons: [],
           sources: [],
         },
@@ -419,36 +422,30 @@ describe("the Inbox badge", () => {
     );
     mountShell(store, socket);
     await settle();
-    const inbox = asked.find((a) => a.what === "inbox");
-    expect(inbox?.params).toMatchObject({ handle: "ada", unread: true, primary_only: true });
-    // A COUNT DRAWS NO CARD, so it asks the engine to judge none: the badge's
-    // read runs behind every screen of every tab.
-    expect(inbox?.params).not.toHaveProperty("cards");
+    expect(asked.some((a) => a.what === "decisions")).toBe(true);
+    // THE FRAME ASKS NO UPDATES FOR A COUNT: the badge reads none of them.
+    expect(asked.filter((a) => a.what === "inbox" && a.params?.primary_only)).toEqual([]);
     const row = screen.getByRole("link", { name: /^Inbox/ });
-    expect(row.textContent).toContain("1");
+    expect(row.textContent).toMatch(/1$/);
+    expect(row.textContent).toContain("waiting on you");
   });
 
-  // A PAGE THE ENGINE HAD MORE THAN is a floor, and says so.
-  test("a page with more behind it is drawn as a floor", async () => {
+  // A COUNT THE ENGINE CAPPED is a floor, and says so.
+  test("a capped count is drawn as a floor", async () => {
     const { store, socket } = answering({
-      inbox: {
-        handle: "ada",
-        notices: [notice("assignee", 1), notice("mention", 2)],
-        primary_reasons: [],
-        sources: [],
-        next_cursor: "c-2",
-      },
+      decisions: { handle: "ada", items: [], total: 50, answerable: 0, capped: true },
     });
     mountShell(store, socket);
     await settle();
-    expect(screen.getByRole("link", { name: /^Inbox/ }).textContent).toContain("2+");
+    expect(screen.getByRole("link", { name: /^Inbox/ }).textContent).toContain("50+");
   });
 
   // NOTHING TO ANSWER IS NO BADGE AT ALL. A zero in the accent is a mark a
   // reader checks, and it would be there permanently on a quiet company.
   test("nothing waiting draws no figure", async () => {
     const { store, socket } = answering({
-      inbox: { handle: "ada", notices: [], primary_reasons: [], sources: [] },
+      decisions: { handle: "ada", items: [], total: 0, answerable: 0, capped: false },
+      inbox: { handle: "ada", notices: [notice("mention", 1)], primary_reasons: [], sources: [] },
     });
     mountShell(store, socket);
     await settle();
@@ -872,9 +869,10 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket, child);
     await settle();
     expect(asked.filter((a) => a.what === "viewer")).toHaveLength(1);
-    expect(asked.filter((a) => a.what === "inbox" && a.params?.primary_only === true)).toHaveLength(
-      1,
-    );
+    // THE COUNT READS WHAT WAITS ON THE READER (`decisions`), never a page of
+    // their updates: no read asks for the primary updates to count them.
+    expect(asked.some((a) => a.what === "decisions")).toBe(true);
+    expect(asked.filter((a) => a.what === "inbox" && a.params?.primary_only === true)).toEqual([]);
   });
 
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not

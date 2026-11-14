@@ -925,6 +925,15 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	if !q.To.IsZero() {
 		add("h.created_at <= ?", store.EncodeTime(q.To))
 	}
+	if len(q.Kinds) == 0 && strings.TrimSpace(q.Task) == "" {
+		// A PERSON'S OWN BOOKKEEPING IS NOT THE COMPANY'S WORK. Every pin, inbox
+		// mark and snooze writes a history row on that person's record
+		// ([ChangePersonUpdated]), and a feed of what the company did listed
+		// them between the real changes, each with no item, and told every
+		// reader when a colleague marked their inbox read. It is still
+		// recorded and still read by naming its kind.
+		add("h.kind <> ?", string(ChangePersonUpdated))
+	}
 	if len(q.Kinds) > 0 {
 		values := make([]any, 0, len(q.Kinds))
 		var moved []string

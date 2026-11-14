@@ -116,6 +116,30 @@
         "description": "Due. null clears it.",
         "maxLength": 200
       },
+      "start": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Start. null clears it.",
+        "maxLength": 200
+      },
+      "created": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Created. null clears it.",
+        "maxLength": 200
+      },
+      "updated": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Updated. null clears it.",
+        "maxLength": 200
+      },
       "blocked": {
         "type": [
           "string",
@@ -183,7 +207,7 @@
           "string",
           "null"
         ],
-        "description": "Then group by. null clears it.",
+        "description": "Subgroup by. null clears it.",
         "maxLength": 200
       },
       "sort": {

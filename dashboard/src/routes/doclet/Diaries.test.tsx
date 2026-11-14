@@ -239,3 +239,30 @@ test("one agent no node holds says why its diary is not shown", async () => {
   expect(screen.getByText("No node holds this agent")).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Diary" })).toBeNull();
 });
+
+// A READ IN FLIGHT IS A SKELETON, never a blank page: `QueryState` draws
+// nothing while it waits, so a screen that left the wait to it was its trail
+// over nothing, which a reader cannot tell from empty or broken.
+const skeleton = () => document.querySelector(".crewlet-skeleton");
+
+test("the diaries list in flight is a skeleton, and no claim that there are no agents", async () => {
+  mount(<Diaries />, { memory_overview: new Promise(() => {}) });
+  await settle();
+  expect(skeleton()).not.toBeNull();
+  expect(screen.queryByText("No agents")).toBeNull();
+});
+
+test("one agent's diary in flight is a skeleton, and gone once the holder answers", async () => {
+  let answer: (value: unknown) => void = () => {};
+  mount(<Diary handle="agent-3" />, {
+    agent_memory: new Promise((resolve) => {
+      answer = resolve;
+    }),
+  });
+  await settle();
+  expect(skeleton()).not.toBeNull();
+  answer({ held_by: "none" });
+  await settle();
+  expect(skeleton()).toBeNull();
+  expect(screen.getByText("No node holds this agent")).toBeTruthy();
+});

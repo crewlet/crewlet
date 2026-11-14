@@ -44,6 +44,7 @@ import {
   queryErrorCode,
 } from "~/protocol/index.ts";
 import { goSignIn, page } from "~/lib/session.ts";
+import { retryFailedReads } from "~/lib/failedReads.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {
@@ -405,18 +406,13 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       That revision is sealed in a form this build doesn’t read, most likely by a newer build.
     </Callout>
   ),
-  timeout: (
-    <Callout variant="warning" icon={<ClockGlyph size="md" />}>
-      The engine didn’t answer in time.
-    </Callout>
-  ),
+  timeout: <FailedRead code="timeout" again />,
   // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
   // this query", which is wrong about each of them in a different way.
-  query_failed: (
-    <Callout variant="danger">
-      The engine failed to answer. You can check logs for the details.
-    </Callout>
-  ),
+  // A FAILED READ SAYS WHAT DID NOT LOAD AND OFFERS THE ONE THING A READER
+  // CAN DO, ask again: it told them to check logs a dashboard reader usually
+  // cannot open, and left a reload as the only way on.
+  query_failed: <FailedRead code="query_failed" again />,
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
@@ -425,6 +421,36 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
 };
+
+/**
+ * A read that failed or timed out, said as what did not load, with the shared
+ * Try again where `again` holds. A screen that draws its own Try again beside
+ * the banner passes `again={false}` through [QueryState]'s `ownRetry`.
+ */
+function FailedRead({ code, again }: { code: "timeout" | "query_failed"; again: boolean }) {
+  const action = again ? <TryAgain /> : undefined;
+  return code === "timeout" ? (
+    <Callout variant="warning" icon={<ClockGlyph size="md" />} action={action}>
+      This didn’t load: the engine didn’t answer in time.
+    </Callout>
+  ) : (
+    <Callout variant="danger" action={action}>
+      This didn’t load: the engine failed to answer.
+    </Callout>
+  );
+}
+
+/**
+ * Ask again every read on screen that failed (`lib/useQuery.ts`'
+ * retryFailedReads): one control for every failed read's banner.
+ */
+export function TryAgain() {
+  return (
+    <Button size="small" variant="secondary" onClick={retryFailedReads}>
+      Try again
+    </Button>
+  );
+}
 
 /**
  * A refusal on authority that says WHY: the access any one of which would
@@ -533,6 +559,7 @@ export function QueryState({
   detail,
   loading,
   empty,
+  ownRetry = false,
   children,
 }: {
   error: string | null;
@@ -572,6 +599,13 @@ export function QueryState({
      */
     headingLevel?: "none";
   };
+  /**
+   * THE SCREEN DRAWS ITS OWN TRY AGAIN beside this state (a Chatlet list's,
+   * the slides starters'), so a failed or timed-out banner leaves the shared
+   * one out: two "Try again" buttons side by side read as two different things
+   * to do.
+   */
+  ownRetry?: boolean;
   children?: ReactNode;
 }) {
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
@@ -591,6 +625,9 @@ export function QueryState({
   const code = queryErrorCode(error);
   if (code !== null && code !== "bad_params" && DETAILED_QUERY_ERRORS.has(code) && detail) {
     return <Callout variant="warning">{detail}</Callout>;
+  }
+  if (ownRetry && (error === "timeout" || error === "query_failed")) {
+    return <FailedRead code={error} again={false} />;
   }
   const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (banner) return <>{banner}</>;

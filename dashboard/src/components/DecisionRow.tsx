@@ -52,12 +52,13 @@ import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writ
 import { Recommendation } from "./Recommendation.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { runStanding, YOU_CAN_ANSWER, type RunStanding } from "~/lib/runStanding.ts";
 import type { DecisionSubject, SeatCondition } from "~/lib/decisions.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
-import type { AgentRow, BudgetWindow, ExecutorRow, WorkAskRow } from "~/protocol/index.ts";
+import type { ExecutorRow, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
@@ -74,55 +75,6 @@ import type { DelegatedAct, HeldDelegation } from "~/contract/delegated.ts";
  */
 export function decisionsHref(): string {
   return href(["inbox"]);
-}
-
-/**
- * Which budget-stopped seats are THIS reader's decision, and which are only a
- * condition they can see.
- *
- * A STOPPED SEAT HAS TWO WAYS OUT, and a seat is waiting on a reader exactly
- * when they can take one of them:
- *
- *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from an admin, and a SEAT's ceiling also from whoever leads it
- *    (`lib/leadScope.ts`) — so the reader's access or the units they lead
- *    decide it, never a binding of their own. The company's ceiling, which
- *    stops a seat whose own window has room, is Admin's alone. Where another system manages the document (ADR-0030),
- *    only its writers raise anything: `configWrite` is `mayChangeConfig`
- *    (`lib/useWriteAccess.ts`), the same answer the raise control is disabled
- *    by, and the caller passes no leads — so a seat is never counted as a
- *    decision whose control then refuses the reader;
- *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
- *    engine to serve that write for them (`viewer.acts`) AND an item the seat
- *    was on: a seat stopped between turns has nothing to hand on.
- *
- * Everything else a reader sees is somebody else's decision, so it is counted
- * with the conditions that "need a look", never as one waiting on them: a
- * sentence telling a person a decision waits that they cannot make is the one
- * thing this screen must not say.
- */
-export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindow }>(
-  conditions: readonly T[],
-  reader: {
-    /** Whether the reader may change the company's configuration: `mayChangeConfig`. */
-    configWrite: boolean;
-    acts: readonly string[];
-  },
-  /**
-   * The handles of the seats the reader leads ([LeadScope.seats]) — EMPTY
-   * on a managed document, where a lead's raise is refused like anybody's.
-   */
-  leads: { has(handle: string): boolean } = new Set(),
-): { mine: T[]; others: T[] } {
-  const mine: T[] = [];
-  const others: T[] = [];
-  for (const c of conditions) {
-    const raises = reader.configWrite || (c.window !== undefined && leads.has(c.row.handle ?? ""));
-    const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
-    const reassign = item !== null && reader.acts.includes("update_work_item");
-    (raises || reassign ? mine : others).push(c);
-  }
-  return { mine, others };
 }
 
 /** A stable key for one subject, whichever list draws it. */
@@ -345,6 +297,7 @@ function DecisionHead({
 function Row({
   who,
   status,
+  waiting,
   title,
   sub,
   line,
@@ -356,6 +309,11 @@ function Row({
 }: {
   who: Who;
   status: "needs" | "stopped";
+  /**
+   * Who a parked run waits on where it does not wait on the reader: said in
+   * place of "Needs you", in the row's quiet ink ([runStanding]).
+   */
+  waiting?: string;
   title: ReactNode;
   sub: ReactNode[];
   /** One more line of words under the title: how long a box is held. */
@@ -386,8 +344,8 @@ function Row({
         <div className="decision-text">
           <span className="decision-title">{title}</span>
           <span className="decision-sub">
-            <span className="decision-state" data-state={status}>
-              {stateWord(status)}
+            <span className="decision-state" data-state={waiting ? "waiting" : status}>
+              {waiting ?? stateWord(status)}
             </span>
             {sub.length > 0 && " · "}
             {sub}
@@ -564,16 +522,18 @@ function AnsweredLine({ answer }: { answer: AskAnswer }) {
 }
 
 function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: number }) {
-  const held = heldCallOf(run);
+  const held = heldCallOf(run, (h) => seatOf(index, h).name);
   if (held) return <HeldCallRow call={held} now={now} />;
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
   const question = (run.question ?? "").trim();
+  const standing = runStanding(run, (h) => seatOf(index, h).name);
   const sub = joined([
     // WHO ASKS BEFORE WHAT, so a long question that takes a line of its own
-    // ends the sentence rather than splitting it.
-    audienceOf(run, index),
+    // ends the sentence rather than splitting it. A run waiting on somebody
+    // else already says whom, and says instead whether the reader may answer.
+    standing.needs ? audienceOf(run, index) : standing.answers ? YOU_CAN_ANSWER : "",
     // THE QUESTION, never its context: the pane and the answer dialog read
     // that.
     question ? (
@@ -588,13 +548,22 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
     <Row
       who={who}
       status="needs"
+      waiting={standing.needs ? undefined : standing.word}
       title="Executor parked on a question"
       sub={sub}
       item={item}
       at={since}
       now={now}
       line={holdLine(run, now)}
-      actions={<AnswerRunButton run={run} seat={who.name} variant="primary" />}
+      actions={
+        standing.answers ? (
+          <AnswerRunButton
+            run={run}
+            seat={who.name}
+            variant={standing.needs ? "primary" : "secondary"}
+          />
+        ) : null
+      }
     />
   );
 }
@@ -639,6 +608,12 @@ export interface HeldCall {
   act?: DelegatedAct;
   /** The engine's own question for it, where the caller has the run's (`heldCallTitle`). */
   question?: string | undefined;
+  /**
+   * Where it stands for the reader, off its run's row ([runStanding]):
+   * absent on a call read off a server's approvals, which are the reader's
+   * to answer by the page that lists them.
+   */
+  standing?: RunStanding;
 }
 
 /** The decision a held call carries out: the question asked, and the answer given. */
@@ -659,10 +634,11 @@ export function actingWords(acting: HeldCallActing, name: (handle: string) => st
 }
 
 /** The call a parked run holds for approval, or null for a run parked on a question. */
-export function heldCallOf(run: ExecutorRow): HeldCall | null {
+export function heldCallOf(run: ExecutorRow, nameOf: (handle: string) => string): HeldCall | null {
   const held = run.held_call;
   if (!held) return null;
   return {
+    standing: runStanding(run, nameOf),
     id: held.id,
     seat: run.agent_handle,
     server: held.server,
@@ -753,12 +729,20 @@ export function HeldCallRow({
         </Stack>
       </Disclosure>
     );
+  // WHERE IT STANDS FOR THE READER: a call waiting on somebody else says
+  // whom, and offers the answer only to a reader who may give it.
+  const standing = call.standing;
+  const answers = standing?.answers ?? true;
   return (
     <Row
       who={who}
       status="needs"
+      waiting={standing && !standing.needs ? standing.word : undefined}
       title={<HeldCallTitle call={call} />}
-      sub={joined([settled ? "" : "its run is parked"])}
+      sub={joined([
+        settled ? "" : "its run is parked",
+        standing && !standing.needs && answers && !settled ? YOU_CAN_ANSWER : "",
+      ])}
       item={call.item}
       at={call.at}
       now={now}
@@ -785,7 +769,7 @@ export function HeldCallRow({
         ) : undefined
       }
       actions={
-        settled ? null : (
+        settled || !answers ? null : (
           <HeldCallButtons
             id={call.id}
             seat={call.seat}
