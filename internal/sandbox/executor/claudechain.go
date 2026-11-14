@@ -120,6 +120,12 @@ const (
 	// the last compaction's boundary, where a boundary names what it kept,
 	// and not among the records it kept ([threadChain], THE RELINK).
 	whyRelinkDeleted chainWhy = "relink_deleted"
+	// whyMalformedAttachment is an attachment the resume's drop of malformed
+	// attachments takes, after its retraction filter: one whose payload is not
+	// of its type's shape ([threadLine.AttachmentWellFormed]; [threadChain],
+	// THE MALFORMED-ATTACHMENT DROP). The main thread's alone: no such drop
+	// follows a subagent's own load.
+	whyMalformedAttachment chainWhy = "malformed_attachment"
 	// whyAnotherAgent is a record a subagent's own load walks, recovers, hangs
 	// or tails whose agentId is not that subagent's, none among it: the load
 	// hands on the records of the subagent's own id alone ([threadChain], A
@@ -143,11 +149,6 @@ const (
 	// whyRelease is a record one release's retraction filter drops and the
 	// other's does not.
 	whyRelease chainWhy = "release"
-	// whyAttachmentDrop is a handed attachment the resume's drop of malformed
-	// attachments may take, which this model does not follow yet; gone once a
-	// later commit of this change models that drop (`feat(executor): model the
-	// malformed attachments a resume drops`).
-	whyAttachmentDrop chainWhy = "attachment_drop"
 )
 
 // Cannot tell, the whole thread: a shape no model holds. Every record answers
@@ -183,8 +184,8 @@ const (
 	// nor null.
 	whyCheckpointShape chainWhy = "checkpoint_shape"
 	// whyAdmission is a record the load drops or rewrites, a reply whose mark
-	// of an API error or model is in no shape, or an attachment the layer
-	// cannot say the malformed-attachment drop keeps.
+	// of an API error or model is in no shape, or, in the main thread, an
+	// attachment the layer cannot say the malformed-attachment drop keeps.
 	whyAdmission chainWhy = "admission"
 	// whyReplyID is a reply id the layer cannot read as the resume does: no
 	// string, or holding U+FFFD ([threadLine.MessageID]); or, where 2.1.322's
@@ -243,8 +244,8 @@ const whyUndecided chainWhy = "undecided"
 
 // chainWhys is every reason, the place each answer stores its reason by.
 var chainWhys = [...]chainWhy{"", whyChain, whyRecoveredReply, whyRecoveredResult, whyHookChain, whyLeafTail,
-	whyOffConversation, whyRetracted, whyRelinkDeleted, whyAnotherAgent, whyNoConversation, whyNoRecord,
-	whyLeafFlag, whyRelease, whyAttachmentDrop, whyBound, whyLine, whyLineGap, whyProgress, whyUUID,
+	whyOffConversation, whyRetracted, whyRelinkDeleted, whyMalformedAttachment, whyAnotherAgent, whyNoConversation,
+	whyNoRecord, whyLeafFlag, whyRelease, whyBound, whyLine, whyLineGap, whyProgress, whyUUID,
 	whyDuplicateUUID, whySidechain, whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape,
 	whyAdmission, whyReplyID, whyCallID, whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape,
 	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyTailTime, whyForkContext, whyAgent,
@@ -400,9 +401,10 @@ const chainPrefixBytes = 10
 // off other records, both of them the main thread's; and the order of the
 // tails, which warm_mochi turns from a walk by breadth sorted by time into a
 // walk by depth (THE TAILS), in a subagent's thread as well, over the same
-// records either way. A record handed under some variants and not others is
-// handedUnknown (whyLeafFlag, whyRelease); each distinct order is handed
-// once, with the variants that hand it ([threadChain.EachOrder]).
+// records either way. The drop of malformed attachments, the same code in
+// both releases, parts none. A record handed under some variants and not
+// others is handedUnknown (whyLeafFlag, whyRelease); each distinct order is
+// handed once, with the variants that hand it ([threadChain.EachOrder]).
 // foamy_spring's other effect, a result hung under a call it names rather than
 // under its parent, is refused wherever it could hang one (whyResultByCall).
 //
@@ -458,12 +460,12 @@ const chainPrefixBytes = 10
 //     out of the session's rows (ZI @293589374) and out of the walk's
 //     fallback (`if(ZI(ne))continue` @293589741), and 2.1.310 out of
 //     neither: whyFileSnapshot;
-//   - a reply whose mark of an API error or model the layer cannot read, and
-//     an attachment whose payload the layer cannot judge by the
-//     malformed-attachment drop's rules (whyAdmission); a timestamp in no form
-//     Claude Code writes, since the
-//     resume compares times as strings in one place and as dates in another,
-//     one order only on that form (whyTimestamp);
+//   - a reply whose mark of an API error or model the layer cannot read, and,
+//     in the main thread, an attachment whose payload the layer cannot judge
+//     by the malformed-attachment drop's rules (whyAdmission); a timestamp in
+//     no form Claude Code writes, since the resume compares times as strings
+//     in one place and as dates in another, one order only on that form
+//     (whyTimestamp);
 //   - a retraction list, a compaction's metadata or a checkpoint's leaf in no
 //     shape (whyRetractionShape, whyPreservedShape, whyCheckpointShape), and a
 //     checkpoint a rewind, a withdrawal or a fork marked (whyMarkedCheckpoint),
@@ -785,9 +787,19 @@ const chainPrefixBytes = 10
 // walk, the recovery and the tails hand, those hung and the tails among them.
 //
 // THE MALFORMED-ATTACHMENT DROP (2.1.322's Fce @295256716 with SCr
-// @295255626, 2.1.310's dne with cJo @248486136), main mode alone, after the
-// filter: an attachment its rules take is handedUnknown until a later commit
-// of this change models the drop (whyAttachmentDrop).
+// @295255626, 2.1.310's dne @248487226 with cJo @248486136, the same code and
+// bounds), main mode alone, over each variant's list after the filter, and so
+// alike in every variant: every attachment of the list whose payload is not
+// of its type's shape, by the rules [threadLine.AttachmentWellFormed] reads
+// (2.1.322's `s.type==="attachment"&&!SCr(s.attachment)` @295256760,
+// 2.1.310's with cJo @248487270), is dropped (whyMalformedAttachment), one the
+// recovery hung or a tail as well as one the walk took; a record the filter
+// dropped keeps the filter's reason. It drops that record alone: every other
+// stays where the walk, the recovery and the tails placed it, those that hang
+// under it among them. Each release's deserializer runs the filter and the
+// drop again (e_n's `Fce(Ve)` @295266070, TJt's `dne(be)` @248494866), which
+// then take nothing more. MEASURED by the layer's census of the probes' 521
+// thread files: the drop takes none of their 7,519 attachments.
 //
 // A SUBAGENT'S OWN LOAD (2.1.322's Rye @293845538, 2.1.310's FBe
 // @247216758), the thread of newThreadChain(agent). It loads the subagent's
@@ -970,7 +982,9 @@ const (
 	kindFallback
 	// kindTimed is a record with a timestamp.
 	kindTimed
-	// kindIllFormed is an attachment the malformed-attachment drop takes.
+	// kindIllFormed is, in the main thread alone, an attachment the
+	// malformed-attachment drop takes: no such drop follows a subagent's own
+	// load, so the chain neither marks nor judges one there.
 	kindIllFormed
 	// kindNowhere is a record whose parent names no record.
 	kindNowhere
@@ -1303,6 +1317,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	if head.Type == recordSystem && head.Subtype == subtypeRefusalFallback {
 		r.kind |= kindFallback
 	}
+	// The malformed-attachment drop follows the main thread's load alone (THE
+	// MALFORMED-ATTACHMENT DROP, A SUBAGENT'S OWN LOAD): judge reads this mark.
 	if c.agent == "" && head.Type == recordAttachment {
 		switch kept, err := line.AttachmentWellFormed(); {
 		case err != nil:
@@ -3600,11 +3616,12 @@ func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 // judge decides each record's answer under g's variants: the records the
 // relink deleted not handed, what the walk, the recovery and the tails hand
 // handed; then, in the main thread, the retraction filter of g's release, read
-// off every record of that list, and the attachments the malformed-attachment
-// drop may take cannot tell, and in a subagent's thread the hand-off to the
-// subagent's own id ([threadChain], THE RELINK, THE RETRACTION FILTER, THE
-// MALFORMED-ATTACHMENT DROP and A SUBAGENT'S OWN LOAD). Its orders are the
-// records it hands for certain, in each order of the tails.
+// off every record of that list, and after it the drop of that list's
+// malformed attachments, what each takes not handed; and in a subagent's
+// thread the hand-off to the subagent's own id ([threadChain], THE RELINK,
+// THE RETRACTION FILTER, THE MALFORMED-ATTACHMENT DROP and A SUBAGENT'S OWN
+// LOAD). Its orders are the records it hands for certain, in each order of
+// the tails.
 func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) error {
 	g.verdicts = make([]chainVerdict, len(c.recs))
 	off, deleted := chainVerdict{handed: verdictNo, why: whyAt(whyOffConversation)},
@@ -3655,9 +3672,12 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 			}
 		}
 	}
+	// The drop of malformed attachments, after the filter, so a record the
+	// filter took keeps the filter's reason. It tests no mode itself: file
+	// marks a main thread's attachments alone.
 	for _, h := range handed {
 		if v := &g.verdicts[h-1]; v.handed == verdictYes && c.is(h, kindAttachment|kindIllFormed) {
-			*v = chainVerdict{handed: verdictUnknown, why: whyAt(whyAttachmentDrop)}
+			*v = chainVerdict{handed: verdictNo, why: whyAt(whyMalformedAttachment)}
 		}
 	}
 	if !main {

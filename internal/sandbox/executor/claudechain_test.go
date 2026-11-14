@@ -1187,26 +1187,109 @@ func TestARetractionTakesBackWhatTheRecordsItHandsName(t *testing.T) {
 		rcOrder{[]int{1, 4, 5, 6}, allVariants})
 }
 
-// A HANDED ATTACHMENT THE MALFORMED-ATTACHMENT DROP MAY TAKE IS CANNOT TELL
-// until a later commit of this change models the drop: an attachment on the
-// conversation whose payload is not of its type's shape (a hook's success of
-// no string content) is whyAttachmentDrop, out of the order, and one of its
-// shape is handed.
+// A MALFORMED ATTACHMENT IS NOT HANDED IN THE MAIN THREAD: after its
+// retraction filter the resume drops every attachment of its list whose
+// payload is not of its type's shape (whyMalformedAttachment), and that record
+// alone, so the reply under it stays on the walk: a hook's success of no
+// string content, a hook's additional context of an entry that is no string,
+// a skill listing of 4,097 names and a task reminder of an entry that is a
+// list are not handed, and each of its shape is, a skill listing of 4,096
+// names and one whose name is 512 UTF-16 code units in 1,024 bytes among
+// them. It drops a record the recovery hung, of a batch's pair under the
+// reply's walked result, and a tail, a Stop hook's success under the turn's
+// last reply, the record under each staying where it was; it drops alike in
+// every variant, so an attachment only q1t's leaf walks to is handed under
+// none; and it runs after the filter, so an attachment 2.1.322's filter takes
+// and 2.1.310's drop takes is not handed in either, for the filter's reason.
 //
-// Mutation: file no attachment as one the drop takes, and the malformed one
-// reads as handed.
-func TestAHandedAttachmentTheMalformedDropMayTakeIsCannotTell(t *testing.T) {
+// Mutation: skip the drop, and each malformed attachment is handed, the one
+// 2.1.322's filter takes split by release and the one q1t's leaf walks to by
+// the flag; answer what it takes cannot tell, and each is; drop in one
+// release alone, and each malformed attachment splits by release; skip it
+// in the variants q1t moves the leaf in, and the one q1t's leaf walks to
+// splits by the flag; run it over the walk and the recovery's records alone,
+// and the Stop hook's success is handed; let it take what the filter took,
+// and the attachment 2.1.322's filter takes answers the drop's reason; read an
+// object as anything typeof calls one, and the task reminder of a list is
+// handed; take any content for a hook's success, or any entry for its
+// additional context, and the malformed one is handed; let a skill listing
+// hold one name more, and the one of 4,097 is handed; or count a name's bytes
+// rather than its UTF-16 code units, and the one of two-byte runes is not.
+func TestAMalformedAttachmentIsNotHandedInTheMainThread(t *testing.T) {
 	t.Parallel()
-	thread := func(hook string) []string {
+	// thread is a call (2), its result (3), an attachment (4) of payload under
+	// the result, and a reply (5) under the attachment.
+	thread := func(payload string) []string {
 		return []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 2000, "x1"),
-			rcAttach(3, 4, 2100, hook), rcReply(4, 5, "msg_b", 3000, rcSaid("done"))}
+			rcAttach(3, 4, 2100, payload), rcReply(4, 5, "msg_b", 3000, rcSaid("done"))}
 	}
-	rcChain(t, "", thread(ctReplace(t, rcHook("x1"), `"content":""`, `"content":7`))...).expect(t,
-		"a hook's success of no string content", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
-			3: yes(whyChain), 4: cannot(whyAttachmentDrop), 5: yes(whyChain)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
-	rcChain(t, "", thread(rcHook("x1"))...).expect(t, "a hook's success of its shape", map[int]rcAnswer{
-		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain), 5: yes(whyChain)},
-		rcOrder{[]int{1, 2, 3, 4, 5}, allVariants})
+	// listing is a skill listing of n names, each name.
+	listing := func(n int, name string) string {
+		return `{"type":"skill_listing","names":["` + strings.Repeat(name+`","`, n-1) + name + `"]}`
+	}
+	// unstated is payload, a hook's success, of no string content; addition is
+	// a hook's additional context, and listed a task reminder of a list.
+	unstated := func(payload string) string { return ctReplace(t, payload, `"content":""`, `"content":7`) }
+	addition := rcContextOf("PostToolUse", "x1")
+	const listed = `{"type":"task_reminder","content":[[]]}`
+	whole := rcCase{want: rcHanding(whyChain, []int{1, 2, 3, 4, 5}), order: []int{1, 2, 3, 4, 5}, leaf: 5}
+	dropped := rcCase{want: rcHanding(whyChain, []int{1, 2, 3, 5}, map[int]rcAnswer{4: no(whyMalformedAttachment)}),
+		order: []int{1, 2, 3, 5}, leaf: 5}
+	for name, tc := range map[string]struct {
+		payload string
+		kept    bool
+	}{
+		"a hook's success of no string content": {unstated(rcHook("x1")), false},
+		"a hook's success of its shape":         {rcHook("x1"), true},
+		"a hook's additional context of an entry that is no string": {ctReplace(t, addition, `["a note"]`,
+			`["a note",7]`), false},
+		"a hook's additional context of its shape": {addition, true},
+		"a skill listing of 4,097 names":           {listing(4097, "a"), false},
+		"a skill listing of 4,096 names":           {listing(4096, "a"), true},
+		"a skill listing of a name of 512 UTF-16 code units in 1,024 bytes": {listing(1,
+			strings.Repeat("\u00e9", 512)), true},
+		"a task reminder of an entry that is a list": {listed, false},
+		"a task reminder of objects":                 {`{"type":"task_reminder","content":[{}]}`, true},
+	} {
+		read := whole
+		if !tc.kept {
+			read = dropped
+		}
+		read.lines = thread(tc.payload)
+		read.check(t, name)
+	}
+
+	for name, tc := range map[string]rcCase{
+		"a batch's additional context of an entry that is no string, hung under the reply's walked result": {
+			[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+				rcAttach(3, 4, 1200, rcSnapshot), rcAttach(4, 5, 1300, rcHookOf("PostToolBatch", "b1")),
+				rcAttach(5, 6, 1400, ctReplace(t, rcContextOf("PostToolBatch", "b1"), `["a note"]`, `[7]`)),
+				rcAttach(6, 7, 1500, rcNote)},
+			rcHanding(whyChain, []int{1, 2, 3}, rcAll(yes(whyHookChain), 4, 5, 7),
+				map[int]rcAnswer{6: no(whyMalformedAttachment)}), []int{1, 2, 3, 4, 5, 7}, 3},
+		"a Stop hook's success of no string content, a tail of the turn's last reply": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), rcAttach(2, 3, 2100, unstated(rcHookOf("Stop", "s1"))),
+			rcStop(3, 4, 2200)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: no(whyMalformedAttachment), 4: yes(whyLeafTail)}),
+			[]int{1, 2, 4}, 2},
+		"an attachment 2.1.322's filter takes and 2.1.310's drop takes": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcAttach(2, 3, 1100, listed), rcRetry(3, 4, 1500, rcQuoted(3)),
+			rcReply(4, 5, "msg_b", 2000, rcSaid("done"))},
+			rcHanding(whyChain, []int{1, 2, 4, 5}, map[int]rcAnswer{3: no(whyRetracted)}), []int{1, 2, 4, 5}, 5},
+	} {
+		tc.check(t, name)
+	}
+
+	// The last case is q1t's shape (TestALeafOnlyAnUnseenFlagMovesIsCannotTell)
+	// with a malformed attachment (4) between the prompt and the later reply,
+	// so only the metcalfe variants' leaf walks to it.
+	const split = "an attachment only q1t's leaf walks to"
+	read := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcCheckpoint(2),
+		rcAttach(1, 4, 2000, listed), rcReply(4, 5, "msg_b", 3000, rcSaid("later")))
+	read.expect(t, split, map[int]rcAnswer{1: yes(whyChain), 2: cannot(whyLeafFlag), 4: no(whyOffConversation),
+		5: cannot(whyLeafFlag)}, rcOrder{[]int{1, 2}, allVariants &^ variantsMetcalfe},
+		rcOrder{[]int{1, 5}, variantsMetcalfe})
+	read.expectLeaf(t, split, 0)
 }
 
 // rcPlain is a plain main thread: a prompt and its reply.
@@ -2290,10 +2373,10 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 // handed; hand another agent's records, or another agent's tails, and they
 // are not answered not handed; run the retraction filter, and
 // the reply its fallback names is taken back; run the malformed-attachment
-// drop, and the hook's success it takes is cannot tell, and the thread of the
-// skill listing it cannot judge; refuse a fork's briefing, and its thread is
-// cannot tell; or stop the walk where a parent names no record, and the torn
-// copy hands its last two records alone.
+// drop, and the hook's success it takes is not handed, and the thread of the
+// skill listing it cannot judge is cannot tell; refuse a fork's briefing, and
+// its thread is cannot tell; or stop the walk where a parent names no record,
+// and the torn copy hands its last two records alone.
 func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 	t.Parallel()
 	own := func(line string) string { return rcOwn(t, line) }
