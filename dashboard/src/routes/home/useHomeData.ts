@@ -23,13 +23,10 @@ import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { ownName, useViewer } from "~/lib/viewer.ts";
-import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
-import { seatConditionsOf } from "~/lib/decisions.ts";
-import { useLeadScope } from "~/lib/leadScope.ts";
+import { useSeatDecisions } from "~/lib/decisions.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import {
   DEFAULT_RANGE,
@@ -48,9 +45,6 @@ const DECISIONS_POLL_MS = 30_000;
 
 /** The series and the spend move on the scale of minutes. */
 const SLOW_POLL_MS = 60_000;
-
-/** The leads a managed document honours: none, since it refuses a lead's write too. */
-const NO_LEADS: ReadonlySet<string> = new Set();
 
 export function useHomeData() {
   const now = useNow();
@@ -106,22 +100,9 @@ export function useHomeData() {
   const crew = useMemo(() => (known ? crewOf(agents) : null), [known, agents]);
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
-  // can see and nothing more. See `seatDecisionsFor`.
-  // A LEAD raises a seat they lead whose OWN window refused (never the
-  // company's ceiling), and on a MANAGED document nobody outside its writers
-  // raises anything, a lead included: the engine refuses their `/config` write
-  // `config_managed` exactly as it refuses anybody's (ADR-0030).
-  const leads = useLeadScope().seats;
-  const managed = managedBlock(viewer) !== null;
-  const seats = useMemo(
-    () =>
-      seatDecisionsFor(
-        seatConditionsOf(agents),
-        { configWrite: mayChangeConfig(viewer), acts: viewer.acts },
-        managed ? NO_LEADS : leads,
-      ),
-    [agents, viewer, leads, managed],
-  );
+  // can see and nothing more (`seatDecisionsFor`, which the frame's badge
+  // reads through the same hook).
+  const seats = useSeatDecisions();
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown (nobody signed in,
   // or not answered yet) is null, never zero.

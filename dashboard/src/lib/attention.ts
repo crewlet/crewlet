@@ -203,6 +203,13 @@ interface AttentionFacts {
   /** The instant this became true, for ordering within a severity. */
   at?: string;
   who?: string;
+  /**
+   * How many nodes a PLATFORM NOTICE stands on (none for a finding's, which
+   * names no node): set exactly on the rows the advisor's notices raise, which
+   * are the ones a reader may put off for a while (`lib/putOff.ts`), and how a
+   * mark tells that the condition has spread since.
+   */
+  spread?: number;
 }
 
 export interface AttentionInput {
@@ -287,9 +294,33 @@ function driftRow(item: AtlasReviewItem): Attention {
   };
 }
 
-/** A standing alarm's row: the section that draws it, its nodes and since when. */
+/**
+ * WHERE A NOTICE IS FIXED, by the condition it is about, where that is one
+ * gesture on one screen rather than the section that lists the alarm: the
+ * backup a missing one asks for is taken from Backups & retention's own
+ * dialog (`take=backup` opens it), and a bucket near its ceiling is freed or
+ * moved on File storage, which shows its usage and its collector.
+ */
+const NOTICE_FIXES: Readonly<Record<string, { path: string[]; query?: Record<string, string>; action: string; clears: string }>> = {
+  backup_age: {
+    path: ["settings", "backups"],
+    query: { take: "backup" },
+    action: "Take a backup",
+    clears:
+      "Clears on its own once a backup the engine verified covers every log. A copy taken outside the engine is not one it can see.",
+  },
+  objects_bucket_near_ceiling: {
+    path: ["settings", "storage"],
+    action: "Open File storage",
+    clears:
+      "Clears on its own once the bucket has a fifth of its room free: when the collector removes files nothing names, or the files move to a larger store.",
+  },
+};
+
+/** A standing alarm's row: where it is fixed, its nodes and since when. */
 function alarmRow(kind: string, n: AdvisorNotice): Attention {
   const home = alarmHome(kind);
+  const fix = NOTICE_FIXES[kind];
   return {
     id: `alarm-${kind}`,
     severity: "critical",
@@ -298,9 +329,13 @@ function alarmRow(kind: string, n: AdvisorNotice): Attention {
     title: `${alarmKindTitle(kind)} has not cleared`,
     detail: "The engine raised this alarm and it has not cleared on its own.",
     ...(n.nodes?.length ? { technical: `Standing on ${n.nodes.join(", ")}.` } : {}),
-    ...(drawnOnBackups(kind) ? alarmsLink() : { path: home.path }),
-    action: `Open ${home.label}`,
-    clears: "Clears when the alarm clears.",
+    ...(fix
+      ? { path: fix.path, ...(fix.query ? { query: fix.query } : {}), action: fix.action }
+      : drawnOnBackups(kind)
+        ? { ...alarmsLink(), action: `Open ${home.label}` }
+        : { path: home.path, action: `Open ${home.label}` }),
+    clears: fix?.clears ?? "Clears when the alarm clears.",
+    spread: n.nodes?.length ?? 0,
     ...(n.since ? { at: n.since } : {}),
   };
 }
@@ -592,6 +627,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       if (n.alarm) out.push(alarmRow(n.alarm, n));
       continue;
     }
+    // AN ALARM'S FINDING IS FIXED WHERE THE ALARM IS: the backup the
+    // no-verified-backup finding asks for is taken on Backups & retention.
+    const fix = n.alarm ? NOTICE_FIXES[n.alarm] : undefined;
     out.push({
       id: `setup-${[f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("-")}`,
       severity: "critical",
@@ -599,9 +637,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "list-checks",
       title: f.title,
       detail: f.fix.sentence,
-      path: ["settings", "advisor"],
-      action: "Open the advisor",
-      clears: "Clears once the setup no longer raises it.",
+      ...(fix
+        ? { path: fix.path, ...(fix.query ? { query: fix.query } : {}), action: fix.action }
+        : { path: ["settings", "advisor"], action: "Open the advisor" }),
+      clears: fix?.clears ?? "Clears once the setup no longer raises it.",
+      spread: n.nodes?.length ?? 0,
       ...at,
     });
   }

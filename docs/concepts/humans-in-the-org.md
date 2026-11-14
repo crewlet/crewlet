@@ -649,10 +649,27 @@ that principal's own record name (`iam.RecordOwner`): the seat they hold, or a
 credential's own login when the directory binds it to none. First comes
 **Needs you** — the questions agents put to them, the executors parked on a
 question to them, a seat stopped on its budget, the conditions a person
-decides — then **Updates**, what reached them and is not read yet, and the
-item they open is read in full beside the list, from its head, with the
-answer to it right there. Updates is a closed, counted group, which they open
-when they choose.
+decides — then **Waiting on others, you can answer**: the parked runs whose
+question went to somebody else (a delegate, a colleague) that they may still
+answer, as the seat's lead or an administrator, decided by the same authority
+the answer itself is. Then **Updates**, what reached them and is not read yet,
+and the item they open is read in full beside the list, from its head, with
+the answer to it right there. Updates is a closed, counted group, which they
+open when they choose. Home's **Needs your decision** card draws the same two
+groups.
+
+**The Inbox badge counts what waits on you, and nothing else**: the asks put
+to you, the runs parked on you, the stopped seats you can act on and the
+conditions you decide that you have not put off. A run you may answer that
+waits on somebody else counts once its delegates escalate it to people or let
+it pass their deadline. A mention, a comment on a task you are assigned or
+reported, or any update that only informs you is listed under Updates,
+readable and markable as read, and counted by no figure. The engine states,
+on every parked run it answers about (`executors`, `decisions`), whom it is
+put to (`put_to`), whether it is put to you (`put_to_you`), whether you may
+answer it (`may_answer`) and whether it waits on you (`needs_you`), and every
+screen reads those rather than deciding for itself. `decisions` answers its
+`total` of what waits on you, and `answerable` for the rest you may answer.
 Nothing on the screen names whose queue to read: there is no way to ask for
 somebody else's from it, and a lead reading a report's queue does so by name,
 decided by the [authority table](identity-and-access.md#the-authority-table-one-function-decides).

@@ -8,6 +8,7 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
+import { asReaders } from "~/test/decisions.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -223,9 +224,12 @@ function mount({
     const all: Record<string, Answer> = { ...QUIET, viewer, ...answers };
     if (what in all) {
       const answer = all[what];
-      return typeof answer === "function"
-        ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
-        : Promise.resolve(answer);
+      const given =
+        typeof answer === "function"
+          ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
+          : Promise.resolve(answer);
+      // WHAT THE FIXTURES LIST IS PUT TO THE READER, as the engine states it.
+      return what === "decisions" ? Promise.resolve(given).then(asReaders) : given;
     }
     return Promise.resolve({});
   }) as typeof socket.query;
@@ -431,6 +435,67 @@ describe("the figures", () => {
 });
 
 describe("the decisions", () => {
+  // WHAT THE READER MAY UNBLOCK FOR SOMEBODY ELSE is a group of its own under
+  // what waits on them, with the same controls, and counted by nothing: the
+  // engine says which is which (`needs_you`, `may_answer`), and the card's
+  // figure is its `total`.
+  //
+  // Mutation: draw every item the engine lists in the first group, or count
+  // `answerable` in the figure, and this fails.
+  test("a run the reader may answer for somebody else is listed apart and counted by nothing", async () => {
+    const theirs = {
+      turn_id: "turn-9",
+      launch_id: "q9",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I rotate the staging keys?",
+      question_context: "",
+      audience_handles: ["ops"],
+      paused_at: "2026-09-22T09:48:00Z",
+      updated_at: "2026-09-22T09:48:00Z",
+      pause_ttl_seconds: 0,
+      put_to: ["ops"],
+      put_to_you: false,
+      may_answer: true,
+      needs_you: false,
+    };
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [
+            { kind: "run", at: theirs.paused_at, run: theirs, put_to_you: false, may_answer: true, needs_you: false },
+          ],
+          total: 0,
+          answerable: 1,
+          capped: false,
+        },
+        executors: { runs: [theirs] },
+      },
+    });
+    await settle();
+    const card = screen.getByRole("heading", { name: /Needs your decision/ }).closest(".home-card") as HTMLElement;
+    expect(within(card).getByText("Nothing waits on you.")).toBeTruthy();
+    const group = within(card).getByRole("region", { name: "Waiting on others, you can answer" });
+    expect(group.querySelector(".decision-state")?.textContent).toBe("Waiting on ops");
+    expect(group.querySelector(".decision-text .decision-sub")?.textContent).toContain("you can answer");
+    expect(within(group).getByRole("button", { name: /Answer/ })).toBeTruthy();
+    expect(card.querySelector(".crewlet-card__title .home-card-count")).toBeNull();
+  });
+
+  // A SIGN-IN THAT HOLDS NO SEAT is put no decision, and the card says that
+  // plainly, with how to be asked, rather than promising that an agent's
+  // question will appear here.
+  test("a sign-in holding no seat is told plainly that nothing is put to it", async () => {
+    mount({
+      viewer: { ...JANE, login: "token:ops", handle: "", owner: "token:ops", name: "", kind: "" },
+      answers: { decisions: { handle: "token:ops", items: [], total: 0, answerable: 0, capped: false } },
+    });
+    await settle();
+    expect(screen.getByText("No decision is put to this sign-in: it holds no seat.")).toBeTruthy();
+    expect(screen.queryByText(/When an agent asks you something/)).toBeNull();
+  });
+
   // GROUPED BY WHO IS ASKING: the asker, the item and the role are said once
   // on the head, and each question carries its answer in place.
   test("an ask is answered by accepting its recommendation, and says so", async () => {

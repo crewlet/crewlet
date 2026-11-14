@@ -113,8 +113,16 @@ export interface Later {
   onOpenChange: (open: boolean) => void;
 }
 
+/** The heading of what the reader may answer that waits on somebody else. */
+export const OTHERS_LABEL = "Waiting on others, you can answer";
+
+/** The heading of the platform notices this reader put off on this browser. */
+export const PUT_OFF_LABEL = "Put off on this browser";
+
 export function InboxColumn({
   needs,
+  others = [],
+  putOff,
   updates,
   snoozed,
   snoozedCount,
@@ -136,6 +144,17 @@ export function InboxColumn({
   elsewhere = null,
 }: {
   needs: readonly InboxRow[];
+  /**
+   * The runs the reader may answer that wait on somebody else, in an open
+   * group of their own after Needs you: answered the same way, and never
+   * counted as waiting on the reader (`lib/decisions.ts`).
+   */
+  others?: readonly InboxRow[];
+  /**
+   * The platform notices this reader put off on this browser, in a closed,
+   * counted group: still listed, each with the way back (`lib/putOff.ts`).
+   */
+  putOff?: UpdatesGroup;
   /** What reached the reader and is not read yet, in its closed group. */
   updates: UpdatesGroup;
   snoozed: Later;
@@ -214,6 +233,11 @@ export function InboxColumn({
           {needs.map((row) => item(row, { onClosed: closed }))}
         </InboxGroup>
       )}
+      {others.length > 0 && (
+        <InboxGroup label={OTHERS_LABEL} count={others.filter((r) => !settled.has(r.key)).length}>
+          {others.map((row) => item(row))}
+        </InboxGroup>
+      )}
       {elsewhere && (
         <Text as="p" variant="caption" className="inbox-note">
           {elsewhere}
@@ -230,6 +254,18 @@ export function InboxColumn({
           onOpenChange={updates.onOpenChange}
         >
           {updates.rows.map((row) => item(row))}
+        </InboxGroup>
+      )}
+      {putOff && putOff.rows.length > 0 && (
+        // CLOSED UNTIL OPENED, and counted: accepted for now, never gone.
+        <InboxGroup
+          label={PUT_OFF_LABEL}
+          count={putOff.rows.length}
+          collapsible
+          open={putOff.open}
+          onOpenChange={putOff.onOpenChange}
+        >
+          {putOff.rows.map((row) => item(row))}
         </InboxGroup>
       )}
       {answered.rows.length > 0 && (

@@ -989,6 +989,21 @@ export interface ExecutorRow {
   held_arguments?: Record<string, unknown> | null;
 
   /**
+   * WHERE THE RUN STANDS FOR THIS READER, as the engine decides it for every
+   * screen that draws a parked run (`runanswer.Waiting`): who it waits on now
+   * by handle (its delegates while a delegated call waits on them, else the
+   * people its question is put to), whether it is put to the reader, whether
+   * the reader may answer it (the answer route's own authority), and whether
+   * it waits on them: put to them, or theirs to answer and escalated by its
+   * delegates or past their deadline. Empty and false on a run that waits on
+   * nobody; absent on a live entry whose durable row is not read yet.
+   */
+  put_to?: string[];
+  put_to_you?: boolean;
+  may_answer?: boolean;
+  needs_you?: boolean;
+
+  /**
    * What this run called through the MCP bridge, in order.
    *
    * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
@@ -6382,15 +6397,26 @@ export interface DecisionItem {
    * change cannot be said line by line; absent once it asks again.
    */
   access_changed?: { lines: string[] };
+  /** Where it stands for the caller: put to them, theirs to answer, and
+   *  waiting on them (a run's are its row's own). */
+  put_to_you: boolean;
+  may_answer: boolean;
+  needs_you: boolean;
 }
 
 /** `decisions`: the open asks put to a person and the executors parked on
- *  a question to them, newest first. */
+ *  a question to them, newest first; and, on the caller's own record, the
+ *  runs they may answer that wait on somebody else. */
 export interface DecisionsAnswer {
   handle: string;
   items: DecisionItem[];
-  /** Every such item, not the page. */
+  /** Everything that waits on the person, not the page: what is put to
+   *  them, and on their own record what they may answer that its delegates
+   *  escalated or left past their deadline. What the badge says. */
   total: number;
+  /** The runs the caller may answer that wait on somebody else in good time:
+   *  listed, and asking nothing of them yet. */
+  answerable: number;
   /** The ask count reached the engine's ceiling, so `total` is a floor. */
   capped: boolean;
   /** When the longest-waiting one began waiting. */
