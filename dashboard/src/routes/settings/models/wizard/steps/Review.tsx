@@ -11,7 +11,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Callout, DescriptionList, Disclosure, Link, Spinner, Text } from "@crewlethq/ui";
+import { Callout, DescriptionList, Disclosure, Link, Text } from "@crewlethq/ui";
 import {
   DEFAULT_HARNESS_MAX_CONCURRENT,
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
@@ -38,8 +38,12 @@ import {
   type Draft,
 } from "../draft.ts";
 import type { WizardStep } from "../../parts.tsx";
+import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
+
+/** The write of a save that is running: the credential's seal, then the document. */
+export type SaveStage = "credential" | "document";
 
 /** Where the engine's check of the change stands. */
 export type ReviewCheck =
@@ -167,6 +171,7 @@ export function Review({
   keptCredential,
   problems,
   check,
+  saving = false,
   testRow,
   onGo,
 }: {
@@ -182,12 +187,15 @@ export function Review({
   keptCredential: boolean;
   problems: readonly ConfigProblem[];
   check: ReviewCheck;
+  /** Which write of a save is running, or false while none is. */
+  saving?: SaveStage | false;
   /** The Test call row: its words and, where it has not passed, the way to run it. */
   testRow: ReactNode;
   onGo: (step: WizardStep, problem: ConfigProblem) => void;
 }) {
   const names = (h: string) => seatName(data.seats, h);
   const secrets = Object.keys(credentialValues(draft));
+  const secretNoun = draft.method === "token" ? "token" : "key";
   const rows = useMemo(
     () => (before && after ? changesOf(before, after, draft.key, names, secrets, editing) : []),
     // `names` and `secrets` follow the draft and the seats.
@@ -313,15 +321,20 @@ export function Review({
             })}
           </ul>
         </Callout>
+      ) : saving ? (
+        // A SAVE SAYS WHICH OF ITS WRITES IS RUNNING: the button's spinner
+        // alone left a form that looked stopped for as long as the engine took.
+        <Waiting key={saving}>
+          {saving === "credential"
+            ? `Storing the ${secretNoun} and re-activating the company with it. The engine tests it first unless it passed here a moment ago.`
+            : `${editing ? "Saving" : "Creating"} the model as one revision.`}
+        </Waiting>
       ) : check.kind === "checking" ? (
-        <div className="models-waiting" role="status">
-          <Spinner size="sm" />
-          <Text variant="body">
-            {check.what === "credential"
-              ? `Testing the ${draft.method === "token" ? "token" : "key"} with the harness…`
-              : "Checking the change with the engine…"}
-          </Text>
-        </div>
+        <Waiting key={check.what}>
+          {check.what === "credential"
+            ? `Testing the ${secretNoun} with one harness run. It usually answers in 5 to 20 seconds.`
+            : "Checking the change with the engine."}
+        </Waiting>
       ) : check.kind === "blocked" ? (
         <Callout variant="warning" title="This cannot be saved from here yet">
           {check.message}
