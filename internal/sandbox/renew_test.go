@@ -242,9 +242,12 @@ func (r *renewRig) lostWithItsHostOnTheBroker(t *testing.T) {
 // the seat was held behind a run nothing drove again. So node-b announces the
 // completion afresh before the delivery in hand is its last, publishes that
 // before acknowledging the delivery, and the wait goes on until the host's
-// store answers or the bound gives the job up. A re-fire, which has no
-// delivery in hand, renews at once; and a hand-back this node's own store made
-// is NAK'd and nothing more, since the waiter announces that job again.
+// store answers or the bound gives the job up, and past the bound until the
+// job's round is carried on: a recorded loss settles nothing while its carry
+// can still fail, and its host's waiter announces nothing either. A re-fire,
+// which has no delivery in hand, renews at once; and a hand-back this node's
+// own store made is NAK'd and nothing more, since the waiter announces that
+// job again.
 //
 // The memory twin hands a NAK'd message back at once, so time moves on the
 // host's own answers, a minute each, on the bubble's clock.
@@ -256,8 +259,10 @@ func (r *renewRig) lostWithItsHostOnTheBroker(t *testing.T) {
 // under the delivery's own id, and no fresh announcement is delivered; ack a
 // delivery whose renewal the broker refused, and the job is left with none;
 // leave a re-fire unrenewed, or a loss this node's store did not take, and
-// nothing carries the completion on; renew a hand-back this node's own store
-// made, and its delivery is never spent.
+// nothing carries the completion on; drop the clock at the recorded loss, and
+// a carry that fails after it runs a budget out with nothing renewing it;
+// renew a hand-back this node's own store made, and its delivery is never
+// spent.
 func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 	t.Parallel()
 	if (renewBudget+1)*readWait >= DefaultBoxTimeout {
@@ -274,6 +279,28 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 					waited, DefaultBoxTimeout)
 			}
 			r.lostWithItsHostOnTheBroker(t)
+		})
+	})
+
+	t.Run("a job lost with its host whose carry fails is renewed until its round is carried on", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THIS NODE'S OWN STORE DOES NOT ANSWER THE WATCH of the run's
+			// log that a lost job's carry waits on its calls by, for past
+			// one message's whole budget: the loss is recorded at the
+			// bound, and its round is not carried on for a while after.
+			mine := &unansweredWatches{PendingStore: r.coordinator.pending, silent: 2 * (renewBudget + 1)}
+			r.coordinator.pending = mine
+			r.announce(t)
+			if waited := time.Since(r.start); waited < DefaultBoxTimeout {
+				t.Fatalf("the broker had nothing left to deliver %v in, inside the %v box timeout",
+					waited, DefaultBoxTimeout)
+			}
+			r.lostWithItsHostOnTheBroker(t)
+			if watched := mine.watched(); watched <= mine.silent {
+				t.Fatalf("the premise: the carry watched the run's log %d times; want it handed back past the %d "+
+					"watches its store did not answer", watched, mine.silent)
+			}
 		})
 	})
 
@@ -468,6 +495,36 @@ func (s *unansweredClaims) ClaimForResume(ctx context.Context, turnID string, ta
 		return PendingRun{}, false, errStoreUnavailable("claim the run", turnID)
 	}
 	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+// unansweredWatches is a run store whose coordination store does not answer
+// the first silent watches of a run's log, which a collection waits on its
+// calls in flight by, and answers every other call, and every watch after
+// those, as the store beneath it does.
+type unansweredWatches struct {
+	PendingStore
+	silent int
+
+	mu      sync.Mutex
+	watches int
+}
+
+func (s *unansweredWatches) WatchLog(ctx context.Context, turnID string) (<-chan LogView, error) {
+	s.mu.Lock()
+	s.watches++
+	n := s.watches
+	s.mu.Unlock()
+	if n <= s.silent {
+		return nil, errStoreUnavailable("watch the run's log", turnID)
+	}
+	return s.PendingStore.WatchLog(ctx, turnID)
+}
+
+// watched is how many watches of a run's log the store was asked for.
+func (s *unansweredWatches) watched() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.watches
 }
 
 // hostReads is the box's host as a case scripts it: from the from-th read of

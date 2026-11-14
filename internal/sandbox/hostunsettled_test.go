@@ -47,7 +47,7 @@ func handedBackUnsettled(t *testing.T, rig *coordRig, step string) {
 // retry, nothing ended or announced, the loss on the claim's row at the
 // collection's instant as the turn resumes, and the turn resumed once to carry
 // the round on in a fresh box, the round's first loss; and the clock on the host
-// gone with it.
+// gone once that carry has settled the run.
 func lostWithItsHost(t *testing.T, rig *coordRig) {
 	t.Helper()
 	at := rig.now
@@ -83,7 +83,7 @@ func lostWithItsHost(t *testing.T, rig *coordRig) {
 			"round's first loss", len(resumed), resumed)
 	}
 	if clocked(rig) {
-		t.Fatal("the clock on the host's store outlived the loss it led to")
+		t.Fatal("the clock on the host's store outlived the carry of the loss it led to")
 	}
 }
 
@@ -452,19 +452,23 @@ func TestASeatLetGoOfForgetsTheClockOnItsHostsStore(t *testing.T) {
 	}
 }
 
-// A CLOCK ON A HOST'S STORE GOES WITH THE COLLECTION IT TIMED, whatever that
-// comes to. It is this node's, kept in memory per job to bound a collection the
-// box's host keeps handing back unread, and it means nothing once the job's
-// collection is over: the turn launched its next job, or the run's record is
-// gone, at its turn's end or its deadline. Kept until the seat was let go, it
-// outlived every such run, a lost job's round carried on without its read
-// among them, on a seat a node may hold for weeks. But a lost job's round whose
-// resume failed is collected again, and its clock is kept for that: the next
-// collection finds the bound passed at once, rather than a box timeout later.
+// A CLOCK ON A HOST'S STORE IS KEPT UNTIL ITS RUN SETTLES, and goes there,
+// whatever that comes to. It is this node's, kept in memory per job to bound a
+// collection the box's host keeps handing back unread, and while it runs the
+// host's waiter announces nothing, so it also says the job's completion is to be
+// renewed. It means nothing once the run's collection has landed its outcome:
+// the turn launched its next job, or the run's end was decided, at its turn's
+// end or its deadline, a lost job's round carried on included. Kept until the
+// seat was let go, it outlived every such run, on a seat a node may hold for
+// weeks. But a failed attempt is no settle: a lost job's round whose resume
+// failed is collected again, and a job recorded lost with its host whose carry
+// fails is carried on again, and the clock is kept for each: the next
+// collection finds the bound passed at once, rather than a box timeout later,
+// and every hand-back meanwhile is renewed.
 //
-// Mutation: keep the clock through the turn's next launch, or through the
-// run's record deleted; or drop it as the round is carried on, before its
-// resume has landed.
+// Mutation: keep the clock through the turn's next launch, or past the run's
+// end decided, a landed carry's included; or drop it at the recorded loss, or
+// as the round is carried on, before its resume has landed.
 func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
 	t.Parallel()
 	timeout := DefaultBoxTimeout
@@ -532,6 +536,40 @@ func TestAClockOnAHostsStoreGoesWithTheCollectionItTimed(t *testing.T) {
 		rig.finished("t1")
 		if clocked(rig) {
 			t.Fatal("the clock on the job's host outlived the run ended at its deadline")
+		}
+	})
+
+	t.Run("a job recorded lost with its host whose carry fails, and then lands", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		mine := &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog"}}
+		rig.coordinator.pending = mine
+		rig.now = rig.now.Add(timeout)
+		// THE LOSS LANDS at the bound, and the carry of its round fails on
+		// this node's own store: the run is not settled, and its host's
+		// waiter still announces nothing.
+		if err := collectAgain(t, rig); !errors.Is(err, ErrStoreSilent) {
+			t.Fatalf("the carry this node's store did not answer = %v; want it handed back for its retry", err)
+		}
+		if got := rig.get("t1"); got.Lost == nil || got.Lost.Cause != LossLaunchNodeStoreSilent {
+			t.Fatalf("the row records %+v; want the job lost with its host, its round still to carry on", got.Lost)
+		}
+		if !clocked(rig) {
+			t.Fatal("the clock on the host's store went with the recorded loss, before its round was carried on")
+		}
+		// AND GOES ONCE THE CARRY LANDS: the turn resumes on the loss and
+		// its end is decided.
+		mine.answer()
+		if err := collectAgain(t, rig); err != nil {
+			t.Fatalf("the carry once this node's store answered = %v", err)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || resumed[0].Lost == nil {
+			t.Fatalf("the turn resumed %d times; want the lost round carried on once", len(resumed))
+		}
+		if clocked(rig) {
+			t.Fatal("the clock on the host's store outlived the carry that settled its run")
 		}
 	})
 

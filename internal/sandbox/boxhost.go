@@ -453,18 +453,22 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // later. A silence this node's own store shares gives nothing up: no claim of
 // the job lands while it lasts, so no collection is made to judge it.
 //
-// IT GOES WHEN THE JOB'S COLLECTION SETTLES, whatever that comes to: the host
-// answering a read its store answered ([Coordinator.noteHostStore]), the
-// collection given up or its job recorded lost with the host
-// ([Coordinator.collectFailed], [Coordinator.loseWithHost]), the turn launching
-// its next job here ([Coordinator.Launch]), the run's record deleted
-// ([Coordinator.finishEnding]), or the seat let go ([Coordinator.ReleaseSeat]).
-// It is KEPT through a hand-back that has the job collected again, a failed
-// resume of a lost job's round carried on without its read included, whose
-// next collection then finds the bound passed at once. Kept until the seat was
-// let go, as it was, a clock outlived every run that ended, or went on to its
-// next job, with no remote collection after it: a stop's, a deadline's, a lost
-// job's round carried on without its read.
+// IT IS KEPT UNTIL THE RUN SETTLES, and goes where the run's collection lands
+// its outcome, whatever that comes to: the job collected, its host answering a
+// read its store answered ([Coordinator.noteHostStore]); the run ended, its
+// collection given up or any ending of it decided ([Coordinator.collectFailed],
+// [Coordinator.endRun]); or the job lost and its round carried on, the turn
+// launching its next job here ([Coordinator.Launch]) or its end decided; and it
+// goes when the seat is let go ([Coordinator.ReleaseSeat]). A FAILED ATTEMPT IS
+// NO SETTLE, and keeps it: a hand-back that has the job collected again, and a
+// loss recorded with the host ([Coordinator.loseWithHost]) whose carry or
+// resume then fails, whose next collection finds the bound passed at once and
+// whose completion is renewed meanwhile (renew.go), since the host's waiter
+// still announces nothing. Dropped at the recorded loss, a carry that failed
+// for longer than one delivery's budget left the run with nothing to drive it;
+// and kept until the seat was let go, a clock outlived every run that ended,
+// or went on to its next job, with no remote collection after it: a stop's, a
+// deadline's, a lost job's round carried on without its read.
 type hostUnsettled struct {
 	handle, launch string
 	since          time.Time
@@ -524,8 +528,8 @@ func (c *Coordinator) hostClocked(turnID, launch string) bool {
 	return ok && kept.launch == launch
 }
 
-// forgetUnsettled drops the clock on the host of turnID's box, for a
-// collection given up.
+// forgetUnsettled drops the clock on the host of turnID's box, for a run that
+// settled: its collection given up, or its end decided ([hostUnsettled]).
 func (c *Coordinator) forgetUnsettled(turnID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -392,8 +392,15 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 // node's own store did not answer, handed back uncounted with the clock on the
 // host kept, so the next collection records it at once; and one the claim no
 // longer holds (a newer lease took the run, or its ending was decided) is that
-// party's to settle, and answers the claim unlost with no error. The clock on
-// the host goes with a verdict that lands: nothing of the job is read again.
+// party's to settle, and answers the claim unlost with no error.
+//
+// THE CLOCK ON THE HOST IS KEPT PAST A VERDICT THAT LANDS, until the run
+// settles ([hostUnsettled]): the round is still to be carried on, by a carry
+// or a resume that can fail and be handed back, and the host's waiter, which
+// reads the run's row through the silent store, announces the job no more than
+// before. While the clock runs, every such hand-back's completion is renewed
+// (renew.go); dropped here, a carry that failed for longer than one delivery's
+// budget left the run, and its seat, with nothing to drive it.
 func (c *Coordinator) loseWithHost(ctx context.Context, run PendingRun, cause error,
 	verdict collectVerdict,
 ) (PendingRun, error) {
@@ -414,7 +421,6 @@ func (c *Coordinator) loseWithHost(ctx context.Context, run PendingRun, cause er
 				"lease took the run, or its ending was decided, and that settles it")
 		return run, nil
 	}
-	c.forgetUnsettled(run.TurnID)
 	run.Lost = &loss
 	log.WarnContext(ctx, "sandbox_collect_lost_with_host", "turn_id", run.TurnID,
 		"agent", run.AgentHandle, "launch_id", run.LaunchID, "node", run.LaunchNode,
