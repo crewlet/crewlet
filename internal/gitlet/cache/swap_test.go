@@ -1246,11 +1246,14 @@ func TestAStoppedRunCountsForTheDutyCycle(t *testing.T) {
 // does not hold; the last scrub's schedule; and a hint's hash of a live pack.
 // So a full round over it hashes nothing, a hint about the pack the scrub and
 // the hash found whole hashes nothing again, and the scrub is not due before
-// its interval.
+// its interval. The case's clock moves on a second between the scrub and the
+// swap, so a schedule the swap stamped afresh reads the swap's instant rather
+// than the scrub's: on a clock unmoved since the scrub, the two were one.
 //
 // Mutations: carry no vouch (the full round hashes every index file again);
 // carry no packChecks (the hint hashes the pack again); carry no scrub
-// schedule (the next incarnation was never scrubbed).
+// schedule (the next incarnation was never scrubbed); stamp the last scrub's
+// end, or its interval's base, at the swap (each reads the swap's instant).
 func TestASwapCarriesEveryVerdictOfTheFilesItLinks(t *testing.T) {
 	t.Parallel()
 	var (
@@ -1286,6 +1289,7 @@ func TestASwapCarriesEveryVerdictOfTheFilesItLinks(t *testing.T) {
 	}
 	vouched := cache.Vouched(c, repo)
 
+	k.clk.Add(time.Second) // the swap's instant is not the scrub's
 	out := k.compact(t)
 	s := w.sync(t, c, repo)
 	if s.Dir == k.held.Dir {
@@ -1342,10 +1346,15 @@ func TestASwapCarriesEveryVerdictOfTheFilesItLinks(t *testing.T) {
 // nothing — is the next incarnation's, which is then not due again before its
 // interval. Dropped with the old one, a scrub of a repository compacted more
 // often than a scrub of it lasts would never land, and be due again at once,
-// for ever.
+// for ever. The case's clock moves on a second after the scrub has begun and
+// again after the swap, so the scrub's start, the next incarnation's and the
+// scrub's end are three instants: on a clock unmoved since the scrub began,
+// a verdict stamped at either earlier one read as its end.
 //
-// Mutation: record the verdict on the incarnation the scrub read (runScrub's
-// serving), and the next incarnation was never scrubbed.
+// Mutations: record the verdict on the incarnation the scrub read (runScrub's
+// serving), and the next incarnation was never scrubbed; stamp the verdict at
+// the instant the scrub began, or its interval's base there (each reads the
+// scrub's start).
 func TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation(t *testing.T) {
 	t.Parallel()
 	hold := newHeldHash()
@@ -1359,9 +1368,10 @@ func TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation(t *testing.T) {
 	go func() { done <- cache.ScrubPass(c) }()
 	select {
 	case <-hold.reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the scrub never hashed the copy")
 	}
+	k.clk.Add(time.Second) // the swap's instant is not the scrub's start
 	k.compact(t)
 	s := w.sync(t, c, repo)
 	if s.Dir == k.held.Dir {
@@ -1370,19 +1380,20 @@ func TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation(t *testing.T) {
 	if at, _, _ := cache.Scrubbed(c, repo); !at.IsZero() {
 		t.Fatalf("the next incarnation was scrubbed at %v before the scrub ended", at)
 	}
+	end := k.clk.Add(time.Second) // nor the scrub's end the swap's
 	close(hold.release)
 	select {
 	case got := <-done:
 		if !slices.Equal(got, []string{repo}) {
 			t.Errorf("the scrub pass scrubbed %v, want %s", got, repo)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the scrub pass never ended")
 	}
 	at, found, base := cache.Scrubbed(c, repo)
-	if !at.Equal(k.clk.Now()) || found || !base.Equal(at) {
+	if !at.Equal(end) || found || !base.Equal(end) {
 		t.Errorf("the next incarnation was scrubbed at %v (found %t, base %v), want the scrub's end %v, nothing "+
-			"found", at, found, base, k.clk.Now())
+			"found, its interval from there", at, found, base, end)
 	}
 	if why, running := cache.ScrubDue(c, repo); why != "" || running {
 		t.Errorf("after the scrub landed the next incarnation's scrub is due for %q (running %t), want only its "+

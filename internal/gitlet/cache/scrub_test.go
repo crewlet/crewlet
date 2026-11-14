@@ -269,24 +269,48 @@ func (h *heldHash) at(path string) {
 // and a reader answered at once each complete beside it. Only one scrub runs
 // on the node: a second pass started meanwhile hashes nothing until the first
 // is let go. The copy made due AT ONCE goes before one only its interval made
-// due, whatever their order otherwise. And the scrub's own pin is no use: the
-// copy's last use stays where it was, so a copy nobody uses after its scrub is
-// not scrubbed again at the next interval. The second pass is read in a
-// synctest bubble, twice, never after a pause: once every goroutine of the
-// case is durably blocked (synctest.Wait) — a pass that did not wait for the
-// node's one scrub has begun hashing by then, however late it ran — and again
-// once the clock has moved past every timer the cache arms (pastEveryTimer)
-// and every goroutine has blocked again — one that waited for it only as long
-// as a grace of its own has begun by then too. The cache's clock is the
-// case's own (clk), which the span does not move, the steps beside the held
-// scrub are over and their bound let go, and on a healthy build the held
-// scrub and the pass behind it wait on no clock: nothing runs in the span.
+// due, whatever their order otherwise. And the scrub is no use, neither its pin
+// nor its release: each copy's last use stays where it was, so a copy nobody
+// uses after its scrub is not scrubbed again at the next interval. The second
+// pass is read in a synctest bubble, twice, never after a pause: once every
+// goroutine of the case is durably blocked (synctest.Wait) — a pass that did
+// not wait for the node's one scrub has begun hashing by then, however late it
+// ran — and again once the clock has moved past every timer the cache arms
+// (pastEveryTimer) and every goroutine has blocked again — one that waited for
+// it only as long as a grace of its own has begun by then too. The cache's
+// clock is the case's own (clk), which the span does not move, the steps
+// beside the held scrub are over and their bound let go, and on a healthy
+// build the held scrub and the pass behind it wait on no clock: nothing runs
+// in the span.
+//
+// The last uses are read against the case's clock moved between them, never
+// on one unmoved: there a scrub that counted as a use stamped the very instant
+// of the last use beside it, and read equal. The clock moves on a second
+// after each copy's last use is read and before the first pass takes its pin,
+// and the copy made due at once is read again as the scrub reaches it, before
+// the steps beside the scrub stamp their own uses over whatever its pin
+// stamped. It moves on again once the last use beside the scrub
+// has been read, before the second pass starts, so a use the scrub stamps from
+// there on — while it is held, at its release, or a timer's while later —
+// reads past it; the copy whose interval made it due is used by nothing after
+// the first move, so any use its pin or its release stamps reads past its own.
+// Both copies are read once both passes have ended and again once the
+// bubble's clock has moved past every timer the cache arms and every goroutine
+// has blocked again, so a use a timer stamped late is in by then. The cache is
+// never started and both passes have ended, so on a healthy build nothing runs
+// in that span either: only the passes' hang detectors fire, into channels
+// nobody reads.
 //
 // Mutations: the scrub takes the entry's write lock (the sync waits for it);
 // two scrubs at once (the second pass hashes while the first is held), or once
 // a minute's wait for the node's one scrub has passed (the second pass hashes
 // once the clock has moved); the interval's taken first; the scrub's pin
-// counted as a use (the unused copy is scrubbed again).
+// counted as a use, as it takes the copy (the copy made due at once reads used
+// as the scrub reaches it), on the interval's copy alone (its last use reads
+// past its own), or a minute on the bubble's clock after (the held copy's last
+// use is past the reader's); and the scrub's release counted as a use, as it
+// lets the copy go (its last use is the scrub's end) or a minute on the
+// bubble's clock after (the same, at the second read).
 func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -320,6 +344,11 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 			t.Fatalf("after a crash report the copy's scrub is due for %q, want report", why)
 		}
 
+		// Each copy's last use, read before the clock moves on a second and
+		// the first pass takes its pin.
+		firstUsed, thenUsed := cache.LastUsed(c, first), cache.LastUsed(c, then)
+		clk.Add(time.Second)
+
 		hold.armed.Store(filepath.Base(w.dir(t, c, first)))
 		order := make(chan []string, 1)
 		go func() { order <- cache.ScrubPass(c) }()
@@ -331,6 +360,9 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 		}
 		if !strings.Contains(path, filepath.Base(w.dir(t, c, first))) {
 			t.Fatalf("the scrub hashed %s first, want the copy made due at once", path)
+		}
+		if got := cache.LastUsed(c, first); !got.Equal(firstUsed) {
+			t.Errorf("the scrub's pin moved the copy's last use from %v to %v: its pin is no use", firstUsed, got)
 		}
 		// Beside the held scrub: a push's delta sync, an adoption and a
 		// reader answered at once.
@@ -360,6 +392,9 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 		}
 		at.Release()
 		used := cache.LastUsed(c, first)
+		// Any use the scrub stamps from here on reads past the last use
+		// beside it.
+		clk.Add(time.Second)
 		cancel() // the steps beside the scrub are over
 
 		// One scrub on the node: a second pass hashes nothing while the
@@ -396,9 +431,21 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 			t.Errorf("the passes scrubbed %v, want the copy made due at once (%s) before the interval's (%s)",
 				passes, first, then)
 		}
-		if got := cache.LastUsed(c, first); !got.Equal(used) {
-			t.Errorf("the scrub moved the copy's last use from %v to %v: its pin is no use", used, got)
+		noUse := func(when string) {
+			t.Helper()
+			if got := cache.LastUsed(c, first); !got.Equal(used) {
+				t.Errorf("the scrub moved the held copy's last use from %v to %v, %s: the scrub is no use",
+					used, got, when)
+			}
+			if got := cache.LastUsed(c, then); !got.Equal(thenUsed) {
+				t.Errorf("the scrub moved the interval's copy's last use from %v to %v, %s: the scrub is no use",
+					thenUsed, got, when)
+			}
 		}
+		noUse("once both passes had ended")
+		time.Sleep(pastEveryTimer)
+		synctest.Wait()
+		noUse("once the clock had then moved past every timer the cache arms")
 		clk.Add(cache.ScrubInterval)
 		if done := cache.ScrubPass(c); len(done) != 0 {
 			t.Errorf("copies nobody used after their scrub were scrubbed again: %v", done)

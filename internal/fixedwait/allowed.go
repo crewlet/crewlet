@@ -374,7 +374,6 @@ var allowed = []Entry{
 	{File: "internal/gitlet/cache/scrub_test.go", Func: "probeReads", ExemptWait: 1, ExemptElapsed: 1, Piece: 5},
 	{File: "internal/gitlet/cache/swap_test.go", Func: "TestACrashBeforeTheSwapsRenameLeavesTheOldIncarnation", ExemptWait: 1, Piece: 5},
 	{File: "internal/gitlet/cache/swap_test.go", Func: "TestAReportFromTheStagedNextIncarnationIsTheCopys", ExemptWait: 1, Piece: 5},
-	{File: "internal/gitlet/cache/swap_test.go", Func: "TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation", ExemptWait: 2, Piece: 5},
 	{File: "internal/gitlet/cache/swap_test.go", Func: "TestAStoppedRunCountsForTheDutyCycle", ExemptWait: 1, Piece: 5},
 	{File: "internal/gitlet/cache/swap_test.go", Func: "TestASwapTellsTheBackfill", ExemptWait: 1, Piece: 5},
 	{File: "internal/gitlet/cache/verify_test.go", Func: "TestACheckPassEndsAtItsBound", ExemptWait: 1, Piece: 5},
