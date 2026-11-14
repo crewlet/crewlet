@@ -42,13 +42,19 @@ import (
 // ([Coordinator.reapTail]).
 //
 // THE SEAT COUNTS THE RUN AS THE CLAIM IT STILL IS until a release lands, and
-// the landing moves that count to the set the release returns the run to
-// ([Coordinator.releaseAnswered]): a run owed its release is in the claim on
-// the store's row, which holds the seat, and a recount meanwhile reads it so.
-// Given back before the release instead, as a resume's hand-back once gave it,
-// a release owed for minutes left the seat counted free beside a claim that
-// would come back to it, and a recount meanwhile counted the run again, so the
-// landing counted it twice.
+// the landing moves that count to the set the release returns the run to, ONCE,
+// in the step that takes the release's answer and drops it from the releases
+// out ([Coordinator.unclaimOwing]), or from the claim that won on the run it
+// put back ([Coordinator.claimCompletion]): a run owed its release is in the
+// claim on the store's row, which holds the seat. Given back before the release
+// instead, as a resume's hand-back once gave it, a release owed for minutes left
+// the seat counted free beside a claim that would come back to it, and a
+// recount meanwhile counted the run again, so the landing counted it twice. And
+// a recount counts a run whose release is out as the claim too, whatever the
+// store's row says by then ([Coordinator.syncSeat]): one that listed the row
+// after the release landed and was written before its answer was taken counted
+// the run where the release put it, and the answer's move counted it there
+// again, an answer's release taking the seat's holding count down twice.
 //
 // # No claim of the job is taken on this node while its release is out
 //
@@ -136,18 +142,32 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 	turnID := cr.run.TurnID
 	released, err := c.pending.ReleaseClaim(ctx, turnID, cr.release)
 	unanswered := errors.Is(err, coord.ErrUnavailable)
+	moved := func() {}
 	c.mu.Lock()
 	out := c.releases[turnID] == cr
 	owed := false
 	if !unanswered {
 		if out {
 			delete(c.releases, turnID)
+			if err == nil && released {
+				// THE CLAIM'S COUNT MOVES WITH IT, now and not before, and
+				// once: the run was the claim on the store's row until this
+				// release landed, and a recount counted it as the claim
+				// while the release was out ([Coordinator.syncSeat]), so it
+				// moves to the set the release returned it to in the step
+				// that ends that. A completion's claim goes back to running,
+				// which holds the seat as the claim did; an answer's to
+				// answered, which holds nothing, its owed resume holding the
+				// seat's mail.
+				moved = c.moveRunLocked(cr.run.AgentHandle, StatusResumed, cr.release.To)
+			}
 		}
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
 		}
 	}
 	c.mu.Unlock()
+	moved()
 	switch {
 	case unanswered && out:
 		c.oweRelease(ctx, cr, err)
@@ -271,14 +291,20 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 		delete(c.claiming, turnID)
 	}
 	landed, owed := false, false
+	moved := func() {}
 	if cr := c.releases[turnID]; won && cr != nil && cr.run.LaunchID == launch {
 		delete(c.releases, turnID)
 		landed = true
+		// ITS COUNT MOVES ONCE, here, as the release's own answer would have
+		// moved it ([Coordinator.unclaimOwing]): back to running, which the
+		// claim that won took it out of again.
+		moved = c.moveRunLocked(cr.run.AgentHandle, StatusResumed, cr.release.To)
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
 		}
 	}
 	c.mu.Unlock()
+	moved()
 	if landed {
 		log.InfoContext(ctx, "sandbox_claim_reverted",
 			"turn_id", turnID, "launch_id", launch,
