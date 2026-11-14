@@ -1,26 +1,43 @@
-name: git-pin
+name: pins
 
-# THE PINNED GITS, HELD TO UPSTREAM EVERY WEEK. scripts/git-pin.env names the git
-# the engine image builds and the two floors' builds the suite runs, each a
-# kernel.org release tarball by version and SHA-256 — and no Dependabot
-# ecosystem watches a source tarball, so without this the pin would be watched
-# by nothing, which looks exactly like a pin with nothing to update. A git
-# security release is an engine release (RELEASING.md): every git node runs the
-# image's git, and Debian's updates to its own git never reach it.
+# THE PINS NO DEPENDABOT ECOSYSTEM READS, HELD TO UPSTREAM EVERY WEEK, one leg
+# of the matrix below each:
+#   - gits: scripts/git-pin.env names the git the engine image builds and the
+#     two floors' builds the suite runs, each a kernel.org release tarball by
+#     version and SHA-256. A git security release is an engine release
+#     (RELEASING.md): every git node runs the image's git, and Debian's
+#     updates to its own git never reach it.
+#   - Chromiums: scripts/chromium-pin.env names the two Chrome for Testing
+#     builds the suite drives, the newest and the floor of the engine's CDP
+#     client, each by version and the SHA-256 of its zip on every released
+#     platform. No release carries them, so a bump is the suite's alone.
+# No Dependabot ecosystem watches a source tarball or a Chrome for Testing
+# build, so without this each pin would be watched by nothing, which looks
+# exactly like a pin with nothing to update.
 #
-# scripts/git-pin-check.sh does the work and its own suite
-# (scripts/git-pin_test.sh, ci.yml's `build + vet`) holds it; this file decides
-# only what a person sees. Exit 1, a pin behind: ONE issue titled
-# `git pin behind upstream` — found by that exact title among the open issues,
-# opened with the `dependencies` label Dependabot's pull requests carry, and
-# rewritten in place (with a comment, so its watchers hear it) only when what it
-# says changes — whose body is the script's report: each stale pin's two new
-# lines, every SHA-256 that of a tarball whose signature verified against the
-# maintainer's pinned key, and the pull request that bumps it. Then the run
-# fails, every week, until the pin moves. Exit 2, the check could not tell (a
-# listing or download refused, a signature that does not verify): the run fails
-# and the issue is left as it was, since nothing new is known. Exit 0: an open
-# issue is closed, because it no longer says anything true.
+# Each leg's script does the work and its own suite holds it
+# (scripts/git-pin_test.sh and scripts/chromium-pin_test.sh, in ci.yml's `build
+# + vet`); this file decides only what a person sees. Exit 1, a pin behind: ONE
+# issue per leg, titled `git pin behind upstream` or `chromium pin behind
+# upstream` — found by that exact title among the open issues, opened with the
+# `dependencies` label Dependabot's pull requests carry, and rewritten in place
+# (with a comment, so its watchers hear it) only when what it says changes —
+# whose body is the script's report: each stale pin's new lines, every SHA-256
+# that of a tarball whose signature verified against the git maintainer's pinned
+# key or of a zip the check downloaded and hashed itself, and the pull request
+# that bumps it. Then the leg fails, every week, until the pin moves. Exit 2,
+# the check could not tell (a listing or download refused, a signature that
+# does not verify, a listing answering something that is no version): the leg
+# fails and its issue is left as it was, since nothing new is known. Exit 0: an
+# open issue is closed, because it no longer says anything true.
+#
+# ONE FILE, ONE ISSUE-KEEPING SCRIPT, rather than a workflow per pin: a second
+# file would copy the script below — the create that is verified before it is
+# asked again, the retries, the comment before the rewrite — and two copies
+# nothing compares drift (ADR-0008). YAML anchors reach only within one file,
+# and a composite action would be a dependency surface of its own. So each
+# leg's differences are the matrix's values, and they reach the steps through
+# `env:`, never spliced into a script.
 #
 # An issue rather than a pull request: a pull request opened with GITHUB_TOKEN
 # leaves its checks waiting for a click (CONTRIBUTING.md, "A dashboard bump
@@ -29,10 +46,12 @@ name: git-pin
 # new credential, which is not this file's to add. So this holds no secret and
 # writes nothing but issues.
 #
-# The release signing key is checked in band, by the last step, whether or
-# not a pin is behind: its signing subkeys expire, and once they do the check
-# above fails on every run. `git-pin-check.sh key` fails this run from 60 days
-# before that, eight weekly runs to refresh scripts/git-signing-key.asc.
+# The git maintainer's release signing key is checked in band, by the git
+# leg's last step, whether or not a pin is behind: its signing subkeys expire,
+# and once they do the check above fails on every run. `git-pin-check.sh key`
+# fails that leg from 60 days before that, eight weekly runs to refresh
+# scripts/git-signing-key.asc. A Chrome for Testing build is signed by nothing,
+# so its leg has no key to hold.
 
 on:
   schedule:
@@ -46,27 +65,47 @@ permissions:
   issues: write
 
 # Two runs at once (a dispatch beside the schedule) would each find no issue and
-# open one apiece; the second waits for the first instead.
+# open one apiece; the second waits for the first instead. The legs of one run
+# keep an issue each, under its own title, so they never contend.
 concurrency:
-  group: git-pin
+  group: pins
   cancel-in-progress: false
 
 jobs:
   check:
-    name: the pinned gits against upstream
+    name: the pinned ${{ matrix.what }} against upstream
     # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
     runs-on: ubuntu-24.04
-    # The check reads kernel.org's listing and, for each pin that is behind,
+    # Each leg runs whatever the other's outcome: a stale git pin is no reason
+    # to stop asking about Chromium, nor the reverse.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - what: gits
+            check: scripts/git-pin-check.sh
+            pins: scripts/git-pin.env
+            title: git pin behind upstream
+            current: Every pin in scripts/git-pin.env is the newest release of its series again
+          - what: Chromiums
+            check: scripts/chromium-pin-check.sh
+            pins: scripts/chromium-pin.env
+            title: chromium pin behind upstream
+            current: Every pin in scripts/chromium-pin.env is the release its rule names again
+    # The git leg reads kernel.org's listing and, for each pin that is behind,
     # one tarball of about 8 MB and its signature: measured from a development
     # machine, 0.6 s with every pin current and 2.8 s with one release to
-    # download and verify. Each download gives up once it has received nothing
-    # for a minute or connected nowhere in 30 seconds, and is asked again three
-    # times (git-pin-check.sh's fetch), so a kernel.org that stops answering
-    # fails the run rather than holding a runner for GitHub's six hours. Ten
-    # minutes is two orders of magnitude over a run that works and room for a
-    # few stalled attempts; a run that meets more is ended here, which fails
-    # it as a run that could not tell does — the issue untouched, the next
-    # week's run asking again.
+    # download and verify. The Chromium leg reads two files of Chrome for
+    # Testing's listing and, for each pin that is behind, a zip of about 200 MB
+    # for each of four platforms: at most eight, measured on a development
+    # machine's link at 18 to 24 s each, 159 s for all eight. Each download
+    # gives up once it has received nothing for a minute or connected nowhere
+    # in 30 seconds, and is asked again three times (each script's fetch), so
+    # an upstream that stops answering fails the leg rather than holding a
+    # runner for GitHub's six hours. Ten minutes is over three times the
+    # slowest leg that works and room for a few stalled attempts; a leg that
+    # meets more is ended here, which fails it as a leg that could not tell
+    # does — its issue untouched, the next week's run asking again.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -75,15 +114,17 @@ jobs:
           # credential left in .git/config is one nothing here needs.
           persist-credentials: false
 
-      - name: compare every pin with upstream's newest release of its series
+      - name: compare every pin with upstream
         id: pins
+        env:
+          CHECK: ${{ matrix.check }}
         run: |
           status=0
-          scripts/git-pin-check.sh >"$RUNNER_TEMP/pins.txt" || status=$?
+          "$CHECK" >"$RUNNER_TEMP/pins.txt" || status=$?
           cat "$RUNNER_TEMP/pins.txt"
           echo "status=$status" >>"$GITHUB_OUTPUT"
           if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
-            echo "::error::scripts/git-pin-check.sh could not tell whether the pins are current (exit $status); its reason is above. The issue is left as it was."
+            echo "::error::$CHECK could not tell whether the pins are current (exit $status); its reason is above. The issue is left as it was."
             exit "$status"
           fi
 
@@ -93,6 +134,9 @@ jobs:
         env:
           STATUS: ${{ steps.pins.outputs.status }}
           REPORT: ${{ runner.temp }}/pins.txt
+          WHAT: ${{ matrix.what }}
+          TITLE: ${{ matrix.title }}
+          CURRENT: ${{ matrix.current }}
         with:
           # Three retries, with the retry plugin's own waits of 1, 4 and 9
           # seconds between them, for the calls a retry cannot double: the
@@ -112,7 +156,8 @@ jobs:
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
-            const TITLE = 'git pin behind upstream';
+            // The leg's own issue, by the matrix's exact title.
+            const TITLE = process.env.TITLE;
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             // A fresh request option for each call made once: the retry plugin
             // writes its count of attempts into a call's request options, and
@@ -161,7 +206,7 @@ jobs:
               for (const issue of open) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: issue.number, request: once(),
-                  body: `Every pin in scripts/git-pin.env is the newest release of its series again ([run](${run})).`,
+                  body: `${process.env.CURRENT} ([run](${run})).`,
                 });
                 await github.rest.issues.update({
                   owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'completed',
@@ -176,7 +221,7 @@ jobs:
             // nothing new notifies nobody.
             const report = fs.readFileSync(process.env.REPORT, 'utf8').trimEnd();
             const body = [
-              'The weekly check, `.github/workflows/git-pin.yml`, found the pinned gits behind upstream:',
+              `The weekly check, \`.github/workflows/pins.yml\`, found the pinned ${process.env.WHAT} behind upstream:`,
               '',
               '```',
               report,
@@ -202,15 +247,19 @@ jobs:
             await github.rest.issues.update({ owner, repo, issue_number: issue.number, body });
             core.info(`updated #${issue.number}`);
 
-      - name: fail the run while a pin is behind
+      - name: fail the leg while a pin is behind
         if: steps.pins.outputs.status == '1'
+        env:
+          PINS: ${{ matrix.pins }}
+          TITLE: ${{ matrix.title }}
         run: |
-          echo "::error::scripts/git-pin.env is behind upstream: the issue \"git pin behind upstream\" names the new lines and the pull request."
+          echo "::error::$PINS is behind upstream: the issue \"$TITLE\" names the new lines and the pull request."
           exit 1
 
       # Whether or not a pin is behind, and whether or not the check could
       # tell: a key about to expire is the one thing that would stop every
-      # later run from telling at all.
+      # later run from telling at all. The git leg's alone: no key signs a
+      # Chrome for Testing build.
       - name: the release signing key stays valid for more than 60 days
-        if: always()
+        if: always() && matrix.what == 'gits'
         run: scripts/git-pin-check.sh key

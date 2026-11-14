@@ -51,8 +51,9 @@ func TestTheHostPassesTheSuite(t *testing.T) {
 // the node floor's series and a person's `git version` of the client floor's,
 // so an arm whose helpers quietly fell back to the pin cannot pass.
 //
-// Under every make target the two gits are REQUIRED
-// (CREWLET_REQUIRE_GIT_FLOOR=1), so a machine that did not build them fails
+// Under the make targets that run the suite the two gits are REQUIRED, as every
+// prerequisite of the suite is (CREWLET_REQUIRE_PREREQUISITES=1,
+// internal/prereqtest's one rule), so a machine that did not build them fails
 // here naming `make git`; a bare `go test` of this package skips the arm and
 // runs everything else.
 //

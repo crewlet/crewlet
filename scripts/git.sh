@@ -8,9 +8,10 @@
 # Prints the directory holding that build's `git` (its bin/) and nothing else on stdout, building it first unless
 # an intact build is already there. A refusal, a build's progress and a build's failure go to stderr. Exits 0 with
 # the directory printed, 1 when a download or a build failed (a tarball whose SHA-256 the machine's hash could not
-# compute among them), 2 when it was asked something it refuses — an unknown pin, a malformed pin file, a tool the
-# build needs and the machine lacks or a hash that cannot compute the recipe's own SHA-256 — before anything is
-# downloaded.
+# compute among them), 2 when it was asked something it refuses — an unknown pin, a pin file missing beside it or
+# malformed, a path that is not absolute (the build cache, GIT_PIN_PREFIX or DESTDIR), a GIT_PIN_TARGET_ARCH that is
+# neither amd64 nor arm64 or, without GIT_PIN_PREFIX, not this machine's, a tool the build needs and the machine
+# lacks or a hash that cannot compute the recipe's own SHA-256 — before anything is downloaded.
 #
 # Environment (each optional):
 #   CREWLET_GIT_CACHE    where builds are kept; ${XDG_CACHE_HOME:-$HOME/.cache}/crewlet/git
@@ -82,15 +83,17 @@
 # SHA-256: a change to the recipe is a new name, never a stale build reused. A build is INTACT when the name
 # resolves to a directory holding .complete and a bin/git that answers `git version <version>`. A builder that finds
 # the name already published by another removes its own directory and prints the other's; a name pointing at no
-# intact build is removed and the link tried again, at most three times; an intact build is never removed or written
-# into; and a <version>-<recipe>.* directory the name does not point at, untouched for a day, is a crashed
+# intact build is removed and the link tried again, at most three times — a name that is a directory rather than a
+# link among them, which no builder makes and the link is never made inside; an intact build is never removed or
+# written into; and a <version>-<recipe>.* directory the name does not point at, untouched for a day, is a crashed
 # builder's and is removed by the next build. So two `make test` runs on one machine — two worktrees — never delete
 # a git the other is running, which an `rm -rf` followed by an install into the shared path did.
 #
 # ITS OWN SUITE is scripts/git-pin_test.sh (`make git-test`, in `make check` and ci.yml's `build + vet`), beside the
 # pin check's: the refusals above, an intact build handed back with nothing downloaded, a tarball that is not the
-# pin's, a hash that gives no SHA-256, a curl configuration that writes to stdout, two builders at once leaving one
-# build, and what a prefix build carries — each against a stand-in tarball, so no case builds git.
+# pin's, a hash that gives no SHA-256, a directory at the name built over, a curl configuration that writes to stdout,
+# two builders at once leaving one build, and what a prefix build carries — each against a stand-in tarball, so no
+# case builds git.
 set -eu
 
 usage() {
@@ -356,9 +359,15 @@ if ! intact "$build"; then
 fi
 base=${build##*/}
 tries=0
-while ! ln -sn "$base" "$link" 2>/dev/null; do
+while :; do
+	# A name that is a directory rather than a link, which no builder makes, is never linked into: `ln -sn` would make
+	# the link INSIDE it and answer 0, leaving the name on whatever the directory holds. It is judged below as any name
+	# is: kept when it holds an intact build, removed and linked again when not.
+	if [ ! -d "$link" ] || [ -L "$link" ]; then
+		ln -sn "$base" "$link" 2>/dev/null && break
+	fi
 	if intact "$link"; then
-		# Another builder published first, and a published build is never replaced: use it.
+		# An intact build at the name — another builder's, published first — is never replaced: use it.
 		rm -rf "$build"
 		build=""
 		break

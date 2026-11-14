@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/prereqtest"
 )
 
 // skillsProbeScript drives the skill-load plugin under node:
@@ -95,7 +97,8 @@ type skillsProbe struct {
 
 func startSkillsProbe(t *testing.T) *skillsProbe {
 	t.Helper()
-	node := nodeForProbe(t)
+	node := prereqtest.OnPath(t, "node", "the OpenCode skill-load plugin's probe runs the plugin under it",
+		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
 	script, err := filepath.Abs(skillsProbeScript)
 	if err != nil {
 		t.Fatal(err)
