@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // rowCrossingRate is the pace the cases below hold a leaf's link to, towards
@@ -22,6 +23,11 @@ const rowCrossingRate = 160 << 10
 // owed end, each a few hundred bytes — so the row it writes is at its bound
 // still, and never past it.
 const rowCrossingRoom = 8 << 10
+
+// rowCrossingCapture is the capture the keep's case stamps what came of: the
+// place its take reserved on the row, begun.
+var rowCrossingCapture = SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1",
+	State: CaptureBegun, At: time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)}
 
 // rowCrossingCase is one path that writes a run's row, through a coordinator
 // whose node reaches the coordination store across a slow leaf link.
@@ -60,6 +66,11 @@ type rowCrossingCase struct {
 // red.
 func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 	t.Parallel()
+	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
+	// case's write is the only thing on the link, and the runner builds one
+	// reply of a row at its bound at a time — each case its own row, under a
+	// turn of its own.
+	across := kvtest.SlowLeaf(t, rowCrossingRate)
 	for _, c := range []rowCrossingCase{
 		{
 			name: "a resumed turn's carry",
@@ -75,19 +86,24 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			},
 		},
 		{
-			name: "a capture's stamp",
+			// THE KEEP'S STAMP OF WHAT CAME OF ITS CAPTURE, made off the read
+			// that took it, with no read's room to keep ([Coordinator.keepCapture]):
+			// over the place its take reserved, begun.
+			name: "a keep's stamp of what came of its capture",
 			row: PendingRun{TurnID: "t-stamp", AgentHandle: "swe", Status: StatusRunning,
-				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch},
+				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch,
+				Capture: &rowCrossingCapture},
 			write: func(ctx context.Context, c *Coordinator, run PendingRun) string {
-				stamp := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: run.LaunchID,
-					State: CaptureBegun, At: time.Now().UTC()}
-				if !c.settleStamp(ctx, time.Time{}, run.TurnID, stamp, c.pending.StampCapture) {
-					return "the stamp was not taken"
-				}
+				c.finishCapture(ctx, time.Time{}, run, rowCrossingCapture, CaptureRefused,
+					"the session could not be uploaded: the object store refused it")
 				return ""
 			},
 			landed: func(run PendingRun) (bool, string) {
-				return run.Capture != nil && run.Capture.State == CaptureBegun, "no begun capture"
+				if run.Capture == nil {
+					return false, "no capture"
+				}
+				return run.Capture.samePlace(rowCrossingCapture) && run.Capture.State == CaptureRefused,
+					"the capture " + string(run.Capture.State)
 			},
 		},
 		{
@@ -110,8 +126,6 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			across := kvtest.SlowLeaf(t, rowCrossingRate)
 			raw, err := encodeRun(c.row)
 			if err != nil {
 				t.Fatalf("encode the run: %v", err)
@@ -129,8 +143,13 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			}
 			// READ BACK THROUGH THE MEMBER the moment the path returned: a
 			// write its caller gave up on is still crossing then, and the
-			// row does not hold it yet.
-			run, found, err := NewCoordStore(across.Member).Get(t.Context(), c.row.TurnID)
+			// row does not hold it yet. Asked for as long as a leader read
+			// is ever asked ([jsprovision.LookupBudget]), since its reply
+			// carries the row whole: a reply that long in the making is the
+			// runner's load, never what the case asks.
+			read, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)
+			defer cancel()
+			run, found, err := NewCoordStore(across.Member).Get(read, c.row.TurnID)
 			if err != nil || !found {
 				t.Fatalf("read the row back: found %t, %v", found, err)
 			}
