@@ -2606,9 +2606,15 @@ func (l threadLine) AttachmentWellFormed() (bool, error) {
 	if err := wireDecode(l.attachment, &a); err != nil {
 		return false, fmt.Errorf("an attachment: %w", err)
 	}
+	// A payload of no type, or of one that is no string, is one the drop
+	// takes: an answer, never an error. A string the decode cannot read is the
+	// layer's own failure, and its error.
+	if len(a.Type) == 0 || a.Type[0] != '"' {
+		return false, nil
+	}
 	kind, err := wireRequiredString("type", a.Type)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("an attachment: %w", err)
 	}
 	switch kind {
 	case attachmentInvokedSkills:
