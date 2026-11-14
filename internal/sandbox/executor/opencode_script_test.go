@@ -95,6 +95,15 @@ import (
 // `serve` keeps the content it was handed, in `serve-config`; and, in
 // `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
 //
+// FAKE_PIPE_CUT=<n> is an OpenCode that cuts what it writes into a PIPE: the
+// answers that can run long (`session export`, `api mcp.list` and `api
+// session.inbox.list`) stop after their first n bytes where its stdout is a
+// pipe, with success, and are printed whole into anything else, as 2.0.32 and
+// 2.1.4 stop a large answer written into a pipe after a 64 KiB multiple and
+// exit 0, and write it whole into a regular file (measured on both, a
+// session's export through gzip and through cat). A pipe is told by `[ -p
+// /dev/stdout ]`, which dash, bash and busybox ash all answer alike.
+//
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
 // FAKE_SERVE=password-first one that prints its password a second before it
@@ -112,6 +121,9 @@ authed() {
 hold() { mkdir -p "$d/sessions" && : > "$d/sessions/$1"; }
 held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
 serving() { : > "$d/serve-settled"; exec sleep 60; }
+answer() {
+  if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then printf '%s\n' "$1" | head -c "$FAKE_PIPE_CUT"; else printf '%s\n' "$1"; fi
+}
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
@@ -150,11 +162,11 @@ api)
   case "$1" in
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
-    if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
+    if [ -n "${FAKE_MCP_LIST:-}" ]; then answer "$FAKE_MCP_LIST"; exit 0; fi
     case "$n" in
-    1) echo '{"data":[]}' ;;
-    2) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
-    *) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
+    1) answer '{"data":[]}' ;;
+    2) answer '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
+    *) answer '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
     esac ;;
   session.get)
     held "${3#sessionID=}" || { echo "Error: Session not found: ${3#sessionID=}" >&2; exit 1; }
@@ -162,7 +174,7 @@ api)
   session.inbox.list)
     inbox=${FAKE_INBOX-}
     [ -n "$inbox" ] || inbox='{"data":[]}'
-    printf '%s\n' "$inbox" ;;
+    answer "$inbox" ;;
   session.inbox.cancel)
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} ${5#inboxID=} $served" >> "$d/cancelled" ;;
@@ -178,9 +190,9 @@ session)
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
-    if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
+    if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then answer "$FAKE_SESSION_EXPORT"; else
       msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
-      printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
+      answer "$(printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}' "$id" "$msgs")"; fi ;;
   import)
     shift 2; dir=
     while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done
@@ -261,6 +273,26 @@ type scriptOpts struct {
 	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
 	// started on, and whether the other was still in the box.
 	values, freshValues string
+	// exportMessages, where set, is the messages the export of a session the
+	// fake holds carries (`export-messages` in the case's directory), for a
+	// case whose export has to be longer than an environment variable holds.
+	exportMessages string
+}
+
+// pipeCut is where a case's OpenCode cuts an answer it writes into a pipe
+// (FAKE_PIPE_CUT): 64 KiB, the multiple 2.0.32 and 2.1.4 stop at, so an answer
+// longer than that runs past the first place one of them may stop.
+const pipeCut = 64 << 10
+
+// longMessages is a session's messages, one whose text alone is longer than n
+// bytes.
+func longMessages(n int) string {
+	return `[{"id":"msg_1","type":"user","text":"` + strings.Repeat("fix the flake ", n/len("fix the flake ")+1) + `"}]`
+}
+
+// exportOf is the export the fake prints of session holding messages.
+func exportOf(session, messages string) string {
+	return `{"info":{"id":"` + session + `","title":"crewlet"},"messages":` + messages + "}\n"
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -364,6 +396,11 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	}
 	if o.freshBrief != "" {
 		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.exportMessages != "" {
+		if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(o.exportMessages), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -980,6 +1017,48 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 	})
 }
 
+// A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO. The inbox listing
+// carries every pending item's whole text, and OpenCode 2.0.32 and 2.1.4 stop
+// writing an answer into a pipe after a 64 KiB multiple and exit 0. The script
+// reads the listing from a file, so a note of the plugin's listed after a long
+// item OpenCode queued is cancelled as the one before it is, under every sh a
+// box may run the script with.
+//
+// Mutation: read the listing through a pipe again, and the note past the cut
+// is left pending.
+func TestANoteListedPastWhatAPipeHoldsIsCancelledToo(t *testing.T) {
+	t.Parallel()
+	const (
+		before = "msg_30292d427a87e479be9f88cba42963ca"
+		past   = "msg_05536338060eb18a87638c49f196ffcf"
+		queued = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+	)
+	item := func(id, text, delivery string) string {
+		return `{"id":"` + id + `","sessionID":"SES","time":{"created":1793072423854},"type":"user",` +
+			`"payload":{"text":"` + text + `"},"delivery":"` + delivery + `"}`
+	}
+	inbox := `{"data":[` + item(before, "first", "steer") + "," +
+		item(queued, strings.Repeat("the brief, at length. ", pipeCut/len("the brief, at length. ")+1), "queue") + "," +
+		item(past, "second", "steer") + `]}`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, req: sandbox.RunRequest{MCPServers: bridgeOnly, Steer: steerWiring},
+			env: []string{"FAKE_INBOX=" + inbox, "FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
+		var got []string
+		for i := 1; i < len(cancelled); i += 3 {
+			got = append(got, cancelled[i])
+		}
+		slices.Sort(got)
+		if want := []string{past, before}; !slices.Equal(got, want) {
+			t.Errorf("cancelled %v, want both of the plugin's pending notes %v, the one listed past the cut too",
+				got, want)
+		}
+	})
+}
+
 // A RUN WITH NO CONFIGURATION STARTS NOTHING. Handed none, the server would run
 // on whatever the image and the checkout hold, with neither the run's posture
 // nor its servers; so a run whose configuration is missing is refused before
@@ -1117,6 +1196,77 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 				}
 				if run.callIndex("run ") >= 0 {
 					t.Errorf("opencode run started before the refusal:\n%s", strings.Join(run.calls, "\n"))
+				}
+			})
+		})
+	}
+}
+
+// A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. The `mcp.list` answer
+// the readiness loop reads lists every server the image's and the repository's
+// configuration declare beside the run's, a failed one with its error, and
+// OpenCode 2.0.32 and 2.1.4 stop writing an answer into a pipe after a 64 KiB
+// multiple and exit 0. The script reads the answer from a file, so a server
+// listed after a failed one's long error is seen as it would be listed first:
+// one the run declares, settled, starts the run at once, and one that would
+// take the names of the engine's tools refuses it.
+//
+// The stand-in cuts this case's answers at 4 KiB rather than [pipeCut]: where
+// the cut falls is the release's, not this invariant's, and the shadow check
+// strips each name it finds with `${r#*…}`, which is slow to reach a name far
+// into the answer: one 64 KiB in took five seconds under dash on two cores.
+//
+// Mutation: read the answer through a pipe again, and the run waits out the
+// bound for the declared server and starts beside the other.
+func TestAServerListedPastWhatAPipeHoldsIsStillSeen(t *testing.T) {
+	t.Parallel()
+	const cut = 4 << 10
+	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
+	seat := sandbox.MCPServer{Name: "github", Command: "false"}
+	// A server of the repository's own that failed, with a long error.
+	const said = "Connection closed: MCP server process exited with code 1. "
+	failed := `{"name":"docs","status":{"status":"failed","error":"` +
+		strings.Repeat(said, cut/len(said)+1) + `"}}`
+	listed := func(entries ...string) string {
+		return `{"location":{"directory":"/home/crewlet/workspace"},"data":[` + strings.Join(entries, ",") + `]}`
+	}
+	connected := func(name string) string { return `{"name":"` + name + `","status":{"status":"connected"}}` }
+	for _, tc := range []struct {
+		name    string
+		servers map[string]sandbox.MCPServer
+		list    string
+		refused string
+	}{
+		{"a server the run declares", map[string]sandbox.MCPServer{"github": seat},
+			listed(failed, connected("github")), ""},
+		{"a server that takes the engine's names", map[string]sandbox.MCPServer{"crewlet": engine},
+			listed(connected("crewlet"), failed, connected("crewlet_x")), "crewlet_x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			forEachShell(t, func(t *testing.T, sh boxShell) {
+				run := runScript(t, scriptOpts{
+					shell: sh,
+					req:   sandbox.RunRequest{MCPServers: tc.servers},
+					env:   []string{"FAKE_MCP_LIST=" + tc.list, "FAKE_PIPE_CUT=" + strconv.Itoa(cut)},
+					times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour},
+				})
+				if tc.refused != "" {
+					if want := "declares an MCP server named " + tc.refused + ","; run.code == 0 ||
+						!strings.Contains(run.stderr, want) || run.callIndex("run ") >= 0 {
+						t.Errorf("the run was not refused before it started for %s, listed past the cut "+
+							"(exit %d):\n%s", tc.refused, run.code, run.stderr)
+					}
+					return
+				}
+				if run.code != 0 {
+					t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+				}
+				if strings.Contains(run.stderr, "still connecting") {
+					t.Errorf("the run waited for a server OpenCode had listed settled:\n%s", run.stderr)
+				}
+				if polls := strings.TrimSpace(readIn(t, run.dir, "polls")); polls != "1" {
+					t.Errorf("mcp.list was asked %s times, want once: the first answer settles the server", polls)
 				}
 			})
 		})
