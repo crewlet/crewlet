@@ -166,3 +166,43 @@ export const ALARMS_AT = "alarms";
 export function alarmsLink(): { path: string[]; query: Record<string, string> } {
   return { path: ["settings", "backups"], query: { at: ALARMS_AT } };
 }
+
+/**
+ * Where a standing alarm is for a reader, beside the count the engine's status
+ * says: in their Inbox's Needs you, put off there on this browser, or not
+ * there (yet, or for this reader at all).
+ *
+ * THE STATUS COUNTS THIS NODE'S ALARM TABLE AS IT FIRES NOW, and Needs you
+ * lists the platform notices: an alarm that has stood for the deferral grace,
+ * merged across the fleet, to an administrator (ADR-0116). Two honest counts
+ * of two things, which read as three disagreeing numbers until the panel says
+ * which alarm is which.
+ */
+export type AlarmPlace = "needs" | "put-off" | "waiting" | "unseen";
+
+/** How long an alarm stands before it reaches Needs you: the engine's deferral grace. */
+export const NOTICE_AFTER_MINUTES = 30;
+
+export function alarmPlace(
+  kind: string,
+  places: { needs: readonly string[]; putOff: readonly string[] } | null,
+): AlarmPlace {
+  if (places === null) return "unseen";
+  if (places.needs.includes(kind)) return "needs";
+  if (places.putOff.includes(kind)) return "put-off";
+  return "waiting";
+}
+
+/** An alarm's place, as the panel says it under its name. */
+export function alarmPlaceWords(place: AlarmPlace): string {
+  switch (place) {
+    case "needs":
+      return "In your Inbox, under Needs you";
+    case "put-off":
+      return "Put off in your Inbox on this browser";
+    case "waiting":
+      return `Reaches your Inbox once it has stood ${NOTICE_AFTER_MINUTES} minutes`;
+    case "unseen":
+      return "";
+  }
+}

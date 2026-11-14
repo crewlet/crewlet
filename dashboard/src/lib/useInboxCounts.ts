@@ -109,6 +109,16 @@ export function useInboxCountsOf(handle: string, enabled: boolean): InboxCounts 
   return data ? { waiting: data.total, capped: data.capped } : { waiting: null, capped: false };
 }
 
+/**
+ * Where the reader's Needs you holds the standing alarms (`lib/alarms.ts`'
+ * alarmPlace): the frame's reading, never a second read of it, and null
+ * outside the frame or for a reader told no notice, where the engine panel
+ * then says nothing about the Inbox.
+ */
+export function useAlarmPlaces(): { needs: readonly string[]; putOff: readonly string[] } | null {
+  return useContext(Reading)?.alarms ?? null;
+}
+
 /** The figure as a badge writes it: a floor carries a "+". */
 export function inboxFigure(counts: InboxCounts): string {
   if (counts.waiting === null) return "";

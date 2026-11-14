@@ -210,6 +210,12 @@ interface AttentionFacts {
    * mark tells that the condition has spread since.
    */
   spread?: number;
+  /**
+   * The alarm kind a platform notice stands for, where one does (an alarm's
+   * own notice, or a finding an alarm raises): how the engine panel says
+   * which of the alarms it counts are in Needs you.
+   */
+  alarm?: string;
 }
 
 export interface AttentionInput {
@@ -336,6 +342,7 @@ function alarmRow(kind: string, n: AdvisorNotice): Attention {
         : { path: home.path, action: `Open ${home.label}` }),
     clears: fix?.clears ?? "Clears when the alarm clears.",
     spread: n.nodes?.length ?? 0,
+    alarm: kind,
     ...(n.since ? { at: n.since } : {}),
   };
 }
@@ -642,6 +649,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         : { path: ["settings", "advisor"], action: "Open the advisor" }),
       clears: fix?.clears ?? "Clears once the setup no longer raises it.",
       spread: n.nodes?.length ?? 0,
+      ...(n.alarm ? { alarm: n.alarm } : {}),
       ...at,
     });
   }

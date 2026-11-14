@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useAgents } from "./store-hooks.ts";
 import { conditionsToDecide } from "./attention.ts";
-import { useAttention } from "./useAttention.ts";
+import { useAttentionSplit, useReadsNotices } from "./useAttention.ts";
 import { waitedOn } from "./budget.ts";
 import { useLeadScope } from "./leadScope.ts";
 import { managedBlock, mayChangeConfig } from "./useWriteAccess.ts";
@@ -204,6 +204,12 @@ export interface NeedsYouCount {
   waiting: number | null;
   /** The engine's count of asks reached its ceiling, so `waiting` is a floor. */
   capped: boolean;
+  /**
+   * The alarm kinds whose platform notices are in the reader's Needs you, and
+   * those they put off, for the engine panel to say where each standing alarm
+   * is; null for a reader who is told no notice (`lib/alarms.ts`' alarmPlace).
+   */
+  alarms?: { needs: readonly string[]; putOff: readonly string[] } | null;
 }
 
 /**
@@ -235,12 +241,17 @@ export function useNeedsYouCount(enabled: boolean, pollMs: number, owner = ""): 
   // lands as a notice on it (`refetchOnInboxOf`).
   const decisions = useQuery("decisions", undefined, { enabled, pollMs, refetchOnInboxOf: owner });
   const seats = useSeatDecisions();
-  const attention = useAttention();
-  return useMemo(
-    () =>
-      enabled
-        ? needsYouCount(decisions.data, seats.mine.length, conditionsToDecide(attention).length)
-        : { waiting: null, capped: false },
-    [enabled, decisions.data, seats.mine.length, attention],
-  );
+  const { shown, putOff } = useAttentionSplit();
+  const readsNotices = useReadsNotices();
+  return useMemo(() => {
+    const alarms = readsNotices
+      ? {
+          needs: shown.flatMap((a) => (a.alarm ? [a.alarm] : [])),
+          putOff: putOff.flatMap((a) => (a.alarm ? [a.alarm] : [])),
+        }
+      : null;
+    return enabled
+      ? { ...needsYouCount(decisions.data, seats.mine.length, conditionsToDecide(shown).length), alarms }
+      : { waiting: null, capped: false, alarms };
+  }, [enabled, decisions.data, seats.mine.length, shown, putOff, readsNotices]);
 }
