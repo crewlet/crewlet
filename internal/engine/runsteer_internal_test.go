@@ -444,6 +444,60 @@ func TestAConfirmationOfANoteUnderAnUnheldKeyWaitsForANodeThatHoldsIt(t *testing
 	}
 }
 
+// A CONFIRMATION IS TURNED AWAY ONLY FOR A NOTE IT NAMES THAT WAITS FOR ITS
+// KEY. A note this node cannot open, still waiting for the job, holds back no
+// confirmation that does not name it. OpenCode's plugin makes a confirmation
+// again where its answer was lost, naming a note the job read already, and the
+// record then decides what it took: that confirmation took nothing and asks
+// nothing of the note waiting for its key, so it is answered done. Turned away
+// for a note it never named, it would be made again on the plugin's backoff
+// for as long as the run lasts, by a harness that owes nothing more, and
+// report the note it named again at every try.
+//
+// Mutation: turn a confirmation away for a note that waits for its key whether
+// or not the confirmation names it, and the confirmation made again goes red.
+func TestAConfirmationIsTurnedAwayOnlyForANoteItNamesThatWaitsForItsKey(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	oldRing := recordseal.OneKey("k-old", "the old fleet key material")
+	newRing := recordseal.OneKey("k-new", "the new fleet key material")
+	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
+	sealer, _ := steersOver(t, oldRing, store)
+	holder, _ := steersOver(t, both, store)
+	keyless, _ := steersOver(t, newRing, store)
+	launch := workingRun(t, store, holder, "run-1")
+	fileSealed(t, sealer, "run-1", steer.Note{ID: "n-old", Text: "use staging", By: "founder"})
+	fileSealed(t, holder, "run-1", steer.Note{ID: "n-new", Text: "and keep the flag off", By: "founder"})
+
+	// SERVED TO THE JOB by a node that holds both keys.
+	served := boundInbox(t, holder, store, "run-1", launch)
+	viewHolds(t, served, 2)
+	if notes, _ := served.Wait(ctx, 0); len(notes) != 2 {
+		t.Fatalf("the poll was answered %+v, want n-old and n-new", notes)
+	}
+
+	// CONFIRMED WHERE THE OLD KEY IS NOT HELD, naming the newer note alone,
+	// and made again as one whose answer was lost.
+	inbox := boundInbox(t, keyless, store, "run-1", launch)
+	viewHolds(t, inbox, 1)
+	for try := range 2 {
+		if err := inbox.Read(ctx, []string{"n-new"}); err != nil {
+			t.Fatalf("confirmation %d, naming no note that waits for its key, answered %v, want it done",
+				try+1, err)
+		}
+	}
+	if read := readOn(ctx, store, "run-1", "n-new"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Fatalf("n-new is read %+v, want it read at job %s's step", read, launch)
+	}
+	for _, n := range mustRow(t, store, "run-1").Steer.Notes {
+		if n.ID == "n-old" && (!n.Waiting() || n.Served != launch) {
+			t.Fatalf("the confirmations left n-old %+v, want it waiting, served to job %s", n, launch)
+		}
+	}
+}
+
 // AN ANCHOR THAT DOES NOT OPEN DECIDES NO AUTHORITY: a person's authority to
 // steer a turn is decided on the seat the run's record names, so a record with
 // no anchor, one that does not verify, or one sealed for another turn names no
