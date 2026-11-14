@@ -57,8 +57,10 @@ import (
 //     more of them than the state has room for.
 //  6. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
 //     the calls its record does not list ([ledger.Iteration.Elided]) — by
-//     identity first, its tool, its digest and its outcome, so a resumed call
-//     log still seeds it exactly, and past that by tool, as the tallies were —
+//     identity first, its tool, its digest and its outcome, an outcome nobody
+//     knows counted apart from a failure ([ledger.Elided.Unfinished]), so a
+//     resumed call log still seeds it exactly, and past that by tool, as the
+//     tallies were —
 //     and with them the names of the round's tools that are reads
 //     ([ledger.Iteration.Reads]), which only a listed call is drawn with.
 //     What a call keeps however far it is condensed — a name, an identity and
@@ -314,30 +316,41 @@ func foldTallies(rounds []ledger.Iteration, folded []bool) int {
 
 // tallied is tally with call counted in it by its identity — its tool, the
 // digest it was admitted under, none where its arguments are withheld or no
-// digest was recorded, and whether it failed — as the record of the calls a
-// round does not list keeps one ([ledger.Elided]).
+// digest was recorded, whether it failed and whether its outcome is unknown —
+// as the record of the calls a round does not list keeps one ([ledger.Elided]).
+//
+// AN UNKNOWN OUTCOME IS COUNTED APART ([ledger.Elided.Unfinished]), never as
+// the failure the call is also marked: the next round reads the tally's line,
+// which says such a call may have taken effect, and the turn's end reads it as
+// a reply that may have gone (internal/engine's unfinishedIn).
 func tallied(tally []ledger.Elided, call ledger.Call) []ledger.Elided {
 	digest := call.Digest
 	if call.Withheld {
 		digest = ""
 	}
-	failed := 0
+	failed, unfinished := 0, 0
 	if call.Failed {
 		failed = 1
+	}
+	if call.Unfinished {
+		unfinished = 1
 	}
 	if i := slices.IndexFunc(tally, func(e ledger.Elided) bool {
 		return e.Name == call.Name && e.Digest == digest
 	}); i >= 0 {
 		tally[i].Calls++
 		tally[i].Failed += failed
+		tally[i].Unfinished += unfinished
 		return tally
 	}
-	return append(tally, ledger.Elided{Name: call.Name, Digest: digest, Calls: 1, Failed: failed})
+	return append(tally, ledger.Elided{Name: call.Name, Digest: digest, Calls: 1, Failed: failed,
+		Unfinished: unfinished})
 }
 
 // byTool is a tally with each tool's calls folded into one count of calls to it
-// whose arguments are not known — the calls and the failures kept — and whether
-// that changed it. The entries keep the order of each tool's first.
+// whose arguments are not known — the calls, the failures and the unknown
+// outcomes kept — and whether that changed it. The entries keep the order of
+// each tool's first.
 func byTool(tally []ledger.Elided) ([]ledger.Elided, bool) {
 	var out []ledger.Elided
 	changed := false
@@ -346,10 +359,11 @@ func byTool(tally []ledger.Elided) ([]ledger.Elided, bool) {
 		if i := slices.IndexFunc(out, func(o ledger.Elided) bool { return o.Name == e.Name }); i >= 0 {
 			out[i].Calls += e.Calls
 			out[i].Failed += e.Failed
+			out[i].Unfinished += e.Unfinished
 			changed = true
 			continue
 		}
-		out = append(out, ledger.Elided{Name: e.Name, Calls: e.Calls, Failed: e.Failed})
+		out = append(out, ledger.Elided{Name: e.Name, Calls: e.Calls, Failed: e.Failed, Unfinished: e.Unfinished})
 	}
 	return out, changed
 }

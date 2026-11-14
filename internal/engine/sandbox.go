@@ -2046,9 +2046,9 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
 // the turn's run has an outcome nobody knows — its entry still in flight as
 // the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
-// round's record holding one so read ([ledger.Call.Unfinished]): that call may
-// be the reply, so the end says its delivery is unknown, never that the turn
-// did not reply.
+// round's record holding one so read, listed ([ledger.Call.Unfinished]) or
+// counted ([ledger.Elided.Unfinished]): that call may be the reply, so the end
+// says its delivery is unknown, never that the turn did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
@@ -2070,13 +2070,16 @@ func resumedEnding(in resumeInput, res turn.Result, reply turn.Reply, answered c
 
 // unfinishedIn reports whether a call of in's turn has an outcome nobody knows:
 // one the log it resumes from held in flight as it was read, or one a closed
-// round's record lists so ([ledger.Call.Unfinished]).
+// round's record lists so ([ledger.Call.Unfinished]) or counts so in the tally
+// of the calls it does not list ([ledger.Elided.Unfinished]) — where a park
+// past its share folded the round's calls (internal/agent/execstate).
 func unfinishedIn(in resumeInput) bool {
 	if len(in.Bridged.InFlight) > 0 {
 		return true
 	}
 	return slices.ContainsFunc(in.State.Iterations, func(it ledger.Iteration) bool {
-		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished })
+		return slices.ContainsFunc(it.Calls, func(c ledger.Call) bool { return c.Unfinished }) ||
+			slices.ContainsFunc(it.Elided, func(e ledger.Elided) bool { return e.Unfinished > 0 })
 	})
 }
 

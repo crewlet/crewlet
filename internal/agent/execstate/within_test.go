@@ -191,11 +191,17 @@ func postRounds(n int) []ledger.Iteration {
 // of the calls its record does not list — by identity while that fits, so a
 // resumed call log still seeds each exactly, and by tool past that — every
 // call and every failure counted, rather than the park refused as a turn whose
-// own context is too large, which it is not.
+// own context is too large, which it is not. AND EVERY OUTCOME NOBODY KNOWS
+// counted apart from the failures (ledger.Elided.Unfinished): each round's
+// first call, and its last — a retry of an earlier call's very arguments — were
+// still in flight as its collection read them, and a tally that counted them as
+// failures alone would tell the next round they did nothing.
 //
 // Mutation: refuse the state once its tallies are folded, and a turn of many
 // rounds can no longer park; drop a call rather than tally it, or its failure,
-// and a resumed call log or a delivery check counts fewer than the round made.
+// and a resumed call log or a delivery check counts fewer than the round made;
+// fold an unknown outcome as a failure alone, by identity or by tool, and the
+// round reads as one whose call did nothing.
 func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -209,6 +215,14 @@ func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t 
 			t.Parallel()
 			state := worst()
 			state.Iterations = postRounds(tc.rounds)
+			for i := range state.Iterations {
+				calls := state.Iterations[i].Calls
+				calls[199].Digest = calls[197].Digest
+				for _, j := range []int{0, 199} {
+					calls[j].Args, calls[j].Result, calls[j].Failed, calls[j].Unfinished = nil,
+						"its outcome is unknown", true, true
+				}
+			}
 			if raw, _ := execstate.Encode(state); len(raw) <= budget {
 				t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
 			}
@@ -223,19 +237,20 @@ func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t 
 			}
 			endingsKept(t, got, state)
 			for _, round := range got.Iterations {
-				calls, failed, entries := 0, 0, 0
+				calls, failed, unfinished, entries := 0, 0, 0, 0
 				for _, e := range round.Elided {
 					if e.Name != "post_message" || (e.Digest != "") != tc.exact {
 						t.Fatalf("round %d keeps %+v, want every call under its tool, its digest kept %v",
 							round.Iteration, e, tc.exact)
 					}
-					calls, failed, entries = calls+e.Calls, failed+e.Failed, entries+1
+					calls, failed, unfinished = calls+e.Calls, failed+e.Failed, unfinished+e.Unfinished
+					entries++
 				}
-				if len(round.Calls) != 0 || calls != 200 || failed != 100 {
-					t.Errorf("round %d lists %d calls and tallies %d (%d failed), want all 200 (100) tallied",
-						round.Iteration, len(round.Calls), calls, failed)
+				if len(round.Calls) != 0 || calls != 200 || failed != 101 || unfinished != 2 {
+					t.Errorf("round %d lists %d calls and tallies %d (%d failed, %d of unknown outcome), want "+
+						"all 200 (101, 2) tallied", round.Iteration, len(round.Calls), calls, failed, unfinished)
 				}
-				if want := map[bool]int{true: 200, false: 1}[tc.exact]; entries != want {
+				if want := map[bool]int{true: 199, false: 1}[tc.exact]; entries != want {
 					t.Errorf("round %d tallies its calls in %d entries, want %d", round.Iteration, entries, want)
 				}
 			}

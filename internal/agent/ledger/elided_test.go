@@ -71,6 +71,34 @@ func TestWhatARecordDidNotKeepIsSaid(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER SAID TO HAVE FAILED. A tally counts
+// such a call among its failures and apart from them (Elided.Unfinished), and
+// its line counts it apart and says what the call's own answer would — that it
+// may have taken effect, to be checked before it is made again — because a run
+// told it failed makes it again: the duplicate post the unknown outcome exists
+// to prevent. A tally holding none says nothing of it.
+//
+// Mutation: render the failures whole, and the call is said to have failed;
+// drop the sentence, and the next round is not told to check.
+func TestACallWhoseOutcomeIsUnknownIsNeverSaidToHaveFailed(t *testing.T) {
+	t.Parallel()
+	line := FormatElided([]Elided{
+		{Name: "post_message", Digest: "a", Calls: 2, Failed: 1, Unfinished: 1},
+		{Name: "post_message", Digest: "b", Calls: 1, Failed: 1},
+		{Name: "read_file", Calls: 4, Failed: 1},
+	}, nil)
+	for _, want := range []string{"post_message ×3 (1 failed, 1 whose outcome is unknown)", "read_file ×4 (1 failed)",
+		"may have taken effect: check whether it did before making it again"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line %q does not say %q", line, want)
+		}
+	}
+	if known := FormatElided([]Elided{{Name: "read_file", Calls: 4, Failed: 1}}, nil); strings.Contains(known,
+		"outcome") {
+		t.Errorf("a tally of known outcomes says %q", known)
+	}
+}
+
 // A ROUND WHOSE CALLS ARE ALL TALLIED IS NOT SAID TO HAVE CALLED NOTHING. A
 // parked turn's closed round condensed past its calls keeps them as a tally
 // alone, and its ledger block says what the tally says, rather than "(none)" —
