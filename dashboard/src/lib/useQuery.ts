@@ -139,6 +139,22 @@ export function retryFailedReads(): void {
   for (const ask of [...failedReads]) ask();
 }
 
+/**
+ * Hold `ask` in the set [retryFailedReads] asks again while `failed` holds. A
+ * `useQuery` read and a `useRest` read (`lib/useRest.ts`) alike: the banner
+ * draws the one Try again for either, and a REST read left out of the set
+ * made it a button that asked nothing.
+ */
+export function useAskedAgainOnFailure(failed: boolean, ask: () => void): void {
+  useEffect(() => {
+    if (!failed) return;
+    failedReads.add(ask);
+    return () => {
+      failedReads.delete(ask);
+    };
+  }, [failed, ask]);
+}
+
 export function useQuery<K extends QueryName>(
   what: K,
   params?: Record<string, unknown>,
@@ -265,13 +281,7 @@ export function useQuery<K extends QueryName>(
 
   // A FAILED READ IS ASKED AGAIN BY "Try again" ([retryFailedReads]), and by
   // nothing else new: its poll and its reconnect still ask as they did.
-  useEffect(() => {
-    if (!enabled || state.error === null) return;
-    failedReads.add(refetch);
-    return () => {
-      failedReads.delete(refetch);
-    };
-  }, [enabled, state.error, refetch]);
+  useAskedAgainOnFailure(enabled && state.error !== null, refetch);
 
   // A TAB COMING BACK ASKS AGAIN.
   //

@@ -43,6 +43,7 @@
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ClientContext } from "./store-hooks.ts";
+import { useAskedAgainOnFailure } from "./useQuery.ts";
 import { EVERY_QUESTION, session } from "~/protocol/session.ts";
 import {
   isAbort,
@@ -313,6 +314,13 @@ export function useRest<T>(
 
   const current = state.key === key;
   const error = current ? state.error : null;
+
+  // A FAILED READ IS ASKED AGAIN BY THE BANNER'S "Try again" (`QueryState`),
+  // loudly, as a press of it is: the set it asks is `useQuery`'s, which held
+  // no REST read, so the button drawn for one asked nothing.
+  const askAgain = useCallback(() => void run(false), [run]);
+  useAskedAgainOnFailure(error !== null, askAgain);
+
   return {
     data: current ? state.data : null,
     error,
