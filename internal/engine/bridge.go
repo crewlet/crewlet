@@ -247,18 +247,25 @@ const appendAttempts = len(appendRetryWaits) + 1
 
 // beginBudget bounds the write of a call's entry ahead of it
 // ([bridgeLedger.Begin]), its retries ([appendRetryWaits]) included, and so a
-// withdrawal's: FIVE SECONDS, as the write that records a job's session start
-// is given ([sessionStartRecordBudget]), and for its reason — one
-// compare-and-swap of the run's log, which a healthy coordination store
-// answers in milliseconds (11.89 at the median and 17.04 at the 99th
-// percentile, measured: internal/coord/kv's BenchmarkABoxRequestOnItsRun, its
-// begin arm), and a store that has not answered in five is in an outage the
-// call should not wait out: past it the call is
-// not run, and its box is told it may make it again. The box waits on it with
-// nothing written on the call's response — its first progress follows the
-// write — which a harness gives a minute (Claude Code 2.1.310's first-byte
+// withdrawal's: FIVE SECONDS, the reason the write that records a job's
+// session start is bounded by beside the row's crossing
+// ([sessionStartRecordBudget]) — one compare-and-swap of the run's log, which
+// a healthy coordination store answers in milliseconds (11.89 at the median
+// and 17.04 at the 99th percentile, measured: internal/coord/kv's
+// BenchmarkABoxRequestOnItsRun, its begin arm), and a store that has not
+// answered in five is in an outage the call should not wait out: past it the
+// call is not run, and its box is told it may make it again. The box waits on
+// it with nothing written on the call's response — its first progress follows
+// the write — which a harness gives a minute (Claude Code 2.1.310's first-byte
 // budget, see internal/api/mcpbridge's answerEvery). None before: the call ran
 // first, and was recorded after it.
+//
+// THE FIVE ALONE, with no crossing of the log beside them as the session start
+// record has (sandbox.RowBudget): the write is made on the harness's own
+// request, which the harness's minute bounds whatever the engine gives it, so
+// a log of megabytes across a slow link is cut by the harness first. What
+// keeps it inside that minute is writing less than the whole log
+// (crewlet/crewlet#1150).
 const beginBudget = 5 * time.Second
 
 // nameDigestPrefix is how much of a call's identity a line naming one carries

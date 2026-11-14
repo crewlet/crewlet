@@ -187,6 +187,12 @@ const steerPublishBudget = 5 * time.Second
 // seconds outlasts it with room, as a capture's record does (internal/sandbox's
 // sessionRecordBudget); a store silent past it is an outage its own alarms
 // name.
+//
+// SAID ONCE AN ATTEMPT HAS FAILED, never while one is still asking: an attempt
+// is given its ten seconds and the time the run's row takes to cross to the
+// store ([steerSettleAttempt]), so the line comes at thirty seconds on a
+// member, and across a link at the slowest pace allowed when the first attempt
+// fails, up to about nine minutes and ten seconds in.
 const steerSettlePatience = 30 * time.Second
 
 // steerSettleAttempt is the reason one attempt at a settle is bounded by,
@@ -235,6 +241,15 @@ const (
 // deployment guide sizes a pod's grace by, is unchanged; and where it does not,
 // the stop is that much shorter than its longest case. A member that has lost
 // its coordination store alone stops up to this much later than its allowance.
+//
+// NO CROSSING OF THE ROW BESIDE IT, though each attempt writes the run's row
+// whole and is given that crossing outside a stop ([steerSettleAttempt]): the
+// window is a step of the stop's longest case, and a crossing of minutes in it
+// would hold the stop past the grace a pod is given, which ends the node
+// before it closes its store. A last attempt the window cuts leaves its take
+// unsettled, which the stop says — as the sandbox coordinator's stop holds the
+// writes of the row it still makes to their reason alone
+// (internal/sandbox's Coordinator.rowContext).
 const steerSettleStopBudget = 5 * time.Second
 
 // runSteers is this node's half of a turn's notes on its run's record: it seals

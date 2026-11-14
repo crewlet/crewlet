@@ -1256,13 +1256,17 @@ it, in one of two ways:
   take's own place among the turn's reads, so a capture of that job counts it
   held, and keeps the take's read beside the telling. The settle asks the
   coordination store until it answers,
-  however long that takes, and says so at thirty seconds
-  ([`steer_take_unsettled`](#failure-modes)); only the node stopping first ends
+  however long that takes, and says so once an attempt has failed and thirty
+  seconds have passed ([`steer_take_unsettled`](#failure-modes)) — on a member
+  at thirty seconds, and across a link at the slowest pace allowed up to about
+  nine minutes and ten seconds in, since each attempt is given its ten seconds
+  and the record's crossing; only the node stopping first ends
   it, once it has asked every take it holds once more — a take a segment the
   stop ends hands off among them — in a window of five seconds from the start
-  of the stop's teardown, beside the leases the stop gives back and never on
-  their allowance, since a settle that runs out leaves a take unsettled rather
-  than a lease lapsing.
+  of the stop's teardown, the stop's own with no crossing of the record beside
+  it, since the stop's longest case sizes a pod's grace, beside the leases the
+  stop gives back and never on their allowance, since a settle that runs out
+  leaves a take unsettled rather than a lease lapsing.
 - **A review's take is answered.** Its round is still waiting on it, so its
   take is settled on the review's own path, in answer mode, and what its write
   recorded is handed over there and then, never marked. Where the store answers
