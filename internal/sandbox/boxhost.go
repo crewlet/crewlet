@@ -101,10 +101,12 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // coordination store did not answer: the host's read of the run's row, which
 // licenses a read of its box ([Coordinator.ReadHostedBox]); the watch of the
 // run's log a collection waits on its calls in flight by
-// ([Coordinator.awaitCalls]); and the record of the sessions its job ran out of
+// ([Coordinator.awaitCalls]); the record of the sessions its job ran out of
 // context in or whose request its provider refused
-// ([PendingStore.RetireSessions]). Each wraps the store's error in
-// it ([storeSilent]).
+// ([PendingStore.RetireSessions]); and the record of its job lost with the
+// host its box is on, where only that host has kept the box unread for the box
+// timeout ([PendingStore.MarkClaimLost], [Coordinator.loseWithHost]). Each
+// wraps the store's error in it ([storeSilent]).
 //
 // NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
 // is up: a collection handed it gives its claim back UNCOUNTED and has its
