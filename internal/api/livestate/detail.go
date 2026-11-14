@@ -82,7 +82,7 @@ var CallDetail = map[string][]string{
 	"response":    {"response"},
 	"narration":   {"round_narration"},
 	"executions":  {"tool_executions", "calls_elided", "elided_calls"},
-	"rounds":      {"rounds"},
+	"rounds":      {"rounds", "rounds_elided"},
 	"invocations": {"invocations"},
 }
 
@@ -114,7 +114,7 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 		Narration: moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
 		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions) &&
 			prev.CallsElided == next.CallsElided && sameList(prev.ElidedCalls, next.ElidedCalls)),
-		Rounds: moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
+		Rounds: moved(was.Rounds, sameList(prev.Rounds, next.Rounds) && prev.RoundsElided == next.RoundsElided),
 		Invocations: moved(was.Invocations,
 			sameList(prev.Invocations, next.Invocations)),
 	}
@@ -161,7 +161,7 @@ func (c *LiveCall) Without(held CallVersions) any {
 		out.ToolExecutions, out.CallsElided, out.ElidedCalls = &c.ToolExecutions, &c.CallsElided, &c.ElidedCalls
 	}
 	if c.Versions.Rounds != held.Rounds {
-		out.Rounds = &c.Rounds
+		out.Rounds, out.RoundsElided = &c.Rounds, &c.RoundsElided
 	}
 	if c.Versions.Invocations != held.Invocations {
 		out.Invocations = &c.Invocations
@@ -185,5 +185,6 @@ type leanCall struct {
 	ElidedCalls    *[]any  `json:"elided_calls,omitempty"`
 	RoundNarration *[]any  `json:"round_narration,omitempty"`
 	Rounds         *[]any  `json:"rounds,omitempty"`
+	RoundsElided   *int    `json:"rounds_elided,omitempty"`
 	Invocations    *[]any  `json:"invocations,omitempty"`
 }

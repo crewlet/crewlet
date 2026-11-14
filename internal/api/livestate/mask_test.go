@@ -37,7 +37,7 @@ var callFamily = map[string]class{
 	"turn_id": status, "work_key": status, "phase": status, "iteration": status,
 	"model": status, "input_tokens": status, "output_tokens": status,
 	"total_tokens": status, "round_num": status, "rounds_used": status,
-	"rounds": status, "max_rounds": status, "round_ceiling": status,
+	"rounds": status, "rounds_elided": status, "max_rounds": status, "round_ceiling": status,
 	"round_started_at": status, "run_started_at": status, "steers": status, "cache_read_tokens": status,
 	"cache_write_tokens": status, "node": status, "in_progress": status,
 	"failed": status, "error": status, "updated_at": status, "started_at": status,
@@ -48,7 +48,7 @@ var callFamily = map[string]class{
 	// THE RUNNING CALLS ARE STATUS WITHOUT THEIR ARGUMENTS: which tools are
 	// running and since when is what the seat is doing; what each was asked
 	// is the body, and [MaskCall] drops that one key from a fresh map.
-	"running_calls": status,
+	"running_calls": status, "running_calls_elided": status,
 
 	"trigger": body, "prompt": body, "prompt_messages": body, "response": body,
 	"tool_executions": body, "calls_elided": body, "elided_calls": body, "round_narration": body,

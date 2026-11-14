@@ -2388,7 +2388,11 @@ const (
 	// claims, and a failed phase's call frozen with what its record left out)
 	// added 972 bytes, nearly all script, and took it to 5974.6 KiB
 	// (6,118,027 bytes): 5975 KiB.
-	treeBudget = 5<<20 + 855<<10
+	// A running phase's card saying what its frame left out in the live
+	// view's words, and the calls in flight it does not list, added 416
+	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
+	// 5976 KiB.
+	treeBudget = 5<<20 + 856<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

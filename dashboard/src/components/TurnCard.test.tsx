@@ -96,6 +96,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     roundStartedAt: "",
     runStartedAt: "",
     runningCalls: [],
+    runningElided: 0,
     bodyWithheld: false,
     steers: [],
     node: "",

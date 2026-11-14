@@ -101,7 +101,7 @@ export const LIVE_CALL_DETAIL = {
   response: ["response"],
   narration: ["round_narration"],
   executions: ["tool_executions", "calls_elided", "elided_calls"],
-  rounds: ["rounds"],
+  rounds: ["rounds", "rounds_elided"],
   invocations: ["invocations"],
 } as const;
 

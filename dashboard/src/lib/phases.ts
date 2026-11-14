@@ -421,6 +421,9 @@ export interface PhaseRecord {
   /** Every tool call running now, in the order they arrived — a harness may run
    *  a response's calls at once. */
   runningCalls: RunningToolCall[];
+  /** How many more calls were running than `runningCalls` lists — a LIVE
+   *  phase's frame holds its calls in flight to their share. 0 otherwise. */
+  runningElided: number;
   /**
    * The engine withheld this phase's BODY from this reader — the prompts, the
    * response, the tool calls, the narration and the trigger's words — and sent
@@ -836,11 +839,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
-    // WHAT ITS RECORD LEFT OUT, on a failed phase's call, frozen with the
-    // record's list; a running phase's frame lists every call so far.
+    // WHAT ITS FRAME LEFT OUT, or on a failed phase's call what its record
+    // left out, frozen with the record's list.
     callsElided: num(call.calls_elided),
     elidedCalls: droppedCalls(call.elided_calls),
-    roundsElided: 0,
+    roundsElided: num(call.rounds_elided),
     toolsAvailableElided: 0,
     toolCatalogueElided: 0,
     pushedRefs: [],
@@ -860,6 +863,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     roundStartedAt: call.round_started_at ?? "",
     runStartedAt: call.run_started_at ?? "",
     runningCalls: runningCalls(call.running_calls),
+    runningElided: num(call.running_calls_elided),
     bodyWithheld: call.body_withheld === true,
     steers: (call.steers ?? []).map((s) => ({
       round: s.round,
@@ -974,6 +978,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // A finished phase has nothing in flight: a call that never returned is
     // the failure its record carries.
     runningCalls: [],
+    runningElided: 0,
     bodyWithheld: false,
     steers: Array.isArray(p.steers)
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
@@ -1087,6 +1092,7 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     roundStartedAt: "",
     runStartedAt: "",
     runningCalls: [],
+    runningElided: 0,
     bodyWithheld: false,
     steers: [],
     node: "",
