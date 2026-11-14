@@ -1196,6 +1196,28 @@ const (
 	hookCancelled         = "hook_cancelled"
 )
 
+// The other attachments whose payloads Claude Code's resume holds to a shape
+// ([threadLine.AttachmentWellFormed]), beside a hook's success and its
+// additional context.
+const (
+	attachmentInvokedSkills  = "invoked_skills"
+	attachmentSkillListing   = "skill_listing"
+	attachmentTaskReminder   = "task_reminder"
+	attachmentTodoReminder   = "todo_reminder"
+	attachmentFile           = "file"
+	attachmentAlreadyRead    = "already_read_file"
+	attachmentWithheldMemory = "withheld_memory"
+)
+
+// skillListingMaxNames and skillListingMaxNameUnits are the most names a skill
+// listing's resume keeps it with, and the most UTF-16 code units each may
+// take (2.1.322's bCr and TCr, 2.1.310's fJo and pJo): Claude Code's own
+// bounds, which [threadLine.AttachmentWellFormed] reads them by.
+const (
+	skillListingMaxNames     = 4096
+	skillListingMaxNameUnits = 512
+)
+
 // threadHook is what a hook's record says of the firing it records.
 type threadHook struct {
 	// Record is the attachment's type, or [hookStopSummary].
@@ -2453,6 +2475,203 @@ func (l threadLine) Retracted(each func(uuid string) error) error {
 		return refused
 	}
 	return fmt.Errorf("retractedMessageUuids: %w", err)
+}
+
+// AttachmentWellFormed reports whether Claude Code's resume keeps an
+// attachment record past its drop of the attachments whose payload is not of
+// their type's shape (2.1.322's Fce through SCr, 2.1.310's dne through cJo,
+// the same rules and bounds), which both releases apply to a resumed main
+// thread's records right after their retraction filter. True on every record
+// that is no attachment, as the drop passes it.
+//
+// THE RULES, the payload being the record's `attachment`, and an object
+// meaning a JSON object, never null or a list (2.1.322's D, 2.1.310's H):
+// the payload an object whose `type` is a string, or the drop takes it; then
+// by that type:
+//
+//   - invoked_skills: `skills` a list whose every element is an object or a
+//     list;
+//   - hook_success: `content` a string;
+//   - skill_listing: `names` absent, or a list of at most 4,096 strings, each
+//     at most 512 UTF-16 code units long, as JavaScript counts a string;
+//   - hook_additional_context: `content` a list of strings;
+//   - task_reminder and todo_reminder: `content` a list of objects;
+//   - file and already_read_file: `content` an object;
+//   - withheld_memory: `by` a string that is not empty, and `entries` a list
+//     of objects, each with a string `path`, a string `displayPath` and a
+//     `why` that is one of denied, outside, unjudged and unsettled, the own
+//     keys of the reasons the harness names (2.1.322's vY, 2.1.310's kq);
+//   - every other type: kept.
+//
+// Every one of the 7,519 attachments of the 521 thread files the probes kept
+// is kept by them.
+//
+// ITS READER is the model of which records Claude Code's resume hands its
+// model, which hands no attachment the drop takes; through it, the one that
+// confirms a hook's note reached the model reads a hook's success or
+// additional context the drop took as handed to no model, by no rule of its
+// own.
+//
+// AN ERROR WHERE THE LAYER CANNOT COUNT AS THE HARNESS DOES: a skill's name
+// past 512 units as the layer's decode reads it, holding a byte that is no
+// UTF-8. The decode reads each such byte as one U+FFFD, where the harness's
+// read of its file can read several as one, so the name may be under the
+// bound to the harness, and no reader can say whether the record is kept.
+// Read the same way, a name the layer counts at or under the bound is under
+// it to the harness too.
+//
+// Decoded from the line's raw `attachment` on each call, each list walked an
+// element at a time ([eachElement]): nothing keeps it.
+func (l threadLine) AttachmentWellFormed() (bool, error) {
+	if l.Head.Type != recordAttachment {
+		return true, nil
+	}
+	if !wireObject(l.attachment) {
+		return false, nil
+	}
+	var a struct {
+		Type    json.RawMessage `json:"type"`
+		Skills  json.RawMessage `json:"skills"`
+		Content json.RawMessage `json:"content"`
+		Names   json.RawMessage `json:"names"`
+		By      json.RawMessage `json:"by"`
+		Entries json.RawMessage `json:"entries"`
+	}
+	if err := wireDecode(l.attachment, &a); err != nil {
+		return false, fmt.Errorf("an attachment: %w", err)
+	}
+	kind, err := wireRequiredString("type", a.Type)
+	if err != nil {
+		return false, nil
+	}
+	switch kind {
+	case attachmentInvokedSkills:
+		return everyElement(a.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' }), nil
+	case hookSuccess:
+		return len(a.Content) > 0 && a.Content[0] == '"', nil
+	case attachmentSkillListing:
+		return skillNamesKept(a.Names)
+	case hookAdditionalContext:
+		return everyElement(a.Content, func(raw json.RawMessage) bool { return raw[0] == '"' }), nil
+	case attachmentTaskReminder, attachmentTodoReminder:
+		return everyElement(a.Content, wireObject), nil
+	case attachmentFile, attachmentAlreadyRead:
+		return wireObject(a.Content), nil
+	case attachmentWithheldMemory:
+		by, byErr := wireRequiredString("by", a.By)
+		return byErr == nil && by != "" && everyElement(a.Entries, withheldEntryKept), nil
+	}
+	return true, nil
+}
+
+// errNotEvery stops a walk of a list at its first element a test refuses
+// ([everyElement]).
+var errNotEvery = errors.New("an element fails its test")
+
+// everyElement reports whether raw is a list, and every element of it passes
+// keep, as JavaScript's Array.isArray and every() read one: a list of none
+// passes. Walked an element at a time ([eachElement]), stopping at the
+// first that fails, so a long list costs its reader one element at a time.
+func everyElement(raw json.RawMessage, keep func(element json.RawMessage) bool) bool {
+	if len(raw) == 0 || raw[0] != '[' {
+		return false
+	}
+	return eachElement(raw, func(element json.RawMessage, _ int) error {
+		if !keep(element) {
+			return errNotEvery
+		}
+		return nil
+	}) == nil
+}
+
+// withheldEntryKept reports whether entry, one of a withheld_memory
+// attachment's entries, is of the shape Claude Code's resume keeps the
+// attachment with ([threadLine.AttachmentWellFormed]).
+func withheldEntryKept(entry json.RawMessage) bool {
+	if !wireObject(entry) {
+		return false
+	}
+	var e struct {
+		Path        json.RawMessage `json:"path"`
+		Why         json.RawMessage `json:"why"`
+		DisplayPath json.RawMessage `json:"displayPath"`
+	}
+	if wireDecode(entry, &e) != nil {
+		return false
+	}
+	why, err := wireRequiredString("why", e.Why)
+	if err != nil {
+		return false
+	}
+	switch why {
+	case "denied", "outside", "unjudged", "unsettled":
+	default:
+		return false
+	}
+	return len(e.Path) > 0 && e.Path[0] == '"' && len(e.DisplayPath) > 0 && e.DisplayPath[0] == '"'
+}
+
+// skillNamesKept reports whether names, a skill_listing attachment's raw
+// `names`, is of the shape Claude Code's resume keeps the attachment with:
+// absent, or a list of at most [skillListingMaxNames] strings, each at most
+// [skillListingMaxNameUnits] UTF-16 code units long, its length checked
+// before its names, as the harness checks them. An error where the answer
+// turns on a name the layer cannot count as the harness does
+// ([threadLine.AttachmentWellFormed]).
+func skillNamesKept(names json.RawMessage) (bool, error) {
+	if names == nil {
+		return true, nil
+	}
+	if names[0] != '[' {
+		return false, nil
+	}
+	var (
+		count      int
+		unreadable bool
+		unquoted   []byte
+	)
+	kept := eachElement(names, func(name json.RawMessage, _ int) error {
+		count++
+		if count > skillListingMaxNames || name[0] != '"' {
+			return errNotEvery
+		}
+		// Read whole with its line, the name unquotes with no error but a lone
+		// surrogate's or invalid UTF-8's, each written as U+FFFD, as the
+		// layer's decode reads it.
+		unquoted, _ = jsontext.AppendUnquote(unquoted[:0], name)
+		if utf16Units(unquoted) <= skillListingMaxNameUnits {
+			return nil
+		}
+		if !utf8.Valid(name) {
+			unreadable = true
+			return nil
+		}
+		return errNotEvery
+	}) == nil
+	if !kept {
+		return false, nil
+	}
+	if unreadable {
+		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
+			"is not one the layer can count as Claude Code does")
+	}
+	return true, nil
+}
+
+// utf16Units is how many UTF-16 code units JavaScript counts the string text,
+// UTF-8 as the layer's decode leaves it, as long: two for a rune past the
+// basic plane, one for every other.
+func utf16Units(text []byte) int {
+	units := 0
+	for len(text) > 0 {
+		r, size := utf8.DecodeRune(text)
+		units++
+		if r > 0xffff {
+			units++
+		}
+		text = text[size:]
+	}
+	return units
 }
 
 // threadPreserved is what a compaction's boundary says it kept of the thread

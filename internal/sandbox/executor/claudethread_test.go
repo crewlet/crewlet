@@ -1362,8 +1362,9 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // interrupted by a shutdown, a compaction's summary, a task's delivery or a
 // batch's reply, the calls that batch was split into among it, when it was
 // written, whether it is meta, the reply it names as its results' source, the
-// key of the call its attachment followed, and whether its message says
-// anything, each beside the error it answered. A
+// key of the call its attachment followed, whether its message says
+// anything, and whether a resume keeps it as an attachment of its shape, each
+// beside the error it answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1452,6 +1453,8 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "followed %t: %x\n", isCall, call)
 	saysText, saysAny := m.Says()
 	fmt.Fprintf(&b, "says text %t, anything %t\n", saysText, saysAny)
+	formed, err := l.AttachmentWellFormed()
+	fmt.Fprintf(&b, "kept as well formed: %t; %v\n", formed, err)
 	return b.String()
 }
 
@@ -1631,6 +1634,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to:   `"sourceToolAssistantUUID":"` + ctUUID(4) + `","SourceToolAssistantUuid":"` + ctUUID(9) + `"`},
 		"a text block's text, then Text": {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":" "}]`),
 			from: `"text":" "`, to: `"text":" ","Text":"batch 1."`},
+		"a skill listing's names, then Names": {record: ctAttachment(ctUUID(1), ctUUID(2),
+			`{"type":"skill_listing","names":["a"]}`, ""), from: `"names":["a"]`, to: `"names":["a"],"Names":7`},
+		"a withheld memory's why, then Why": {record: ctAttachment(ctUUID(1), ctUUID(2), ctWithheld(
+			`{"path":"a","why":"denied","displayPath":"a"}`), ""), from: `"why":"denied"`,
+			to: `"why":"denied","Why":"no reason"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -3363,6 +3371,122 @@ func TestAMessageSaysWhetherItSaidAnything(t *testing.T) {
 		if saysText, saysAny := m.Says(); saysText != tc.text || saysAny != tc.any {
 			t.Errorf("%s says text %t and anything %t; want %t and %t", name, saysText, saysAny, tc.text, tc.any)
 		}
+	}
+}
+
+// ctWithheld is a withheld_memory attachment of entries, each a JSON value, as
+// 2.1.322 writes one, abridged to the keys its resume reads.
+func ctWithheld(entries ...string) string {
+	return `{"type":"withheld_memory","by":"a Read deny rule","entries":[` + strings.Join(entries, ",") + `]}`
+}
+
+// AN ATTACHMENT SAYS WHETHER THE RESUME KEEPS IT: AttachmentWellFormed reads an
+// attachment's payload by Claude Code's own rules for the types it holds to a
+// shape, each at its edge: invoked_skills' every skill an object or a list;
+// hook_success's content a string; skill_listing's names absent or a list of
+// at most 4,096 strings of at most 512 UTF-16 code units each, a name of 256
+// runes past the basic plane at the bound and one of 300 runes of two bytes
+// under it; hook_additional_context's content a list of strings;
+// task_reminder's and todo_reminder's content a list of objects, never of
+// lists; file's and already_read_file's content an object, never a list;
+// withheld_memory's by a string that is not empty and every entry an
+// object of a string path and displayPath and a why among the harness's four
+// own reasons, never a name every object inherits; any other type kept, and
+// no payload, a payload that is no object or of no string type dropped. A
+// record that is no attachment is kept. A name past the bound that holds a
+// byte that is no UTF-8 is an error, since its length is not one the layer
+// counts as the harness does; under the bound, it is kept.
+//
+// Mutation: drop no attachment, and every malformed one is kept; read an
+// object as anything JavaScript's typeof calls one, and a reminder of lists,
+// or a file whose content is a list, is kept; count a name's bytes or its
+// runes, not its UTF-16 code units, and a name at the bound of two-byte runes
+// is dropped, or one past it of runes past the basic plane kept; check its
+// names before the list's length, and a list one past 4,096 of names past
+// the bound reads otherwise; take any key for a reason, and a why of
+// "constructor" is kept; or read a name the layer cannot count as kept, and
+// it is no error.
+func TestAnAttachmentSaysWhetherTheResumeKeepsIt(t *testing.T) {
+	t.Parallel()
+	attached := func(payload string) string { return ctAttachment(ctUUID(1), ctUUID(2), payload, "") }
+	listing := func(names ...string) string {
+		quoted := make([]string, len(names))
+		for i, name := range names {
+			quoted[i] = strconv.Quote(name)
+		}
+		return attached(`{"type":"skill_listing","names":[` + strings.Join(quoted, ",") + `]}`)
+	}
+	many := func(n int) []string { return slices.Repeat([]string{"a"}, n) }
+	entry := func(why string) string { return `{"path":"a","why":` + why + `,"displayPath":"a"}` }
+	for name, tc := range map[string]struct {
+		record string
+		kept   bool
+	}{
+		"invoked skills of objects and lists":        {attached(`{"type":"invoked_skills","skills":[{},[]]}`), true},
+		"invoked skills of none":                     {attached(`{"type":"invoked_skills","skills":[]}`), true},
+		"invoked skills holding null":                {attached(`{"type":"invoked_skills","skills":[{},null]}`), false},
+		"invoked skills holding a number":            {attached(`{"type":"invoked_skills","skills":[1]}`), false},
+		"invoked skills that are an object":          {attached(`{"type":"invoked_skills","skills":{}}`), false},
+		"invoked skills absent":                      {attached(`{"type":"invoked_skills"}`), false},
+		"a hook's success, as measured":              {attached(ctBatchSuccess), true},
+		"a hook's success of numeric content":        {attached(`{"type":"hook_success","content":7}`), false},
+		"a hook's success of null content":           {attached(`{"type":"hook_success","content":null}`), false},
+		"a hook's success of no content":             {attached(`{"type":"hook_success","stdout":""}`), false},
+		"a skill listing of no names":                {attached(`{"type":"skill_listing"}`), true},
+		"a skill listing of null names":              {attached(`{"type":"skill_listing","names":null}`), false},
+		"a skill listing of names that are a string": {attached(`{"type":"skill_listing","names":"a"}`), false},
+		"a skill listing of none":                    {listing(), true},
+		"a skill listing of 4,096 names":             {listing(many(4096)...), true},
+		"a skill listing of 4,097 names":             {listing(many(4097)...), false},
+		"a name of 512 units":                        {listing(strings.Repeat("a", 512)), true},
+		"a name of 513 units":                        {listing(strings.Repeat("a", 513)), false},
+		"a name of 256 runes past the basic plane":   {listing(strings.Repeat("\U0001F600", 256)), true},
+		"a name of 257 runes past the basic plane":   {listing(strings.Repeat("\U0001F600", 257)), false},
+		"a name of 300 runes of two bytes":           {listing(strings.Repeat("\u00e9", 300)), true},
+		"a name that is a number":                    {attached(`{"type":"skill_listing","names":["a",7]}`), false},
+		"4,097 names, one past the bound and no UTF-8": {attached(`{"type":"skill_listing","names":["` +
+			strings.Repeat("\xff", 600) + `"` + strings.Repeat(`,"a"`, 4096) + `]}`), false},
+		"a short name holding a byte that is no UTF-8": {attached(`{"type":"skill_listing","names":["a` + "\xff" +
+			`b"]}`), true},
+		"an additional context, as measured":           {attached(ctBatchContext), true},
+		"an additional context of none":                {attached(`{"type":"hook_additional_context","content":[]}`), true},
+		"an additional context of a number":            {attached(`{"type":"hook_additional_context","content":["a",7]}`), false},
+		"an additional context that is a string":       {attached(`{"type":"hook_additional_context","content":"a"}`), false},
+		"an additional context of no content":          {attached(`{"type":"hook_additional_context"}`), false},
+		"a task reminder of objects":                   {attached(`{"type":"task_reminder","content":[{}]}`), true},
+		"a task reminder of a list":                    {attached(`{"type":"task_reminder","content":[[]]}`), false},
+		"a task reminder of null":                      {attached(`{"type":"task_reminder","content":[null]}`), false},
+		"a todo reminder of a string":                  {attached(`{"type":"todo_reminder","content":["a"]}`), false},
+		"a todo reminder of no content":                {attached(`{"type":"todo_reminder"}`), false},
+		"a file of an object":                          {attached(`{"type":"file","content":{}}`), true},
+		"a file of a list":                             {attached(`{"type":"file","content":[]}`), false},
+		"a file read already, of a string":             {attached(`{"type":"already_read_file","content":"a"}`), false},
+		"a file of no content":                         {attached(`{"type":"file"}`), false},
+		"a withheld memory":                            {attached(ctWithheld(entry(`"denied"`), entry(`"unsettled"`))), true},
+		"a withheld memory of none":                    {attached(ctWithheld()), true},
+		"a withheld memory of an empty by":             {attached(`{"type":"withheld_memory","by":"","entries":[]}`), false},
+		"a withheld memory of no by":                   {attached(`{"type":"withheld_memory","entries":[]}`), false},
+		"a withheld memory whose why is constructor":   {attached(ctWithheld(entry(`"constructor"`))), false},
+		"a withheld memory whose why is a number":      {attached(ctWithheld(entry(`7`))), false},
+		"a withheld memory of an entry that is a list": {attached(ctWithheld(`[]`)), false},
+		"a withheld memory of no displayPath":          {attached(ctWithheld(`{"path":"a","why":"denied"}`)), false},
+		"a withheld memory of entries that are none":   {attached(`{"type":"withheld_memory","by":"x"}`), false},
+		"a reminder of tokens, a type of no rule":      {attached(ctTokens), true},
+		"a payload of no type":                         {attached(`{"content":"a"}`), false},
+		"a payload whose type is a number":             {attached(`{"type":7}`), false},
+		"a payload that is a list":                     {attached(`[{"type":"file"}]`), false},
+		"a payload that is a string":                   {attached(`"file"`), false},
+		"a payload that is null":                       {attached(`null`), false},
+		"an attachment record of none":                 {ctReplace(t, attached(ctTokens), `"attachment":`+ctTokens+`,`, ""), false},
+		"a reply, which is no attachment":              {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), true},
+	} {
+		if kept, err := ctLine(t, tc.record).AttachmentWellFormed(); kept != tc.kept || err != nil {
+			t.Errorf("%s is kept %t, %v; want %t", name, kept, err, tc.kept)
+		}
+	}
+	unreadable := attached(`{"type":"skill_listing","names":["` + strings.Repeat("\xff", 600) + `"]}`)
+	if kept, err := ctLine(t, unreadable).AttachmentWellFormed(); err == nil {
+		t.Errorf("a name past the bound holding bytes that are no UTF-8 is kept %t, want an error", kept)
 	}
 }
 
