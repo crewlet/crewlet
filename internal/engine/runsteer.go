@@ -1519,7 +1519,9 @@ func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
 // Bind starts serving the inbox for the job launch: its view of the run's
 // record follows the record from here, under ctx stripped of its cancellation —
 // the inbox lives as long as the job's session, which outlives the turn that
-// launched it, and the view is stopped by [runInbox.Close] alone.
+// launched it, and the view is stopped by [runInbox.Close] alone. Bound before
+// the bridge files the session's opening ([Engine.openBridge]), so no opening
+// serves an inbox that serves no job yet.
 func (i *runInbox) Bind(ctx context.Context, launch string) {
 	if i == nil {
 		return
@@ -1787,8 +1789,9 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 //
 // AN INBOX THAT SERVES NO JOB TAKES NO READ, AND SAYS SO
 // ([mcpbridge.ErrInboxNotServing]): one closed, its opening's end having taken
-// it after the notes route found it serving, or one not yet bound, which a
-// recovery's opening serves a moment before it is. Answered done, the plugin
+// it after the notes route found it serving, or one not yet bound, which no
+// opening serves, its bind coming before the bridge files the opening
+// ([Engine.openBridge]), and which says so too. Answered done, the plugin
 // never confirmed the note again, and the record kept it served and unread, for
 // the run's ending to report unconfirmed and a later launch to tell again as
 // one the session may already show. Turned away, the confirmation made again

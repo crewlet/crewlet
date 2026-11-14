@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -32,10 +34,12 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A person's note to a turn whose executor is out, through the real turn: the
@@ -1578,14 +1582,15 @@ func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 // NOTHING. The run's opening on the bridge can end as its notes route records a
 // confirmation (the run ended, the seat left the node, or a recovery opened the
 // job again with an inbox of its own), and its end closes the inbox the route
-// found serving; and a recovery's opening serves the box a moment before its
-// inbox is bound to the job. Either inbox serves no job, and a read of it took
-// nothing and answered done: the bridge said 204, the plugin never confirmed the
-// note again, and the record kept it served and unread, so the run's ending
-// reported unconfirmed a note OpenCode had delivered, and a later launch told it
-// again as one the session may already show. So such an inbox answers
+// found serving. That inbox serves no job, and a read of it took nothing and
+// answered done: the bridge said 204, the plugin never confirmed the note
+// again, and the record kept it served and unread, so the run's ending reported
+// unconfirmed a note OpenCode had delivered, and a later launch told it again
+// as one the session may already show. So such an inbox answers
 // mcpbridge.ErrInboxNotServing, which the bridge turns away to ask again, and
-// the confirmation made again is recorded by the inbox that serves the job.
+// the confirmation made again is recorded by the inbox that serves the job. An
+// inbox not yet bound serves no job either, and says so too, though no opening
+// serves one (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound).
 //
 // Mutation: answer a read of an inbox that serves no job done (nil), and both
 // of its reads go red.
@@ -1607,7 +1612,7 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 	if err := served.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
 		t.Errorf("a confirmation reaching a closed inbox answered %v, want ErrInboxNotServing", err)
 	}
-	// A RECOVERY'S OPENING SERVES THE BOX before its inbox is bound.
+	// AN INBOX NOT YET BOUND takes no read either.
 	unbound := runs.inbox(identityOfRun(mustRow(t, store, "run-1")), 1)
 	t.Cleanup(unbound.Close)
 	if err := unbound.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
@@ -1631,6 +1636,151 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 		read.Boundary != string(types.SteerBoundaryStep) {
 		t.Errorf("the confirmation made again left n-1 read %+v, want it read at job %s's step", read, launch)
 	}
+}
+
+// AN OPENING IS FILED ONLY ONCE ITS INBOX IS BOUND. A box reaches its job's
+// opening the moment the bridge files it: a recovery's at once, with the token
+// it already holds. And the bridge files the opening before it ends the job's
+// opening this node held until then, an end that waits for that opening's
+// answers still on their way, for up to five seconds. The inbox was bound only
+// once the bridge's Open had returned, so all that while the opening served an
+// inbox that served no job: a poll of it spun, its wait handing back a channel
+// that is always closed, and a confirmation was turned away as one no inbox
+// took. So the launch and the recovery bind the inbox before the bridge files
+// the opening (Engine.openBridge), and a confirmation reaching the opening as
+// the job's earlier one ends is recorded.
+//
+// Mutation: bind the inbox once the bridge's Open has returned, and the
+// confirmation is turned away.
+func TestAnOpeningIsFiledOnlyOnceItsInboxIsBound(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	// SERVED TO THE JOB by the plugin's poll, before the recovery.
+	served := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, served, 1)
+	if notes, _ := served.Wait(ctx, 0); len(notes) != 1 {
+		t.Fatalf("the poll was answered %+v, want n-1", notes)
+	}
+	served.Close()
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	bridge := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL})
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
+	server.Config.Handler = mux
+	e := &Engine{bridge: bridge, runSteers: runs}
+	company := specCompany(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+roles:
+  - {name: SWE, handle: swe, llm: zulu}
+`)
+	swe := company.Org.AgentSeatByHandle("swe")
+	if swe == nil {
+		t.Fatal("the company has no swe seat")
+	}
+	surface := tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+		ForTurn(&turnctx.Turn{RunID: "run-1", Seat: swe, Org: company.Org})
+
+	// THE JOB'S OPENING THIS NODE HELD UNTIL THE RECOVERY, whose end is caught
+	// as it closes that opening's inbox: by then the bridge has filed the
+	// recovery's opening, and serves it.
+	before := &heldInbox{closing: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(before.letGo)
+	endpoint := bridge.Open(ctx, &mcpbridge.Session{RunID: "run-1", Launch: launch, Handle: "swe",
+		Role: swe.Name, Surface: surface, Steer: before})
+	if endpoint == "" {
+		t.Fatal("the bridge opened no session for the job")
+	}
+
+	// THE RECOVERY'S SESSION, with an inbox of its own, as reopenAgentRun
+	// builds it.
+	row := mustRow(t, store, "run-1")
+	inbox := runs.inbox(identityOfRun(row), 1)
+	t.Cleanup(inbox.Close)
+	ledger := newBridgeLedger(store, nil)
+	session := &mcpbridge.Session{RunID: "run-1", Handle: "swe", Role: swe.Name, Surface: surface,
+		Ledger: ledger, Steer: inbox}
+	opened := make(chan error, 1)
+	go func() {
+		_, err := e.openBridge(ctx, session, ledger, inbox, row.NamedJob(0, ""))
+		opened <- err
+	}()
+	select {
+	case <-before.closing:
+	case err := <-opened:
+		t.Fatalf("the recovery's opening returned (%v) without ending the job's opening before it", err)
+	}
+
+	// THE BOX'S CONFIRMATION, as the job's earlier opening ends.
+	status := confirmOn(t, server.Client(), mcpbridge.SteerURL(endpoint), "n-1")
+	before.letGo()
+	if err := <-opened; err != nil {
+		t.Fatalf("openBridge: %v", err)
+	}
+	if status != http.StatusNoContent {
+		t.Fatalf("a confirmation reaching the recovery's opening as the job's earlier one ended was "+
+			"answered %d, want it recorded: 204", status)
+	}
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Errorf("the confirmation left n-1 read %+v, want it read at job %s's step", read, launch)
+	}
+}
+
+// heldInbox is a run's note inbox whose close holds until it is let go: the
+// inbox of an opening whose end a case catches midway.
+type heldInbox struct {
+	closing chan struct{}
+	release chan struct{}
+	enter   sync.Once
+	free    sync.Once
+}
+
+func (h *heldInbox) Take(context.Context, string) string { return "" }
+
+func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
+	return nil, h.release
+}
+
+func (h *heldInbox) Read(context.Context, []string) error { return mcpbridge.ErrInboxNotServing }
+
+func (h *heldInbox) Close() {
+	h.enter.Do(func() { close(h.closing) })
+	<-h.release
+}
+
+func (h *heldInbox) letGo() { h.free.Do(func() { close(h.release) }) }
+
+// confirmOn posts a run's confirmation that its harness read the notes ids to
+// the run's notes route, and answers its status.
+func confirmOn(t *testing.T, client *http.Client, route string, ids ...string) int {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"ids": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, route+"/read", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("the confirmation failed on the wire: %v", err)
+	}
+	_ = res.Body.Close()
+	return res.StatusCode
 }
 
 // THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last

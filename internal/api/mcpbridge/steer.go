@@ -95,8 +95,10 @@ type SteerInbox interface {
 
 // ErrInboxNotServing is what a [SteerInbox] answers a [SteerInbox.Read] with
 // where it serves no job: closed, the opening that served it having ended, or
-// not yet bound to its job, which a recovery's opening serves a moment before
-// it is. It recorded nothing. Declared here, by the consumer, which tells it
+// not yet bound to its job, which no opening serves (the engine binds a run's
+// inbox before the bridge files the opening that serves it, so a box that
+// reaches the opening the moment it is filed finds the inbox serving). It
+// recorded nothing. Declared here, by the consumer, which tells it
 // from a write that could not be confirmed: the read is turned away to ask
 // again, as one reaching its opening as it ends is ([Bridge.serveSteer]), and
 // its next try reaches the inbox that serves the job now.
@@ -384,11 +386,10 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 //     was recorded nowhere, and the seat's next holder was never asked.
 //   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
 //     ([ErrInboxNotServing]): the end closed it after the route found it
-//     serving, or a recovery's opening serves the box before its inbox is
-//     bound. The inbox decides that under its own lock, which its close takes,
-//     so a read either found it serving and is recorded through the store,
-//     which a later close does not touch, or did not and is not recorded at
-//     all.
+//     serving. The inbox decides that under its own lock, which its close
+//     takes, so a read either found it serving and is recorded through the
+//     store, which a later close does not touch, or did not and is not
+//     recorded at all.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
