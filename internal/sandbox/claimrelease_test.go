@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -661,11 +662,16 @@ func TestAReleaseAClaimTookOverBeforeItWasOwedIsNotOwed(t *testing.T) {
 // ([Coordinator.oweRelease]): one a claim of its job took over, or the seat's
 // release dropped, after the step that found it out with its answer lost has
 // landed or goes with the seat, and kept all the same it held the seat's mail
-// behind it until a retry found it gone.
+// behind it until a retry found it gone. AND ONLY ONE IT KEEPS IS SAID TO BE
+// KEPT: the node writes sandbox_claim_revert_owed after that step, for a
+// release it kept; written before it, the line said the node kept a claim that
+// had been given back.
 //
-// Mutation: keep the release without asking whether it is still out.
+// Mutation: keep the release without asking whether it is still out, or write
+// the line before the step that asks.
+//
+// Not parallel: it reads the process's logger ([captureLogs]).
 func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
-	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// gone takes the recorded release out of the releases out, as the
@@ -685,7 +691,7 @@ func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
 			gone: func(rig *coordRig, _ *claimRelease) { rig.coordinator.releaseOwed("swe") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			logs := captureLogs(t)
 			rig := newCoordRig(t)
 			holds := rig.withHold()
 			run := rig.launch("t1")
@@ -705,6 +711,19 @@ func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
 			if kept != tc.out || owed != tc.out || waiting != tc.out || holds.holding("swe") != tc.out {
 				t.Fatalf("kept %v, owed %v, a retry waiting %v, the seat's mail held %v; want each %v",
 					kept, owed, waiting, holds.holding("swe"), tc.out)
+			}
+			said, want := 0, 0
+			if tc.out {
+				want = 1
+			}
+			for line := range strings.SplitSeq(logs.String(), "\n") {
+				if strings.Contains(line, " msg=sandbox_claim_revert_owed ") &&
+					strings.Contains(line, " launch_id="+run.LaunchID+" ") {
+					said++
+				}
+			}
+			if said != want {
+				t.Fatalf("the node said %d times that it keeps the claim's release; want %d", said, want)
 			}
 		})
 	}
