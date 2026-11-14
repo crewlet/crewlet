@@ -138,9 +138,12 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Eight more are a
+itself is recorded beside either as the write's `operator_id`. Nine more are a
 person's decisions about the company rather than its work, and are served only
-there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
+there too: `pause_seat` and `resume_seat`; `run_schedule`, which runs one
+schedule now, off its cron, decided on every seat it wakes
+([Running a schedule now](../concepts/scheduling.md#running-a-schedule-now));
+and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
 is out in its box, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead

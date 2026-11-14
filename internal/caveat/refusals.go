@@ -361,3 +361,66 @@ func AtlasChangedMeanwhile() Refusal {
 	return Refusal{person: "Somebody changed this entry while you were deciding, so nothing was " +
 		"recorded. Look at it again, then decide."}
 }
+
+// ScheduleSwitchedOff is a run asked for now of a schedule somebody switched
+// off: switching it off is the decision that it does not run, which a run by
+// hand would overrule without changing.
+func ScheduleSwitchedOff() Refusal {
+	return Refusal{person: "This schedule is switched off, so it does not run, on its own " +
+		"times or by hand, and nothing was run. Switch it on, then run it."}
+}
+
+// SchedulingSwitchedOff is a run asked for now on a company that switched its
+// schedules off altogether.
+func SchedulingSwitchedOff() Refusal {
+	return Refusal{person: "Schedules are switched off for this company, so none runs, on " +
+		"its own times or by hand, and nothing was run."}
+}
+
+// SchedulesWaitForAModel is a run asked for now on a company with no model,
+// whose agents hold every piece of work until one is set up: a run sent now
+// would start whenever that happened.
+func SchedulesWaitForAModel() Refusal {
+	return Refusal{person: "The company has no model set up yet, so no agent can do the " +
+		"work and nothing was run. Add a model in Settings, then run it again."}
+}
+
+// ScheduleHasNobodyToRun is a run asked for now of a team's schedule no agent
+// runs: one for its lead where no agent leads the team (toLead), or one for
+// each member where no agent is a member.
+func ScheduleHasNobodyToRun(toLead bool) Refusal {
+	if toLead {
+		return Refusal{person: "This schedule runs as its team's lead, and no agent leads " +
+			"the team, so nothing was run."}
+	}
+	return Refusal{person: "This schedule runs for each agent in its team, and the team " +
+		"has none, so nothing was run."}
+}
+
+// ScheduleSeatsPaused is a run asked for now every seat of which a person
+// paused, by their handles. A paused seat starts no work, so nothing was sent.
+func ScheduleSeatsPaused(handles []string) Refusal {
+	if len(handles) == 1 {
+		return Refusal{person: fmt.Sprintf("@%s is paused, so nothing was run. Resume it, "+
+			"then run the schedule again.", handles[0])}
+	}
+	return Refusal{person: fmt.Sprintf("%s are paused, so nothing was run. Resume them, "+
+		"then run the schedule again.", words.And(atHandles(handles)))}
+}
+
+// ScheduleSeatsNotReady is a run asked for now whose seats could not be
+// readied to take it, by their handles. Nothing was claimed or sent, so the
+// same run asked for again a moment later is the remedy.
+func ScheduleSeatsNotReady(handles []string) Refusal {
+	return Refusal{person: fmt.Sprintf("%s could not take the run just now, so nothing was "+
+		"sent. Run the schedule again in a moment.", words.And(atHandles(handles)))}
+}
+
+// atHandles is each handle as a person reads it, `@handle`.
+func atHandles(handles []string) []string {
+	out := make([]string, len(handles))
+	for i, h := range handles {
+		out[i] = "@" + h
+	}
+	return out
+}
