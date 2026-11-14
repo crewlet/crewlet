@@ -2169,7 +2169,10 @@ func handBackOf(answer RecordedAnswer) []HandedBack {
 func (c *Coordinator) deliverHandBack(ctx context.Context, run PendingRun) error {
 	published, err := c.publishCopies(ctx, run, run.HandBack)
 	if len(published) > 0 {
-		if _, clearErr := c.pending.ClearHandBack(ctx, run.TurnID, published); clearErr != nil {
+		clearCtx, clearDone := c.endingCall(ctx)
+		_, clearErr := c.pending.ClearHandBack(clearCtx, run.TurnID, published)
+		clearDone()
+		if clearErr != nil {
 			log.WarnContext(ctx, "sandbox_answer_handback_uncleared",
 				"turn_id", run.TurnID, "agent", run.AgentHandle, "error", clearErr.Error(),
 				"detail", "the copies are published; whoever reads the run next publishes "+

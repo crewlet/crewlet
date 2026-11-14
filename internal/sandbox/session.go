@@ -2476,15 +2476,8 @@ func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 // pause, as [stampContext] bounds a take's single record. by zero, a stamp made
 // off the read, is bounded by the record's budget and the crossing alone.
 func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
-	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), RowBudget(c.pending, c.recordBudget))
-	if by.IsZero() {
-		return settle, cancel
-	}
-	bounded, cancelBounded := context.WithDeadline(settle, by)
-	return bounded, func() {
-		cancelBounded()
-		cancel()
-	}
+	settle, cancel := c.rowContext(context.WithoutCancel(ctx), c.recordBudget)
+	return before(settle, cancel, by)
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its
@@ -3158,7 +3151,9 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	if err != nil {
 		return PendingRun{}, err
 	}
-	owing, _, err := c.pending.OweEnd(ctx, run.TurnID, raw)
+	writeCtx, writeDone := c.endingCall(ctx)
+	owing, _, err := c.pending.OweEnd(writeCtx, run.TurnID, raw)
+	writeDone()
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: recording the end turn %s owes: %w", run.TurnID, err)
 	}
@@ -3229,7 +3224,10 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 			return run, recordErr
 		}
 	}
-	if _, clearErr := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); clearErr != nil {
+	clearCtx, clearDone := c.endingCall(ctx)
+	_, clearErr := c.pending.ClearEnd(clearCtx, run.TurnID, run.OwedEnd)
+	clearDone()
+	if clearErr != nil {
 		return run, fmt.Errorf("sandbox: clearing the end turn %s owed, which the executor log has: %w",
 			run.TurnID, clearErr)
 	}

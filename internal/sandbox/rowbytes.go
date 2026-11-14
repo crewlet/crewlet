@@ -451,9 +451,11 @@ const rowRecord kept.Record = "the run's record"
 //
 // So a store that does not answer is waited on for the reason's length beyond
 // the crossing, and a healthy one answers as soon as the row is in. A budget
-// whose reader is ANOTHER node — how long a read stands by for a capture a node
-// elsewhere keeps — counts the slowest node's crossing instead,
-// coord.MaxValueCrossing, since it cannot know which node's it is.
+// whose reader is ANOTHER node — how long a capture a node elsewhere keeps is
+// in flight, and a read stands by for it ([SessionCaptureBudget],
+// [standbyBudget]) — counts the slowest node's crossing instead,
+// coord.MaxValueCrossing, since it cannot know which node's it is. And a
+// stopping node gives no write its crossing ([Coordinator.rowContext]).
 func RowBudget(store PendingStore, reason time.Duration) time.Duration {
 	return reason + store.RowCrossing()
 }

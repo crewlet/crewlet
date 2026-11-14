@@ -130,15 +130,15 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 // stopRun stops one of the seat's runs [Coordinator.StopSeat] listed, as a
 // person's stop by asks.
 //
-// UNDER A CONTEXT OF ITS OWN, as every teardown's writes of a row take
-// ([Coordinator.detachedRecord]): the caller is a watch whose context ends with
-// the node, and a stop it started must still reach the box it is reclaiming.
-// ONE FOR EACH RUN, since each run's row is a write of its own: one grace
-// shared by every run of the seat gave whichever row crossed first the time
-// every other's needed.
+// UNDER A CONTEXT OF ITS OWN, as every ending a teardown makes runs
+// ([detachedEnding]): the caller is a watch whose context ends with the node,
+// and a stop it started must still reach the box it is reclaiming. EACH WRITE
+// OF EACH RUN'S ROW IS BOUNDED ON ITS OWN, the teardown's grace and the row's
+// crossing ([Coordinator.endingCall]): one grace shared by every run of the
+// seat gave whichever row crossed first the time every other's needed, and
+// one shared by an ending's writes gave its first the time its next needed.
 func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, by RunStop, run PendingRun) {
-	endCtx, cancel := c.detachedRecord(ctx)
-	defer cancel()
+	endCtx := detachedEnding(ctx)
 	if run.Launch.Collected {
 		heldHere := c.endCollectedWait(endCtx, run)
 		log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,
@@ -198,7 +198,9 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 // it ([Coordinator.stillRefused]): the stop decides this job.
 func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool {
 	if run.HeldFor != "" {
-		lifted, err := c.pending.LiftHold(ctx, run.TurnID, run.HeldFor)
+		liftCtx, liftDone := c.endingCall(ctx)
+		lifted, err := c.pending.LiftHold(liftCtx, run.TurnID, run.HeldFor)
+		liftDone()
 		switch {
 		case err != nil:
 			log.WarnContext(ctx, "sandbox_stop_hold_unlifted", "turn_id", run.TurnID,
@@ -259,7 +261,9 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 		collection.Charged, collection.CompanyCharged = c.charge(ctx, run, result)
 		collection.Published = c.publishCollected(ctx, run, result).Published
 	}
-	written, won, err := c.pending.CollectStop(ctx, run.TurnID, collection)
+	writeCtx, writeDone := c.endingCall(ctx)
+	written, won, err := c.pending.CollectStop(writeCtx, run.TurnID, collection)
+	writeDone()
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: recording what stopped run %s had spent: %w",
 			run.TurnID, err)
@@ -270,7 +274,9 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 	// NOT THIS ATTEMPT'S TO RECORD: another attempt at the same ending did
 	// it first, or the ending finished meanwhile. The row as it stands says
 	// which; the delete that follows decides the rest.
-	current, found, err := c.pending.Get(ctx, run.TurnID)
+	readCtx, readDone := c.endingCall(ctx)
+	current, found, err := c.pending.Get(readCtx, run.TurnID)
+	readDone()
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: reading stopped run %s back: %w", run.TurnID, err)
 	}

@@ -782,7 +782,8 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 		// A COORDINATOR OF ITS OWN over the flaky store, so nothing the rig's
 		// coordinator runs in the background reads the store this case swaps.
 		reserving := &flakyStamps{PendingStore: rig.pending, fails: 2}
-		c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
+		c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond,
+			life: t.Context()}
 		if took, err := c.reserveCapture(t.Context(), time.Time{}, "t1", begun); err != nil || !took {
 			t.Fatalf("the place was reserved %v (%v) through the store's bad moment, want reserved", took, err)
 		}
@@ -1440,7 +1441,8 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		// instant: a record asks until exactly its bound, and one that asked
 		// on past it, by a second or by the record's whole budget, reads so.
 		inBubble(t, func(t *testing.T) {
-			c := &Coordinator{pending: &silentStamps{}, recordBudget: time.Minute, sessionRetry: time.Millisecond}
+			c := &Coordinator{pending: &silentStamps{}, recordBudget: time.Minute, sessionRetry: time.Millisecond,
+				life: t.Context()}
 			stamp := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureBegun}
 			for name, record := range map[string]func(by time.Time){
 				"a place's reservation": func(by time.Time) { _, _ = c.reserveCapture(t.Context(), by, "t1", stamp) },
