@@ -1689,8 +1689,12 @@ agent's MCP tools (`agents`) and flags every agent holding more than
   to nobody. The agent's own limits count as they hold it
   ([Narrowing a server for a team](#narrowing-a-server-for-a-team)): a tool a
   limit blocks for it does not count, and a server a limit turns off for it
-  counts nothing. The engine's own tools are not counted (`builtin_tools` says how
-  many every agent holds).
+  counts nothing. The engine's own tools are not counted: `builtin_tools` says
+  how many of them the agent is offered, every one but those the engine leaves
+  off its surfaces, such as the health tools for an agent whose role carries no
+  `health_tools` and, below `full_access`, the code writes
+  ([Groups, and who may call each one](#groups-and-who-may-call-each-one),
+  [The company's code](#the-companys-code)).
 - **Each name counts once.** Two of an agent's servers listing a tool under
   the same name hand it one tool, so its total (`mcp_tools`) can be less than
   its servers' counts added up.
@@ -1717,9 +1721,10 @@ The page's **Agent access** tab draws `agents`: one row per agent, a column
 per server with the tools it offers the agent there (or the server's state,
 where it is not running), the agent's total, and **Over 100** beside an agent
 the engine flags. A callout names every agent over the budget. Choosing an
-agent opens its tools: its total against the budget, and each server it
-reaches with why and how many of its tools sit at each level. The tab is the
-administrator's, since `agents` is.
+agent opens its tools: its total against the budget, each server it reaches
+with why and how many of its tools sit at each level, and how many of the
+built-in tools it is offered. The tab is the administrator's, since `agents`
+is.
 
 ### Turning a server off
 
@@ -3063,7 +3068,7 @@ configuration writes as an empty string.
 
 ### Tool annotation overrides
 
-The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name). `tavily-mcp` 0.2.22 advertises none: its five tools only read the web, and unannotated each counts as a possible delivery, so a turn that only searched can pass the [delivery check](../concepts/tool-capabilities.md#the-delivery-check-did-this-answer-reach-anybody):
+The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name). `tavily-mcp` 0.2.22 advertises none: its five tools only read the web, and unannotated each counts as a possible delivery, so a turn that only searched can pass the [delivery check](../concepts/tool-capabilities.md#the-delivery-check-did-this-answer-reach-anybody), and counts as having [acted](../concepts/tool-capabilities.md#did-this-turn-act-outside-the-engine): its `no_action` is sent back and the turn reviewed, and one that broke is given up rather than redelivered. With the keys below each is a read of the world, which neither delivers nor counts as having acted, so such a turn may end quietly, and one that broke comes back:
 
 ```yaml
 mcp_servers:

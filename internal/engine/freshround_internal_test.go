@@ -81,7 +81,10 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRunToldItsCalls(t *testing.
 // (sandbox.LaunchRecord.BriefOmitted), which the resume an answer drives reads
 // into the runner's terms ([runnerResume]); the relaunch carrying the round on
 // in the job's own box, its harness having ended its own run, tells that copy
-// those two reads, which it holds only as a count, and no other call it holds.
+// those two reads, which it holds only as a count, and no other call it holds:
+// its record carries the count its collection writes of a copy far below its
+// threshold, so the copy is judged to hold every other call
+// ([collectedFarBelow]).
 //
 // Mutation: leave the record's set out of the resume (runnerResume not reading
 // it), and the copy is told none of them.
@@ -111,6 +114,7 @@ func TestAFreshJobsLeftOutReadsReachItsCopysNextBrief(t *testing.T) {
 	// ended its own run.
 	resumed.Launch.Brief, resumed.Launch.BriefOmitted = sandbox.BriefFresh, []int{2, 3}
 	resumed.Launch.HarnessEnd = sandbox.HarnessEndOwnRun
+	collectedFarBelow(&resumed.Launch)
 	brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
 		BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 		Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",

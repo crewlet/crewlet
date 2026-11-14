@@ -22,7 +22,9 @@ import (
 // every read the relaunch makes, and marked. So the copy in the job's box is
 // told it, once, under the late calls' words: alone where its harness ended its
 // own run, which holds every other call of the round; and apart from the
-// round's other calls where it was cut off.
+// round's other calls where it was cut off. Both arms' records carry the count
+// the job's collection writes of a copy far below its threshold, so the copy is
+// judged by its harness's end alone ([collectedFarBelow]).
 //
 // Mutation: drop the mark as the ledger appends the call, or as the resume
 // hands the runner the round's calls, and the copy whose harness ended its own
@@ -67,6 +69,7 @@ func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 			}
 			resumed := asking.row(t, turnID)
 			resumed.Launch.HarnessEnd = end
+			collectedFarBelow(&resumed.Launch)
 			brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
 				BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",

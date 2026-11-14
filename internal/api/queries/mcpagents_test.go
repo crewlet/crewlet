@@ -1,16 +1,21 @@
 package queries_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // agentsCompany grants four servers four ways: docs to every agent with one
@@ -53,7 +58,7 @@ func agentsSources(t *testing.T, doc string, statuses map[string][]coord.MCPServ
 	}
 	return queries.Sources{
 		Coord: backend, Company: companySource(t, cfg),
-		Builtins:    func() []queries.ToolRow { return catalogueBuiltins() },
+		Builtins:    catalogueOffer,
 		MCPListings: fakeListings{listings: listings(epochs(t, backend))},
 	}
 }
@@ -154,6 +159,63 @@ func TestAnAgentsCountLeavesOutBlockedAndRefusedToolsAndOnlyItsGrantsCount(t *te
 	}
 	if got.ToolBudget != queries.MCPToolBudget || queries.MCPToolBudget != 100 {
 		t.Errorf("tool_budget = %d (the constant is %d), want 100", got.ToolBudget, queries.MCPToolBudget)
+	}
+}
+
+// EACH AGENT IS COUNTED THE BUILT-INS IT IS OFFERED: every tool on the
+// answer's shelves but those the offer withholds from it, decided over the
+// chart the answer lists it in. dev is withheld one shelved tool; lead is
+// withheld one shelved tool, a row the catalogue shelves nowhere (submit_work)
+// and a built-in no row carries (fleet_health), the last two taking nothing
+// off; chief is withheld nothing. The withholding is asked once for each agent
+// and never for a person.
+//
+// Mutation: stamp one total on every agent (dev counted 4), count the shelved
+// less the withheld (lead counted 1), count rows rather than shelves (chief
+// counted 5), or ask over another chart or for a human seat, and this is red.
+func TestEachAgentIsCountedTheBuiltinsItIsOffered(t *testing.T) {
+	t.Parallel()
+	s := agentsSources(t, agentsCompany, nil, func(map[string]int64) []coord.MCPListing { return nil })
+	var mu sync.Mutex
+	var asked []string
+	s.Builtins = func() queries.BuiltinOffer {
+		return queries.BuiltinOffer{Rows: catalogueBuiltins(),
+			Withheld: func(_ context.Context, o *org.Organization, seat *org.Role) []string {
+				mu.Lock()
+				defer mu.Unlock()
+				asked = append(asked, seat.Handle())
+				if o == nil || o.AgentSeatByHandle(seat.Handle()) != seat {
+					t.Errorf("%s was decided over a chart that does not list it", seat.Handle())
+				}
+				switch seat.Handle() {
+				case "dev":
+					return []string{builtin.CreateWorkItemTool}
+				case "lead":
+					return []string{builtin.ShareArtifactTool, toolname.SubmitWork, builtin.FleetHealthTool}
+				}
+				return nil
+			}}
+	}
+	got := askMCPStatus(t, s)
+	shelved := 0
+	for _, g := range got.Builtin {
+		shelved += len(g.Tools)
+	}
+	if shelved != 4 {
+		t.Fatalf("the premise: the answer shelves %d built-ins, want 4 (list and create, share, activate)",
+			shelved)
+	}
+	for seat, want := range map[string]int{"chief": 4, "dev": 3, "lead": 3} {
+		if n := agentNamed(t, got, seat).BuiltinTools; n != want {
+			t.Errorf("%s is counted %d built-ins, want %d", seat, n, want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	slices.Sort(asked)
+	if !slices.Equal(asked, []string{"chief", "dev", "lead"}) {
+		t.Errorf("the withholding was asked for %v, want chief, dev and lead once each, and never a person",
+			asked)
 	}
 }
 

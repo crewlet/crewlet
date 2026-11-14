@@ -1055,11 +1055,13 @@ const leadsAgainHeader = "## Messages that carried this work on that the session
 // answers, the review and the turn's task the brief of the job whose session it
 // continues opened with, or told again in turn, where that session is not known
 // to hold that brief (its harness cut off, or never known to have ended its
-// own run), in the order they were sent; and how many earlier such messages are
-// not kept to tell again (cut), said rather than left out: those past the
-// engine's bound on them, and every one the store could not give back to the
-// brief's builder, all of them where its read failed, though the store may
-// keep them still, so said as not kept, never as no longer kept.
+// own run), in the order they were sent, one that cannot be read here or a
+// review the turn's record no longer keeps said in its place ([LeadUnread],
+// [ReviewNotKept]); and how many earlier such messages are not kept to tell
+// again (cut), said rather than left out: those past the engine's bound on
+// them, and every one the store could not give back to the brief's builder,
+// all of them where its read failed, though the store may keep them still, so
+// said as not kept, never as no longer kept.
 //
 // SAID AS MESSAGES IT MAY ALREADY SHOW, ONE MESSAGE WHEREVER SHOWN, as notes
 // told again are ([NotesReadAgain]): a session cut off may hold any of them, an
@@ -1111,6 +1113,26 @@ func plural(n int, one, many string) string {
 // missing; never a word of what it said.
 const LeadUnread = "### A message that carried this work on cannot be read here" +
 	"\nThe engine's copy of it does not open on the node carrying this run on, so it is not told again here."
+
+// ReviewNotKept is a review that sent the work back, said in its place among the
+// messages a session is told again ([LeadsToldAgain]) where the turn's record
+// no longer keeps the round it closed whole (internal/agent/runner's
+// reviewOf): a parked turn past its share folds whole closed rounds into one
+// entry standing for them, which keeps their calls by tool and none of their
+// reviews (internal/agent/ledger's Iteration.Through), and the prior-work
+// ledger says of such a round that it is not kept on the parked turn. Never a
+// word of what the review said, which no record keeps.
+//
+// IN ITS PLACE, NEVER AMONG THE EARLIER MESSAGES NOT KEPT, which the section
+// says before every message it tells: a review can follow a message the section
+// tells, and the later of two that differ stands, so said as earlier, the run
+// would take the messages before it as standing over a review that may have
+// redirected the work. And never as a message that cannot be read here
+// ([LeadUnread]), which says the engine holds a copy of it, nor as a send-back
+// that said nothing.
+const ReviewNotKept = "### A review that sent this work back, which is not kept" +
+	"\nThe round it reviewed is not kept on the parked turn, and what its reviewer said is gone with it, so it " +
+	"is not told again here."
 
 // KeyAnswersBefore keys the section [EarlierAnswers] is appended to a fresh
 // brief as (internal/agent/runner's continueAgentRun and executeAsAgentRun):
@@ -1223,6 +1245,27 @@ func HeldCallListed(round int) string {
 	n := strconv.Itoa(round)
 	return "The call was made once: it is among round " + n + "'s calls, under Iteration " + n + " of the work " +
 		"already done earlier in this turn, which says how it ended."
+}
+
+// HeldCallCounted is what an answer told to a run says of the call it answered
+// that was made, before what became of the call, where the brief that tells it
+// holds round, the round the answer came in, under an entry of the work already
+// done ([PriorWorkHeader]) that may count the call rather than list it with how
+// it ended (internal/agent/runner's heldIn): a span of rounds a park dropped,
+// headed by its first round and its last (internal/agent/ledger's
+// Iteration.Through), or a round alone, last not past first, whose record
+// counts calls of its tool by tool, or its reads past the list's read cap.
+// Said so the run reads the call as one of that entry's, never as a call
+// beside the ones the entry counts, and is told how it ended, which the entry
+// may not say. A span's rounds are written with "to", never the dash its
+// heading has, which a run matches all the same.
+func HeldCallCounted(round, first, last int) string {
+	heading := "Iteration " + strconv.Itoa(first)
+	if last > first {
+		heading = "Iterations " + strconv.Itoa(first) + " to " + strconv.Itoa(last)
+	}
+	return "The call is one of round " + strconv.Itoa(round) + "'s calls, which " + heading + " of the work " +
+		"already done earlier in this turn may count rather than list, so what became of it is told here. "
 }
 
 // AnswerUnread is an answer told to a run that the brief cannot read on the

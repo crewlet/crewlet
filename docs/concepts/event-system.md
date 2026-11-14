@@ -15,7 +15,7 @@ One interface serves all inter-component communication:
 | Where the broker runs | What that is |
 |---|---|
 | **In this process**: `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member (a solo node included) it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot (the **identity estate** among the state logs whose records live on that stream), and Worklet, Doclet, Chatlet and Gitlet put their items, pages, messages and repositories there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf (an embedded node without `data`, joining the members over `stream.leaf.urls`) runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
-| **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. Two things the operator's server has to promise that the embedded one is built with. Messages of 8 MiB, the largest the engine sends: a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write. And no duplicate-window limit below 15 minutes, the window `CREWLET_DLQ` declares so that a second keep of one dead letter stores nothing: a server whose `jetstream { limits { duplicate_window } }` is lower refuses that stream, and the node's boot fails naming the setting (see [Deployment](../guides/deployment.md#an-external-nats-server)). The client's own socket writes are given the time the largest of them takes at the engine's slowest link, about eight minutes, before it gives the connection up. |
+| **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. Three things the operator's server has to promise that the embedded one is built with. Messages of 8 MiB, the largest the engine sends: a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write. And no duplicate-window limit below 15 minutes, the window `CREWLET_DLQ` declares so that a second keep of one dead letter stores nothing: a server whose `jetstream { limits { duplicate_window } }` is lower refuses that stream, and the node's boot fails naming the setting (see [Deployment](../guides/deployment.md#an-external-nats-server)). And `write_timeout: retry` for its clients. A server keeps the default `close` for a client's connection, which a node's is. A node whose link cannot carry a large delivery inside the server's 10 s `write_deadline` is then cut at its first one, and cut again each time the delivery comes back. With `retry`, a batch still crossing is written on, and only a dead link is cut. The engine cannot read that setting from the server, so nothing refuses a server without it. The client's own socket writes are given the time the largest of them takes at the engine's slowest link, about eight minutes, before it gives the connection up. |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
 Both are certified by **one** conformance suite (`internal/queue/queuetest`). A backend that suite has not certified does not exist as far as the engine is concerned — which is exactly why the twin is certified by the same cases as the real broker rather than by cases written for a twin.
@@ -502,7 +502,13 @@ agent_turn_started         # a turn, or a resumed segment of one, beginning —
                            # unless the turn died in its own frames — then a
                            # turn.guard_breach under its turn_id says so, or
                            # its process died under it
-agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
+agent_turn_completed       # full LLM reasoning cycle with tokens and tools,
+                           # its calls held to a record's one share of its
+                           # message and the rest counted: `calls_elided`,
+                           # and `elided_calls` by tool ({name, calls,
+                           # failed}) — every phase's unlisted calls, and the
+                           # ones this list drops in turn (see "What an agent
+                           # record keeps");
                            # names the work item the turn was charged to —
                            # including by `sole_write`, which only a
                            # completion can conclude — and carries
@@ -562,13 +568,16 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # be started, the environment condition
                            # that failed it (store_busy, disk_full,
                            # coordination_unavailable, ...), or
-                           # error. The execute record
-                           # that collected a run lists the calls its
-                           # run's record kept, and says the rest:
+                           # error. Each payload is held to its share of
+                           # the message (see "What an agent record keeps"):
+                           # the calls a record does not list are
                            # `calls_elided`, and `elided_calls` by tool
-                           # ({name, calls, failed}) — a long run's
-                           # dropped middle, counted in its round's
-                           # tool_calls; a call held for a person's
+                           # ({name, calls, failed}) — a long phase's or a
+                           # collected run's dropped middle, the latter
+                           # counted in its round's tool_calls — the rounds it
+                           # does not list `rounds_elided`, and the tool names
+                           # `tools_available_elided` and
+                           # `tool_catalogue_elided`; a call held for a person's
                            # approval carries `held` and the one they
                            # approved `approved`, their `arguments` `{}`
                            # because both ride the run's record sealed
@@ -875,6 +884,21 @@ nodes about an edit the webhook receiver already recorded). The cause is a
 value rather than a sentence, because the admission rule below is checked by a
 walk and no walk can read intent out of prose. See the exclusions table in the
 Deployment page above.
+
+### What an agent record keeps
+
+A phase's record (`agent_phase_completed`) and a turn's (`agent_turn_completed`) are each one event, and an event past the queue's ceiling (8 MiB) is refused at its publish: it would not arrive long, it would not arrive at all, taking every fact of its phase with it, and, for a turn's record, the end of the seat's live row. So each payload that grows with what a phase was handed and made has a share of the message, measured as the event encodes it with every escape counted (a page of HTML is six bytes a `<`), and a payload past its share is kept in part with the cut said. A record within every share is published as it was built.
+
+- **Tool calls** (`tool_executions`): past their share, every row is held to the shares an executor's own call log holds a call to (its arguments to 8 KiB, the newest successful submission's to 64 KiB, its answer and a failure's error to 4 KiB as their openings, its name to 256 bytes), and past that the middle beyond 200 calls is dropped, the first hundred and the newest hundred kept. `calls_elided` counts the calls the list does not keep and `elided_calls` names them by tool, at most 64 tools, the calls of any more counted under no name. A turn's record holds every phase's list to the same one share and merges their counts.
+- **Rounds**: a phase past 256 rounds keeps its first and newest 128, each with its provider call, its prose, the harness runs over it, the notes read in it and the calls made in it. `rounds_elided` counts the rest, whose calls are counted in `calls_elided`.
+- **Prompts** (`system_prompt`, `user_prompt`): a quarter MiB each. Past it every part of the prompt keeps its opening, the longest cut first, and the outline (`system_sections`, `user_sections`) is rewritten to the kept text, so it still tiles it. The prompt the model was sent is not changed: this is the record's copy.
+- **Prose** (`round_narration`): a quarter MiB for every round's together; past it each round keeps an opening. A collected run's round carries a copy of its report, which past that share says the record's `response` holds the whole.
+- **Response**: 1.5 MiB, what a run's report may weigh at its worst escape, so a collected run's report is never cut; a host phase's model text past it keeps its opening.
+- **Notes** keep 32 KiB, and each list of **tool names** (`tools_available`, `tool_catalogue`) 64 KiB, its names in order while they fit and the rest counted in `tools_available_elided` and `tool_catalogue_elided`.
+
+A running phase's live frame (`agent_turn_progress`) is held to live shares rather than a message's, since it is republished whole five times a second to every dashboard open on its seat and the socket hub queues hundreds for a client that falls behind: past them it keeps the **newest** of what grows, what a reader of a running phase is watching arrive. Its calls keep 256 KiB, the newest that fit, each answer already its tail, with the rest counted in `calls_elided` and `elided_calls`; its round window is a record's, counted in `rounds_elided`; its committed prose keeps 64 KiB; the attempts at the round in flight that a provider gave up on keep the newest four, each its end within its part of 16 KiB; and its calls in flight keep 32 KiB, each one's arguments 2 KiB, with the rest counted in `running_calls_elided`. The opening frame's prompts keep a record's share each. A frame at its worst weighs under a MiB.
+
+Some words are held where they are made instead, since every reader of them would otherwise hold a different cut of one answer: a review's `final_artifact` (256 KiB, what a run's report may weigh), its `notes` and its `completed_work` (32 KiB each), which `submit_review` refuses past their bounds naming the field, so the reviewer shortens them; and a trigger's `summary`, held to 1 KiB, its one line, where the trigger is described.
 
 ### What may reach the node estate
 

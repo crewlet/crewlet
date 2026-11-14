@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -26,25 +27,13 @@ import (
 // the plugin it drives.
 const probeScript = "opencode_steer_probe.mjs"
 
-// nodeForProbe is the node the plugin is driven under, by internal/e2e's
-// policy for its client replay: where CI is set a missing node FAILS the case,
-// because a skip would pass the build with the plugin never run; elsewhere it
-// skips, for a fast loop on a machine without one. The skip is declared
-// nowhere in internal/skipgate, so the make targets that gate a change refuse
-// to start without node (require-node) rather than report it.
-func nodeForProbe(t *testing.T) string {
+// nodeForNotes is the node the notes plugin is driven under, found by the
+// suite's one rule for a program it needs: under the make targets that run the
+// suite a missing node fails the case, and a bare `go test` skips it.
+func nodeForNotes(t *testing.T) string {
 	t.Helper()
-	node, err := exec.LookPath("node")
-	if err == nil {
-		return node
-	}
-	switch strings.ToLower(os.Getenv("CI")) {
-	case "1", "true", "yes":
-		t.Fatalf("node is not on PATH, so the OpenCode notes plugin would go unrun and "+
-			"the build would still pass: %v", err)
-	}
-	t.Skip("node is not installed; the OpenCode notes plugin's probe needs it")
-	return ""
+	return prereqtest.OnPath(t, "node", "the OpenCode notes plugin's probe runs the plugin under it",
+		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
 }
 
 // notesCall is one request the plugin made of the notes route, held until the
@@ -377,7 +366,7 @@ const (
 // or its reset; await a poll in setup; write a file beside the plugin.
 func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	t.Parallel()
-	node := nodeForProbe(t)
+	node := nodeForNotes(t)
 
 	// THE PLUGIN AS A RUN IS HANDED IT: written by WriteConfig into a real
 	// box, its route named by a reference to a file holding it.
@@ -688,7 +677,7 @@ func (i *routeInbox) Close() {}
 // goes red.
 func TestThePluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	t.Parallel()
-	node := nodeForProbe(t)
+	node := nodeForNotes(t)
 	_, box := openCodeBox(t, t.TempDir())
 	p := executor.PathsFor(box)
 	cfgPath, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{

@@ -124,7 +124,7 @@ func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
 
 func (f *fakeRuntime) Tools() []queries.ToolRow { return f.tools }
 
-func (f *fakeRuntime) Builtins() []queries.ToolRow { return f.builtins }
+func (f *fakeRuntime) Builtins() queries.BuiltinOffer { return queries.BuiltinOffer{Rows: f.builtins} }
 
 func (f *fakeRuntime) Listings() queries.MCPListingReader { return f.listings }
 

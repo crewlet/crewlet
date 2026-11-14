@@ -100,7 +100,7 @@ func oauthSources(t *testing.T) queries.Sources {
 	stripe.Expiry = &past
 	return queries.Sources{
 		Coord: backend, Company: companySource(t, cfg),
-		Builtins:  func() []queries.ToolRow { return catalogueBuiltins() },
+		Builtins:  catalogueOffer,
 		MCPGrants: grantsReader{grants: []coord.MCPGrant{linear, moved, notion, stripe}},
 		Now:       func() time.Time { return oauthNow },
 	}

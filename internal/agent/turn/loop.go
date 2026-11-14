@@ -158,7 +158,9 @@ type Surface struct {
 	// first, and answering the first is how a seat closed out a founder's
 	// chat thread by writing a row in the tracker.
 	Deliveries map[string]string
-	// KnownReads is every tool POSITIVELY annotated read-only.
+	// KnownReads is every tool POSITIVELY annotated read-only. An MCP-served
+	// one never delivers ([Deliverable]), and one open-world as well is no
+	// act ([Acted]) unless it delivers: it reads the world.
 	KnownReads []string
 	// KnownOpenWorld is every tool POSITIVELY annotated open-world — one
 	// whose own annotations say it reaches outside this process.
@@ -167,7 +169,23 @@ type Surface struct {
 	// the same question and neither contains the other: a deliverable is a
 	// tool whose call reaches somebody WAITING on this turn, and `a2a_ask`
 	// leaves the process without answering anybody — it wakes a colleague.
+	//
+	// NOT EVERY ONE OF THEM ACTS: one also in KnownReads — a web search,
+	// `ssh_read` — reads the world and changes nothing in it, so [Acted]
+	// leaves it out unless it delivers.
 	KnownOpenWorld []string
+	// PresumedWrites is every MCP-served tool that no hint, its server's or
+	// an operator's override, marks as a read or as a write (`read_only:
+	// false` and `destructive: true` mark a write): a delivery by the
+	// fail-closed default ([Deliverable]), and so an act ([Acted]), though
+	// nothing says its call changed anything.
+	//
+	// It exists for the correction that says what a turn did
+	// ([ActedAccount]) — told it "acted" after only searching through such a
+	// tool, a model reads the correction as false against its own call — and
+	// for the corrections that say a turn wrote somewhere else or reached
+	// somebody, which never say so of a presumed write ([KnownDelivered]).
+	PresumedWrites []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
 	// `activate_tool` promotes onto the next round — and nothing on a phase
@@ -391,21 +409,21 @@ type Result struct {
 	// Suspended marks a turn parked on its executor's run.
 	Suspended bool
 
-	// Acted reports that this attempt's own record PROVES it already
+	// Acted reports that this attempt's own record shows it already
 	// reached outside the engine (see [Acted]): what a retry of THIS attempt
 	// would repeat. A resumed attempt answers for its own calls, never for
 	// those its executor's run made before the segment that collects it
 	// ([Work.Inherited]).
 	//
 	// It exists for the callers that have to tell a turn which broke
-	// having done nothing from one which broke having already posted,
-	// asked a colleague or started a box. Those are two different facts
-	// and a redelivery is right for exactly one of them; the dispatcher
-	// used to have only `err != nil`, which is neither. Both callers read
-	// it through [Abandon] rather than directly.
+	// having done nothing from one which broke having already posted or
+	// asked a colleague. Those are two different facts and a redelivery is
+	// right for exactly one of them; the dispatcher used to have only
+	// `err != nil`, which is neither. Both callers read it through
+	// [Abandon] rather than directly.
 	//
-	// The zero value is the safe answer and the honest one: a turn that
-	// proved nothing gets today's behaviour, which is to come back. Set
+	// The zero value is the safe answer and the honest one: a turn whose
+	// record shows no act gets today's behaviour, which is to come back. Set
 	// wherever the loop holds a round's record — never in a defer, because
 	// [Run]'s results are unnamed and a deferred write to `res` would be
 	// discarded at every `return res, …` in this file.
@@ -509,6 +527,14 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 	// the closed rounds, in order, the detector sees the sequence one
 	// uninterrupted run of the loop would have — a closed round is exactly
 	// one the loop observed on its way to closing it.
+	//
+	// A SPAN OF ROUNDS A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
+	// ([ledger.Iteration.Through]), which is all it keeps of them: the
+	// detector compares each round it observes with the one before it, and the
+	// round before whatever follows a span is the span's last. Skipping a span
+	// would compare the round after it with the round before it — rounds
+	// apart, a stall nobody repeated — and miss the one the dropped round and
+	// the next really make.
 	stall := StallDetector{}
 	for _, closed := range in.History {
 		if closed.ArtifactHash != "" {
@@ -731,7 +757,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Iterations = append(res.Iterations, ledger.Iteration{
 			Iteration: round,
 			Intent:    work.Summary,
-			Calls:     work.Calls,
+			Calls:     closedCalls(work.Calls),
 			Elided:    work.Elided,
 			Absorbed:  work.Absorbed,
 			// Only the reads actually CALLED, not the whole surface's
@@ -819,6 +845,23 @@ func names(calls []ledger.Call) []string {
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, c.Name)
+	}
+	return out
+}
+
+// closedCalls is a round's calls as its closed record keeps them: every call
+// whole but a SUCCESSFUL call's output, which nothing reads once its round has
+// closed — the prior-work ledger shows a failed call's error alone, a delivery
+// check reads names and outcomes, and a seed reads identities — and which a
+// parked turn would otherwise carry on its run's row for every round it closed.
+// A failed call keeps its error, which the next round reads. calls itself is
+// never changed.
+func closedCalls(calls []ledger.Call) []ledger.Call {
+	out := slices.Clone(calls)
+	for i := range out {
+		if !out[i].Failed {
+			out[i].Result = ""
+		}
 	}
 	return out
 }

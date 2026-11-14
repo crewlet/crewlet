@@ -1,66 +1,25 @@
 package hostbox
 
 import (
-	"bufio"
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
-	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
-// writerEnv makes this test binary a WRITER of a shared login rather than the
-// suite: see [TestMain] and [runWriter].
-const writerEnv = "HOSTBOX_TEST_CREDENTIAL_WRITER"
-
-// TestMain runs the writer when this binary was re-executed as one, and the
-// suite otherwise — dispatched here rather than from a test function, so the
-// writer is never reported as a test that skipped.
-func TestMain(m *testing.M) {
-	if dir := os.Getenv(writerEnv); dir != "" {
-		runWriter(dir)
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
-// twoLogins are the logins the killed writer alternates between: two files
-// each, every file different, so any mix of the two is told apart from both.
+// twoLogins are two logins of two files each, every file different, so any
+// mix of the two is told apart from both.
 var twoLogins = []map[string][]byte{
 	{"auth.json": []byte(`{"token":"first sign-in"}`), "config.toml": []byte("provider = \"first\"\n")},
 	{"auth.json": []byte(`{"token":"second sign-in"}`), "config.toml": []byte("provider = \"second\"\n")},
 }
 
 var twoLoginNames = []string{"auth.json", "config.toml"}
-
-// runWriter writes the two logins in turn, for ever, each under the lock every
-// writer takes, and says "ready" once the first has landed — so the case that
-// kills it kills a writer in its loop rather than one still starting.
-func runWriter(dir string) {
-	ctx := context.Background()
-	for i := 0; ; i++ {
-		release, err := LockCredentials(ctx, dir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		if err := WriteCredentials(dir, twoLoginNames, twoLogins[i%2]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		release()
-		if i == 0 {
-			fmt.Println("ready")
-		}
-	}
-}
 
 // writeRaw puts files in a directory directly, as the state a writer left.
 func writeRaw(t *testing.T, dir string, files map[string]string) {
@@ -119,7 +78,7 @@ func TestAWriteThatStopsPartWayIsFinishedByTheNextRead(t *testing.T) {
 	obstacle := filepath.Join(dir, "config.toml")
 	writeRaw(t, filepath.Join(obstacle, "in-the-way"), map[string]string{"x": "x"})
 
-	err := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
 	if err == nil {
 		t.Fatal("a write whose second file could not be written reported success")
 	}
@@ -162,7 +121,7 @@ func TestAWriteThatFailsBeforeItsJournalWritesNothing(t *testing.T) {
 	// A directory where the journal goes: its rename cannot land.
 	writeRaw(t, filepath.Join(CredentialJournal(dir), "in-the-way"), map[string]string{"x": "x"})
 
-	err := WriteCredentials(dir, twoLoginNames, twoLogins[1])
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[1], nil)
 	if err == nil || Committed(err) {
 		t.Fatalf("a write whose journal could not land = %v, want a failure that did not commit", err)
 	}
@@ -175,71 +134,169 @@ func TestAWriteThatFailsBeforeItsJournalWritesNothing(t *testing.T) {
 	}
 }
 
-// A WRITER KILLED AT ANY INSTANT LEAVES ONE LOGIN OR THE OTHER, NEVER HALF OF
-// EACH. A real process writing two logins in turn under the lock is killed at a
-// random moment, again and again, and what the directory holds afterwards is
-// read under the same lock: every time, exactly one of the two logins. Most
-// kills land inside a write — between its journal and its last file — which is
-// counted, so a run in which none did certifies nothing and fails.
+// A WRITE REPORTS EVERY STEP IT TAKES AND NO OTHER, each once it has happened.
+// The steps are where a suite parks a writer's process to kill it, so a step
+// reported for a file that did not move, or ahead of what it names, is a kill
+// at an instant no writer is ever at, and a step not reported is an instant no
+// kill reaches. Each step is checked on disk as it is reported: the journal
+// stands from the commit until the close, and a file written or removed is
+// written or removed.
 //
-// Mutation: write the files without the journal, and some kill leaves one
-// login's auth.json beside the other's config.toml.
-func TestAKilledWriterNeverLeavesHalfALogin(t *testing.T) {
+// Mutation: report written for a file left alone as already in place (the
+// same login again sees it); report closed after a settle that failed (the
+// refused second file sees it); report committed ahead of the journal's
+// rename (the journal that cannot land sees it).
+func TestAWriteReportsEveryStepItTakesAndNoOther(t *testing.T) {
 	t.Parallel()
-	const trials = 40
-	midWrite := 0
-	for trial := range trials {
-		dir := filepath.Join(t.TempDir(), "credentials")
-		cmd := exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // this test binary
-		cmd.Env = append(os.Environ(), writerEnv+"="+dir)
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			t.Fatalf("trial %d: the writer did not start (%q, %v): %s", trial, line, err, stderr.String())
-		}
-		time.Sleep(time.Duration(rand.IntN(3000)) * time.Microsecond)
-		if err := cmd.Process.Kill(); err != nil {
-			t.Fatal(err)
-		}
-		_ = cmd.Wait()
-
-		if _, err := os.Stat(CredentialJournal(dir)); err == nil {
-			midWrite++
-		}
-		release, err := LockCredentials(t.Context(), dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := readLogin(t, dir)
-		release()
-		if err != nil {
-			t.Fatalf("trial %d: reading what the killed writer left: %v", trial, err)
-		}
-		whole := false
-		for _, login := range twoLogins {
-			want := map[string]string{}
-			for name, content := range login {
-				want[name] = string(content)
-			}
-			whole = whole || maps.Equal(got, want)
-		}
-		if !whole {
-			t.Fatalf("trial %d: a writer killed mid-write left %v — part of one login and part of "+
-				"the other", trial, got)
-		}
+	type reached struct {
+		step CredentialStep
+		name string
 	}
-	t.Logf("%d of %d kills landed inside a write", midWrite, trials)
-	if midWrite == 0 {
-		t.Fatalf("none of %d kills landed inside a write, so the case certified nothing", trials)
+	asText := func(login map[string][]byte) map[string]string {
+		out := map[string]string{}
+		for name, content := range login {
+			out[name] = string(content)
+		}
+		return out
+	}
+	alone := map[string][]byte{"auth.json": twoLogins[1]["auth.json"]}
+	for name, c := range map[string]struct {
+		before map[string]string // the directory's files before the write
+		// inTheWay is a name a directory stands at, beside the directory
+		// when it is the journal's and inside it otherwise.
+		inTheWay string
+		login    map[string][]byte
+		// committed and applied: the write is the login of record, and it
+		// was put in place.
+		committed, applied bool
+		want               []reached
+	}{
+		"a write that drops a file": {
+			before: asText(twoLogins[0]), login: alone, committed: true, applied: true,
+			want: []reached{
+				{StepCommitted, ""}, {StepWritten, "auth.json"}, {StepRemoved, "config.toml"}, {StepClosed, ""},
+			},
+		},
+		"the same login again": {
+			before: asText(twoLogins[0]), login: twoLogins[0], committed: true, applied: true,
+			want: []reached{{StepCommitted, ""}, {StepClosed, ""}},
+		},
+		"a removal of a file that is not there": {
+			login: alone, committed: true, applied: true,
+			want: []reached{{StepCommitted, ""}, {StepWritten, "auth.json"}, {StepClosed, ""}},
+		},
+		"a write whose second file is refused": {
+			inTheWay: "config.toml", login: twoLogins[0], committed: true,
+			want: []reached{{StepCommitted, ""}, {StepWritten, "auth.json"}},
+		},
+		"a write whose journal cannot land": {
+			inTheWay: "journal", login: twoLogins[0],
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := filepath.Join(t.TempDir(), "credentials")
+			writeRaw(t, dir, c.before)
+			switch c.inTheWay {
+			case "":
+			case "journal":
+				writeRaw(t, filepath.Join(CredentialJournal(dir), "in-the-way"), map[string]string{"x": "x"})
+			default:
+				writeRaw(t, filepath.Join(dir, c.inTheWay, "in-the-way"), map[string]string{"x": "x"})
+			}
+			var got []reached
+			err := WriteCredentials(dir, twoLoginNames, c.login, func(step CredentialStep, name string) {
+				got = append(got, reached{step, name})
+				_, statErr := os.Lstat(CredentialJournal(dir))
+				if standing := statErr == nil; standing != (step != StepClosed) {
+					t.Errorf("at %s %q a journal stands: %t", step, name, standing)
+				}
+				switch step {
+				case StepWritten:
+					if raw, err := os.ReadFile(filepath.Join(dir, name)); err != nil || !bytes.Equal(raw, c.login[name]) {
+						t.Errorf("at written %q the file holds %q (%v), want %q", name, raw, err, c.login[name])
+					}
+				case StepRemoved:
+					if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+						t.Errorf("at removed %q the file is still there: %v", name, err)
+					}
+				}
+			})
+			if !slices.Equal(got, c.want) {
+				t.Errorf("the write reported %v, want %v", got, c.want)
+			}
+			if Committed(err) != c.committed || (err == nil) != c.applied {
+				t.Errorf("the write answered %v, want committed %t and applied %t", err, c.committed, c.applied)
+			}
+		})
+	}
+}
+
+// WHAT A KILLED WRITE STAGED IS GONE BY THE NEXT HOLD OF THE LOCK. A write
+// killed between staging a file and its rename left the staged copy, a login
+// file's inside the directory and the journal's beside it, and nothing removed
+// either, not even a logout: a token on the disk past the login it was part
+// of. The next read, write and logout each remove both, and leave alone a file
+// another writer staged beside the directory under a lock of its own.
+//
+// Mutation: sweep nothing, and both copies survive every hold; sweep the
+// directory's parent, and the other writer's staged file is gone.
+func TestWhatAKilledWriteStagedIsGoneByTheNextHold(t *testing.T) {
+	t.Parallel()
+	for name, hold := range map[string]func(dir string) error{
+		"a read": func(dir string) error {
+			_, err := ReadCredentials(dir, twoLoginNames)
+			return err
+		},
+		"a write":  func(dir string) error { return WriteCredentials(dir, twoLoginNames, twoLogins[1], nil) },
+		"a logout": func(dir string) error { return WriteCredentials(dir, twoLoginNames, nil, nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			dir := filepath.Join(root, "credentials")
+			writeRaw(t, dir, map[string]string{
+				"auth.json": "a", "config.toml": "c", stagedPrefix + "killed": `{"token":"staged"}`,
+			})
+			journal, err := json.Marshal(credentialJournal{Version: journalVersion,
+				Write: map[string][]byte{"auth.json": []byte(`{"token":"staged"}`)}, Remove: []string{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(root, stagedPrefix+"another-writer")
+			writeRaw(t, root, map[string]string{filepath.Base(stagedJournal(dir)): string(journal),
+				filepath.Base(other): "another writer's"})
+			if err := hold(dir); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			for _, path := range []string{filepath.Join(dir, stagedPrefix+"killed"), stagedJournal(dir)} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Errorf("%s left %s, which a killed write staged: %v", name, path, err)
+				}
+			}
+			if raw, err := os.ReadFile(other); err != nil || string(raw) != "another writer's" {
+				t.Errorf("%s took %s, which another writer staged beside the directory: %q, %v",
+					name, other, raw, err)
+			}
+		})
+	}
+}
+
+// THE JOURNAL IS STAGED WHERE THE NEXT HOLD LOOKS FOR IT: under a name of its
+// own beside the directory, never ReplaceFile's random one, which the next
+// hold cannot tell from another writer's, so a write killed before its
+// journal's rename leaves a copy the next hold removes. Seen through an
+// obstacle at that name, which a write staged there cannot get past.
+//
+// Mutation: stage the journal through ReplaceFile, and the write lands.
+func TestTheJournalIsStagedWhereTheNextHoldLooks(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "credentials")
+	writeRaw(t, filepath.Join(stagedJournal(dir), "in-the-way"), map[string]string{"x": "x"})
+	err := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
+	if err == nil || Committed(err) || !strings.Contains(err.Error(), filepath.Base(stagedJournal(dir))) {
+		t.Fatalf("a write with an obstacle where its journal is staged = %v, want a refusal naming %s",
+			err, stagedJournal(dir))
 	}
 }
 
@@ -279,7 +336,7 @@ func TestAWriteReplacesOneLeftStanding(t *testing.T) {
 	}
 
 	// The logout: every name it knows, none of them held.
-	if err := WriteCredentials(dir, twoLoginNames, nil); err != nil {
+	if err := WriteCredentials(dir, twoLoginNames, nil, nil); err != nil {
 		t.Fatalf("WriteCredentials: %v", err)
 	}
 	got, err := readLogin(t, dir)
@@ -314,7 +371,7 @@ func TestAJournalThisBuildCannotFinishIsRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, readErr := ReadCredentials(dir, twoLoginNames)
-			writeErr := WriteCredentials(dir, twoLoginNames, twoLogins[0])
+			writeErr := WriteCredentials(dir, twoLoginNames, twoLogins[0], nil)
 			for verb, err := range map[string]error{"read": readErr, "write": writeErr} {
 				if err == nil || !strings.Contains(err.Error(), CredentialJournal(dir)) ||
 					!strings.Contains(err.Error(), "remove it to discard that write") {
@@ -346,7 +403,7 @@ func TestAWriteOfWhatIsNoLoginIsRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "credentials")
-			if err := WriteCredentials(dir, c.names, c.login); err == nil || Committed(err) {
+			if err := WriteCredentials(dir, c.names, c.login, nil); err == nil || Committed(err) {
 				t.Fatalf("WriteCredentials = %v, want a refusal that committed nothing", err)
 			}
 			if _, err := os.Stat(CredentialJournal(dir)); !os.IsNotExist(err) {

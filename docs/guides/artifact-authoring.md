@@ -304,6 +304,14 @@ to a call from another seat's turn, or from a run parked on a question,
 collected or torn down; `forbidden` to a caller that is not an agent seat; and
 `unavailable` on a node that runs no sandbox
 ([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)).
+A project's file is copied in as
+[`read_project_file`](worklet.md#a-projects-files) reads it, and refused in
+that tool's words: a caller who may not read the project's files copies none
+(`forbidden`); a project or a file that is not there, or a path the tracker
+refuses, is the argument to change (`invalid`), since a copy only names its
+source; and content the object store cannot hand back is `unavailable`, or
+`internal_error` where what it holds is not the file, which the copy checks
+against the file's SHA-256 before a byte of it moves.
 Small changes go as `edits` (`old_str` and `new_str` pairs against the base
 version), which saves most of the output a whole-file republish would cost. Every publish names `base_version`; when somebody else
 published since, the tool answers with the live version, who published it,

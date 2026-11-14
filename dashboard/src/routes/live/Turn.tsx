@@ -885,8 +885,9 @@ export function turnFacts(
   const output = work.reduce((n, p) => n + p.outputTokens, 0);
   const cached = work.reduce((n, p) => n + p.cacheReadTokens, 0);
   // EVERY CALL THE TURN'S PHASES MADE: the ones their records list, and the
-  // ones a collected executor's record counts without listing — a long run's
-  // dropped middle — which its round's own count, on the Timeline, includes.
+  // ones their records count without listing — a long phase's or a long run's
+  // dropped middle — which a collected run's round count, on the Timeline,
+  // includes.
   const dropped = view.own.reduce((n, p) => n + p.callsElided, 0);
   const calls = view.own.reduce((n, p) => n + p.tools.length, 0) + dropped;
   const trigger = view.trigger;
