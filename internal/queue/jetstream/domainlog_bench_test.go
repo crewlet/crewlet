@@ -14,10 +14,12 @@ import (
 // record of [statelog.MaxTransportRecordBytes], the ceiling the code log
 // declares — which is the figure [DomainLog.At]'s term is judged against on a
 // member's own connection: the reply, the record base64-encoded inside its
-// JSON, a third larger, has to be in before the one-second read term, or the
-// read is asked again with the first reply still crossing. Across a link the
-// term is given the reply's crossing at the object store's floor instead
-// ([Queue.recordCrossing]), which no member's figure measures.
+// JSON, a third larger, is built and decoded in this process, and its read is
+// given that handling beyond the read term (internal/jsapi's HandlingPace,
+// which this benchmark measured), or it is asked again with the first reply
+// still being built. Across a link the term is given the reply's crossing at
+// the object store's floor besides ([Queue.recordArrival]), which no member's
+// figure measures.
 func BenchmarkADomainLogReadOfItsLargestRecord(b *testing.B) {
 	q, err := Open(b.Context(), Config{})
 	if err != nil {

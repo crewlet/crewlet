@@ -2704,10 +2704,11 @@ through the layer by two readings, the floor's figure by its unchanged rule and
 the count (`sandbox.SessionCapture.ResumedCount`, `sandbox.TakenSession.Count`);
 and ONE read of the job's main thread in the read that collects a job, on the
 box's host, before the take, within `sandbox.MainThreadReadWait` (15 s), which
-`sandbox.BoxReadBudget` holds for a Claude Code collection alone (480 s for an
-uncapped turn's, about 673 s with a cap), a look at each saved compaction's size
-and never a read of its body, written with how the harness ended in the one
-write (`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not
+`sandbox.BoxReadBudget` holds for a Claude Code collection alone, 20 s more for
+its asker than another harness's (about 4,680 s for an uncapped turn's, about
+5,954 s with a cap), a look at each saved compaction's size and never a read of
+its body, written with how the harness ended in the one write
+(`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not
 over is counted unread with no read, since its harness may still write; a stop's
 read and a loss's ask nothing. The walk is the seam every later reading of the
 thread joins (`walkThread`, `threadReading`), never a second read.

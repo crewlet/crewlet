@@ -15,6 +15,8 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
 // fakeMCPEnv carries a [fakeScript] to the fake harness: the variable that makes
@@ -517,7 +519,7 @@ func runFakeReport(script fakeScript) {
 		_ = os.WriteFile(to, []byte(strings.Join(os.Args[1:], " ")), 0o600)
 	}
 	pid, _ := strconv.Atoi(strings.TrimPrefix(argAfter("--server"), "http://fake-"))
-	if pid <= 0 || syscall.Kill(pid, 0) != nil {
+	if !serverRunning(pid) {
 		fmt.Fprintln(os.Stderr, "fake: connection refused")
 		os.Exit(4)
 	}
@@ -529,6 +531,24 @@ func runFakeReport(script fakeScript) {
 		"input_tokens": u.Input, "output_tokens": u.Output,
 	}})
 	os.Exit(0)
+}
+
+// serverRunning reports whether the fake server whose pid its address names is
+// still running, as a real server's port answers a client: a server that has
+// exited refuses from the moment it exits, before anything reaps it, so a
+// zombie is not running ([procgrouptest.Running]). Read off kill(pid, 0), a
+// zombie answered as running until its parent reaped it, so a report asked of a
+// server that had just been stopped was answered (#1080's defect, in a fake). A
+// record the kernel would not give exits the fake 79, a status no other fake
+// exits with, rather than answer either way. Both fakes that stand in for a
+// harness's own server ask it.
+func serverRunning(pid int) bool {
+	running, err := procgrouptest.Running(pid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fake: reading the kernel's record of the server, pid %d: %v\n", pid, err)
+		os.Exit(79)
+	}
+	return running
 }
 
 // connectFake starts the server its configuration names — the relay — and

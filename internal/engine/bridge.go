@@ -247,18 +247,25 @@ const appendAttempts = len(appendRetryWaits) + 1
 
 // beginBudget bounds the write of a call's entry ahead of it
 // ([bridgeLedger.Begin]), its retries ([appendRetryWaits]) included, and so a
-// withdrawal's: FIVE SECONDS, as the write that records a job's session start
-// is given ([sessionStartRecordBudget]), and for its reason — one
-// compare-and-swap of the run's log, which a healthy coordination store
-// answers in milliseconds (11.89 at the median and 17.04 at the 99th
-// percentile, measured: internal/coord/kv's BenchmarkABoxRequestOnItsRun, its
-// begin arm), and a store that has not answered in five is in an outage the
-// call should not wait out: past it the call is
-// not run, and its box is told it may make it again. The box waits on it with
-// nothing written on the call's response — its first progress follows the
-// write — which a harness gives a minute (Claude Code 2.1.310's first-byte
+// withdrawal's: FIVE SECONDS, the reason the write that records a job's
+// session start is bounded by beside the row's crossing
+// ([sessionStartRecordBudget]) — one compare-and-swap of the run's log, which
+// a healthy coordination store answers in milliseconds (11.89 at the median
+// and 17.04 at the 99th percentile, measured: internal/coord/kv's
+// BenchmarkABoxRequestOnItsRun, its begin arm), and a store that has not
+// answered in five is in an outage the call should not wait out: past it the
+// call is not run, and its box is told it may make it again. The box waits on
+// it with nothing written on the call's response — its first progress follows
+// the write — which a harness gives a minute (Claude Code 2.1.310's first-byte
 // budget, see internal/api/mcpbridge's answerEvery). None before: the call ran
 // first, and was recorded after it.
+//
+// THE FIVE ALONE, with no crossing of the log beside them as the session start
+// record has (sandbox.RowBudget): the write is made on the harness's own
+// request, which the harness's minute bounds whatever the engine gives it, so
+// a log of megabytes across a slow link is cut by the harness first. What
+// keeps it inside that minute is writing less than the whole log
+// (crewlet/crewlet#1150).
 const beginBudget = 5 * time.Second
 
 // nameDigestPrefix is how much of a call's identity a line naming one carries
@@ -514,13 +521,17 @@ func (l *bridgeLedger) notRecorded(ctx context.Context, runID, launch string, ca
 			"and its box was told so")
 }
 
-// sessionStartRecordBudget bounds the write that records which session a job's
-// box said it started ([bridgeLedger.started]): FIVE SECONDS, as a note's pull
-// mark is given ([steerPublishBudget]), and for its reason — one compare-and-swap
-// of one row, which a healthy coordination store answers in milliseconds, and a
-// store that has not answered in five is in an outage this write waits out no
-// better. A record that missed it is read as a session of the job's own by
-// every later rebuild of the run's guard: the safe direction.
+// sessionStartRecordBudget is the reason the write that records which session a
+// job's box said it started ([bridgeLedger.recordStart]) is bounded by, beside
+// the time the run's row takes to cross to the store (sandbox.RowBudget): FIVE
+// SECONDS, as a note's pull mark is given ([steerPublishBudget]), and for its
+// reason — one compare-and-swap of one row, which a healthy coordination store
+// answers in milliseconds, and a store that has not answered in five is in an
+// outage this write waits out no better. A record that missed it is read as a
+// session of the job's own by every later rebuild of the run's guard: the safe
+// direction. Held to the five alone, a row of megabytes across a slow link was
+// cut while its bytes were still crossing (crewlet/crewlet#1076); off the
+// request's path, the crossing holds nothing up.
 const sessionStartRecordBudget = 5 * time.Second
 
 // changeNames is changes as the run's call log spells them.
@@ -557,17 +568,23 @@ func (l *bridgeLedger) started(ctx context.Context, runID string, start sandbox.
 	if launch == "" {
 		return
 	}
-	base := context.WithoutCancel(ctx)
-	go func() {
-		ctx, cancel := context.WithTimeout(base, sessionStartRecordBudget)
-		defer cancel()
-		if _, err := l.store.MarkSessionStart(ctx, runID, launch, start); err != nil {
-			log.WarnContext(ctx, "executor_session_start_unrecorded", "run_id", runID,
-				"launch_id", launch, "session_start", string(start), "error", err.Error(),
-				"detail", "the run's tools are held to the session its box started; a later "+
-					"rebuild of its skill guard takes that session for one of its own")
-		}
-	}()
+	go l.recordStart(context.WithoutCancel(ctx), runID, launch, start)
+}
+
+// recordStart is the write [bridgeLedger.started] makes off the path of the
+// request that said which session the job's box started, under base, within
+// [sessionStartRecordBudget] and the time the run's row takes to cross to the
+// store (sandbox.RowBudget); a write the store does not take is said, and read
+// as a session of the job's own.
+func (l *bridgeLedger) recordStart(base context.Context, runID, launch string, start sandbox.SessionStart) {
+	ctx, cancel := context.WithTimeout(base, sandbox.RowBudget(l.store, sessionStartRecordBudget))
+	defer cancel()
+	if _, err := l.store.MarkSessionStart(ctx, runID, launch, start); err != nil {
+		log.WarnContext(ctx, "executor_session_start_unrecorded", "run_id", runID,
+			"launch_id", launch, "session_start", string(start), "error", err.Error(),
+			"detail", "the run's tools are held to the session its box started; a later "+
+				"rebuild of its skill guard takes that session for one of its own")
+	}
 }
 
 // boxStarted is what a job's bridge session does once the job's box says which

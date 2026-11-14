@@ -297,7 +297,7 @@ func (d *dispatcher) reopen() {
 		default:
 		}
 	}
-	d.active, d.began = true, time.Now()
+	d.active, d.began = true, d.now()
 	d.invCalls, d.invRuns, d.invTurns = len(d.calls), len(d.runs), len(d.turns)
 	d.invRounds = d.rounds
 }

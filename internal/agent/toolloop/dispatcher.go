@@ -342,6 +342,9 @@ type dispatcher struct {
 	ctx         context.Context
 	terminators map[string]struct{}
 
+	// now is the clock the record reads — [Config.Now], else time.Now.
+	now func() time.Time
+
 	// gate is held SHARED by every ordinary call while it runs and
 	// EXCLUSIVELY by a call that ends or parks the phase, which therefore
 	// runs alone — see the file's doc.
@@ -399,9 +402,13 @@ func newDispatcher(ctx context.Context, cfg Config, firstRound int) *dispatcher 
 		cfg:         cfg,
 		ctx:         ctx,
 		terminators: make(map[string]struct{}, len(cfg.TerminateAfter)),
+		now:         cfg.Now,
 		done:        make(chan struct{}),
 		rounds:      firstRound,
 		invRounds:   firstRound,
+	}
+	if d.now == nil {
+		d.now = time.Now
 	}
 	d.cond = sync.NewCond(&d.mu)
 	for _, name := range cfg.TerminateAfter {
@@ -431,7 +438,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (_ llm.Se
 	if title == "" {
 		title = d.cfg.Surface.Phase()
 	}
-	r := &run{opts: opts, start: time.Now(), released: make(chan struct{}), ctx: ctx}
+	r := &run{opts: opts, start: d.now(), released: make(chan struct{}), ctx: ctx}
 	// THE RUN'S CONTEXT for its connection, which is the run's as much as its
 	// calls are; no call runs under it — see [callContext].
 	session, err := d.cfg.Host.Open(ctx, config.ToolServerName, title, &runCalls{d: d, r: r})
@@ -467,7 +474,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (_ llm.Se
 // Observe records one model request.
 func (d *dispatcher) Observe(t llm.Turn) {
 	d.mu.Lock()
-	now := time.Now()
+	now := d.now()
 	turn := d.turnByID(t.ID)
 	if turn != nil {
 		// The same request read again, further along: take what is new.
@@ -1115,7 +1122,7 @@ func (d *dispatcher) roundModelLocked(round int) string {
 // turns a panic into the phase's end.
 func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	d.mu.Lock()
-	c.started = time.Now()
+	c.started = d.now()
 	d.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
@@ -1131,7 +1138,7 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 				"and the phase was stopped.", Failed: true, Cause: mcp.RefusalInternalError}
 		}
 		d.mu.Lock()
-		c.took = time.Since(c.started)
+		c.took = d.now().Sub(c.started)
 		d.mu.Unlock()
 	}()
 	d.frame()

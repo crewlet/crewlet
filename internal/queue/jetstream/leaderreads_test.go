@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // leaderReadsToken is what accountQueue's broker requires: the dial refuses an
@@ -740,7 +741,7 @@ func heldBefore(t *testing.T, q *Queue, held *jsapitest.Held, subject string) in
 	}
 }
 
-// A RECORD READ BY ITS POSITION ACROSS A LINK IS GIVEN ITS RECORD'S CROSSING,
+// A RECORD READ BY ITS POSITION ACROSS A LINK IS GIVEN ITS RECORD'S ARRIVAL,
 // and a subject's newest, which a writer waits on, is not.
 //
 // Both replies carry a whole record, base64-encoded, as large as the log's
@@ -748,12 +749,13 @@ func heldBefore(t *testing.T, q *Queue, held *jsapitest.Held, subject string) in
 // external cluster's shape — a re-ask sent while the first reply is still
 // crossing puts the whole record on the link again, ahead of the node's lease
 // renewals, every two seconds until the first lands. So a read by position
-// is presumed lost only once its log's largest reply could have crossed at
-// the object store's floor — for this log's mebibyte, longer than any
-// caller's deadline here — and is asked once. The last-sequence read is the
+// is presumed lost only once its log's largest reply could have arrived —
+// crossed at the object store's floor, and been handled at the handling pace
+// — for this log's mebibyte, longer than any caller's deadline here — and is
+// asked once. The last-sequence read is the
 // write path's: every create asks it, and a request a member dropped across
 // an election has to be asked again in seconds, so it keeps the read term.
-func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
+func TestARecordReadAcrossALinkIsGivenItsRecordsArrival(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
 	spec.MaxMessageBytes = 1 << 20
@@ -764,9 +766,9 @@ func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
 	}
 	const subject = "crewlet.probe.log.task.a"
 	appendN(t, log, subject, 1)
-	if want := jsapi.Crossing(1<<20, objstore.MiBPace); log.crossing != want {
+	if want := jsapi.Arrival(1<<20, objstore.MiBPace); log.arrival != want {
 		t.Fatalf("the log across a link gives a record read %v beyond the read term, want "+
-			"its largest message's crossing at the object store's floor, %v", log.crossing, want)
+			"its largest message's arrival at the object store's floor, %v", log.arrival, want)
 	}
 
 	// Past two of the read term's re-asks, and well inside the crossing.
@@ -837,19 +839,53 @@ func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 	}
 }
 
+// A MEMBER'S DEAD LETTERS ARE READ GIVEN THE HANDLING OF THE LARGEST REPLY.
+//
+// A member's own connection crosses no link, but a dead letter may be as large
+// as the transport, and the leader's reply to a read of one — eleven
+// megabytes, the entry base64-encoded in JSON — is built by the leader and
+// decoded by this process. Read at the bare read term, such a read was asked
+// again at two seconds and at four while the leader was still building the
+// first reply under load, every re-ask another whole reply, and ran out its
+// five seconds with none of them answered (crewlet/crewlet#1153). So a
+// member's dead letters are read through a leader carrying the transport's
+// ceiling at no pace: its term is the read term and that reply's handling.
+//
+// Mutation: read a member's dead letters through the plain leader, and its
+// term is the bare read term.
+func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.T) {
+	t.Parallel()
+	q := openForTest(t, Config{})
+	letters, err := q.deadLetters(t.Context(), topics.DeadLetter("member.letters", "grp"))
+	if err != nil {
+		t.Fatalf("open the dead letters: %v", err)
+	}
+	if letters.copies != nil {
+		t.Fatal("a member's own connection reads its dead letters through copies, where no leaf's " +
+			"link stands between it and the leader")
+	}
+	want := jsprovision.ReadTerm + jsapi.Handling(int(q.nc.MaxPayload()))
+	if got := letters.leader.Term(); got != want {
+		t.Errorf("a member's dead letters are read at a term of %v, want the read term and the "+
+			"handling of a reply as large as the transport carries, %v", got, want)
+	}
+}
+
 // ONLY A CONNECTION TO THE NODE'S OWN MEMBER CROSSES NO LINK, AND ONLY A
 // LEAF'S CROSSES A LEAF'S — the facts the engine hands the object store as
 // its AcrossLink, and the copy reads decide by, read here off how the queue's
-// connection was made. A member's own connection alone is given no pace, and
-// a member's record read asks at the read term, its reply crossing at most a
-// cluster route. A leaf's and an external cluster's client are paced at the
+// connection was made. A member's own connection alone is given no pace: a
+// member's record read is given its reply's handling and no crossing, its
+// reply crossing at most a cluster route. A leaf's and an external cluster's
+// client are paced at the
 // object store's floor, the slowest a link is allowed to be; and only the
 // leaf's has a server on its side of the link that holds what crosses it to
 // its max_payload, which no server holds a delivery to its own client to.
 //
 // Mutation: pace a member's own connection, leave a leaf's or an external
 // cluster's unpaced, take an external dial for a leaf's link or a leaf's for
-// none, and its row goes red.
+// none, and its row goes red; give a member's record read no handling, or a
+// crossing, and its log's does.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -865,7 +901,21 @@ func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}
-	if got := (&Queue{link: linkOf(&embeddedServer{})}).recordCrossing(nil); got != 0 {
-		t.Errorf("a member's record read is given %v beyond the read term, want none", got)
+
+	// A MEMBER'S OWN LOG: its record read is given the handling of a reply of
+	// its largest record, and no crossing.
+	q := openForTest(t, Config{})
+	spec := probeDomain()
+	spec.MaxMessageBytes = 1 << 20
+	if err := q.EnsureDomainStream(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	log, err := q.DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	if want := jsapi.Handling(int(spec.MaxMessageBytes)); log.arrival != want {
+		t.Errorf("a member's record read is given %v beyond the read term, want the handling of a reply "+
+			"of its largest record and no crossing, %v", log.arrival, want)
 	}
 }

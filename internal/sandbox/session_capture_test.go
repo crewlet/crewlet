@@ -105,7 +105,7 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 				t.Fatalf("the take spooled nothing: %+v", kept)
 			}
 			rig.coordinator.Stop()
-			rig.coordinator.keepLater(spooled)
+			rig.coordinator.keepLater(t.Context(), spooled)
 			if left := rig.spools(t); len(left) != 0 {
 				t.Errorf("a keep the stopped node dropped left its spool: %v", left)
 			}
@@ -588,7 +588,7 @@ func TestATakesOwnReservationItsAnswerLostIsItsOwn(t *testing.T) {
 			t.Fatal("a take whose reservation the store applied and whose answer was lost spooled nothing, " +
 				"want it gone on under its own place")
 		}
-		rig.coordinator.keepLater(spooled)
+		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()
 		if c := rig.get("t1").Capture; c == nil || c.State != CaptureLanded ||
 			c.CaptureSeq != spooled.stamp.CaptureSeq {

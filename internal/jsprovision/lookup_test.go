@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -140,5 +141,64 @@ func TestAStreamInfoNamingNoLeaderIsAskedAgain(t *testing.T) {
 	}
 	if err := leaderAnswered("KV_x", &jetstream.StreamInfo{}); err != nil {
 		t.Errorf("a stream on one server (no cluster) was refused: %v", err)
+	}
+}
+
+// A READ WHOSE ANSWER IS STILL ARRIVING IS NEITHER ASKED AGAIN NOR CUT OFF AT
+// THE CEILING.
+//
+// A stream leader's reply that carries a value of megabytes is built by the
+// leader, crosses whatever link stands between, and is decoded, none of it
+// heard until its last byte is in. Presumed lost at the bare read term, such a
+// read was asked again while its first reply was still on its way — each
+// re-ask another whole reply built and sent — and held to the bare ceiling,
+// one whose reply takes longer than the ceiling to arrive was never taken
+// (crewlet/crewlet#1149, crewlet/crewlet#1153). Given its arrival, the read is
+// asked once and takes the reply that lands past the bare ceiling, inside the
+// arrival; the control, given none, is asked again at the term and cut off at
+// the ceiling. Exact, in a bubble.
+//
+// Mutation: grow the term alone, or the ceiling alone, by the arrival, and the
+// read is cut off at the bare ceiling, or asked again while its reply is still
+// on its way.
+func TestAReadWhoseAnswerIsStillArrivingIsNeitherAskedAgainNorCutOff(t *testing.T) {
+	t.Parallel()
+	// THE REPLY TAKES THREE CEILINGS TO ARRIVE, and lands half of that past
+	// the bare ceiling.
+	arrival := 3 * fast.Lookup
+	lands := fast.Lookup + arrival/2
+	for _, c := range []struct {
+		name   string
+		timing Timing
+		taken  bool
+		asked  func(int32) bool
+	}{
+		{"given its arrival", fast.Arriving(arrival), true, func(n int32) bool { return n == 1 }},
+		{"control", fast, false, func(n int32) bool { return n > 1 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var asks atomic.Int32
+				got, err := ReadWith(context.Background(), c.timing, func(ctx context.Context) (int, error) {
+					asks.Add(1)
+					landed := time.NewTimer(lands)
+					defer landed.Stop()
+					select {
+					case <-landed.C:
+						return 7, nil
+					case <-ctx.Done():
+						return 0, ctx.Err()
+					}
+				}, nil)
+				if taken := err == nil && got == 7; taken != c.taken {
+					t.Errorf("a reply landing %v in, past the ceiling of %v, read = %d, %v: taken %t, "+
+						"want %t", lands, fast.Lookup, got, err, taken, c.taken)
+				}
+				if n := asks.Load(); !c.asked(n) {
+					t.Errorf("a read whose reply lands %v in was asked %d times", lands, n)
+				}
+			})
+		})
 	}
 }

@@ -470,6 +470,48 @@ const (
 // kept on.
 const rowRecord kept.Record = "the run's record"
 
+// RowBudget is the bound of a change of a run's row, or of a part beside it,
+// whose caller bounds it for a reason of its own: that reason — a store's slow
+// moment, a leader's election outlasted, a teardown's grace — and the time a
+// change of a value at its bound ([RowBytes]) takes to cross this node's
+// connection to the coordination store — the read its decision is taken on,
+// and the write, for every time the store may send it — as the store says
+// ([PendingStore.RowCrossing]). In the store's own process that is none, and
+// the bound is the reason alone.
+//
+// # A row's bytes are the change's, not the reason's
+//
+// Every change of a row reads it whole and writes it whole — up to six
+// megabytes — and a node without the `data` role, or any node of an external
+// cluster, reads and sends it across a link the engine allows to carry as
+// little as a mebibyte in thirty seconds both ways: the read's reply, a third
+// larger than the row, is heard only once its last byte is in, and the
+// store's acknowledgement of the write waits on its last byte too. The store
+// gives the read the time its reply takes to arrive, and a write whose caller
+// set no deadline the crossing of what it carries; a caller's own deadline it
+// keeps. Held to a reason alone — five seconds, thirty — a row of megabytes
+// was cut while its bytes were still crossing, and read as a store that did
+// not answer: a resumed turn's carry went unrecorded, a capture's stamp was
+// asked again sending the whole row from its first byte until its budget
+// ended, and a teardown's write was abandoned (crewlet/crewlet#1076); and
+// given the write's sends alone, the read before it — four minutes for a row
+// at its bound at the floor — was left nothing (crewlet/crewlet#1149).
+// Counted at the row's bound, never at the row being changed: the store
+// decides what it writes inside its own read-decide-write, after the caller's
+// deadline is set, and a row grows between two changes of it.
+//
+// So a store that does not answer is waited on for the reason's length beyond
+// the crossing, and a healthy one answers as soon as the row is in. A budget
+// whose reader is ANOTHER node — how long a capture a node elsewhere keeps is
+// in flight, and a read stands by for it ([SessionCaptureBudget],
+// [standbyBudget]), how long a box's host may take over a read of it
+// ([BoxReadBudget]) — counts the slowest node's crossing instead,
+// coord.MaxValueCrossing, since it cannot know which node's it is. And a
+// stopping node gives no change its crossing ([Coordinator.rowContext]).
+func RowBudget(store PendingStore, reason time.Duration) time.Duration {
+	return reason + store.RowCrossing()
+}
+
 // ErrStateTooLarge is a parked turn's state past its share of the row
 // ([ExecuteStateBytes]), refused by [PendingStore.MarkSuspended] rather than by
 // the store: a row that big would refuse every write after it.

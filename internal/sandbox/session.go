@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -129,7 +130,7 @@ import (
 // A take dies with its process, leaving its place stamped begun and its spool
 // on that process's disk, so read by its age alone ([captureInFlight]) such a
 // capture held the turn's end for as long as a capture can take
-// ([SessionCaptureBudget], about twenty-one minutes), and a relaunch that
+// ([SessionCaptureBudget], about thirty-four and a half minutes), and a relaunch that
 // followed it started a session of its own beside a record the log may well
 // have taken.
 //
@@ -251,9 +252,9 @@ import (
 // decides its endings and records their ends on its own frame. So the row
 // outlives the frame that decided its ending by the settling of the turn's
 // captures — bounded by a capture's own budget ([SessionCaptureBudget], about
-// twenty-one minutes at the bounds), and where a read stands by for one that
-// does not land, by that read's takeover and keep ([endCaptureWait], about
-// thirty-nine), and for a capture whose taker is gone by
+// thirty-four and a half minutes at the bounds), and where a read stands by for
+// one that does not land, by that read's takeover and keep ([endCaptureWait],
+// about seventy-eight and a half), and for a capture whose taker is gone by
 // its lease's TTL and one read of the log (above) — and the end's write, and
 // the seat's mail waits on it as on every ending kept for its retry. A turn
 // with no capture still ends: its row names no object, and holds the account.
@@ -953,14 +954,23 @@ func (c SessionCapture) standbyOf() SessionCapture {
 }
 
 // standbyBudget is how long a read stands by for a capture, from the instant it
-// stood by ([SessionCapture.StandbyAt]), before a wait reads it as one whose
-// node stopped: as long as the capture it stands by for can take
+// stood by ([SessionCapture.StandbyAt]), before a wait reads it as one
+// whose node stopped: as long as the capture it stands by for can take
 // ([SessionCaptureBudget]), which began no later; then one more read of the
 // run's row ([captureWaitTick]), the one in which the read standing by sees how
-// that capture came out; and the one record its taking of the next place asks
-// for ([sessionRecordBudget]). Past it, a wait reads the read as gone; one
-// whose taker lease has lapsed is withdrawn sooner ([Coordinator.standDownGone]).
-var standbyBudget = SessionCaptureBudget + captureWaitTick + sessionRecordBudget
+// that capture came out; and the one stamp its taking of the next place asks
+// for ([captureStampBudget]), counted at the slowest node's crossing, since the
+// read standing by may be any node's and the wait reading its age any other.
+// Past it, a wait reads the read as gone; one whose taker lease has lapsed is
+// withdrawn sooner ([Coordinator.standDownGone]).
+//
+// AT TODAY'S BOUNDS thirty-four minutes and thirty seconds for the capture,
+// two seconds for the read, and thirteen and a half minutes for the stamp:
+// forty-eight minutes and two seconds and a fraction. Counted without the
+// stamp's crossing, a standby across a slow link whose stamp of its place was
+// still crossing would be read as gone, now that the stamp is no longer cut
+// at its thirty seconds (crewlet/crewlet#1076).
+var standbyBudget = SessionCaptureBudget + captureWaitTick + captureStampBudget
 
 // endCaptureWait is the most a turn's end waits for its captures to settle
 // ([Coordinator.awaitCapture]), on this node's clock: as long as the last of
@@ -968,19 +978,24 @@ var standbyBudget = SessionCaptureBudget + captureWaitTick + sessionRecordBudget
 // where nothing stands by for it; and where a read stands by for one that does
 // not land, [standbyBudget] — the read standing by takes the place after it no
 // later than that past the capture's own instant — and the keep of its own
-// session there ([SessionKeepBudget]). The end waits from no earlier than the
-// capture it waits on began, so this is the whole of it: at today's bounds a
-// capture's budget is twenty-one minutes (four for the take, seventeen for
-// the keep), and this thirty-eight minutes and thirty-two seconds.
+// session there ([SessionKeepBudget]) and that keep's stamp of what came of it
+// ([captureStampBudget]). The end waits from no earlier than the capture it
+// waits on began, so this is the whole of it: at today's bounds a capture's
+// budget is thirty-four minutes and thirty seconds (four for the take,
+// seventeen for the keep and thirteen and a half for its stamp, a change of a
+// row at its bound across the slowest node's link), and this seventy-eight
+// minutes and thirty-two seconds and a fraction.
 //
 // AN END THAT WAITED A CAPTURE'S BUDGET ALONE gave up on a standby's session
 // still uploading — the read holding the place refused at the end of its
 // budget, the standby's keep only starting — and recorded the end, whose
 // tombstone refused the standby's record: the session one read held whole was
-// lost though it was being kept. The wait still ends as soon as nothing is in
-// flight ([captureInFlight]), so a turn whose captures settle waits no longer
-// than it did.
-var endCaptureWait = standbyBudget + SessionKeepBudget
+// lost though it was being kept. And one that waited the standby's keep
+// without its stamp named the standby's capture begun and never finished
+// while its stamp of what came of it was still crossing. The wait still ends
+// as soon as nothing is in flight ([captureInFlight]), so a turn whose
+// captures settle waits no longer than it did.
+var endCaptureWait = standbyBudget + SessionKeepBudget + captureStampBudget
 
 // kept is the capture as a box read reports it ([SessionKept]).
 func (c SessionCapture) kept() *SessionKept {
@@ -1016,7 +1031,10 @@ func (c *SessionCapture) UnmarshalJSON(raw []byte) error {
 }
 
 // sessionRecordBudget bounds one record of a capture or an end: every attempt
-// at it, under its one operation, together.
+// at it, under its one operation, together. And it is the reason a stamp of a
+// capture on its run's row is asked again within ([Coordinator.askStamp]),
+// beside which a stamp is given the time the row takes to cross to the store
+// ([RowBudget]): a stamp writes the run's row whole.
 //
 // THIRTY SECONDS. A write the log takes is answered in milliseconds; one its
 // serving node has published and not yet applied is answered within the
@@ -1065,10 +1083,30 @@ const SessionTakeBudget = SessionPackWait + SessionScrubWait
 // seconds each) and its record ([sessionRecordBudget]).
 var SessionKeepBudget = objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 
-// SessionCaptureBudget is the most a capture takes from its take to its record:
-// a capture stamped begun longer ago than this is one whose node stopped, or
-// whose budget ran out, before it could stamp what came of it.
-var SessionCaptureBudget = SessionTakeBudget + SessionKeepBudget
+// SessionCaptureBudget is the most a capture takes from its take to its stamp
+// of what came of it: the take ([SessionTakeBudget]), the keep
+// ([SessionKeepBudget]) and the stamp, made after the keep and off its budget
+// ([captureStampBudget]). A capture stamped begun longer ago than this is one
+// whose node stopped, or whose budget ran out, before it could stamp what came
+// of it — on any node's clock, which is why the stamp is counted at the
+// slowest node's crossing. Counted without the stamp, every reader aged out a
+// capture whose stamp of what came of it was still crossing a slow link: a
+// standby took its place over and uploaded the session again, and a turn's end
+// named it begun and never finished.
+//
+// AT TODAY'S BOUNDS thirty-four minutes and thirty seconds and a fraction: four
+// for the take, seventeen for the keep and thirteen and a half for the stamp.
+var SessionCaptureBudget = SessionTakeBudget + SessionKeepBudget + captureStampBudget
+
+// captureStampBudget is the most a capture's stamp of what came of it takes,
+// as a node reads its age: every attempt at it, within one record's budget
+// ([sessionRecordBudget]) and the time a change of the run's row takes to
+// cross to the store, its read and its write ([Coordinator.askStamp],
+// [RowBudget]) — counted at the slowest node's link (coord.MaxValueCrossing),
+// since the stamp is made by whichever node keeps the capture or takes its
+// place, and its age is read by any. Thirteen and a half minutes and a
+// fraction at today's bounds.
+var captureStampBudget = sessionRecordBudget + coord.MaxValueCrossing
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
 // way finish before it cancels them ([Coordinator.Stop]): the teardown grace
@@ -1506,10 +1544,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})
 	}
-	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
-	// reservation answered after the take's deadline reserves a place for a
-	// take that can no longer spool, and leaves the outcome stamp none of the
-	// room it is kept before by ([Coordinator.takeContext]).
+	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
+	// keeps for the reservation beside the pack's budget
+	// ([Coordinator.reserveRoom]) — never past it: a reservation answered
+	// after the take's deadline reserves a place for a take that can no
+	// longer spool, and leaves the outcome stamp none of the room it is kept
+	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	if standing {
 		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at)
@@ -1833,19 +1873,31 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 }
 
 // takeContext is the context a take runs under, and the instant by which its
-// own records must be made: its own budget ([SessionTakeBudget]), and never
-// past where the read it is part of must stop to leave those records their
-// room — the stamp of what came of it ([Coordinator.settleContext]), the
-// digest it leaves in the box ([stampContext]) — and after them its pause and
-// its answer theirs ([discardGrace] each). So nothing a take does, cut short or
-// not, costs the box its pause, which is what holds a collected box asleep, and
-// bounded by the pause reaper, until whatever its turn does next.
+// own records must be made: its own budget ([SessionTakeBudget]) for its pack
+// and its scrub, and beside it the room its reservation of the capture's place
+// is given ([Coordinator.reserveRoom]) — never past where the read it is part
+// of must stop to leave its records their room ([Coordinator.takeRecordsRoom]):
+// the stamp of what came of it ([Coordinator.settleContext]), the digest it
+// leaves in the box ([stampContext]) and how its job's harness ended
+// ([Coordinator.markHarnessEnd]) — and after them the pause and its record and
+// the answer theirs ([Coordinator.pauseRoom]). So nothing a take does, cut short
+// or not, costs the box its pause, which is what holds a collected box asleep,
+// and bounded by the pause reaper, until whatever its turn does next.
 // by is zero where the read has no deadline.
+//
+// THE RESERVATION'S ROOM BESIDE THE TAKE'S OWN BUDGET, never inside it: the
+// place is reserved once the session is packed ([Coordinator.takeCapture]),
+// writing the run's row whole, and a pack at its bound — its own wait
+// ([SessionPackWait]) — left a reservation inside the take's budget nothing
+// but the scrub's minutes, which the spool after it needs, and across a slow
+// link a row of megabytes takes minutes to read and write: the reservation
+// was cut while its bytes were still crossing, and no capture was made
+// (crewlet/crewlet#1151).
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
-	deadline := time.Now().Add(SessionTakeBudget)
-	by := recordsBy(ctx)
+	deadline := time.Now().Add(SessionTakeBudget + c.reserveRoom())
+	by := c.recordsBy(ctx)
 	if !by.IsZero() {
-		if last := by.Add(-discardGrace); last.Before(deadline) {
+		if last := by.Add(-c.takeRecordsRoom()); last.Before(deadline) {
 			deadline = last
 		}
 	}
@@ -1853,16 +1905,42 @@ func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context
 	return take, cancel, by
 }
 
+// reserveRoom is the room a take gives its reservation of the capture's place
+// beside its own budget ([Coordinator.takeContext]): one record's reason
+// ([sessionRecordBudget]), within which the reservation is asked again while
+// the store does not answer ([Coordinator.askStamp]), and the time a change of
+// the run's row at its bound takes to cross this node's connection to the
+// store ([RowBudget]) — none in the store's own process.
+func (c *Coordinator) reserveRoom() time.Duration { return RowBudget(c.pending, c.recordBudget) }
+
+// takeRecordsRoom is the room a read leaves the records it makes after its
+// take, before its pause ([Coordinator.recordsBy]): a teardown's grace
+// ([discardGrace]) for those records and the digest a take leaves in the box,
+// and the crossing of each of the two changes of the run's row among them —
+// the stamp of what came of the take and how its job's harness ended — at this
+// node's connection to the store ([PendingStore.RowCrossing]): none in the
+// store's own process.
+func (c *Coordinator) takeRecordsRoom() time.Duration {
+	return discardGrace + 2*c.pending.RowCrossing()
+}
+
+// pauseRoom is the room a read leaves its box's pause, the pause's record on
+// the run's row ([PendingStore.MarkBoxPaused]) and its answer: a teardown's
+// grace ([discardGrace]) and the crossing of that one change of the row at
+// this node's connection to the store — none in the store's own process.
+func (c *Coordinator) pauseRoom() time.Duration { return discardGrace + c.pending.RowCrossing() }
+
 // recordsBy is the instant by which a read's records made after its take must
 // be made — the take's own ([Coordinator.takeContext]) and how its job's
-// harness ended ([Coordinator.markHarnessEnd]) — so its pause and its answer
-// keep their room ([discardGrace]); zero where the read has no deadline.
-func recordsBy(ctx context.Context) time.Time {
+// harness ended ([Coordinator.markHarnessEnd]) — so its pause, the pause's
+// record and its answer keep their room ([Coordinator.pauseRoom]); zero where
+// the read has no deadline.
+func (c *Coordinator) recordsBy(ctx context.Context) time.Time {
 	d, ok := ctx.Deadline()
 	if !ok {
 		return time.Time{}
 	}
-	return d.Add(-discardGrace)
+	return d.Add(-c.pauseRoom())
 }
 
 // stampContext is the context the one record a take makes only once is made
@@ -1874,10 +1952,27 @@ func recordsBy(ctx context.Context) time.Time {
 // ([Coordinator.settleContext]).
 func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
 	stamp, cancel := detached(ctx)
+	return before(stamp, cancel, by)
+}
+
+// recordContext is [stampContext] for a record a read makes once on the run's
+// row — how its job's harness ended ([Coordinator.markHarnessEnd]): one of its
+// own within the grace and the time the row takes to cross to the store
+// ([Coordinator.detachedRecord]), never past by. The grace alone was a box
+// call's, which a row of megabytes across a slow link outlasts while its bytes
+// are still crossing (crewlet/crewlet#1076).
+func (c *Coordinator) recordContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	record, cancel := c.detachedRecord(ctx)
+	return before(record, cancel, by)
+}
+
+// before is ctx, whose cancel is cancel, held to end no later than by as well;
+// ctx itself for by zero.
+func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (context.Context, context.CancelFunc) {
 	if by.IsZero() {
-		return stamp, cancel
+		return ctx, cancel
 	}
-	bounded, cancelBounded := context.WithDeadline(stamp, by)
+	bounded, cancelBounded := context.WithDeadline(ctx, by)
 	return bounded, func() {
 		cancelBounded()
 		cancel()
@@ -1957,15 +2052,17 @@ func (c *Coordinator) sweepSpools() {
 
 // keepLater keeps a spooled capture off the frame that took it, on the
 // coordinator's own lifetime ([Coordinator.keepCapture]); nothing for nil. A
-// coordinator that is stopping keeps nothing more, and says why on the stamp.
-func (c *Coordinator) keepLater(spooled *spooledCapture) {
+// coordinator that is stopping keeps nothing more, and says why on the stamp,
+// made under ctx, the frame's: so a capture the coordinator's own stopped work
+// took is stamped within the stop's one grace ([Coordinator.Stop]).
+func (c *Coordinator) keepLater(ctx context.Context, spooled *spooledCapture) {
 	if spooled == nil {
 		return
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		c.dropSpool(spooled, "the node stopped before the session could be uploaded")
+		c.dropSpool(ctx, spooled, "the node stopped before the session could be uploaded")
 		return
 	}
 	c.keeping.Add(1)
@@ -1978,14 +2075,15 @@ func (c *Coordinator) keepLater(spooled *spooledCapture) {
 
 // dropSpool refuses a spooled capture that will not be kept, saying why, and
 // removes its spool: a standby, which holds no place to refuse, is withdrawn
-// instead ([Coordinator.standDown]), so no wait holds for it.
-func (c *Coordinator) dropSpool(spooled *spooledCapture, why string) {
+// instead ([Coordinator.standDown]), so no wait holds for it. The stamp is made
+// under a context of its own, keeping ctx's values ([detach]).
+func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, why string) {
 	defer func() { _ = os.Remove(spooled.file) }()
 	if spooled.standby {
-		c.standDown(c.keepLife, time.Time{}, spooled.run, spooled.stamp, why)
+		c.standDown(ctx, time.Time{}, spooled.run, spooled.stamp, why)
 		return
 	}
-	c.finishCapture(c.keepLife, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
+	c.finishCapture(ctx, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
 }
 
 // keepCapture uploads a spooled capture into the object it was sealed for,
@@ -2115,7 +2213,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun) {
 		return
 	}
 	spooled, _ := c.readLost(ctx, run)
-	c.keepLater(spooled)
+	c.keepLater(ctx, spooled)
 }
 
 // readLost is the read of a lost run's box on this node's host — for this
@@ -2417,7 +2515,7 @@ func (c *Coordinator) abandonPlace(ctx context.Context, by time.Time, run Pendin
 // ([Coordinator.settleContext]).
 //
 // ASKED AGAIN BECAUSE A STAMP LEFT BEGUN IS READ AS A KEEP STILL UNDER WAY for
-// as long as a capture can take ([SessionCaptureBudget], twenty minutes and
+// as long as a capture can take ([SessionCaptureBudget], half an hour and
 // more): the turn's end waits that long on it, and a relaunch reads a capture
 // that settled as one it cannot continue. Once the record's budget is spent
 // the store's outage is its own alarm's, and the stamp ages out as never
@@ -2448,10 +2546,16 @@ type stampWrite func(ctx context.Context, turnID string, stamp SessionCapture) (
 
 // askStamp stamps a capture on its run's row through write, asked again while
 // the coordination store does not answer, spaced by a doubling wait, within one
-// record's budget ([sessionRecordBudget]) and under a context of its own, never
-// past by ([Coordinator.settleContext]): whether the row took it, how many times
-// it was asked, and the store's last error where it never answered — the one
-// way of asking every stamp of a capture takes.
+// record's budget ([sessionRecordBudget]) and the time the row takes to cross
+// to the store ([RowBudget]), under a context of its own, never past by
+// ([Coordinator.settleContext]): whether the row took it, how many times it was
+// asked, and the store's last error where it never answered — the one way of
+// asking every stamp of a capture takes.
+//
+// THE CROSSING TOO, because every stamp sends the row whole: held to the
+// record's thirty seconds alone, a row of megabytes across a slow link was cut
+// while its bytes were still crossing, and asked again from its first byte
+// until the budget ended, never taken (crewlet/crewlet#1076).
 func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 	stamp SessionCapture, write stampWrite) (bool, int, error) {
 
@@ -2473,20 +2577,18 @@ func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 }
 
 // settleContext is the context a stamp asked again is made under: one of its
-// own, which outlives the caller's, within one record's budget — and never past
-// by, where the read a take is part of needs the rest of its time for the box's
+// own, which outlives the caller's, within one record's budget and the time the
+// run's row takes to cross to the store ([RowBudget]) — and never past by,
+// where the read a take is part of needs the rest of its time for the box's
 // pause, as [stampContext] bounds a take's single record. by zero, a stamp made
-// off the read, is bounded by the record's budget alone.
+// off the read, is bounded by the record's budget and the crossing alone.
 func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
-	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
-	if by.IsZero() {
-		return settle, cancel
-	}
-	bounded, cancelBounded := context.WithDeadline(settle, by)
-	return bounded, func() {
-		cancelBounded()
+	free, release := detach(ctx)
+	settle, cancel := c.rowContext(free, c.recordBudget)
+	return before(settle, func() {
 		cancel()
-	}
+		release()
+	}, by)
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its
@@ -3107,10 +3209,10 @@ func turnEndOf(run PendingRun, ending executorkeep.Ending) TurnEnd {
 // DECIDED ONCE: a turn that owes an end already keeps it, and this one is
 // dropped, which is what lets two paths that end one turn end it once.
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]): a frame that ends a turn is often
-// one a drain is cancelling, and an end that frame could not owe was recorded
-// at once instead — before the turn's captures settled, and without what they
-// came to.
+// UNDER A CONTEXT OF ITS OWN ([Coordinator.detachedRecord]): a frame that ends
+// a turn is often one a drain is cancelling, and an end that frame could not
+// owe was recorded at once instead — before the turn's captures settled, and
+// without what they came to.
 //
 // FITTED TO THE EXECUTOR LOG'S BOUNDS BEFORE IT RIDES THE ROW
 // ([executorkeep.Ending.Fit]): its prose is a model's and a guard's — a
@@ -3124,7 +3226,7 @@ func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executor
 	if err != nil {
 		return false, err
 	}
-	ctx, cancel := detached(ctx)
+	ctx, cancel := c.detachedRecord(ctx)
 	defer cancel()
 	owing, _, err := c.pending.OweEnd(ctx, turnID, raw)
 	if err != nil {
@@ -3160,7 +3262,9 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	if err != nil {
 		return PendingRun{}, err
 	}
-	owing, _, err := c.pending.OweEnd(ctx, run.TurnID, raw)
+	writeCtx, writeDone := c.endingCall(ctx)
+	owing, _, err := c.pending.OweEnd(writeCtx, run.TurnID, raw)
+	writeDone()
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: recording the end turn %s owes: %w", run.TurnID, err)
 	}
@@ -3231,7 +3335,10 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 			return run, recordErr
 		}
 	}
-	if _, clearErr := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); clearErr != nil {
+	clearCtx, clearDone := c.endingCall(ctx)
+	_, clearErr := c.pending.ClearEnd(clearCtx, run.TurnID, run.OwedEnd)
+	clearDone()
+	if clearErr != nil {
 		return run, fmt.Errorf("sandbox: clearing the end turn %s owed, which the executor log has: %w",
 			run.TurnID, clearErr)
 	}

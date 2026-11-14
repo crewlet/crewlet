@@ -455,10 +455,40 @@ states how its connection reaches the store when it opens it, from its
 broker's kind, since the store cannot see how the connection was made. A
 node's MCP listings are written on a pass of their own beside its fifteen-second
 beat, each write waiting as long as its bytes take, so a slow listing holds up
-no beat. What this does not cover is the event system's to say, and the same:
+no beat. A caller that bounds a change of a value of megabytes for a reason of
+its own — a sandbox run's record and the parts beside it — adds the crossing
+itself: the store says how long a change of a value at what one key holds
+takes to cross the node's connection — its read's reply, below, and every
+send of its write (`coord.MaxValueCrossing`, thirteen minutes, across a link
+at the floor; none in the store's own process) — and the caller's bound is its
+reason and that
+([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)). What this does not cover is the event system's to say, and the same:
 a link slower than the floor, a link busy with traffic ahead of the write, and
 the lease renewals a large write holds behind it
 ([Delivery Semantics](event-system.md#delivery-semantics)).
+
+A read of a **large value waits as long as its reply takes to cross.** Every
+read of a key is its stream leader's, whose reply carries the value
+base64-encoded in JSON, a third larger, heard only once its last byte is in.
+A read is otherwise asked again two seconds after it was sent and every two
+after that, and never for longer than thirty seconds, the longest silence the
+broker keeps. For a bucket whose values are budgeted to what one key holds — a
+sandbox run's record and the parts beside it — a reply at the bound is eight
+mebibytes: four minutes across a link at the floor. Held to the thirty
+seconds, such a read across a slow link was never answered, so a record past
+about 768 KiB could not be read, nor changed by the read-decide-write every
+change of it is; and asked again every two seconds, each re-ask put another
+whole reply on the link the first was still crossing. So across a link a read
+of such a bucket is given the crossing of a reply at its bound at the floor,
+beyond the read term and beyond the thirty seconds: it is asked once while its
+reply can still be on its way. On a member's own connection, which crosses
+nothing, it keeps the read term: a caller waits on every such read within a
+reason of its own — five seconds at the shortest — and a request a member
+dropped across an election is asked again two seconds later, inside it,
+where the new leader answers it. Building and decoding a reply of eight
+mebibytes takes a node tens of milliseconds, well inside the read term. A
+bucket of small values keeps the read term and the thirty seconds wherever
+the node is.
 
 ---
 

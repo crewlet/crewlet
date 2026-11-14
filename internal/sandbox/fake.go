@@ -437,6 +437,11 @@ type FakeProvider struct {
 	// a control plane that is slow to answer, or does not, for one box
 	// while it answers for the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
+	// KillFunc, when set, is called by every Kill on a live context before
+	// it answers, WITHOUT the provider's lock, and a non-nil answer fails
+	// the Kill unrecorded — a control plane that is slow to answer a
+	// reclaim, or does not.
+	KillFunc func(ctx context.Context, sandboxID string) error
 	// Made, when set, is handed every box Create makes, before Create
 	// answers: a case scripts a fresh box's commands there.
 	Made func(box *FakeSandbox)
@@ -546,6 +551,14 @@ func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, e
 func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	p.mu.Lock()
+	kill := p.KillFunc
+	p.mu.Unlock()
+	if kill != nil {
+		if err := kill(ctx, sandboxID); err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
