@@ -253,6 +253,13 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: which agent a per-agent server is tested as, in its dialog",
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
     "modal: a header or variable's new value, write-only, in its dialog",
+  "routes/agents/ScheduleControls.tsx":
+    "modal: a new schedule, or a schedule's owner, cron, task and who runs it, in its dialog",
+  "routes/settings/DelegatedRuleDialog.tsx":
+    "modal: a delegated-decision rule's kinds and delegates, in its sheet",
+  "routes/settings/Limits.tsx":
+    "saved per change: one limit's value, in the panel its pencil opens, written by that " +
+    "panel's own Save",
   "components/TitleField.tsx":
     "not an editor: one field; every screen that draws it holds the value and declares the draft",
   "components/ConfigField.tsx":

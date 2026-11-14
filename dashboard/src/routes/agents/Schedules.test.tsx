@@ -32,6 +32,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { Router } from "~/app/router.tsx";
 import { pinZoneForTest } from "~/lib/prefs.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -259,6 +260,8 @@ async function mountScreen(
     grants?: string[];
     /** The fires both histories answer with, in place of the one fire. */
     runs?: Record<string, unknown>[];
+    /** Who reads the screen, in place of a person the engine serves nothing. */
+    viewer?: Record<string, unknown>;
   } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", {
@@ -297,7 +300,7 @@ async function mountScreen(
         : what === "schedule_runs"
           ? { runs: over.runs ?? [fire], truncated: false }
           : what === "viewer"
-            ? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] }
+            ? (over.viewer ?? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] })
             : {},
     );
   const view = render(
@@ -613,6 +616,28 @@ test("the list offers a new schedule and a schedule's page its own controls", as
   for (const name of [/Run now/, /Edit/, /Pause/, /Delete/]) {
     expect(screen.getByRole("button", { name })).toBeTruthy();
   }
+});
+
+// RUN NOW IS DRAWN FOR A READER WHO CANNOT RUN IT, disabled with the sentence
+// that says what would change that: it is the one control here that makes a
+// change through the act gate (`run_schedule`), so the write gate holds this
+// suite to drawing it for each reader the gate refuses.
+test.each([
+  ["an anonymous reader", { login: "", acts: [], grants: [] }, WRITE_REASONS.anonymous],
+  [
+    "a person the engine does not serve",
+    { login: "ana", owner: "ana", acts: [], grants: [] },
+    WRITE_REASONS.not_served,
+  ],
+])("Run now is drawn for %s, disabled with the reason", async (_who, viewer, reason) => {
+  await mountScreen(["role", "pm", "standup"], { viewer });
+  const button = screen.getByRole("button", { name: /Run now/ });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  const said = (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+  expect(said).toContain(reason);
 });
 
 // THE CRON'S SENTENCE IS THE SCHEDULE'S CLOCK, said where the reader's reads

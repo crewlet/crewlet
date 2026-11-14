@@ -176,6 +176,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "rename, trash, restore and purge its own routes take",
     suite: "routes/doclet/page/PageView.test.tsx",
   },
+  "routes/agents/ScheduleControls.tsx": {
+    why:
+      "a schedule's Run now (run_schedule), on its page and its peek, held with the " +
+      "schedule's own reason where it is paused or nobody can run it",
+    suite: "routes/agents/Schedules.test.tsx",
+  },
   "routes/artifacts/new/fileTask.ts": {
     why:
       "a create page's ask an agent: one create_work_item filed to the chosen seat, " +

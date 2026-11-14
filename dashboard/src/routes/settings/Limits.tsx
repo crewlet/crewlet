@@ -312,7 +312,7 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
       source={source.words}
       changed={source.changed}
     >
-      <span className="ceiling limit-value">
+      <span className="ceiling">
         <span>{amountWords(shown, shown.value, shown.off)}</span>
         {mark && (
           <span className="ceiling-applying t-caption" role="status">
