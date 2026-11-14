@@ -2739,7 +2739,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state. SSH's also carries `ssh`: the authority's public line (`ca_public_key`, and `next_ca_public_key` during a rotation), the lines rotations retired (`retired_ca_public_keys`, newest last, which each server drops when its setup runs again), the `setup_version` this engine renders, the closed set of commands the engine runs on a server that lets the atlas read it (`inventory_commands`: `{"command", "containers"}`, `containers` marking the one run only where a server's container reads are on), and each server with its key fingerprints, users, whether the atlas reads it (`inventory`), the agents naming it and its latest Test connection with the current authority, as the server is now (a test from before its fields changed is not shown) |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `POST` | `/setup/integrations/{kind}/verify` | Check one typed credential at its vendor with a read-only call, before anything stores it. Writes nothing: no secret, no config, no revision and no reconcile state. See [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored) |
-| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
+| `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block, turning off the agents that were on there in the same revision |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
@@ -3907,6 +3907,24 @@ account with nothing left to authenticate a second attempt. Until the teardown
 succeeds the surface reports phase `disconnecting`, labelled **Disconnecting**,
 and a failure holds it there and retries rather than letting it drift back to
 looking connected.
+
+**The block and the agents on through it leave in one revision.** The company
+document refuses an agent turned on at an integration the company has not
+connected (Mattermost, Jira, Confluence, SSH), so the revision that removes the
+block also turns off every seat that was on there: `enabled` becomes `false`
+and the rest of the seat's block (its roles, channels, projects, servers) is
+kept, so connecting again and turning the agent on restores what it was given.
+A seat already off, or with no block, is left as it is. The block alone used to
+be the whole revision, which those rules refused: the teardown retried it for
+ever and `force` answered `400`, until somebody turned every agent off by hand.
+A forced disconnect answers the handles it turned off as `seats_off`.
+
+A failed teardown pass is recorded on the surface's reconcile row with
+`teardown_held_by`: `vendor` where the third-party app's half failed, and
+`settings` where that half finished and the company's settings refused the
+revision that removes the block (some other rule the removal breaks, which
+`last_error` names by path). Forcing writes the same revision, so a disconnect
+the settings hold is moved by changing the setting, then disconnecting again.
 
 ```json
 { "remove_seats": false, "force": false }

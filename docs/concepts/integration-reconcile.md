@@ -281,6 +281,7 @@ GET /query/integrations
     "outcome": "blocked",
     "attempts": 3,
     "last_error": "",
+    "teardown_held_by": "",
     "last_attempt_at": "2026-03-01T12:00:00Z",
     "settled_at": "2026-03-01T09:14:00Z",
     "next_attempt_at": "2026-03-01T13:00:00Z",
@@ -348,6 +349,8 @@ The tool then takes one surface's verdict: a **teardown** first, whatever else i
 Every state on a line or a page is the roll-up's (the phase labels above and the roll-up's own words: **Connecting**, **Paused**, **Action needed**, **Credential expiring**, **Status unavailable**, **Not in use**), and the screen adds none of its own. So while it has not read the `integrations` answer (still loading, refused for want of `admin`, or failed before it ever answered) it draws **no state** at all, on the page and in the peek alike, and once the read has been refused or has failed, its banner says why: a refusal naming the access that would admit the reader (Admin), a failure offering to ask again. A screen that filled the gap with a default once read Slack as *Connecting* in amber for as long as the read was missing. None of these claims the integration works, which is the distinction the whole screen turns on. A reader without Admin is never asked the question at all: the page shows them Crewlet's own services and lists the apps with no state.
 
 A tool's page holds everything else in the object above: each faulted surface with its `detail`, named, so "Jira: swe has no Jira account" reads on the Atlassian page; the actor, the link, the fault and the findings the phase was not derived from; each agent's row with its own step at the vendor; the settings form, Disconnect, the provisioning passes and each surface's deliveries. What a line is *drawn* as follows the `actor`, not the phase: amber only where a person owes the next step (`admin` or `operator`) or where ingress is broken, because nothing the engine or a third-party app is doing needs a person told about it.
+
+**A failed disconnect says what holds it.** `teardown_held_by` is `vendor` where the third-party app's half of a teardown failed, `settings` where that half finished and the company's settings refused the revision that removes the block, and empty where no teardown pass failed. The two have different ways out: a vendor that will not let go is forced past, and a refusal of the settings is moved by changing the setting `last_error` names, since forcing writes the same revision. The disconnect's revision turns off every agent that was on at the integration as it removes the block, so the rule that refuses an agent turned on where the company has no connection is no longer one a disconnect can trip.
 
 `last_error` is a **fault**, not a finding: the engine or the third-party app failing to look at the world at all, rather than a statement about it. A pass that fails drops the previous pass's findings rather than leaving them standing under a fresh timestamp, because a pass that failed did not observe anything.
 

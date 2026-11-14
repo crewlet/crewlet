@@ -279,3 +279,100 @@ func EditSeats(doc *config.Company, edits []SeatEdit) error {
 	}
 	return nil
 }
+
+// DisconnectRequest removes one integration's block from the company document.
+type DisconnectRequest struct {
+	// Kind is the integration, as `integrations.<kind>` names its block.
+	Kind string
+
+	// Summary is the audit sentence stored on the revision.
+	Summary string
+
+	// By is who the revision records as its author; see [ApplyRequest.By].
+	By iam.Actor
+
+	// Engine marks the engine's own write, made by its teardown once the
+	// vendor's half has finished; see [ApplyRequest.Engine].
+	Engine bool
+
+	// Expect and Stated are the revision the caller built on and whether its
+	// request named it in an If-Match header; see [ApplyRequest.Expect].
+	Expect string
+	Stated bool
+}
+
+// Disconnected is what a disconnect wrote: the revision, and the seats it
+// turned off at the integration, by handle.
+type Disconnected struct {
+	Applied
+	SeatsOff []string
+}
+
+// Disconnect removes an integration's block and turns off every seat that was
+// on through the connection it held, as ONE revision.
+//
+// THE ONE WRITER OF A DISCONNECT, for the engine's teardown and for a forced
+// one alike. Each used to send the merge patch `{"integrations":{kind:null}}`
+// alone, and where the document refuses an agent turned on at an integration
+// the company has not connected (Mattermost, Jira, Confluence, SSH) that
+// revision was refused: the teardown retried it for ever and the forced
+// disconnect answered 400, until somebody turned every agent off by hand.
+// What a disconnect leaves has to be a document the rules accept, so the
+// seats go off in the revision the block leaves in
+// ([config.Company.TurnOffDisconnected]): one decision, reviewed and reverted
+// as one.
+//
+// The refusals are a write's: a [*RacedError] for a stale Expect and a
+// [*ValidationError] for a company the change still leaves invalid, which is
+// then some other rule's to say.
+func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Disconnected, error) {
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" {
+		return Disconnected{}, &PatchError{Err: errEmptyPatch}
+	}
+	patch, err := json.Marshal(map[string]any{"integrations": map[string]any{kind: nil}})
+	if err != nil {
+		return Disconnected{}, fmt.Errorf("configapi: encode the disconnect of %s: %w", kind, err)
+	}
+	var off []string
+	access := entityKinds[EntityRoles]
+	d := draft{
+		expect: req.Expect, stated: statedPrecondition(req.Stated, req.Expect),
+		requireActive: true, by: req.By, engine: req.Engine,
+		rules: authoredRules, authored: true,
+		build: func(b base) (*config.Company, []byte, error) {
+			document, err := applyMergePatch(b.document, patch)
+			if err != nil {
+				return nil, nil, &PatchError{Err: err}
+			}
+			next, err := config.DecodeCompany(document)
+			if err != nil {
+				return nil, nil, fmt.Errorf("configapi: decode the disconnected config: %w", err)
+			}
+			next.RestoreRedacted(b.prior)
+			// THE SEATS ARE SPLICED INTO THE STORED BYTES one by one, as a
+			// save of several seats is, so everything this build cannot
+			// represent on a seat it turns off is carried.
+			off = next.TurnOffDisconnected(b.prior)
+			for _, handle := range off {
+				entity, found := access.find(next, handle)
+				if !found {
+					return nil, nil, &EntityError{Err: fmt.Errorf("%w: no seat %q", ErrNoSuchEntity, handle)}
+				}
+				if document, err = spliceStored(document, access, handle, entity, false); err != nil {
+					return nil, nil, err
+				}
+			}
+			return next, document, nil
+		},
+	}
+	prepared, err := s.prepare(ctx, d)
+	if err != nil {
+		return Disconnected{}, err
+	}
+	applied, err := s.commit(ctx, prepared, req.Summary)
+	if err != nil {
+		return Disconnected{}, err
+	}
+	return Disconnected{Applied: applied, SeatsOff: off}, nil
+}

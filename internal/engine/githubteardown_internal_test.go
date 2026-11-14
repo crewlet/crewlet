@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -46,11 +47,13 @@ func newSeatWriter(handle string, app map[string]any) *seatWriter {
 	}}
 }
 
-func (w *seatWriter) Apply(_ context.Context, _ []byte, _ string, by iam.Actor) error {
+func (w *seatWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
+
+func (w *seatWriter) Disconnect(_ context.Context, _ integration.Kind, _ string, by iam.Actor) ([]string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.dropped = append(w.dropped, by)
-	return nil
+	return nil, nil
 }
 
 func (w *seatWriter) Seat(_ context.Context, handle string) ([]byte, error) {
