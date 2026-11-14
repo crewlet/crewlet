@@ -9039,6 +9039,13 @@ the left, following the scroll (`Outline`, `useActiveHeading`), so where the
 reader is in a long page is always in view. Below the phone breakpoint the
 page is one column and the outline is not drawn.
 
+Its headings step by one under the trail's `h1`: the page's title is an `h2`
+(`DocumentTitle as="h2"`), as every object's title is in the frame, and the
+body's shallowest heading is an `h3` whatever `#` it was written with, each
+deeper one stepping from it (`renderMarkdown`'s `headingsFrom`). A title drawn
+as a second `h1` gave a screen reader two page titles, and a body written from
+`##` opened two levels under it.
+
 - **The page bar**: the eye, **History**, **Edit** and **More**. The eye
   watches or stops watching as the person (a `save_page` carrying nothing but
   `watch`), and the count beside it opens who is told: the watchers less the

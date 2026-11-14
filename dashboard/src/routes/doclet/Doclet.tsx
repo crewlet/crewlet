@@ -1347,7 +1347,7 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
         </Card.Header>
         {body.trim() ? (
           <Document size="sm" measure="none">
-            {renderMarkdown(body, { highlight: terms })}
+            {renderMarkdown(body, { highlight: terms, headingsFrom: 3 })}
           </Document>
         ) : (
           <p className="knowledge-note">

@@ -772,3 +772,20 @@ test("offers its filters to Ask Crewlet whatever the number of agents", () => {
   );
   expect(parseUrlPatch({ seat: "nobody" }, keys).ok).toBe(false);
 });
+
+// A CARD'S TITLE IS ONE UNDER THE PAGE'S: the trail's last crumb is the h1,
+// and every card here was a fixed h3, a level no heading on the page stood
+// at. Mutation: put `as="h3"` back on a card's title and this goes red.
+test("every card's title is a heading one under the page's title", async () => {
+  const { asked } = mount();
+  await phasesCard(asked);
+  for (const title of [
+    "Running turns",
+    "Waiting on a person",
+    "In a box",
+    "Activity",
+    "Recent phases",
+  ]) {
+    expect(screen.getByRole("heading", { name: title }).tagName, title).toBe("H2");
+  }
+});

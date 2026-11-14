@@ -406,8 +406,25 @@ test("the outline lists the sections, and a body's first line that repeats the t
       .getAllByRole("button")
       .map((b) => b.textContent),
   ).toEqual(["When a host fails", "Escalation"]);
-  // The title is the page's h1 and nowhere else.
+  // The title is drawn once.
   expect(screen.getAllByText("Provisioner runbook", { selector: "h1, h2, h3" })).toHaveLength(1);
+});
+
+// THE PAGE'S OUTLINE STEPS BY ONE UNDER THE TRAIL'S h1: its title an h2, as
+// every object's title is in the frame, and its body's first heading an h3
+// whatever `#` it was written with. The title was a second h1 and a body
+// written from `##` opened two levels under it. Mutation: draw the title as
+// an h1 again, or the body from its own levels, and this goes red.
+test("the title is an h2 and the body's sections step from h3", async () => {
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  expect(screen.getByRole("heading", { name: "Provisioner runbook" }).tagName).toBe("H2");
+  expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
+  expect(screen.getByRole("heading", { name: "When a host fails" }).tagName).toBe("H3");
+  expect(screen.getByRole("heading", { name: "Escalation" }).tagName).toBe("H3");
+  // And the Connections cards sit under their section's h2.
+  expect(screen.getByRole("heading", { name: "Connections" }).tagName).toBe("H2");
+  expect(screen.getByRole("heading", { name: /^Read by agents/ }).tagName).toBe("H3");
 });
 
 // A FOLDER IS A PAGE WITH NOTHING WRITTEN IN IT: it says what it groups.

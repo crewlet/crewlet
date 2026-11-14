@@ -184,7 +184,10 @@ function PageProps({
  * written in it), what it groups.
  */
 function PageBody({ detail, body }: { detail: PageDetail; body: string }) {
-  if (body.trim()) return <Document>{renderMarkdown(body, { anchors: true })}</Document>;
+  // THE BODY IS THE PAGE under its title's h2 (the trail holds the h1), so its
+  // first heading is an h3 whatever `#` it was written with.
+  if (body.trim())
+    return <Document>{renderMarkdown(body, { anchors: true, headingsFrom: 3 })}</Document>;
   const children = detail.children ?? [];
   if (!detail.folder) return <p className="knowledge-note">This page has no body.</p>;
   return (
@@ -413,7 +416,10 @@ export function PageView({ id }: { id: string }) {
               )}
             </div>
             <article className="knowledge-read-page" aria-label={page.title}>
-              <DocumentTitle>{page.title}</DocumentTitle>
+              {/* AN h2, as every object's title is in the frame: the trail's
+                  last crumb is the page's h1 and already names it, and a
+                  second h1 gave a screen reader two titles. */}
+              <DocumentTitle as="h2">{page.title}</DocumentTitle>
               <PageProps detail={data} spaceName={spaceName} who={who} now={now} />
               {editing ? (
                 <PageEditor

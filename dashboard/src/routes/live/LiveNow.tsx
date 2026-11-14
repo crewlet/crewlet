@@ -384,7 +384,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">Running turns</Card.Title>
+              <Card.Title>Running turns</Card.Title>
             </Card.Header>
             <LiveRoom>
               {running.length === 0 && org === null ? (
@@ -416,7 +416,7 @@ export function LiveNow() {
 
           <Card padding="none" className="live-card">
             <Card.Header icon={<CircleQuestionMarkGlyph size="sm" />} count={waiting.length}>
-              <Card.Title as="h3">Waiting on a person</Card.Title>
+              <Card.Title>Waiting on a person</Card.Title>
             </Card.Header>
             {waiting.length === 0 && !runsKnown ? (
               <Skeleton variant="text" rows={3} label="Loading the waiting executors" />
@@ -452,7 +452,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">In a box</Card.Title>
+              <Card.Title>In a box</Card.Title>
             </Card.Header>
             {runs.error && !runs.data ? (
               <QueryState error={runs.error} refusal={runs.refusal} loading={false} />
@@ -504,7 +504,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">Activity</Card.Title>
+              <Card.Title>Activity</Card.Title>
             </Card.Header>
             {viewer.loading ? (
               <Skeleton variant="text" rows={4} label="Checking your access" />
@@ -582,7 +582,7 @@ export function LiveNow() {
           // nobody but an admin, and drawn locked for everybody else.
           <Card padding="none" className="live-card">
             <Card.Header icon={<BrainGlyph size="sm" />}>
-              <Card.Title as="h3">Recent phases</Card.Title>
+              <Card.Title>Recent phases</Card.Title>
             </Card.Header>
             {viewer.loading ? (
               <Skeleton variant="text" rows={4} label="Checking your access" />
