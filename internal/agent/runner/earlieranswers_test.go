@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -291,9 +292,16 @@ func TestABaseContinuationCarriesTheTurnsAnswers(t *testing.T) {
 // the brief that told them. And the call a person approved that an answer in it
 // tells is in no list of the round's calls, as a lead's own is not.
 //
+// EACH ONCE, WHERE THE COPY MAY BE A SUMMARY TOO: a Claude Code copy whose
+// collection counted nothing is told every lead the run keeps, the earlier
+// answers among them, and the task carries them still, so each answer, and the
+// outcome of the call one of them approved, is told once, inside the task, and
+// never on its own as well.
+//
 // Mutation: tell the task again without its answers, take the base's own answer
 // among them, leave them at their own level, tell them as to a session that
-// holds none of them, or list the call one of them approved, and a check goes
+// holds none of them, list the call one of them approved, or tell an answer the
+// task carries on its own too where every kept lead is told, and a check goes
 // red.
 func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 	t.Parallel()
@@ -302,48 +310,114 @@ func TestATaskToldAgainCarriesTheAnswersItsBriefTold(t *testing.T) {
 	held.Seq = 2
 	approved := numbered("vendor_post", map[string]any{"body": "done"}, 1, 1)
 	approved.Approved, approved.HeldID = true, held.Answer.Held.HeldID
-	brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndCutOff, nil,
+	for name, summary := range map[string]bool{"a copy cut off": false, "a copy that may be a summary": true} {
+		brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndCutOff, nil,
+			func(r *runner.Resume) {
+				if summary {
+					// Its collection counted nothing: it may be a summary, so
+					// every lead the run keeps is told.
+					r.Run.Harness = sandbox.ClaudeCodeHarness
+				}
+				r.Bridged = []runner.BridgedCall{approved,
+					numbered("slack_history", map[string]any{"channel": "C1"}, 2, 2)}
+				r.Leads = []runner.ResumeLead{
+					keptLead(answerOf("job-0", 1, 1, "use the release branch")),
+					{Lead: held, Result: &sandbox.HeldResult{Output: "posted"}},
+					toldLead(task), toldLead(answerOf("job-3", 3, 1, "the config")),
+				}
+				r.Base = baseTurn
+			}).Continue.Brief
+		section := leadsSection(brief)
+		order := []string{"### A new turn of this conversation began here", "### Earlier answers that carried " +
+			"this work on", "#### An answer to a question this work asked (in this round)",
+			"use the release branch", "#### A call a person answered (in this round)",
+			"\n### An answer to a question this work asked\n", "the config"}
+		last := -1
+		for _, part := range order {
+			at := strings.Index(section, part)
+			if at <= last {
+				t.Fatalf("%s: the copy is not told %q after %q, in its brief's order: the task, its answers "+
+					"nested under it, then the answer that carried it on:\n%s", name, part, order, brief)
+			}
+			last = at
+		}
+		for _, once := range []string{"use the release branch", "the config",
+			"A run of this work called `vendor_post`"} {
+			if n := strings.Count(brief, once); n != 1 {
+				t.Errorf("%s: %q is told %d times, want once:\n%s", name, once, n, brief)
+			}
+		}
+		// The nested answers alone, up to the lead told after the task at its
+		// own level: the order above found them.
+		nested := section[strings.Index(section, "### Earlier answers that carried this work on"):]
+		if end := strings.Index(nested, "\n### "); end >= 0 {
+			nested = nested[:end]
+		}
+		if !strings.Contains(nested, "Runs of this work stopped to ask") || strings.Contains(nested, "Your session") ||
+			strings.Contains(nested, "before you") {
+			t.Errorf("%s: the answers told again with the task are told as to a session that holds none of "+
+				"them:\n%s", name, nested)
+		}
+		if !strings.Contains(brief, "- slack_history(") || strings.Contains(brief, "- vendor_post(") {
+			t.Errorf("%s: the call an answer told with the task approved is listed among the round's calls:\n%s",
+				name, brief)
+		}
+	}
+}
+
+// EVERY ANSWER IS TOLD ONCE, UNDER THE OLDEST TASK THAT CARRIES IT. A copy that
+// may be a summary is told every lead the run keeps, and a turn can keep two
+// tasks: the base continuation its first launch made, and another a later
+// launch made of the same session where no capture of the turn had landed.
+// Each task's brief told every answer before it, so an answer before both is
+// told under the older alone, an answer after the older under the newer, and
+// the newer's own carry after it, each once and in the order they came.
+//
+// Mutation: let every task carry every answer before it, and the oldest answer
+// is told twice.
+func TestEveryAnswerIsToldOnceUnderTheOldestTaskThatCarriesIt(t *testing.T) {
+	t.Parallel()
+	older := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-2", Seq: 2, Round: 1, Task: &sandbox.LeadTask{}}
+	newer := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-4", Seq: 4, Round: 1, Task: &sandbox.LeadTask{}}
+	brief := relaunchedInBox(t, inBoxCarryNamed(t, "a replaced sign-in"), sandbox.HarnessEndOwnRun, nil,
 		func(r *runner.Resume) {
-			r.Bridged = []runner.BridgedCall{approved, numbered("slack_history", map[string]any{"channel": "C1"}, 2, 2)}
+			r.Run.Harness = sandbox.ClaudeCodeHarness
 			r.Leads = []runner.ResumeLead{
-				keptLead(answerOf("job-0", 1, 1, "use the release branch")),
-				{Lead: held, Result: &sandbox.HeldResult{Output: "posted"}},
-				toldLead(task), toldLead(answerOf("job-3", 3, 1, "the config")),
+				keptLead(answerOf("job-1", 1, 1, "the first answer")),
+				keptLead(older), keptLead(answerOf("job-2", 2, 1, "the older task's carry")),
+				keptLead(newer), keptLead(answerOf("job-4", 4, 1, "the newer task's carry")),
 			}
 			r.Base = baseTurn
 		}).Continue.Brief
+	if !strings.Contains(brief, prompts.MayCompactSession) {
+		t.Fatalf("the copy is not told as one that may be a summary:\n%s", brief)
+	}
 	section := leadsSection(brief)
-	order := []string{"### A new turn of this conversation began here", "### Earlier answers that carried this " +
-		"work on", "#### An answer to a question this work asked (in this round)", "use the release branch",
-		"#### A call a person answered (in this round)", "\n### An answer to a question this work asked\n",
-		"the config"}
-	last := -1
-	for _, part := range order {
-		at := strings.Index(section, part)
-		if at <= last {
-			t.Fatalf("the copy is not told %q after %q, in its brief's order: the task, its answers nested under "+
-				"it, then the answer that carried it on:\n%s", part, order, brief)
+	task := "### A new turn of this conversation began here"
+	first := strings.Index(section, task)
+	second := first + 1 + strings.Index(section[first+1:], task)
+	if first < 0 || second <= first {
+		t.Fatalf("the copy is not told both tasks:\n%s", brief)
+	}
+	for _, answer := range []struct {
+		words    string
+		from, to int
+	}{
+		{"the first answer", first, second},
+		{"the older task's carry", second, len(section)},
+		{"the newer task's carry", second, len(section)},
+	} {
+		at := strings.Index(section, answer.words)
+		if n := strings.Count(brief, answer.words); n != 1 || at < answer.from || at > answer.to {
+			t.Errorf("%q is told %d times, at %d, want once between %d and %d:\n%s", answer.words, n, at,
+				answer.from, answer.to, section)
 		}
-		last = at
 	}
-	for _, once := range []string{"use the release branch", "the config"} {
-		if n := strings.Count(brief, once); n != 1 {
-			t.Errorf("%q is told %d times, want once:\n%s", once, n, brief)
-		}
-	}
-	// The nested answers alone, up to the lead told after the task at its own
-	// level: the order above found them.
-	nested := section[strings.Index(section, "### Earlier answers that carried this work on"):]
-	if end := strings.Index(nested, "\n### "); end >= 0 {
-		nested = nested[:end]
-	}
-	if !strings.Contains(nested, "Runs of this work stopped to ask") || strings.Contains(nested, "Your session") ||
-		strings.Contains(nested, "before you") {
-		t.Errorf("the answers told again with the task are told as to a session that holds none of them:\n%s",
-			nested)
-	}
-	if !strings.Contains(brief, "- slack_history(") || strings.Contains(brief, "- vendor_post(") {
-		t.Errorf("the call an answer told with the task approved is listed among the round's calls:\n%s", brief)
+	olderAt, carryAt := strings.Index(section, "the older task's carry"), strings.Index(section, "the newer task's carry")
+	own := strings.LastIndex(section[:max(carryAt, 0)], "\n### An answer to a question this work asked\n")
+	if carryAt < olderAt || own < olderAt {
+		t.Errorf("the newer task's own carry is not told after the answers it carries, at its own level:\n%s",
+			section)
 	}
 }
 

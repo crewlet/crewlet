@@ -525,16 +525,22 @@ stateDiagram-v2
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
-  delivered again in order and asked again. A change that lowers a ceiling
-  parks it again at the cost of one delivery. A seat parked because its
-  launch was refused below a floor above the static one waits one turnover
-  for that floor at most: the park keeps the window it waited on, on this
-  node, and the seat's next launch, in a later window, is held at the static
-  floor, or the room below it, and drops a session that window still leaves
-  no room for ([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)).
-  A busy company's other seats spend in the window first after every
-  turnover, so a floor within the room a window can leave the launch could be
-  short in every window; waited for in each, the delivery never ran.
+  delivered again, the seat's priority lane first, and asked again. A change that lowers a ceiling
+  parks it again at the cost of one delivery. A delivery whose launch was
+  refused below a floor above the static one waits one turnover for that
+  floor at most: the park keeps, on this node, the window that delivery
+  waited on, under the ids of its own events, and the delivery's next launch,
+  in a later window, is held at the static floor, or the room below it, and
+  drops a session that window still leaves no room for ([What a continued
+  launch costs](code-sandbox.md#what-a-continued-launch-costs)). The wait is
+  that delivery's alone: a person's message written to the seat while it was
+  parked, which the release hands the seat first from its priority lane,
+  launches on its own floor, and the delivery that waited is held at its
+  every try until it is worked or dead-lettered, so a try every member of the
+  seat's chain refuses keeps the wait for the next. A busy company's other
+  seats spend in the window first after every turnover, so a floor within the
+  room a window can leave the launch could be short in every window; waited
+  for in each, the delivery never ran.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
   can run out during the turn. That turn stops with `budget_exhausted` and makes
   no model call after the refusal — its meter holds it, so the next phase, the

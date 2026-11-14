@@ -124,7 +124,14 @@ func continuedDown(t *testing.T, g guarded, kept bool) toldPath {
 // that may be a summary: why, in words that never say it was cut off, then every
 // lead its record keeps, every call of the round from its start as calls it may
 // already show, and every note the turn has read the same way, in that order;
-// and a guard that arms no skill.
+// and a guard that arms no skill. NOWHERE "CUT OFF" OF THIS SESSION: its record
+// says its harness ended its own run, so no section of its brief says it was,
+// or may have been, cut off, the leads told again among them, whose section
+// once said the run working in the session may have been cut off before its
+// harness wrote them. Save where a turn's task told again says what it says of
+// the session the conversation's last turn left, under the line that makes it
+// conditional ([conditionalOnTheBase]): that session may have been cut off when
+// it was kept, which is true of where it began, never of this run.
 func toldAsASummary(t *testing.T, name string, told toldPath) {
 	t.Helper()
 	section, leads := strings.Index(told.brief, prompts.MayCompactSession), strings.Index(told.brief, leadsHeading)
@@ -140,15 +147,38 @@ func toldAsASummary(t *testing.T, name string, told toldPath) {
 		t.Errorf("%s: the session is not told every kept lead, every call of the round from its start and every "+
 			"note the turn has read:\n%s", name, told.brief)
 	}
-	for _, cutOff := range []string{prompts.InterruptedCopy, prompts.MayBeInterruptedCopy,
-		prompts.InterruptedSession} {
-		if strings.Contains(told.brief, cutOff) {
-			t.Errorf("%s: a session its record has end its own run is told it was cut off:\n%s", name, told.brief)
+	for _, line := range outsideTheBase(told.brief) {
+		if strings.Contains(strings.ToLower(line), "cut off") {
+			t.Errorf("%s: a session its record has end its own run is told %q:\n%s", name, line, told.brief)
 		}
 	}
 	if !told.refused {
 		t.Errorf("%s: the guard of a session that may be a summary arms a skill", name)
 	}
+}
+
+// conditionalOnTheBase opens what a turn's task told again says of the session
+// the conversation's last turn left, true only of a session that began as that
+// one ([prompts.NextTurnAgain]): its bullets follow it, to the next line that
+// is not one.
+const conditionalOnTheBase = "Where the session above began as the one your earlier "
+
+// outsideTheBase is the lines of brief save those [conditionalOnTheBase] opens
+// and the bullets under it.
+func outsideTheBase(brief string) []string {
+	var lines []string
+	under := false
+	for _, line := range strings.Split(brief, "\n") {
+		switch {
+		case strings.HasPrefix(line, conditionalOnTheBase):
+			under = true
+		case under && strings.HasPrefix(line, "- "):
+		default:
+			under = false
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // toldAsHeld fails t unless told is a session's continuation told as one that

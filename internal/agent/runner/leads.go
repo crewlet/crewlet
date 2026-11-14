@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"math"
 	"slices"
 	"strings"
 
@@ -46,11 +47,17 @@ import (
 // that was handed the answer in a fresh run's words: told "you stopped to ask",
 // it is told something its session never did; told to check a branch out on a
 // fresh machine, or that it is in a new box, it is told of a box it is not in.
-// So an answer is "a run of this work asked … answered", a held call "a run of
-// this work called", and the turn's task keeps its boundary and none of its
-// box's claims ([prompts.NextTurnAgain]). Each is told under the relaunching
-// segment's token: a chat reply fenced under who wrote it, an answer by turn and
-// every engine word defused, as the lead it was.
+// And a session that may be a summary is told every lead the run keeps, those
+// of another lineage of the turn among them, and marks them told in turn, so
+// no record says which session a lead's brief went to. So an answer is "a run
+// of this work asked … answered", a held call "a run of this work called", a
+// review a send-back of this turn's work, never "the same session"
+// ([prompts.ContinuedRound.Again]), and the turn's task keeps its boundary and
+// none of its box's claims, and says what it says of the session the
+// conversation's last turn left only of a session that began as that one
+// ([prompts.NextTurnAgain]). Each is told under the relaunching segment's
+// token: a chat reply fenced under who wrote it, an answer by turn and every
+// engine word defused, as the lead it was.
 
 // copyMayLackBrief reports whether the copy of the session the job's own box
 // holds may lack the brief its job was handed by its record's word: where the
@@ -91,6 +98,22 @@ type toldAgain struct {
 // drop every lead the session held from earlier briefs, and the record cannot
 // say which those were.
 //
+// EACH ONCE: an answer that a task told here carries ([answersNested]) is told
+// inside it alone, in that task's brief's order, and never on its own as well.
+// Where this section tells it of its own account all the same (its job's
+// record marks it told, or all holds), its ref is handed on as that of every
+// such lead is, so a later brief whose task does not open on its node tells
+// the answer on its own. One its record never marked, which a base
+// continuation's task alone carries (where the section is not told every
+// lead), stays unmarked as that continuation left it: the task carries it to
+// every later brief, and where the task does not open there it is said with
+// it, a message that cannot be read here. The held call it tells of is named
+// by the task's telling ([Runner.taskAgain]), which no list of the round's
+// calls then tells. Told on its own too, one answer and one held call's
+// outcome were two messages under two headings of one section, the call
+// allowed and made twice; and the brief's record, marking the answer told,
+// carried the second telling to every later continuation of that session.
+//
 // BUILT BEFORE THE BRIEF'S LEAD, beside the calls: telling the turn's task again
 // renders the prior-work ledger of the rounds its brief rendered, which can
 // spend the seat's auxiliary model, charged before the relaunch's last ask of
@@ -106,38 +129,103 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 		// session lacks them as surely, and a later read tells them.
 		out      = toldAgain{unread: slices.Clone(r.cfg.Resume.LeadsUnread)}
 		rendered []string
+		tells    = func(told ResumeLead) bool { return told.Told || all }
+		nested   = answersNested(r.cfg.Resume.Leads, tells)
 	)
 	for _, told := range r.cfg.Resume.Leads {
-		if !told.Told && !all {
+		if !tells(told) {
 			continue
 		}
 		lead := told.Lead
 		out.refs = append(out.refs, sandbox.LeadRef{Job: lead.Job, Kind: lead.Kind})
+		if nested.carries(lead) {
+			continue
+		}
 		if lead.Unread == "" && lead.Answer != nil && lead.Answer.Held != nil && lead.Answer.Refused == nil {
 			out.held = append(out.held, lead.Answer.Held.HeldID)
 		}
-		text, held := r.leadAgain(ctx, told, history, current, b)
+		text, held := r.leadAgain(ctx, told, nested, history, current, b)
 		rendered, out.held = append(rendered, text), append(out.held, held...)
 	}
 	out.section = prompts.LeadsToldAgain(rendered, r.cfg.Resume.LeadsCut)
 	return out
 }
 
+// tasksTold is the task leads one section tells again whose answers they carry
+// ([Runner.taskAgain]), by their places among the turn's launches
+// ([sandbox.Lead.Seq]), oldest first: what says which of them carries each
+// earlier answer ([tasksTold.carries]).
+type tasksTold []int64
+
+// answersNested is the task leads among leads that a section tells again,
+// where tells says which leads it tells, and so the answers they carry: a task
+// lead that opens here, which [Runner.taskAgain] renders, never one that does
+// not, which is said as a message that cannot be read and carries nothing.
+func answersNested(leads []ResumeLead, tells func(ResumeLead) bool) tasksTold {
+	var tasks tasksTold
+	for _, told := range leads {
+		if tells(told) && toldAsTask(told.Lead) {
+			tasks = append(tasks, told.Lead.Seq)
+		}
+	}
+	slices.Sort(tasks)
+	return tasks
+}
+
+// toldAsTask reports whether lead is told again as the turn's task, its
+// answers nested under it ([Runner.taskAgain]): a task lead that opened here.
+// ONE TEST FOR BOTH [answersNested] and [Runner.leadAgain]: a task the first
+// counted as carrying the answers before it and the second said as a message
+// that cannot be read here would tell those answers nowhere, neither on their
+// own nor under it.
+func toldAsTask(lead sandbox.Lead) bool {
+	return lead.Unread == "" && lead.Kind == sandbox.LeadKindTask && lead.Task != nil
+}
+
+// carries reports whether a task told again carries lead, an answer: whether
+// any task told again came after the answer's job ([sandbox.Lead.Seq]). Each
+// such task's brief told the answer, and the section tells every lead oldest
+// first, so the OLDEST of them tells it and the others leave it out
+// ([tasksTold.from]): told under each, one answer was two messages again, as
+// many as the tasks a summary is told (two base continuations of one turn, the
+// later after a loss no capture of the turn had landed for). Never an answer of
+// the task's own job, which carried that job on and is told after it as a lead
+// of its own.
+func (t tasksTold) carries(lead sandbox.Lead) bool {
+	return lead.Kind == sandbox.LeadKindAnswer && len(t) > 0 && lead.Seq < t[len(t)-1]
+}
+
+// from is the place from which the task told again at place carries the
+// answers before it ([answersBetween]): the place of the newest task told
+// before it, which carries the answers before its own place, and the least
+// place for the oldest task.
+func (t tasksTold) from(place int64) int64 {
+	from := int64(math.MinInt64)
+	for _, earlier := range t {
+		if earlier < place {
+			from = earlier
+		}
+	}
+	return from
+}
+
 // leadAgain is one lead told again, under a heading of its own, to a run working
 // in round current: an answer in words of its own ([answerAgain]); a review as
-// its send-back told it, on the notes of the round it closed
-// ([prompts.BuildContinuedRound]), or, where the turn's record no longer keeps
-// that round whole ([reviewOf]), as a review that is not kept
-// ([prompts.ReviewNotKept]); the turn's task with its boundary, the closed
-// rounds its brief rendered and the answers it told, or was to tell where its
-// read of them failed ([Runner.taskAgain]); and one that did not open here, or
-// that this build cannot render, as a message that cannot be read here
-// ([prompts.LeadUnread]). What a review or a task recomposes is nested under
-// the lead by the headings its builder wrote, never a byte of the words they
-// hold moved ([prompts.Prompt.Nested]): the task, the review's notes and the
-// ledger's quoted output are somebody else's words. held is the held calls a
-// task told again tells what became of among its answers, which no list of
-// the round's calls in the same brief tells ([withHeld]).
+// its send-back told it, on the notes of the round it closed, in words true of
+// any session of the work ([prompts.ContinuedRound.Again]), or, where the
+// turn's record no longer keeps that round whole ([reviewOf]), as a review
+// that is not kept ([prompts.ReviewNotKept]); the turn's task with its
+// boundary, the closed rounds its brief rendered and the answers it told, or
+// was to tell where its read of them failed, from the place tasks says the
+// task told before it leaves off ([Runner.taskAgain], [tasksTold.from],
+// [toldAsTask]); and one that did not open here, or that this build cannot
+// render, as a message that cannot be read here ([prompts.LeadUnread]). What a
+// review or a task recomposes is nested under the lead by the headings its
+// builder wrote, never a byte of the words they hold moved
+// ([prompts.Prompt.Nested]): the task, the review's notes and the ledger's
+// quoted output are somebody else's words. held is the held calls a task told
+// again tells what became of among its answers, which no list of the round's
+// calls in the same brief tells ([withHeld]).
 //
 // A REVIEW NOT KEPT IS SAID IN ITS PLACE, in words of its own: told on its
 // round's notes, it would be a send-back that said nothing; told as one that
@@ -148,8 +236,8 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 // as on its first launch), and, the later of two that differ standing, the
 // run would take the leads before it as standing over a review that may have
 // redirected the work.
-func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, history []ledger.Iteration, current int,
-	b provenance.Boundary) (text string, held []string) {
+func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, tasks tasksTold, history []ledger.Iteration,
+	current int, b provenance.Boundary) (text string, held []string) {
 
 	lead := told.Lead
 	switch {
@@ -158,11 +246,12 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, history []ledge
 		return answerAgain(*lead.Answer, told.Result, answerAt{}, b), nil
 	case lead.Kind == sandbox.LeadKindReview:
 		if notes, found := reviewOf(history, lead.Round); found {
-			return r.sendBackLead(notes).Nested().Text, nil
+			return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes,
+				Again: true}).Nested().Text, nil
 		}
 		return prompts.ReviewNotKept, nil
-	case lead.Kind == sandbox.LeadKindTask && lead.Task != nil:
-		return r.taskAgain(ctx, lead, history, current, b)
+	case toldAsTask(lead):
+		return r.taskAgain(ctx, lead, tasks.from(lead.Seq), history, current, b)
 	}
 	return prompts.LeadUnread, nil
 }
@@ -187,18 +276,20 @@ func reviewOf(history []ledger.Iteration, iteration int) (string, bool) {
 }
 
 // taskAgain is a task lead told again, to a run working in round current: where
-// the turn began, as [prompts.NextTurnAgain] tells it of the session its
-// conversation's last turn left ([Resume.Base]), then the turn's ask as that
-// brief told it, with only the closed rounds its prior-work block rendered
-// ([Runner.turnAsk], [roundsThrough]): a round closed after it is in the
-// session, or is told by its own rule, and told here too, round 1's calls would
-// be told in the task's ledger and again in the calls the brief lists after it.
-// Where a park has folded rounds the brief rendered into a span since, the span
-// is told as the record keeps it, whole even where it runs on past the brief's
-// last round ([roundsThrough]), and a review the task carried that the span
-// took is said gone by the span's own words ([ledger.Iteration.Through]). The
-// base's turn and home are the engine's record of that session, defused under
-// b.
+// the turn began, after the turn whose session its brief continued
+// ([Resume.Base]), as [prompts.NextTurnAgain] tells it, in words true of a
+// session that did not begin as that one, since a continuation that may be a
+// summary is told every task the run keeps, another lineage's among them; then
+// the turn's ask as that brief told it, with only the closed rounds its
+// prior-work block rendered ([Runner.turnAsk], [roundsThrough]): a round closed
+// after it is in the session, or is told by its own rule, and told here too,
+// round 1's calls would be told in the task's ledger and again in the calls the
+// brief lists after it. Where a park has folded rounds the brief rendered into
+// a span since, the span is told as the record keeps it, whole even where it
+// runs on past the brief's last round ([roundsThrough]), and a review the task
+// carried that the span took is said gone by the span's own words
+// ([ledger.Iteration.Through]). The base's turn and home are the engine's
+// record of that session, defused under b.
 //
 // AND THEN THE ANSWERS THAT BRIEF TOLD, after the ask, as that brief told them
 // ([earlierAnswers]): the brief that continued the session its conversation's
@@ -206,17 +297,20 @@ func reviewOf(history []ledger.Iteration, iteration int) (string, bool) {
 // answers after its ask ([Runner.turnsAnswers]): every answer lead whose job
 // came before the lead's own ([sandbox.Lead.Seq]), the only ones the run kept
 // when that brief was built, and never the lead's own carry, which is told
-// after it as a lead of its own. Recomposed here, never marked told on their
-// own, so they are told again in that brief's order: marked told apart, every
-// answer of an earlier job sorts before the task among the run's leads, and,
-// the later of two that differ standing, the task told again would stand over
-// the answers its own brief told after it. Where that brief's read of the
-// run's leads failed, it said them as not kept rather than told them
-// (sandbox.TurnLeads.Unread), and a read that gives them back tells them here
-// all the same: the session lacks them as surely. held is the held calls those
-// answers tell what became of.
-func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, history []ledger.Iteration, current int,
-	b provenance.Boundary) (string, []string) {
+// after it as a lead of its own; from the place from on, where a task the same
+// section tells before this one leaves off ([tasksTold.from]), so an answer
+// both tasks' briefs told is told once, under the older. Recomposed here, and
+// never told on their own where this task is told, though a summary's brief
+// marks them told ([Runner.leadsAgain]), so they are told again in that brief's
+// order: told apart, every answer of an earlier job sorts before the task among
+// the run's leads, and, the later of two that differ standing, the task told
+// again would stand over the answers its own brief told after it. Where that
+// brief's read of the run's leads failed, it said them as not kept rather than
+// told them (sandbox.TurnLeads.Unread), and a read that gives them back tells
+// them here all the same: the session lacks them as surely. held is the held
+// calls those answers tell what became of.
+func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, from int64, history []ledger.Iteration,
+	current int, b provenance.Boundary) (string, []string) {
 
 	task := *lead.Task
 	m := prompts.NextTurn{Fire: notify.Scheduled(r.cfg.Turn.ConversationKey)}
@@ -230,7 +324,7 @@ func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, history []led
 		reviewed, _ = reviewOf(history, task.Reviewed)
 	}
 	told := prompts.NextTurnAgain(m) + "\n\n" + r.turnAsk(ctx, rendered, reviewed).Nested().Text
-	answers := earlierAnswers(answersBefore(r.cfg.Resume.Leads, lead.Seq), current, rendered, 0, false, b)
+	answers := earlierAnswers(answersBetween(r.cfg.Resume.Leads, from, lead.Seq), current, rendered, 0, false, b)
 	if answers.section.Text != "" {
 		told += "\n\n" + answers.section.Nested().Text
 	}
@@ -690,15 +784,17 @@ func earlierAnswers(leads []ResumeLead, current int, listed []ledger.Iteration, 
 	return out
 }
 
-// answersBefore is the leads of leads whose job came before place, the place
-// among the turn's launches of the job that kept a task lead ([sandbox.Lead.Seq]):
-// the leads the run kept when that job's brief was built, which that brief told
-// the answers of, or said as not kept where its read of them failed
-// ([Runner.taskAgain]).
-func answersBefore(leads []ResumeLead, place int64) []ResumeLead {
+// answersBetween is the leads of leads whose job came before place, the place
+// among the turn's launches of the job that kept a task lead ([sandbox.Lead.Seq]),
+// and at or after from, where the task told before it in the same section
+// leaves off ([tasksTold.from]): of the leads the run kept when that job's brief
+// was built, which that brief told the answers of, or said as not kept where
+// its read of them failed ([Runner.taskAgain]), the ones no earlier task of the
+// section tells.
+func answersBetween(leads []ResumeLead, from, place int64) []ResumeLead {
 	var out []ResumeLead
 	for _, lead := range leads {
-		if lead.Lead.Seq < place {
+		if from <= lead.Lead.Seq && lead.Lead.Seq < place {
 			out = append(out, lead)
 		}
 	}

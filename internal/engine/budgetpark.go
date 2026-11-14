@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -102,12 +103,13 @@ var budgetParkSpec = parkSpec{
 // park holds, which its holder answers (parkheld.go).
 type budgetParks = seatParks[budgetBasis]
 
-// floorWaits is every seat this node parked on a launch's refusal below its
-// floor, by the seat's id, with the window the park waited on
-// ([Engine.budgetPark]): what the seat's next dispatched launch takes to know
-// that its turn waited a turnover for that floor
-// ([agentLauncher.continuedFloor]), and so is held, in a later window, to no
-// more than the floor a launch with no brief needs.
+// floorWaits is every delivery this node parked its seat for on a launch's
+// refusal below its floor, by the seat's id and, within the seat, by the id of
+// each of the delivery's events, with the window the park waited on
+// ([Engine.budgetPark]): what that delivery's next launch reads to know that it
+// waited a turnover for that floor ([agentLauncher.continuedFloor]), and so is
+// held, in a later window, to no more than the floor a launch with no brief
+// needs.
 //
 // WAITED FOR WITHOUT A BOUND, A FLOOR ABOVE THE STATIC ONE HELD A DELIVERY FOR
 // EVER. A launch's brief, or a session it continues, can take its floor within
@@ -119,40 +121,93 @@ type budgetParks = seatParks[budgetBasis]
 // whose floor counted its brief already, had that band then too. So it waits
 // one turnover, and no more.
 //
+// KEYED BY THE DELIVERY, NEVER BY THE SEAT ALONE. The park holds the seat's
+// whole inbox, and its release hands the seat's mail back in the seat's order,
+// which is not the order its deliveries were refused in: a person who writes
+// to the seat while it is parked rides the seat's priority lane, which every
+// drain takes first (queue.Prioritize), so that message's turn runs before the
+// delivery the park deferred. Kept for the seat, the window went to whichever
+// launch came first: the person's, which never waited, held below its own
+// brief's floor, while the delivery that waited found nothing, was refused at
+// its floor again and parked again, in every window a person wrote to the
+// seat. So the window is kept under the id of each of the delivery's events in
+// its stream ([deliveryOf]), which every redelivery of it and every copy a
+// requeue publishes carries, and never under anything a redelivery renews (its
+// attempt, its turn's run id): a launch reads it only where its own turn
+// carries one of those events, a turn its redelivery merged newer mail into
+// among them.
+//
+// READ, NEVER TAKEN, by the delivery's launch, and dropped once the delivery
+// will not come back ([Dispatcher.Gone]). Taken by the launch, the wait was
+// spent by a try that went no further: refused by every member of its chain,
+// its seat parked on its provider, the try after that park was held to its
+// floor again. So every try of the delivery after the turnover is held, until
+// it is worked, settled or dead-lettered; one that goes out parks its turn on
+// its run, and the dispatch that launched it acknowledges the delivery. And
+// dropped with the seat's other parks when this node lets the seat go
+// ([Engine.forgetBudgetPark]).
+//
 // WHO HAS TO AGREE ON IT: this node alone, as the park does. It rides the park,
-// and the seat's next launch is this node's: the park holds the seat's whole
-// inbox, and its release hands the seat's mail back in order, the delivery it
-// deferred at its head. A seat that moves takes nothing of it to its next
-// holder, which may hold the launch one window more, still bounded: refused
-// there, it is parked there, and its next try there takes the record that park
-// writes. TAKEN, never read, by the seat's next launch, whichever delivery's it
-// is: a record left behind would hold a later delivery's launch, which never
-// waited, below its floor. And dropped with the seat's other parks when this
-// node lets the seat go ([Engine.forgetBudgetPark]).
+// and the delivery's next launch is this node's: the park holds the seat's
+// whole inbox, so the delivery comes back here. A seat that moves takes nothing
+// of it to its next holder, which may hold the launch one window more, still
+// bounded: refused there, it is parked there, and its next try there reads the
+// record that park writes.
 type floorWaits struct {
 	mu    sync.Mutex
-	seats map[uuid.UUID]sandbox.BudgetWindow
+	seats map[uuid.UUID]map[uuid.UUID]sandbox.BudgetWindow
 }
 
-// parked records that seat's launch was refused below its floor and its park
-// waits on window w, replacing what an earlier park recorded.
-func (f *floorWaits) parked(seat uuid.UUID, w sandbox.BudgetWindow) {
+// parked records that the launch of seat's delivery whose events' ids are
+// delivery was refused below its floor and the seat's park waits on window w,
+// each id replacing what an earlier park recorded for it.
+func (f *floorWaits) parked(seat uuid.UUID, delivery []uuid.UUID, w sandbox.BudgetWindow) {
+	if len(delivery) == 0 {
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.seats == nil {
-		f.seats = map[uuid.UUID]sandbox.BudgetWindow{}
+		f.seats = map[uuid.UUID]map[uuid.UUID]sandbox.BudgetWindow{}
 	}
-	f.seats[seat] = w
+	waits := f.seats[seat]
+	if waits == nil {
+		waits = map[uuid.UUID]sandbox.BudgetWindow{}
+		f.seats[seat] = waits
+	}
+	for _, id := range delivery {
+		waits[id] = w
+	}
 }
 
-// take is the window seat's last park on a launch's floor waited on, the zero
-// window where none is recorded, and forgets it.
-func (f *floorWaits) take(seat uuid.UUID) sandbox.BudgetWindow {
+// waited is the window seat's parks recorded for each of the events whose ids
+// are delivery, in their order, none where none is recorded. A delivery a
+// redelivery merged newer mail into can carry more than one: each of its
+// events that waited keeps the window its own park recorded.
+func (f *floorWaits) waited(seat uuid.UUID, delivery []uuid.UUID) []sandbox.BudgetWindow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	w := f.seats[seat]
-	delete(f.seats, seat)
-	return w
+	var out []sandbox.BudgetWindow
+	for _, id := range delivery {
+		if w, ok := f.seats[seat][id]; ok {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// gone drops what seat's parks recorded for the events whose ids are ids, a
+// delivery that will not come back to the seat ([Dispatcher.Gone]).
+func (f *floorWaits) gone(seat uuid.UUID, ids []uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	waits := f.seats[seat]
+	for _, id := range ids {
+		delete(waits, id)
+	}
+	if len(waits) == 0 {
+		delete(f.seats, seat)
+	}
 }
 
 // forget drops what seat's parks recorded, for a seat this node lets go of.
@@ -160,6 +215,20 @@ func (f *floorWaits) forget(seat uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.seats, seat)
+}
+
+// deliveryOf is the ids a delivery's events are known by in their stream: each
+// event's own id, which every redelivery of it and every copy a requeue
+// publishes carries, and which the inbox's dedupe, the completion ledger and
+// the queue's headroom all name the event by. Never what a redelivery renews.
+func deliveryOf(evs []*events.Event) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(evs))
+	for _, ev := range evs {
+		if ev != nil {
+			out = append(out, ev.ID)
+		}
+	}
+	return out
 }
 
 // launchRefusedIn is the window r names where refused is an executor launch's
@@ -178,20 +247,22 @@ func launchRefusedIn(refused error, r refusal) sandbox.BudgetWindow {
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
 // of its capped windows is refusing, or leaves less room than the delivery's
 // launch needs, reporting the deferral reason. refused is the budget refusal the
-// delivery's turn met, nil before any turn ran: the floor the park waits for
-// room for is the one that launch was refused below ([floorOf]): its brief
-// beside the static floor; for a first launch that continues its
-// conversation's session, that session's context beside its brief; and, where
-// its fresh brief's floor is held, the static floor or the room below it
-// ([launchFloor.tokens]). It is the static floor where no launch was refused.
+// delivery's turn met, nil before any turn ran, and delivery the events that
+// turn was dispatched for, nil with it: the floor the park waits for room for
+// is the one that launch was refused below ([floorOf]): its brief beside the
+// static floor; for a first launch that continues its conversation's session,
+// that session's context beside its brief; and, where its fresh brief's floor
+// is held, the static floor or the room below it ([launchFloor.tokens]). It is
+// the static floor where no launch was refused.
 //
-// AND WHERE A LAUNCH WAS, the window the park waits on is recorded for the
-// seat's next launch ([floorWaits]), which takes it in a later window and is
+// AND WHERE A LAUNCH WAS, the window the park waits on is recorded for that
+// delivery ([floorWaits]), whose next launch reads it in a later window and is
 // held there to no more than the floor a launch with no brief needs: a floor
 // within the most room a window can leave the launch is still past what a busy
 // company's window leaves at the launch's read, and waited for again in every
-// window, it went out in none. So the launch waits one turnover for it, and
-// no more.
+// window, it went out in none. So the delivery waits one turnover for it, and
+// no more, and no other delivery the park's release hands the seat is held for
+// a wait it never did.
 //
 // What it does NOT do is decide an unknown: a counter that cannot be read
 // lets the delivery through, logged, because the turn's own meter is the gate
@@ -200,7 +271,9 @@ func launchRefusedIn(refused error, r refusal) sandbox.BudgetWindow {
 // the hold that could not be taken, which the dispatcher DEFERS (see
 // [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
 // the delivery's place at the head of the seat's inbox.
-func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (string, bool, error) {
+func (e *Engine) budgetPark(ctx context.Context, handle string, delivery []*events.Event,
+	refused error) (string, bool, error) {
+
 	c := e.Company()
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
@@ -229,11 +302,12 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (
 		"the window turned over"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
-	// THE WINDOW A LAUNCH WAS REFUSED BELOW ITS FLOOR IN, recorded with the
-	// park and before the seat is asked for below, for the race that ask
-	// closes for the park: a release that finds the seat gone forgets both.
+	// THE WINDOW A LAUNCH WAS REFUSED BELOW ITS FLOOR IN, recorded for the
+	// delivery whose launch it was, with the park and before the seat is
+	// asked for below, for the race that ask closes for the park: a release
+	// that finds the seat gone forgets both.
 	if w := launchRefusedIn(refused, r); w.Valid() {
-		e.floorWaits.parked(seat, w)
+		e.floorWaits.parked(seat, deliveryOf(delivery), w)
 	}
 	reason := refusingReason(r)
 	if refusing {
@@ -332,8 +406,8 @@ func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusi
 // AND NAMING THE WINDOW IT WAITS ON where a launch was refused
 // ([sandbox.Refusal.Window]), which the release counts onto the job's record
 // for the turn's next relaunch, held in a later window to no more than the
-// floor a launch with no brief needs, as a dispatch's next launch is through
-// its park ([floorWaits]).
+// floor a launch with no brief needs, as a parked delivery's next launch is
+// through what its seat's park recorded for it ([floorWaits]).
 func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, refused error) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
@@ -420,15 +494,32 @@ func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
 
 // forgetBudgetPark drops a released seat's park without resuming anything
 // ([seatParks.forget]), and what its parks recorded of a launch's floor for its
-// next launch here ([floorWaits]): the seat's next holder decides its own.
+// deliveries' next launches here ([floorWaits]): the record is the park's, and
+// the seat's next holder decides its own.
 //
 // THE RECORD FIRST, before the park's hold is lifted: a lifted hold may hand
 // the seat's mail to a handler at once (the in-memory queue drains into it
-// synchronously), and a launch there would take the record the release is
+// synchronously), and a launch there would read the record the release is
 // dropping.
 func (e *Engine) forgetBudgetPark(ctx context.Context, seat uuid.UUID) {
 	e.floorWaits.forget(seat)
 	e.budgetParks.forget(ctx, e, budgetParkSpec, seat)
+}
+
+// budgetDeliveryGone drops what handle's seat's parks recorded of a launch
+// refused below its floor for gone, the events of a delivery that will not come
+// back to the seat ([Dispatcher.Gone]): nothing would read it again, and kept,
+// it would grow the seat's record for as long as this node holds the seat.
+// Another delivery's record, its seat still parked or its next try still to
+// come, is kept.
+func (e *Engine) budgetDeliveryGone(_ context.Context, handle string, gone []*events.Event) {
+	seat, err := e.seatID(handle)
+	if err != nil {
+		// A SEAT THE RUNNING COMPANY NO LONGER HOLDS is let go of, and its
+		// release forgets every record of it ([Engine.forgetBudgetPark]).
+		return
+	}
+	e.floorWaits.gone(seat, deliveryOf(gone))
 }
 
 // stopBudgetParks disarms every reset alarm, for a node shutting down; see

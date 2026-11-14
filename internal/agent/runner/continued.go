@@ -1099,8 +1099,10 @@ func (r *Runner) firstUnanswered() int {
 
 // sendBackLead is what carries a send-back's session on: the review's notes and
 // the engine's correction, with the task restated and the rules the earlier
-// rounds' calls are read by ([prompts.BuildContinuedRound]). With its outline,
-// which a later brief that tells it again nests it by ([Runner.leadAgain]).
+// rounds' calls are read by ([prompts.BuildContinuedRound]). A later brief
+// that tells the review again builds it anew, in words true of any session
+// ([prompts.ContinuedRound.Again], [Runner.leadAgain]): these say the session
+// above is the one the review sent back, true only of this brief's.
 func (r *Runner) sendBackLead(notes string) prompts.Prompt {
 	return prompts.BuildContinuedRound(prompts.ContinuedRound{Task: r.cfg.Task, Review: notes})
 }

@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -79,10 +81,18 @@ type agentLauncher struct {
 	// floor in, off that job's record
 	// ([sandbox.LaunchRecord.RelaunchRefusedIn]): the zero window where none
 	// was, or where the record was written by a build that kept none. NIL on a
-	// dispatched segment's launcher, whose launch takes what the seat's park
-	// recorded on this node instead ([floorWaits]). Read by
-	// [agentLauncher.continuedFloor].
+	// dispatched segment's launcher, whose launch reads what the seat's park
+	// recorded on this node for its delivery instead
+	// ([agentLauncher.delivery]). Read by [agentLauncher.continuedFloor].
 	relaunchRefusedIn *sandbox.BudgetWindow
+
+	// delivery is, on a dispatched segment's launcher, the ids of the events
+	// its turn was dispatched for ([deliveryOf]), under which the seat's park
+	// on this node recorded the window a launch of that delivery was refused
+	// below its floor in ([floorWaits]); nil on a resumed segment's, whose
+	// relaunches read their job's record instead. Read by
+	// [agentLauncher.refusedIn].
+	delivery []uuid.UUID
 
 	// run is the launch past the turn's fence, nil for [agentLauncher.launch]:
 	// a case's stand-in for the sandbox.
@@ -696,10 +706,15 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	}
 	// THE WINDOW AN EARLIER TRY WAS REFUSED BELOW ITS FLOOR IN, where it has
 	// turned over since: that try waited for it, and this one waits for no
-	// more than the static floor alone ([launchFloor.after]).
+	// more than the static floor alone ([launchFloor.after]). A delivery a
+	// redelivery merged newer mail into can carry two, each its own event's:
+	// one that has turned over is a wait its work has done.
 	var waited sandbox.BudgetWindow
-	if w := l.refusedIn(); m.turnedOver(w) {
-		waited = w
+	for _, w := range l.refusedIn() {
+		if m.turnedOver(w) {
+			waited = w
+			break
+		}
 	}
 	// THE FRESH BRIEF FIRST, since every launch may hand its run that brief,
 	// however many sessions it offers: its box falls back to it wherever it
@@ -791,23 +806,32 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	return req, floor
 }
 
-// refusedIn is the window an earlier try of this launcher's work was refused
-// below its floor in, the zero window where none is known: on a resumed
-// segment's launcher, the one its run's job's record names
-// ([agentLauncher.relaunchRefusedIn]); on a dispatched one's, the one the
-// seat's last park on this node waited on, which this TAKES, so a later
-// delivery's launch, which never waited, is held to its floor ([floorWaits]).
-func (l *agentLauncher) refusedIn() sandbox.BudgetWindow {
+// refusedIn is every window an earlier try of this launcher's work was refused
+// below its floor in, none where none is known: on a resumed segment's
+// launcher, the one its run's job's record names
+// ([agentLauncher.relaunchRefusedIn]); on a dispatched one's, those the seat's
+// parks on this node recorded for the events its turn was dispatched for
+// ([agentLauncher.delivery], [floorWaits]), and never one recorded for another
+// delivery of the seat: the park's release hands the seat a person's message
+// from its priority lane before the delivery it deferred, and that message's
+// launch, which never waited, given the wait, went out below its own floor
+// while the delivery that waited was refused at its floor again.
+//
+// READ, NEVER TAKEN: the record lasts as long as its delivery
+// ([Dispatcher.Gone]), so a try refused for anything but its floor, every
+// member of its chain at its limit among them, leaves the next try held as
+// it was.
+func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 	if l.relaunchRefusedIn != nil {
-		return *l.relaunchRefusedIn
+		return []sandbox.BudgetWindow{*l.relaunchRefusedIn}
 	}
-	if l.company == nil || l.company.Org == nil {
-		return sandbox.BudgetWindow{}
+	if len(l.delivery) == 0 || l.company == nil || l.company.Org == nil {
+		return nil
 	}
 	if seat, ok := l.company.Org.AgentIDFor(l.seat); ok {
-		return l.engine.floorWaits.take(seat)
+		return l.engine.floorWaits.waited(seat, l.delivery)
 	}
-	return sandbox.BudgetWindow{}
+	return nil
 }
 
 // keptFloor is the floor of a launch that continues s, the session it was asked
@@ -1250,14 +1274,15 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duratio
 // conversation is what the turn's dispatch read of its conversation, which a
 // dispatched segment's one launch — the turn's first — continues and freezes;
 // nil for a resumed segment's, whose relaunches read what that launch froze.
-// notes is a resumed segment's notes on its run's record, which its relaunches'
-// briefs are sealed from ([agentLauncher.notes]); nil for a dispatched one's.
-// relaunchRefusedIn is a resumed segment's window its run's last relaunch was
-// refused below its floor in ([agentLauncher.relaunchRefusedIn]); nil for a
-// dispatched one's.
+// delivery is the ids of the events a dispatched segment's turn was dispatched
+// for ([agentLauncher.delivery]); nil for a resumed one's. notes is a resumed
+// segment's notes on its run's record, which its relaunches' briefs are sealed
+// from ([agentLauncher.notes]); nil for a dispatched one's. relaunchRefusedIn
+// is a resumed segment's window its run's last relaunch was refused below its
+// floor in ([agentLauncher.relaunchRefusedIn]); nil for a dispatched one's.
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
-	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, notes *rowSource,
-	relaunchRefusedIn *sandbox.BudgetWindow,
+	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, delivery []uuid.UUID,
+	notes *rowSource, relaunchRefusedIn *sandbox.BudgetWindow,
 ) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
@@ -1267,7 +1292,8 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 		return nil
 	}
 	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask,
-		conversation: conversation, told: told, notes: notes, relaunchRefusedIn: relaunchRefusedIn}
+		conversation: conversation, told: told, delivery: delivery, notes: notes,
+		relaunchRefusedIn: relaunchRefusedIn}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then
