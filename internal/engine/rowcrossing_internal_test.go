@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -40,13 +41,19 @@ const rowCrossingRoom = 8 << 10
 // of a row at its bound (sandbox.RowBudget), and its row goes red.
 func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) {
 	t.Parallel()
+	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
+	// case's write is the only thing on the link, and the runner builds one
+	// reply of a row at its bound at a time — each case its own row, under a
+	// turn of its own.
+	across := kvtest.SlowLeaf(t, rowCrossingRate)
 	for _, c := range []struct {
 		name   string
+		turnID string
 		write  func(ctx context.Context, store sandbox.PendingStore, turnID string)
 		landed func(sandbox.PendingRun) bool
 	}{
 		{
-			name: "the session a job's box started",
+			name: "the session a job's box started", turnID: "t-session-start",
 			write: func(ctx context.Context, store sandbox.PendingStore, turnID string) {
 				newBridgeLedger(store, nil).recordStart(ctx, turnID, "launch-1", sandbox.SessionStartContinued)
 			},
@@ -55,7 +62,7 @@ func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) 
 			},
 		},
 		{
-			name: "a job's first pull of its notes",
+			name: "a job's first pull of its notes", turnID: "t-pull-mark",
 			write: func(ctx context.Context, store sandbox.PendingStore, turnID string) {
 				inbox := newRunSteers(steerSeals{}, store, nil).inbox(
 					runIdentity{turn: steer.Turn{TurnID: turnID, AgentHandle: "swe"}}, 1)
@@ -65,9 +72,7 @@ func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) 
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			across := kvtest.SlowLeaf(t, rowCrossingRate)
-			const turnID = "t-crossing"
+			turnID := c.turnID
 			raw, err := json.Marshal(sandbox.PendingRun{TurnID: turnID, AgentHandle: "swe",
 				Status: sandbox.StatusRunning, LaunchID: "launch-1", LaunchSeq: 1})
 			if err != nil {
@@ -82,8 +87,13 @@ func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) 
 			c.write(t.Context(), sandbox.NewCoordStore(across.Leaf), turnID)
 			// READ BACK THROUGH THE MEMBER the moment the write returned: a
 			// write cut short is still crossing then, and the row does not
-			// hold it yet.
-			run, found, err := sandbox.NewCoordStore(across.Member).Get(t.Context(), turnID)
+			// hold it yet. Asked for as long as a leader read is ever asked
+			// ([jsprovision.LookupBudget]), since its reply carries the row
+			// whole: a reply that long in the making is the runner's load,
+			// never what the case asks.
+			read, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)
+			defer cancel()
+			run, found, err := sandbox.NewCoordStore(across.Member).Get(read, turnID)
 			if err != nil || !found {
 				t.Fatalf("read the row back: found %t, %v", found, err)
 			}
