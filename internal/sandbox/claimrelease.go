@@ -113,6 +113,25 @@ import (
 // ([Coordinator.claiming]), which decides first, and which counts each claim
 // off on every way out of it, a panic included ([Coordinator.claimDoneLocked]):
 // a count left up held the owed release back for good.
+//
+// # A later job's release takes an earlier one's place
+//
+// A CLAIM OF ANOTHER JOB OF THE RUN IS NOT REFUSED, and its release can go out
+// while an earlier job's is still owed. A resumed turn can relaunch its
+// executor and then fail: the claim its frame gives back names the job the
+// relaunch moved the run off, and a release the store does not answer is owed.
+// The relaunched job's completion is claimed all the same, the refusal naming
+// only the owed release's own job, and where that job's resume fails as well,
+// its release is recorded in the earlier one's place ([Coordinator.unclaimAt]).
+// THE EARLIER ONE IS ANSWERED THERE, as a write that did not land, which it
+// is. Had it landed, it put its own job back, and the run moves on from there
+// only through a claim of that job, which is refused while its release is out
+// or takes the release over as it wins ([Coordinator.claimCompletion]); and on a
+// run that has moved on to a later job, an earlier job's release can no longer
+// land. Left out in the run's entry, it held every later move on the run
+// behind it, the later release's and the run's last among them, for as long as
+// this node held the seat: the seat counted the run as the claim after it was
+// over, and took no mail.
 
 // errReleaseOwed is a completion refused because this node is still giving
 // back, or still owes, the release of the claim it took on the same job

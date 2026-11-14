@@ -4599,10 +4599,21 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail stri
 	// AND ITS WRITE IN THE RUN'S ENTRY, in the same step (claimrelease.go):
 	// a recount counts the run as the claim it still is for as long as the
 	// release is out, and a write recorded behind it moves after it.
+	//
+	// THE RELEASE IT TAKES THE PLACE OF IS ANSWERED FIRST, as one that did
+	// not land: an earlier job's, still owed, which can no longer land (see
+	// "A later job's release takes an earlier one's place" in
+	// claimrelease.go). Left out in the entry, it held every later move on
+	// the run behind it for as long as this node held the seat.
+	moved := func() {}
 	c.mu.Lock()
+	if earlier := c.releases[run.TurnID]; earlier != nil {
+		moved = c.wroteCountLocked(earlier.write, false)
+	}
 	cr.write = c.writingCountLocked(run, StatusResumed, cr.release.To)
 	c.releases[run.TurnID] = cr
 	c.mu.Unlock()
+	moved()
 	return c.unclaimOwing(ctx, cr)
 }
 

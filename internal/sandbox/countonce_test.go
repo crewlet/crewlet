@@ -892,6 +892,113 @@ func TestARecordMadeWhileAReleaseIsOwedMovesItsRunAfterTheRelease(t *testing.T) 
 		"t3's question alone, t1's answer resumed and its run over", 0, 1)
 }
 
+// A RELEASE A LATER JOB'S TAKES THE PLACE OF LEAVES NOTHING OUT ON ITS RUN
+// (claimrelease.go). A resumed turn can relaunch its executor and then fail, and
+// the claim its frame gives back names the job the relaunch moved the run off:
+// a release that cannot land, which the store here leaves unanswered, so it is
+// owed. The relaunched job then finishes, its claim wins, since only a claim of
+// the owed release's own job is refused, and its resume fails too, so its claim
+// is given back before the earlier release is made again. The later release
+// takes the earlier one's place among the releases out, and the earlier one's
+// write in the run's entry is answered there, as the write that did not land
+// that it is. Left out, it held every later move on the run behind it for as
+// long as this node held the seat, the later release's and the run's last among
+// them: the seat counted the run holding after it was over, and took no mail.
+// Answered as landed, an answer's release took the run out of the holding set
+// while its relaunched job still worked, the seat read free beside it.
+//
+// Mutation: put a release in the place of one still out without answering the
+// earlier one's write, or answer it as one that landed.
+func TestAReleaseALaterJobsTakesThePlaceOfLeavesNothingOutOnItsRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// arrange puts t1 where the claim the case gives back is taken from,
+		// and claim takes it, its resume relaunching the job and failing.
+		arrange func(t *testing.T, rig *coordRig)
+		claim   func(t *testing.T, rig *coordRig)
+	}{
+		{name: "a completion's claim",
+			arrange: func(_ *testing.T, rig *coordRig) {
+				rig.launch("t1")
+				rig.runner.Finish(Result{Success: true})
+			},
+			claim: func(t *testing.T, rig *coordRig) {
+				payload, ev := rig.completion("t1")
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			}},
+		{name: "an answer's claim",
+			arrange: func(t *testing.T, rig *coordRig) { parkOnAQuestion(t, rig) },
+			claim: func(t *testing.T, rig *coordRig) {
+				reply := chatReply(answerOnTheDM, "use main",
+					replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute)))
+				_, _ = rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			tc.arrange(t, rig)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			first := rig.get("t1")
+			store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending}}
+			rig.coordinator.pending = store
+			store.silence("ReleaseClaim")
+			rig.resumer.err, rig.resumer.failsInTurn = errors.New("the model provider did not answer"), true
+			relaunched := false
+			rig.resumer.during = func(ctx context.Context, run PendingRun) {
+				if relaunched {
+					return
+				}
+				relaunched = true
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq(run.TurnID)); err != nil {
+					t.Errorf("relaunch: %v", err)
+				}
+				rig.suspendIn(ctx, run.TurnID)
+			}
+			tc.claim(t, rig)
+			second := rig.get("t1")
+			if second.LaunchID == first.LaunchID || second.Status != StatusRunning ||
+				!rig.coordinator.releasing("t1", first.LaunchID) {
+				t.Fatalf("the premise: t1 is %s on job %s, the first job's release out %v; want the relaunched "+
+					"job running and the first job's release owed", second.Status, second.LaunchID,
+					rig.coordinator.releasing("t1", first.LaunchID))
+			}
+			wantSeatCounts(t, rig, "with the first job's release owed,", "the relaunched job holding the seat",
+				1, 0)
+
+			store.answer()
+			payload, ev := rig.completion("t1")
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			if got := rig.get("t1"); got.LaunchID != second.LaunchID || got.Status != StatusRunning ||
+				rig.coordinator.releasing("t1", second.LaunchID) {
+				t.Fatalf("the premise: t1 is %s on job %s; want the relaunched job's claim given back to "+
+					"running", got.Status, got.LaunchID)
+			}
+			rig.coordinator.mu.Lock()
+			out := rig.coordinator.writing["t1"]
+			rig.coordinator.mu.Unlock()
+			if out != nil {
+				t.Errorf("%d writes are left out on t1 once both releases are answered, holding every later "+
+					"move on it", len(out.out))
+			}
+			wantSeatCounts(t, rig, "with the relaunched job's claim given back,",
+				"the relaunched job holding the seat", 1, 0)
+
+			rig.fireRetries()
+			rig.resumer.failWith(nil)
+			payload, ev = rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+				t.Fatalf("the premise: t1 found %v (%v); want its run over", found, err)
+			}
+			wantSeatCounts(t, rig, "once t1's run is over,", "nothing", 0, 0)
+		})
+	}
+}
+
 // A RECOVERY'S TAKEOVER HAS THE LAST WORD ON ITS RUN (countwrite.go). A write
 // a frame of this node's earlier holding records after the seat's release is
 // still out when this node takes the seat back, and the recovery's takeover of
