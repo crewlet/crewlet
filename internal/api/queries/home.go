@@ -735,7 +735,10 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	}
 	// THE CALLER'S OWN RECORD, where what they may answer is listed beside
 	// what is put to them.
-	principal, _ := iam.From(ctx)
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "decisions")
+	}
 	own := handle == iam.RecordOwner(principal)
 	var items []DecisionItem
 	total, capped := 0, false
