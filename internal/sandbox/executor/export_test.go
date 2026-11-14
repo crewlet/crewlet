@@ -89,6 +89,10 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, 
 	}))
 }
 
+// OpenCodeCursorTail is how much of a list answer's end a run's script reads
+// its cursor from ([openCodeCursor]).
+const OpenCodeCursorTail = openCodeCursorTail
+
 // OpenCodeEndPath is the most a run's script spends after an end request
 // reaches it while its harness runs, at the waits Command runs it at
 // ([openCodeEndPath]).

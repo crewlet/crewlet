@@ -548,6 +548,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`imported= spid= xpid= xout=%s url=`, loop)
 	b.WriteString(openCodeStops())
 	b.WriteString(openCodeBounded(paths, times))
+	b.WriteString(openCodeCursor())
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
 	// keep TAG FILE FLAGS...: one export into FILE, moved over the document
@@ -929,15 +930,12 @@ func openCodePack(paths Paths, staged, dest, server, call string) string {
 // which takes the first figure. No page is ever left out between two printed,
 // so no older figure is taken for a newer request.
 //
-// THE CURSOR IS READ AS TEXT, as the steers' ids are ([openCodeLeftoverSteers]),
-// since a box may have no JSON parser: the answer is `{"data": [...], "cursor":
-// {"previous": ..., "next": ...}}`, so its `next` is the last key of the whole
-// answer, read anchored at its end (base64url, which holds no quote), and a
-// `next` key inside a message's content is never it. An answer that ends
-// otherwise yields no cursor, and the asking stops: no figure, never a wrong one.
-// Measured on OpenCode 2.0.32 and 2.2.7 (testdata/opencode/<version>/context):
-// the answer is one line, ends with its cursor's `next`, and names a step by the
-// id the run's stream names it by (`part.messageID`).
+// THE CURSOR IS THE ANSWER'S OWN, read as every list answer's is
+// ([openCodeCursor]): an answer that ends otherwise yields no cursor, and the
+// asking stops: no figure, never a wrong one. Measured on OpenCode 2.0.32 and
+// 2.2.7 (testdata/opencode/<version>/context): the answer is one line, ends
+// with its cursor's `next`, and names a step by the id the run's stream names it
+// by (`part.messageID`).
 //
 // NEVER ON AN END REQUEST: a stop's, a loss's and a turn's cap end the round the
 // job ran, which no relaunch continues in place, and the pages would spend the
@@ -964,11 +962,45 @@ func openCodeContext(paths Paths, times openCodeTimes) string {
 	line(`  ctxleft=$((ctxleft - ctxsize))`)
 	line(`  printf '{"type":"%s","page":'; tr -d '\n' < "$ctxfile"; printf '}\n'`, openCodeContextEvent)
 	line(`  grep -q '"error"[[:space:]]*:[[:space:]]*{' "$ctxfile" || break`)
-	line(`  ctxcur=$(tr -d '\n' < "$ctxfile" | sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)"[[:space:]]*}[[:space:]]*}[[:space:]]*$/\1/p')`)
+	line(`  ctxcur=$(listcursor "$ctxfile")`)
 	line(`  [ -n "$ctxcur" ] || break`)
 	line(`done`)
 	line(`rm -f "$ctxfile"`)
 	return b.String()
+}
+
+// openCodeCursorTail is how much of a list answer's end the script reads its
+// cursor from ([openCodeCursor]).
+//
+// ONE KIBIBYTE. The answer ends `"cursor":{"previous":"…","next":"…"}}`, each
+// cursor unpadded base64url of `{"id":…,"order":"desc","direction":…}`: 98
+// characters (`next`) and 103 (`previous`) for the 30-byte message ids OpenCode
+// mints (testdata/opencode/<version>/context), 143 and 148 for a 64-byte one.
+// The cursor object is then 226 and 316 bytes, 236 and 326 with `"cursor":` and
+// the closing brace; a pretty-printer's indentation adds tens. A kibibyte holds
+// the widest with that margin, and none of the data URI a message can carry,
+// which can run to tens of mebibytes.
+const openCodeCursorTail = 1 << 10
+
+// openCodeCursor is the script's one reading of a list answer's cursor,
+// `listcursor FILE`: the `next` of the answer in FILE, or nothing.
+//
+// READ AS TEXT, as the steers' ids are ([openCodeLeftoverSteers]), since a box
+// may have no JSON parser: the answer is `{"data": [...], "cursor": {"previous":
+// ..., "next": ...}}`, so its `next` is the last key of the whole answer, read
+// anchored at its end (base64url, which holds no quote), and a `next` key
+// inside a message's content is never it.
+//
+// FROM ITS END ALONE ([openCodeCursorTail]), and UNDER LC_ALL=C: a message is
+// bounded in count and not in bytes, and the end of an answer cut there can
+// fall inside a multi-byte character. Under a UTF-8 locale GNU sed's `.` matches
+// no such cut character, so the unanchored match would begin after it and print
+// it in front of the cursor, which would then name no page; under LC_ALL=C
+// every byte is a character the `.` matches. tail and tr run under it too, so no step
+// reads the bytes as anything but bytes.
+func openCodeCursor() string {
+	return fmt.Sprintf(`listcursor() { LC_ALL=C tail -c %d "$1" | LC_ALL=C tr -d '\n' | LC_ALL=C sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)"[[:space:]]*}[[:space:]]*}[[:space:]]*$/\1/p'; }
+`, openCodeCursorTail)
 }
 
 // openCodeStops is the script's two stops beside end ([endFunction], which
