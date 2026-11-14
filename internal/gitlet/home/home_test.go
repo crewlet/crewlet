@@ -134,14 +134,20 @@ func (e *estate) recheck(repo string, due gitlet.ChangeDue) {
 	e.rechecks[repo] = append(e.rechecks[repo], due)
 }
 
+// QueueDue answers the queue's due work: these cases hold no queue owing any.
+func (e *estate) QueueDue(context.Context, gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return gitlet.QueueDueAnswer{Position: e.at}, nil
+}
+
 func (e *estate) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
-	case q.Kind == gitlet.ReadChecksDue || q.Kind == gitlet.ReadQueueDue:
-		// THE CHECK WORK'S AND THE QUEUE'S LISTINGS: these cases hold no
-		// change owing either.
-		if q.Kind == gitlet.ReadChecksDue && q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
+	case q.Kind == gitlet.ReadChecksDue:
+		// THE CHECK WORK'S LISTING: these cases hold no change owing any.
+		if q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
 			e.checkFloors = append(e.checkFloors, q.Fresh)
 		}
 		return gitlet.ReadAnswer{Position: e.at}, nil

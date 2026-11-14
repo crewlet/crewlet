@@ -1590,12 +1590,6 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 			}
 			return r.queueListing(ctx, tx, q, chart, &out)
 		}
-	case ReadQueueDue:
-		// A SET READ, of the domain or of the one repository, as
-		// changes_due's: every record the home asks after it is decided
-		// again by the repository's committer from its own snapshot.
-		query = q.queueQuery(fresh)
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.queueDue(ctx, tx, q, &out) }
 	case ReadInbox:
 		// A SET READ OF THE DOMAIN, as a listing of changes across
 		// repositories is: the notices are written by the records of every
@@ -1713,8 +1707,6 @@ func (q ReadQuery) validate() error {
 		return q.validateChecksQueued()
 	case ReadChecksRunning:
 		return q.validateChecksRunning()
-	case ReadQueueDue:
-		return q.validateQueueDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1753,9 +1745,6 @@ func (q ReadQuery) validate() error {
 	case q.DefaultTips != nil:
 		return fmt.Errorf("%w: default_tips: only a default_tips read names the repository whose tip it reads",
 			ErrInvalid)
-	case q.QueueDue != nil:
-		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
-			"in", ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
 		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
@@ -1997,8 +1986,6 @@ func (q ReadQuery) validateIntroduced() error {
 			"before an instant")
 	case q.Target != "":
 		return refused("target", "only a queue, a landings or a green read names a branch's queue")
-	case q.QueueDue != nil:
-		return refused("queue_due", "only a queue_due read names the repository its home owes queue work in")
 	case q.Reviewer != "":
 		return refused("reviewer", "only a listing of changes or of a reviewer's reviews names a reviewer")
 	case q.Needs != "":
@@ -2080,7 +2067,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
@@ -2132,7 +2119,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
@@ -2175,7 +2162,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
@@ -2228,7 +2215,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
@@ -2308,7 +2295,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
@@ -2352,7 +2339,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 		{"branch_changes", q.BranchChanges != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
@@ -2453,7 +2440,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"finding_ids", len(q.FindingIDs) > 0},
-		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"target", q.Target != ""},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {

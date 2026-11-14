@@ -3,6 +3,7 @@ package gitlet_test
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1028,11 +1030,14 @@ func TestAQueueReadSaysWhatItsQueuesPutOutLately(t *testing.T) {
 	}
 }
 
-// landedOwingClose is a repository named name whose one change, carrying
-// item, ada queued into main asking its work item closed, and its landing
-// applied: the repository, the change, the entry and the land record.
-func landedOwingClose(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter, name string,
-	item *types.WorkItem) (repo, change, entryID string, land gitlet.QueueProposal) {
+// queuedFor is a repository named name whose one change — dev's from feature
+// into main, a queue target ([queueGate]), carrying item — by queued asking
+// its work item closed, the enqueue made for f, and a train of it built onto
+// main's tip A, its tip M passed: the repository, the change, the entry and
+// the train, which lands it.
+func queuedFor(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter, name string,
+	item *types.WorkItem, by gitlet.Principal, f types.WrittenFor) (repo, change, entryID string,
+	train gitlet.QueueProposal) {
 
 	t.Helper()
 	s := suiteSettings()
@@ -1047,18 +1052,29 @@ func landedOwingClose(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.Chan
 	requireChanged(t, opened, err)
 	change = opened.ChangeID
 	ready(t, n, w, repo, change)
-	enqueue := enqueueing(repo, change, ada, oidOf("B"))
-	enqueue.Enqueue.CloseTask = true
+	enqueue := enqueueing(repo, change, by, oidOf("B"))
+	enqueue.WrittenFor, enqueue.Enqueue.CloseTask = f, true
 	res, err := c.ProposeQueue(t.Context(), enqueue)
 	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
 	entryID = enqueue.Enqueue.EntryID
-	train := training(repo, oidOf("A"), entryID, oidOf("M"))
+	train = training(repo, oidOf("A"), entryID, oidOf("M"))
 	res, err = c.ProposeQueue(t.Context(), train)
 	requireRecorded(t, res, err)
 	n.passed(repo, oidOf("M"), mainRef, "unit")
+	return repo, change, entryID, train
+}
+
+// landedOwingClose is a repository named name whose one change, carrying
+// item, ada queued into main asking its work item closed, and its landing
+// applied: the repository, the change, the entry and the land record.
+func landedOwingClose(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter, name string,
+	item *types.WorkItem) (repo, change, entryID string, land gitlet.QueueProposal) {
+
+	t.Helper()
+	repo, change, entryID, train := queuedFor(t, n, c, w, name, item, ada, types.ForNobody())
 	land = landingOf(repo, train.Candidate.Train, oidOf("A"),
 		gitlet.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")})
-	res, err = c.ProposeQueue(t.Context(), land)
+	res, err := c.ProposeQueue(t.Context(), land)
 	requireRecorded(t, res, err)
 	return repo, change, entryID, land
 }
@@ -1092,8 +1108,7 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	owed := func(repo string) []gitlet.QueueWorkEntry {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
 		if err != nil {
 			t.Fatalf("read %s's queue work: %v", repo, err)
 		}
@@ -1101,8 +1116,7 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 	listed := func(repo string) bool {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{Fresh: stale})
 		if err != nil {
 			t.Fatalf("list the repositories owing queue work: %v", err)
 		}
@@ -1227,8 +1241,7 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 	stale := statelog.Freshness{Level: statelog.ReadStale}
 	owed := func(repo string) []string {
 		t.Helper()
-		a, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue, Fresh: stale,
-			QueueDue: &gitlet.QueueDueQuery{RepoID: repo}})
+		a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
 		if err != nil {
 			t.Fatalf("read %s's queue work: %v", repo, err)
 		}
@@ -1319,5 +1332,228 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 	requireRecorded(t, res, err)
 	if got := owed(repo); len(got) != 0 {
 		t.Fatalf("a settle naming a close settled already beside one owed left %v owing, want none", got)
+	}
+}
+
+// enqueuedForCases are the enqueues the queue's records about an entry are
+// read back for: cto's made in a turn founder woke, cto's made for nobody, the
+// seat's own work, and ada's, a person's, who writes for nobody but herself.
+func enqueuedForCases(founder *types.WorkingFor) []struct {
+	name string
+	by   gitlet.Principal
+	f    types.WrittenFor
+	want *types.WorkingFor
+} {
+	return []struct {
+		name string
+		by   gitlet.Principal
+		f    types.WrittenFor
+		want *types.WorkingFor
+	}{
+		{"cto's enqueue made for founder", cto, types.ForTurn(founder), founder},
+		{"cto's enqueue made for nobody", cto, types.ForTurn(nil), nil},
+		{"ada's enqueue", ada, types.ForNobody(), nil},
+	}
+}
+
+// versionOf is the code record version a record carrying want is stamped at:
+// the carrier's where it carries one, the base otherwise.
+func versionOf(want *types.WorkingFor) int {
+	if want != nil {
+		return gitlet.WorkingForVersion
+	}
+	return 1
+}
+
+// A QUEUE'S LANDING WAKES FOR WHOM ITS ENTRY WAS ENQUEUED (ADR-0109): a landing
+// names each entry's enqueuer as the merger it lands the change as, and the
+// enqueue was that seat's write in a turn somebody woke, so the change's other
+// authors are told it merged for that somebody, read off the entry's row, as
+// the seat's own merge would have told them. cto queues dev's change into main
+// in a turn founder woke: its landing carries founder beside cto, at version
+// 2, and dev, its owner, is woken by cto for founder. cto's enqueue made for
+// nobody, and ada's, a person's, carry nobody, at version 1, and dev is woken
+// by the enqueuer alone.
+//
+// Mutation: the landing's decide handing its routing no carrier — the landing
+// of cto's entry made for founder carries nobody and dev is woken for nobody,
+// red.
+func TestAQueuesLandingWakesForWhomItsEntryWasEnqueued(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+	for i, tc := range enqueuedForCases(founder) {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, change, entryID, train := queuedFor(t, n, c, w, fmt.Sprintf("landed-%d", i), item, tc.by, tc.f)
+			res, err := c.ProposeQueue(t.Context(), landingOf(repo, train.Candidate.Train, oidOf("A"),
+				gitlet.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")}))
+			at := requireRecorded(t, res, err)
+			routings := routingAt(t, n, at)
+			if len(routings) != 1 || !routings[0].Merged || routings[0].Actor != tc.by.Seat {
+				t.Fatalf("the landing carries %+v, want the change merged by %s, who queued it", routings,
+					tc.by.Seat)
+			}
+			if f, v := routings[0].WorkingFor, n.recordAt(at).V; !reflect.DeepEqual(f, tc.want) ||
+				v != versionOf(tc.want) {
+				t.Errorf("the landing's routing carries %+v at version %d, want %+v at %d", f, v, tc.want,
+					versionOf(tc.want))
+			}
+			writer := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "cto", WorkingFor: tc.want}
+			if tc.by.Kind != gitlet.PrincipalAgent {
+				writer = types.NotificationWriter{Kind: iam.ActorHuman, Seat: tc.by.Seat}
+			}
+			_, relayed, routed := wakesOf(t, feedRecord(t, n, at))
+			switch {
+			case !relayed || !slices.Equal(woken(routed), []string{"dev:merged"}):
+				t.Fatalf("the landing wakes %v (relayed %v), want dev, its owner, told it merged", woken(routed),
+					relayed)
+			case routed[0].Writer == nil || !reflect.DeepEqual(*routed[0].Writer, writer):
+				t.Errorf("dev's wake is written by %s, want %s", writtenBy(routed[0].Writer), writtenBy(&writer))
+			}
+		})
+	}
+}
+
+// AN EJECTION AND AN UNMADE CLOSE WAKE FOR WHOM THEIR ENQUEUE WAS MADE
+// (ADR-0109's amendment): the merge queue's own records about an entry name no
+// actor, since no principal's act made them, and tell the entry's enqueuer and
+// its change's authors about that enqueue — that it left the queue, that the
+// landed change's work item was left open — so each carries whom the enqueue
+// was made for beside no actor, read off the entry's row, and the turn it wakes
+// works for them: worked for the told seat's own, it would queue the change
+// again, or close the item its requester could not, with every app the seat
+// holds. cto queues dev's change in a turn founder woke: its ejection, and the
+// settle of its landing's close not closed, each wake dev and cto written by
+// the engine for founder, at version 2. Enqueued for nobody, or by ada, a
+// person, each wakes its seats written by the engine alone, at version 1.
+//
+// Mutations: the ejection's decide handing its routing no carrier — the
+// ejection of cto's entry made for founder wakes dev and cto for nobody, red;
+// the settle's likewise — its unmade close, red; writerOf handing the
+// engine's carrier on neither op — both wake their seats for nobody, red.
+func TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+	// told is what the record at at carries and wakes: its one routing
+	// carrying want beside no actor, at its version, and the seats seats
+	// woken, each written by the engine for want.
+	told := func(t *testing.T, what string, at statelog.Position, want *types.WorkingFor, seats ...string) {
+		t.Helper()
+		routings := routingAt(t, n, at)
+		if len(routings) != 1 || routings[0].Actor != "" {
+			t.Fatalf("the %s carries %+v, want one routing naming no actor", what, routings)
+		}
+		if f, v := routings[0].WorkingFor, n.recordAt(at).V; !reflect.DeepEqual(f, want) || v != versionOf(want) {
+			t.Errorf("the %s's routing carries %+v at version %d, want %+v at %d", what, f, v, want,
+				versionOf(want))
+		}
+		_, relayed, routed := wakesOf(t, feedRecord(t, n, at))
+		got := woken(routed)
+		slices.Sort(got)
+		if !relayed || !slices.Equal(got, seats) {
+			t.Fatalf("the %s wakes %v (relayed %v), want %v", what, got, relayed, seats)
+		}
+		writer := types.NotificationWriter{Kind: iam.ActorSystem, WorkingFor: want}
+		for _, r := range routed {
+			if r.Writer == nil || !reflect.DeepEqual(*r.Writer, writer) {
+				t.Errorf("the %s wakes %s written by %s, want %s", what, r.To.Handle, writtenBy(r.Writer),
+					writtenBy(&writer))
+			}
+		}
+	}
+	for i, tc := range enqueuedForCases(founder) {
+		t.Run(tc.name, func(t *testing.T) {
+			// THE EJECTION: its entry put out of the queue, its train with it.
+			repo, _, entryID, _ := queuedFor(t, n, c, w, fmt.Sprintf("ejected-%d", i), item, tc.by, tc.f)
+			res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *gitlet.QueueProposal) {
+				p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: entryID,
+					Reason: gitlet.EjectCheckFailed, Checks: []string{"unit"}}}}
+			}))
+			seats := []string{"cto:dequeued", "dev:dequeued"}
+			if tc.by.Kind != gitlet.PrincipalAgent {
+				seats = []string{"dev:dequeued"}
+			}
+			told(t, "ejection", requireRecorded(t, res, err), tc.want, seats...)
+
+			// THE UNMADE CLOSE: landed, its work item's close settled not
+			// closed.
+			repo, change, entryID, train := queuedFor(t, n, c, w, fmt.Sprintf("unclosed-%d", i), item, tc.by,
+				tc.f)
+			res, err = c.ProposeQueue(t.Context(), landingOf(repo, train.Candidate.Train, oidOf("A"),
+				gitlet.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")}))
+			requireRecorded(t, res, err)
+			res, err = c.ProposeQueue(t.Context(), queueRecord(func(p *gitlet.QueueProposal) {
+				p.CloseSettled = &gitlet.CloseSettled{RepoID: repo, Settled: []gitlet.SettledClose{{
+					EntryID: entryID, Outcome: gitlet.CloseNotClosed,
+					Detail: "founder, for whom cto queued the change, does not use Worklet"}}}
+			}))
+			seats = []string{"cto:merged", "dev:merged"}
+			if tc.by.Kind != gitlet.PrincipalAgent {
+				seats = []string{"dev:merged"}
+			}
+			told(t, "unmade close", requireRecorded(t, res, err), tc.want, seats...)
+		})
+	}
+}
+
+// THE HOME'S QUEUE WORK SAYS WHOM EACH ENTRY WAS ENQUEUED FOR (ADR-0109): the
+// one read answer that carries whom a code write was made for, since the home
+// closes a landed change's work item for them, on either of its paths — from
+// the target's live entries the page that lands the change answers
+// (QueueDue.Entries), and from the closes a landing left owed, which a later
+// page answers (QueueOwedCloses). cto's entry enqueued in a turn founder woke
+// is answered for founder on both; cto's made for nobody, and ada's, a
+// person's, for nobody.
+//
+// Mutations: the target's entries read without the carrier (workEntriesOf) —
+// cto's live entry is answered for nobody, red; the owed closes read without
+// it (owedClosesIn) — cto's owed close is answered for nobody, red.
+func TestTheHomesQueueWorkSaysWhomEachEntryWasEnqueuedFor(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	for i, tc := range enqueuedForCases(founder) {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, change, entryID, train := queuedFor(t, n, c, w, fmt.Sprintf("read-%d", i), item, tc.by, tc.f)
+			a, err := n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
+			switch {
+			case err != nil:
+				t.Fatalf("read %s's queue work: %v", repo, err)
+			case a.DueQueue == nil || len(a.DueQueue.Entries) != 1 || a.DueQueue.Entries[0].EntryID != entryID:
+				t.Fatalf("%s's queue work answers %+v, want its one entry %s", repo, a.DueQueue, entryID)
+			case !reflect.DeepEqual(a.DueQueue.Entries[0].WorkingFor, tc.want):
+				t.Errorf("the live entry is answered enqueued for %+v, want %+v", a.DueQueue.Entries[0].WorkingFor,
+					tc.want)
+			}
+
+			res, err := c.ProposeQueue(t.Context(), landingOf(repo, train.Candidate.Train, oidOf("A"),
+				gitlet.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")}))
+			requireRecorded(t, res, err)
+			a, err = n.reader.QueueDue(t.Context(), gitlet.QueueDueQuery{RepoID: repo, Fresh: stale})
+			switch {
+			case err != nil:
+				t.Fatalf("read %s's queue work: %v", repo, err)
+			case len(a.QueueOwedCloses) != 1 || a.QueueOwedCloses[0].EntryID != entryID:
+				t.Fatalf("%s's queue work owes %+v, want its landed entry %s's close", repo, a.QueueOwedCloses,
+					entryID)
+			case !reflect.DeepEqual(a.QueueOwedCloses[0].WorkingFor, tc.want):
+				t.Errorf("the owed close is answered enqueued for %+v, want %+v", a.QueueOwedCloses[0].WorkingFor,
+					tc.want)
+			}
+		})
 	}
 }

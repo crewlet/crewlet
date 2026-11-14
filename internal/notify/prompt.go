@@ -289,10 +289,16 @@ type Inbound struct {
 // (ADR-0109). The apps are kept for a credential's write alone, and only as
 // apps this build knows, once each, in iam.Apps order: what a seat's or a
 // person's record carries is not its requester's to use, since the running
-// node reads who holds the seat. The carrier is kept for an agent's write
-// alone, its apps held to that same order: a person, a credential and the
-// engine write for nobody but themselves, and a carrier handed for one of
-// them would make a turn work for somebody that writer never spoke for.
+// node reads who holds the seat. The carrier is kept for an agent's write and
+// for the engine's, its apps held to that same order: a person and a
+// credential write for nobody but themselves, and a carrier handed for one of
+// them would make a turn work for somebody that writer never spoke for. The
+// engine writes for nobody but itself too, save the one exception ADR-0109's
+// amendment makes: its record about an agent's earlier act made for somebody,
+// which carries that act's carrier — Gitlet's merge queue's ejection and a
+// close it could not make, which internal/gitlet's parser alone hands one
+// (its writerOf). Every other producer hands the record's own carrier, which
+// its store refuses on any write but an agent's (types.WrittenFor.For).
 func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant,
 	workingFor *types.WorkingFor) *types.NotificationWriter {
 
@@ -300,13 +306,13 @@ func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant,
 	switch kind {
 	case iam.ActorAgent, iam.ActorHuman:
 		w.Seat = strings.TrimSpace(actor)
-		if kind == iam.ActorAgent && workingFor != nil {
-			w.WorkingFor = workingFor.Clone()
-			w.WorkingFor.Apps = knownApps(workingFor.Apps)
-		}
 	case iam.ActorOperator:
 		w.Login = strings.TrimSpace(actor)
 		w.Apps = knownApps(apps)
+	}
+	if (kind == iam.ActorAgent || kind == iam.ActorSystem) && workingFor != nil {
+		w.WorkingFor = workingFor.Clone()
+		w.WorkingFor.Apps = knownApps(workingFor.Apps)
 	}
 	return w
 }

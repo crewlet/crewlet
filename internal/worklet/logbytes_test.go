@@ -136,8 +136,16 @@ const (
 // was assigned (ADR-0109): the open's, the merge's and the enqueue's payload
 // carry them, and so do the routings of the ask, the reviews and the answer,
 // each of which wakes a seat — a human seat by its handle, 47 bytes a record.
-// The home's own records carry none, and neither does the merge's routing,
-// which tells only its author, who merged it.
+// The home's own records carry none: its facts of a revision and a failed
+// check of a head carry whom the revision was pushed for only where they wake
+// a seat, and the reference revisions' facts ask nobody and the reference
+// checks pass; a readiness is no principal's act; the queue's landing carries
+// whom each entry's enqueue was made for only where it wakes a seat, and the
+// reference landing wakes none, its one author being the seat that queued the
+// change, who is not told of their own act; and the queue's ejection and a
+// close it could not make carry it beside no actor, where the reference day
+// ejects nothing and its settle closed the item, which routes nobody. Neither
+// does the merge's routing, which tells only its author, who merged it.
 const (
 	codeChangeOpenBytes           = 3_160
 	codeChangeEditBytes           = 2_770
@@ -540,7 +548,8 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"change holding an ask, a few hundred bytes each; the reference company's changes are each " +
 		"reviewed by the reviewer they ask before they merge, so none ends with an ask waiting",
 	gitlet.OpChangeLanded: "a change whose target came to hold its head outside a merge record — a " +
-		"person's own push of it — landed by its repository's home Gitlet node: once a change at most, " +
+		"push of it onto its target, a person's or a seat's — landed by its repository's home Gitlet " +
+		"node: once a change at most, " +
 		"in place of the merge record such a change never takes, and smaller than it (no pack and no " +
 		"principal); the reference company's changes are merged",
 	gitlet.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
@@ -740,9 +749,14 @@ var routingReasons = map[string]string{
 	"not_closed": "why a merged change's work item was left open, which only a close_settled that ended " +
 		"not_closed routes, and the reference queued change's item closes",
 	"working_for": "whom an agent's write was made for, which the writer stamps beside an agent's actor " +
-		"only where the routing wakes a seat (gitlet's routingFor): a home's own records carry none in this " +
-		"build, and a routing that tells nobody but its actor — the reference merge's, whose author merges " +
-		"it — wakes no seat to carry it to",
+		"only where the routing wakes a seat (gitlet's routingFor): a readiness is the home's own judgement, " +
+		"which no agent's act made; the home's records about a seat's earlier push or enqueue carry whom it " +
+		"was made for — a revision's facts, a failed check of its head, a landing found and the queue's " +
+		"landing beside the act's actor, the queue's ejection and a close it could not make beside none — " +
+		"and the reference ones route nobody, stay out of the day or wake no seat: the reference landing " +
+		"tells the change's authors but its enqueuer, who queued their own change, and a closed settle " +
+		"routes nobody; and a routing that tells nobody but its actor — the reference merge's, whose author " +
+		"merges it — wakes no seat to carry it to",
 }
 
 // routingAbsent is every key of a change's routing under prefix that a term's
@@ -926,8 +940,9 @@ var codeLogFields = map[gitlet.OpKind]struct {
 		absent: absent(
 			map[string]string{
 				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +
-					"asked to look again, an unreviewed change's lead — with the change's context, and " +
-					"the reference revisions ask nobody, so they carry none",
+					"asked to look again, an unreviewed change's lead — with the change's context, its " +
+					"pusher and whom the revision was pushed for, and the reference revisions ask nobody, " +
+					"so they carry none",
 				"patch_id_omitted": "a patch too large to identify, and the reference revision's is small",
 				"touches_all": "a revision touching more paths than gitlet.MaxTouchedBytes holds, which " +
 					"names none, and the reference revision touches five",
@@ -1157,8 +1172,9 @@ var codeLogFields = map[gitlet.OpKind]struct {
 				"log":              "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
 				"url":              "a link to a check's run outside the engine, where its reporter gave one",
 				"routing": "whom an ending that fails a change's head concerns (gitlet.CheckFinished.Routing): " +
-					"the change's routing, its authors and the head's pusher — some hundreds of bytes, as " +
-					"a merge's routing is — and the reference checks pass, which concern nobody",
+					"the change's routing, its authors, the head's pusher and whom the head was pushed for — " +
+					"some hundreds of bytes, as a merge's routing is — and the reference checks pass, which " +
+					"concern nobody",
 			}),
 	},
 }

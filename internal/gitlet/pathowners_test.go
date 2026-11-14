@@ -326,7 +326,6 @@ func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 		gitlet.ReadChecksQueued:  {ChecksQueued: &gitlet.ChecksQueuedQuery{}},
 		gitlet.ReadChecksRunning: {ChecksRunning: &gitlet.ChecksRunningQuery{RepoID: id}},
 		gitlet.ReadQueue:         {Asker: asker, Repo: "web"},
-		gitlet.ReadQueueDue:      {QueueDue: &gitlet.QueueDueQuery{}},
 		gitlet.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},
 		gitlet.ReadGreen:         {Asker: asker, Repo: "web"},
 		gitlet.ReadInbox:         {Asker: asker, Inbox: &gitlet.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},

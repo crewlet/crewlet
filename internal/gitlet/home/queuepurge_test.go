@@ -74,8 +74,8 @@ func (h *gitHome) at() statelog.Position {
 // queueDue is main's queue work as the home reads it, linearizable.
 func (h *gitHome) queueDue() gitlet.QueueDue {
 	h.t.Helper()
-	a, err := h.f.Code(h.t).Read(context.Background(), gitlet.ReadQuery{Kind: gitlet.ReadQueueDue,
-		Fresh: gitlettest.Linearizable, QueueDue: &gitlet.QueueDueQuery{RepoID: h.repo}})
+	a, err := h.f.Code(h.t).QueueDue(context.Background(), gitlet.QueueDueQuery{RepoID: h.repo,
+		Fresh: gitlettest.Linearizable})
 	if err != nil || a.DueQueue == nil {
 		h.t.Fatalf("main's queue work: %+v, %v", a.DueQueue, err)
 	}
