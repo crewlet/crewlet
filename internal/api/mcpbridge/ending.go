@@ -104,15 +104,16 @@ func (e ending) notRun() string {
 // appendRetryWaits, 1.75 seconds of waits between four attempts) and, after an
 // activation, the hold for the box's re-list (internal/toolsession's
 // relistWait, two seconds) — under four seconds on a coordination store that
-// answers. FIVE, as the write ahead of a call and the record of a job's
-// session start are given (internal/engine's beginBudget and
-// sessionStartRecordBudget), and for their reason: a store that has not
-// answered in five is in an outage this wait would not see the end of. Past
-// it the end waits no longer: an answer still on its way is one a box is not
-// reading, and the box's sessions are closed behind the end once it is out
-// (see the package doc). NOTHING HOLDS THE SUM TO THE BOUND: both waits live in
-// other packages, one of them the engine's, which this one cannot import, so
-// moving either is reading this again.
+// answers. FIVE, as the write ahead of a call is given (internal/engine's
+// beginBudget, five alone because a harness's own minute bounds that write,
+// crewlet/crewlet#1150) and the record of a job's session start is for its
+// reason, beside its row's crossing (sessionStartRecordBudget): a store that
+// has not answered in five is in an outage this wait would not see the end
+// of. Past it the end waits no longer: an answer still on its way is one a box
+// is not reading, and the box's sessions are closed behind the end once it is
+// out (see the package doc). NOTHING HOLDS THE SUM TO THE BOUND: both waits
+// live in other packages, one of them the engine's, which this one cannot
+// import, so moving either is reading this again.
 //
 // Not a setting: nothing about a deployment moves what it is sized for.
 const endAnswerWait = 5 * time.Second

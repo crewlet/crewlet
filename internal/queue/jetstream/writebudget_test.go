@@ -349,7 +349,7 @@ func TestAWriteCountsWhatItSends(t *testing.T) {
 // How slow a connection may be is decided once, where it is made ([linkOf]),
 // and every crossing on it reads that one decision: a state log record's read
 // by its position from the leader — given its log's largest record's
-// crossing, or on a log read through its copies the record's own — and read
+// arrival, or on a log read through its copies the record's own — and read
 // raw; a dead letter's frame from the leader and raw; and a write's request.
 // Decided apart, a pace changed for one of them — made configurable, or per
 // link — would leave the others at the old one. Held here at a pace no link
@@ -371,13 +371,14 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 		t.Fatalf("open the log: %v", err)
 	}
 	largest := min(q.nc.MaxPayload(), spec.MaxMessageBytes)
-	if want := jsapi.Crossing(int(largest), pace); log.crossing != want {
-		t.Errorf("a record's read is given %v to cross, want its largest record's crossing at "+
-			"the connection's pace, %v", log.crossing, want)
+	if want := jsapi.Arrival(int(largest), pace); log.arrival != want {
+		t.Errorf("a record's read is given %v to arrive, want its largest record's arrival at "+
+			"the connection's pace, %v", log.arrival, want)
 	}
 	// A LOG READ THROUGH ITS COPIES: its records as large as the transport,
-	// each read from the leader at its own reply's crossing where that
-	// reply crosses, and otherwise raw, waited for its own crossing.
+	// each read from the leader at its own reply's arrival where the leaf's
+	// server carries that reply, and otherwise raw, waited for its own
+	// crossing.
 	copied := DomainStream{Name: "CREWLET_PACED_LOG", Subjects: []string{"crewlet.paced.log.>"},
 		MaxBytes: 4 * queue.MaxPayloadBytes, MaxMessageBytes: queue.MaxPayloadBytes,
 		Duplicates: 2 * time.Minute}
@@ -393,9 +394,9 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 			"across a leaf's link, whose reply of its largest record cannot cross it")
 	}
 	const record = 64 << 10
-	if want := jsapi.Crossing(record, pace); copiedLog.replyCrossing(record) != want {
-		t.Errorf("a record read from the leader is given %v to cross, want its own reply's "+
-			"crossing at the connection's pace, %v", copiedLog.replyCrossing(record), want)
+	if want := jsapi.Arrival(record, pace); copiedLog.replyArrival(record) != want {
+		t.Errorf("a record read from the leader is given %v to arrive, want its own reply's "+
+			"arrival at the connection's pace, %v", copiedLog.replyArrival(record), want)
 	}
 	if want := jsapi.Sending(record, pace); copiedLog.copies.crossing(record) != want {
 		t.Errorf("a record read raw waits %v for its crossing, want its own at the "+
@@ -406,17 +407,17 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 		t.Fatalf("open the dead letters: %v", err)
 	}
 	// A DEAD LETTER'S FRAME across the leaf's link: read from the leader at a
-	// term of its reply's crossing where that reply crosses, and otherwise
-	// raw, waited for the entry's own crossing — each at the connection's
-	// pace.
+	// term of its reply's arrival where the leaf's server carries that
+	// reply, and otherwise raw, waited for the entry's own crossing — each at
+	// the connection's pace.
 	if letters.copies == nil {
 		t.Fatal("a connection across a leaf's link reads its dead letters from the leader " +
 			"alone, whose reply of an entry as large as the transport cannot cross it")
 	}
 	const entry = 64 << 10
-	if want := jsprovision.ReadTerm + jsapi.Crossing(entry, pace); letters.carrying(q, entry).Term() != want {
+	if want := jsprovision.ReadTerm + jsapi.Arrival(entry, pace); letters.carrying(q, entry).Term() != want {
 		t.Errorf("a dead letter's frame is read from the leader at a term of %v, want the read "+
-			"term and its reply's crossing at the connection's pace, %v",
+			"term and its reply's arrival at the connection's pace, %v",
 			letters.carrying(q, entry).Term(), want)
 	}
 	if want := jsapi.Sending(entry, pace); letters.copies.crossing(entry) != want {

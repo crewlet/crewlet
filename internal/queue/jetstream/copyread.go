@@ -35,11 +35,10 @@ import (
 //
 // So a connection that crosses a LEAF'S LINK ([link.leaf]) reads such a
 // message RAW, from a consumer's delivery, which carries the message as it was
-// stored ([copyRead]). So does one whose leader's reply would fit but could
-// not land inside the ceiling every read is held to, at the link's pace
-// ([Queue.leaderCarries]): the leader's read is asked for no longer than that
-// ceiling, so a reply that takes longer to cross failed at every ask, where a
-// raw read waits for its message's own crossing.
+// stored ([copyRead]) — and only such a message: one whose leader's reply the
+// leaf's server carries is the leader's read, given the time that reply takes
+// to arrive at the link's pace, beyond the read term and beyond the ceiling
+// every read is held to ([Queue.leaderCarries], [jsapi.Leader.Carrying]).
 //
 // Every other connection keeps the leader's read. A member's own crosses no
 // link, and a dial to a broker somebody else runs crosses only that broker's
@@ -371,17 +370,18 @@ const firstPullRemakes = 3
 // connection and the leader ([link.leaf], decided where the connection was
 // made); and across one, only where the leader's reply ([jsapi.ReplyBytes])
 // is no larger than what the leaf's server holds a message to — past it, it
-// closes its whole link on the reply — and lands inside the ceiling every
-// read is held to at the link's pace: the read term, the reply's crossing
-// ([jsapi.Crossing]) and no more than the queue's lookup ceiling
-// ([jsprovision.LookupBudget]).
+// closes its whole link on the reply.
+//
+// NEVER BY HOW LONG THE REPLY TAKES TO CROSS: a leader's read of a message
+// that may be large is given its reply's arrival beyond the read term and
+// beyond the lookup ceiling ([jsapi.Leader.Carrying], [DomainLog.At]), so a
+// reply the leaf's server carries lands however slow the link. It was routed
+// raw as well wherever its reply could not land inside the bare ceiling at
+// the link's pace — about a mebibyte at the floor — because the ceiling then
+// counted no arrival, and a read whose reply took longer than thirty seconds
+// to cross failed at every ask (crewlet/crewlet#1149).
 func (q *Queue) leaderCarries(messageBytes int) bool {
-	if !q.link.leaf {
-		return true
-	}
-	t := q.provisioning()
-	return int64(jsapi.ReplyBytes(messageBytes)) <= q.nc.MaxPayload() &&
-		t.ReadTerm+jsapi.Crossing(messageBytes, q.link.pace) <= t.Lookup
+	return !q.link.leaf || int64(jsapi.ReplyBytes(messageBytes)) <= q.nc.MaxPayload()
 }
 
 // copyRead reads one stream's messages through consumers placed on the

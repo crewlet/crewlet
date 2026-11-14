@@ -729,6 +729,12 @@ type FleetStore struct {
 	// and purge a marker through its own revision (markers.go).
 	js jetstream.JetStream
 
+	// reach is how this node's connection reaches the buckets
+	// ([FleetConfig.Reach]), which every bucket's writes are held to the
+	// pace of and a caller's budget for a run's value counts
+	// ([FleetStore.ValueCrossing]).
+	reach Reach
+
 	// ageless is every bucket above the broker never ages — the ones whose
 	// removal markers stay until [FleetStore.SweepMarkers] removes them.
 	// DERIVED from the retention each bucket is opened with rather than
@@ -821,7 +827,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}
 
 	store := &FleetStore{
-		js:            js,
+		js: js, reach: cfg.Reach,
 		maxRateWindow: cfg.MaxRateWindow, freshness: cfg.StatusFreshness,
 	}
 	store.tallies.codec = codec[coord.Tally]{
@@ -907,6 +913,14 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
 			return nil, err
+		}
+		if bucket.into == &store.runs {
+			// A RUN'S RECORD AND ITS PARTS are budgeted to what one key
+			// holds (internal/sandbox's RowBytes), so every read of one is
+			// given the crossing of a reply that large ([holdingLarge]) —
+			// before the handle is kept anywhere, the marker sweep's list
+			// of ageless buckets included.
+			got = holdingLarge(got)
 		}
 		*bucket.into = got
 		switch bucket.into {

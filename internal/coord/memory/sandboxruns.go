@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -248,6 +249,10 @@ func (f *Fleet) SandboxRunPart(_ context.Context, turnID string, part coord.RunP
 	}
 	return copyRecord(held), true, nil
 }
+
+// ValueCrossing is none: the twin is the store in the node's own process, so a
+// write crosses no link — see [coord.SandboxRuns.ValueCrossing].
+func (f *Fleet) ValueCrossing() time.Duration { return 0 }
 
 // MutateSandboxRunPart changes the part beside turnID's run by a decision
 // taken on the part as it stands — optimistic, as [Fleet.MutateSandboxRun] is
