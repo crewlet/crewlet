@@ -36,6 +36,13 @@
  * says why a media query in the stylesheet cannot; the result is one
  * attribute, `data-peek="column" | "drawer"`, so the two shapes cannot both
  * hold at one width, or neither.
+ *
+ * # A frame with no sidebar
+ *
+ * An artifact's standalone page asks for the frame without its sidebar
+ * (`standalone`): everything above stays (the session, the readings, the
+ * assistant, the peek, the palette), and the kit draws its sheet in the
+ * sidebar's place, so the page's bar and the artifact take the whole window.
  */
 
 import {
@@ -123,7 +130,7 @@ import {
 import { framePageOf, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
 import { readTab, writeTab } from "./assistant/tab.ts";
-import { resolves } from "./routes.ts";
+import { pagePath, resolves } from "./routes.ts";
 import { ToastRoom, useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
@@ -502,7 +509,14 @@ export function FrameReadings({ children }: { children: ReactNode }) {
  * has recorded no reader behind a session read of its own (`learnReader` in
  * `protocol/socket.ts`) — decides.
  */
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({
+  children,
+  standalone = false,
+}: {
+  children: ReactNode;
+  /** Draw the frame with no sidebar, for an artifact's standalone page. */
+  standalone?: boolean;
+}) {
   return (
     <SessionReading>
       <FrameReadings>
@@ -510,14 +524,14 @@ export function Shell({ children }: { children: ReactNode }) {
             on Worklet's pages, and the same panel centred for G then P
             anywhere. */}
         <ProjectSwitcherProvider>
-          <Frame>{children}</Frame>
+          <Frame standalone={standalone}>{children}</Frame>
         </ProjectSwitcherProvider>
       </FrameReadings>
     </SessionReading>
   );
 }
 
-function Frame({ children }: { children: ReactNode }) {
+function Frame({ children, standalone }: { children: ReactNode; standalone: boolean }) {
   const route = useRoute();
   const peek = usePeek();
   const nav = useNavigator();
@@ -805,7 +819,8 @@ function Frame({ children }: { children: ReactNode }) {
   // SCREEN resolved, so this depends on the title rather than on the path;
   // `named` says whether a screen supplied it, asked of `labels` rather than
   // of a flag each crumb branch would have to set.
-  const path = route.path;
+  // THE PAGE, not its standalone view: one artifact opened either way is one recent.
+  const path = useMemo(() => pagePath(route.path), [route.path]);
   const named = useMemo(() => Object.values(labels).includes(where), [labels, where]);
   useEffect(() => {
     if (path.length < 2) return;
@@ -936,7 +951,7 @@ function Frame({ children }: { children: ReactNode }) {
             rail={railShape}
             onRailChange={setRailShape}
             railFoldKeys={RAIL_FOLD_KEYS}
-            sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
+            sidebar={standalone ? undefined : <Sidebar onSearch={() => setPaletteOpen(true)} />}
             topbar={
               ownHeader ? (
                 <div className="page-head">

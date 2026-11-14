@@ -1,7 +1,8 @@
 /**
  * A listed artifact's own actions, on a gallery card's More and a list row's:
- * pin or unpin, copy its link, rename it, move it to a folder and move it to
- * the trash, or, for one in the trash, restore it.
+ * open it in a new tab on a page of its own, pin or unpin, copy its link,
+ * rename it, move it to a folder and move it to the trash, or, for one in the
+ * trash, restore it.
  *
  * ONLY WHAT THE READER MAY DO is offered. Renaming and filing in a folder are
  * an editor's who holds the artifacts app (the folder's own say is the
@@ -16,6 +17,7 @@ import { Menu, useToast, type MenuEntry } from "@crewlethq/ui";
 import {
   CopyGlyph,
   EllipsisGlyph,
+  ExternalLinkGlyph,
   FolderInputGlyph,
   PencilGlyph,
   PinGlyph,
@@ -29,7 +31,7 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { patchArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { usePinToggle } from "~/lib/artifacts/pinToggle.ts";
-import { copyAddress } from "./parts.tsx";
+import { copyAddress, openInNewTab } from "./parts.tsx";
 import { TrashDialog } from "./SettingsTab.tsx";
 import { RenameDialog } from "./RenameDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
@@ -84,6 +86,12 @@ export function ArtifactMenu({
         copy,
       ]
     : [
+        {
+          key: "tab",
+          label: "Open in new tab",
+          icon: <ExternalLinkGlyph size="sm" />,
+          onSelect: () => openInNewTab(item.id),
+        },
         {
           key: "pin",
           label: pin.label,
