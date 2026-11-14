@@ -1706,15 +1706,16 @@ func opensSession(r *http.Request) bool {
 // the box's startup is made again three times, about 0.5, 2 and 6 seconds
 // after the first, and the server is given up for the run where all three
 // meet a 503 too; one opening a session again after the box's session was
-// lost mid-run is made again five times within about 15 seconds, then up to
-// eight more times in the background, minutes apart, while the answer stays a
-// 503. A call that meets a 503 ([Bridge.forward], [Bridge.heldOnly]) is not
-// made again: the model's call fails, a hook's call is a hook error the run
-// goes on past, and the CLI keeps the server and its session. The 400 this
-// 503 replaced was never made again at a box's startup, which left the box
-// without its tools for the run. OpenCode's own MCP client was not measured;
-// its notes plugin, the notes route's one client, asks again on its own
-// backoff and reads no Retry-After either.
+// lost mid-run is made five times within about 15 seconds, at once and then
+// 1, 2, 4 and 8 seconds apart, then up to eight more times in the background
+// over the minutes that follow while the answer stays a 503. A call that meets
+// a 503 ([Bridge.forward], [Bridge.heldOnly]) is not made again: the model's
+// call fails, a hook's call is a hook error the run goes on past, and the CLI
+// keeps the server and its session. The 400 this 503 replaced was never made
+// again at a box's startup, which left the box without its tools for the run.
+// OpenCode's own MCP client was not measured; its notes plugin, the notes
+// route's one client, asks again on its own backoff and reads no Retry-After
+// either.
 //
 // THE BRIDGE DOES NOT ROUTE THE REQUEST AGAIN ITSELF: the 503 fires only where
 // the opening ended in the instant between the routing that found it and the
