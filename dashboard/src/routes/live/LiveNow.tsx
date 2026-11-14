@@ -107,6 +107,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
  * a sixty-cell strip would not be.
  */
 const STRIP_OFFER: Offer = {
+  screen: "live.now",
   ranges: ["15m", "1h", "6h"],
   custom: false,
   fallback: "1h",

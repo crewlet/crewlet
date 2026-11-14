@@ -92,6 +92,7 @@ const PAGE = 100;
  * offer is a fixed vocabulary of windows rather than a claim about retention.
  */
 const LOG_OFFER: Offer = {
+  screen: "live.activity",
   ranges: ["1h", "6h", "1d", "7d", "30d"],
   custom: true,
   fallback: "1d",

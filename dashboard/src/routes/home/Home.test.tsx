@@ -414,6 +414,28 @@ describe("the figures", () => {
     expect(tile("Completed · today").textContent).toContain("vs yesterday");
   });
 
+  test("the range a reader chose is the one Home opens on when they come back", async () => {
+    mount();
+    await settle();
+    fireEvent.click(screen.getByRole("radio", { name: "30 days" }));
+    await settle();
+    expect(location.hash).toBe("#/home?range=30d");
+
+    // A RELOAD OF THE BARE ADDRESS, which is what the sidebar, a new tab and
+    // the page a sign-in lands on all open: no range in it.
+    cleanup();
+    asked = [];
+    location.hash = "#/home";
+    mount();
+    await settle();
+    expect(screen.getByRole("radio", { name: "30 days" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(asked.filter((a) => a.kind === "token_series").map((a) => a.params.days)).toEqual([30]);
+    // The store is the tab's: hand the next case the range every reader starts from.
+    fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
+  });
+
   test("the crew is the engine's word for every seat", async () => {
     mount({
       agents: [

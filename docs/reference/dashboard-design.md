@@ -1596,6 +1596,36 @@ vocabulary's order either way, so `1d` reads the same on every screen.
 `window=` is a **section**, not a filter: a reader who widened the range and
 pressed Back means the narrower one.
 
+**A range is kept for its reader.** The address is one history entry's: it
+carries a range through a reload and a link, and through nothing else. The
+sidebar, the palette, a new tab and the page a sign-in lands on all open a
+screen with no range in its address, and a screen that then read a constant
+showed seven days to the reader who had asked for thirty a minute before. So
+the last named window a reader CHOSE on a screen is kept for them in the
+browser (`lib/keptRange.ts`, one record per reader in `lib/readerStore.ts`, a
+word per screen), and the rule is the same for `window=` and for Home's
+`range=`:
+
+- **The address wins when it names a range.** A link somebody shared opens the
+  range they were looking at, whatever its reader chose last.
+- **Where it names none, the reader's own last choice is the range**, and the
+  screen's default only where they have never made one. That choice is then
+  noted into the address without a history entry, so the address a reader
+  copies says the range they are looking at; an address stays bare where the
+  kept choice is the default or nothing is kept.
+- **A choice is written to both, and to the address in full**, the default
+  included: an address without a range now means "the reader's own", so the
+  one way to say "seven days" to whoever opens the link is to say it. The
+  assistant's range actions write the default in full for the same reason.
+- **Opening a link is not a choice.** Only the control writes the store, so a
+  colleague's link to a quarter does not make every later visit a quarter.
+- **Only a named window is kept** (`7d`, `today`). Two instants a reader typed
+  are a question about one stretch of time, shown and linked but not
+  remembered. A stored word the screen no longer offers is its default.
+- **Screens that ask one question share a choice**: Token spend and its
+  Expensive tasks page keep one window between them. Every other screen keeps
+  its own, since their offers differ.
+
 The two edges reach the engine as the half-open `since`/`until` pair every
 windowed question takes — except on Spend, whose named windows are whole
 company days the engine cuts on the company's clock, so the screen sends
@@ -3035,7 +3065,9 @@ company did.** That is Home until its reader arranges it (see
   nobody bound is told nothing about decisions at all, and before the first
   state arrives nothing about who is working. The **Today · 7 days · 30 days** control
   (`range=`) sets the window the figures below read over; Today is one company
-  day, cut at the company's midnight by the engine.
+  day, cut at the company's midnight by the engine. The choice is kept for
+  its reader, so Home opens on it however they come back (see
+  [`window=`](#window--one-vocabulary-for-every-time-range)).
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
   from the engine's `activity`, with the state bar of working, waiting,
   stopped and idle, and a sub-line naming only the states somebody is in;
