@@ -649,7 +649,11 @@ describe("a reader who may not change the org", () => {
       ["Move up", true],
       ["Move down", true],
     ]);
-    expect(screen.getByRole("menu", { name: "Actions for Dev" }).textContent).toContain(REASON);
+    // THE REASON IS THE MENU'S HEADER, which stands beside its items in the
+    // menu's panel rather than inside role=menu.
+    expect(
+      screen.getByRole("menu", { name: "Actions for Dev" }).closest(".crewlet-menu")!.textContent,
+    ).toContain(REASON);
   });
 
   /* AND A READER WHO MAY is told nothing of the kind: the same rows, open. */

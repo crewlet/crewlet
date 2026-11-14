@@ -158,7 +158,15 @@ test("a list row draws the kind's mark, the kind and description under the title
     }),
   ];
   mount("all");
-  expect(headers()).toEqual(["Name", "Access", "Owner", "Folder", "Your role", "Edited", ""]);
+  expect(headers()).toEqual([
+    "Name",
+    "Access",
+    "Owner",
+    "Folder",
+    "Your role",
+    "Edited",
+    "Actions",
+  ]);
   const own = screen
     .getByText("Architecture notes")
     .closest(".crewlet-data-grid__row") as HTMLElement;
@@ -212,14 +220,14 @@ test("Select draws a box on every card and a bar to move what is picked; the tra
 test("Yours draws no owner and no role, which would say You and Owner on every row", () => {
   asList();
   mount("yours", "#/artifacts/yours");
-  expect(headers()).toEqual(["Name", "Access", "Folder", "Edited", ""]);
+  expect(headers()).toEqual(["Name", "Access", "Folder", "Edited", "Actions"]);
 });
 
 test("the trash says when each went in and when it goes for good, and offers a restore and no pin", () => {
   asList();
   items = [row({ status: "trashed", trashed_at: "2026-10-18T10:00:00Z", title: "Old draft" })];
   mount("yours", "#/artifacts/yours?status=trashed");
-  expect(headers()).toEqual(["Name", "Trashed", "Deleted for good", ""]);
+  expect(headers()).toEqual(["Name", "Trashed", "Deleted for good", "Actions"]);
   expect(screen.getByText(/Only you see your trash/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "More for “Old draft”" }));
   expect(screen.queryByRole("menuitem", { name: "Pin to your sidebar" })).toBeNull();
