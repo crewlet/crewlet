@@ -122,6 +122,13 @@ func rcFallback(parent, n, ms int, retracted string) string {
 	return rcSystem(parent, n, ms, subtypeRefusalFallback, `"retractedMessageUuids":[`+retracted+`],`)
 }
 
+// rcMeta is record n, a meta user record of text: a skill's, as its harness
+// writes one.
+func rcMeta(parent, n, ms int) string {
+	return `{"parentUuid":` + rcParent(parent) + `,"isSidechain":false,"type":"user","message":{"role":"user",` +
+		`"content":"a skill's text"},"isMeta":true,` + rcTail(n, ms)
+}
+
 // rcRetry is record n, the meta user record a retry sends in place of the
 // records it takes back, retracted.
 func rcRetry(parent, n, ms int, retracted string) string {
@@ -629,8 +636,11 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 // window's end, and windows that overlap merged: a reply's second record and
 // a result written after the window's walked result; a record of the reply
 // on another branch, placed after the reply's first walked record though
-// written before it; two replies' windows overlapping, merged; and a result
-// written after every record of its window, at the window's end.
+// written before it; two replies' windows overlapping, merged; a result
+// written after every record of its window, at the window's end; a window's
+// records in the order of the file, whatever order the recovery met them in;
+// a meta user record, part of a reply's run, carrying its window on past it;
+// and a compaction's boundary, no part of one, ending the window before it.
 //
 // A WINDOW OPENS WHEREVER THE RECOVERY RECOVERS OR HANGS A RECORD, so a window
 // the hanging alone opens merges with the one before it and moves where that
@@ -645,7 +655,12 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 // Mutation: place a window's records after it, and the reply's other record
 // comes after its result; stop a window at its reply's last record, and the
 // later result comes before the walked one; or keep two overlapping windows
-// apart, and their records are placed twice over. Open a window only where it
+// apart, and their records are placed twice over. Leave a window's records in
+// the order the recovery met them, and a result comes after the record of
+// its reply written after it; read a meta user record as no part of a
+// reply's run, and the result recovered beside it lands before that record;
+// or read a compaction's boundary as part of one, and the result lands after
+// the boundary. Open a window only where it
 // recovered a record, and the result the window before it recovered lands
 // before the second reply's records in the first two hanging cases; hang
 // nothing under the reply's results, and it does in the third; or hang under
@@ -695,6 +710,22 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 			rcReply(3, 4, "msg_b", 3000, rcSaid("done")), rcResults(2, 5, 4000, "x1"), rcCheckpoint(4)},
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain),
 				5: yes(whyRecoveredResult)}, []int{1, 2, 3, 5, 4}},
+		"a window's records in the order of the file": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 2000, "x1"),
+			rcReply(1, 4, "msg_a", 1001, rcSaid("aside")), rcReply(2, 5, "msg_b", 3000, rcSaid("done"))},
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyRecoveredResult),
+				4: yes(whyRecoveredReply), 5: yes(whyChain)}, []int{1, 2, 3, 4, 5}},
+		"a meta user record in a reply's run": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcMeta(2, 3, 1100), rcResults(2, 4, 2000, "x1"),
+			rcReply(3, 5, "msg_z", 3000, rcSaid("z"))},
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyRecoveredResult),
+				5: yes(whyChain)}, []int{1, 2, 3, 4, 5}},
+		"a compaction's boundary ending a reply's run": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+			rcSystem(2, 3, 1100, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
+			rcResults(2, 4, 2000, "x1"), rcReply(3, 5, "msg_z", 3000, rcSaid("z"))},
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyRecoveredResult),
+				5: yes(whyChain)}, []int{1, 2, 4, 3, 5}},
 		"a window a hook's record under a walked record alone opens": {hooked(rcAttach(6, 8, 1600, rcNote),
 			rcReply(6, 9, "msg_z", 1700, rcSaid("z"))), walkedTwo, []int{1, 2, 3, 4, 5, 6, 7, 9}},
 		"a window a hook's record under the reply alone opens": {[]string{rcPrompt(0, 1, 0),
