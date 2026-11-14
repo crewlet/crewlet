@@ -2361,9 +2361,11 @@ func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
 // through the batch of, from which the resume does not start; a terminal
 // attachment under a record a turn names, which puts that record in no set; a
 // checkpoint a turn names, outside a set of two; a set of two whose last
-// row's walk finds no turn record; and a prompt only a record the relink
+// row's walk finds no turn record; a prompt only a record the relink
 // deleted names as its parent, a terminal for all that, which leads though the
-// summary over it is stamped later.
+// summary over it is stamped later; and a reply two terminal attachments walk
+// up to, a set of one, which the last row, an attachment under the prompt a
+// turn names, does not narrow.
 //
 // Mutation: take a system record for a turn record, and the critic's F1 walks
 // from the last row; take the checkpoint whether or not it is in the set, and
@@ -2377,7 +2379,9 @@ func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
 // record, and the set of two of one time walks from its last row; or count a
 // record the relink deleted as naming its parent, and the prompt only a
 // deleted attachment names is no terminal, so the set is empty and the
-// summary, the newest record, leads.
+// summary, the newest record, leads; or file a member once for each terminal
+// that walks up to it, and the set of one reads as two, which the last row
+// narrows to the prompt over it.
 func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 	t.Parallel()
 	keeping := rcKeeping(4, 1, 2)
@@ -2482,6 +2486,10 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcAttach(8, 5, 3500, rcNote), rcBoundary(6, 4000, rcKeeping(7, 3, 4)), rcSummary(6, 7, 4600),
 			rcPrompt(7, 8, 4500)},
 			rcHanding(whyChain, []int{6, 7, 3, 4, 8}, rcAll(no(whyRelinkDeleted), 1, 2, 5)), []int{6, 7, 3, 4, 8}, 8},
+		"one member two terminals walk up to, a set of one": {rcCompacted(keeping, rcPrompt(2, 5, 3000),
+			rcReply(5, 6, "msg_b", 4000, rcSaid("b")), rcAttach(6, 7, 4500, rcNote), rcAttach(6, 8, 4600, rcNote),
+			rcAttach(5, 9, 4700, rcNote)),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6}, tails(7, 8), off(9)), []int{3, 4, 1, 2, 5, 6, 7, 8}, 6},
 		"a set of two of one time, its first member": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 2000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
 			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
