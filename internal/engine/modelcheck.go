@@ -88,7 +88,7 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 		ExecutorSeats:     company.ExecutorSeatsOn(key),
 		ExecutorHarnesses: executor.Names(),
 		Cell:              string(company.EntryCell(key)),
-		RunsAsRoot:        processEUID() == 0 && !(company.Providers.Sandbox != nil && company.Providers.Sandbox.Fake),
+		RunsAsRoot:        processEUID() == 0 && (company.Providers.Sandbox == nil || !company.Providers.Sandbox.Fake),
 		BridgeURL:         os.Getenv(mcpbridge.BaseURLVar),
 		Values:            values,
 	}
