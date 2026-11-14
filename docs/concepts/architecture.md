@@ -338,9 +338,11 @@ company declared.
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
 children are up — one subprocess per server per seat, each a spawn, a handshake
-and a `tools/list` — and on the example company, whose one `shared: false`
-server is Mattermost, that is 7 children; a company with a tracker, a wiki and
-a code host wired in runs three times that. Serving first means the dashboard,
+and a `tools/list` — and the example company declares no server at all, since
+its chat, tracker, wiki and code are builtin tools, while the same seven seats
+with a vendor's chat, tracker, wiki and code host wired in run three children
+each — chat's, the Atlassian server the tracker and the wiki share, and the
+code host's — 21 in all. Serving first means the dashboard,
 the REST API and every webhook route answer during that window, and `/health`
 says honestly that this node holds no seats yet: its `seats` list is the seats
 claimed so far, which is none. `/ready` carries no seats at all. Webhooks
