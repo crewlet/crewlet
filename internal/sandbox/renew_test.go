@@ -69,20 +69,23 @@ func (p *controlTee) refuseNext(n int) {
 	p.failing = n
 }
 
-// timedHost is the box's host as these cases time it: every read takes
-// [readWait] on the bubble's clock, and then, where set, at sets what changes
-// at the time elapsed since the rig was built.
+// timedHost is the box's host as these cases time it: every read first waits
+// out wait, which the rig sets to take [readWait] on the bubble's clock and
+// then, where at is set, to have at say what changes at the time elapsed
+// since the rig was built ([newRenewRig]).
+//
+// THE WAIT IS THE RIG'S, written inside its bubble-only builder, never in this
+// method: a method of an exported name is reached where no caller can be held
+// to a bubble, so a sleep written here is the wall clock's to
+// internal/fixedwait, however every case runs it.
 type timedHost struct {
 	BoxReader
-	start time.Time
-	at    func(elapsed time.Duration)
+	wait func()
+	at   func(elapsed time.Duration)
 }
 
 func (h *timedHost) ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
-	time.Sleep(readWait)
-	if h.at != nil {
-		h.at(time.Since(h.start))
-	}
+	h.wait()
 	return h.BoxReader.ReadBox(ctx, run, read)
 }
 
@@ -113,7 +116,11 @@ type renewRig struct {
 	seen []delivered
 }
 
-// newRenewRig builds a [renewRig]; it runs inside a synctest bubble.
+// newRenewRig builds a [renewRig]. Its host's every read waits a minute on the
+// clock, so it runs only inside a synctest bubble, where that wait moves the
+// bubble's time on at once rather than holding the case for a minute a read.
+//
+//fixedwait:bubble
 func newRenewRig(t *testing.T) *renewRig {
 	t.Helper()
 	broker := queuemem.New(queuemem.WithMaxRedeliveries(renewBudget))
@@ -134,7 +141,13 @@ func newRenewRig(t *testing.T) *renewRig {
 	rig.now = time.Now()
 	store, _ := unsettledHost(t, rig)
 	r := &renewRig{coordRig: rig, broker: broker, tee: tee, store: store, start: time.Now()}
-	r.host = &timedHost{BoxReader: rig.coordinator.boxes, start: r.start}
+	r.host = &timedHost{BoxReader: rig.coordinator.boxes}
+	r.host.wait = func() {
+		time.Sleep(readWait)
+		if r.host.at != nil {
+			r.host.at(time.Since(r.start))
+		}
+	}
 	rig.coordinator.boxes = r.host
 	// THE ENGINE'S CONTROL HANDLER, for what these cases meet: an error that
 	// names no condition is NAK'd and nil is acknowledged (internal/engine's
