@@ -16,9 +16,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { configHunks, ConfigScreen, nodeOnRevision, RevisionPeek } from "./Config.tsx";
+import { configHunks } from "~/lib/configHunks.ts";
+import { ConfigScreen, nodeOnRevision, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type ConfigChange } from "~/protocol/index.ts";
 import type { FleetNode } from "~/protocol/types.ts";
 
@@ -113,9 +115,11 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
   };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ConfigScreen />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <ConfigScreen />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }
@@ -626,9 +630,11 @@ describe("the revisions table, laid out", () => {
       Promise.resolve(what === "config_audit" ? revisions : {});
     render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <RevisionPeek id={revisions[0]!.revision_id} />
-        </Router>
+        <ViewerProvider>
+          <Router>
+            <RevisionPeek id={revisions[0]!.revision_id} />
+          </Router>
+        </ViewerProvider>
       </ClientContext.Provider>,
     );
     expect((await screen.findAllByText("Created")).length).toBeGreaterThan(0);
@@ -652,9 +658,11 @@ test("a revision's peek says each property once, its ids in the mono face", asyn
     );
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <RevisionPeek id={revisions[0]!.revision_id} />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <RevisionPeek id={revisions[0]!.revision_id} />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   expect(await screen.findByText("Where it came from")).toBeDefined();
@@ -774,9 +782,11 @@ describe("which nodes run a revision", () => {
       Promise.resolve(what === "config_audit" ? revisions : what === "fleet" ? fleet : {});
     render(
       <ClientContext.Provider value={{ store, socket }}>
-        <Router>
-          <RevisionPeek id={id} />
-        </Router>
+        <ViewerProvider>
+          <Router>
+            <RevisionPeek id={id} />
+          </Router>
+        </ViewerProvider>
       </ClientContext.Provider>,
     );
   }

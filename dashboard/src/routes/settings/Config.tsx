@@ -9,18 +9,23 @@
  * picking a row from the history drops it, because a row picked here is a
  * question about the active document again.
  *
- * Read-only, deliberately. The previous editor was a bare JSON textarea with
- * no schema hints, no validation until Save, no diff before saving, and a
- * dirty flag that was set and never read — so navigating away lost the edit
- * silently. A config editor worth having is a real project; a config VIEWER
- * that shows the active revision, its history and its diffs is genuinely
- * useful today and cannot lose anybody's work.
+ * # And it changes the document whole
+ *
+ * Three writes of the whole document live here (`ConfigWrites.tsx`): a
+ * revision's **Revert** (on its page and its peek), the Active lens's
+ * **Reload**, and its **Edit**, the document as YAML in place, which a file
+ * can be imported over. Each is asked first and carries the summary the
+ * person writes; the edit is checked by the engine (`?dry_run=true`, under the
+ * read's entity tag) before it is saved, its problems located, and it guards
+ * unsaved writing against a stray move. Every other screen that writes the
+ * document changes one part of it.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useParam } from "~/app/router.tsx";
 import {
+  Button,
   ButtonLink,
   Card,
   CodeBlock,
@@ -45,9 +50,21 @@ import {
   LayersGlyph,
   ClockGlyph,
   SlidersVerticalGlyph,
+  PencilGlyph,
+  RefreshCwGlyph,
+  RotateCcwGlyph,
 } from "@crewlethq/icons/glyphs";
+import { useConfigReloadAccess, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import {
+  DocumentEditor,
+  ReloadDialog,
+  RevertDialog,
+  useStoredToast,
+  type Stored,
+} from "./ConfigWrites.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
+import { DiffView } from "~/components/DiffView.tsx";
+import { configHunks } from "~/lib/configHunks.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -59,7 +76,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import type { ConfigChange, FleetNode, RevisionMeta } from "~/protocol/index.ts";
+import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -170,46 +187,6 @@ function RevisionState({ revision }: { revision: RevisionMeta }) {
   if (revision.is_active) return <Tag variant="success">active</Tag>;
   if (revision.activated_at) return <Tag appearance="outline">superseded</Tag>;
   return <Tag appearance="outline">never activated</Tag>;
-}
-
-/**
- * A value as a diff draws it: JSON, so `"true"` and `true` stay two different
- * settings (the harness's `renderValue` rule), and an object or a list in the
- * document's own indented shape rather than as one run-on line.
- *
- * ABSENT IS `null`. `configapi.Change` omits an empty side, and Go's
- * `omitempty` on an `any` drops a JSON null with it — so a setting changed
- * from null arrives with no `from` at all, and `JSON.stringify` of that is
- * `undefined`, which the line would print as the word.
- */
-function shownValue(value: unknown): string {
-  if (value !== null && typeof value === "object") return JSON.stringify(value, null, 2);
-  return JSON.stringify(value) ?? "null";
-}
-
-/**
- * A comparison as the one diff the dashboard draws (`components/DiffView.tsx`),
- * KEYED by path: an added setting is its new value added, a removed one its
- * old value removed, and a CHANGED one is both — its old value removed and its
- * new value added — so the diff underlines what moved inside the value rather
- * than printing the two halves either side of an arrow.
- *
- * ONE HUNK A CHANGE, each skipping nothing: the changes are the whole answer,
- * not runs cut out of a longer text, and a hunk is what keeps one setting's
- * two lines together however the next change reads.
- */
-export function configHunks(changes: readonly ConfigChange[]): DiffHunk[] {
-  return changes.map(({ path, kind, from, to }) => ({
-    skipped: 0,
-    lines: [
-      ...(kind === "added"
-        ? []
-        : [{ kind: "remove" as const, text: shownValue(from), before: null, after: null, path }]),
-      ...(kind === "removed"
-        ? []
-        : [{ kind: "add" as const, text: shownValue(to), before: null, after: null, path }]),
-    ],
-  }));
 }
 
 /** The Diff lens's head, which a row pressed below it brings back on screen. */
@@ -465,6 +442,10 @@ export function RevisionPeek({ id }: { id: string }) {
     () => (audit.data ?? []).find((r) => r.revision_id === id) ?? null,
     [audit.data, id],
   );
+  const reverting = useRevert(() => {
+    audit.refetch();
+    fleet.refetch();
+  });
 
   return (
     <>
@@ -491,7 +472,9 @@ export function RevisionPeek({ id }: { id: string }) {
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
+              actions={reverting.button(revision)}
             />
+            {reverting.dialog}
             <div className="col gap-3">
               <RevisionBody
                 revision={revision}
@@ -591,6 +574,22 @@ export function ConfigScreen({
     enabled: onRevision,
     pollMs: FLEET_POLL_MS,
   });
+  // EVERY ANSWER A WRITE OF THE DOCUMENT MOVES, read again once it is stored.
+  const reread = () => {
+    active.refetch();
+    audit.refetch();
+    fleet.refetch();
+    ids.refetch();
+    if (entity) one.refetch();
+  };
+  const reverting = useRevert(reread);
+  const [editing, setEditing] = useState(false);
+  const [reloading, setReloading] = useState(false);
+  const stored = useStoredToast();
+  const writeAccess = useConfigWriteAccess();
+  const reloadAccess = useConfigReloadAccess();
+  const unsealed =
+    active.error === "unsealed_revision" || active.error === "unsealed_fleet_revision";
 
   // A NIL ANSWER IS "NO ACTIVE REVISION", NOT AN EMPTY COLLECTION, and the two
   // are one lens apart on this screen: the Active lens already says so, and
@@ -702,8 +701,9 @@ export function ConfigScreen({
           History lens lists revisions of that Integrations and Structure
           wrote. This page shows it; those pages change parts; import replaces it. */}
       <PageNote>
-        This page shows the company document. Integrations, Structure and Principles change parts of
-        it, and <InlineCode>crewlet config import</InlineCode> replaces it whole.
+        This page shows the company document and changes it whole: edit it, import a file over it as{" "}
+        <InlineCode>crewlet config import</InlineCode> does, reload it, or revert to an earlier
+        revision. Integrations, Structure and Principles change parts of it.
       </PageNote>
 
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:
@@ -730,27 +730,32 @@ export function ConfigScreen({
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
                   actions={
-                    // WHAT THIS SAVE CHANGED is the revision against its
-                    // PARENT (see the file's head): against the active one,
-                    // the active revision's own "See its changes" opened
-                    // "No differences". The company's first revision has no
-                    // parent, and all of it is what that save wrote, which the
-                    // provenance below already says.
-                    addressed.parent_revision_id ? (
-                      <ButtonLink
-                        size="small"
-                        leadingIcon={<SplitGlyph size="sm" />}
-                        href={href(["settings", "config"], {
-                          lens: "diff",
-                          revision: addressed.revision_id,
-                          against: addressed.parent_revision_id,
-                        })}
-                      >
-                        See its changes
-                      </ButtonLink>
-                    ) : undefined
+                    <span className="row gap-2">
+                      {/* WHAT THIS SAVE CHANGED is the revision against its
+                          PARENT (see the file's head): against the active
+                          one, the active revision's own "See its changes"
+                          opened "No differences". The company's first
+                          revision has no parent, and all of it is what that
+                          save wrote, which the provenance below already
+                          says. */}
+                      {addressed.parent_revision_id && (
+                        <ButtonLink
+                          size="small"
+                          leadingIcon={<SplitGlyph size="sm" />}
+                          href={href(["settings", "config"], {
+                            lens: "diff",
+                            revision: addressed.revision_id,
+                            against: addressed.parent_revision_id,
+                          })}
+                        >
+                          See its changes
+                        </ButtonLink>
+                      )}
+                      {reverting.button(addressed)}
+                    </span>
                   }
                 />
+                {reverting.dialog}
                 <RevisionBody
                   revision={addressed}
                   nodes={fleet.data?.nodes ?? []}
@@ -763,10 +768,37 @@ export function ConfigScreen({
         </>
       )}
 
-      {!onRevision && lens === "active" && (
+      {!onRevision && lens === "active" && editing && (
+        <DocumentEditor
+          onClose={() => setEditing(false)}
+          onStored={(s: Stored) => {
+            setEditing(false);
+            stored("Saved", s);
+            reread();
+          }}
+        />
+      )}
+
+      {reloading && (
+        <ReloadDialog
+          onClose={() => setReloading(false)}
+          onStored={(s) => {
+            setReloading(false);
+            stored("Reloaded", s);
+            reread();
+          }}
+        />
+      )}
+
+      {!onRevision && lens === "active" && !editing && (
         <>
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
-          <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
+          <QueryState
+            error={active.error}
+            refusal={active.refusal}
+            detail={active.detail}
+            loading={active.loading}
+          >
             {active.data ? (
               // FLUSH: the block is the card's content, so it takes the
               // card's surface rather than drawing a second frame inside it.
@@ -774,7 +806,31 @@ export function ConfigScreen({
                 <Card.Header
                   icon={<FileTextGlyph size="sm" />}
                   subtitle="as the engine resolved it"
-                  actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
+                  actions={
+                    <span className="row gap-2">
+                      <CopyButton text={pretty} title="the active revision, as JSON" />
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        leadingIcon={<RefreshCwGlyph size="sm" />}
+                        disabledReason={reloadAccess.can ? undefined : reloadAccess.reason}
+                        title={reloadAccess.can ? undefined : reloadAccess.reason}
+                        onClick={() => setReloading(true)}
+                      >
+                        Reload
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        leadingIcon={<PencilGlyph size="sm" />}
+                        disabledReason={writeAccess.can ? undefined : writeAccess.reason}
+                        title={writeAccess.can ? undefined : writeAccess.reason}
+                        onClick={() => setEditing(true)}
+                      >
+                        Edit
+                      </Button>
+                    </span>
+                  }
                 >
                   <Card.Title>Active revision</Card.Title>
                 </Card.Header>
@@ -799,6 +855,21 @@ export function ConfigScreen({
               />
             )}
           </QueryState>
+          {/* AN UNSEALED ACTIVE REVISION opens to nobody, and the refusal
+              above says so in the engine's words; a whole document is the
+              one write that replaces it. */}
+          {unsealed && (
+            <div className="row">
+              <Button
+                variant="primary"
+                leadingIcon={<PencilGlyph size="sm" />}
+                disabledReason={writeAccess.can ? undefined : writeAccess.reason}
+                onClick={() => setEditing(true)}
+              >
+                Replace the document
+              </Button>
+            </div>
+          )}
         </>
       )}
 
@@ -1088,4 +1159,54 @@ export function ConfigScreen({
       )}
     </>
   );
+}
+
+/**
+ * A revision's Revert: the button a revision's page and its peek draw, and
+ * the confirmation it opens (`ConfigWrites.tsx`).
+ *
+ * DRAWN FOR EVERY READER and disabled with the reason, as every write control
+ * is: on the active revision, which a revert would publish again unchanged
+ * (that is a reload, on the Active lens), and for a reader the document is
+ * not theirs to change.
+ */
+function useRevert(onStored: () => void): {
+  button: (revision: RevisionMeta) => ReactNode;
+  dialog: ReactNode;
+} {
+  const access = useConfigWriteAccess();
+  const toast = useStoredToast();
+  const [target, setTarget] = useState<RevisionMeta | null>(null);
+  return {
+    button: (revision) => {
+      const held = !access.can
+        ? access.reason
+        : revision.is_active
+          ? "This is the active revision. Reload it from the Active view to publish it again."
+          : undefined;
+      return (
+        <Button
+          size="small"
+          variant="secondary"
+          leadingIcon={<RotateCcwGlyph size="sm" />}
+          disabledReason={held}
+          title={held}
+          onClick={() => setTarget(revision)}
+        >
+          Revert to this revision
+        </Button>
+      );
+    },
+    dialog: target && (
+      <RevertDialog
+        revision={target}
+        onClose={() => setTarget(null)}
+        onStored={(stored) => {
+          setTarget(null);
+          toast("Reverted", stored);
+          onStored();
+        }}
+      />
+    ),
+  };
 }
