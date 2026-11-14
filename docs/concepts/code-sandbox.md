@@ -1231,7 +1231,11 @@ it:
     whose tools are closed, which takes nothing more from its notes: a seat
     leaving the node closes its tools here before its release ends its session,
     and the read made again reaches the seat's next holder, which records it; a
-    person's stop closes them too, and the run's end then refuses the read. Each
+    person's stop closes them too, and the run's end then refuses the read. And
+    so is a read that reaches the notes once the job's completion has claimed
+    the run, whose record then takes no read of the job while its session still
+    serves: the read made again is recorded where the claim is handed back and
+    the run goes on in its box, and refused once the run is over. Each
     note carries an id the harness admits it under, unique to the note and the
     job, so a poller that admits it twice admits it once.
 

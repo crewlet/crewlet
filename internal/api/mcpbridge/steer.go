@@ -84,7 +84,9 @@ type SteerInbox interface {
 	// record; an error is a read that could not be confirmed written, and its
 	// notes wait, or, where the write landed, are reported when the harness
 	// confirms them again. An inbox that serves no job, not yet bound or
-	// closed, takes no read and answers [ErrInboxNotServing].
+	// closed, takes no read and answers [ErrInboxNotServing], and so does one
+	// whose job the run's record takes no read of any more, for a note named
+	// that still waits.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
@@ -94,15 +96,19 @@ type SteerInbox interface {
 }
 
 // ErrInboxNotServing is what a [SteerInbox] answers a [SteerInbox.Read] with
-// where it serves no job: closed, the opening that served it having ended, or
-// not yet bound to its job, which no opening serves (the engine binds a run's
-// inbox before the bridge files the opening that serves it, so a box that
-// reaches the opening the moment it is filed finds the inbox serving). It
-// recorded nothing. Declared here, by the consumer, which tells it
-// from a write that could not be confirmed: the read is turned away to ask
-// again, as one reaching its opening as it ends is ([Bridge.serveSteer]), and
-// its next try reaches the inbox that serves the job now.
-var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox serves no job, and recorded nothing")
+// where it serves no job that takes notes: closed, the opening that served it
+// having ended; not yet bound to its job, which no opening serves (the engine
+// binds a run's inbox before the bridge files the opening that serves it, so a
+// box that reaches the opening the moment it is filed finds the inbox
+// serving); or bound to a job the run's record takes no read of any more, a
+// note the read names still waiting there: the job's completion claimed the
+// run while its opening still serves, the run's ending is decided, or a later
+// job carries it on. It recorded nothing. Declared here, by the consumer,
+// which tells it from a write that could not be confirmed: the read is turned
+// away to ask again, as one reaching its opening as it ends is
+// ([Bridge.serveSteer]), and its next try reaches the inbox that serves the
+// job now, or the run that goes on once a claim is handed back.
+var ErrInboxNotServing = errors.New("mcpbridge: the run's note inbox serves no job that takes notes, and recorded nothing")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -389,7 +395,11 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 //     serving. The inbox decides that under its own lock, which its close
 //     takes, so a read either found it serving and is recorded through the
 //     store, which a later close does not touch, or did not and is not
-//     recorded at all.
+//     recorded at all. And so does an inbox whose job the run's record takes
+//     no read of any more, though it still serves: the job's completion
+//     claimed the run before the reclaim closes its session, so the read
+//     made again is recorded where the claim is handed back and the run goes
+//     on in its box, and refused once the run is over.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))

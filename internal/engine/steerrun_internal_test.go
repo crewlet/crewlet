@@ -1638,6 +1638,105 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 	}
 }
 
+// A CONFIRMATION ITS JOB'S RECORD NO LONGER TAKES SAYS SO, AND RECORDS NOTHING.
+// A job's completion claims its run, which moves the record out of the
+// statuses its harness takes notes in, while the job's session on the bridge
+// still serves, until the reclaim closes it. A read reaching the inbox then
+// found it serving, took nothing, since the record took no read of the job,
+// and answered done: the bridge said 204, the plugin never confirmed the note
+// again, and the record kept it served and unread. So the inbox answers
+// mcpbridge.ErrInboxNotServing for a note its take left waiting, which the
+// bridge turns away to ask again; and once the claim is handed back, the
+// collection not finished, and the run goes on in its box, the confirmation
+// made again is recorded. A note named that no longer waits is no such note:
+// the same confirmation made once more, through an inbox whose view still
+// shows the note waiting though its job read it, is answered done.
+//
+// Mutation: answer a confirmation whose take left a note waiting done, and the
+// read after the claim goes red; turn away every confirmation that took fewer
+// notes than it named, or one that left a note whatever became of it, and the
+// one made once more goes red.
+func TestAConfirmationItsJobsRecordNoLongerTakesSaysSo(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 1)
+	if notes, _ := inbox.Wait(ctx, 0); len(notes) != 1 {
+		t.Fatalf("the poll was answered %+v, want n-1", notes)
+	}
+	// AN INBOX OF THE SAME JOB WHOSE VIEW STAYS AS IT IS NOW, the note waiting.
+	staleRuns, _ := steersOver(t, steerRing, frozenWatch{PendingStore: store})
+	stale := boundInbox(t, staleRuns, store, "run-1", launch)
+	viewHolds(t, stale, 1)
+
+	// THE JOB'S COMPLETION CLAIMS THE RUN, its session and its inbox still
+	// serving.
+	if _, ok, err := store.ClaimForResume(ctx, "run-1", sandbox.CompletionTail(launch),
+		sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if err := inbox.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Errorf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	}
+	if n := mustRow(t, store, "run-1").Steer.Notes[0]; !n.Waiting() || n.Served != launch {
+		t.Fatalf("a confirmation the record did not take left n-1 %+v, want it waiting, served to job %s",
+			n, launch)
+	}
+	if got := steered(p); len(got) != 0 {
+		t.Fatalf("a confirmation the record did not take reported %+v", got)
+	}
+
+	// THE CLAIM IS HANDED BACK, and the run goes on in its box: the
+	// confirmation made again is recorded.
+	if ok, err := store.ReleaseClaim(ctx, "run-1",
+		sandbox.Release{Launch: launch, To: sandbox.StatusRunning}); err != nil || !ok {
+		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+	}
+	if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("the confirmation made again answered %v", err)
+	}
+	if read := readOn(ctx, store, "run-1", "n-1"); read == nil || read.Launch != launch ||
+		read.Boundary != string(types.SteerBoundaryStep) {
+		t.Fatalf("the confirmation made again left n-1 read %+v, want it read at job %s's step", read, launch)
+	}
+	// AND MADE ONCE MORE, by the inbox that still sees the note waiting: its
+	// take leaves the note, which its job read already, and it is answered
+	// done.
+	if err := stale.Read(ctx, []string{"n-1"}); err != nil {
+		t.Errorf("a confirmation of a note its job read already answered %v, want it done", err)
+	}
+}
+
+// frozenWatch is a run store whose watch of a run's notes hands its follower
+// the record as it stands when the watch opens, and nothing after: a view that
+// stays behind the record.
+type frozenWatch struct{ sandbox.PendingStore }
+
+func (s frozenWatch) WatchNotes(ctx context.Context, turnID string) (<-chan sandbox.NotesView, error) {
+	views, err := s.PendingStore.WatchNotes(ctx, turnID)
+	if err != nil {
+		return nil, err
+	}
+	first := make(chan sandbox.NotesView, 1)
+	go func() {
+		defer close(first)
+		handed := false
+		// EVERY LATER VIEW IS READ AND DROPPED, so the watch beneath never
+		// waits on this one, and closes with it.
+		for view := range views {
+			if !handed {
+				first <- view
+				handed = true
+			}
+		}
+	}()
+	return first, nil
+}
+
 // AN OPENING IS FILED ONLY ONCE ITS INBOX IS BOUND. A box reaches its job's
 // opening the moment the bridge files it: a recovery's at once, with the token
 // it already holds. And the bridge files the opening before it ends the job's

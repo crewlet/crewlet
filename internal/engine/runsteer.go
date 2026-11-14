@@ -1798,6 +1798,17 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 // reaches the inbox that serves the job now. DECIDED UNDER THE INBOX'S OWN
 // LOCK, which its Close takes ([runInbox.bound]): a read that found the inbox
 // serving records through the store, a write a later Close does not touch.
+//
+// NOR DOES AN INBOX WHOSE JOB ITS RECORD TAKES NO READ OF ANY MORE, and it says
+// so the same way: a note named that still waits on the record once the take
+// left it ([waitsUntaken]). The job's completion claimed the run, moving its
+// record out of [steerTakeStatuses] while its session still serves, until the
+// reclaim closes it; or the run's ending is decided; or a later job carries it
+// on. Answered done, that read too was recorded nowhere, the note kept served
+// and unread. Turned away, the confirmation made again is recorded where the
+// claim is handed back and the run goes on in its box, and refused once the
+// run is over. A note named that no longer waits is no such note, whoever
+// read it: answered done, reported where this job's earlier read holds it.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	launch, watch := i.bound()
 	switch {
@@ -1813,7 +1824,6 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 			candidates = append(candidates, o)
 		}
 	}
-	var record *sandbox.PendingRun
 	if len(candidates) < len(ids) {
 		// A NOTE THE VIEW HAS NOT CAUGHT UP WITH, or one already read: the
 		// record decides, read now.
@@ -1824,7 +1834,6 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 		if !found {
 			return nil
 		}
-		record = &run
 		candidates = nil
 		for _, o := range i.steers.waiting(run.TurnID, run.Steer.Notes, launch) {
 			if slices.Contains(ids, o.held.ID) {
@@ -1836,20 +1845,38 @@ func (i *runInbox) Read(ctx context.Context, ids []string) error {
 	if err != nil || len(taken) == len(ids) {
 		return err
 	}
-	// A NOTE NAMED THAT THIS CONFIRMATION DID NOT TAKE: off the record read
-	// above, or, where the view said every one waited, read now.
-	if record == nil {
-		run, found, err := i.steers.store.Get(ctx, i.ident.turn.TurnID)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return nil
-		}
-		record = &run
+	// A NOTE NAMED THAT THIS CONFIRMATION DID NOT TAKE: the record decides,
+	// read after the take, which another reader may have overtaken.
+	run, found, err := i.steers.store.Get(ctx, i.ident.turn.TurnID)
+	if err != nil {
+		return err
 	}
-	i.confirmedBefore(ctx, *record, launch, ids, taken)
+	if !found {
+		return nil
+	}
+	i.confirmedBefore(ctx, run, launch, ids, taken)
+	if waitsUntaken(run, candidates) {
+		return mcpbridge.ErrInboxNotServing
+	}
 	return nil
+}
+
+// waitsUntaken reports whether run's record, read after a confirmation's take
+// ([runInbox.Read]), still holds waiting a note of the take's candidates: one
+// the take left. A take records every waiting note it names for its job while
+// the record takes reads of the job, so such a note waits on a record that took
+// none: its job's completion claimed the run, its ending is decided, or a later
+// job carries it on. A candidate another reader took meanwhile waits no more,
+// and is no such note.
+func waitsUntaken(run sandbox.PendingRun, candidates []openedNote) bool {
+	for _, c := range candidates {
+		if slices.ContainsFunc(run.Steer.Notes, func(n sandbox.RunNote) bool {
+			return n.ID == c.held.ID && n.Waiting()
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // confirm records candidates read by job launch at the run's next step, and
