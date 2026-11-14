@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { withDerived } from "~/test/org.ts";
@@ -148,9 +149,11 @@ function mount(hash = "#/settings/delegated-decisions") {
     <TestClient store={store}>
       <ToastProvider>
         <LayerHost>
-          <Router>
-            <DelegatedDecisions />
-          </Router>
+          <ViewerProvider>
+            <Router>
+              <DelegatedDecisions />
+            </Router>
+          </ViewerProvider>
         </LayerHost>
       </ToastProvider>
     </TestClient>,

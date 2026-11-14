@@ -8739,6 +8739,46 @@ a.live-row:hover {
   padding-left: 1.1em;
 }
 
+/* SETTINGS › CONFIGURATION, THE DOCUMENT EDITOR: the summary takes the row
+   and Save stands at its end, level with the field rather than its label. */
+.config-document-save {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--spacing-3);
+}
+.config-document-save > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A REVERT'S DIFF, held to a height inside its confirmation, scrolling on
+   its own: a revert that drops a whole block draws a hundred lines. */
+.config-revert-diff {
+  max-height: min(24rem, 45vh);
+  overflow: auto;
+}
+
+/* SETTINGS › DELEGATED DECISIONS: what the switch's change came to, under the
+   card's head, and one required-checks entry as a row (the repository, its
+   branch, the checks taking what is left, its bin). */
+.delegated-rules-status {
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.delegated-rules-status:has(> .ceiling-status:empty) {
+  display: none;
+}
+.delegated-checks-entry {
+  align-items: flex-start;
+}
+.delegated-checks-entry > :nth-child(1),
+.delegated-checks-entry > :nth-child(2) {
+  flex: 0 0 9rem;
+  min-width: 0;
+}
+.delegated-checks-entry > :nth-child(3) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* SETTINGS › CONFIGURATION › ENTITIES: a list and the one it opened. A fixed
    list track (the longest handle a company is likely to write, in mono, and
    no wider) beside a `1fr` detail, so the detail fills the row the way every
