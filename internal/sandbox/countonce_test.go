@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // recountOnLanding is a run store that, once a claim's release or a park's
@@ -416,4 +418,205 @@ func TestARecountCountsARunWithAWriteOutWhereTheMovesAlreadyMadeLeaveIt(t *testi
 	wantSeatCounts(t, rig, "with both answers taken,", "the answered run in neither set", 0, 0)
 	rig.coordinator.syncSeat(t.Context(), "swe")
 	wantSeatCounts(t, rig, "recounted once both are answered,", "the answered run in neither set", 0, 0)
+}
+
+// recountOnDelete is a run store that, once an ending's delete has removed a
+// run's record, has the seat recounted before the delete's answer is returned:
+// a recount whose listing was read after the delete landed, and written before
+// the node took the delete's answer.
+type recountOnDelete struct {
+	PendingStore
+	recount func(ctx context.Context)
+}
+
+func (s *recountOnDelete) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
+	settled, deleted, err := s.PendingStore.Finish(ctx, turnID, ending)
+	if err == nil && deleted {
+		s.recount(ctx)
+	}
+	return settled, deleted, err
+}
+
+// deleteRefused is a run store that refuses every ending's delete: the record
+// stays, and the ending is kept for the node's retry.
+type deleteRefused struct{ PendingStore }
+
+func (deleteRefused) Finish(context.Context, string, string) (PendingRun, bool, error) {
+	return PendingRun{}, false, errRefusedCall
+}
+
+// claimedBeside launches t2 and claims it for its resume, as a completion's
+// collection does: a run that holds the seat throughout and that none of
+// [countedEndings] ends, a person's stop included, which leaves a claimed run
+// to its turn.
+func claimedBeside(t *testing.T, rig *coordRig) {
+	t.Helper()
+	run := rig.launch("t2")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t2", CompletionTail(run.LaunchID),
+		rigLease); err != nil || !won {
+		t.Fatalf("ClaimForResume t2 = %v, %v", won, err)
+	}
+}
+
+// countedEnding is one of the endings whose caller counts its run out of the
+// seat's sets: what puts t1 where that ending finds it, and the ending itself.
+type countedEnding struct {
+	name    string
+	arrange func(t *testing.T, rig *coordRig)
+	end     func(t *testing.T, rig *coordRig)
+}
+
+// countedEndings are the three: a run settled as lost, here a launch that never
+// suspended ([Coordinator.FailRun]); a person's stop of a launch whose job
+// never started, finished at once ([Coordinator.StopSeat]); and a launch
+// abandoned once its row was written, here by its turn's fence
+// ([Coordinator.abandon]), whose launch counts t1 in itself.
+var countedEndings = []countedEnding{
+	{
+		name:    "a settle of a launch that never suspended",
+		arrange: func(t *testing.T, rig *coordRig) { rig.launching("t1") },
+		end: func(t *testing.T, rig *coordRig) {
+			if err := rig.coordinator.FailRun(t.Context(), "t1", types.ExecutorFailureSuspensionUnrecorded,
+				"the turn could not write its parked state onto the run"); err != nil {
+				t.Fatalf("FailRun: %v", err)
+			}
+		},
+	},
+	{
+		name: "a stop of a launch whose job never started",
+		arrange: func(t *testing.T, rig *coordRig) {
+			if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+				TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", CreatedAt: rig.now,
+			}, rigLease); err != nil {
+				t.Fatalf("BeginLaunch: %v", err)
+			}
+		},
+		end: func(t *testing.T, rig *coordRig) {
+			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+				t.Fatalf("StopSeat: %v", err)
+			}
+		},
+	},
+	{
+		name:    "a launch abandoned once its row was written",
+		arrange: func(*testing.T, *coordRig) {},
+		end: func(t *testing.T, rig *coordRig) {
+			req := launchReq("t1")
+			refused := errors.New("the turn was stopped as its run opened")
+			req.Fence = func() error { return refused }
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, req); !errors.Is(err, refused) {
+				t.Fatalf("Launch = %v, want the turn's fence refusing it", err)
+			}
+		},
+	},
+}
+
+// AN ENDING'S DELETE MOVES ITS SEAT'S COUNT ONCE (countwrite.go). An ending
+// takes its run out of the seat's sets as the delete that ends it lands: it is
+// recorded before the delete is sent, a recount meanwhile counts the run where
+// it was whether or not its listing still has the row, and the delete's answer
+// takes it out. Counted out after the delete and outside the lock, a recount
+// whose listing was read after the delete and written before that counted the
+// run out already, and the ending then took it out a second time: here the
+// seat's other run, a claim that holds it throughout, was left counted by
+// nothing, and the seat read free beside it, its next mail run beside the
+// claim's resumed turn. Each ending is made twice, once with no recount
+// beside it, where its own move is the only one, and once with a recount
+// between its delete and the delete's answer.
+//
+// Mutation: count an ending's run out as it ends, after its delete, or have a
+// recount count only the runs its listing has, and the seat reads free beside
+// its claim; or leave the ending's run counted, and the seat stays held for a
+// run that is gone.
+func TestAnEndingsDeleteMovesItsSeatsCountOnce(t *testing.T) {
+	t.Parallel()
+	for _, e := range countedEndings {
+		for _, between := range []bool{false, true} {
+			name := e.name + ", nothing recounting beside it"
+			if between {
+				name = e.name + ", a recount between its delete and the answer"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				rig := newCoordRig(t)
+				e.arrange(t, rig)
+				claimedBeside(t, rig)
+				rig.coordinator.syncSeat(t.Context(), "swe")
+				if between {
+					rig.coordinator.pending = &recountOnDelete{PendingStore: rig.coordinator.pending,
+						recount: func(ctx context.Context) { rig.coordinator.syncSeat(ctx, "swe") }}
+				}
+				e.end(t, rig)
+				if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+					t.Fatalf("the premise: t1's record found %v (%v); want the ending to have deleted it",
+						found, err)
+				}
+				wantSeatCounts(t, rig, "once t1's ending deleted it,", "t2's claim holding the seat", 1, 0)
+				if held, _ := rig.coordinator.SeatRuns("swe"); !held {
+					t.Fatal("the seat reads free beside t2's claim")
+				}
+			})
+		}
+	}
+}
+
+// AN ENDING SOMEBODY ELSE FINISHED FIRST LEAVES ITS RUN COUNTED BY NOBODY
+// (countwrite.go). Each of the three endings finds its run's ending decided and
+// its record deleted by another party a moment before its own decision, so it
+// has no delete of its own to move the run out of the seat's sets: the seat is
+// recounted from the store, which no longer has the row. A settle and an
+// abandon used to count the run out whatever became of their ending, and a
+// stop counted nothing for a run that moved on; left to a delete that never
+// came, the run stayed counted, and the seat was held for a run that was over.
+//
+// Mutation: drop the recount where the ending is not this node's, in any of
+// the three.
+func TestAnEndingSomebodyElseFinishedFirstLeavesItsRunCountedByNobody(t *testing.T) {
+	t.Parallel()
+	for _, e := range countedEndings {
+		t.Run(e.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			e.arrange(t, rig)
+			claimedBeside(t, rig)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			rig.coordinator.pending = endedFirst{rig.coordinator.pending}
+			e.end(t, rig)
+			if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+				t.Fatalf("the premise: t1's record found %v (%v); want another party to have ended it",
+					found, err)
+			}
+			wantSeatCounts(t, rig, "once another party had ended t1,", "t2's claim alone holding the seat", 1, 0)
+		})
+	}
+}
+
+// AN ENDING WHOSE DELETE DID NOT LAND MOVES NO COUNT (countwrite.go): its run
+// is still on the store, where a recount reads it, and stays counted where it
+// is until a delete lands; the ending, kept, holds the seat's mail behind it
+// besides. Counted out as the ending was decided, the seat read a run still on
+// its row as gone, and a recount then counted it back: the count followed
+// whichever came last.
+//
+// Mutation: count an ending's run out whether or not its delete landed.
+func TestAnEndingWhoseDeleteDidNotLandMovesNoCount(t *testing.T) {
+	t.Parallel()
+	for _, e := range countedEndings {
+		t.Run(e.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			e.arrange(t, rig)
+			claimedBeside(t, rig)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			rig.coordinator.pending = deleteRefused{rig.coordinator.pending}
+			e.end(t, rig)
+			if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found {
+				t.Fatalf("the premise: t1's record found %v (%v); want it kept, its delete refused", found, err)
+			}
+			wantSeatCounts(t, rig, "with t1's delete refused,", "t1, still on its row, and t2's claim holding",
+				2, 0)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			wantSeatCounts(t, rig, "recounted,", "t1, still on its row, and t2's claim holding", 2, 0)
+		})
+	}
 }

@@ -1076,13 +1076,15 @@ type Coordinator struct {
 	releases map[string]*claimRelease
 	claiming map[string]int
 	// writing are the writes this node has out that move a run between its
-	// seat's sets, by the run's job, each recorded before it is sent and
+	// seat's sets, by the run's turn, each recorded before it is sent and
 	// dropped, with its move made, in the step that takes its answer, or, while
 	// a write recorded before it on the run is still out, in the step that
-	// takes that one's: a park's question, and an answer's record, claim and
-	// decline (countwrite.go). A recount counts a run with a write out where the
-	// moves made so far leave it ([Coordinator.syncSeat]). Under mu.
-	writing map[jobKey]*runWrites
+	// takes that one's: a park's question, an answer's record, claim and
+	// decline, and the delete of an ending that counts its run out
+	// (countwrite.go). A recount counts every run of the seat with a write out
+	// where the moves made so far leave it, whether or not its listing has the
+	// run's row ([Coordinator.syncSeat]). Under mu.
+	writing map[string]*runWrites
 	// unsettled is the clock on each job's host that answered this node's
 	// collections that its own coordination store did not answer, by turn
 	// id, kept until the job's collection settles ([hostUnsettled]). Under
@@ -1245,7 +1247,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		retries:      map[string]*answerRetry{},
 		releases:     map[string]*claimRelease{},
 		claiming:     map[string]int{},
-		writing:      map[jobKey]*runWrites{},
+		writing:      map[string]*runWrites{},
 		unsettled:    map[string]hostUnsettled{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
@@ -1411,15 +1413,15 @@ func (c *Coordinator) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// countRun and uncountRun take a run into and out of the set its status
-// belongs to, and moveRun carries one from one set to the other.
+// countRun takes a run into the set its status belongs to, and moveRun
+// carries one from one set to the other. A run leaves the seat's sets by the
+// delete that ends it, whose answer moves the count (countwrite.go).
 //
 // A STATUS RATHER THAN A NUMBER at every call site, so a caller cannot count a
 // run into one set while the store has it in the other — the two sets are what
 // the screening branches on, and a run counted in the wrong one is either a
 // seat parked on nothing or an open question nothing offers a reply to.
-func (c *Coordinator) countRun(handle, status string)   { c.moveRun(handle, "", status) }
-func (c *Coordinator) uncountRun(handle, status string) { c.moveRun(handle, status, "") }
+func (c *Coordinator) countRun(handle, status string) { c.moveRun(handle, "", status) }
 
 // moveRun applies one transition under ONE lock, which is what
 // [Coordinator.SeatRuns] needs: a park is a decrement and an increment, and a
@@ -1503,11 +1505,13 @@ func (c *Coordinator) moveRunLocked(handle, from, to string) func() {
 	}
 }
 
-// moved says that a seat's runs moved in the store under this node's hand
-// without a count it applied — an ending of this node's deleted a run's record —
-// so that a recount whose listing was read before is read again
-// ([Coordinator.syncSeat]) rather than written after the recount that follows
-// the delete.
+// moved says that a seat's runs moved in the store under this node's hand, as
+// an ending of this node's deleted a run's record, so that a recount whose
+// listing was read before is read again ([Coordinator.syncSeat]) rather than
+// written after the recount that follows the delete. Said for every delete of
+// this node's: one that moves the count ([ending.counted]) moves the seat as
+// its answer is taken as well, and one of a run this node does not count, or
+// whose seat its caller recounts after, moves nothing else.
 func (c *Coordinator) moved(handle string) {
 	if handle == "" {
 		return
@@ -1616,22 +1620,26 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) 
 // AND NEVER A WRITE TWICE. A write of this node's that moves a run between the
 // seat's sets moves the seat's count where the write put the run once that
 // write's answer is taken, not as the write lands on the store: a claim it
-// gives back (claimrelease.go), a park of its job's question, and an answer's
-// record, the claim that resumes it and a decline that lets it go
-// (countwrite.go). A release the store does not answer keeps the claim, which
-// holds the seat ([Coordinator.unclaimOwing]), and a park frees the seat only
-// with its question on the row ([Coordinator.park]). A recount whose listing
-// was read after such a write landed, and written before its answer was taken,
-// counted the run where the write put it, and the answer's move then counted it
-// there again: an answer's release took the seat's holding count down twice,
-// freeing a seat that held another run beside it; a park counted its one
-// question twice, the seat offering its mail to an answer match with nothing
-// left to answer; and an answer's record took a seat holding a second question
-// out of the question set altogether, that question's answer then run as an
-// unrelated turn. So a run whose release is out, or with another such write
-// out, is counted where the moves made so far leave it, whatever the listing
-// found it in ([Coordinator.countedLocked]), and the write's answer moves that
-// count, once, under the lock that ends that counting.
+// gives back (claimrelease.go), a park of its job's question, an answer's
+// record, the claim that resumes it and a decline that lets it go, and the
+// delete that ends a run it counts (countwrite.go). A release the store does
+// not answer keeps the claim, which holds the seat ([Coordinator.unclaimOwing]),
+// a park frees the seat only with its question on the row ([Coordinator.park]),
+// and a delete that did not land leaves its run on the row. A recount whose
+// listing was read after such a write landed, and written before its answer was
+// taken, counted the run where the write put it, and the answer's move then
+// counted it there again: an answer's release took the seat's holding count
+// down twice, freeing a seat that held another run beside it; a park counted
+// its one question twice, the seat offering its mail to an answer match with
+// nothing left to answer; an answer's record took a seat holding a second
+// question out of the question set altogether, that question's answer then run
+// as an unrelated turn; and an ending's delete, which leaves the run out of the
+// listing altogether, took it out a second time, freeing a seat whose other run
+// still worked. So a run whose release is out, or with another such write out,
+// is counted where the moves made so far leave it, whatever the listing found
+// it in and whether or not the listing has its row
+// ([Coordinator.countedLocked]), and the write's answer moves that count, once,
+// under the lock that ends that counting.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	for range seatRecountRounds {
 		c.mu.Lock()
@@ -1650,8 +1658,8 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 		// COUNTED UNDER THE LOCK that a write this node is making moves the
 		// count under once its answer is taken: a run it is moving between
 		// the seat's sets is counted where the moves made so far leave it
-		// until then.
-		counts := c.countedLocked(runs)
+		// until then, its row listed or not.
+		counts := c.countedLocked(handle, runs)
 		// THIS RECOUNT MOVES THE SEAT TOO, for a recount whose listing is
 		// older than this one's and is still on its way here.
 		c.moves[handle]++
@@ -1672,17 +1680,28 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			"already kept stand")
 }
 
-// countedLocked is a seat's counts from a listing of its runs, each counted as
-// [Coordinator.countOfLocked] reads it: in the set its status names, but a run
-// this node is moving between the seat's sets where the moves made so far leave
-// it, whatever set the listing found it in. See [Coordinator.syncSeat]. Under
-// mu.
-func (c *Coordinator) countedLocked(runs []PendingRun) seatRuns {
+// countedLocked is handle's seat's counts from a listing of its runs: each run
+// with no write out as [Coordinator.countOfLocked] reads it, in the set its
+// status names, and EVERY RUN OF THE SEAT WITH A WRITE OUT where the moves made
+// so far leave it ([Coordinator.writing]), whatever set the listing found it in
+// and whether or not the listing has its row at all: a create that landed
+// after the listing, or a delete that landed before it, has its move still to
+// come (countwrite.go). See [Coordinator.syncSeat]. Under mu.
+func (c *Coordinator) countedLocked(handle string, runs []PendingRun) seatRuns {
 	var counts seatRuns
 	for _, run := range runs {
+		if c.writing[run.TurnID] != nil {
+			continue
+		}
 		part := c.countOfLocked(run)
 		counts.holding += part.holding
 		counts.awaiting += part.awaiting
+	}
+	for _, writes := range c.writing {
+		if writes.handle == handle {
+			counts.holding += writes.counted.holding
+			counts.awaiting += writes.counted.awaiting
+		}
 	}
 	return counts
 }
@@ -4721,12 +4740,23 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 }
 
 // settleNoted is [Coordinator.settleFailed] over a whole announcement.
+//
+// OUT OF WHICHEVER SET THE RECORD WAS IN, as its delete lands: this path
+// settles a claimed run ([StatusResumed]) and a launch that never suspended
+// ([StatusLaunching]) alike, each counted by this node, and the delete's
+// answer moves it out once ([ending.counted]). Counted out after the ending
+// returned, a recount whose listing was read after the delete counted it out
+// already, and the seat whose other run still worked read free beside it; and
+// an ending kept for its retry, its record still on the row, was counted out
+// all the same. A run that is no longer this node's to end, somebody else
+// having ended it or a newer lease owning it, has no delete of this node's to
+// move it, and the seat is recounted from the store instead, which reads the
+// row as it stands, or none.
 func (c *Coordinator) settleNoted(ctx context.Context, run PendingRun, note *failureNote) bool {
-	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note})
-	// Out of whichever set the record was in: this path settles a claimed
-	// run ([StatusResumed]) and a launch that never suspended
-	// ([StatusLaunching]) alike, and a status names its own set.
-	c.uncountRun(run.AgentHandle, run.Status)
+	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note, counted: true})
+	if !ours {
+		c.syncSeat(ctx, run.AgentHandle)
+	}
 	return ours
 }
 
@@ -4948,6 +4978,18 @@ type ending struct {
 	// but a stop's ([Coordinator.StopSeat]). It is announced in place of a
 	// note, so a stop never carries one.
 	stop *RunStop
+
+	// counted is whether this node counts the run in the set its status
+	// names, so that the delete that ends it moves it out of the seat's
+	// counts as the delete's answer is taken, once (countwrite.go): an
+	// ending of a run this node launched or claimed and settles itself
+	// ([Coordinator.settleNoted], [Coordinator.StopSeat],
+	// [Coordinator.abandon]). Kept with the ending, so the retry that
+	// finishes it moves the count as its own delete lands. Every other
+	// ending moves nothing at its delete: its run is one this node does not
+	// count yet (a recovery's), or its caller recounts the seat once the
+	// ending returns, which reads the store's own answer.
+	counted bool
 }
 
 // decision is the ending as the store records it.
@@ -5055,7 +5097,7 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
 	c.noteLaunchStop(decided)
 	ending := *decided.Ending
-	finished, err := c.finishOnce(ctx, decided, mayAsk)
+	finished, err := c.finishOnce(ctx, decided, mayAsk, e.counted)
 	switch {
 	case !finished && !mayAsk:
 		// ANOTHER ATTEMPT ON THIS NODE IS FINISHING IT — and this node's
@@ -5124,7 +5166,7 @@ var errAwaitsFrame = errors.New("sandbox: the run's turn is still running on thi
 // the record gone and lets the seat's mail go at once; or it kept the ending
 // itself, and its own keep arms the retry again on the spacing its failure
 // earns.
-func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk bool) (bool, error) {
+func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk, counted bool) (bool, error) {
 	c.mu.Lock()
 	if c.finishing[run.TurnID] {
 		c.mu.Unlock()
@@ -5143,7 +5185,7 @@ func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk boo
 			c.scheduleOwedLocked(run.TurnID, 0)
 		}
 	}()
-	return true, c.finishEnding(ctx, run, mayAsk)
+	return true, c.finishEnding(ctx, run, mayAsk, counted)
 }
 
 // frameBegins and frameEnds bracket a resumed turn's frame on this node
@@ -5235,7 +5277,9 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //     [Coordinator.publishEnd]), and cleared from the row;
 //  10. the record is deleted ([PendingStore.Finish]), every call of the round
 //     its log still holds in flight named as it goes
-//     ([Coordinator.nameDeletedInFlight]).
+//     ([Coordinator.nameDeletedInFlight]); for an ending whose run this node
+//     counts ([ending.counted]), the delete is recorded before it is sent and
+//     its answer moves the run out of the seat's counts, once (countwrite.go).
 //
 // # Off any frame somebody waits on
 //
@@ -5274,7 +5318,7 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 // ([ErrHandBackOwed], [ErrAnswerOwed], [ErrEndOwed]), and hands back the row as
 // it stands; the steps run again against it. A step that does not land is
 // returned, and the caller keeps the ending.
-func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
+func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, counted bool) error {
 	// THE ROW AS IT STANDS, not as the caller's decision read it: an attempt
 	// before this one may have owed the turn's end, or recorded it, since —
 	// and a step decided off a stale copy is a step made twice. A row that is
@@ -5432,7 +5476,21 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			c.nameDeletedInFlight(ctx, run)
 			named = true
 		}
+		// OUT OF THE SEAT'S SETS AS THE DELETE'S ANSWER IS TAKEN, for a run
+		// this node counts: recorded before the delete is sent, so a recount
+		// meanwhile counts the run where it is, its row listed or not, and
+		// a delete that did not land moves nothing (countwrite.go).
+		var write *countWrite
+		if counted {
+			write = c.writingCount(run, run.Status, "")
+		}
 		settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+		if write != nil {
+			c.mu.Lock()
+			moved := c.wroteCountLocked(write, err == nil && deleted)
+			c.mu.Unlock()
+			moved()
+		}
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending

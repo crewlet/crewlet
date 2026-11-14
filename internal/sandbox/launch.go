@@ -574,10 +574,10 @@ type LaunchResult struct {
 // RECOUNTS the seat from the store wherever it is processed — that is what
 // carries a held seat across a restart or a handoff — but nothing waits for it.
 //
-// A launch that fails after the row is written gives the count back as it
-// abandons the row ([Coordinator.abandon]); one that fails to suspend into the
-// row is settled by [Coordinator.FailRun], whose ending gives it back the same
-// way.
+// A launch that fails after the row is written gives the count back as the
+// delete that abandons the row lands ([Coordinator.abandon]); one that fails to
+// suspend into the row is settled by [Coordinator.FailRun], whose ending gives
+// it back the same way.
 //
 // m is the manager the request's [Spec] was built with ([Manager.BuildSpec]),
 // passed rather than read off the coordinator here: an apply landing between
@@ -1212,21 +1212,33 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	// a settle may no longer act on ([Coordinator.finish]). Where the two are
 	// one box — the attach landed — it is killed twice, which every provider
 	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
+	//
+	// AND THE SEAT GOES BACK AS THE DELETE LANDS, once ([ending.counted]): the
+	// launch counted the run holding as it opened the row, and the ending's
+	// delete moves it out as its answer is taken. A record that survives the
+	// delete is a launching row whose ending this node keeps and retries,
+	// holding the seat's mail behind it, and it stays counted where a
+	// recount reads it until its own delete lands. Given back here whether or
+	// not the record was deleted, the seat read that row as gone, and a
+	// recount whose listing was read after a delete that did land had
+	// counted it out already, so the seat whose other run still worked read
+	// free beside it. A row no longer this node's to end, ended by somebody
+	// else or owned by a newer lease, has no delete of this node's to move
+	// it, and the seat is recounted from the store instead.
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, err := c.endRecord(ctx, run, ending{
-		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true,
-	}); err != nil {
+	decided, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true, counted: true,
+	})
+	switch {
+	case err != nil:
 		log.WarnContext(ctx, "sandbox_launch_finish_kept",
 			"turn_id", req.Turn.TurnID, "error", err.Error(),
 			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
 				"the ending, and the seat's next recovery pass reaps the row if the seat "+
 				"moves first")
+	case decided == nil:
+		c.syncSeat(ctx, req.Turn.AgentHandle)
 	}
-	// AND THE SEAT GOES BACK whether or not the record could be deleted:
-	// the launch is over and its box reclaimed, so nothing is driving a job
-	// the seat's mail must wait behind. A record that survived the delete is
-	// a launching row whose ending this node keeps and retries.
-	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
 // label is what the run is named by, cut by [summarise]: the caller's own

@@ -1,30 +1,36 @@
 package sandbox
 
-// # A write that moves a run between its seat's sets moves the count once
+// # Every write that moves a run between its seat's sets moves the count once
 //
 // A seat's two counts ([seatRuns]) are moved by the writes this node makes to
 // the seat's runs, and set wholesale by a recount from the store's listing
-// ([Coordinator.syncSeat]). A write that takes a run from one set to the other
-// moves the count when its answer is taken, never as it lands: a write the
-// store did not answer may not have landed, and one it refused moved nothing.
-// Moved after the write's answer and outside the lock, as an answer's record,
-// claim and declines moved it, a recount whose listing was read after the write
-// landed, and written before the move, counted the run where the write put it,
-// and the move then counted it there a second time. The recount's guard reads
-// again only where this node moved the seat while it listed, and a write that
-// has landed with its move still to come is no move yet.
+// ([Coordinator.syncSeat]). A write that takes a run from one set to the other,
+// or onto the store or off it, moves the count when its answer is taken, never
+// as it lands: a write the store did not answer may not have landed, and one it
+// refused moved nothing. Moved after the write's answer and outside the lock, as
+// an answer's record, claim and declines moved it and an ending's delete still
+// did, a recount whose listing was read after the write landed, and written
+// before the move, counted the run where the write put it, and the move then
+// counted it there a second time. The recount's guard reads again only where
+// this node moved the seat while it listed, and a write that has landed with its
+// move still to come is no move yet.
 //
 // So each such write is RECORDED BEFORE IT IS SENT, with the status it moves
 // the run from and the one it moves it to ([Coordinator.writingCount]); a
-// recount counts a run with a write out where the moves made so far leave it,
-// whatever the listing found it in ([Coordinator.countOfLocked]); and the
-// write's answer makes its move once, under the lock, in the step that takes it
+// recount counts every run of the seat with a write out where the moves made so
+// far leave it, whatever its listing found it in and WHETHER OR NOT ITS LISTING
+// HAS ITS ROW ([Coordinator.countedLocked]): a delete that landed before the
+// listing leaves the run out of it, its move still to come; and the write's
+// answer makes its move once, under the lock, in the step that takes it
 // ([Coordinator.wroteCountLocked]). The writes are a park's question
 // ([Coordinator.park], resumed to awaiting), an answer's record
 // ([Coordinator.record], the question to answered), the claim that resumes the
-// answer ([Coordinator.resumeOwedAdmitted], answered to resumed), and either
-// decline that lets it go ([Coordinator.dropUnopened],
-// [Coordinator.declineAnswer], answered back to the question). A claim's
+// answer ([Coordinator.resumeOwedAdmitted], answered to resumed), either decline
+// that lets it go ([Coordinator.dropUnopened], [Coordinator.declineAnswer],
+// answered back to the question), and the delete that ends a run this node
+// counts, from its status to no row at all ([Coordinator.finishEnding], for the
+// endings that count their run out: [Coordinator.settleNoted],
+// [Coordinator.StopSeat] and [Coordinator.abandon], [ending.counted]). A claim's
 // release keeps a record of its own, which a recount reads the same way
 // (claimrelease.go).
 //
@@ -32,8 +38,23 @@ package sandbox
 // twice, a seat holding a second question read as having none open, and that
 // question's answer was run as an unrelated turn ([seatRuns.awaiting]); counted
 // into it twice, the seat's mail was offered to an answer match with nothing
-// more to answer; and counted holding twice, a claim kept the seat's inbox held
-// until the next recount.
+// more to answer; counted holding twice, a claim kept the seat's inbox held
+// until the next recount; and counted out of the holding set twice by an
+// ending's delete, a seat whose other run still worked read free beside it, and
+// its next mail ran beside that run.
+//
+// A DELETE THAT DID NOT LAND MOVES NOTHING EITHER. The ending is kept for this
+// node's retry ([Coordinator.oweEnding]), which holds the seat's mail behind it,
+// and its run stays counted where a recount reads its row until a delete lands.
+// Counted out as the ending was decided, whether or not the delete landed, the
+// seat read a run still on its row as gone, and the next recount counted it
+// back. An ending that turns out not to be this node's, somebody else having
+// ended the run or a newer lease owning it, or a run that moved on before its
+// stop, makes no delete here at all: its caller recounts the seat, which reads
+// the row as it stands, or none. An ending whose run this node does not count,
+// or recounts the seat after, moves nothing at its delete: a recount after a
+// write's answer reads the store's own answer, which no move then counts a
+// second time.
 //
 // # Two writes out on one run move it in the order they were recorded
 //
@@ -52,15 +73,16 @@ package sandbox
 // set before the park's had counted it in, which the clamp at zero
 // ([Coordinator.adjust]) swallowed on a seat with no other question, and the
 // park's move then counted the answered run as a question.
+//
+// THE WRITES OF ONE RUN ARE KEYED BY ITS TURN, whatever job each names: a turn
+// has one row, which the store holds once, and a recount that counted a run's
+// row apart from a write out on another job of it would count the one row twice.
 
-// jobKey names one job of a turn's run: the turn, and the launch that made the
-// job.
-type jobKey struct{ turn, launch string }
-
-// runWrites is the writes this node has out on one job's run
-// ([Coordinator.writing]), in the order they were recorded, and the run's part
-// of its seat's counts as the moves made so far leave it.
+// runWrites is the writes this node has out on one run of the seat named by
+// handle ([Coordinator.writing]), in the order they were recorded, and the
+// run's part of its seat's counts as the moves made so far leave it.
 type runWrites struct {
+	handle  string
 	counted seatRuns
 	out     []*countWrite
 }
@@ -70,7 +92,7 @@ type runWrites struct {
 // ([Coordinator.writingCount]), and done once its answer is taken, landed or
 // not ([Coordinator.wroteCountLocked]).
 type countWrite struct {
-	key          jobKey
+	turn         string
 	handle       string
 	from, to     string
 	done, landed bool
@@ -92,14 +114,13 @@ func countOf(status string) seatRuns {
 // where the earlier write's moves leave it, and this write's move follows that
 // one's.
 func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite {
-	w := &countWrite{key: jobKey{turn: run.TurnID, launch: run.LaunchID}, handle: run.AgentHandle,
-		from: from, to: to}
+	w := &countWrite{turn: run.TurnID, handle: run.AgentHandle, from: from, to: to}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	writes := c.writing[w.key]
+	writes := c.writing[w.turn]
 	if writes == nil {
-		writes = &runWrites{counted: countOf(from)}
-		c.writing[w.key] = writes
+		writes = &runWrites{handle: run.AgentHandle, counted: countOf(from)}
+		c.writing[w.turn] = writes
 	}
 	writes.out = append(writes.out, w)
 	return w
@@ -116,7 +137,7 @@ func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite 
 // [Coordinator.moveRunLocked]'s does.
 func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	w.done, w.landed = true, landed
-	writes := c.writing[w.key]
+	writes := c.writing[w.turn]
 	var move seatRuns
 	for len(writes.out) > 0 && writes.out[0].done {
 		next := writes.out[0]
@@ -130,7 +151,7 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	writes.counted.holding += move.holding
 	writes.counted.awaiting += move.awaiting
 	if len(writes.out) == 0 {
-		delete(c.writing, w.key)
+		delete(c.writing, w.turn)
 	}
 	if move == (seatRuns{}) || w.handle == "" {
 		return func() {}
@@ -142,17 +163,13 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	}
 }
 
-// countOfLocked is run's part of its seat's counts as a recount reads it off a
-// listing ([Coordinator.syncSeat]): as the claim it still is for a run whose
-// release is out ([Coordinator.releases]), where the moves made so far leave a
-// run with another write out ([Coordinator.writing]), and in the set its status
-// names otherwise. Under mu.
+// countOfLocked is the part of its seat's counts a recount reads a listed run
+// with no write out as ([Coordinator.countedLocked]): as the claim it still is
+// for a run whose release is out ([Coordinator.releases]), and in the set its
+// status names otherwise. Under mu.
 func (c *Coordinator) countOfLocked(run PendingRun) seatRuns {
 	if c.releasingLocked(run.TurnID, run.LaunchID) {
 		return countOf(StatusResumed)
-	}
-	if writes := c.writing[jobKey{turn: run.TurnID, launch: run.LaunchID}]; writes != nil {
-		return writes.counted
 	}
 	return countOf(run.Status)
 }

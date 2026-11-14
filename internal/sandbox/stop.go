@@ -127,6 +127,11 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	// still reach the box it is reclaiming.
 	endCtx, cancel := detached(ctx)
 	defer cancel()
+	// A RUN THAT MOVED ON BEFORE ITS STOP has no delete of this node's to move
+	// it, and one somebody else ended meanwhile is gone: the seat is
+	// recounted from the store once the stops are made, which reads each such
+	// row as it stands, or none.
+	movedOn := false
 	for _, run := range runs {
 		if run.Ending != nil || !slices.Contains(Stoppable, run.Status) {
 			continue
@@ -140,9 +145,15 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 					"first round")
 			continue
 		}
+		// OUT OF THE SET THE RUN HELD THE SEAT IN as the delete that ends it
+		// lands, as every ending this node made of a run it counts gives it
+		// back ([ending.counted]): the run is over once its record is gone,
+		// and until then it is still on its row, ending under this node's
+		// retry, which holds the seat's mail behind it.
 		stop := by
 		decided, err := c.endRecord(endCtx, run, ending{
 			fence: fence, whileIn: Stoppable, launch: run.LaunchID, reclaim: true, stop: &stop,
+			counted: true,
 		})
 		switch {
 		case err != nil:
@@ -158,16 +169,15 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 			log.InfoContext(ctx, "sandbox_stop_declined", "turn_id", run.TurnID, "seat", handle,
 				"detail", "the run moved on before it could be stopped; the turn's own fence "+
 					"or the pause itself holds it from here")
-			continue
+			movedOn = true
 		default:
 			log.InfoContext(ctx, "executor_stopped", "turn_id", run.TurnID, "seat", handle,
 				"launch_id", run.LaunchID, "status", run.Status, "by", by.By,
 				"by_kind", by.ByKind, "operator_id", by.OperatorID)
 		}
-		// THE SEAT GOES BACK out of the set the run held it in, as every
-		// ending this node made gives it back ([Coordinator.settleFailed]):
-		// the run is over, or ending under this node's retry.
-		c.uncountRun(handle, run.Status)
+	}
+	if movedOn {
+		c.syncSeat(endCtx, handle)
 	}
 	return nil
 }
