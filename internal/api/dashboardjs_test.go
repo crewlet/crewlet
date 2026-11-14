@@ -2392,7 +2392,13 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// A page tidied from its own screen (Rename, Labels, Move, the trash with
+	// Restore and Delete permanently, a space's trash list), a draft's
+	// Publish on the page, in More and in the editor, an empty space's header,
+	// a disconnect the settings hold said as theirs, and the seat gestures'
+	// dialog held by the screen added 12,312 bytes, nearly all script, and
+	// took it to 5987.1 KiB (6,130,755 bytes): 5988 KiB.
+	treeBudget = 5<<20 + 868<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

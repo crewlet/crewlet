@@ -4146,7 +4146,10 @@ var ACTIONS = {
 			"base_version",
 			"body",
 			"message",
-			"watch"
+			"watch",
+			"status",
+			"labels",
+			"parent"
 		],
 		domain: "pages",
 		apps: ["doclet"],
