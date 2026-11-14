@@ -96,14 +96,14 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 			holder := openStore(t)
 			seedMemory(t, holder)
 			syncer := syncerOn(t, holder, conn)
-			if _, err := syncer.Publish(t.Context(), seat.Handle); err != nil {
+			if _, err := syncer.PublishOwn(t.Context(), seat.Handle); err != nil {
 				t.Fatalf("publish: %v", err)
 			}
 			var notes []string
 			if tc.between > 0 {
 				notes = writeNotes(t, holder, tc.between, 0)
 			}
-			if _, err := syncer.Publish(t.Context(), seat.Handle); err != nil {
+			if _, err := syncer.PublishOwn(t.Context(), seat.Handle); err != nil {
 				t.Fatalf("publish again: %v", err)
 			}
 
@@ -173,7 +173,7 @@ func TestAFailedFetchReportsNoneOfTheRowsItsTransactionRolledBack(t *testing.T) 
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	refused := Row{Table: "episodes", Values: map[string]any{"id": "e9"}}
@@ -220,7 +220,7 @@ func TestAVersionWhoseSkillTheChangelogDoesNotHoldIsLeftOutNotRefused(t *testing
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	stream, err := jsOn(t, conn).Stream(t.Context(), topics.MemoryStream)
@@ -352,7 +352,7 @@ func TestARowOnAnotherTablesSubjectsIsRefused(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	misrouted := Row{Table: "episodes", Values: map[string]any{
@@ -441,7 +441,7 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -593,7 +593,7 @@ func TestAChangelogMadeAgainUnderAHydrationRefusesTheSeat(t *testing.T) {
 			conn := broker(t)
 			holder := openStore(t)
 			seedMemory(t, holder)
-			if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+			if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 				t.Fatalf("publish: %v", err)
 			}
 

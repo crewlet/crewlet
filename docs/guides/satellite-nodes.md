@@ -468,11 +468,13 @@ the dependency surface before choosing a host for it:
   memory whatever the changelog had not acknowledged when the node stopped,
   since the deleted store takes it along: a graceful stop flushes each seat
   for five seconds, about fifty rows across a leaf link to another region,
-  and a crash flushes nothing. And after every boot, the first cycles of each seat it
-  takes carry back everything the seat's hydration brought in, about three
-  hundred rows a cycle across such a link, shared by its seats, while what the
-  seat writes meanwhile waits behind those rows
-  ([#1039](https://github.com/crewlet/crewlet/issues/1039); see
+  and a crash flushes nothing. And after every boot, each seat it takes
+  carries back everything its hydration brought in, in one turn a cycle that
+  its seats share, with what is left of the three hundred rows or so a cycle
+  carries across such a link after every seat's own rows and its profiles and
+  skills, which each cycle carries first: while those outlast a cycle, that
+  turn still comes once in every lap of the seats
+  ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)

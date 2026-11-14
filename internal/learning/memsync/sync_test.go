@@ -139,7 +139,7 @@ func TestASeatCarriesItsMemoryToANewNode(t *testing.T) {
 
 	oldOwner := openStore(t)
 	seedMemory(t, oldOwner)
-	if published, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+	if published, err := syncerOn(t, oldOwner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	} else if published.Rows != len(tables) {
 		t.Fatalf("published %d rows, want one per table (%d)", published.Rows, len(tables))
@@ -189,7 +189,7 @@ func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
 	ctx := context.Background()
 	oldOwner := openStore(t)
 	seedMemory(t, oldOwner)
-	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, oldOwner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	held := jsapitest.DropFirst(t, ns, jsapitest.StreamInfo(topics.MemoryStream), 1)
@@ -227,7 +227,7 @@ func TestAHydrationWhoseBarrierAMemberDropsAsksAgain(t *testing.T) {
 	ctx := context.Background()
 	oldOwner := openStore(t)
 	seedMemory(t, oldOwner)
-	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, oldOwner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	held := jsapitest.DropFirst(t, ns, barrierSubject(seat.AgentID), 1)
@@ -285,7 +285,7 @@ func TestABarrierNoStreamLeaderTookIsPublishedAgain(t *testing.T) {
 	conn := broker(t)
 	oldOwner := openStore(t)
 	seedMemory(t, oldOwner)
-	if _, err := syncerOn(t, oldOwner, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, oldOwner, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestABrokerAtItsStorageLimitRefusesTheSeatWithItsOwnAnswer(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestABarrierTheBrokerWillNotLetThisNodePublishIsRefusedByName(t *testing.T)
 	ns, conn := brokerServerWith(t, users, nats.UserInfo("fleet", "fleet"))
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestRepublishingCollapsesOntoOneMessagePerRow(t *testing.T) {
 		// it is the case that would grow the stream if compaction were
 		// not doing its job.
 		syncer.Forget(seat.Handle)
-		if _, err := syncer.Publish(ctx, seat.Handle); err != nil {
+		if _, err := syncer.PublishOwn(ctx, seat.Handle); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 	}
@@ -465,10 +465,10 @@ func TestASecondPublishCarriesOnlyWhatIsNew(t *testing.T) {
 	seedMemory(t, db)
 
 	syncer := syncerOn(t, db, conn)
-	if _, err := syncer.Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncer.PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
-	again, err := syncer.Publish(ctx, seat.Handle)
+	again, err := syncer.PublishOwn(ctx, seat.Handle)
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
@@ -501,9 +501,9 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 		t.Fatalf("seed a peer's episode: %v", err)
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
-	syncerOn(t, db, conn).Publish(ctx, seat.Handle)
+	syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle)
 	peer := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" })
-	if _, err := peer.Publish(ctx, "ceo"); err != nil {
+	if _, err := peer.PublishOwn(ctx, "ceo"); err != nil {
 		t.Fatalf("publish the peer: %v", err)
 	}
 
@@ -561,7 +561,7 @@ func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *test
 	// Seed real memory, so a wrong answer here cannot be excused as the
 	// seat genuinely having none.
 	seedMemory(t, db)
-	if _, err := syncer.Publish(context.Background(), seat.Handle); err != nil {
+	if _, err := syncer.PublishOwn(context.Background(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -613,7 +613,7 @@ func TestABrokerThatCannotOpenAReplayFailsTheHydration(t *testing.T) {
 
 	db := openStore(t)
 	seedMemory(t, db)
-	if _, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -659,7 +659,7 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 	// A node that has seen the stream once and hydrated from it.
 	owner := openStore(t)
 	seedMemory(t, owner)
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	node := openStore(t)
@@ -717,7 +717,7 @@ func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 
 	owner := openStore(t)
 	seedMemory(t, owner)
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	node := openStore(t)
@@ -739,7 +739,7 @@ func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 	if _, err := client.CreateStream(ctx, original.CachedInfo().Config); err != nil {
 		t.Fatalf("make the changelog again from its configuration: %v", err)
 	}
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("put the rows back: %v", err)
 	}
 	restored, err := client.Stream(ctx, topics.MemoryStream)
@@ -773,7 +773,7 @@ func TestAStreamThisNodeHasNeverSeenIsNotARecreation(t *testing.T) {
 
 	owner := openStore(t)
 	seedMemory(t, owner)
-	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, owner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	fresh := openStore(t)
@@ -833,7 +833,7 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 
 	oldOwner := openStore(t)
 	seedMemory(t, oldOwner)
-	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+	if _, err := syncerOn(t, oldOwner, conn).PublishOwn(ctx, seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -866,7 +866,7 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	seedMemory(t, db)
 
 	nobody := New(db, jsOn(t, conn), func(string) string { return "" })
-	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published.Rows != 0 {
+	if published, err := nobody.PublishOwn(ctx, seat.Handle); err != nil || published.Rows != 0 {
 		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
 			published.Rows, err)
 	}
@@ -875,7 +875,7 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 			carried, err)
 	}
 
-	if published, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil ||
+	if published, err := syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle); err != nil ||
 		published.Rows != len(tables) {
 		t.Fatalf("the control published %d rows (%v), want one per table (%d)",
 			published.Rows, err, len(tables))

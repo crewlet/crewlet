@@ -4078,23 +4078,28 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST PUBLISH, then forget the seat. The publish carries what the
-	// cycles have not, from the marks they left, before the successor
-	// hydrates: for [memoryFlushTimeout], one broker round trip a row, and
-	// what it does not reach is lost to the successor as a crash loses it.
-	// That is more than the last cycle's writes while the backlog an
-	// acquisition or a restart left is still being carried back
-	// (crewlet/crewlet#1039), when the seat's profiles and skills, sent
-	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
-	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
-	// than the broker takes, at which every publish of the seat fails
-	// (crewlet/crewlet#349); and what it does carry of those whole tables
-	// can still be replaced by an older copy published after it
-	// (crewlet/crewlet#511). Forgetting the watermarks
-	// makes the seat's next holding here carry again everything this node
-	// holds for it, as a restart does, which is what puts this node's rows
-	// back on a changelog an operator accepted after a recreation, or one
-	// restored while the node ran.
+	// A LAST TURN, then forget the seat. The flush carries what the cycles
+	// have not, from the marks they left, before the successor hydrates: what
+	// the seat wrote while held here first, then its profiles, skills and
+	// onboarding marker, sent whole, then, while the bound has time, the rows
+	// this node held for the seat when it took it, which the changelog mostly
+	// holds already ([flushSeatMemory]). It has [memoryFlushTimeout], one
+	// broker round trip a row, and what it does not reach of the first two is
+	// lost to the successor as a crash loses it. That is more than the last
+	// cycle's writes when the seat's profiles and skills, sent whole, outlast
+	// the bound (crewlet/crewlet#1040), behind a burst larger than the bound
+	// carries (crewlet/crewlet#1041), and behind a row larger than the broker
+	// takes, at which every pass of the seat that meets it fails
+	// (crewlet/crewlet#349); and what it does carry of those whole tables can
+	// still be replaced by an older copy published after it, and a release
+	// after a taking of the seat that failed flushes this node's own copies
+	// of the profiles, skills and marker, which can be older than the
+	// changelog's (crewlet/crewlet#511). Forgetting the marks and the
+	// boundary makes the seat's next holding here take a new boundary and
+	// carry back, after what it writes, everything this node holds for it,
+	// as a restart does, which is what puts this node's rows back on a
+	// changelog an operator accepted after a recreation, or one restored
+	// while the node ran.
 	//
 	// Best effort, and it must be: this runs on the release path, where the
 	// seat is already gone. A failure here costs the successor what the
@@ -4107,8 +4112,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 		// cost the drain a few seconds, not the whole shutdown.
 		flushCtx, stopFlush := context.WithTimeout(
 			context.WithoutCancel(ctx), memoryFlushTimeout)
-		if _, err := e.memory.Publish(flushCtx, handle); err != nil {
-			log.WarnContext(ctx, "seat_memory_not_flushed", "seat", handle, "error", err)
+		for _, line := range flushSeatMemory(flushCtx, e.memory, handle) {
+			log.Log(ctx, line.level, line.msg, line.args...)
 		}
 		stopFlush()
 		e.memory.Forget(handle)

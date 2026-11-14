@@ -56,7 +56,7 @@ const noteWidth = 1536
 // set, is called with the count acknowledged so far, inside the publish of
 // the row that made it, so a case acts at the row it names.
 //
-// Embedded rather than stubbed, as openFailsJS is: [Syncer.Publish] calls
+// Embedded rather than stubbed, as openFailsJS is: a publish of a seat calls
 // nothing else, and anything else called on it is a nil interface's panic.
 type roundTripJS struct {
 	jetstream.JetStream
@@ -106,6 +106,13 @@ func registered(t *testing.T, name string) table {
 // one in stamp order.
 func writeNotes(t *testing.T, db *store.DB, n, width int) []string {
 	t.Helper()
+	return writeNotesUnder(t, db, "n", n, width)
+}
+
+// writeNotesUnder is [writeNotes] with the ids under prefix rather than n, so
+// a case writes notes more than once.
+func writeNotesUnder(t *testing.T, db *store.DB, prefix string, n, width int) []string {
+	t.Helper()
 	var vector, model any
 	if width > 0 {
 		vector, model = make([]byte, 4*width), "fixture-model"
@@ -113,7 +120,7 @@ func writeNotes(t *testing.T, db *store.DB, n, width int) []string {
 	ids := make([]string, n)
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range ids {
-			ids[i] = fmt.Sprintf("n%04d", n-1-i)
+			ids[i] = fmt.Sprintf("%s%04d", prefix, n-1-i)
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO agent_diary
 				(id, agent_id, kind, content, source, created_at, embedding, embedding_model)
 				VALUES (?, ?, 'diary_long', ?, 'reflect', 1, ?, ?)`,
@@ -197,15 +204,16 @@ func runsOf(ns []int) string {
 	return strings.Join(runs, ", ")
 }
 
-// publishFor is one Publish of the seat under bound, which on a bubble's
+// publishFor is one own pass of the seat under bound, which on a bubble's
 // clock is exactly bound: the rows the changelog acknowledged in it, in
-// order, and what it answered.
+// order, and what it answered. The seat here has no boundary, so every row is
+// its own, as every row was a publish's before the boundary.
 func publishFor(t *testing.T, s *Syncer, js *roundTripJS, bound time.Duration) ([]string, Carried, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), bound)
 	defer cancel()
 	from := len(js.acked)
-	carried, err := s.Publish(ctx, seat.Handle)
+	carried, err := s.PublishOwn(ctx, seat.Handle)
 	return slices.Clone(js.acked[from:]), carried, err
 }
 
@@ -255,7 +263,7 @@ func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T)
 			t.Fatalf("after %d cycles the %d notes were still not carried and the diary's "+
 				"mark is %d: the last cycle had notes %s acknowledged, so each cycle its "+
 				"bound cut started over where the one before it had", len(cycles), len(ids),
-				s.mark(seat.Handle, "agent_diary"), runsOf(cycles[len(cycles)-1]))
+				s.mark(seat.Handle, "agent_diary", ownRange), runsOf(cycles[len(cycles)-1]))
 		}
 		if len(cycles) > 3 {
 			t.Fatalf("the %d notes took %d cycles, want 3 at %d a cycle", len(ids), len(cycles), perCycle)
@@ -299,7 +307,7 @@ func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T)
 
 // THE RELEASE FLUSH CONTINUES WHERE THE CYCLES STOPPED.
 //
-// The flush is one more Publish, under a bound of its own. With the mark
+// The flush is one more publish, under a bound of its own. With the mark
 // moving only after a whole table it began at the mark the cycles had left
 // unmoved, and was cut inside the same prefix they were (#1033), carrying
 // again what they had already had acknowledged. It begins at the first row
@@ -382,7 +390,7 @@ func TestARowWrittenAfterACutIsCarriedWithTheRestOfTheBacklog(t *testing.T) {
 		if len(carriedIn) == 0 {
 			t.Fatalf("after %d cycles the note written after the first cut was never "+
 				"carried: it sorts behind the backlog, and the diary's mark is %d",
-				cycles, s.mark(seat.Handle, "agent_diary"))
+				cycles, s.mark(seat.Handle, "agent_diary", ownRange))
 		}
 		if len(carriedIn) != 1 || carriedIn[0] != 3 {
 			t.Fatalf("the note written after the first cut was carried in cycles %s, want "+
@@ -416,11 +424,11 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 		return nil
 	}}
 	s := syncerOver(db, js)
-	if _, err := s.Publish(t.Context(), seat.Handle); !errors.Is(err, refused) {
+	if _, err := s.PublishOwn(t.Context(), seat.Handle); !errors.Is(err, refused) {
 		t.Fatalf("the first publish answered %v, want the refusal of its fifth row", err)
 	}
 	first := len(js.acked)
-	if _, err := s.Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("the next publish: %v", err)
 	}
 	if got, want := numbersOf(t, js.acked[first:], numbers), span(5, len(ids)); !slices.Equal(got, want) {
@@ -454,7 +462,7 @@ func TestAPublishThatOutlivesAForgetDoesNotStartItsTableAgain(t *testing.T) {
 	js := &roundTripJS{}
 	s := syncerOver(db, js)
 	pages := 0
-	s.beforePage = func(table string) {
+	s.beforePage = func(_ markRange, table string) {
 		if table != "agent_diary" {
 			return
 		}
@@ -463,7 +471,7 @@ func TestAPublishThatOutlivesAForgetDoesNotStartItsTableAgain(t *testing.T) {
 			s.Forget(seat.Handle)
 		}
 	}
-	if _, err := s.Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if pages < 3 {
@@ -502,7 +510,7 @@ func TestAPublishSkipsWhatARacingPublishOfTheSeatHadAcknowledged(t *testing.T) {
 			return
 		}
 		raced, racing, from = true, true, len(js.acked)
-		if _, err := s.Publish(t.Context(), seat.Handle); err != nil {
+		if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
 			t.Errorf("the racing publish: %v", err)
 		}
 		racing, to = false, len(js.acked)
@@ -510,7 +518,7 @@ func TestAPublishSkipsWhatARacingPublishOfTheSeatHadAcknowledged(t *testing.T) {
 	// second is how many rows had been acknowledged when the first publish
 	// read its second page of the diary.
 	pages, second := 0, -1
-	s.beforePage = func(table string) {
+	s.beforePage = func(_ markRange, table string) {
 		if racing || table != "agent_diary" {
 			return
 		}
@@ -518,7 +526,7 @@ func TestAPublishSkipsWhatARacingPublishOfTheSeatHadAcknowledged(t *testing.T) {
 			second = len(js.acked)
 		}
 	}
-	if _, err := s.Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if got := numbersOf(t, js.acked[from:to], numbers); !slices.Equal(got, span(1, len(ids))) {
@@ -564,7 +572,7 @@ func TestAPublishHoldsOnePageOfABacklogNotAllOfIt(t *testing.T) {
 		}
 	}
 	s := syncerOver(db, js)
-	if _, err := s.Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if got, want := numbersOf(t, js.acked, numbers), span(1, len(ids)-1); !slices.Equal(got, want) {
@@ -606,7 +614,7 @@ func TestARowLargerThanAPageIsNeverLeftBehind(t *testing.T) {
 	// page was read. A page read with none acknowledged since follows a page
 	// that took no row and said there were more.
 	read, stuck := -1, false
-	s.beforePage = func(table string) {
+	s.beforePage = func(_ markRange, table string) {
 		if table != "episodes" {
 			return
 		}
@@ -616,7 +624,7 @@ func TestARowLargerThanAPageIsNeverLeftBehind(t *testing.T) {
 		}
 		read = len(js.acked)
 	}
-	_, err := s.Publish(ctx, seat.Handle)
+	_, err := s.PublishOwn(ctx, seat.Handle)
 	if stuck {
 		t.Fatalf("a page of the episodes took no row and said there were more, so the publish "+
 			"read it again with %d of the 3 episodes acknowledged: a page must take the row that "+
@@ -668,18 +676,18 @@ func TestAPublishSaysWhatItCarriedAndWhereItStopped(t *testing.T) {
 	}}
 	s := syncerOver(db, js)
 
-	first, err := s.Publish(t.Context(), seat.Handle)
+	first, err := s.PublishOwn(t.Context(), seat.Handle)
 	if want := (Carried{Rows: len(tables), Marked: len(tables) - whole}); err != nil || first != want {
 		t.Fatalf("the first publish answered %+v (%v), want %+v: the seed's row of every table "+
 			"acknowledged, and those of the watermark tables marked", first, err, want)
 	}
-	second, err := s.Publish(t.Context(), seat.Handle)
+	second, err := s.PublishOwn(t.Context(), seat.Handle)
 	if want := (Carried{Rows: whole}); err != nil || second != want {
 		t.Fatalf("the second publish answered %+v (%v), want %+v: the whole tables carried "+
 			"again, and nothing marked", second, err, want)
 	}
 	refuse = true
-	third, err := s.Publish(t.Context(), seat.Handle)
+	third, err := s.PublishOwn(t.Context(), seat.Handle)
 	if want := (Carried{StoppedIn: firstWhole, Whole: true}); !errors.Is(err, refused) || third != want {
 		t.Fatalf("the publish refused at its first row answered %+v (%v), want %+v and the "+
 			"refusal", third, err, want)
