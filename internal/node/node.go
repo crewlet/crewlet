@@ -412,6 +412,24 @@ func (n *Node) stopConverging() {
 	n.wg.Wait()
 }
 
+// BeginDrain is [Node.Drain]'s first step alone: this node stops claiming,
+// gives up its presence, and cuts every seat it is still taking
+// ([seat.Host.BeginDrain]), and nothing waits for a turn or gives a seat back.
+//
+// EXPORTED FOR A STOP DECIDED BEFORE THE NODE HAS STARTED, which cannot run a
+// whole drain yet: an engine whose start is cancelled while the seat host's
+// first pass runs begins the drain here at once, so the pass claims nothing
+// more and cuts what it is establishing
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Start]). The whole drain
+// follows as that stop's shutdown.
+//
+// Its presence give-back is a step of the stop ctx carries, or of one this
+// node's TTL begins ([seat.WithinStop]) — the allowance Drain hands it when
+// Drain is what calls it, so the drain's give-backs still share one.
+func (n *Node) BeginDrain(ctx context.Context) {
+	n.host.BeginDrain(seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL()))
+}
+
 // drainLogInterval is how often a drain says how much work is left.
 //
 // It is a REPORTING cadence, not a deadline — see Drain for why there is no
@@ -428,7 +446,8 @@ const drainLogInterval = 10 * time.Second
 // knows about consumers but not about who owns a seat.
 //
 //  1. Stop claiming and give up presence, so peers stop reserving capacity
-//     for a node that will never claim again.
+//     for a node that will never claim again ([Node.BeginDrain]). A seat
+//     still being taken is cut rather than waited for.
 //  2. Quiesce every held seat: no NEW work is taken, and the seats keep
 //     renewing so the turns already running can finish.
 //  3. Once no handler and no turn is running ([Node.waitInFlight]), release
@@ -494,7 +513,7 @@ func (n *Node) Drain(ctx context.Context) {
 	// — see the doc above. Free of ctx's cancellation, and carrying the
 	// allowance every one of them is a step of.
 	stop := seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL())
-	n.host.BeginDrain(stop)
+	n.BeginDrain(stop)
 
 	// THE GATE FIRST, before the mailboxes quiesce. Quiescing stops NEW
 	// deliveries, but a turn already delivered and parked behind a slot is
