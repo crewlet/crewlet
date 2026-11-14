@@ -2440,7 +2440,11 @@ const (
 	// in one place and a kept range measure 6008.7 KiB (6,152,941 bytes), 409
 	// bytes over the three and the running phase's card added to the tree
 	// they were built on: 6009 KiB.
-	treeBudget = 5<<20 + 889<<10
+	// The train's own fixes (one Try again where a screen draws its own, and a
+	// failed REST read asked again by the shared one) added 318 bytes, all
+	// script, and took it to 6009.0 KiB (6,153,259 bytes), 43 bytes past it:
+	// 6010 KiB.
+	treeBudget = 5<<20 + 890<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
