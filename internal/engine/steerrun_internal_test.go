@@ -1756,6 +1756,68 @@ func TestAConfirmationIsJudgedByTheRecordReadAfterItsTake(t *testing.T) {
 	}
 }
 
+// A CONFIRMATION TURNED AWAY STILL REPORTS WHAT ITS JOB READ BEFORE. The
+// confirmation the plugin makes again after an answer it lost names a note an
+// earlier confirmation of its job read beside one it owes now, and reports
+// that earlier read, under the same id and at the same instant, whatever
+// became of the earlier report (runInbox.confirmedBefore). Where its job's
+// record takes no read any more, its completion having claimed the run, the
+// confirmation is turned away for the note still waiting; and where the claim
+// goes on to end the run, every try after it is refused. Turned away before it
+// reported the earlier read, it would leave that read reported by nobody: the
+// run's ending reports nothing of a note a step read.
+//
+// Mutation: turn the confirmation away before it reports what its job read
+// before, and that report is never made.
+func TestAConfirmationTurnedAwayStillReportsWhatItsJobReadBefore(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and keep the flag off", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	viewHolds(t, inbox, 2)
+	if notes, _ := inbox.Wait(ctx, 0); len(notes) != 2 {
+		t.Fatalf("the poll was answered %+v, want n-1 and n-2", notes)
+	}
+	// N-1 CONFIRMED AND REPORTED, the answer lost on its way back to the plugin.
+	if err := inbox.Read(ctx, []string{"n-1"}); err != nil {
+		t.Fatalf("the confirmation of n-1 answered %v", err)
+	}
+	eventually(t, "n-1's report", func() bool { return len(steered(p)) == 1 })
+
+	// THE JOB'S COMPLETION CLAIMS THE RUN, and the plugin confirms n-1 again
+	// beside n-2, which OpenCode delivered since.
+	if _, ok, err := store.ClaimForResume(ctx, "run-1", sandbox.CompletionTail(launch),
+		sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if err := inbox.Read(ctx, []string{"n-1", "n-2"}); !errors.Is(err, mcpbridge.ErrInboxNotServing) {
+		t.Fatalf("a confirmation its job's record no longer takes answered %v, want ErrInboxNotServing", err)
+	}
+	// N-1 REPORTED AGAIN, as one record: the same id at the same instant.
+	eventually(t, "n-1's report made again", func() bool { return len(steered(p)) == 2 })
+	p.mu.Lock()
+	published := slices.Clone(p.events)
+	p.mu.Unlock()
+	for _, ev := range published {
+		rec, _ := events.DataAs[*types.AgentTurnSteered](ev)
+		if rec == nil || rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered ||
+			rec.Boundary != types.SteerBoundaryStep || rec.LaunchID != launch {
+			t.Errorf("a confirmation reported %+v, want n-1 delivered at job %s's step", rec, launch)
+		}
+		if ev.ID != published[0].ID || !ev.Timestamp.Equal(published[0].Timestamp) {
+			t.Errorf("n-1 is reported as %s at %v and as %s at %v, want one record", ev.ID, ev.Timestamp,
+				published[0].ID, published[0].Timestamp)
+		}
+	}
+	if read := readOn(ctx, store, "run-1", "n-2"); read != nil {
+		t.Errorf("the confirmation turned away left n-2 read %+v, want it waiting", read)
+	}
+}
+
 // frozenWatch is a run store whose watch of a run's notes hands its follower
 // the record as it stands when the watch opens, and nothing after: a view that
 // stays behind the record.
