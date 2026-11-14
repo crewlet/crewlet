@@ -95,7 +95,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	if got := e.node.InFlightTurns(); got != turns {
 		t.Errorf("a refused resume kept the node's admission: %d turns in flight, want %d", got, turns)
 	}
-	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
+	if got := controlOutcome(t.Context(), err).Outcome; got != queue.OutcomeAck {
 		t.Errorf("the control topic hands a limited resume back as %s, want ack", got)
 	}
 
@@ -246,7 +246,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Condition != waitProvider {
 		t.Fatalf("an announcement of the held job = %v, want the limit's refusal", err)
 	}
-	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
+	if got := controlOutcome(t.Context(), err).Outcome; got != queue.OutcomeAck {
 		t.Fatalf("the control topic hands the held job back as %s, want ack", got)
 	}
 	if got := admitted.Load(); got != settled {

@@ -389,7 +389,7 @@ func TestAnAnswerRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
 		t.Fatalf("the node that let the seat go answered %v, want it refused for the seat", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeDefer {
 		t.Fatalf("the refused answer leaves the control topic as %s, want it handed on (defer)", got)
 	}
 	if now := mustRun(t, w.store, "t1"); now.Answer != nil || now.Status != sandbox.StatusAwaiting {
@@ -438,7 +438,7 @@ func TestARefusalOnTheStoresWordAloneIsNotALostSeat(t *testing.T) {
 	if errors.As(err, &refused) && refused.Condition == sandbox.SeatLost {
 		t.Fatalf("a refusal on the store's word was named a lost seat while the node's lease stands: %v", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeNak {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeNak {
 		t.Fatalf("the refusal leaves the control topic as %s, want nak: a deferral quiesces "+
 			"the attachment of a seat this node holds", got)
 	}
@@ -484,7 +484,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Condition != sandbox.SeatLost {
 		t.Fatalf("the node that let the seat go answered %v, want the completion refused as a lost seat", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeDefer {
 		t.Fatalf("the refused completion leaves the control topic as %s, want it handed on (defer)", got)
 	}
 	if now := mustRun(t, w.store, "t1"); now.Status != sandbox.StatusRunning {

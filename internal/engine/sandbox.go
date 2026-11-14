@@ -3812,7 +3812,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// A detached run outlives its node, so that window is not hypothetical.
 	if err := e.backends.Queue.Subscribe(ctx, control, group,
 		func(ctx context.Context, ev *events.Event) queue.Result {
-			return controlOutcome(rt.coordinator.OnEvent(ctx, ev))
+			return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
@@ -3842,7 +3842,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 }
 
 // controlOutcome is what a seat's control-topic delivery leaves with the broker,
-// given what the coordinator made of it.
+// given what the coordinator made of it under ctx, the delivery's context.
 //
 // # A refusal is handed back by the condition it names
 //
@@ -3905,20 +3905,26 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //
 // A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
 // handed back because the coordination store did not answer a step
-// ([sandbox.ErrStoreSilent]: a collection's, or the claim itself, or a claim
-// refused while the store has yet to take the release of the last one), and
-// every delivery handed back while no waiter can announce the job
-// ([sandbox.ErrUnannounced], above: a renewal's NAK and a refusal's among
-// them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on the same backoff
-// and spending the same budget, so the spacing and the budget the dead-letter
-// inequality below holds are unchanged, but a delivery whose budget it spends
-// is kept with the group's unhandled deliveries, never with its poison, the
-// subject an operator reads as messages that failed as themselves. A failure
-// the completion itself caused (a resume that failed, a refusal that names
-// nothing to wait on) stays the message's wherever a waiter announces the job
-// again; while none can, it is marked and handed back as the node's with every
-// other hand-back (above), since its delivery is then what carries the
-// completion.
+// ([sandbox.ErrStoreSilent]: a collection's, the record of a park's question,
+// or the claim itself, or a claim refused while the store has yet to take the
+// release of the last one), and every delivery handed back while no waiter can
+// announce the job ([sandbox.ErrUnannounced], above: a renewal's NAK and a
+// refusal's among them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on
+// the same backoff and spending the same budget, so the spacing and the budget
+// the dead-letter inequality below holds are unchanged, but a delivery whose
+// budget it spends is kept with the group's unhandled deliveries, never with
+// its poison, the subject an operator reads as messages that failed as
+// themselves. SO IS EVERY FAILURE THE QUEUE TELLS AS ITS NODE'S
+// ([queue.NodeFault], the one test internal/notify's wakes are classified by
+// too): a publish the broker did not answer or a queue no longer live refused,
+// the announcement of a park's question among them, and any failure under a
+// context that has ended, a collection this node's stop, drain or seat move cut
+// short ("interrupted") among them. A refusal that waits is still acknowledged
+// whatever the context, as above. A failure the completion itself caused (a
+// resume that failed, a refusal that names nothing to wait on) stays the
+// message's wherever a waiter announces the job again; while none can, it is
+// marked and handed back as the node's with every other hand-back (above),
+// since its delivery is then what carries the completion.
 //
 // THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
 // dead-letters while it lasts loses nothing: the waiter's schedule never stops
@@ -3945,7 +3951,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // flight. A renewal the broker does not take answers the hand-back's error, and
 // the delivery is NAK'd to try again on ([sandbox.Coordinator.OnEvent],
 // internal/sandbox's renew.go).
-func controlOutcome(err error) queue.Result {
+func controlOutcome(ctx context.Context, err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
 	}
@@ -3960,6 +3966,8 @@ func controlOutcome(err error) queue.Result {
 		return queue.NakNode(err)
 	case waits:
 		return queue.Ack()
+	case queue.NodeFault(ctx, err):
+		return queue.NakNode(err)
 	}
 	return queue.Nak(err)
 }

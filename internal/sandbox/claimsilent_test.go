@@ -13,10 +13,14 @@ import (
 // did not answer is: the failure is this node's, never the message's, and the
 // engine's control handler hands a store's silence back as the node's own, so a
 // delivery whose budget a store outage spends is not kept as poison
-// ([ErrStoreSilent], internal/engine's controlOutcome).
+// ([ErrStoreSilent], internal/engine's controlOutcome). SO IS THE RECORD OF A
+// PARK'S QUESTION the store did not answer: the park follows a read the box's
+// host answered, so no clock runs and nothing renews it, and its delivery,
+// handed back as the message's, was kept with the poison once an outage spent
+// its budget.
 //
-// Mutation: hand a claim's failure back as it came, and the store's silence
-// reads as the message's own failure.
+// Mutation: hand a claim's failure, or a park's record, back as it came, and
+// the store's silence reads as the message's own failure.
 func TestAClaimTheStoreDidNotTakeIsTheStoresSilence(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +58,24 @@ func TestAClaimTheStoreDidNotTakeIsTheStoresSilence(t *testing.T) {
 		if !errors.Is(err, errReleaseOwed) || !errors.Is(err, ErrStoreSilent) {
 			t.Fatalf("a claim while the release of the last one is owed = %v; want it refused as the store's "+
 				"silence", err)
+		}
+	})
+
+	t.Run("a park's question the store did not record", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.ask("t1", whichBranch())
+		rig.runner.Finish(Result{})
+		rig.coordinator.pending = &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"MarkAwaiting"}}}
+		if err := collectAgain(t, rig); !errors.Is(err, ErrStoreSilent) {
+			t.Fatalf("a park whose question the store did not record = %v; want it handed back as the "+
+				"store's silence", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the park the store did not record left the run %s; want it handed back to running",
+				got.Status)
 		}
 	})
 }

@@ -401,7 +401,7 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := controlOutcome(tc.err).Outcome; got != tc.want {
+			if got := controlOutcome(t.Context(), tc.err).Outcome; got != tc.want {
 				t.Errorf("controlOutcome(%v) = %s, want %s", tc.err, got, tc.want)
 			}
 		})
@@ -411,26 +411,34 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
 // handed back because the coordination store did not answer a step
 // (sandbox.ErrStoreSilent: a collection's step, the claim, a claim refused while
-// its last release is owed), or handed back while no waiter can announce the
-// job (sandbox.ErrUnannounced, a renewal's NAK and a refusal's among them), is
-// returned on the same backoff as any failure and spends the same budget, so
-// the spacing the dead-letter inequality holds is the same; but it is the
-// node's (queue.NakNode), so a delivery whose budget it spends is kept with the
-// group's unhandled deliveries, never with its poison. A failure of the
-// completion itself stays the message's.
+// its last release is owed, the record of a park's question), or handed back
+// while no waiter can announce the job (sandbox.ErrUnannounced, a renewal's NAK
+// and a refusal's among them), is returned on the same backoff as any failure
+// and spends the same budget, so the spacing the dead-letter inequality holds
+// is the same; but it is the node's (queue.NakNode), so a delivery whose budget
+// it spends is kept with the group's unhandled deliveries, never with its
+// poison. SO IS ONE THE QUEUE TELLS AS ITS NODE'S (queue.NodeFault, the test
+// internal/notify's wakes ask too): an announcement of the job's question the
+// broker did not take, and a handler this node's stop, drain or seat move
+// cancelled. A failure of the completion itself stays the message's.
 //
-// Mutation: hand a store's silence back with queue.Nak, and a delivery spent
-// during a store outage is kept as poison.
+// Mutation: hand a store's silence, a broker's refusal or a cancelled handler
+// back with queue.Nak, and a delivery spent during an outage or a stop is kept
+// as poison.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
 	silent := fmt.Errorf("sandbox: collecting t1: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent)
 	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
 	refusal := errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: node.ErrSeatNotOwned,
 		Refusal: sandbox.Refusal{Condition: waitOwnership, Reason: node.ErrSeatNotOwned.Error()}})
 	refused := errors.New("nats: no responders available for request")
+	unanswered := fmt.Errorf("%w: nats: no responders available for request", queue.ErrUnavailable)
 	for name, tc := range map[string]struct {
-		err   error
-		nodes bool
+		err     error
+		nodes   bool
+		stopped bool
 	}{
 		"a step the store did not answer":       {err: silent, nodes: true},
 		"a claim the store did not answer":      {err: fmt.Errorf("sandbox: claiming t1: %w", silent), nodes: true},
@@ -439,11 +447,24 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 		"a renewal the broker did not take":     {err: fmt.Errorf("%w; %w", unannounced(silent), refused), nodes: true},
 		"nothing settled while no waiter announces again": {
 			err: fmt.Errorf("%w: its run is not settled", sandbox.ErrUnannounced), nodes: true},
+		"a park the store did not record": {err: fmt.Errorf("sandbox: parking t1: %w", silent), nodes: true},
+		"the question's announcement the broker did not take": {
+			err: fmt.Errorf("sandbox: announcing the question t1 asked: %w", unanswered), nodes: true},
+		"the question's announcement to a queue no longer live": {
+			err:   fmt.Errorf("sandbox: announcing the question t1 asked: %w: draining", queue.ErrNotLive),
+			nodes: true},
+		"a collection this node's stop cut short": {
+			err: fmt.Errorf("sandbox: collecting t1 was interrupted: %w", context.Canceled), nodes: true,
+			stopped: true},
 		"a resume that failed": {err: errors.New("sandbox: resuming t1: the model provider did not answer")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := controlOutcome(tc.err)
+			ctx := t.Context()
+			if tc.stopped {
+				ctx = stopped
+			}
+			got := controlOutcome(ctx, tc.err)
 			if got.Outcome != queue.OutcomeNak {
 				t.Fatalf("controlOutcome(%v) = %s; want it handed back for a retry", tc.err, got.Outcome)
 			}

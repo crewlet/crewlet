@@ -445,6 +445,20 @@ func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 // the sake of one.
 func NakNode(err error) Result { return Result{Outcome: OutcomeNak, Err: err, NodeFault: true} }
 
+// NodeFault reports whether err, what a handler met with ctx, its delivery's
+// context, is a failure of THIS NODE's that the queue itself can tell: a verb
+// the broker did not answer ([ErrUnavailable]), one refused by a queue that is
+// no longer live ([ErrNotLive]), or any failure under a context that has
+// ended, a stop, a drain or a seat moving on cancelling the handler. A handler
+// answers such a failure with [NakNode]. ONE TEST FOR EVERY HANDLER THAT ASKS
+// IT (internal/notify's wakes, internal/engine's seat control topic), so a
+// failure one of them keeps out of its group's poison is one the other keeps
+// out too; a handler adds the faults of its own node that only it can tell
+// (a rate valve's refusal, a coordination store's silence) beside it.
+func NodeFault(ctx context.Context, err error) bool {
+	return err != nil && (ctx.Err() != nil || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotLive))
+}
+
 // Defer leaves the delivery unacked and quiesces the attachment, for cause.
 func Defer(cause DeferCause, reason string) Result {
 	return Result{Outcome: OutcomeDefer, Cause: cause, Reason: reason}

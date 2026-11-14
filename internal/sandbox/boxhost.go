@@ -112,8 +112,10 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // context in or whose request its provider refused
 // ([PendingStore.RetireSessions]); the record of its job lost with the host
 // its box is on, where only that host has kept the box unread for the box
-// timeout ([PendingStore.MarkClaimLost], [Coordinator.loseWithHost]); and the
-// claim the collection is made under, where the store did not answer it or
+// timeout ([PendingStore.MarkClaimLost], [Coordinator.loseWithHost]); the
+// record of the question its job asked, which parks the run
+// ([PendingStore.MarkAwaiting], [Coordinator.park]); and the claim the
+// collection is made under, where the store did not answer it or
 // this node refused it while the store has yet to take the release of the last
 // one ([Coordinator.claimCompletion]). Each wraps the store's error, or that
 // refusal, in it ([storeSilent]). A completion handed back for it is this

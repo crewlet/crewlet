@@ -3139,7 +3139,13 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			// loss is announced.
 			return nil
 		}
-		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
+		// THE STORE'S SILENCE ([ErrStoreSilent]), as every step a
+		// collection cannot go on without is: the park follows a read the
+		// box's host answered, so no clock runs on it and nothing renews
+		// its delivery, which is handed back as this node's failure and
+		// never the message's (internal/engine's controlOutcome), or an
+		// outage that spent its budget kept it with the poison.
+		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, storeSilent(ctx, err))
 	}
 
 	// THE AGENT HAS STOPPED, and this is the moment that becomes durable.
