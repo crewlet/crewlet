@@ -2677,6 +2677,16 @@ func utf16Units(text []byte) int {
 // threadPreserved is what a compaction's boundary says it kept of the thread
 // before it ([threadLine.Preserved]).
 type threadPreserved struct {
+	// Named is whether the boundary names what it kept at all: a list, even
+	// one of none, or a segment. A resume acts on every boundary that does,
+	// the newest of them: it relinks the thread by the records one names, and
+	// where it names none, or is not the last boundary, it drops every record
+	// written before the last boundary all the same (2.1.322's iWo, 2.1.310's
+	// ypo, each taking the boundary whose `preservedMessages` or
+	// `preservedSegment` JavaScript reads as true). So a list of none, whose
+	// anchor may be empty too, is never read as a boundary that names
+	// nothing.
+	Named bool
 	// Kept is whether it says it kept records, and Anchor names the record
 	// they hang from. Segment is whether it names them as a segment, from
 	// Tail up to Head by parent; else it lists them, each handed to
@@ -2704,7 +2714,10 @@ type threadPreserved struct {
 // is the last boundary and every record it names is in the thread, it
 // RELINKS the thread: it chains the kept records after the anchor, hangs the
 // anchor's other children from the last of them, and drops every other
-// record before that boundary. Each of the 22 boundaries the probes kept
+// record before that boundary. A boundary that names either acts though it
+// keeps nothing: where it lists none, or is not the last boundary, the resume
+// relinks nothing and drops every record before the last boundary all the
+// same ([threadPreserved.Named]). Each of the 22 boundaries the probes kept
 // names both, alike.
 //
 // ITS READER is the model of which records Claude Code's resume hands its
@@ -2750,8 +2763,9 @@ func (l threadLine) Preserved(each func(uuid string) error) (threadPreserved, er
 }
 
 // preservedList is what a compaction's `preservedMessages`, raw, says it kept
-// ([threadLine.Preserved]), each listed uuid handed to each: kept where it
-// lists any, since a resume relinks by a list of none no record.
+// ([threadLine.Preserved]), each listed uuid handed to each: named whatever it
+// lists, and kept where it lists any, since a resume relinks by a list of none
+// no record, and still drops by it every record before the last boundary.
 func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPreserved, error) {
 	if !wireObject(raw) {
 		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedMessages is %s, not an object", wireKind(raw))
@@ -2782,7 +2796,7 @@ func preservedList(raw json.RawMessage, each func(uuid string) error) (threadPre
 	})
 	switch {
 	case err == nil:
-		return threadPreserved{Kept: listed > 0, Anchor: anchor}, nil
+		return threadPreserved{Named: true, Kept: listed > 0, Anchor: anchor}, nil
 	case refused != nil:
 		return threadPreserved{}, refused
 	}
@@ -2804,7 +2818,7 @@ func preservedSegment(raw json.RawMessage) (threadPreserved, error) {
 	if err := wireDecode(raw, &segment); err != nil {
 		return threadPreserved{}, fmt.Errorf("compactMetadata.preservedSegment: %w", err)
 	}
-	p := threadPreserved{Kept: true, Segment: true}
+	p := threadPreserved{Named: true, Kept: true, Segment: true}
 	var err error
 	if p.Head, err = wireRequiredString("preservedSegment.headUuid", segment.Head); err != nil {
 		return threadPreserved{}, err

@@ -3046,15 +3046,18 @@ func ctListed(summary string, kept ...string) string {
 // it lists any; else its preservedSegment, the anchor and the segment's two
 // ends; and nothing where the boundary carries neither, a null for either, or
 // no compactMetadata, null among it, or on a record of another type or
-// subtype, whatever it carries. Every other shape, a metadata, a list, an
-// anchor or an end of another type, an entry that is no string, is an error.
-// An error each returns ends the walk as it is.
+// subtype, whatever it carries. A boundary that carries either names what it
+// kept, a list of none of no anchor among them, since the resume drops by it
+// every record before the last boundary whatever it keeps. Every other shape,
+// a metadata, a list, an anchor or an end of another type, an entry that is no
+// string, is an error. An error each returns ends the walk as it is.
 //
 // Mutation: read the segment where a list is, and the list's records go
 // unread; take a list of none for one that keeps records, and a boundary that
 // keeps nothing relinks; read a null list as one, and a boundary naming its
-// segment alone is an error; or read a null metadata as one, and a boundary
-// that keeps nothing is an error.
+// segment alone is an error; read a null metadata as one, and a boundary
+// that keeps nothing is an error; or read a boundary as naming what it kept
+// only where it keeps records, and a list of none of no anchor names nothing.
 func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 	t.Parallel()
 	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
@@ -3067,15 +3070,18 @@ func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
 		uuids  []string
 	}{
 		"a boundary listing what it kept beside its segment": {boundary,
-			threadPreserved{Kept: true, Anchor: ctUUID(8)}, kept},
-		"a boundary naming its segment alone": {segment, threadPreserved{Kept: true, Anchor: ctUUID(8),
-			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary naming its segment alone": {segment, threadPreserved{Named: true, Kept: true,
+			Anchor: ctUUID(8), Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
 		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
-			`,"preservedMessages":null`), threadPreserved{Kept: true, Anchor: ctUUID(8), Segment: true,
-			Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+			`,"preservedMessages":null`), threadPreserved{Named: true, Kept: true, Anchor: ctUUID(8),
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
 		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
 			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
-			threadPreserved{Anchor: ctUUID(8)}, nil},
+			threadPreserved{Named: true, Anchor: ctUUID(8)}, nil},
+		"a boundary listing none of no anchor": {ctReplace(t, segment, `"compactMetadata":{`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"","uuids":[]},`),
+			threadPreserved{Named: true}, nil},
 		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
 			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
 		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
