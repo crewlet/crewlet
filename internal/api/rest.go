@@ -125,6 +125,8 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/llm/runners", what: "llm_runners"},
 	{method: "GET", pattern: "/llm/models", what: "llm_models"},
 	{method: "GET", pattern: "/llm/device-sign-ins/{id}", what: "llm_device_sign_in", path: map[string]string{"id": "id"}},
+	// AND ONE MODEL'S LATEST CHECK, which `POST` on the same path starts.
+	{method: "GET", pattern: "/llm/providers/{key}/check", what: "llm_check", path: map[string]string{"key": "key"}},
 	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
 	// Plural beside `POST /backup`, which TAKES one: the read is a
 	// collection and the write is one act, and neither is the other's

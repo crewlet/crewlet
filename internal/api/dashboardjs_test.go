@@ -2392,7 +2392,11 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// A model's test polled while it runs on its node's own time (the
+	// `llm_check` question, and what a test that found nothing says) added
+	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
+	// bytes): 5977 KiB.
+	treeBudget = 5<<20 + 857<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

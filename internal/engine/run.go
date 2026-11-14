@@ -426,6 +426,9 @@ type Engine struct {
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
 	signIns deviceSignIns
+	// modelChecks is the model checks this node runs on its own time
+	// (modelcheckrun.go).
+	modelChecks modelChecks
 
 	// testNode is the node id an engine built with no node answers for
 	// itself: a case standing up several engines on one coordination store.
@@ -2614,6 +2617,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
 	e.startModelRetries(ctx)
 	e.startDeviceSignIns(ctx)
+	// AND THE MODEL CHECKS PEOPLE ASK FOR, each run on this node's time.
+	e.startModelChecks(ctx)
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
@@ -3393,6 +3398,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()
+	// AND A CHECK THIS NODE RUNS ENDS SAYING THE NODE STOPPED, so the
+	// person checks again on a node that is up.
+	e.stopModelChecks()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP THAT PUBLISHES, which is what the
 	// admission says: the key means "this process may be publishing", and
 	// it is the one thing that keeps a capacity coordinator from taking its

@@ -27,7 +27,13 @@ import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
-import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
+import type {
+  ModelCheck,
+  ModelDevice,
+  ModelEntriesAnswer,
+  ModelsAnswer,
+  RunnersAnswer,
+} from "./models.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
@@ -8094,6 +8100,8 @@ export interface QueryMap {
   llm_models: ModelsAnswer;
   /** One device sign-in (`id`). Admin. */
   llm_device_sign_in: ModelDevice;
+  /** One model's latest test (`key`), running or ended. Admin. */
+  llm_check: ModelCheck;
 }
 
 export type QueryName = keyof QueryMap;

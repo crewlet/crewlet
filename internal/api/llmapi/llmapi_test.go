@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,13 @@ type fakeEngine struct {
 	running int
 	// onCheck runs as a check returns: a test cancels the request there.
 	onCheck func()
+	// started are the checks asked to start; startErr refuses a start, and
+	// holdCheck answers one with its check running, keeping it in pending
+	// for the case to run.
+	started   []llmapi.ModelCheckAsk
+	startErr  error
+	holdCheck bool
+	pending   func(context.Context) (json.RawMessage, error)
 }
 
 type checked struct {
@@ -94,6 +102,36 @@ func (f *fakeEngine) CheckModel(_ context.Context, key string, draft *config.LLM
 		f.onCheck()
 	}
 	return f.check, nil
+}
+
+// StartModelCheck runs the check at once and answers it ended, as the engine
+// does a check that ends within its hold, or answers it running where the
+// case holds it.
+func (f *fakeEngine) StartModelCheck(ctx context.Context, ask llmapi.ModelCheckAsk,
+	run func(context.Context) (json.RawMessage, error)) (coord.ModelCheck, error) {
+	f.mu.Lock()
+	f.started = append(f.started, ask)
+	startErr, hold := f.startErr, f.holdCheck
+	f.mu.Unlock()
+	if startErr != nil {
+		return coord.ModelCheck{}, startErr
+	}
+	record := coord.ModelCheck{ID: uuid.New(), Entry: ask.Entry, Node: "node-1", Draft: ask.Draft,
+		Smoke: ask.Smoke, StartedAt: clock, Deadline: clock.Add(ask.Budget), By: ask.By.Name, ByKind: ask.By.Kind}
+	if hold {
+		f.mu.Lock()
+		f.pending = run
+		f.mu.Unlock()
+		return record, nil
+	}
+	answer, err := run(ctx)
+	record.EndedAt = clock.Add(time.Second)
+	if err != nil {
+		record.Failure = err.Error()
+	} else {
+		record.Answer = answer
+	}
+	return record, nil
 }
 
 func (f *fakeEngine) RetryModel(context.Context, string, coord.ModelRetryMode, iam.Actor) (llmapi.Retried, error) {
@@ -598,7 +636,9 @@ func TestTheRuntimeVerbsAnswerInTheirShapes(t *testing.T) {
 	}
 
 	code, body = r.do(t, http.MethodPost, "/llm/providers/default/check", `{"smoke": true}`, nil)
-	if lines, _ := body["lines"].([]any); code != http.StatusOK || body["ok"] != true || len(lines) != 1 {
+	answer, _ := body["check"].(map[string]any)
+	if lines, _ := answer["lines"].([]any); code != http.StatusOK || body["state"] != "ended" ||
+		answer["ok"] != true || len(lines) != 1 {
 		t.Errorf("check = %d %v", code, body)
 	}
 	if c := r.engine.checks[len(r.engine.checks)-1]; !c.smoke || c.values != nil {
@@ -703,6 +743,70 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 // draftBody is a check of a draft entry: a model the company does not run yet.
 const draftBody = `{"smoke": false, "entity": {"harness": "claude-code", "model": "opus",
 	"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`
+
+// A CHECK IS ANSWERED WHILE IT RUNS, ON THE NODE'S OWN TIME. Its harness runs
+// outlast the two minutes of silence a proxy in front of the API is told to
+// allow, so the route starts the check under its budget and answers 202 with
+// it running and where its outcome is read; the check the node runs renders
+// what it found as the answer its record keeps. A check asked while another of
+// the entry runs that is not the one asked for is refused naming it, and one
+// asked of a stopping node is sent to another node at the drain's wait.
+//
+// Mutation: answer a running check 200, start it under another budget, or
+// drop the Location, and this is red.
+func TestACheckIsAnsweredWhileItRunsOnTheNodesTime(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.engine.holdCheck = true
+	post := func(t *testing.T) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/llm/providers/default/check",
+			strings.NewReader(`{"smoke": true}`))
+		rec := httptest.NewRecorder()
+		r.h.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := post(t)
+	var running map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &running); err != nil {
+		t.Fatalf("the check answered non-JSON %d: %s", rec.Code, rec.Body)
+	}
+	if rec.Code != http.StatusAccepted || running["state"] != "running" || running["node"] != "node-1" ||
+		running["ended_at"] != nil || running["check"] != nil || running["entry"] != "default" {
+		t.Fatalf("a running check = %d %v, want 202 with it running", rec.Code, running)
+	}
+	if at := rec.Header().Get("Location"); at != "/llm/providers/default/check" {
+		t.Errorf("Location = %q, want where the check's outcome is read", at)
+	}
+	if len(r.engine.started) != 1 || r.engine.started[0] != (llmapi.ModelCheckAsk{Entry: "default", Smoke: true,
+		By: r.engine.started[0].By, Budget: llmapi.CheckBudget}) || r.engine.started[0].By.Name == "" {
+		t.Errorf("the check was started as %+v, want the saved entry with its smoke calls under CheckBudget",
+			r.engine.started)
+	}
+	answer, err := r.engine.pending(t.Context())
+	if err != nil {
+		t.Fatalf("the running check: %v", err)
+	}
+	var found map[string]any
+	if err := json.Unmarshal(answer, &found); err != nil || found["ok"] != true || found["node"] != "node-a" {
+		t.Errorf("the check rendered %s (%v), want what the doctor found", answer, err)
+	}
+
+	r.engine.holdCheck = false
+	r.engine.startErr = &llmapi.ModelCheckInProgressError{Running: coord.ModelCheck{ID: uuid.New(),
+		Entry: "default", Node: "node-2", Draft: true, StartedAt: clock, Deadline: clock.Add(llmapi.CheckBudget)}}
+	code, body := r.do(t, http.MethodPost, "/llm/providers/default/check", `{"smoke": true}`, nil)
+	if other, _ := body["running"].(map[string]any); code != http.StatusConflict || body["error"] != "check_in_progress" ||
+		other["node"] != "node-2" || other["state"] != "running" {
+		t.Errorf("a check asked while another runs = %d %v, want 409 naming the running one", code, body)
+	}
+	r.engine.startErr = llmapi.ErrModelChecksStopped
+	if rec := post(t); rec.Code != http.StatusServiceUnavailable ||
+		rec.Header().Get("Retry-After") != strconv.Itoa(int(llmapi.StoppingRetryAfter/time.Second)) {
+		t.Errorf("a check asked of a stopping node = %d (Retry-After %q), want 503 at the drain's wait",
+			rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
 
 // A DRAFT IS RUN ONLY BY WHO MAY WRITE WHAT IT STANDS FOR.
 //
