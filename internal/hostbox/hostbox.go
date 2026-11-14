@@ -24,7 +24,9 @@
 // ([ReadCredentials], [WriteCredentials]), because the harness backend's seats
 // and commands and a local box's teardown all write it, and one of them
 // replacing its files a rename at a time is a login half written whenever that
-// writer stops between two of them.
+// writer stops between two of them. A write names its steps ([CredentialStep])
+// to an observer its caller hands it, nil in every write the engine makes, so
+// the suites can kill a writer at every one.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox

@@ -141,6 +141,13 @@ func DefaultBoxRoot() string {
 type boxLayout struct {
 	id   string
 	root string
+	// credentialSteps observes the login write-back a teardown of this box
+	// makes ([hostbox.CredentialSteps]): its backend's
+	// ([Local.credentialSteps]), nil in production. ON THE LAYOUT because the
+	// layout is the one value every teardown holds (a box's Close and Kill,
+	// the orphan reaper, a box a later process reconnected to), and the one
+	// [Local.layout] mints for each of them.
+	credentialSteps hostbox.CredentialSteps
 }
 
 // home is the box's own side: its HOME, and its mount in container mode.
@@ -452,8 +459,11 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 	for relative, rec := range seeded {
 		files[relative] = rec.Source
 	}
+	commit := func(dir string, names []string, next map[string][]byte) error {
+		return hostbox.WriteCredentials(dir, names, next, l.credentialSteps)
+	}
 	for _, login := range loginsOf(files) {
-		got, err := writeBackLogin(ctx, l, login, seeded, hostbox.WriteCredentials)
+		got, err := writeBackLogin(ctx, l, login, seeded, commit)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_writeback_failed",
 				"sandbox_id", l.id, "dir", login.dir, "error", err.Error())
@@ -620,7 +630,8 @@ func writeBackLogin(
 }
 
 // loginCommit is how a write-back puts a whole login in the shared directory:
-// [hostbox.WriteCredentials], in every box.
+// [hostbox.WriteCredentials], with the observer the box's layout carries
+// ([boxLayout.credentialSteps]), in every box.
 //
 // A PARAMETER rather than a call written in, for the one failure after which
 // the refresh HAS been written — its journal landed, and a file the disk then
@@ -1004,6 +1015,11 @@ type Local struct {
 	opts LocalOptions
 	root string
 	cli  containerCLI // the resolved runtime; its path is "" in direct mode
+	// credentialSteps observes every login write-back this backend's boxes
+	// make ([hostbox.CredentialSteps]): nil in production, set by the suite
+	// before a box is made (export_test.go's ObserveCredentialWrites), and
+	// carried to each teardown on the box's layout.
+	credentialSteps hostbox.CredentialSteps
 }
 
 var _ Provider = (*Local)(nil)
@@ -1078,7 +1094,7 @@ func (l *Local) layout(id string) (boxLayout, error) {
 		// comparison on a path that is about to be deleted from.
 		return boxLayout{}, localErrorf("local sandbox: %q is not a usable box id", id)
 	}
-	return boxLayout{id: id, root: filepath.Join(l.root, "boxes", id)}, nil
+	return boxLayout{id: id, root: filepath.Join(l.root, "boxes", id), credentialSteps: l.credentialSteps}, nil
 }
 
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
@@ -1571,7 +1587,9 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 		if !entry.IsDir() {
 			continue
 		}
-		layout := boxLayout{id: entry.Name(), root: filepath.Join(boxes, entry.Name())}
+		layout := boxLayout{
+			id: entry.Name(), root: filepath.Join(boxes, entry.Name()), credentialSteps: l.credentialSteps,
+		}
 		if lastSeen(layout).Before(cutoff) {
 			candidates = append(candidates, layout)
 		}

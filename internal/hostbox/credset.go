@@ -69,6 +69,22 @@ import (
 // consumer's path now goes through, and a layout every document describing the
 // directory has to change for. The journal leaves the directory a directory of
 // files, where every path a consumer was handed still names the file it did.
+//
+// THE STEPS ARE NAMED ([CredentialStep]): the journal landing, each file put in
+// place, each file removed, the journal removed. Each leaves a directory no
+// other instant leaves. Between two of them nothing a reader of the login can
+// see changes: a file being replaced is staged under a name no reader reads
+// until its rename, which is the step, and which the next hold of the lock
+// removes if a kill came first, and a directory's sync changes only what a
+// power loss keeps, which no kill reaches. So a writer killed at every step has
+// been killed at every instant that matters, and a write reports each step to
+// the observer its caller hands it ([CredentialSteps]). That observer is nil in
+// every write the engine makes; in the suites it is the kill matrix
+// (internal/hostbox/hostboxtest), which parks the writer's process at one step
+// at a time and kills it there. A READER FINISHING a write reports none: what
+// it puts in place is what the write it finishes would have, in the same
+// order, skipping what is already there, so a reader killed part way leaves a
+// directory the write killed at one of its own steps leaves.
 
 // CredentialJournal is the journal of the shared credential directory dir
 // ([WriteCredentials]): dir + ".pending", BESIDE the directory for the reason
@@ -139,6 +155,55 @@ func Committed(err error) bool {
 	return err == nil || errors.As(err, &unapplied)
 }
 
+// CredentialStep is one step of a journaled login write ([WriteCredentials]),
+// as the write reaches it: a point at which a writer killed there leaves a
+// directory no other instant leaves.
+type CredentialStep string
+
+const (
+	// StepCommitted is the write's journal landing: the write is the login
+	// of record, and nothing it writes or removes has moved yet.
+	StepCommitted CredentialStep = "committed"
+	// StepWritten is one file of the login, the one named, put in place: the
+	// files after it in name order, and every removal, have not moved yet.
+	StepWritten CredentialStep = "written"
+	// StepRemoved is one file the login does not hold, the one named,
+	// removed: every file of the login is in place, and the removals after it
+	// in name order have not moved yet.
+	StepRemoved CredentialStep = "removed"
+	// StepClosed is the journal's removal: the write is finished.
+	StepClosed CredentialStep = "closed"
+)
+
+// Valid reports whether s is one of the four steps.
+func (s CredentialStep) Valid() bool {
+	switch s {
+	case StepCommitted, StepWritten, StepRemoved, StepClosed:
+		return true
+	}
+	return false
+}
+
+// CredentialSteps observes a login write's steps as it reaches them: the step,
+// and the file it is about ("" for a step about the whole login). It is called
+// on the writing goroutine, under the caller's hold of the directory's lock,
+// after the step has happened, so an observer that does not return holds the
+// write, and the lock, at that step: which is how a suite parks a writer's
+// process there to kill it (internal/hostbox/hostboxtest).
+//
+// NIL OBSERVES NOTHING, and nil is every write the engine makes. A file
+// already holding what the write puts there, a removal of a file that is not
+// there, a directory's sync and a file staged before its rename report
+// nothing: none of them changes what a reader of the login can see.
+type CredentialSteps func(step CredentialStep, name string)
+
+// reach reports step to s, where there is an s.
+func (s CredentialSteps) reach(step CredentialStep, name string) {
+	if s != nil {
+		s(step, name)
+	}
+}
+
 // ReadCredentials reads the login the shared credential directory dir holds,
 // among names: the content of every one of them the directory holds a regular
 // file under, by name, and none of the others — ONE committed login, never
@@ -159,7 +224,7 @@ func ReadCredentials(dir string, names []string) (map[string][]byte, error) {
 	if err := sweep(dir); err != nil {
 		return nil, err
 	}
-	if err := settle(dir); err != nil {
+	if err := settle(dir, nil); err != nil {
 		return nil, err
 	}
 	login := map[string][]byte{}
@@ -190,9 +255,12 @@ func ReadCredentials(dir string, names []string) (map[string][]byte, error) {
 // carried into this write's journal, so nothing it committed is lost and
 // nothing this write states is overridden.
 //
+// steps observes the steps the write reaches ([CredentialSteps]); nil observes
+// none.
+//
 // A failure before the journal lands writes nothing; one after it is an
 // [*UnappliedError] — see [Committed].
-func WriteCredentials(dir string, names []string, login map[string][]byte) error {
+func WriteCredentials(dir string, names []string, login map[string][]byte, steps CredentialSteps) error {
 	if err := checkNames(names); err != nil {
 		return err
 	}
@@ -245,7 +313,8 @@ func WriteCredentials(dir string, names []string, login map[string][]byte) error
 	if err = writeJournal(dir, raw); err != nil {
 		return fmt.Errorf("hostbox: recording the login write in %s: %w", CredentialJournal(dir), err)
 	}
-	if err = settle(dir); err != nil {
+	steps.reach(StepCommitted, "")
+	if err = settle(dir, steps); err != nil {
 		return &UnappliedError{Journal: CredentialJournal(dir), Err: err}
 	}
 	return nil
@@ -302,7 +371,10 @@ func sweep(dir string) error {
 //
 // The journal's removal is NOT synced: a removal a power loss undoes leaves the
 // journal to be finished again, which writes what is already there.
-func settle(dir string) error {
+//
+// steps observes what it puts in place ([CredentialSteps]): the writer's own
+// observer when a write settles itself, nil when a reader finishes a write.
+func settle(dir string, steps CredentialSteps) error {
 	journal, ok, err := readJournal(dir)
 	if err != nil || !ok {
 		return err
@@ -314,20 +386,23 @@ func settle(dir string) error {
 	if err := SyncDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("hostbox: syncing the directory of %s: %w", path, err)
 	}
-	if err := apply(dir, journal); err != nil {
+	if err := apply(dir, journal, steps); err != nil {
 		return fmt.Errorf("hostbox: finishing the login write recorded in %s: %w", path, err)
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("hostbox: closing the login write recorded in %s: %w", path, err)
 	}
+	steps.reach(StepClosed, "")
 	return nil
 }
 
 // apply puts a journal's login in place: its files written, in name order,
 // then its removals, then the directory synced. A file already holding what
 // the journal says is left alone, so finishing a write a second time — after a
-// power loss undid the journal's removal — writes nothing.
-func apply(dir string, journal credentialJournal) error {
+// power loss undid the journal's removal — writes nothing. Each file it puts
+// in place and each it removes is a step ([CredentialSteps]); one it leaves
+// alone, or finds already gone, is none.
+func apply(dir string, journal credentialJournal, steps CredentialSteps) error {
 	if err := os.MkdirAll(dir, DirMode); err != nil {
 		return fmt.Errorf("preparing %q: %w", dir, err)
 	}
@@ -342,14 +417,20 @@ func apply(dir string, journal credentialJournal) error {
 		if err := ReplaceFile(target, bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("writing %q: %w", target, err)
 		}
+		steps.reach(StepWritten, name)
 	}
 	removals := slices.Clone(journal.Remove)
 	slices.Sort(removals)
 	for _, name := range removals {
 		target := filepath.Join(dir, name)
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		err := os.Remove(target)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
 			return fmt.Errorf("removing %q: %w", target, err)
 		}
+		steps.reach(StepRemoved, name)
 	}
 	if err := SyncDir(dir); err != nil {
 		return fmt.Errorf("syncing %q: %w", dir, err)
