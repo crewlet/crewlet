@@ -1260,10 +1260,10 @@ var _ mainThreadReader = (*FakeRunner)(nil)
 
 // ReadMainThread answers a collection's read of a job's main thread with what
 // [FakeRunner.MainThread] says, and no reading where it is unset.
-func (f *FakeRunner) ReadMainThread(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading {
-	f.mu.Lock()
-	read := f.MainThread
-	f.mu.Unlock()
+func (r *FakeRunner) ReadMainThread(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading {
+	r.mu.Lock()
+	read := r.MainThread
+	r.mu.Unlock()
 	if read == nil {
 		return MainThreadReading{}
 	}
