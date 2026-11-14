@@ -1830,8 +1830,10 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 // recorded nowhere. Turned away, the plugin confirms it again on its own
 // backoff, and the confirmation is recorded once it reaches a node that holds
 // the key, the run's seat having moved or its session opened again there; a
-// run that ends first leaves the note served and unread on its record, as its
-// ending reports it. Every other note the read names is taken and reported
+// run that ends first leaves the note served and unread on its record, which
+// its ending reports unconfirmed where the node ending the run holds the key;
+// a node that does not records nothing of it (steer_note_end_unrecorded,
+// [runSteers.ended]). Every other note the read names is taken and reported
 // before it is turned away, as ever. A note this node cannot open that waits
 // no more, or waits for another job, is no such note.
 func (i *runInbox) Read(ctx context.Context, ids []string) error {

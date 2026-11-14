@@ -1242,8 +1242,10 @@ it:
     `steer_read_key_unknown` once for the note, which waits for a node that
     holds its key. The read made again is recorded once it reaches such a
     node, the run's seat moved or its session opened again there; a run that
-    ends first leaves the note served and never confirmed, as its ending
-    reports it. Each
+    ends first leaves the note served and never confirmed, which its ending
+    reports `unconfirmed` where the node ending the run holds the key; a node
+    that does not records nothing of the note (`steer_note_end_unrecorded`).
+    Each
     note carries an id the harness admits it under, unique to the note and the
     job, so a poller that admits it twice admits it once.
 

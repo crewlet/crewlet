@@ -340,7 +340,9 @@ does not hold, records the confirmation's other notes and turns it away the
 same way, saying so once for the note (`steer_read_key_unknown`): the note
 waits for a node that holds its key, as it does for every reader, and the
 confirmation made again is recorded once it reaches one. A run that ends
-first leaves the note served and never confirmed, as its ending reports it.
+first leaves the note served and never confirmed, which its ending reports
+`unconfirmed` where the node ending the run holds the key; a node that does
+not records nothing of the note (`steer_note_end_unrecorded`).
 
 **One constructor states every outcome with its step.** `steer.Record` takes an
 `End` that `steer.Delivered`, `Retold`, `Missed`, `Unconfirmed` and `Expired`
