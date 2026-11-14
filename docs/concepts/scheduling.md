@@ -573,8 +573,8 @@ judges what its run did by then.
 
 ## Running a schedule now
 
-A person can run one schedule **now**, off its cron, with the operator tool
-`run_schedule`
+A person can run one schedule **now**, off its cron: the dashboard's **Run
+now** on the schedule's page, or the operator tool `run_schedule`
 ([Running a schedule now](../reference/api-endpoints.md#running-a-schedule-now))
 from their own assistant. The schedule's task goes to every seat it wakes, as
 one more fire of the schedule's own conversation, so the run continues the
@@ -880,7 +880,12 @@ holds the `scheduler` fleet duty.
   next-run times, projected from the current organization on each request)
   and `recent_runs` (the company's 50 most recent fires). The next-fire times
   tick as you watch: every relative time in the product reads one shared
-  clock rather than being baked at render.
+  clock rather than being baked at render. A schedule's times are drawn on
+  the clock it fires on, the zone named, with the reader's own time beside
+  them where it differs. **New schedule**, and on a schedule's page **Edit**,
+  **Pause** or **Resume** and **Delete**, rewrite the seat or team that
+  declares it through the configuration routes (Admin, or a lead inside their
+  own team); **Run now** is [running it now](#running-a-schedule-now).
 - **The history is the replicated usage domain's**
   ([ADR-0020](../../adr/0020-a-nodes-own-day-is-a-compacted-domain.md)), not
   the ledger of whichever node answers. Each data node derives the fires its

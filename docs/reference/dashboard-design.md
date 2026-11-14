@@ -1386,7 +1386,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org` · `#/company/org/table` | **Structure**, the organization on one page, in two tabs over one org builder: the **Org chart** (the default), the organization drawn as a chart, by teams or, with its Reporting view switch, by reporting lines; and the **Table**, its tab carrying the seat count, one row per company, team and seat with each seat's Status, Reports to, Problems and run-time controls (Pause, Pause and stop, Resume, Steer, and the remedy its state asks for: Answer, Review call or Raise budget). Both tabs draw each seat's live state, and both are where the units and seats and the company's name are written, a draft and its selection carrying from one to the other; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead; anybody else reads the org projection, every edit and control held with its reason)* | `show=` (the status filter: a Table chip, or a chart legend key) · `chart=reporting` · `closed=` (the teams closed on the chart) · `unit=` · `seat=` (the selection, which opens nothing) · `editor=open` (with `unit=` or `seat=`: opens that node's editor once, then leaves the address) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Worklet's New project, which opens that node's editor on its Project field holding the key, then leaves the address) · `peek=seat:{handle}\|unit:{key}` (a seat's or a unit's panel; a unit has no page of its own) · `at=` (the scroll) · `zoom=` (the chart's zoom and pan) |
 | `#/company/org/edit` · `#/company/org/roster` · `#/company/org/teams` · `#/company/org/teams/{unit}` | The org pages Structure replaced (Edit org, the Roster, Teams and a team's page), kept because their addresses are in bookmarks and in links pasted into tasks and chat: each is replaced at once by the Structure tab that holds it. Edit org opens the Org chart, or the Table with `view=table`, and opens the editor of a node its `seat=` or `unit=` names; the Roster and Teams open the Table; a team's page opens the Table with that unit's panel open (`peek=unit:{unit}`) | `view=table` (Edit org's) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|activity\|settings`, and a section's word (`code`, `turns`, `memory`, `schedules`, `access`) lands on the tab holding it, scrolled to that section · `session=` (Memory); human: overview · work · settings (Work only where the company runs Worklet or hosts code) · `from=` (the address it was opened from, which its trail names and its crumbs go back to) |
-| `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
+| `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, **New schedule** in the bar, and with none an empty state offering a new schedule and, to a reader who may open it, the configuration a schedule is written in; one schedule, with **Run now**, **Edit**, **Pause** or **Resume** and **Delete** in its bar and its peek | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/atlas` · `#/company/atlas/{id}` · `#/company/atlas/changes` · `#/company/atlas/review` · `#/company/atlas/sources` | **Atlas** *(needs Atlas access, locked for a reader without it)*: what the company runs on, as one page: a band of counts, the map read the way a request travels and the catalogue under it grouped by health, sharing one search, one set of filters and one selection, under a coverage line that says how many entries and where from and never that it is complete; one entry's page, its tabs Overview, Relations, Sources and History; Changes, the atlas's own log for the company; Review, what waits for a person, where `kind=` narrows it; Sources, each integration's last read and Refresh now ([Company › Atlas](#company--atlas)) | `q=` · `kind=` · `lane=` · `vendor=` · `confidence=` · `health=` · `unconfirmed=true` · `sel={id}` (the selection) · `trace=up\|down\|both` (the side of its path a link lit) · `peek=atlas:{id}` (the sheet, whose entry is the selection) · on an entry's page `tab=` |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
@@ -5680,12 +5680,37 @@ Two rules keep it honest:
   out in the zone the engine names on the row — the schedule's own, or the
   [company's clock](../getting-started/configuration.md#the-companys-clock)
   where it names none — and never in a default of the screen's: a row read as
-  UTC was wrong by the zone's standing offset. A row whose zone is not UTC
-  says so under the list, because each instant is then shown in the reader's
-  own zone.
+  UTC was wrong by the zone's standing offset.
+- **One clock, named.** A schedule's times are drawn on the clock it fires on
+  (`routes/agents/scheduleClock.ts`): the instants under a heading naming the
+  zone ("next 5 runs, on Europe/Berlin time"), the tick each fire stood for
+  with the zone's short name in its cell, the Next fact's and cell's hint, and
+  the sentence under an expression ("weekdays at 09:30, Europe/Berlin time").
+  The reader's own time is secondary and labelled theirs ("Mon 00:30 your
+  time"), and only where their clock reads the instant differently. The list
+  once said "in Europe/Berlin" over times drawn on the reader's clock, so a
+  reader in Los Angeles read 00:30 for a 09:30 standup. A fire of a schedule
+  the company no longer declares names no clock, and its tick is drawn on the
+  reader's, named as theirs; a run a person asked for stood for no tick, and
+  says "by hand".
 - **An unreadable expression says so.** The engine runs the schedule; a
   reading aid that invented a sentence would put words on screen the engine
   does not act on. The expression renders as itself with nothing claimed.
+
+A schedule is changed where it is read. **New schedule**, **Edit**, **Pause**,
+**Resume** and **Delete** each rewrite the one seat or team that declares it
+(`PUT /config/roles/{handle}` or `PUT /config/units/{id}`, the seat by its
+handle and never by the agent id a schedules row carries as its scope's
+identity), its `schedules` list changed and nothing else, checked by the
+engine's dry run first, a problem drawn beside the field it is about, and
+stored under the revision it was read with and a summary ("Pause the schedule
+“daily-standup” on the unit core"). They are held, with the gate's sentence,
+for a reader who may not change that seat or team (Admin, or a lead inside
+their own team, on a document nobody else manages). Pause is `enabled: false`
+in the document. An edit keeps the name, which the schedule's runs and its
+conversation on each seat are kept under, and says so. **Run now** is the
+act `run_schedule`, held for a paused schedule, one nobody runs, and a reader
+who does not lead every seat it wakes; its toast names the seats it reached.
 
 Cron ORs the day-of-month and day-of-week fields when **both** are restricted
 — `0 0 1 * 1` fires on the first of the month *and* on every Monday — and both
