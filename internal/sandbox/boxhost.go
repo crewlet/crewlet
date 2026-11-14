@@ -465,12 +465,16 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // collection given up or any ending of it decided ([Coordinator.collectFailed],
 // [Coordinator.endRun]); or the job lost and its round carried on, the turn
 // launching its next job here ([Coordinator.Launch]) or its end decided; and it
-// goes when the seat is let go ([Coordinator.ReleaseSeat]). A FAILED ATTEMPT IS
-// NO SETTLE, and keeps it: a hand-back that has the job collected again, and a
-// loss recorded with the host ([Coordinator.loseWithHost]) whose carry or
-// resume then fails, whose next collection finds the bound passed at once and
-// whose completion is renewed meanwhile (renew.go), since the host's waiter
-// still announces nothing. Dropped at the recorded loss, a carry that failed
+// goes when the seat is let go ([Coordinator.ReleaseSeat]). It goes too at any
+// read its host answers with its store answering, whatever the read came to,
+// the box's own failure to be read included ([Coordinator.noteHostStore]): the
+// silence it times is over, and that host's waiter announces the job again
+// from there. A FAILED ATTEMPT IS OTHERWISE NO SETTLE, and keeps it: a
+// hand-back that has the job collected again, and a loss recorded with the
+// host ([Coordinator.loseWithHost]) whose carry or resume then fails, whose
+// next collection finds the bound passed at once and whose completion is
+// renewed meanwhile (renew.go), since the host's waiter still announces
+// nothing. Dropped at the recorded loss, a carry that failed
 // for longer than one delivery's budget left the run with nothing to drive it;
 // and kept until the seat was let go, a clock outlived every run that ended,
 // or went on to its next job, with no remote collection after it: a stop's, a

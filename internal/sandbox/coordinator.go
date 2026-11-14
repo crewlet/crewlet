@@ -2145,7 +2145,8 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// not answer is this node's to make again ([Coordinator.unclaimAt]),
 		// after which only that host's waiter or this delivery asks again.
 		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil || !clocked {
-			//nolint:nilerr // As below: the run has been ended and announced.
+			//nolint:nilerr // Ended and announced where the hand-back was refused, as below; acknowledged
+			// otherwise, no clock running on that host's store.
 			return nil
 		}
 		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)

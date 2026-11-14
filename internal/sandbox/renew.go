@@ -39,8 +39,8 @@ import (
 // unless the run settled, which drops the clock ([hostUnsettled]): every other
 // answer hands it back, marked [ErrUnannounced], and renews it, WHATEVER ITS
 // KIND ([Coordinator.renewing]). The host's own answer that its store did not
-// answer; a claim this node's own store does not answer, or refuses while a
-// release this node owes is out ([errReleaseOwed]); a host that does not
+// answer; a claim this node's own store does not answer, or one this node
+// refuses while a release it owes is out ([errReleaseOwed]); a host that does not
 // answer the read at all ([ErrBoxHostSilent]), which is acknowledged only where
 // no clock runs; a record of the job's loss this node's store did not take
 // ([Coordinator.loseWithHost]), or a carry of its round that fails after it;
