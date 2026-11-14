@@ -444,10 +444,16 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // and its row goes red; declare every bucket large, and the leases' does.
 func TestARunsValueIsReadGivenTheArrivalOfAReplyAtItsBound(t *testing.T) {
 	t.Parallel()
-	message := coord.MaxValueBytes + kvHeaderBytes
+	// THE FIGURES STATED, not derived again: a value at its bound with the most
+	// header a write leaves on it, base64-encoded in its reply beside the
+	// reply's envelope, is a reply of exactly eight mebibytes — eight seconds
+	// handled at a second a mebibyte, and 240 crossing at thirty.
+	if reply := jsapi.ReplyBytes(coord.MaxValueBytes + kvHeaderBytes); reply != 8<<20 {
+		t.Fatalf("the reply to a read of a run's value at its bound is %d bytes, want eight mebibytes", reply)
+	}
 	for reach, want := range map[Reach]time.Duration{
-		InProcess:  jsprovision.ReadTerm + jsapi.Handling(message),
-		AcrossLink: jsprovision.ReadTerm + jsapi.Handling(message) + jsapi.Crossing(message, objstore.MiBPace),
+		InProcess:  jsprovision.ReadTerm + 8*time.Second,
+		AcrossLink: jsprovision.ReadTerm + 8*time.Second + 240*time.Second,
 	} {
 		if got := runsReadTerm(t, reach); got != want {
 			t.Errorf("a read of a run's value %s is given a term of %v, want %v", reach, got, want)
