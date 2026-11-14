@@ -67,7 +67,7 @@
 # where compiling git took 812 s against 87 s cross-compiled on four vCPUs —
 # and the cross-compiled stage runs beside the runtime stage's emulated
 # apt-get, which the arm64 image pays anyway (RELEASING.md has the minutes).
-FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS git
+FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS git
 ARG TARGETARCH
 # The toolchain for the target — gcc where the target is this platform,
 # Debian's cross toolchain where it is not — and the target architecture's
@@ -92,7 +92,7 @@ RUN set -eu; \
 COPY scripts/git-pin.env scripts/git.sh /src/scripts/
 RUN GIT_PIN_TARGET_ARCH="$TARGETARCH" GIT_PIN_PREFIX=/usr/local DESTDIR=/out /src/scripts/git.sh node
 
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than
