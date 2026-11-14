@@ -2093,15 +2093,32 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 // stops at the loop, and the kept records hang under it, off the walk from
 // the leaf.
 //
+// A RECORD THE RELINK DELETES IS IN NO LATER STEP, whatever it names or
+// shares with a record it kept, as every step after 2.1.322's iWo and
+// 2.1.310's ypo reads the map they deleted it from: an attachment it deletes
+// under the last kept record is no tail of the leaf, and makes that record
+// no parent; a reply it deletes is no member of the leaf set though nothing
+// names it; an attachment whose parent it deleted takes the fallback past
+// that parent, to the summary 400 ms before it, and never to the deleted reply
+// stamped later still; and a reply it deletes that shares a kept reply's id,
+// or a result it deletes of a kept reply's call, is not recovered beside it.
+//
 // Mutation: hang none of the anchor's other children, and the kept records lie
 // on no walk; chain none of the kept records, and the walk stops at the head
 // the trim left; delete the boundary too, and the relink chains the summary
 // under itself; hang no user record whose parent was deleted, and the walk
 // takes its fallback there; hang an attachment too, and it brings the kept
 // records onto the walk; delete nothing, and what lies before the boundary
-// reads as off the conversation; or walk up from the anchor past a record it
-// met, and that walk never ends where the anchor's ancestry loops: End, which
-// counts the walk's steps, gives up on the thread.
+// reads as off the conversation; index a deleted record by its parent or its
+// reply, and the deleted attachment is a tail; count a deleted record as
+// naming its parent, and the last kept reply is no terminal, so the leaf set
+// is empty and the summary leads; walk up from a deleted record as from a
+// terminal, and the deleted reply joins the set, which the last row, the
+// summary, then narrows to itself; read a deleted parent as a root, and the
+// attachment past it takes no fallback; take a deleted record among the
+// fallback's candidates, and the walk takes the deleted reply; or walk up from
+// the anchor past a record it met, and that walk never ends where the anchor's
+// ancestry loops: End, which counts the walk's steps, gives up on the thread.
 func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	t.Parallel()
 	turn := []string{rcReply(4, 5, "msg_a", 3000, rcSaid("a")), rcPrompt(5, 6, 4000)}
@@ -2112,6 +2129,9 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	head := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcPrompt(2, 3, 2000),
 		rcReply(3, 4, "msg_k", 3000, rcSaid("k")), rcBoundary(5, 4000, rcKeeping(6, 3, 4)), rcSummary(5, 6, 4100)}
 	kept := []int{3, 4, 1, 2, 5, 6}
+	// latest is head with the deleted reply (2) stamped after the summary.
+	latest := slices.Clone(head)
+	latest[1] = rcReply(1, 2, "msg_a", 4400, rcSaid("a"))
 	t9 := []int{8, 9, 10, 11, 5, 6, 7, 12, 13, 15}
 	// s1 and s2 are probe S's runs' walks; their Stop hook's pairs after the
 	// last reply follow them, its tails.
@@ -2160,6 +2180,28 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 			rcAttach(4, 5, 2500, rcNote), rcReply(5, 6, "msg_x", 3000, rcCalls("x1")), rcResults(6, 7, 4000, "x1"),
 			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))),
 			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7, 8}), []int{3, 4, 1, 2, 5, 6, 7, 8}, 8},
+		"a deleted attachment under the last kept record, no tail of the leaf": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcPrompt(2, 3, 2000), rcReply(3, 4, "msg_k", 3000, rcSaid("k")),
+			rcAttach(4, 5, 3500, rcNote), rcBoundary(6, 4000, rcKeeping(7, 3, 4)), rcSummary(6, 7, 4100)},
+			rcHanding(whyChain, []int{6, 7, 3, 4}, rcAll(no(whyRelinkDeleted), 1, 2, 5)), []int{6, 7, 3, 4}, 4},
+		"an attachment whose parent the relink deleted, the fallback past it": {append(slices.Clone(head),
+			rcAttach(2, 7, 4500, rcNote), rcReply(7, 8, "msg_b", 5000, rcSaid("b"))),
+			rcHanding(whyChain, []int{5, 6, 7, 8}, rcAll(no(whyRelinkDeleted), 1, 2),
+				rcAll(no(whyOffConversation), 3, 4)), []int{5, 6, 7, 8}, 8},
+		"the fallback past a deleted parent, the deleted reply the latest": {append(latest,
+			rcAttach(2, 7, 4500, rcNote), rcReply(7, 8, "msg_b", 5000, rcSaid("b"))),
+			rcHanding(whyChain, []int{5, 6, 7, 8}, rcAll(no(whyRelinkDeleted), 1, 2),
+				rcAll(no(whyOffConversation), 3, 4)), []int{5, 6, 7, 8}, 8},
+		"a deleted reply of a kept reply's id, not recovered": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_x", 1000, rcSaid("abandoned")), rcReply(1, 3, "msg_x", 1100, rcSaid("kept")),
+			rcBoundary(4, 2000, rcKeeping(5, 1, 3)), rcSummary(4, 5, 2100), rcPrompt(5, 6, 3000),
+			rcReply(6, 7, "msg_b", 4000, rcSaid("b"))},
+			rcHanding(whyChain, []int{4, 5, 1, 3, 6, 7}, rcAll(no(whyRelinkDeleted), 2)), []int{4, 5, 1, 3, 6, 7}, 7},
+		"a deleted result of a kept reply's call, not recovered": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_x", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+			rcBoundary(4, 2000, rcKeeping(5, 1, 2)), rcSummary(4, 5, 2100), rcPrompt(5, 6, 3000),
+			rcReply(6, 7, "msg_b", 4000, rcSaid("b"))},
+			rcHanding(whyChain, []int{4, 5, 1, 2, 6, 7}, rcAll(no(whyRelinkDeleted), 3)), []int{4, 5, 1, 2, 6, 7}, 7},
 		"a boundary keeping records the thread does not hold": {[]string{rcBoundary(1, 0, rcKeeping(3, 98, 99)),
 			rcSummary(1, 2, 100), rcReply(2, 3, "msg_x", 200, rcCalls("x1")), rcResults(3, 4, 300, "x1"),
 			rcReply(4, 5, "msg_after", 400, rcSaid("after"))},
@@ -2318,8 +2360,10 @@ func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
 // S3, B3). Beside them, a checkpoint in the set that the last row descends
 // through the batch of, from which the resume does not start; a terminal
 // attachment under a record a turn names, which puts that record in no set; a
-// checkpoint a turn names, outside a set of two; and a set of two whose last
-// row's walk finds no turn record.
+// checkpoint a turn names, outside a set of two; a set of two whose last
+// row's walk finds no turn record; and a prompt only a record the relink
+// deleted names as its parent, a terminal for all that, which leads though the
+// summary over it is stamped later.
 //
 // Mutation: take a system record for a turn record, and the critic's F1 walks
 // from the last row; take the checkpoint whether or not it is in the set, and
@@ -2330,7 +2374,10 @@ func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
 // the set holds the thread's roots; take the set's member last in the file,
 // or the later on a tie, and the set of two walks from the other; or fall
 // back to the newest record of all where the single path finds no turn
-// record, and the set of two of one time walks from its last row.
+// record, and the set of two of one time walks from its last row; or count a
+// record the relink deleted as naming its parent, and the prompt only a
+// deleted attachment names is no terminal, so the set is empty and the
+// summary, the newest record, leads.
 func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 	t.Parallel()
 	keeping := rcKeeping(4, 1, 2)
@@ -2430,6 +2477,11 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 			rcReply(1, 2, "msg_a", 9000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
 			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
 			rcHanding(whyChain, []int{1, 2}, off(3, 4, 5, 6)), []int{1, 2}, 2},
+		"a terminal only a record the relink deleted names": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcPrompt(2, 3, 2000), rcReply(3, 4, "msg_k", 3000, rcSaid("k")),
+			rcAttach(8, 5, 3500, rcNote), rcBoundary(6, 4000, rcKeeping(7, 3, 4)), rcSummary(6, 7, 4600),
+			rcPrompt(7, 8, 4500)},
+			rcHanding(whyChain, []int{6, 7, 3, 4, 8}, rcAll(no(whyRelinkDeleted), 1, 2, 5)), []int{6, 7, 3, 4, 8}, 8},
 		"a set of two of one time, its first member": {[]string{rcPrompt(0, 1, 0),
 			rcReply(1, 2, "msg_a", 2000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
 			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
@@ -2442,14 +2494,17 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 // AN EMPTY LEAF SET FALLS BACK TO THE NEWEST RECORD: where no walk up from a
 // record none names finds a user or assistant record that none names, the
 // resume walks from the record of the latest time of all, of any kind, the
-// first in the file on a tie, as 2.1.322's Ozt and 2.1.310's p0 take it; and
+// first in the file on a tie, as 2.1.322's Ozt and 2.1.310's p0 take it, of
+// the records the relink left, never one it deleted though stamped later; and
 // where the set holds records of no time at all, it finds no conversation and
 // hands nothing, falling back to none.
 //
 // Mutation: take the later on a tie, and the second attachment leads; fall back
 // to user and assistant records alone, and a thread of none hands nothing,
 // and one whose turns a loop holds walks from them; or fall back wherever the
-// set's members have no time, and a set of untimed records hands the newest.
+// set's members have no time, and a set of untimed records hands the newest;
+// or take a record the relink deleted among them, and the prompt it deleted,
+// the latest of all, leads.
 func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 	t.Parallel()
 	system := rcSystem(0, 1, 0, "informational", "")
@@ -2468,6 +2523,10 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 			rcSystem(0, 3, 2000, "informational", ""), rcAttach(3, 4, 3000, rcNote)},
 			rcHanding(whyChain, []int{3, 4}, map[int]rcAnswer{1: no(whyOffConversation), 2: no(whyOffConversation)}),
 			[]int{3, 4}, 4},
+		"the newest record the relink left, not the latest it deleted": {[]string{rcPrompt(0, 1, 9000),
+			rcBoundary(2, 1000, rcKeeping(3, 1)), rcSummary(2, 3, 1100), rcBoundary(4, 2000, `{"trigger":"manual"}`),
+			rcAttach(4, 5, 3000, rcNote)},
+			rcHanding(whyChain, []int{4, 5}, rcAll(no(whyRelinkDeleted), 1, 2, 3)), []int{4, 5}, 5},
 		"a set of untimed records: no conversation": {[]string{untimed(rcPrompt(0, 1, 0), 0),
 			untimed(rcReply(1, 2, "msg_a", 1000, rcSaid("a")), 1000), rcSystem(0, 3, 2000, "informational", ""),
 			rcAttach(3, 4, 3000, rcNote)},
@@ -2486,7 +2545,8 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 // sidechain's, or of another agent, neither leads nor makes the record it
 // names a parent; and a thread of none, or none of a time, hands nothing. It
 // walks the whole file as the main thread's resume does, as its own relink
-// left it, by parents written after their records and by the fallback past a
+// left it (a record it deleted no own leaf, and naming no own record as its
+// parent), by parents written after their records and by the fallback past a
 // record a torn write left, recovers beside its replies a result off the walk
 // as well, and hands on every record of the subagent's agentId that the walk,
 // the recovery or the tails reach, a sidechain's or not, and no other's. No
@@ -2505,7 +2565,10 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 // subagent's, and a thread of none leads, and another agent's records are
 // handed; pick the leaf as the main thread's resume does, or file no own
 // leaves, and the answers and own leaves part from the load's; skip the
-// relink, and the turn it deletes is handed; filter on isSidechain as well as
+// relink, and the turn it deletes is handed; take a record the relink deleted
+// for an own leaf, and the own leaves part from the load's; count one as
+// naming its parent, and the prompt only a deleted attachment names is no own
+// leaf, so the thread hands nothing; filter on isSidechain as well as
 // agentId, and the record of the subagent's id that is no sidechain's is not
 // handed; hand another agent's records, or another agent's tails, and they
 // are not answered not handed; run the retraction filter, and
@@ -2603,6 +2666,12 @@ func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 			own(rcMeta(4, 6, 3000)), own(rcReply(6, 7, "msg_c", 3100, rcSaid("done")))},
 			rcHanding(whyChain, []int{1, 2, 3, 4, 6, 7}, rcAll(no(whyOffConversation), 5)),
 			[]int{1, 2, 3, 4, 6, 7}, 7}, []int{5, 7}},
+		"an own leaf only a record the relink deleted names": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
+			own(rcReply(1, 2, "msg_a", 1000, rcSaid("a"))), own(rcPrompt(2, 3, 2000)),
+			own(rcReply(3, 4, "msg_k", 3000, rcSaid("k"))), own(rcAttach(8, 5, 3500, rcNote)),
+			own(rcBoundary(6, 4000, rcKeeping(7, 3, 4))), own(rcSummary(6, 7, 4100)), own(rcPrompt(7, 8, 4200))},
+			rcHanding(whyChain, []int{6, 7, 3, 4, 8}, rcAll(no(whyRelinkDeleted), 1, 2, 5)),
+			[]int{6, 7, 3, 4, 8}, 8}, []int{8}},
 		"V3: two calls at once, the first's result an own leaf recovered beside its reply": {rcCase{[]string{
 			own(rcPrompt(0, 1, 0)), own(rcReply(1, 2, "msg_x", 1000, rcCalls("x1"))),
 			own(rcReply(2, 3, "msg_x", 1001, rcCalls("x2"))), own(rcResults(2, 4, 1100, "x1")),
