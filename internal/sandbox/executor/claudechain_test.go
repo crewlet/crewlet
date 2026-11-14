@@ -142,6 +142,95 @@ func rcCheckpoint(leaf int) string {
 		ctSession + `"}`
 }
 
+// rcStop is record n, the summary a Stop hook's firing ends with.
+func rcStop(parent, n, ms int) string {
+	return rcSystem(parent, n, ms, hookStopSummary, `"hookCount":1,`)
+}
+
+// rcBoundary is record n, a compaction's boundary of compactMetadata
+// metadata, rooting a chain of its own as both releases write one.
+func rcBoundary(n, ms int, metadata string) string {
+	return rcSystem(0, n, ms, subtypeCompactBoundary, `"compactMetadata":`+metadata+`,`)
+}
+
+// rcListing is a compaction's metadata naming the records it kept, kept, by
+// its list alone, hanging from anchor; rcSegment names them by its segment
+// alone, from head to tail; and rcKeeping by both alike, as both releases
+// write it.
+func rcListing(anchor int, kept ...int) string {
+	return `{"trigger":"manual","preservedMessages":{"anchorUuid":"` + rcUUID(anchor) + `","uuids":[` +
+		rcQuoted(kept...) + `]}}`
+}
+
+// rcSegment is a compaction's metadata naming its kept records by a segment
+// ([rcListing]).
+func rcSegment(anchor, head, tail int) string {
+	return `{"trigger":"manual","preservedSegment":{"headUuid":"` + rcUUID(head) + `","anchorUuid":"` +
+		rcUUID(anchor) + `","tailUuid":"` + rcUUID(tail) + `"}}`
+}
+
+// rcKeeping is a compaction's metadata naming its kept records by a list and
+// a segment alike ([rcListing]).
+func rcKeeping(anchor int, kept ...int) string {
+	segment := rcSegment(anchor, kept[0], kept[len(kept)-1])
+	return segment[:len(segment)-1] + `,"preservedMessages":{"anchorUuid":"` + rcUUID(anchor) + `","uuids":[` +
+		rcQuoted(kept...) + `]}}`
+}
+
+// rcSummary is record n, the user record a compaction hands its summary on in.
+func rcSummary(parent, n, ms int) string {
+	return `{"parentUuid":` + rcParent(parent) + `,"isSidechain":false,"type":"user","message":{"role":"user",` +
+		`"content":"the summary"},"isCompactSummary":true,` + rcTail(n, ms)
+}
+
+// rcCompacted is a compacted thread as its resume reads it: a prompt (1) and
+// a reply (2), the compaction's boundary (3) of metadata, which may name them
+// as what it kept, the summary (4) under the boundary, and lines.
+func rcCompacted(metadata string, lines ...string) []string {
+	return append([]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_kept", 1000, rcSaid("kept")),
+		rcBoundary(3, 2000, metadata), rcSummary(3, 4, 2100)}, lines...)
+}
+
+// rcCase is one thread a case reads, and what it expects of it: every
+// record's answer by its line, the one order every variant hands, and the
+// line of the leaf every variant walks from, 0 for none.
+type rcCase struct {
+	lines []string
+	want  map[int]rcAnswer
+	order []int
+	leaf  int
+}
+
+// rcAll is every line of lines answering answer.
+func rcAll(answer rcAnswer, lines ...int) map[int]rcAnswer {
+	all := make(map[int]rcAnswer, len(lines))
+	for _, line := range lines {
+		all[line] = answer
+	}
+	return all
+}
+
+// rcHanding is want: every line of lines handed for why, and every line of
+// each of more as it states, the later's over the earlier's where two state
+// one.
+func rcHanding(why chainWhy, lines []int, more ...map[int]rcAnswer) map[int]rcAnswer {
+	want := rcAll(yes(why), lines...)
+	for _, answers := range more {
+		for line, answer := range answers {
+			want[line] = answer
+		}
+	}
+	return want
+}
+
+// check reads tc's thread and holds it to what tc expects.
+func (tc rcCase) check(t *testing.T, name string) {
+	t.Helper()
+	read := rcChain(t, "", tc.lines...)
+	read.expect(t, name, tc.want, rcOrder{tc.order, allVariants})
+	read.expectLeaf(t, name, tc.leaf)
+}
+
 // rcRead is a thread read into a chain: the chain, and each record's handle
 // by its line.
 type rcRead struct {
@@ -1014,13 +1103,9 @@ func TestAThreadTheModelCannotPlaceIsCannotTell(t *testing.T) {
 		"a content replacement spreading too many": {"", append(slices.Clone(rcPlain),
 			`{"type":"content-replacement","sessionId":"`+ctSession+`","replacements":[{}`+
 				strings.Repeat(",{}", threadChainMaxSpread)+`]}`), whySpread},
-		"a compaction's boundary listing what it kept": {"", append(slices.Clone(rcPlain),
-			boundary(`{"preservedMessages":{"anchorUuid":"`+rcUUID(4)+`","uuids":[`+rcQuoted(2)+`]}}`),
-			rcPrompt(3, 4, 3000)), whyRelink},
-		"a compaction's boundary listing none, of no anchor": {"", append(slices.Clone(rcPlain),
-			boundary(`{"preservedMessages":{"anchorUuid":"","uuids":[]}}`), rcPrompt(3, 4, 3000)), whyRelink},
-		"a last row of no turn above it": {"", []string{rcSystem(0, 1, 0, "informational", ""),
-			rcAttach(1, 2, 1000, rcNote)}, whyLeafSet},
+		"a relink under an anchor naming no record": {"", append(slices.Clone(rcPlain),
+			boundary(`{"preservedMessages":{"anchorUuid":"`+rcUUID(9)+`","uuids":[`+rcQuoted(2)+`]}}`),
+			rcPrompt(3, 4, 3000)), whyRelinkShape},
 		"a subagent's thread": {ctAgent, []string{ctReplace(t, rcPlain[0], `"isSidechain":false`,
 			`"isSidechain":true`)}, whySubagentMode},
 		"a subagent's fork reference": {ctAgent, []string{`{"type":"fork-context-ref","agentId":"` + ctAgent + `"}`},
@@ -1168,17 +1253,26 @@ func TestALineThatIsNoRecordIsSkippedOnlyWhereTheLoadSkipsIt(t *testing.T) {
 }
 
 // A THREAD PAST THE CHAIN'S BOUND IS CANNOT TELL: the chain files
-// threadChainMaxRecords records and retraction prefixes, and
-// threadChainMaxCalls call ids; a thread at each bound is read, and one past
-// it, by a prefix, a call or a record more, is whyBound; and past the bound
-// See still decodes and hands back each user and assistant message, with
-// pastChainBound, which answers whyBound.
+// threadChainMaxRecords records, retraction prefixes and uuids the newest
+// boundary that names what it kept lists, and threadChainMaxCalls call ids;
+// a thread at each bound is read, and one past it, by a prefix, a listed uuid,
+// a call or a record more, is whyBound; a boundary's list counts in place of
+// the one before it, never beside it, and the boundary itself with it, so a
+// boundary at the bound in place of a longer list is read, and one past it
+// with no list to replace, whether it names what it kept or not, is whyBound;
+// and past the bound See still decodes and hands back each user and assistant
+// message, with pastChainBound, which answers whyBound.
 //
 // Mutation: take a bound's own count for past it, and the thread at it is
-// cannot tell; count no prefixes or no calls, or no record past a bound its
-// prefixes filled, and the thread past one reads; or hand back no message
-// past the bound, and the reader that counts what lies past it counts
-// nothing.
+// cannot tell; count no prefixes, no listed uuids or no calls, or no record
+// past a bound its prefixes filled, and the thread past one reads; hold a list
+// to no room, or count only its entries that are uuids, and the list of none
+// past the bound by itself reads; count an earlier boundary's list beside the
+// later one's, and the two lists of half the bound pass it; hold a boundary's
+// own room before the list it replaces is released, and the boundary at the
+// bound passes it; let a boundary pass the bound, and the boundary past it
+// reads; or hand back no message past the bound, and the reader that counts
+// what lies past it counts nothing.
 func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	t.Parallel()
 	prompt := rcPlain[0]
@@ -1191,6 +1285,35 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 		rcOrder{[]int{1, 2}, allVariants})
 	rcChain(t, "", prompt, retracting(threadChainMaxRecords-1)).expectCannotTell(t,
 		"records and prefixes past the bound", whyBound)
+
+	// listing is boundary n, whose list names entry, a uuid no record carries
+	// or none at all, entries times: the relink does nothing by it, and each
+	// entry counts all the same.
+	absent := `"` + rcUUID(99) + `"`
+	listing := func(n int, entry string, entries int) string {
+		return rcBoundary(n, 1000, `{"preservedMessages":{"anchorUuid":"`+rcUUID(1)+`","uuids":[`+entry+
+			strings.Repeat(","+entry, entries-1)+`]}}`)
+	}
+	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords-3), rcPrompt(2, 3, 2000)).expect(t,
+		"records and listed uuids at the bound", map[int]rcAnswer{1: no(whyOffConversation), 2: yes(whyChain),
+			3: yes(whyChain)}, rcOrder{[]int{2, 3}, allVariants})
+	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords-2), rcPrompt(2, 3, 2000)).expectCannotTell(t,
+		"records and listed uuids past the bound", whyBound)
+	rcChain(t, "", prompt, listing(2, `"x"`, threadChainMaxRecords-1)).expectCannotTell(t,
+		"a list of no uuids past the bound by itself", whyBound)
+	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords/2), listing(3, absent, threadChainMaxRecords/2),
+		rcPrompt(3, 4, 2000)).expect(t, "a later boundary's list counted in place of the earlier's",
+		map[int]rcAnswer{1: no(whyOffConversation), 2: cannot(whyTail), 3: yes(whyChain), 4: yes(whyChain)},
+		rcOrder{[]int{3, 4}, allVariants})
+	none := `{"preservedMessages":{"anchorUuid":"","uuids":[]}}`
+	rcChain(t, "", prompt, listing(2, absent, threadChainMaxRecords-2), rcBoundary(3, 2000, none),
+		rcPrompt(3, 4, 3000)).expect(t, "a boundary at the bound listing none in place of a longer list",
+		map[int]rcAnswer{1: no(whyRelinkDeleted), 2: no(whyRelinkDeleted), 3: yes(whyChain), 4: yes(whyChain)},
+		rcOrder{[]int{3, 4}, allVariants})
+	for name, metadata := range map[string]string{"listing none": none, "naming nothing": `{"trigger":"manual"}`} {
+		rcChain(t, "", prompt, retracting(threadChainMaxRecords-2), rcBoundary(3, 2000, metadata)).expectCannotTell(
+			t, "a boundary "+name+" past the bound", whyBound)
+	}
 
 	calling := func(calls int) string {
 		return rcReply(1, 2, "msg_a", 1000, `[{"type":"tool_use","id":"c","name":"B"}`+
@@ -1271,6 +1394,388 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 		if all != allVariants || !slices.EqualFunc(got, tc.orders, slices.Equal) {
 			t.Errorf("%s: the variants %08b hand %v; want all eight to hand %v", name, all, got, tc.orders)
 		}
+	}
+}
+
+// A RELINK HANDS THE KEPT RECORDS UNDER ITS ANCHOR: where the last compaction's
+// boundary names the records it kept, by a list, a segment or both alike, the
+// resume chains them under the boundary's anchor, the compaction's summary as
+// both releases write it or the boundary itself as a partial compaction does,
+// hangs the anchor's other children from the last of them, and deletes every
+// record written before the boundary that it did not keep (whyRelinkDeleted).
+// So it hands probe S's two runs and probe T's T9media: a head a trim left
+// naming no record until the relink hangs it, and whole turns deleted. Where it
+// deleted a user record's parent, it hangs that record from the last kept one
+// too; an attachment keeps that parent, which then names none, so the walk
+// takes its fallback there. Where the anchor holds a call, or lies between a
+// call and its result, the relink hangs the result from the kept records,
+// which hold no call of its, so tengu_foamy_spring may hang it under its
+// call's reply: the thread is cannot tell (whyResultByCall), the critic's F1a
+// to F1f. Where the anchor is the summary, under it an attachment as T9media
+// writes it or not, or the boundary keeps records the thread does not hold,
+// the call and its result stay together.
+//
+// Mutation: hang none of the anchor's other children, and the kept records lie
+// on no walk; chain none of the kept records, and the walk stops at the head
+// the trim left; delete the boundary too, and the relink chains the summary
+// under itself; hang no user record whose parent was deleted, and the walk
+// takes its fallback there; hang an attachment too, and it brings the kept
+// records onto the walk; or delete nothing, and what lies before the boundary
+// reads as off the conversation.
+func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
+	t.Parallel()
+	turn := []string{rcReply(4, 5, "msg_a", 3000, rcSaid("a")), rcPrompt(5, 6, 4000)}
+	call := []string{rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+		rcReply(6, 7, "msg_after", 5000, rcSaid("after"))}
+	// head is a thread whose compaction kept a prompt (3) and a reply (4), and
+	// deleted the turn before them (1, 2).
+	head := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcPrompt(2, 3, 2000),
+		rcReply(3, 4, "msg_k", 3000, rcSaid("k")), rcBoundary(5, 4000, rcKeeping(6, 3, 4)), rcSummary(5, 6, 4100)}
+	kept := []int{3, 4, 1, 2, 5, 6}
+	t9 := []int{8, 9, 10, 11, 5, 6, 7, 12, 13, 15}
+	s1 := []int{11, 12, 7, 8, 9, 13, 14, 15, 17, 18, 19}
+	s2 := []int{4, 5, 1, 2, 3, 6, 7, 8, 10, 11, 12}
+	for name, tc := range map[string]rcCase{
+		"a list and a segment alike": {rcCompacted(rcKeeping(4, 1, 2), turn...), rcHanding(whyChain, kept), kept, 6},
+		"a list alone":               {rcCompacted(rcListing(4, 1, 2), turn...), rcHanding(whyChain, kept), kept, 6},
+		"a segment alone":            {rcCompacted(rcSegment(4, 1, 2), turn...), rcHanding(whyChain, kept), kept, 6},
+		"the boundary its anchor, as a partial compaction writes it": {rcCompacted(rcKeeping(3, 1, 2),
+			rcReply(4, 5, "msg_a", 3000, rcSaid("a"))), rcHanding(whyChain, []int{3, 1, 2, 4, 5}),
+			[]int{3, 1, 2, 4, 5}, 5},
+		"probe T's T9media": {[]string{rcPrompt(0, 1, 0), rcAttach(1, 2, 100, rcNote),
+			rcReply(2, 3, "msg_a", 200, rcCalls("x1")), rcResults(3, 4, 300, "x1"),
+			rcReply(4, 5, "msg_b", 400, rcSaid("b")), rcPrompt(5, 6, 500), rcAttach(6, 7, 600, rcNote),
+			rcBoundary(8, 700, rcKeeping(11, 5, 6, 7)), rcAttach(8, 9, 800, rcNote), rcAttach(9, 10, 900, rcNote),
+			rcSummary(10, 11, 1000), rcAttach(11, 12, 1100, rcNote), rcAttach(12, 13, 1200, rcNote), rcCheckpoint(15),
+			rcReply(13, 15, "msg_c", 1300, rcSaid("c")), rcCheckpoint(15)},
+			rcHanding(whyChain, t9, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4)), t9, 15},
+		"probe S's s1": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 100, rcSaid("a")),
+			rcAttach(2, 3, 200, rcNote), rcStop(3, 4, 300), rcPrompt(4, 5, 400), rcAttach(5, 6, 500, rcNote),
+			rcReply(6, 7, "msg_b", 600, rcSaid("b")), rcAttach(7, 8, 700, rcNote), rcStop(8, 9, 800), rcCheckpoint(9),
+			rcBoundary(11, 900, rcKeeping(12, 7, 8, 9)), rcSummary(11, 12, 1000), rcMeta(12, 13, 1100),
+			rcPrompt(13, 14, 1200), rcAttach(14, 15, 1300, rcNote), rcCheckpoint(15), rcPrompt(15, 17, 1400),
+			rcAttach(17, 18, 1500, rcNote), rcReply(18, 19, "msg_c", 1600, rcSaid("c")), rcAttach(19, 20, 1700, rcNote),
+			rcStop(20, 21, 1800), rcCheckpoint(21)},
+			rcHanding(whyChain, s1, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4, 5, 6), rcAll(cannot(whyTail), 20, 21)),
+			s1, 19},
+		"probe S's s2, whose head names no record": {[]string{rcReply(rcNowhere, 1, "msg_a", 0, rcSaid("a")),
+			rcAttach(1, 2, 100, rcNote), rcStop(2, 3, 200), rcBoundary(4, 300, rcKeeping(5, 1, 2, 3)),
+			rcSummary(4, 5, 400), rcMeta(5, 6, 500), rcPrompt(6, 7, 600), rcAttach(7, 8, 700, rcNote), rcCheckpoint(8),
+			rcPrompt(8, 10, 800), rcAttach(10, 11, 900, rcNote), rcReply(11, 12, "msg_b", 1000, rcSaid("b")),
+			rcAttach(12, 13, 1100, rcNote), rcStop(13, 14, 1200), rcCheckpoint(14)},
+			rcHanding(whyChain, s2, rcAll(cannot(whyTail), 13, 14)), s2, 12},
+		"a user record whose parent the relink deleted": {append(slices.Clone(head), rcPrompt(2, 7, 5000),
+			rcReply(7, 8, "msg_b", 6000, rcSaid("b"))),
+			rcHanding(whyChain, []int{5, 6, 3, 4, 7, 8}, rcAll(no(whyRelinkDeleted), 1, 2)), []int{5, 6, 3, 4, 7, 8},
+			8},
+		"an attachment whose parent the relink deleted": {append(slices.Clone(head), rcAttach(2, 7, 20000, rcNote),
+			rcReply(7, 8, "msg_b", 21000, rcSaid("b"))),
+			rcHanding(whyChain, []int{7, 8}, rcAll(no(whyRelinkDeleted), 1, 2), rcAll(no(whyOffConversation), 3, 4, 6),
+				rcAll(cannot(whyTail), 5)), []int{7, 8}, 8},
+		"the summary the anchor of a call after it": {rcCompacted(rcKeeping(4, 1, 2), call...),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7}), []int{3, 4, 1, 2, 5, 6, 7}, 7},
+		"the summary the anchor, an attachment its other child (F1n)": {rcCompacted(rcKeeping(4, 1, 2),
+			rcAttach(4, 5, 2500, rcNote), rcReply(5, 6, "msg_x", 3000, rcCalls("x1")), rcResults(6, 7, 4000, "x1"),
+			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7, 8}), []int{3, 4, 1, 2, 5, 6, 7, 8}, 8},
+		"a boundary keeping records the thread does not hold": {[]string{rcBoundary(1, 0, rcKeeping(3, 98, 99)),
+			rcSummary(1, 2, 100), rcReply(2, 3, "msg_x", 200, rcCalls("x1")), rcResults(3, 4, 300, "x1"),
+			rcReply(4, 5, "msg_after", 400, rcSaid("after"))},
+			rcHanding(whyChain, []int{1, 2, 3, 4, 5}), []int{1, 2, 3, 4, 5}, 5},
+	} {
+		tc.check(t, name)
+	}
+
+	for name, lines := range map[string][]string{
+		"F1a: the anchor makes the call, kept by a list and a segment": rcCompacted(rcKeeping(5, 1, 2), call...),
+		"F1b: the anchor makes the call, kept by a segment":            rcCompacted(rcSegment(5, 1, 2), call...),
+		"F1c: the anchor makes the call and is the checkpoint": rcCompacted(rcKeeping(5, 1, 2),
+			append(slices.Clone(call), rcCheckpoint(5))...),
+		"F1d: the anchor an attachment between the call and its result": rcCompacted(rcKeeping(6, 1, 2),
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcAttach(5, 6, 3500, rcNote), rcResults(6, 7, 4000, "x1"),
+			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))),
+		"F1e: the anchor the first record of two calls at once": rcCompacted(rcKeeping(5, 1, 2),
+			rcReply(4, 5, "msg_p", 3000, rcCalls("x1")), rcReply(5, 6, "msg_p", 3001, rcCalls("y1")),
+			rcResults(5, 7, 4000, "x1"), rcResults(6, 8, 4100, "y1"), rcReply(8, 9, "msg_after", 5000, rcSaid("after"))),
+		"F1f: the anchor makes the call, its result under the reply's other record": rcCompacted(rcKeeping(5, 1, 2),
+			rcReply(4, 5, "msg_p", 3000, rcCalls("x1")), rcReply(5, 6, "msg_p", 3001, rcCalls("y1")),
+			rcResults(6, 7, 4000, "x1"), rcResults(6, 8, 4100, "y1"), rcReply(8, 9, "msg_after", 5000, rcSaid("after"))),
+	} {
+		rcChain(t, "", lines...).expectCannotTell(t, name, whyResultByCall)
+	}
+}
+
+// A RELINK THAT DOES NOT RESOLVE DELETES ONLY WHAT ITS BOUNDARY CUTS: where the
+// boundary that names what it kept is not the last, or lists none, the resume
+// keeps nothing and still deletes every record written before the last
+// boundary, then walks the rest by its single path, a list of none read before
+// a segment beside it; and where a uuid its list names no record of the
+// thread, a canonical uuid or not, where its segment's walk up from its tail
+// breaks before its head, or where no boundary names what it kept, nothing
+// happens at all, and what lies before the boundary is off the conversation
+// rather than deleted.
+//
+// Mutation: relink by an earlier boundary's list, and the thread reads as one
+// whose anchor the last boundary's deletion takes, cannot tell; delete nothing
+// where that boundary is not the last, and what lies
+// before the last reads as off the conversation; read the segment before a
+// list beside it, and the relink starts the resume from the checkpoint;
+// delete where a listed record is absent, and the records before the boundary
+// read as deleted; read a list of a uuid that is no canonical uuid by its
+// canonical ones alone, or a segment whose walk breaks as what it walked, and
+// the resume relinks.
+func TestARelinkThatDoesNotResolveDeletesOnlyWhatItsBoundaryCuts(t *testing.T) {
+	t.Parallel()
+	turn := rcReply(4, 5, "msg_a", 3000, rcSaid("a"))
+	untouched := rcHanding(whyChain, []int{3, 4, 5}, rcAll(no(whyOffConversation), 1, 2))
+	for name, tc := range map[string]rcCase{
+		"metadata on an earlier boundary alone": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_kept", 1000, rcSaid("kept")), rcBoundary(3, 2000, rcKeeping(4, 1, 2)),
+			rcSummary(3, 4, 2100), rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
+			rcBoundary(6, 4000, `{"trigger":"manual"}`), rcSummary(6, 7, 4100), rcReply(7, 8, "msg_b", 5000,
+				rcSaid("b")), rcCheckpoint(8), rcAttach(8, 10, 6000, rcNote), rcAttach(8, 11, 6100, rcNote),
+			rcPrompt(11, 12, 7000), rcReply(12, 13, "msg_x", 8000, rcCalls("x1")), rcResults(13, 14, 9000, "x1")},
+			rcHanding(whyChain, []int{6, 7, 8, 11, 12, 13, 14}, rcAll(no(whyRelinkDeleted), 1, 2, 3, 4, 5),
+				rcAll(cannot(whyTail), 10)), []int{6, 7, 8, 11, 12, 13, 14}, 14},
+		"a list of none beside a segment": {rcCompacted(ctReplace(t, rcKeeping(4, 1, 2),
+			`"uuids":[`+rcQuoted(1, 2)+`]`, `"uuids":[]`), rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
+			rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote), rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000),
+			rcReply(9, 10, "msg_x", 6000, rcCalls("x1")), rcResults(10, 11, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 5, 8, 9, 10, 11}, rcAll(no(whyRelinkDeleted), 1, 2),
+				rcAll(cannot(whyTail), 7)), []int{3, 4, 5, 8, 9, 10, 11}, 11},
+		"a list of none, of no anchor": {append(slices.Clone(rcPlain),
+			rcBoundary(3, 2000, `{"preservedMessages":{"anchorUuid":"","uuids":[]}}`), rcPrompt(3, 4, 3000)),
+			rcHanding(whyChain, []int{3, 4}, rcAll(no(whyRelinkDeleted), 1, 2)), []int{3, 4}, 4},
+		"a listed uuid no record carries": {rcCompacted(rcListing(4, 1, 98), turn), untouched, []int{3, 4, 5}, 5},
+		"a listed uuid that is no canonical uuid": {rcCompacted(ctReplace(t, rcListing(4, 1, 2),
+			`"`+rcUUID(2)+`"`, `"not-a-uuid"`), turn), untouched, []int{3, 4, 5}, 5},
+		"a segment whose walk breaks before its head": {[]string{rcPrompt(0, 1, 0),
+			rcReply(rcNowhere, 2, "msg_kept", 1000, rcSaid("kept")), rcBoundary(3, 2000, rcSegment(4, 1, 2)),
+			rcSummary(3, 4, 2100), turn}, untouched, []int{3, 4, 5}, 5},
+		"a boundary that names nothing it kept": {rcCompacted(`{"trigger":"manual"}`, turn), untouched,
+			[]int{3, 4, 5}, 5},
+	} {
+		tc.check(t, name)
+	}
+}
+
+// A RELINK THE MODEL CANNOT FOLLOW IS CANNOT TELL, the whole thread: one whose
+// anchor names no record, a canonical uuid or not, or one the relink deletes,
+// which hangs the first kept record under none or under the last of them; one
+// whose anchor is among the kept records or below one of them by parent, the
+// first or the last, or that keeps a record twice, which chains them under
+// themselves; one that keeps its own boundary, whether or not its anchor hangs
+// under it; and a list that holds no uuids at all, a shape both releases'
+// admission drops and the layer refuses (whyPreservedShape).
+//
+// Mutation: drop any one check, and that thread reads as relinked.
+func TestARelinkTheModelCannotFollowIsCannotTell(t *testing.T) {
+	t.Parallel()
+	turn := rcReply(4, 5, "msg_a", 3000, rcSaid("a"))
+	for name, tc := range map[string]struct {
+		lines []string
+		why   chainWhy
+	}{
+		"an anchor naming no record": {rcCompacted(rcKeeping(97, 1, 2), turn), whyRelinkShape},
+		"an anchor of no canonical uuid": {rcCompacted(ctReplace(t, rcListing(4, 1, 2), rcUUID(4),
+			"not-a-uuid"), turn), whyRelinkShape},
+		"an anchor the relink deletes": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+			rcPrompt(2, 3, 2000), rcBoundary(4, 3000, rcKeeping(1, 2, 3)), rcSummary(4, 5, 3100),
+			rcReply(5, 6, "msg_b", 4000, rcSaid("b"))}, whyRelinkShape},
+		"an anchor among the kept records": {rcCompacted(rcListing(5, 1, 5), turn), whyRelinkShape},
+		"a boundary keeping itself":        {rcCompacted(rcListing(4, 1, 3), turn), whyRelinkShape},
+		"a boundary keeping itself, its anchor a root of its own": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcBoundary(3, 2000, rcListing(5, 1, 3)), rcSummary(3, 4, 2100),
+			rcPrompt(0, 5, 3000), rcReply(5, 6, "msg_b", 4000, rcSaid("b"))}, whyRelinkShape},
+		"an anchor below the first kept record": {rcCompacted(rcKeeping(5, 1, 2),
+			rcReply(1, 5, "msg_a", 3000, rcSaid("a"))), whyRelinkShape},
+		"an anchor below the last kept record": {rcCompacted(rcKeeping(5, 1, 2),
+			rcReply(2, 5, "msg_a", 3000, rcSaid("a"))), whyRelinkShape},
+		"a record kept twice": {rcCompacted(rcListing(4, 1, 2, 1), turn), whyRelinkShape},
+		"a list holding no uuids": {rcCompacted(`{"trigger":"manual","preservedMessages":{"anchorUuid":"`+
+			rcUUID(4)+`"}}`, turn), whyPreservedShape},
+	} {
+		rcChain(t, "", tc.lines...).expectCannotTell(t, name, tc.why)
+	}
+}
+
+// THE LEAF SET IS CJT'S ON THE RELINKED PARENTS: where the resume relinked, or
+// its single path finds no user or assistant record, it takes its leaf from
+// the set of the first such records up from each record none names as its
+// parent, through records that are neither, that no user or assistant record
+// names in turn: a set of one is that one; of more, the resume walks from the
+// checkpoint's nearest such record, where the checkpoint is in the set and the
+// last row descends through none of its batches, else from the last row's;
+// and where that walk finds none, from the set's newest member, the first in
+// the file on a tie.
+//
+// Each of the round's relink critics' shapes, read as both releases read them:
+// a lagging checkpoint the resume does not start from, under which a turn
+// hangs off an attachment or a stop hook's summary, the checkpoint the anchor,
+// or a call's result whose token reminder the next call hangs off, alone or
+// under T9media's anchor (I3a, I3d to I3i, R2b, R2c, S1); a checkpoint the
+// resume does start from, which a terminal attachment or summary under it puts
+// in the set (I3b, I3c, the critic's F1 as R2a); a last record a stop hook's
+// summary, a checkpoint the boundary, and a relink by its segment alone (S2,
+// S3, B3). Beside them, a checkpoint in the set that the last row descends
+// through the batch of, from which the resume does not start; a terminal
+// attachment under a record a turn names, which puts that record in no set; a
+// checkpoint a turn names, outside a set of two; and a set of two whose last
+// row's walk finds no turn record.
+//
+// Mutation: take a system record for a turn record, and the critic's F1 walks
+// from the last row; take the checkpoint whether or not it is in the set, and
+// the checkpoint a turn names leads; drop the batch exception, and the batch's
+// last row is cut; read Y1t directly in the set's pick, and I3b walks from the
+// last row; take a member a user or assistant record names, and the record
+// over the terminal attachment leads; walk past the first turn record up, and
+// the set holds the thread's roots; take the set's member last in the file,
+// or the later on a tie, and the set of two walks from the other; or fall
+// back to the newest record of all where the single path finds no turn
+// record, and the set of two of one time walks from its last row.
+func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
+	t.Parallel()
+	keeping := rcKeeping(4, 1, 2)
+	off := func(lines ...int) map[int]rcAnswer { return rcAll(no(whyOffConversation), lines...) }
+	tails := func(lines ...int) map[int]rcAnswer { return rcAll(cannot(whyTail), lines...) }
+	for name, tc := range map[string]rcCase{
+		"I3a: a checkpoint no turn names, a turn under its attachment": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
+			rcPrompt(7, 8, 5000), rcReply(8, 9, "msg_x", 6000, rcCalls("x1")), rcResults(9, 10, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 7, 8, 9, 10}), []int{3, 4, 1, 2, 5, 7, 8, 9, 10}, 10},
+		"I3b: a checkpoint a terminal attachment puts in the set": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 4000, rcNote),
+			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5}, 5},
+		"I3c: a checkpoint a terminal stop hook's summary puts in the set": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcStop(5, 7, 4000),
+			rcAttach(5, 8, 4100, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5}, tails(7, 8), off(9, 10, 11)), []int{3, 4, 1, 2, 5}, 5},
+		"I3d: I3b where the resume relinks nothing": {[]string{rcBoundary(1, 0, rcKeeping(3, 98, 99)),
+			rcSummary(1, 2, 100), rcReply(2, 3, "msg_before", 200, rcSaid("before")), rcCheckpoint(3),
+			rcAttach(3, 5, 300, rcNote), rcAttach(3, 6, 400, rcNote), rcPrompt(6, 7, 500),
+			rcReply(7, 8, "msg_x", 600, rcCalls("x1")), rcResults(8, 9, 700, "x1")},
+			rcHanding(whyChain, []int{1, 2, 3, 6, 7, 8, 9}, tails(5)), []int{1, 2, 3, 6, 7, 8, 9}, 9},
+		"I3e: a call before a checkpoint no turn names": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
+			rcPrompt(9, 10, 7000), rcReply(10, 11, "msg_last", 8000, rcSaid("last"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7, 9, 10, 11}), []int{3, 4, 1, 2, 5, 6, 7, 9, 10, 11}, 11},
+		"I3f: a call before a checkpoint in the set": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"),
+			rcReply(6, 7, "msg_after", 5000, rcSaid("after")), rcCheckpoint(7), rcAttach(7, 9, 6000, rcNote),
+			rcAttach(7, 10, 6100, rcNote), rcPrompt(10, 11, 7000), rcReply(11, 12, "msg_last", 8000, rcSaid("last"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7}, tails(9, 10), off(11, 12)),
+			[]int{3, 4, 1, 2, 5, 6, 7}, 7},
+		"I3g: the anchor the checkpoint": {rcCompacted(keeping, rcReply(4, 5, "msg_before", 3000, rcSaid("before")),
+			rcCheckpoint(4), rcPrompt(5, 7, 4000), rcReply(7, 8, "msg_x", 5000, rcCalls("x1")),
+			rcResults(8, 9, 6000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 7, 8, 9}), []int{3, 4, 1, 2, 5, 7, 8, 9}, 9},
+		"I3h: a call's result the checkpoint, the next call under its reminder": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_y", 3000, rcCalls("y1")), rcResults(5, 6, 4000, "y1"), rcCheckpoint(6),
+			rcAttach(6, 8, 5000, rcNote), rcReply(8, 9, "msg_x", 6000, rcCalls("x1")), rcResults(9, 10, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 8, 9, 10}), []int{3, 4, 1, 2, 5, 6, 8, 9, 10}, 10},
+		"I3i: I3h under T9media's anchor": {rcCompacted(keeping, rcAttach(4, 5, 2500, rcNote),
+			rcReply(5, 6, "msg_y", 3000, rcCalls("y1")), rcResults(6, 7, 4000, "y1"), rcCheckpoint(7),
+			rcAttach(7, 9, 5000, rcNote), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")), rcResults(10, 11, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 7, 9, 10, 11}), []int{3, 4, 1, 2, 5, 6, 7, 9, 10, 11}, 11},
+		"R2a: the critic's F1, a checkpoint a summary and an attachment put in the set": {[]string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcCheckpoint(4),
+			rcStop(4, 6, 3000), rcAttach(4, 7, 3100, rcNote), rcPrompt(7, 8, 4000),
+			rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")},
+			rcHanding(whyChain, []int{2, 3, 1, 4}, tails(6, 7), off(8, 9, 10)), []int{2, 3, 1, 4}, 4},
+		"R2b: a turn right under the checkpoint's summary": {[]string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcStop(4, 5, 3000),
+			rcCheckpoint(5), rcReply(5, 7, "msg_x", 4000, rcCalls("x1")), rcResults(7, 8, 5000, "x1")},
+			rcHanding(whyChain, []int{2, 3, 1, 4, 5, 7, 8}), []int{2, 3, 1, 4, 5, 7, 8}, 8},
+		"R2c: a turn under an attachment under the checkpoint's summary": {[]string{
+			rcReply(rcNowhere, 1, "msg_kept", 0, rcSaid("kept")), rcBoundary(2, 1000, rcKeeping(3, 1)),
+			rcSummary(2, 3, 1100), rcReply(3, 4, "msg_before", 2000, rcSaid("before")), rcStop(4, 5, 3000),
+			rcCheckpoint(5), rcAttach(5, 7, 3500, rcNote), rcPrompt(7, 8, 4000),
+			rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")},
+			rcHanding(whyChain, []int{2, 3, 1, 4, 5, 7, 8, 9, 10}), []int{2, 3, 1, 4, 5, 7, 8, 9, 10}, 10},
+		"S1: the checkpoint a stop hook's summary a turn hangs off": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcStop(5, 6, 3500), rcCheckpoint(6),
+			rcPrompt(6, 8, 4000), rcReply(8, 9, "msg_x", 5000, rcCalls("x1")), rcResults(9, 10, 6000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6, 8, 9, 10}), []int{3, 4, 1, 2, 5, 6, 8, 9, 10}, 10},
+		"S2: the checkpoint the boundary": {rcCompacted(keeping, rcCheckpoint(3),
+			rcReply(4, 6, "msg_x", 3000, rcCalls("x1")), rcResults(6, 7, 4000, "x1"),
+			rcReply(7, 8, "msg_after", 5000, rcSaid("after"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 6, 7, 8}), []int{3, 4, 1, 2, 6, 7, 8}, 8},
+		"S3: a stop hook's summary the last record": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_x", 3000, rcCalls("x1")), rcResults(5, 6, 4000, "x1"), rcStop(6, 7, 5000)),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 6}, tails(7)), []int{3, 4, 1, 2, 5, 6}, 6},
+		"B3: a relink by its segment alone, a lagging checkpoint a turn names": {rcCompacted(rcSegment(4, 1, 2),
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcPrompt(5, 7, 4000),
+			rcReply(7, 8, "msg_x", 5000, rcCalls("x1")), rcResults(8, 9, 6000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 7, 8, 9}), []int{3, 4, 1, 2, 5, 7, 8, 9}, 9},
+		"a checkpoint in the set, the last row descending through its batch": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_a", 3000, rcCalls("x1", "x2")), rcResults(5, 6, 4000, "x1"), rcCheckpoint(6),
+			rcAttach(6, 8, 4500, rcNote), rcResults(5, 9, 5000, "x2"), rcReply(9, 10, "msg_b", 6000, rcSaid("b"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 9, 10}, map[int]rcAnswer{6: yes(whyRecoveredResult),
+				8: cannot(whyTail)}), []int{3, 4, 1, 2, 5, 6, 9, 10}, 10},
+		"a terminal attachment under a record a turn names, no member": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcAttach(5, 7, 3500, rcNote),
+			rcPrompt(5, 8, 4000), rcReply(8, 9, "msg_after", 5000, rcSaid("after"))),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 8, 9}, tails(7)), []int{3, 4, 1, 2, 5, 8, 9}, 9},
+		"a checkpoint a turn names, outside a set of two": {rcCompacted(keeping,
+			rcReply(4, 5, "msg_before", 3000, rcSaid("before")), rcCheckpoint(5), rcPrompt(5, 7, 3500),
+			rcAttach(5, 8, 4000, rcNote), rcPrompt(8, 9, 5000), rcReply(9, 10, "msg_x", 6000, rcCalls("x1")),
+			rcResults(10, 11, 7000, "x1")),
+			rcHanding(whyChain, []int{3, 4, 1, 2, 5, 8, 9, 10, 11}, off(7)), []int{3, 4, 1, 2, 5, 8, 9, 10, 11}, 11},
+		"a set of two the last row's walk leaves, its newest member": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 9000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
+			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, off(3, 4), tails(5, 6)), []int{1, 2}, 2},
+		"a set of two of one time, its first member": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 2000, rcSaid("a")), rcPrompt(0, 3, 1000), rcReply(3, 4, "msg_b", 2000, rcSaid("b")),
+			rcSystem(0, 5, 3000, "informational", ""), rcAttach(5, 6, 4000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, off(3, 4), tails(5, 6)), []int{1, 2}, 2},
+	} {
+		tc.check(t, name)
+	}
+}
+
+// AN EMPTY LEAF SET FALLS BACK TO THE NEWEST RECORD: where no walk up from a
+// record none names finds a user or assistant record that none names, the
+// resume walks from the record of the latest time of all, of any kind, the
+// first in the file on a tie, as 2.1.322's Ozt and 2.1.310's p0 take it; and
+// where the set holds records of no time at all, it finds no conversation and
+// hands nothing, falling back to none.
+//
+// Mutation: take the later on a tie, and the second attachment leads; fall back
+// to user and assistant records alone, and a thread of none hands nothing,
+// and one whose turns a loop holds walks from them; or fall back wherever the
+// set's members have no time, and a set of untimed records hands the newest.
+func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
+	t.Parallel()
+	system := rcSystem(0, 1, 0, "informational", "")
+	untimed := func(record string, ms int) string {
+		return ctReplace(t, record, `,"timestamp":"`+rcAt(ms)+`"`, "")
+	}
+	for name, tc := range map[string]rcCase{
+		"no turn record: the newest, an attachment": {[]string{system, rcAttach(1, 2, 1000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}), []int{1, 2}, 2},
+		"two newest of one time: the first in the file": {[]string{system, rcAttach(1, 2, 1000, rcNote),
+			rcAttach(1, 3, 1000, rcNote)}, rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}),
+			[]int{1, 2}, 2},
+		"the newest not the last": {[]string{system, rcAttach(1, 2, 5000, rcNote), rcAttach(1, 3, 1000, rcNote)},
+			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: cannot(whyTail)}), []int{1, 2}, 2},
+		"turn records only a loop holds": {[]string{rcPrompt(2, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+			rcSystem(0, 3, 2000, "informational", ""), rcAttach(3, 4, 3000, rcNote)},
+			rcHanding(whyChain, []int{3, 4}, map[int]rcAnswer{1: no(whyOffConversation), 2: no(whyOffConversation)}),
+			[]int{3, 4}, 4},
+		"a set of untimed records: no conversation": {[]string{untimed(rcPrompt(0, 1, 0), 0),
+			untimed(rcReply(1, 2, "msg_a", 1000, rcSaid("a")), 1000), rcSystem(0, 3, 2000, "informational", ""),
+			rcAttach(3, 4, 3000, rcNote)},
+			map[int]rcAnswer{1: no(whyNoConversation), 2: no(whyNoConversation), 3: no(whyNoConversation),
+				4: no(whyNoConversation)}, []int{}, 0},
+	} {
+		tc.check(t, name)
 	}
 }
 
