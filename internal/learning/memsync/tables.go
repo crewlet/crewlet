@@ -73,14 +73,18 @@ type table struct {
 	// cut inside one of these tables keeps nothing of it, and the seat's next
 	// one starts it again: a seat whose profiles and skills alone outlast a
 	// cycle's publish has the rows before the cut sent again every cycle and
-	// never the rest of them, nor the skill versions and the onboarding
-	// marker the registry lists after them (crewlet/crewlet#1040).
+	// never the rest of them, nor the onboarding marker the registry lists
+	// after them (crewlet/crewlet#1040). A publish's own pass carries the
+	// tables with a watermark before these ([ownPassOrder]), so what the
+	// seat wrote is not behind them.
 	wholeEachCycle bool
 
 	// watermark is the column an append-only table's incremental export
-	// is over: a seat's rows past the last one the stream acknowledged, in
-	// that column's order, a page at a time. Empty for a wholeEachCycle
-	// table, which has none.
+	// is over: a seat's rows of each range about its boundary, its own and
+	// its backlog ([Syncer.PublishOwn], [Syncer.PublishBacklog]), past the
+	// last one of that range the stream acknowledged, in that column's
+	// order, a page at a time. Empty for a wholeEachCycle table, which has
+	// none.
 	//
 	// IT MUST NEVER BE REUSED, which is what the rowid failed. A TEXT-keyed
 	// table with no AUTOINCREMENT hands out max(rowid) + 1, so after the
@@ -141,11 +145,12 @@ type table struct {
 	// without its parent: a version of a skill the seat does not have.
 	//
 	// Such a version's skill is missing for one of two reasons. The
-	// changelog does not hold it at all: the skill was written after a
-	// publish read the seat's skills and refined before that publish read
-	// their versions, and no later publish of the node that wrote it carried
-	// the skill before the node stopped holding the seat — a crash, or a
-	// release whose flush was cut first. Or the changelog holds it and this
+	// changelog does not hold it at all: a publish's own pass carries the
+	// skill versions before the skills it sends whole ([ownPassOrder]), so a
+	// skill its holding wrote and refined had its archived body sent before
+	// the skill, and the publish was cut between the two, by a crash or by a
+	// release's flush running out, before any later publish of that node
+	// carried the skill. Or the changelog holds it and this
 	// store skipped it: the store already held another skill of the seat
 	// under the same name, which synthesized_skills' (agent_handle, name)
 	// index allows once, so the carried skill met the import's trailing skip
@@ -180,8 +185,10 @@ var retiredTables = []string{
 	"conversation_sessions",
 }
 
-// tables is every table a seat's memory lives in, in the order a publish
-// carries them and a hydration replays them.
+// tables is every table a seat's memory lives in, in the order a hydration
+// replays them. A publish's own pass carries the tables with a watermark
+// first ([ownPassOrder]), and its backlog carries only those, in this order
+// ([backlogPassOrder]).
 //
 // PARENTS BEFORE CHILDREN, and the reader enforces it:
 // synthesized_skill_versions references synthesized_skills, and foreign keys
@@ -276,6 +283,43 @@ var tables = []table{
 		wholeEachCycle: true,
 	},
 }
+
+// ownPassOrder is the order a publish's own pass carries the tables in
+// ([Syncer.PublishOwn]): the tables with a watermark, in the registry's order
+// (the diary, the episodes, the skill versions), and then the tables sent
+// whole, in the registry's order (the counterparty profiles, the skills, the
+// onboarding marker).
+//
+// WHAT THE HOLDING WROTE GOES FIRST, because it is what a cut should lose
+// last. Of a watermark table the pass carries what the holding wrote since
+// its last pass, a few rows a cycle, while every pass sends each
+// whole-each-cycle table entire, as many rows as the seat has profiles and
+// skills, neither of them bounded (crewlet/crewlet#1040): a pass is cut
+// inside those far likelier than anywhere else, and one cut there has
+// carried every row the holding wrote. In the registry's order the skill
+// versions sat behind the profiles and skills, so a flush cut inside those
+// lost the versions too, and a seat whose profiles and skills outlast a
+// cycle never had its versions carried at all, by a flush or by any of its
+// cycles.
+//
+// A VERSION THEN GOES AHEAD OF ITS SKILL: a skill the holding refined has its
+// archived body sent before the skill's new copy, and a cut between the two
+// leaves the version on the changelog with the skill's older copy, or with no
+// copy where the skill is new to this holding. A hydration takes either: it
+// replays each table on its own, the skills before their versions, and leaves
+// out a version whose skill is still not in the store ([table.parent]), where
+// a cut in the registry's order would have lost the version as well. Within
+// each half the registry's order stands: a durable note, then a turn's
+// record, then a skill's archived body; and the profiles, the skills and the
+// marker, whose carrying crewlet/crewlet#1040 replaces.
+var ownPassOrder = slices.Concat(
+	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return t.wholeEachCycle }),
+	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return !t.wholeEachCycle }))
+
+// backlogPassOrder is the order a publish's backlog carries the tables in
+// ([Syncer.PublishBacklog]): the tables with a watermark, in the registry's
+// order. The tables sent whole are not in it: the own pass sends them.
+var backlogPassOrder = slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return t.wholeEachCycle })
 
 // isBlob reports whether a column carries bytes.
 func (t table) isBlob(column string) bool {

@@ -108,7 +108,7 @@ func TestABarrierBelowTheHydrationsDoesNotEndAReplay(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if _, err := syncerOn(t, openStore(t), conn).Hydrate(t.Context(), seat.Handle); err != nil {
@@ -153,7 +153,7 @@ func TestEveryHydrationOfASeatLeavesItOneBarrier(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if rows, barriers := seatMessages(t, conn); rows != len(tables) || barriers != 0 {
@@ -190,7 +190,7 @@ func TestTwoHydrationsOfASeatRacingEachOtherBothEnd(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
@@ -267,7 +267,7 @@ func TestTheBarrierIsNeverARow(t *testing.T) {
 	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
