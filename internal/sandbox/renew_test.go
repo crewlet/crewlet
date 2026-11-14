@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -408,4 +409,75 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)
 		}
 	})
+}
+
+// A RENEWAL THE BROKER DOES NOT TAKE IS SAID BY WHAT IT LEAVES. On a delivery,
+// the delivery is handed back to make the renewal again when it comes back, and
+// its line says so (sandbox_completion_renew_failed). A re-fire has no delivery
+// to come back on: its own line says the completion waits for the host's store
+// (sandbox_completion_refire_unsettled), and nothing says a delivery was handed
+// back, since a reader told so waits for a retry that never comes.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutation: say the delivery's line wherever a renewal is refused, and a
+// re-fire's refusal says it handed back a delivery it never had; say it
+// nowhere, and a renewal refused on a delivery is said by nothing.
+func TestARefusedRenewalIsSaidByWhatItLeaves(t *testing.T) {
+	t.Run("a delivery in hand is handed back to make it again", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			logs := captureLogs(t)
+			r := newRenewRig(t)
+			r.tee.refuseNext(1)
+			r.announce(t)
+			failed := linesSaying(logs.String(), "sandbox_completion_renew_failed")
+			if len(failed) != 1 || !strings.Contains(failed[0], "level=WARN") ||
+				!strings.Contains(failed[0], errBrokerRefused.Error()) {
+				t.Fatalf("the renewal the broker refused on a delivery was said as %q; want it once, at "+
+					"warning, with the broker's refusal", failed)
+			}
+			if refire := linesSaying(logs.String(), "sandbox_completion_refire_unsettled"); len(refire) != 0 {
+				t.Fatalf("a delivery's refused renewal was said as a re-fire's: %q", refire)
+			}
+		})
+	})
+
+	t.Run("a re-fire says it waits for the host's store, and no more", func(t *testing.T) {
+		logs := captureLogs(t)
+		rig := newCoordRig(t)
+		gate := gated(rig)
+		gate.refuse(true)
+		unsettledHost(t, rig)
+		payload, kept := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+		}
+		gate.refuse(false)
+		rig.queue.mu.Lock()
+		rig.queue.err = errBrokerRefused
+		rig.queue.mu.Unlock()
+		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.inflight.Wait()
+
+		if failed := linesSaying(logs.String(), "sandbox_completion_renew_failed"); len(failed) != 0 {
+			t.Fatalf("a re-fire's refused renewal said a delivery was handed back to make it again: %q", failed)
+		}
+		refire := linesSaying(logs.String(), "sandbox_completion_refire_unsettled")
+		if len(refire) != 1 || !strings.Contains(refire[0], "level=WARN") ||
+			!strings.Contains(refire[0], errBrokerRefused.Error()) {
+			t.Fatalf("the re-fire's refused renewal was said as %q; want it once, at warning, with the "+
+				"broker's refusal", refire)
+		}
+	})
+}
+
+// linesSaying is every line of logs whose message is msg.
+func linesSaying(logs, msg string) []string {
+	var said []string
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, "msg="+msg+" ") {
+			said = append(said, line)
+		}
+	}
+	return said
 }

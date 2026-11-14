@@ -46,7 +46,11 @@ import (
 // A RE-FIRE HAS NO DELIVERY IN HAND. A completion this node kept for a
 // condition and re-fires once it clears ([Coordinator.refire]) was
 // acknowledged when it was kept, so a re-fire whose collection is handed back
-// this way is renewed at once: nothing else would carry it.
+// this way is renewed at once: nothing else would carry it. Nor does anything
+// bring back a re-fire whose renewal the broker does not take, so its own line
+// says the completion waits for that host's store, and never that a delivery
+// was handed back to make the renewal again: WHAT A REFUSED RENEWAL LEAVES IS
+// ITS CALLER'S TO SAY ([Coordinator.renewing], [Coordinator.refire]).
 //
 // ONLY THIS WAIT'S HAND-BACKS: the host's own answer that its store did not
 // answer, and, while the clock this node keeps on that host runs, a record of
@@ -94,7 +98,11 @@ func (h *hostUnsettledHandBack) Unwrap() error { return h.err }
 // being what the coordinator made of it ([Coordinator.OnCompleted]): err as it
 // is, unless err is a claim handed back for the silence of its box's host's
 // store alone and trigger, the delivery in hand, has at most [renewReserve]
-// deliveries left, when the completion is announced afresh ([Coordinator.renew]).
+// deliveries left, when the completion is announced afresh ([Coordinator.renew])
+// and nil is answered, so the delivery is acknowledged and the fresh one
+// carries the completion on. A renewal the broker does not take answers err
+// beside why, so the delivery is NAK'd and comes back to make it again, which
+// its line says (sandbox_completion_renew_failed).
 func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
 	err error,
 ) error {
@@ -106,25 +114,34 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 	if !stated || left > renewReserve {
 		return err
 	}
-	return c.renew(ctx, ev, trigger, err)
+	refused := c.renew(ctx, ev, trigger)
+	if refused == nil {
+		return nil
+	}
+	log.WarnContext(ctx, "sandbox_completion_renew_failed", "turn_id", ev.TurnID,
+		"launch_id", ev.LaunchID, "agent", ev.AgentHandle, "deliveries_left", left,
+		"error", refused.Error(),
+		"detail", "the completion of a job whose box's host cannot read the coordination store "+
+			"could not be announced afresh; the delivery in hand is handed back, and the renewal "+
+			"is made again when it comes back")
+	return fmt.Errorf("%w; %w", err, refused)
 }
 
 // renew announces ev's completion afresh on its seat's control topic, for a
 // claim handed back for the silence of its box's host's store alone, and
-// answers what the delivery in hand, if there is one, is left with: nil where
-// the fresh announcement went out, so the delivery is acknowledged and the
-// fresh one carries the completion on; handedBack, the hand-back itself, beside
-// why, where it did not, so the delivery is NAK'd and comes back to try again.
+// answers why it could not where the broker did not take it. What that leaves
+// is the caller's to say: a delivery in hand comes back to make it again
+// ([Coordinator.renewing]), and a re-fire, which has none, waits for the host's
+// store ([Coordinator.refire]).
 //
 // TRIGGER'S TRACE AND SOURCE, so the resume it leads to nests under the turn
 // that launched the job, as the waiter's own announcement does; trigger may be
 // nil, which carries neither.
-func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
-	handedBack error,
-) error {
+func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) error {
 	control := controlSubject(ev.Agent)
 	if control == "" {
-		return handedBack
+		return fmt.Errorf("sandbox: the completion of %s names no seat whose control topic could carry it "+
+			"afresh", ev.TurnID)
 	}
 	var trace events.TraceContext
 	if trigger != nil {
@@ -135,18 +152,13 @@ func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trig
 		renewed.Source = trigger.Source
 	}
 	if err := c.queue.Publish(ctx, control, renewed); err != nil {
-		log.WarnContext(ctx, "sandbox_completion_renew_failed", "turn_id", ev.TurnID,
-			"launch_id", ev.LaunchID, "agent", ev.AgentHandle, "error", err.Error(),
-			"detail", "the completion of a job whose box's host cannot read the coordination store "+
-				"could not be announced afresh; the delivery in hand is handed back, and the renewal "+
-				"is made again when it comes back")
-		return fmt.Errorf("%w; announcing it afresh: %w", handedBack, err)
+		return fmt.Errorf("sandbox: announcing the completion of %s afresh: %w", ev.TurnID, err)
 	}
 	log.InfoContext(ctx, "sandbox_completion_renewed", "turn_id", ev.TurnID,
 		"launch_id", ev.LaunchID, "agent", ev.AgentHandle, "announcement", renewed.ID.String(),
 		"detail", "the job's box is on a node whose coordination store does not answer it, so that "+
-			"node's waiter cannot announce the job again; this node announced it afresh before its "+
-			"delivery ran out, and the collection is asked again until the store answers or the box "+
-			"timeout records the job lost with that node")
+			"node's waiter cannot announce the job again; this node announced it afresh, in place of a "+
+			"delivery about to run out or of a re-fire that had none, and the collection is asked again "+
+			"until the store answers or the box timeout records the job lost with that node")
 	return nil
 }
