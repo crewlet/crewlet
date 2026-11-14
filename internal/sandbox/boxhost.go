@@ -386,7 +386,7 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 		// ending decided: the job ended and its session taken here, and kept
 		// off the read.
 		spooled, kept := c.readLost(ctx, run)
-		c.keepLater(spooled)
+		c.keepLater(ctx, spooled)
 		return Result{Kept: kept}, false, nil
 	}
 	return c.readBox(ctx, run, read)

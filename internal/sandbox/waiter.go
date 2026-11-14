@@ -1291,7 +1291,7 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	// task's deadline or a stop cancelled it would leave a paused snapshot
 	// billed with nobody left to reclaim it — a teardown takes a context of
 	// its own for exactly that.
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	// Kill by id: Connect would auto-resume the snapshot, booting the box
 	// back up purely to shut it down.

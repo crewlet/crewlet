@@ -138,7 +138,8 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 // seat gave whichever row crossed first the time every other's needed, and
 // one shared by an ending's writes gave its first the time its next needed.
 func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, by RunStop, run PendingRun) {
-	endCtx := detachedEnding(ctx)
+	endCtx, done := detachedEnding(ctx)
+	defer done()
 	if run.Launch.Collected {
 		heldHere := c.endCollectedWait(endCtx, run)
 		log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,

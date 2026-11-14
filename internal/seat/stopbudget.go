@@ -58,11 +58,13 @@ import (
 // records rather than gives leases back, so none of it is a step of this
 // allowance either (internal/sandbox's Coordinator.Stop): a retry still
 // running, whose every write on the coordinator's lifetime ends as the stop
-// begins and whose teardown's write outside it within its thirty seconds; a
-// session keep still uploading, given thirty seconds to end; and the stamp of
-// each keep it cuts there, held to its thirty seconds — 90 s at most, each
-// write held to its reason alone once the coordinator stops, and its taker
-// lease given back after them, on this allowance. So what follows the drain
+// begins and everything it makes on a context of its own — a teardown's write,
+// a capture's stamp, a box's kill, however many one after another — within
+// one thirty-second grace from the stop; a session keep still uploading, given
+// thirty seconds to end; and the stamp of each keep it cuts there, held to its
+// thirty seconds — 90 s at most, each write held to its reason alone once the
+// coordinator stops, and its taker lease given back after them, on this
+// allowance. So what follows the drain
 // can take about 136 s on a member that runs seats: 15 for the seats, 15 for
 // the listeners, 16 for the aux, keeper, usage and admission bounds and 90 for
 // the sandbox coordinator — 46 s on one that runs none — and about 140 s on a

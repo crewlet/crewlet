@@ -1989,15 +1989,17 @@ func (c *Coordinator) sweepSpools() {
 
 // keepLater keeps a spooled capture off the frame that took it, on the
 // coordinator's own lifetime ([Coordinator.keepCapture]); nothing for nil. A
-// coordinator that is stopping keeps nothing more, and says why on the stamp.
-func (c *Coordinator) keepLater(spooled *spooledCapture) {
+// coordinator that is stopping keeps nothing more, and says why on the stamp,
+// made under ctx, the frame's: so a capture the coordinator's own stopped work
+// took is stamped within the stop's one grace ([Coordinator.Stop]).
+func (c *Coordinator) keepLater(ctx context.Context, spooled *spooledCapture) {
 	if spooled == nil {
 		return
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		c.dropSpool(spooled, "the node stopped before the session could be uploaded")
+		c.dropSpool(ctx, spooled, "the node stopped before the session could be uploaded")
 		return
 	}
 	c.keeping.Add(1)
@@ -2010,14 +2012,15 @@ func (c *Coordinator) keepLater(spooled *spooledCapture) {
 
 // dropSpool refuses a spooled capture that will not be kept, saying why, and
 // removes its spool: a standby, which holds no place to refuse, is withdrawn
-// instead ([Coordinator.standDown]), so no wait holds for it.
-func (c *Coordinator) dropSpool(spooled *spooledCapture, why string) {
+// instead ([Coordinator.standDown]), so no wait holds for it. The stamp is made
+// under a context of its own, keeping ctx's values ([detach]).
+func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, why string) {
 	defer func() { _ = os.Remove(spooled.file) }()
 	if spooled.standby {
-		c.standDown(c.keepLife, time.Time{}, spooled.run, spooled.stamp, why)
+		c.standDown(ctx, time.Time{}, spooled.run, spooled.stamp, why)
 		return
 	}
-	c.finishCapture(c.keepLife, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
+	c.finishCapture(ctx, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
 }
 
 // keepCapture uploads a spooled capture into the object it was sealed for,
@@ -2147,7 +2150,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun) {
 		return
 	}
 	spooled, _ := c.readLost(ctx, run)
-	c.keepLater(spooled)
+	c.keepLater(ctx, spooled)
 }
 
 // readLost is the read of a lost run's box on this node's host — for this
@@ -2517,8 +2520,12 @@ func (c *Coordinator) askStamp(ctx context.Context, by time.Time, turnID string,
 // pause, as [stampContext] bounds a take's single record. by zero, a stamp made
 // off the read, is bounded by the record's budget and the crossing alone.
 func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
-	settle, cancel := c.rowContext(context.WithoutCancel(ctx), c.recordBudget)
-	return before(settle, cancel, by)
+	free, release := detach(ctx)
+	settle, cancel := c.rowContext(free, c.recordBudget)
+	return before(settle, func() {
+		cancel()
+		release()
+	}, by)
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its

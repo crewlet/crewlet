@@ -1706,9 +1706,10 @@ of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
 spend, the reads of unit repositories and the day's usage, and, on a pod that
-runs seats, the sandbox coordinator's own end (a retry's teardown still
-running, a session keep still uploading, and the stamp of each keep it cuts,
-thirty seconds each), closing the store — takes milliseconds on a healthy
+runs seats, the sandbox coordinator's own end (a retry still running, all of
+whose teardowns are held to one grace from the stop, a session keep still
+uploading, and the stamp of each keep it cuts, thirty seconds each), closing
+the store — takes milliseconds on a healthy
 fleet but up to about 136 s on a member that runs seats and has lost both its
 event stream and its coordination store, about 140 s on a node without
 `data`, and about 46 s on a member that runs none, each step waiting out its

@@ -471,6 +471,63 @@ func TestAStopHoldsTheStampsOfTheKeepsItCutsToTheirReason(t *testing.T) {
 	})
 }
 
+// A STOP HOLDS A RETRY PART-WAY THROUGH A LOST RUN'S TAKE TO ONE GRACE, ALL OF
+// IT.
+//
+// A coordinator's stop waits for every retry still running. A retry finishing
+// the kept ending of a lost run whose box this node hosts takes the run's
+// session before it reclaims the box, and what it does once the stop comes is
+// made on contexts of its own, which the stop's cancellation does not reach:
+// the reservation of the capture's place, the stamp of that place refused once
+// the reservation was cut, and the reclaim's kill of the box. Each held to its
+// own grace from its own start, against a store and a box that never answer
+// they ran one after another — ninety seconds of a stop whose figure gives the
+// work it waits for thirty. So everything the stopped work makes is held to one
+// grace from the stop ([detach]): the stop returns once that grace has passed,
+// whatever the store and the box do. Exact, in a bubble.
+//
+// Mutation: detach a teardown's or a stamp's context with
+// context.WithoutCancel again, or start the stop's grace at each call's own
+// start, and the stop returns sixty or ninety seconds after it began.
+func TestAStopHoldsARetryPartWayThroughALostRunsTakeToOneGrace(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		stamps := &silentStamps{}
+		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
+			stamps.PendingStore = o.Pending
+			o.Pending = stamps
+		})
+		rig.coordinator.recordBudget = sessionRecordBudget
+		rig.launching("t1")
+		rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+		if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+			t.Fatalf("RecoverSeat: %v", err)
+		}
+		// THE BOX NEVER ANSWERS ITS RECLAIM, as the store never answers a
+		// stamp.
+		rig.provider.KillFunc = func(ctx context.Context, _ string) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		retried := make(chan int, 1)
+		go func() { retried <- rig.fireRetries() }()
+		synctest.Wait()
+		if n := stamps.asked.Load(); n != 1 {
+			t.Fatalf("the premise: the retry's take asked the store for its capture's place %d times, "+
+				"want once, unanswered", n)
+		}
+		start := time.Now()
+		rig.coordinator.Stop()
+		if took := time.Since(start); took != discardGrace {
+			t.Errorf("the stop returned %v after it began, want one teardown's grace, %v, for all the "+
+				"retry made after it", took, discardGrace)
+		}
+		if n := <-retried; n != 1 {
+			t.Errorf("fired %d retries, want the lost run's ending's one", n)
+		}
+	})
+}
+
 // A WAITER'S WRITE OF A RUN'S ROW IS GIVEN THE ROW'S CROSSING PAST ITS TASK'S
 // BOUND.
 //

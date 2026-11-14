@@ -1133,7 +1133,7 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // as well as the box. Under a context of its own, for the reason every
 // reclaim takes one ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	provider, err := c.mgr().Provider(Placement(prior.Placement))
 	if err != nil {
@@ -1187,7 +1187,7 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 // whose writes of the row is given the row's crossing too ([detachedEnding]).
 func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
 	if sandboxID != "" {
-		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+		killCtx, cancel := detached(ctx)
 		provider, err := m.Provider(req.Spec.Placement)
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_no_backend",
@@ -1199,7 +1199,8 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 		}
 		cancel()
 	}
-	ctx = detachedEnding(ctx)
+	ctx, done := detachedEnding(ctx)
+	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
 	// the one party that can name it. The launch's own is killed above,

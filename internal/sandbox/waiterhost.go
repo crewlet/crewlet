@@ -473,7 +473,7 @@ func (w *Waiter) reclaimHostBox(ctx context.Context, manager *Manager, box HostB
 			"sandbox_id", box.SandboxID, "placement", string(box.Placement), "error", err.Error())
 		return
 	}
-	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	killCtx, cancel := detached(ctx)
 	defer cancel()
 	if err := provider.Kill(killCtx, box.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_host_box_reclaim_failed", "turn_id", box.TurnID,
