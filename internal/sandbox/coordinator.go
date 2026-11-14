@@ -3100,16 +3100,23 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// a step of its own, the release left a moment with no write out on the
 	// run, in which a recount counted the run off its row, the question,
 	// while the release then recorded counted it as the claim (countwrite.go).
+	// AND BEFORE THE WRITE'S ANSWER IS TAKEN, so the release is recorded
+	// behind it in the run's entry, and behind whatever was recorded after
+	// it: an answer by turn's record of the question the lost write put on
+	// the row, its answer taken first, moves the run to its answer as this
+	// answer is taken, and the release then counts the run there. Recorded
+	// after it, in an entry of its own from the claim, the release counted
+	// the answered run as the claim, holding the seat.
 	c.mu.Lock()
-	moved := c.wroteCountLocked(write, err == nil)
 	var handBack *claimRelease
 	movedBack := func() {}
 	if err != nil {
 		handBack, movedBack = c.handingBackLocked(run, parkUnrecordedDetail, failure{}, nil)
 	}
+	moved := c.wroteCountLocked(write, err == nil)
 	c.mu.Unlock()
-	moved()
 	movedBack()
+	moved()
 	if err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -4758,9 +4765,10 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail stri
 // AND ITS WRITE IN THE RUN'S ENTRY, in the same step (claimrelease.go): a
 // recount counts the run as the claim it still is for as long as the release
 // is out, and a write recorded behind it moves after it. A caller whose own
-// write on the run has just had its answer taken records the release in the
-// step that took it ([Coordinator.park]), so no recount finds the run with no
-// write out between the two (countwrite.go).
+// write on the run did not land records the release in the step that takes
+// that write's answer, before taking it ([Coordinator.park]), so no recount
+// finds the run with no write out between the two, and the release moves
+// after that write and whatever was recorded behind it (countwrite.go).
 //
 // THE RELEASE IT TAKES THE PLACE OF IS ANSWERED FIRST, as one that did not
 // land: an earlier job's, still owed, which can no longer land (see "A later

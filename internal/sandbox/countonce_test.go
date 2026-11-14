@@ -1042,6 +1042,99 @@ func TestAParksHandBackIsRecordedInTheStepThatTakesItsAnswer(t *testing.T) {
 		"t2 working, and t1's and t3's questions", 1, 2)
 }
 
+// answeredBehindPark is a run store whose record of a park's question lands
+// and is then reported unanswered, as [parkLandsUnanswered]'s is, once record
+// has answered the question on the run while the park's write was still out:
+// the record of an answer by turn to a question the park has written and not
+// yet heard back on, its own answer taken first. Every claim's release it is
+// sent has the seat recounted before it goes on, as a recount made while the
+// release was out.
+type answeredBehindPark struct {
+	*parkLandsUnanswered
+	record  func(ctx context.Context)
+	recount func(ctx context.Context)
+}
+
+func (s *answeredBehindPark) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if err := s.PendingStore.MarkAwaiting(ctx, turnID, q); err != nil {
+		return err
+	}
+	s.record(ctx)
+	return errStoreUnavailable("write the sandbox run", turnID)
+}
+
+func (s *answeredBehindPark) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	s.recount(ctx)
+	return s.parkLandsUnanswered.ReleaseClaim(ctx, turnID, release)
+}
+
+// A PARK'S HAND-BACK MOVES AFTER THE WRITES RECORDED BEHIND THE PARK
+// (countwrite.go). A park's question can land with its answer lost, and an
+// answer by turn be recorded to that question while the park's write is still
+// out, the record's own answer taken first: its move waits for the park's. The
+// park's answer, lost, then lets the record's move go, from the claim to the
+// answer, which is in neither set, and the park hands its claim back. Its
+// release is recorded behind them in the run's entry, in the step that takes
+// the park's answer, so a recount while the release is out counts the run where
+// the record put it, and the release, made against a run no longer the claim,
+// finds it moved on. Recorded once the park's answer had been taken, in an
+// entry of its own from the claim, the release counted the answered run as the
+// claim: the seat held by a run whose row holds nothing, until the store
+// answered the release.
+//
+// Mutation: record the park's hand-back after taking the park's answer; the
+// recount made as the release goes out counts t1 holding.
+func TestAParksHandBackMovesAfterTheWritesRecordedBehindThePark(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkElsewhere(t, rig, "t3")
+	rig.launch("t2")
+	rig.launch("t1")
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "before t1 parks,", "t1 and t2 working and t3's question", 2, 1)
+	var during *seatRuns
+	store := &answeredBehindPark{
+		parkLandsUnanswered: &parkLandsUnanswered{PendingStore: rig.coordinator.pending, silent: true},
+		record: func(ctx context.Context) {
+			run := rig.getIn(ctx, "t1")
+			words, answer := chatReply(answerOnTheDM, "use main",
+				replyAt("use main", run.AskedAt.Add(time.Minute))).answerOf(rig.now)
+			if _, won, err := rig.coordinator.record(ctx, run, words, answer); err != nil || !won {
+				t.Errorf("record = %v, %v; want t1's answer recorded while its park is out", won, err)
+			}
+		},
+		recount: func(ctx context.Context) {
+			if during != nil {
+				return
+			}
+			rig.coordinator.syncSeat(ctx, "swe")
+			counted := seatCounts(rig)
+			during = &counted
+		},
+	}
+	rig.coordinator.pending = store
+	rig.ask("t1", whichBranch())
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion("t1")
+	_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	answered := rig.get("t1")
+	if answered.Status != StatusAnswered || !rig.coordinator.releasing("t1", answered.LaunchID) || during == nil {
+		t.Fatalf("the premise: t1 is %s, its release out %v, the seat recounted as it went out %v; want its "+
+			"answer on the row and the claim's release owed", answered.Status,
+			rig.coordinator.releasing("t1", answered.LaunchID), during != nil)
+	}
+	if during.holding != 1 || during.awaiting != 1 {
+		t.Fatalf("recounted as the park's release went out, the seat counts %d holding and %d awaiting; want "+
+			"t2 working and t3's question, t1's answer in neither set", during.holding, during.awaiting)
+	}
+	wantSeatCounts(t, rig, "with the park's release owed,", "t2 working and t3's question", 1, 1)
+
+	store.answer()
+	rig.fireRetries()
+	wantSeatCounts(t, rig, "once the release, made again, found t1 moved on to its answer,",
+		"t2 working and t3's question, t1's answer resumed and its run over", 1, 1)
+}
+
 // A RELEASE A LATER JOB'S TAKES THE PLACE OF LEAVES NOTHING OUT ON ITS RUN
 // (claimrelease.go). A resumed turn can relaunch its executor and then fail, and
 // the claim its frame gives back names the job the relaunch moved the run off:
