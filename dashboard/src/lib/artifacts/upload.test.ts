@@ -78,3 +78,27 @@ test("a direct transfer is refused", async () => {
   });
   await expect(uploadFiles(null, [{ path: "a.html", body: "x" }], "k-3")).rejects.toThrow(/bucket/);
 });
+
+// AN ASSET UPLOAD SAYS SO, on the artifact's own intent: the engine decides it
+// by the asset verb and holds it to the asset store's bounds. Mutation: drop
+// `asset: true` and the intent is read as the next version's.
+test("an asset upload goes through the artifact's intent and says it is for the asset store", async () => {
+  const sent = engine({
+    upload: "u-4",
+    expires_at: "",
+    transfers: [{ path: "venues.csv", method: "PUT", url: "", direct: false }],
+  });
+  await uploadFiles("a-1", [{ path: "venues.csv", body: "a,b\n" }], "k-4", "assets");
+  expect(sent[0]!.url).toContain("/artifacts/a-1/uploads");
+  expect(JSON.parse(String(sent[0]!.init.body))).toMatchObject({
+    asset: true,
+    entries: [{ path: "venues.csv", size: 4 }],
+  });
+  expect(sent[1]!.url).toContain("/artifacts/uploads/u-4/files/venues.csv");
+});
+
+test("a version's upload says nothing of assets", async () => {
+  const sent = engine({ upload: "u-5", expires_at: "", transfers: [] });
+  await uploadFiles("a-1", [{ path: "index.html", body: "<p>" }], "k-5");
+  expect(JSON.parse(String(sent[0]!.init.body))).not.toHaveProperty("asset");
+});
