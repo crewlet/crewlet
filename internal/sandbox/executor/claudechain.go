@@ -1402,9 +1402,10 @@ func (s *jsonDepth) step(b byte) {
 	case s.escape:
 		s.escape = false
 	case s.inString:
-		if b == '\\' {
+		switch b {
+		case '\\':
 			s.escape = true
-		} else if b == '"' {
+		case '"':
 			s.inString = false
 		}
 	case b == '"':
