@@ -18,9 +18,10 @@ import (
 //
 // The shape: sh starts cat in the background and exits. cat's parent is
 // therefore gone — the only thing that can still reach it is the process
-// GROUP. cat reads a pipe this case holds open and writes to a pipe nothing
-// else holds, so it cannot end on its own while the case runs: only a signal
-// ends it, and once the case is over its input's end of file does.
+// GROUP. cat reads a pipe whose write end this case holds open, and writes to
+// a pipe whose write end nothing else holds, so it cannot end on its own while
+// the case runs: only a signal ends it, and once the case is over its input's
+// end of file does.
 //
 // GONE IS READ OFF ITS OUTPUT, never off its pid. The kernel closes every
 // descriptor a process holds as it exits, before anything reaps it, so the
