@@ -447,6 +447,7 @@ func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 	graphFirst(t, c, repo)
 	first := clk.Now() // the round added the packs no index covers
 	var ranAt []time.Time
+	//fixedwait:stated first and every clk.Now() are the case's clock (clk.on), which only the loop moves
 	for clk.Now().Before(first.Add(cache.MidxMaxWait + cache.MidxDebounce)) {
 		clk.Add(cache.MidxDebounce - time.Second)
 		w.push(t, repo, "refs/heads/main", nil)
@@ -460,6 +461,7 @@ func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 			"MidxMaxWait (%v) after the first pack it did not cover", cache.MidxDebounce-time.Second,
 			cache.MidxMaxWait+cache.MidxDebounce, ranAt, cache.MidxMaxWait)
 	}
+	//fixedwait:stated ranAt and first are both the case's clock (clk.on), which only the loop moves
 	if waited := ranAt[0].Sub(first); waited < cache.MidxMaxWait || waited >= cache.MidxMaxWait+cache.MidxDebounce {
 		t.Errorf("the run came %v after the first pack it covers, want within a push of MidxMaxWait (%v)",
 			waited, cache.MidxMaxWait)
@@ -584,7 +586,7 @@ func TestMaintenanceNeverDelaysASync(t *testing.T) {
 	go func() { passed <- cache.MaintainerPass(c) }()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer started no run in %v", hangDetector)
 	}
 
@@ -611,7 +613,7 @@ func TestMaintenanceNeverDelaysASync(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("the held run's context ended with %v, want a cancellation", err)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("a sync that removed a pack left the maintenance run on its incarnation running")
 	}
 	select {
@@ -619,7 +621,7 @@ func TestMaintenanceNeverDelaysASync(t *testing.T) {
 		if len(ran) != 0 {
 			t.Errorf("a cancelled run was reported as maintained: %v", ran)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer's pass has not ended %v after its run was cancelled", hangDetector)
 	}
 	if got := w.logs.lines(t, "code_cache_maintenance_cancelled"); len(got) != 1 || got[0]["step"] != "multi-pack-index" {
@@ -682,7 +684,7 @@ func TestADropStopsARunWritingWhatItDrops(t *testing.T) {
 	_, wait := cache.StartMaintainerPass(c)
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer started no run in %v", hangDetector)
 	}
 
@@ -699,7 +701,7 @@ func TestADropStopsARunWritingWhatItDrops(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("the held run's context ended with %v, want a cancellation", err)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("a delta whose pack drops the index left the run writing the index running")
 	}
 	if ran := wait(); len(ran) != 0 {
@@ -927,7 +929,7 @@ func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 	go func() { passed <- cache.MaintainerPass(c) }()
 	select {
 	case <-held:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer started no run in %v", hangDetector)
 	}
 	// A pass that waited for its first run would never reach this: the held
@@ -950,7 +952,7 @@ func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
 		if len(ran) != 2 {
 			t.Errorf("the pass answered %v, want both repositories once the held run was let go", ran)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the pass has not ended %v after its held run was let go", hangDetector)
 	}
 }
@@ -1005,7 +1007,7 @@ func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 	for range started {
 		select {
 		case <-holding:
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 			t.Fatalf("a run the pass started holds no slot after %v", hangDetector)
 		}
 	}
@@ -1330,7 +1332,7 @@ func startHeld(t *testing.T, c *cache.Cache, indexing <-chan struct{}, release c
 	}
 	select {
 	case <-indexing:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		letGo()
 		t.Fatalf("%s's run holds no slot at its index after %v", repo, hangDetector)
 	}
@@ -1353,7 +1355,7 @@ func graphedAlone(t *testing.T, w *syncWorld, c *cache.Cache, indexing <-chan st
 		}
 	case <-indexing:
 		t.Fatalf("%s's graph-first run went on to its index in the slot kept for a person", repo)
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the pass over %s has not ended after %v", repo, hangDetector)
 	}
 	if !statOK(t, filepath.Join(dir, "objects", "info", "commit-graph")) ||
@@ -1502,7 +1504,7 @@ func TestARunStoppedFromOutsideIsNoRun(t *testing.T) {
 	go func() { passed <- cache.MaintainerPass(c) }()
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer started no run in %v", hangDetector)
 	}
 	c.Stop(context.Background())
@@ -1511,7 +1513,7 @@ func TestARunStoppedFromOutsideIsNoRun(t *testing.T) {
 		if len(ran) != 0 {
 			t.Errorf("a run Stop ended was reported as maintained: %v", ran)
 		}
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the pass has not ended %v after Stop", hangDetector)
 	}
 	if doc := readStateDoc(t, s.Dir); !doc.Maintained.LastRun.IsZero() || doc.Maintained.Took != 0 {
@@ -1795,7 +1797,7 @@ func TestRoundsBackToBackStillGetTheMaintainersRun(t *testing.T) {
 				s.Release()
 			}()
 			for steady.Load() && !cache.RoundQueued(c, repo) {
-				time.Sleep(100 * time.Microsecond)
+				time.Sleep(100 * time.Microsecond) //fixedwait:liveness
 			}
 		})
 	})
@@ -1822,12 +1824,12 @@ func TestRoundsBackToBackStillGetTheMaintainersRun(t *testing.T) {
 
 	select {
 	case ticks <- time.Now():
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatal("the maintainer did not take its tick")
 	}
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("with rounds back to back no maintenance run started in %v: %d rounds ended", hangDetector,
 			rounds.Load())
 	}
@@ -1959,7 +1961,7 @@ func TestAnOwedRunWaitsOutAQueuedRoundThatWouldStopIt(t *testing.T) {
 			w.sync(t, c, repo)
 			select {
 			case <-queuedEnded:
-			case <-time.After(hangDetector):
+			case <-time.After(hangDetector): //fixedwait:liveness
 				t.Fatal("the queued round never ended")
 			}
 			if tooEarly.Load() {
@@ -2010,7 +2012,7 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 		t.Helper()
 		select {
 		case ticks <- time.Now():
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 			t.Fatalf("the maintainer did not take a tick in %v", hangDetector)
 		}
 	}
@@ -2027,12 +2029,12 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	select {
 	case ticks <- time.Now():
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer did not take a tick in %v", hangDetector)
 	}
 	select {
 	case <-reached:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("the maintainer's tick started no run in %v", hangDetector)
 	}
 
@@ -2043,7 +2045,7 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(hangDetector):
+	case <-time.After(hangDetector): //fixedwait:liveness
 		t.Fatalf("Stop has not returned %v after it cancelled a maintenance run", hangDetector)
 	}
 	if got := w.logs.lines(t, "code_cache_maintenance_cancelled"); len(got) != 1 {
