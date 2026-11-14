@@ -1183,10 +1183,13 @@ it:
     so it is never recorded on the run's ledger: it is the harness asking, not the
     model. Its answer is always text — the hook's answer, with the notes as its
     additional context, or empty for nothing — and **never an error**, because a
-    hook whose call failed makes the harness drop and re-initialise the run's whole
-    bridge. Only the main agent's loop takes notes: a subagent's batch, and a
-    hook whose agent id the harness did not fill in, take nothing, because a note
-    handed to a delegated loop binds that piece of work alone. One answer
+    hook whose call is answered with an error makes the harness drop and
+    re-initialise the run's whole bridge (measured on Claude Code 2.1.263 and
+    2.1.310), where one the bridge turns away with a `503` is a hook error the
+    run goes on past, the bridge kept (measured on 2.1.310 and 2.1.322). Only
+    the main agent's loop takes notes: a subagent's batch, and a hook whose
+    agent id the harness did not fill in, take nothing, because a note handed
+    to a delegated loop binds that piece of work alone. One answer
     carries the oldest waiting notes within **9,000 UTF-16 code units**, measured
     as the harness measures its context, and the rest wait for the next step; it is
     answered within **five seconds**, half the hook's timeout, or not at all. A

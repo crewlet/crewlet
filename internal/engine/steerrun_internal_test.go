@@ -570,10 +570,11 @@ func (s failingStore) WatchNotes(ctx context.Context, turnID string) (<-chan san
 	return s.PendingStore.WatchNotes(ctx, turnID)
 }
 
-// A STORE FAILURE ANSWERS EMPTY, NEVER AN ERROR: a hook whose call failed makes
-// Claude Code drop and re-initialise the run's whole bridge, so a take the
-// record cannot serve is answered with nothing, the note waits for the next
-// step, and a read that could not be written is the poller's to retry.
+// A STORE FAILURE ANSWERS EMPTY, NEVER AN ERROR: a hook whose call is answered
+// with an error makes Claude Code drop and re-initialise the run's whole bridge,
+// so a take the record cannot serve is answered with nothing, the note waits
+// for the next step, and a read that could not be written is the poller's to
+// retry.
 func TestAStoreFailureAnswersEmptyNeverAnError(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())

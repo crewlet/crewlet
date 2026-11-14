@@ -29,13 +29,15 @@ import (
 //     it is answered by the server's own receiving middleware, so the call never
 //     reaches the run's surface and is never recorded on its ledger: it is the
 //     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
-//     — never an error: measured on Claude Code, a hook's call that failed made
-//     the harness drop and re-initialise the whole bridge, telling the model its
-//     tools were still connecting. And the opening's end waits for that answer
-//     before it closes the box's sessions, for as long as the box waits for it
-//     ([binding.holdHook]): an answer the close refused would fail the call all
-//     the same, and a take's notes would be recorded handed over to a step that
-//     never had them.
+//     — never an error: measured on Claude Code 2.1.263 and 2.1.310, a hook's
+//     call answered with an error made the harness drop and re-initialise the
+//     whole bridge, telling the model its tools were still connecting; one the
+//     bridge turns away with a 503 is a hook error the run goes on past, the
+//     bridge kept (2.1.310 and 2.1.322, [Bridge.serveMCP]). And the opening's
+//     end waits for that answer before it closes the box's sessions, for as
+//     long as the box waits for it ([binding.holdHook]): an answer the close
+//     refused would fail the call all the same, and a take's notes would be
+//     recorded handed over to a step that never had them.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered, each recorded served to the run's
