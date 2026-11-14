@@ -1266,18 +1266,32 @@ export function PhaseCard({
               its share of one message, and a collected run's record keeps
               its run's head and tail, so the rounds above would otherwise
               read as everything the phase did. */}
+          {/* A RUNNING PHASE'S FRAME HOLDS THEM TOO, five times a second: it
+              keeps the newest calls a reader is watching arrive, and the
+              record keeps the first and the newest once the phase ends. */}
           {record.roundsElided > 0 && (
             <Callout variant="warning">
               {plural(record.roundsElided, "more round")}{" "}
-              {record.roundsElided === 1 ? "isn’t" : "aren’t"} listed: the record keeps a long
-              phase’s first and newest rounds, and counts the calls of the rest below.
+              {record.roundsElided === 1 ? "isn’t" : "aren’t"} listed:{" "}
+              {record.live ? "the live view" : "the record"} keeps a long phase’s first and newest
+              rounds, and counts the calls of the rest below.
             </Callout>
           )}
           {record.callsElided > 0 && (
             <Callout variant="warning">
               {plural(record.callsElided, "more call")} the phase made{" "}
-              {record.callsElided === 1 ? "isn’t" : "aren’t"} listed: its record didn’t keep{" "}
-              {record.callsElided === 1 ? "it" : "them"}.{droppedWords(record.elidedCalls)}
+              {record.callsElided === 1 ? "isn’t" : "aren’t"} listed:{" "}
+              {record.live
+                ? "the live view keeps a running phase’s newest calls"
+                : `its record didn’t keep ${record.callsElided === 1 ? "it" : "them"}`}
+              .{droppedWords(record.elidedCalls)}
+            </Callout>
+          )}
+          {record.runningElided > 0 && (
+            <Callout variant="info">
+              {plural(record.runningElided, "more call")}{" "}
+              {record.runningElided === 1 ? "is" : "are"} running than the live view lists: each is
+              listed once it answers.
             </Callout>
           )}
 

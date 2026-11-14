@@ -864,6 +864,30 @@ describe("what a launch's record left out", () => {
   });
 });
 
+// WHAT A RUNNING PHASE'S FRAME LEFT OUT IS READ OFF ITS LIVE CALL: the calls
+// its list does not carry, by tool, the rounds past its window and the calls in
+// flight past their share — a frame holds each to its live share.
+//
+// Mutation: read a live call's lists without their counts, and a long running
+// phase reads as the newest calls its frame happened to carry.
+describe("what a running phase's frame left out", () => {
+  test("is read off its live call", () => {
+    const record = fromLiveCall(
+      liveCall({
+        calls_elided: 120,
+        elided_calls: [{ name: "read_file", calls: 120 }],
+        rounds_elided: 9,
+        running_calls_elided: 4,
+      }),
+      "PM",
+    );
+    expect(record.callsElided).toBe(120);
+    expect(record.elidedCalls).toEqual([{ name: "read_file", calls: 120, failed: 0 }]);
+    expect(record.roundsElided).toBe(9);
+    expect(record.runningElided).toBe(4);
+  });
+});
+
 // WHAT A COLLECTED RUN'S RECORD DID NOT KEEP IS READ OFF ITS PHASE RECORD. The
 // executor's record lists the calls its run's record kept, a long run's head
 // and tail, and says how many more the run made and by tool; a reader that
