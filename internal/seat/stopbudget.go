@@ -53,18 +53,28 @@ import (
 // background writes; an open sandbox bridge session spends its listener's
 // grace whole. The leases' share can fall entirely after the drain too: a
 // store lost during it leaves the presence give-back fast and the seats'
-// give-backs, each after its seat's 5 s last event, spending all of it. So
-// what follows the drain can take about 46 s: 15 for the seats, 15 for the
-// listeners, 16 for the aux, keeper, usage and admission bounds — about 50 s
-// on a node without `data`, which flushes its custody batches on a ten-second
+// give-backs, each after its seat's 5 s last event, spending all of it. And
+// on a node that runs seats, the sandbox coordinator's own stop carries
+// records rather than gives leases back, so none of it is a step of this
+// allowance either (internal/sandbox's Coordinator.Stop): a retry still
+// running, whose every write on the coordinator's lifetime ends as the stop
+// begins and whose teardown's write outside it within its thirty seconds; a
+// session keep still uploading, given thirty seconds to end; and the stamp of
+// each keep it cuts there, held to its thirty seconds — 90 s at most, each
+// write held to its reason alone once the coordinator stops, and its taker
+// lease given back after them, on this allowance. So what follows the drain
+// can take about 136 s on a member that runs seats: 15 for the seats, 15 for
+// the listeners, 16 for the aux, keeper, usage and admission bounds and 90 for
+// the sandbox coordinator — 46 s on one that runs none — and about 140 s on a
+// node without `data`, which flushes its custody batches on a ten-second
 // budget instead of a keeper and a usage flush. The settles' window adds
-// nothing to either: it opens as the teardown begins, before the engine's
-// auxiliary-spend flush, and is over by the end of that flush's five seconds
-// wherever the flush spends them. docs/guides/deployment.md
-// therefore has every pod given a grace of at least its longest turn plus
-// 60 s, plus any preStop sleep (Kubernetes counts the hook inside the grace):
-// the drain's share, this stop's 50 s at most, and room for the process to
-// exit.
+// nothing to any of them: it opens as the teardown begins, before the
+// engine's auxiliary-spend flush, and is over by the end of that flush's five
+// seconds wherever the flush spends them. docs/guides/deployment.md therefore
+// has every pod given a grace of at least its longest turn plus 150 s, plus
+// any preStop sleep (Kubernetes counts the hook inside the grace): the
+// drain's share, this stop's 140 s at most, and room for the process to exit
+// — a pod that runs no seats its longest turn plus 60 s.
 //
 // # Only what lapses
 //
