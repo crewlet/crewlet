@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -83,7 +84,7 @@ func everyWrite() []aWrite {
 			return err
 		}},
 		{"the delivery budget's dead letter", func(ctx context.Context, q *Queue) error {
-			return q.deadLetter(ctx, "budget.probe", "grp", make([]byte, 5<<20))
+			return q.deadLetter(ctx, budgetLetters, "a budget probe", make([]byte, 5<<20))
 		}},
 		anAppend,
 	}
@@ -111,7 +112,7 @@ func budgetedQueue(t *testing.T, js jetstream.JetStream, pace time.Duration) *Qu
 		}
 		streams[spec.name] = struct{}{}
 	}
-	return &Queue{js: js, pace: pace, streams: streams}
+	return &Queue{js: js, link: link{pace: pace}, streams: streams}
 }
 
 // EACH WRITE IS BUDGETED FOR THE BYTES IT SENDS, through the one budget a
@@ -136,8 +137,8 @@ func TestEachWriteIsBudgetedForTheBytesItSends(t *testing.T) {
 		name string
 		pace time.Duration
 	}{
-		{"on a member's own connection", linkPaceOf(&embeddedServer{})},
-		{"across a leaf's link", linkPaceOf(&embeddedServer{leaf: true})},
+		{"on a member's own connection", linkOf(&embeddedServer{}).pace},
+		{"across a leaf's link", linkOf(&embeddedServer{leaf: true}).pace},
 	} {
 		for _, w := range everyWrite() {
 			t.Run(w.name+" "+link.name, func(t *testing.T) {
@@ -206,7 +207,7 @@ func TestAWriteSentAgainIsGivenItsOwnCrossing(t *testing.T) {
 				t.Parallel()
 				synctest.Test(t, func(t *testing.T) {
 					js := &sendsJS{answers: []error{c.err}}
-					q := budgetedQueue(t, js, linkPaceOf(&embeddedServer{leaf: true}))
+					q := budgetedQueue(t, js, linkOf(&embeddedServer{leaf: true}).pace)
 					if err := w.write(context.Background(), q); err != nil {
 						t.Fatalf("the write sent again: %v", err)
 					}
@@ -215,7 +216,7 @@ func TestAWriteSentAgainIsGivenItsOwnCrossing(t *testing.T) {
 							len(js.sends), c.answer)
 					}
 					first, again := js.sends[0], js.sends[1]
-					crossing := jsapi.Sending(first.bytes, q.pace)
+					crossing := jsapi.Sending(first.bytes, q.link.pace)
 					if gained := again.deadline.Sub(first.deadline); !again.set || gained != crossing {
 						t.Errorf("the send again was given %v more than the first (set %t), "+
 							"want its own crossing, %v", gained, again.set, crossing)
@@ -345,23 +346,26 @@ func TestAWriteCountsWhatItSends(t *testing.T) {
 
 // A CONNECTION'S READS AND WRITES ARE PACED BY ONE DECISION.
 //
-// How slow a connection may be is decided once, where it is made
-// ([linkPaceOf]), and every crossing on it reads that one decision: a state
-// log record's read by its position, a dead letter's frame, and a write's
-// request. Decided apart, a pace changed for one of them — made configurable,
-// or per link — would leave the others at the old one. Held here at a pace no
-// link is given today, so a crossing that decided its own pace is told from
-// one that read the connection's.
+// How slow a connection may be is decided once, where it is made ([linkOf]),
+// and every crossing on it reads that one decision: a state log record's read
+// by its position from the leader — given its log's largest record's
+// crossing, or on a log read through its copies the record's own — and read
+// raw; a dead letter's frame from the leader and raw; and a write's request.
+// Decided apart, a pace changed for one of them — made configurable, or per
+// link — would leave the others at the old one. Held here at a pace no link
+// is given today, so a crossing that decided its own pace is told from one
+// that read the connection's, across a leaf's link, where every one of them
+// is made.
 //
-// Mutation: pace a record's read, a frame's read or a write by the object
-// store's floor itself rather than by the connection's pace, and its row goes
-// red.
+// Mutation: pace a record's read — from the leader or raw — a frame's read or
+// a write by the object store's floor itself rather than by the connection's
+// pace, and its row goes red.
 func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 	t.Parallel()
 	const pace = 7 * time.Second
 	spec := probeDomain()
 	q := domainQueue(t, spec)
-	q.pace = pace
+	q.link = link{pace: pace, leaf: true}
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
@@ -371,13 +375,53 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 		t.Errorf("a record's read is given %v to cross, want its largest record's crossing at "+
 			"the connection's pace, %v", log.crossing, want)
 	}
+	// A LOG READ THROUGH ITS COPIES: its records as large as the transport,
+	// each read from the leader at its own reply's crossing where that
+	// reply crosses, and otherwise raw, waited for its own crossing.
+	copied := DomainStream{Name: "CREWLET_PACED_LOG", Subjects: []string{"crewlet.paced.log.>"},
+		MaxBytes: 4 * queue.MaxPayloadBytes, MaxMessageBytes: queue.MaxPayloadBytes,
+		Duplicates: 2 * time.Minute}
+	if err := q.EnsureDomainStream(t.Context(), copied); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	copiedLog, err := q.DomainLog(t.Context(), copied.Name)
+	if err != nil {
+		t.Fatalf("open the log of large records: %v", err)
+	}
+	if copiedLog.copies == nil {
+		t.Fatal("a log of records as large as the transport is read from the leader alone " +
+			"across a leaf's link, whose reply of its largest record cannot cross it")
+	}
+	const record = 64 << 10
+	if want := jsapi.Crossing(record, pace); copiedLog.replyCrossing(record) != want {
+		t.Errorf("a record read from the leader is given %v to cross, want its own reply's "+
+			"crossing at the connection's pace, %v", copiedLog.replyCrossing(record), want)
+	}
+	if want := jsapi.Sending(record, pace); copiedLog.copies.crossing(record) != want {
+		t.Errorf("a record read raw waits %v for its crossing, want its own at the "+
+			"connection's pace, %v", copiedLog.copies.crossing(record), want)
+	}
 	letters, err := q.deadLetters(t.Context(), topics.DeadLetter("pace.probe", "grp"))
 	if err != nil {
 		t.Fatalf("open the dead letters: %v", err)
 	}
-	if want := jsprovision.ReadTerm + jsapi.Crossing(int(q.nc.MaxPayload()), pace); letters.leader.Term() != want {
-		t.Errorf("a dead letter's frame is read at a term of %v, want the read term and the "+
-			"largest entry's crossing at the connection's pace, %v", letters.leader.Term(), want)
+	// A DEAD LETTER'S FRAME across the leaf's link: read from the leader at a
+	// term of its reply's crossing where that reply crosses, and otherwise
+	// raw, waited for the entry's own crossing — each at the connection's
+	// pace.
+	if letters.copies == nil {
+		t.Fatal("a connection across a leaf's link reads its dead letters from the leader " +
+			"alone, whose reply of an entry as large as the transport cannot cross it")
+	}
+	const entry = 64 << 10
+	if want := jsprovision.ReadTerm + jsapi.Crossing(entry, pace); letters.carrying(q, entry).Term() != want {
+		t.Errorf("a dead letter's frame is read from the leader at a term of %v, want the read "+
+			"term and its reply's crossing at the connection's pace, %v",
+			letters.carrying(q, entry).Term(), want)
+	}
+	if want := jsapi.Sending(entry, pace); letters.copies.crossing(entry) != want {
+		t.Errorf("a dead letter's frame read raw waits %v for its crossing, want its own at "+
+			"the connection's pace, %v", letters.copies.crossing(entry), want)
 	}
 	synctest.Test(t, func(t *testing.T) {
 		js := &sendsJS{}

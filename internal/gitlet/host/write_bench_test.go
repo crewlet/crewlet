@@ -844,7 +844,7 @@ func (r *writeRig) seed(b *testing.B, todo []*writeBranchState) {
 			defer func() { <-slots }()
 			for i, content := range []string{"seed\n", "changed\n"} {
 				w := gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: r.repos[br.repo],
-					Principal: benchSeat(), OpID: opNow(),
+					Principal: benchSeat(), WrittenFor: types.ForNobody(), OpID: opNow(),
 					Fresh: statelog.FloorAt(statelog.ReadSession, r.seam.FloorOf(r.repos[br.repo])), Ref: br.ref,
 					ExpectedHead: br.head, Message: fmt.Sprintf("seed %d", i),
 					Files: []gitlet.FileOp{text(r.path(br, 0), content)}}
@@ -1585,8 +1585,9 @@ func (r *commitRig) warm(b *testing.B) {
 func (r *commitRig) build(b *testing.B, files int, dir string) {
 	b.Helper()
 	r.n++
-	w := gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: r.repo, Principal: r.who, OpID: opNow(),
-		Fresh: statelog.FloorAt(statelog.ReadSession, r.pos), Base: r.base, Message: fmt.Sprintf("build %d", r.n),
+	w := gitlet.EngineWrite{Kind: gitlet.WriteCommitFiles, RepoID: r.repo, Principal: r.who,
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: statelog.FloorAt(statelog.ReadSession, r.pos),
+		Base: r.base, Message: fmt.Sprintf("build %d", r.n),
 		Ref: fmt.Sprintf("refs/heads/seats/%s/b%06d", gitlettest.FixtureAlice, r.n)}
 	for j := range files {
 		w.Files = append(w.Files, text(path.Join(dir, fmt.Sprintf("new%06d-%04d.txt", r.n, j)),

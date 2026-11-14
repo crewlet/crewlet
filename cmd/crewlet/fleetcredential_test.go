@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nkeys"
 
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -30,7 +31,7 @@ var credentialKeys = [2][]byte{bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{
 // serverURL, or none when serverURL is empty.
 func credentialTierA(t *testing.T, serverURL string) (path string, material runtoken.Material) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	api := ""
 	if serverURL != "" {
 		host, port, err := net.SplitHostPort(strings.TrimPrefix(serverURL, "http://"))

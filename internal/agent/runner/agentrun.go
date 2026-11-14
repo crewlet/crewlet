@@ -252,6 +252,11 @@ type Continuation struct {
 	// on the new job, so that job is not carried on again for it.
 	SignInReplaced bool
 
+	// RequestRefused is a launch carrying on a round whose job's continued
+	// session its provider refused ([Refused]): recorded on the new job, so
+	// that job is not carried on again for it.
+	RequestRefused bool
+
 	// ContextTokens is what the last request of that session carried, as
 	// its newest capture measured it ([SessionBasis.ContextTokens]): what
 	// the relaunch sends again before Brief where it continues the session
@@ -634,13 +639,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 }
 
 // continueAgentRun carries on a run that parked on a person's question, now
-// answered ([Asked]), whose job was lost with its host ([Lost]), or which was
-// refused on a sign-in replaced while it ran ([Rotated]): the SAME round,
+// answered ([Asked]), whose job was lost with its host ([Lost]), which was
+// refused on a sign-in replaced while it ran ([Rotated]), or whose continued
+// session its provider refused ([Refused]): the SAME round,
 // relaunched rather than collected — continuing the session of the job it
 // follows, from that job's kept capture in whatever box the launch gets, or
 // as the job's own box holds it, and as a fresh run told what happened where
-// the session can be continued neither way. The launch decides which, once it
-// knows which box it has.
+// the session can be continued neither way, as a refused one never can. The
+// launch decides which, once it knows which box it has.
 //
 // A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
 // its phase is closed here as failed, saying why, and the turn ends with it.
@@ -820,7 +826,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// that the call a person approved is made: every brief below opens with it,
 	// and a later brief to a session that may lack the one its run reads tells
 	// it again (leads.go). None for a loss or a replaced sign-in, whose words
-	// every later brief's cut-off section says too.
+	// every later brief's cut-off section says too, nor for a provider's
+	// refusal, whose run did no work for a later session to lack.
 	own := ownLeads(state.Round, carry.lead())
 	// THE GUARD IS THE RELAUNCH'S FROM HERE, empty until its launch decides
 	// which session its run takes up ([Runner.sessionDecided]): the rebuild
@@ -891,6 +898,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Continue: &Continuation{
 			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
+			RequestRefused: isRefused(carry),
 			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
 			// it whether the turn kept it or not: the floor of a launch
 			// that continues it in its box.
@@ -1296,6 +1304,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// own calls' work made, which the closed round's record carries for the
 	// next segment's call log and nothing else reads.
 	work.Elided, work.Absorbed = elided, absorbed
+	// A JOB ITS PROVIDER REFUSED DID NO WORK TO JUDGE: the round carries the
+	// provider's message, and the loop ends the turn on it.
+	work.RequestRefused = r.cfg.Resume.RequestRefused
 	return work, described, nil
 }
 

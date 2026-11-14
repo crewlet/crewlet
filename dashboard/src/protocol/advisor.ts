@@ -6,6 +6,8 @@
  * when the administrator presses Apply, under the entity's own tag.
  */
 
+import type { AtlasKind } from "../contract/atlas.ts";
+
 /** What ignoring a finding costs. */
 export type AdvisorSeverity = "blocks" | "costs" | "note";
 
@@ -38,6 +40,7 @@ export interface AdvisorFix {
     | "open_setting"
     | "external_step"
     | "draft_with_assistant"
+    | "atlas_act"
     | "none"
     | (string & {});
   sentence: string;
@@ -49,11 +52,33 @@ export interface AdvisorFix {
   url?: string;
   /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
   prompt?: string;
+  /** The atlas tool call an `atlas_act` fix sends, once per entry the finding names. */
+  act?: AdvisorAtlasAct;
+}
+
+/**
+ * The atlas tool that fixes an atlas finding (`advisor.AtlasAct`): `args` is
+ * what every call carries, and `asks` what the reader adds before sending it.
+ */
+export interface AdvisorAtlasAct {
+  tool: "atlas_set_owner" | "atlas_relate" | "atlas_confirm" | "atlas_refresh" | (string & {});
+  args?: Record<string, string>;
+  asks?: "owner" | "monitor" | "value" | (string & {});
+}
+
+/** One atlas entry a finding names, sent only to a reader who holds the atlas app. */
+export interface AdvisorAtlasEntry {
+  id: string;
+  kind: AtlasKind;
+  key: string;
+  name: string;
+  /** Who the atlas names for it, where the finding is about that. */
+  owner?: { kind: "seat" | "unit" | (string & {}); name: string };
 }
 
 /** The one thing a finding is about. */
 export interface AdvisorSubject {
-  kind: "company" | "seat" | "schedule" | "integration" | "alarm" | (string & {});
+  kind: "company" | "seat" | "schedule" | "integration" | "alarm" | "atlas" | (string & {});
   seat?: string;
   unit?: string;
   schedule?: string;
@@ -65,13 +90,15 @@ export interface AdvisorFinding {
   class: string;
   severity: AdvisorSeverity;
   actor: AdvisorActor;
-  source: "static" | "evidence" | "reconcile";
+  source: "static" | "evidence" | "reconcile" | "atlas";
   area: string;
   subject: AdvisorSubject;
   title: string;
   why: string;
   path: string;
   evidence: { key: string; value: number }[];
+  /** At most five atlas entries the finding is about; absent for a reader without the atlas app. */
+  entries?: AdvisorAtlasEntry[];
   fix: AdvisorFix;
 }
 
@@ -89,7 +116,7 @@ export interface AdvisorNotice {
   since?: string;
   /** The nodes an alarm stands on. */
   nodes?: string[];
-  /** How a held conversation failed: `context_exhausted` or `out_of_memory`. */
+  /** How a held conversation failed: `context_exhausted`, `out_of_memory` or `request_refused`. */
   cause?: string;
   /** The alarm kind that raised a finding's notice, for a reader without the finding. */
   alarm?: string;
@@ -102,7 +129,8 @@ export interface AdvisorAnswer {
   /** What reaches the administrators' Inbox; absent from an engine older than the notices. */
   notices?: AdvisorNotice[];
   /**
-   * What the answer could not read (`integrations`, `work`, `ledger`, `pauses`, `runs`, `alarms`),
+   * What the answer could not read (`integrations`, `work`, `ledger`, `pauses`, `runs`, `alarms`,
+   * `atlas`, `atlas_sources`),
    * so a short list never reads as all clear.
    */
   unread: string[];

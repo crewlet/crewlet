@@ -42,7 +42,7 @@ func accountBucketAt(t *testing.T, cfg natsobj.Config,
 		ServerName:        "natsobj-leader-test",
 		JetStream:         true,
 		DontListen:        true,
-		StoreDir:          t.TempDir(),
+		StoreDir:          brokertest.TempDir(t),
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
 	})
 	if err != nil {

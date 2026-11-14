@@ -685,6 +685,21 @@ func Catalogue() []Instrument {
 				"pressed it.",
 		},
 
+		// ---- the notification service's inbound group ------------------
+		{
+			Name: NotifyInboundDeadLetterExpired, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Deliveries the notification service's inbound group never " +
+				"handled — a newer record's wake an older node passed until its " +
+				"budget was spent, or one a node that shed or stopped handed back " +
+				"last — that the dead-letter stream's retention " +
+				"(stream.event_retention_hours) let go before any node's replay " +
+				"delivered them: wakes lost for good. Counted once across the fleet, " +
+				"by the first data node whose alarm reading saw the entry within a " +
+				"beat of its expiry and then gone, through a claim a replay that " +
+				"drops an entry takes first, so a replayed entry is never counted. " +
+				"`inbound_dead_lettered` is raised while any waits.",
+		},
+
 		// ---- the work pickup ------------------------------------------
 		{
 			Name: WorkPickups, Kind: KindCounter, Unit: UnitCount,
@@ -810,8 +825,10 @@ func Catalogue() []Instrument {
 				"`unavailable` — which decided nothing; `handed_on`, one this " +
 				"node decided nothing of for a reason about itself (stopping, " +
 				"no chart to judge a seat by, behind the company's " +
-				"configuration), which the estate asks the repository's " +
-				"runner-up; and `failed`, any other error. `stale` climbing is " +
+				"configuration, a build that does not know a value whom the " +
+				"write is made for names), which the estate asks the " +
+				"repository's runner-up; and `failed`, any other error. " +
+				"`stale` climbing is " +
 				"askers writing against a change pushes keep moving; " +
 				"`handed_on` on one node and `applied` on another, a node that " +
 				"cannot judge its seats.",
@@ -1071,8 +1088,10 @@ func Catalogue() []Instrument {
 				"ask — which decided nothing; `handed_on`, one this node " +
 				"decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +
-				"or a reviewer by, behind the company's configuration), which " +
-				"the estate asks the repository's runner-up; and `failed`, any " +
+				"or a reviewer by, behind the company's configuration, a build " +
+				"that does not know a value whom the write is made for names), " +
+				"which the estate asks the repository's runner-up; and " +
+				"`failed`, any " +
 				"other error. `busy` climbing is a change written faster than " +
 				"one node writes it — its writes wait their turn one at a time " +
 				"— or one the change kept moving under for every round.",
@@ -1138,7 +1157,10 @@ func Catalogue() []Instrument {
 				"ended `errored runner_lost`; `mirrors`: its import or its pull " +
 				"mirror's sync STARTED, on a goroutine of its own, since a fetch " +
 				"from another host outlives a turn — `crewlet.code.import.chunks` " +
-				"and `crewlet.code.mirror.runs` count what each came to) and " +
+				"and `crewlet.code.mirror.runs` count what each came to; " +
+				"`atlas_code`: its deploy and dependency files read for the atlas " +
+				"where its default branch moved, at most fifty files a turn, or " +
+				"what they declared withdrawn where it is no longer scanned) and " +
 				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +

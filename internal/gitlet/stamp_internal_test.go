@@ -9,9 +9,8 @@ import (
 )
 
 // novelFields stands in for a field a later build adds to a code record, so
-// the stamping rule runs on a field the production table does not name — the
-// first versioned field the committer's successor adds meets a rule that
-// already runs.
+// the stamping rule runs on a field the production table does not name, under
+// a table this test holds still whatever rows the production one gains.
 var novelFields = statelog.RecordFields{
 	{Name: "PushBatch.Novel", Since: 2, Op: string(OpPush), Path: []string{"mutation", "novel"}},
 }
@@ -73,8 +72,8 @@ func TestACodeRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 			t.Fatalf("the production encoder on a %s: %v", op, err)
 		}
 		if got := stampOf(t, body); got != baseRecordVersion {
-			t.Fatalf("the production encoder stamped a %s %d, want %d — the table is "+
-				"empty, so nothing this build writes is above the base", op, got, baseRecordVersion)
+			t.Fatalf("the production encoder stamped a %s carrying no versioned field %d, want the base %d — "+
+				"a record that carries nothing new is read by every build", op, got, baseRecordVersion)
 		}
 	}
 }

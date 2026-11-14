@@ -1062,7 +1062,10 @@ turn a person woke — their message, their comment, a work item they assigned
 permission too: for a person without it, every code tool is refused, its
 executor is given no repository, and the seat tells them an administrator can
 give them Gitlet. Not even the seat's own branches are changed for them. A
-colleague seat's turn is held to that colleague's grant as well ([Reads made
+colleague seat's turn is held to that colleague's grant as well, and a turn
+woken by a change, a review, a comment or a push a colleague made while it
+worked for somebody is held to that somebody instead, as on Worklet, Doclet and
+Chatlet ([Reads made
 for somebody else](../concepts/gitlet.md#reads-made-for-somebody-else),
 [Writes made for somebody else](../concepts/gitlet.md#writes-made-for-somebody-else)).
 

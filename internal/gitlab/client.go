@@ -76,45 +76,106 @@ func NewClient(opts ClientOptions) (*Client, error) {
 // URL is the instance base, without the API path.
 func (c *Client) URL() string { return c.base }
 
-func (c *Client) get(ctx context.Context, path string, params url.Values, out any) error {
+// open sends one GET and answers its response, open, for a status below 400.
+// The caller closes the body.
+func (c *Client) open(ctx context.Context, path string, params url.Values, accept string) (*http.Response, error) {
 	target := c.base + APIPath + path
 	if len(params) > 0 {
 		target += "?" + params.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fmt.Errorf("gitlab: %s: %w", path, err)
+		return nil, fmt.Errorf("gitlab: %s: %w", path, err)
 	}
 	// PRIVATE-TOKEN rather than a bearer, which GitLab accepts for both a
 	// personal access token and a group one. Bearer is for OAuth tokens
 	// only and 401s on a PAT — the same credential, rejected purely on
 	// which header carried it.
 	req.Header.Set("PRIVATE-TOKEN", c.token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("gitlab: %s: %w", path, err)
+		return nil, fmt.Errorf("gitlab: %s: %w", path, err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
 		// TYPED, like the write half's. A caller deciding what a refusal
 		// means — 404 is "not there yet", 403 is "this credential
 		// cannot" — would otherwise substring-match a message whose
 		// wording differs by GitLab version and by locale.
-		return &APIError{
+		return nil, &APIError{
 			Method: http.MethodGet, Path: path, Status: resp.StatusCode,
 			Detail: httpx.ReadRefusal(resp),
 		}
 	}
+	return resp, nil
+}
+
+func (c *Client) get(ctx context.Context, path string, params url.Values, out any) error {
+	_, err := c.getPage(ctx, path, params, out)
+	return err
+}
+
+// getPage is get for one page of a listing GitLab pages by keyset: it also
+// answers what to add to the query for the page after it, nil at the last.
+func (c *Client) getPage(ctx context.Context, path string, params url.Values, out any) (url.Values, error) {
+	resp, err := c.open(ctx, path, params, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	if out == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return nil
+		return nil, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
-		return fmt.Errorf("gitlab: decode %s: %w", path, err)
+		return nil, fmt.Errorf("gitlab: decode %s: %w", path, err)
+	}
+	return nextPage(resp.Header), nil
+}
+
+// nextPage reads where a listing goes on from its response's headers: the
+// page token of the `next` link a keyset listing sends, or the page number an
+// instance that pages by offset sends instead. Nil is the last page.
+func nextPage(h http.Header) url.Values {
+	for _, link := range strings.Split(h.Get("Link"), ",") {
+		target, rel, _ := strings.Cut(link, ";")
+		if !strings.Contains(rel, `rel="next"`) {
+			continue
+		}
+		u, err := url.Parse(strings.Trim(strings.TrimSpace(target), "<>"))
+		if err != nil {
+			continue
+		}
+		for _, key := range []string{"page_token", "page"} {
+			if v := u.Query().Get(key); v != "" {
+				return url.Values{key: {v}}
+			}
+		}
+	}
+	if n := strings.TrimSpace(h.Get("X-Next-Page")); n != "" {
+		return url.Values{"page": {n}}
 	}
 	return nil
+}
+
+// getRaw reads a response's body as it is, at most limit bytes of it, and
+// reports a body past limit, of which it answers nothing.
+func (c *Client) getRaw(ctx context.Context, path string, limit int64) (raw []byte, oversize bool, err error) {
+	resp, err := c.open(ctx, path, nil, "application/octet-stream")
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	raw, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("gitlab: read %s: %w", path, err)
+	}
+	if int64(len(raw)) > limit {
+		return nil, true, nil
+	}
+	return raw, false, nil
 }
 
 // Me is the account this credential authenticates as.

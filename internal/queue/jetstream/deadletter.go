@@ -57,11 +57,21 @@ import (
 //     current holds it to them — the alarm's reading lists again only when
 //     they moved, and takes a listing as current only when its counts are
 //     the marks' (internal/engine's deadLetterWatch).
-//   - A FRAME ([Queue.DeadLetterFrame]) is the leader's message read by
-//     sequence, `STREAM.MSG.GET` ([jsapi.Leader]): the one read that moves a
-//     payload, made by the one reader that acts on it — a feed's replay — and
-//     asked of the leader, so an entry is never reported gone because a
-//     replica had not heard of it.
+//   - A FRAME ([Queue.DeadLetterFrame]) is the one read that moves a payload,
+//     made by the one reader that acts on it — a feed's replay — and never
+//     reports an entry gone because a replica had not heard of it. It is the
+//     leader's message read by sequence, `STREAM.MSG.GET` ([jsapi.Leader]),
+//     wherever that read's reply reaches this node: on a member's own
+//     connection, and across a link no leaf stands on, given there the time
+//     the largest entry's reply takes to cross. ACROSS A LEAF'S LINK an entry
+//     may be too large for that reply to cross it — the reply is JSON, the
+//     entry base64-encoded inside it, and a leaf's server closes its whole
+//     link on a message past the transport — so it is found from its headers
+//     first, through a consumer on the leader's own copy ([copyRead.at]),
+//     read with the leader's message read where its own reply crosses the
+//     link, and otherwise read RAW through such a consumer
+//     ([copyRead.message]): the leader's answer either way, as copyread.go
+//     says.
 //
 // # One entry for one identity
 //
@@ -74,19 +84,24 @@ import (
 // is declared (engineStreams), and a retention shorter than it is one the
 // broker refuses the stream for (Tier A refuses it first).
 //
-// THE DELIVERY BUDGET'S DEAD LETTER NAMES NONE ([Queue.deadLetter]): the
-// broker never hands a subscription's message past its MaxDeliver to anybody
-// (nats-server v2.15.2, server/consumer.go:2430-2457, hasMaxDeliveries,
-// asked as the acknowledgement window lapses at :6185-6191), and the budget's
-// keep is of the delivery that reached it, so no second node is ever handed
-// the message it keeps.
+// THE DELIVERY BUDGET'S DEAD LETTER NAMES ONE TOO ([Queue.deadLetter]), on
+// either of its pair's subjects, poison's or the unhandled deliveries'
+// ([queue.RetiredTo]): the message the broker stored, its stream, its sequence
+// and its instant ([letterOf]). A message whose keep failed goes back for its
+// next delivery to keep — the broker's backstop stands past the budget for
+// that ([keepRetries]) — and a keep that stored its entry and lost its answer
+// failed as far as its keeper heard, so the identity is what makes the keep
+// made again come to nothing. A copy too large for the identity's header
+// beside it is kept with none, and twice at worst.
 //
-// A DROP ([Queue.DropDeadLetter]) asks the leader which subject the sequence
-// is on before it deletes it — the same message read, so it moves the payload
-// of the one entry it removes: the pinned server has no read of a message's
-// subject without it (above), and a consumer's would answer from a replica,
-// where an entry not yet heard of reads as already gone and the drop would
-// answer done having removed nothing.
+// A DROP ([Queue.DropDeadLetter]) asks which subject the sequence is on before
+// it deletes it, and the delete is the leader's. Wherever the leader's read
+// reaches this node the check is that read, so it moves the payload of the
+// one entry it removes: the pinned server has no read of a message's subject
+// without it (above). ACROSS A LEAF'S LINK it reads the entry's HEADERS
+// ALONE, through a consumer on the leader's own copy ([copyRead.at]) — never a
+// replica's, where an entry not yet heard of would read as already gone and
+// the drop answer done having removed nothing.
 
 // letterHeader is the header a dead letter's keeper's header rides in, beside
 // the stream the keep expects (`Nats-Expected-Stream`).
@@ -101,8 +116,11 @@ const letterHeader = "Crewlet-Dead-Letter"
 // stalled roll can leave on one subject take two.
 const letterPage = 500
 
-// letterQuiet is how long one pull of a listing waits for its entries before
-// the listing asks its consumer what it still holds.
+// letterQuiet is how long a reader of a throwaway consumer — a listing, or a
+// copy read ([copyRead]) — hears nothing from its pull before it asks the
+// consumer what it says of itself ([pulling.quiet]); a pull the consumer
+// says it is answering, a whole message crossing a link among them, is
+// waited on past it.
 //
 // ONE SECOND, internal/objstore/natsobj's quietWait, for its reason: a cluster
 // drops a new consumer's FIRST PULL routinely — the member that made the
@@ -130,10 +148,10 @@ func (q *Queue) KeepDeadLetter(ctx context.Context, subject, id string, header, 
 	}
 	// THE CONTRACT'S CEILING FOR A KEEP, before the transport's: the twin
 	// refuses exactly these, so the two never disagree about an entry whose
-	// header block would take it past the transport ([queue.LetterFraming]).
-	if size := len(header) + len(body); size+queue.LetterFraming > queue.MaxPayloadBytes {
+	// header block would take it past the transport ([queue.LetterFits]).
+	if !queue.LetterFits(header, body) {
 		return false, fmt.Errorf("keep a dead letter on %s: %d bytes of header and body exceed the "+
-			"%d-byte limit less the %d a keep is framed in: %w", subject, size,
+			"%d-byte limit less the %d a keep is framed in: %w", subject, len(header)+len(body),
 			queue.MaxPayloadBytes, queue.LetterFraming, queue.ErrTooLarge)
 	}
 	stream, err := q.streamFor(ctx, subject)
@@ -211,33 +229,23 @@ func (q *Queue) DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept
 	if err != nil {
 		return nil, err
 	}
-	q.noteConsumerProposal()
-	cons, err := q.js.CreateConsumer(ctx, letters.stream, jetstream.ConsumerConfig{
+	cons, drop, err := q.throwaway(ctx, letters.stream, jetstream.ConsumerConfig{
 		Description:   "a listing of the dead letters on " + subject + ", headers only",
 		FilterSubject: subject,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
-		AckPolicy:     jetstream.AckNonePolicy,
 		// NO PAYLOAD CROSSES: the broker delivers each entry's headers,
 		// the keeper's among them, and the payload's size in place of the
 		// payload.
 		HeadersOnly: true,
-		// A READER'S THROWAWAY, as a peek's is: one replica, in memory,
-		// reaped if this listing dies before it deletes it.
-		Replicas:          1,
-		MemoryStorage:     true,
-		InactiveThreshold: peekBackstop,
+		// A READER'S THROWAWAY, as a peek's is: one replica, in memory.
+		Replicas:      1,
+		MemoryStorage: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list the dead letters on %s: %w", subject, q.brokerFailed(ctx, err))
 	}
-	defer func() {
-		// WithoutCancel, for peek's reason: a cleanup that inherits the
-		// cancellation it is cleaning up after does nothing at all.
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), peekCleanup)
-		defer stop()
-		_ = q.js.DeleteConsumer(cleanup, letters.stream, cons.CachedInfo().Name)
-	}()
-	kept, err := letters.headers(ctx, cons)
+	defer drop()
+	kept, err := letters.headers(ctx, q, cons)
 	if err != nil {
 		return nil, fmt.Errorf("list the dead letters on %s: %w", subject, q.brokerFailed(ctx, err))
 	}
@@ -245,81 +253,73 @@ func (q *Queue) DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept
 }
 
 // headers is every entry cons delivers, in order, until it says nothing is
-// pending — read a pull of [letterPage] at a time, each waited for no longer
-// than [letterQuiet].
+// pending — asked a pull of [letterPage] at a time on one inbox the listing
+// holds throughout ([pulling]), each waited for no longer than [letterQuiet],
+// so an entry delivered to a pull that has expired still reaches the
+// listing, in its place: the consumer's delivery count guards every entry,
+// and one missing from a listing reads to its reader as one that is gone.
 //
 // THE CONSUMER'S OWN COUNT DECIDES THE END, never a quiet pull: a pull that
-// brought nothing asks the consumer, which ends the listing where it holds
-// nothing more and has delivered nothing this listing missed, and pulls again
-// where it still holds entries — for as long as the server keeps a silence
+// brought nothing asks the consumer ([pulling.quiet]), which ends the listing
+// where it holds nothing more and has delivered nothing this listing has not
+// had, and is pulled again where it still holds entries or has delivered some
+// still on their way — for as long as the server keeps a silence
 // ([jsprovision.LookupBudget]), past which the listing fails rather than
-// answer short. A delivery the consumer counted and this listing never
-// received — a gap in its delivery count — fails the listing too: an entry
-// missing from a listing reads to its reader as one that is gone.
-func (s letterStream) headers(ctx context.Context, cons jetstream.Consumer) ([]queue.Kept, error) {
+// answer short.
+func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Consumer) ([]queue.Kept, error) {
 	pending := cons.CachedInfo().NumPending
+	if pending == 0 {
+		return nil, nil
+	}
+	p, err := q.pulls(s.stream, cons)
+	if err != nil {
+		return nil, err
+	}
+	defer p.stop()
 	var (
 		out []queue.Kept
-		// delivered is the consumer's count of the last delivery taken,
-		// and heard when one last arrived.
-		delivered uint64
-		heard     = time.Now()
+		// heard is when an entry last arrived.
+		heard = time.Now()
 	)
 	for pending > 0 {
-		// A PULL IS BOUNDED BY ITS OWN WAIT, never the caller's context —
-		// the client takes one or the other (nats.go v1.55.0,
-		// jetstream/pull.go:889-891) — so the caller's is asked before
-		// each: a listing whose caller went stops within one quiet pull.
-		if err := ctx.Err(); err != nil {
+		asked := int(min(pending, letterPage))
+		if err := p.ask(asked, letterQuiet, 0); err != nil {
 			return nil, err
 		}
-		batch, err := cons.Fetch(int(min(pending, letterPage)), jetstream.FetchMaxWait(letterQuiet))
-		if err != nil {
-			return nil, err
-		}
-		got := 0
-		for msg := range batch.Messages() {
-			meta, metaErr := msg.Metadata()
-			if metaErr != nil {
-				return nil, fmt.Errorf("an entry was delivered with no position this build "+
-					"can read: %w", metaErr)
-			}
-			if meta.Sequence.Consumer != delivered+1 {
-				return nil, fmt.Errorf("the listing's consumer counted delivery %d after %d: "+
-					"an entry it delivered never arrived", meta.Sequence.Consumer, delivered)
-			}
-			delivered = meta.Sequence.Consumer
-			out = append(out, s.kept(meta.Sequence.Stream, meta.Timestamp, msg.Headers()))
-			got++
-			if pending = meta.NumPending; pending == 0 {
+		took := 0
+		for took < asked && pending > 0 {
+			d, err := p.within(ctx, letterQuiet)
+			if errors.Is(err, errQuiet) || errors.Is(err, errExpired) {
 				break
 			}
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, s.kept(d.meta.Sequence.Stream, d.meta.Timestamp, d.msg.Header))
+			pending = d.meta.NumPending
+			took++
 		}
-		if err = batch.Error(); err != nil {
-			return nil, err
-		}
-		if got > 0 {
+		if took > 0 {
 			heard = time.Now()
 			continue
 		}
-		info, err := cons.Info(ctx)
-		if err != nil {
+		says, info, err := p.quiet(ctx)
+		switch {
+		case err != nil:
 			return nil, err
+		case says == drained:
+			return out, nil
 		}
-		if info.Delivered.Consumer != delivered {
-			return nil, fmt.Errorf("the listing's consumer delivered %d entries and %d arrived",
-				info.Delivered.Consumer, delivered)
-		}
-		if pending = info.NumPending; pending > 0 && time.Since(heard) >= jsprovision.LookupBudget {
+		if pending = p.owed(info); time.Since(heard) >= jsprovision.LookupBudget {
 			return nil, fmt.Errorf("the listing's consumer delivered nothing for %v while it "+
-				"held %d entries", jsprovision.LookupBudget, pending)
+				"owed %d entries", jsprovision.LookupBudget, pending)
 		}
 	}
 	return out, nil
 }
 
 // DeadLetterFrame implements queue.EventQueue: the payload of the entry seq,
-// read from the stream's leader, once the leader says seq holds an entry of
+// as the stream's leader holds it, once the leader says seq holds an entry of
 // subject.
 func (q *Queue) DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error) {
 	if seq == 0 {
@@ -329,7 +329,46 @@ func (q *Queue) DeadLetterFrame(ctx context.Context, subject string, seq uint64)
 	if err != nil {
 		return nil, false, err
 	}
-	msg, err := letters.leader.At(ctx, seq)
+	if letters.copies == nil {
+		return letters.frame(ctx, q, letters.leader, subject, seq)
+	}
+	// ACROSS A LEAF'S LINK: what the sequence holds is found from its
+	// headers, on the leader's own copy, before anything is read whole.
+	at, err := letters.copies.at(ctx, seq)
+	switch {
+	case err != nil:
+		return nil, false, fmt.Errorf("read dead letter %d on %s: %w", seq, subject, q.brokerFailed(ctx, err))
+	case !at.held:
+		return nil, false, nil
+	case at.subject != subject:
+		return nil, false, fmt.Errorf("jetstream: dead letter %d is on %s, not %s; nothing was read",
+			seq, at.subject, subject)
+	case q.leaderCarries(at.bytes):
+		// ITS LEADER'S REPLY CROSSES THE LINK, inside the ceiling, so the
+		// leader answers, given the time that reply takes to cross
+		// ([jsapi.Leader.Carrying]).
+		return letters.frame(ctx, q, letters.carrying(q, at.bytes), subject, seq)
+	}
+	msg, held, err := letters.copies.message(ctx, seq, at)
+	if err != nil {
+		return nil, false, fmt.Errorf("read dead letter %d on %s: %w", seq, subject, q.brokerFailed(ctx, err))
+	}
+	return msg.data, held, nil
+}
+
+// carrying is the stream leader's read of an entry of entryBytes on q's
+// connection: presumed lost only once its reply has had time to cross the
+// connection at its pace ([jsapi.Leader.Carrying], [link.pace]).
+func (s letterStream) carrying(q *Queue, entryBytes int) *jsapi.Leader {
+	return s.leader.Carrying(entryBytes, q.link.pace)
+}
+
+// frame is the entry at seq on subject as leader reads it from the stream's
+// leader, refused where seq is another subject's entry.
+func (s letterStream) frame(ctx context.Context, q *Queue, leader *jsapi.Leader, subject string,
+	seq uint64) ([]byte, bool, error) {
+
+	msg, err := leader.At(ctx, seq)
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):
 		return nil, false, nil
@@ -399,8 +438,9 @@ func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) 
 	}
 	// A PEER THAT DROPPED IT FIRST: the broker refuses to delete a message
 	// that is no longer there, and that is the outcome this call asked for.
-	// Asked again of the leader rather than read off the refusal's words,
-	// which the client folds into one sentinel with every other refusal.
+	// Asked again rather than read off the refusal's words, which the client
+	// folds into one sentinel with every other refusal — of the leader's own
+	// copy either way, the one that refused the delete.
 	if gone, err = letters.gone(ctx, q, subject, seq); err == nil && gone {
 		return nil
 	}
@@ -408,19 +448,31 @@ func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) 
 }
 
 // letterStream is the dead-letter stream as one verb reads it: its name, a
-// reader of its leader and how long it keeps an entry.
+// reader of its leader, how long it keeps an entry, and — where an entry may
+// be too large for its leader's reply to reach this node — a reader of its
+// copies.
 type letterStream struct {
 	stream string
+	// leader reads the stream's leader: given the largest entry's reply's
+	// crossing where the connection crosses a link the leader's read is kept
+	// across, and none where it reads through copies, whose read gives each
+	// entry its own ([letterStream.carrying]).
 	leader *jsapi.Leader
 	// keep is the stream's own age bound, zero for a stream kept by none.
 	keep time.Duration
+	// copies reads an entry through a consumer on the leader's own copy
+	// where a leaf's link stands between the connection and the leader,
+	// and is nil wherever the leader's read reaches it whole
+	// ([Queue.leaderCarries]).
+	copies *copyRead
 }
 
 // deadLetters opens subject's stream for a dead-letter verb: refused for a
 // subject outside the namespace, provisioned through the one door every verb
-// passes ([Queue.streamFor]), and read from its leader with a term that covers
-// an entry as large as the transport carries where the connection crosses a
-// link, at the connection's one pace ([Queue.recordCrossing]'s reason).
+// passes ([Queue.streamFor]), and read from its leader — and, where a leaf's
+// link stands between the connection and the leader, past which a leader's
+// reply of an entry as large as the transport carries cannot reach this node
+// ([Queue.leaderCarries]), from its copies as well.
 func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, error) {
 	if err := deadLetterSubject(subject); err != nil {
 		return letterStream{}, err
@@ -437,10 +489,20 @@ func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, 
 	if err != nil {
 		return letterStream{}, fmt.Errorf("jetstream: read the dead letters on %s: %w", subject, err)
 	}
-	if q.pace > 0 {
-		leader = leader.Carrying(int(q.nc.MaxPayload()), q.pace)
+	letters := letterStream{stream: stream, leader: leader, keep: spec.maxAge}
+	switch {
+	case !q.leaderCarries(int(q.nc.MaxPayload())):
+		// ACROSS A LEAF'S LINK: an entry is found from its headers, and
+		// read by its own size ([Queue.DeadLetterFrame]).
+		letters.copies = q.copiesOf(stream, leader)
+	case q.link.pace > 0:
+		// ACROSS A LINK NO LEAF STANDS ON — a dial to a broker somebody
+		// else runs — the leader's read, given the time an entry as large
+		// as the transport carries takes to cross at the connection's
+		// pace: nothing there holds its reply to the transport.
+		letters.leader = leader.Carrying(int(q.nc.MaxPayload()), q.link.pace)
 	}
-	return letterStream{stream: stream, leader: leader, keep: spec.maxAge}, nil
+	return letters, nil
 }
 
 // kept is the entry stored at seq at stored, with headers, as the contract
@@ -457,8 +519,20 @@ func (s letterStream) kept(seq uint64, stored time.Time, headers nats.Header) qu
 }
 
 // gone reports whether seq holds no entry any more, and refuses a seq whose
-// entry is another subject's.
+// entry is another subject's — across a leaf's link from the entry's headers
+// alone, through a consumer on the leader's own copy ([copyRead.at]).
 func (s letterStream) gone(ctx context.Context, q *Queue, subject string, seq uint64) (bool, error) {
+	if s.copies != nil {
+		at, err := s.copies.at(ctx, seq)
+		switch {
+		case err != nil:
+			return false, fmt.Errorf("read dead letter %d on %s: %w", seq, subject, q.brokerFailed(ctx, err))
+		case at.held && at.subject != subject:
+			return false, fmt.Errorf("jetstream: dead letter %d is on %s, not %s; nothing was dropped",
+				seq, at.subject, subject)
+		}
+		return !at.held, nil
+	}
 	msg, err := s.leader.At(ctx, seq)
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):

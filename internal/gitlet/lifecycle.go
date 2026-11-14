@@ -165,10 +165,10 @@ type LifecycleRequest struct {
 	// Import is a create's, and only a create's: the repository at another
 	// host it is filled from ([CreateRepo.Import]) — a person's alone (U49
 	// a), and nil for none. A request is no record, so it takes no
-	// versionedFields row: the create it leads to carries it, and
-	// CreateRepo.Import names the row that takes (mirror.go). It crosses the
-	// estate's wire to whichever data node decides it under the code
-	// domain's stated condition, as RepoChange.PathOwners does.
+	// versionedFields row: the create it leads to carries it, in the base
+	// format (mirror.go). It crosses the estate's wire to whichever data node
+	// decides it, and every node asked it reads it: the domain landed on main
+	// with it ([RecordVersion]).
 	Import *ImportSource `json:"import,omitempty"`
 	// Change is a settings request's fields, each nil left as it stands.
 	Change *RepoChange `json:"change,omitempty"`
@@ -186,10 +186,9 @@ type LifecycleRequest struct {
 	// refused — but for the seat's own work, which whoever woke it steers.
 	//
 	// A request is no record, so this field takes no versionedFields row; it
-	// crosses the estate's wire to whichever data node decides it under the
-	// code domain's stated condition — no build carrying the domain has run
-	// without it, none of the domain being on main — so every node asked it
-	// reads it.
+	// crosses the estate's wire to whichever data node decides it, and every
+	// node asked it reads it: the domain landed on main with it
+	// ([RecordVersion]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// TurnID is a hold's, and only a hold's: the turn taking it, recorded on
 	// its [Hold] so a reader of the log can say whose hold ordered an expiry.
@@ -198,12 +197,10 @@ type LifecycleRequest struct {
 	// turn holds ([Holdable]), whose row the decide reads — or "" for a hold
 	// on the scratch repository itself.
 	//
-	// A request is no record, so this field takes no versionedFields row of
-	// its own ([Hold.Ref] names the one the record takes); it crosses the
-	// estate's wire to whichever data node decides it under the code
-	// domain's stated condition — no build carrying the domain has run
-	// without it, none of the domain being on main — so every node asked it
-	// reads it.
+	// A request is no record, so this field takes no versionedFields row
+	// ([Hold.Ref] is the record's, in the base format); it crosses the
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Ref string `json:"ref,omitempty"`
 	// Seen is a hold's, and only a hold's: the position the turn's read of
 	// what it holds answered at — the repository's resolution
@@ -229,9 +226,9 @@ type RepoChange struct {
 	//
 	// A request is no record, so this field takes no versionedFields row: the
 	// record a settings change leads to carries the repository's settings
-	// whole, and [RepoSettings.Search] names the row those take. It crosses
-	// the estate's wire to whichever data node decides it under the code
-	// domain's stated condition, as PathOwners below does.
+	// whole, in the base format ([RepoSettings.Search]). It crosses the
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Search *SearchMode `json:"search,omitempty"`
 	// Owner is a PROJECT repository's new owner: a scratch repository stays
 	// its seat's own.
@@ -241,11 +238,9 @@ type RepoChange struct {
 	//
 	// A request is no record, so this field takes no versionedFields row:
 	// the record a settings change leads to carries the repository's settings
-	// whole, and [RepoSettings.PathOwners] names the row those take. It
-	// crosses the estate's wire to whichever data node decides it, under the
-	// code domain's stated condition — no build carrying the domain has run
-	// without it, none of the domain being on main — so every node asked it
-	// reads it.
+	// whole, in the base format ([RepoSettings.PathOwners]). It crosses the
+	// estate's wire to whichever data node decides it, and every node asked
+	// it reads it: the domain landed on main with it ([RecordVersion]).
 	PathOwners *PathOwnersChange `json:"path_owners,omitempty"`
 	// MirrorFrom and MirrorTo set a PROJECT repository's pull mirror and push
 	// mirror ([RepoSettings.MirrorFrom], [RepoSettings.MirrorTo]): nil leaves
@@ -253,9 +248,10 @@ type RepoChange struct {
 	// whole. A person's alone (U49 a): an agent asking either is refused
 	// not_permitted whatever its grant ([lifecycleRefusal]). A request is no
 	// record, so neither takes a versionedFields row: the record the change
-	// leads to carries the settings whole, and RepoSettings' fields name the
-	// rows those take (mirror.go). Each crosses the estate's wire under the
-	// code domain's stated condition, as PathOwners does.
+	// leads to carries the settings whole, in the base format (mirror.go).
+	// Each crosses the estate's wire to whichever data node decides it, and
+	// every node asked it reads it: the domain landed on main with them
+	// ([RecordVersion]).
 	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
 	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
 }
@@ -435,11 +431,10 @@ func (c PathOwnersChange) applyTo(owners []PathOwner) []PathOwner {
 //
 // A REQUEST IS NO RECORD, so none of these fields takes a versionedFields
 // row: the record a protect request leads to carries the repository's
-// settings whole, whose rules' push controls are the code domain's base
-// format and whose gates take the row [MergeGate] names. It crosses the
-// estate's wire to whichever data node decides it, under the code domain's
-// stated condition — no build carrying the domain has run without it, none of
-// the domain being on main — so every node asked it reads it.
+// settings whole, its rules' push controls and their gates in the base format
+// ([MergeGate]). It crosses the estate's wire to whichever data node decides
+// it, and every node asked it reads it: the domain landed on main with it
+// ([RecordVersion]).
 type ProtectChange struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern string `json:"pattern"`
@@ -529,14 +524,9 @@ type LifecycleResult struct {
 	// became without reading the repository's every rule whole.
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Gates]': no
-	// build that carries the code domain has run without this field — none
-	// of the domain is on main, so no image and no release serves a
-	// lifecycle request. A build that predated it would answer a protect
-	// request with no rule, which its caller would read as the pattern
-	// holding none; so were a build without it ever to run first, the rule
-	// would move to an answer of its own rather than ride a field such a
-	// build leaves out.
+	// versionedFields row. The domain landed on main with it
+	// ([RecordVersion]), so every node that serves a lifecycle request
+	// answers it.
 	Rule *Protection `json:"rule,omitempty"`
 	// Refusal names why the request was refused; empty where it was not.
 	Refusal LifecycleRefusal `json:"refusal,omitempty"`

@@ -455,15 +455,17 @@ func withHeld(leadHeld []string, again toldAgain) []string {
 //
 // A run that starts a session of its own holds none of the briefs before it: a
 // fresh run carrying a round on (a loss, an answer or a replaced sign-in whose
-// job's session its launch continues neither way), a send-back that starts one,
-// and the session its conversation's last turn left, handed either brief whole.
-// Its brief told it the turn's task, its closed rounds' calls and reviews and
-// every note, and of the answers a person gave the work only the newest, the one
-// carrying its round on now, if any: the prior-work ledger carries calls,
-// intents, text and reviews, never a person's reply, by design, since a review's
-// evidence is the run's calls ([RefusedReply]). So an answer that carried an
-// earlier job on, in this round or a round a review sent back, an instruction a
-// person gave the work, was lost to the next session that started afresh.
+// job's session its launch continues neither way, and a provider's refusal of
+// the session its job continued, which no launch continues), a send-back that
+// starts one, and the session its conversation's last turn left, handed either
+// brief whole. Its brief told it the turn's task, its closed rounds' calls and
+// reviews and every note, and of the answers a person gave the work only the
+// newest, the one carrying its round on now, if any: the prior-work ledger
+// carries calls, intents, text and reviews, never a person's reply, by design,
+// since a review's evidence is the run's calls ([RefusedReply]). So an answer
+// that carried an earlier job on, in this round or a round a review sent back,
+// an instruction a person gave the work, was lost to the next session that
+// started afresh.
 //
 // So such a brief tells every answer the run keeps beside its record, the
 // turn's whole (sandbox.PendingStore.Leads), before what carries its round on

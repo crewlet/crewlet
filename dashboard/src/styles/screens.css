@@ -6868,6 +6868,11 @@ a.work-cal-chip {
   align-items: flex-start;
   min-width: 0;
 }
+/* A column sizes each line to its words, so a line is held to the row's
+   width here: a name is cut with its ellipsis, and a sentence wraps. */
+.home-widget-line > * {
+  max-width: 100%;
+}
 /* A seat's own card is the widget, so it fills the cell it is placed in. */
 .home-agents-seat {
   display: flex;
@@ -6901,10 +6906,20 @@ a.work-cal-chip {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
-  padding: 10px var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
 }
 .decision-item + .decision-item {
   border-top: 1px solid var(--color-edge-hairline);
+}
+/* WHAT A DECISION IS READ FROM (an escalation, the arguments) is a row of its
+   own across both columns, one step between its blocks: held to the words'
+   column, it left the column under the controls empty for as long as it ran. */
+.decision-detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
 }
 .decision-text {
   display: flex;
@@ -6955,12 +6970,6 @@ a.work-cal-chip {
   justify-content: flex-end;
   gap: 6px;
 }
-/* A ROW WHOSE WORDS OPEN (a held call's arguments) keeps its controls on the
-   title's line: centred on the words, the buttons moved under the pointer as
-   the arguments opened. */
-.decision-item.is-pinned > .decision-actions {
-  align-self: start;
-}
 /* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
    and what every row under it shares (the item, the role, how long ago). */
 .decision-group {
@@ -6970,9 +6979,9 @@ a.work-cal-chip {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-2);
   min-width: 0;
-  padding: 6px var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-4);
   border-bottom: 1px solid var(--color-border-default);
   background: var(--color-surface-inset);
 }
@@ -7041,21 +7050,6 @@ a.work-cal-chip {
 }
 .decision-answered-rec {
   color: var(--color-text-tertiary);
-}
-
-/* AN ESCALATED CALL'S DELEGATES (components/Delegation.tsx): each delegate's
-   answer, then the engine's sentences, one block apart inside the callout,
-   held to a reading measure like the run's banner below. */
-.delegation-note .delegation-answer {
-  max-width: 72ch;
-}
-.delegation-note .delegation-answer + .delegation-answer {
-  margin-block-start: var(--spacing-3);
-}
-.delegation-reasons {
-  margin: 0;
-  padding-inline-start: var(--spacing-5);
-  list-style: disc;
 }
 
 /* A HELD MERGE OR DEPLOY (components/Delegation.tsx): the agent's values kept

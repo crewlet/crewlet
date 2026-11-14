@@ -345,7 +345,7 @@ func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"already_known": o.known, "said": "The atlas already holds this, so nothing was recorded."})
 		return r, nil
 	}
-	evidence, refusal := o.ground(turn, settings.Company, argString(args, "seen_in"))
+	seen, refusal := o.ground(turn, settings.Company, argString(args, "seen_in"))
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -366,7 +366,7 @@ func (t *atlasAgentWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"%d times a day in the atlas, and today's are used. Do not call it again today.", t.Name(),
 			AtlasRecordsPerDay)), nil
 	}
-	return t.write(ctx, actor, o, subject, evidence, args), nil
+	return t.write(ctx, actor, o, subject, seen, args), nil
 }
 
 // readAtlasNow reads what a write to the atlas is decided on: the atlas as the
@@ -691,7 +691,9 @@ func (o *observing) planDispute(a map[string]any) (atlas.Ref, *tools.Result) {
 // ground holds every claim to the cited call: an answer of the tool seenIn
 // names, made in this turn, that shows what each claim states. The newest
 // such answer is the evidence, and its class is the record's.
-func (o *observing) ground(turn *turnctx.Turn, c *config.Company, seenIn string) (atlas.Evidence, *tools.Result) {
+func (o *observing) ground(turn *turnctx.Turn, c *config.Company, seenIn string) (atlasdomain.Observation,
+	*tools.Result) {
+	seen := atlasdomain.Observation{Turn: o.turn}
 	tool := strings.TrimSpace(seenIn)
 	answers, dropped := turn.Answers().Of(tool)
 	if len(answers) == 0 {
@@ -701,7 +703,7 @@ func (o *observing) ground(turn *turnctx.Turn, c *config.Company, seenIn string)
 		}
 		r := refused(tools.RefusalInvalid, fmt.Sprintf("%s recorded nothing: `seen_in` names a tool you "+
 			"called in this turn, and %s. Make the read in this turn, then record what it shows.", o.tool, why))
-		return "", &r
+		return seen, &r
 	}
 	var missing []string
 	for _, answer := range answers {
@@ -712,13 +714,19 @@ func (o *observing) ground(turn *turnctx.Turn, c *config.Company, seenIn string)
 			}
 		}
 		if len(missing) == 0 {
-			return evidenceOf(c, answer), nil
+			// THE CALL'S OWN TOOL, as the turn recorded it, never the name
+			// the agent typed: kept where it is a name a record keeps.
+			seen.Evidence = evidenceOf(c, answer)
+			if atlas.CitableTool(answer.Tool) {
+				seen.Tool = answer.Tool
+			}
+			return seen, nil
 		}
 	}
 	r := refused(tools.RefusalInvalid, fmt.Sprintf("%s recorded nothing: no answer of %s in this turn shows "+
 		"%s. Record only what the cited call's answer shows, as it shows it.", o.tool, clip(tool),
 		strings.Join(missing, ", ")))
-	return "", &r
+	return seen, &r
 }
 
 // shownBy reports whether one answer shows what g states: one of its texts
@@ -734,10 +742,10 @@ func (g grounded) shownBy(a turnctx.Answer) bool {
 // from the call, so a retry of the call is every claim again and the log
 // answers each that landed.
 func (t *atlasAgentWrite) write(ctx context.Context, actor Actor, o *observing, subject atlas.Ref,
-	evidence atlas.Evidence, args map[string]any) tools.Result {
+	seen atlasdomain.Observation, args map[string]any) tools.Result {
 
 	by := iam.Actor{Name: actor.Handle, Kind: iam.ActorAgent}
-	seen := atlasdomain.Observation{Turn: o.turn, Evidence: evidence}
+	evidence := seen.Evidence
 	var last statelog.Result
 	for i, g := range o.claims {
 		opID := opIDFor(actor, t.Name(), "atlas-observe", stepObject(g.claim.Subject, g.claim.Slot()), args)

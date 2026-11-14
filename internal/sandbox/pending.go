@@ -743,10 +743,11 @@ type BridgeCall struct {
 
 	// Late marks a call its round's log took AFTER ITS JOB WAS REPLACED: still
 	// running when a relaunch that carries the round on — a loss's, a person's
-	// answer's, a replaced sign-in's — was readied, and finished only after its
-	// harness died, gave up on it or was replaced. A call of the round all the
-	// same, whose effect happened: listed and numbered as every call is, but
-	// its spend is never the later job's ([PendingStore.AppendBridgeCall]).
+	// answer's, a replaced sign-in's, a refused session's — was readied, and
+	// finished only after its harness died, gave up on it or was replaced. A
+	// call of the round all the same, whose effect happened: listed and
+	// numbered as every call is, but its spend is never the later job's
+	// ([PendingStore.AppendBridgeCall]).
 	// THE LOG'S TO GIVE, as a call's number is, in two writes alone: the append
 	// that takes the call once the log is open to a later job of the round
 	// ([BridgeLog.take]), which replaces whatever a caller handed in; and that
@@ -1219,8 +1220,9 @@ type PendingRun struct {
 	Base *ConversationBase `json:"conversation_base,omitempty"`
 
 	// ExhaustedSessions are the sessions a job of this turn ran out of its model's
-	// context in ([ranOutOfContext]): no later launch continues them, and the turn's
-	// end retires them on the executor log. The TURN'S, kept by every relaunch.
+	// context in, or had its request refused by its provider in ([sessionSpent]):
+	// no later launch continues them, and the turn's end retires them on the
+	// executor log. The TURN'S, kept by every relaunch.
 	ExhaustedSessions []string `json:"exhausted_sessions,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
@@ -1620,8 +1622,8 @@ type PendingRun struct {
 	RequesterApps  []iam.Grant `json:"requester_apps,omitempty"`
 
 	// WorkingFor is who the run's turn works for when a colleague's ask, an
-	// answer, or a colleague's write on Worklet, Doclet or Chatlet handed it
-	// on ([types.WorkingFor]), which its resumed turn works for too.
+	// answer, or a colleague's write on Worklet, Doclet, Chatlet or Gitlet
+	// handed it on ([types.WorkingFor]), which its resumed turn works for too.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// ColleagueAsk is the colleague's A2A question the run's turn answers,
@@ -1655,7 +1657,7 @@ type PendingRun struct {
 	// HELD TO [ExecuteStateBytes], its share of the row: the park condenses
 	// a state past it (internal/agent/execstate's EncodeWithin), and
 	// [PendingStore.MarkSuspended] refuses one still past it
-	// ([ErrStateTooLarge]) rather than write a row the broker refuses.
+	// ([ErrStateTooLarge]) rather than write a row the store refuses.
 	//
 	// RAW BYTES, because this package carries the conversation and never
 	// reads it. Held as a decoded map it was decoded twice on every
@@ -1740,6 +1742,33 @@ type PendingRun struct {
 	// [PendingStore.BeginLaunch] or the job's first checkout with them and
 	// replaced by every relaunch, set only where they are.
 	CodeCeiling string `json:"code_ceiling,omitempty"`
+
+	// CodeWorkingFor is whom the turn that launched this job works for, as
+	// the job's first checkout composed it — the carrier every code write of
+	// that turn's own tools states (internal/agent/builtin's RunRepos
+	// .WorkingFor, ADR-0109): a colleague's seat, a person's, or a credential
+	// acting as no seat with the apps the checkout's node held it to — and
+	// nil for a job that works for its own seat: a turn nobody woke, and one
+	// the seat itself woke. What the job's box pushes, and the change its
+	// collection opens, are the turn's writes made late, so each carries it
+	// (Gitlet's box admission, internal/engine's collection); and a
+	// credential's holds both to the seat's own work, as the turn's own code
+	// writes for it are: Gitlet's box admission holds the box to the
+	// credential's own grant, which pushes nothing, and the open is asked
+	// under the ceiling of nobody (ADR-0110).
+	//
+	// CARRIED, NEVER READ HERE, as CodeCeiling is, and job-scoped like it:
+	// written by [PendingStore.BeginLaunch] or the job's first checkout with
+	// the grants, and replaced by every relaunch. ONE REQUESTER A JOB: a later
+	// checkout made for anybody else is refused ([GrantConflict]), and one
+	// made for the same credential holding fewer apps narrows it, never
+	// widening it ([PendingStore.GrantRepo]). A row a build before the field
+	// wrote holds none, and its job's writes carry nobody until it ends: its
+	// grants were taken for nobody, so a checkout of that job made for
+	// somebody, its turn carried on by a node of this build, is refused as any
+	// other requester's is, whichever repository it names — a job granted for
+	// nobody is never used for somebody, whichever build wrote its row.
+	CodeWorkingFor *types.WorkingFor `json:"code_working_for,omitempty"`
 
 	// Charged is whether this launch's collected tokens are on the fleet's
 	// token counter.
@@ -2530,12 +2559,13 @@ type PendingStore interface {
 	// drops a hold an earlier job's turn depends on.
 	//
 	// THE JOB'S GRANTS ARE ITS OWN, so a create and a reset alike write the
-	// run's [PendingRun.Repos], [PendingRun.CodeFloor] and
-	// [PendingRun.CodeCeiling] as handed, and [PendingRun.CodeLaunch] from
-	// that same floor whatever the caller put there: a relaunch's
-	// repositories replace the previous job's, its launch floor is the one
-	// its own resolution read, and the colleague it works for is the one
-	// that resolution read for.
+	// run's [PendingRun.Repos], [PendingRun.CodeFloor],
+	// [PendingRun.CodeCeiling] and [PendingRun.CodeWorkingFor] as handed, and
+	// [PendingRun.CodeLaunch] from that same floor whatever the caller put
+	// there: a relaunch's repositories replace the previous job's, its launch
+	// floor is the one its own resolution read, and the colleague it works
+	// for, and whom its pushes are made for, are the ones that resolution
+	// read for.
 	//
 	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
 	// read or waiting, with its numbering and the seat anchor — and created
@@ -2959,7 +2989,7 @@ type PendingStore interface {
 	// [ErrStateTooLarge] before anything is written: the park condenses its
 	// state to fit (internal/agent/execstate's EncodeWithin), so a state past
 	// it is one the turn's own context will not fit, and a row that big would
-	// be refused by the broker on this write and every write after it.
+	// be refused by the store on this write and every write after it.
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall makes one step of a tool call a bridged run made
@@ -3010,13 +3040,14 @@ type PendingStore interface {
 	// ([BridgeLog.take]):
 	//
 	//   - A LATE CALL OF THE ROUND, where the log is still on that round — a
-	//     relaunch that carried it on after a loss, a person's answer or a
-	//     replaced sign-in: its entry updated, the call listed as every call of
-	//     the round is, numbered, and MARKED ([BridgeCall.Late]), since no
-	//     brief of the round told it and the session of the job that made it
-	//     may not hold it. Its spend is written nowhere: on the next job's
-	//     record that job's resume would pay it as its own, and the job it was
-	//     made in is over. Answered recorded beside [ErrJobReplaced].
+	//     relaunch that carried it on after a loss, a person's answer, a
+	//     replaced sign-in or a refused session: its entry updated, the call
+	//     listed as every call of the round is, numbered, and MARKED
+	//     ([BridgeCall.Late]), since no brief of the round told it and the
+	//     session of the job that made it may not hold it. Its spend is
+	//     written nowhere: on the next job's record that job's resume would pay
+	//     it as its own, and the job it was made in is over. Answered recorded
+	//     beside [ErrJobReplaced].
 	//   - A CALL OF ANOTHER ROUND — a relaunch that started a new round, as a
 	//     send-back does, or an append that names no round — is NOT RECORDED:
 	//     the new round numbers its own calls, and the old round's are folded
@@ -3262,10 +3293,19 @@ type PendingStore interface {
 	// yet: a `code_checkout` the job's box made (ADR-0093). Answers the grant
 	// the row holds for that repository and what was done:
 	// [GrantAdded]; [GrantHeld] for a repository already given on the same
-	// branch with the same access, writing nothing; [GrantConflict] for one
-	// given otherwise, or a ceiling other than the row's; [GrantFull] past
+	// branch with the same access, writing nothing but its new name where a
+	// rename moved it since and whom the job works for where the checkout
+	// narrows it (below); [GrantConflict] for one given otherwise, or a
+	// ceiling other than the row's, or one made for another requester than
+	// the row's ([PendingRun.CodeWorkingFor]) — nobody among them, so a job
+	// granted for nobody is never used for somebody; [GrantFull] past
 	// [MaxRunRepos]; [GrantNotRunning] for a row gone, ended or holding
-	// another job. An invalid grant ([RepoGrant.Validate]) is an error.
+	// another job. An invalid grant ([RepoGrant.Validate]) is an error. The
+	// first grant of a job sets whom its turn works for beside the
+	// colleague's ceiling, and a later one that adds or holds a repository
+	// for the same credential holding fewer apps narrows the row's to those —
+	// never widening it, so a credential an administrator narrowed while the
+	// job ran pushes for no app it no longer holds.
 	//
 	// THE ROW IS THE GRANT: Gitlet's box admission reads it on every
 	// request, so a repository is reachable from the write on and nothing
@@ -4763,10 +4803,17 @@ const (
 	// ordinary refusal, so a credential that keeps failing fails the turn
 	// rather than relaunching it for ever.
 	FollowUpSignInReplaced FollowUpReason = "sign_in_replaced"
+	// FollowUpRequestRefused is a job relaunched in a fresh session because
+	// the provider refused the request the job before it made in a session it
+	// continued. ONCE: a job launched for this reason that is refused again is
+	// collected, and its round ends the turn.
+	FollowUpRequestRefused FollowUpReason = "request_refused"
 )
 
 // Valid reports whether the reason is one this build names.
-func (r FollowUpReason) Valid() bool { return r == FollowUpSignInReplaced }
+func (r FollowUpReason) Valid() bool {
+	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused
+}
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
 // every token figure in the engine is: the whole input, the share of it the

@@ -28,6 +28,14 @@
 // catalogue is derived from what a seat can hold (every level of every GitHub
 // permission the seat catalogue offers), never listed by hand, so it cannot
 // fall behind the Agents tab.
+//
+// # What the atlas shows needs a person
+//
+// atlas.go reads five more classes off the company's atlas as its asker reads
+// it: an owner that left, a service open to the internet nothing watches, a
+// source that stopped reading, a service nobody owns, and a disagreement a
+// week old. A finding names its entries only to a holder of the atlas app,
+// and its fix is an atlas tool call the reader sends (ADR-0141).
 package advisor
 
 import (
@@ -152,7 +160,10 @@ type Finding struct {
 	Evidence []Fact `json:"evidence"`
 	// Records names at most five records behind the evidence, by id.
 	Records []string `json:"records,omitempty"`
-	Fix     Fix      `json:"fix"`
+	// Entries names at most [MaxAtlasEntries] atlas entries the finding is
+	// about, only for a reader who holds the atlas app.
+	Entries []AtlasEntry `json:"entries,omitempty"`
+	Fix     Fix          `json:"fix"`
 }
 
 // Answer is every finding about the company at one revision, the most costly

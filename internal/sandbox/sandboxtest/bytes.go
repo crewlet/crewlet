@@ -20,8 +20,9 @@ import (
 // it.
 //
 // EACH IS A PROPERTY OF THE WRITE THAT GROWS A VALUE. The row and the log beside
-// it are each one value in the coordination store, held to the broker's payload
-// bound (sandbox's RowBytes), and the writes that grow them — a bridged call
+// it are each one value in the coordination store, held to what one key of it
+// holds (sandbox's RowBytes, the store's coord.MaxValueBytes), and the writes
+// that grow them — a bridged call
 // appended to the log, a parked state, a launch's title — each hold what they
 // write to its share. A suite that asserted the codec alone would certify the
 // author's arithmetic and nothing about what lands in the store, so the raw
@@ -203,9 +204,9 @@ func callsBytes(t *testing.T, log []byte) int {
 // every call answered a builtin's whole 64 KiB page — and sixty more past the
 // log's count, dropped from its middle — leaves a log whose calls weigh no
 // more than their share (sandbox's BridgeLogBytes) and which is a value the
-// broker takes (sandbox's RowBytes), every call stating the size it answered
+// store takes (sandbox's RowBytes), every call stating the size it answered
 // and the dropped ones counted by identity; and the row beside it is a value
-// the broker takes too, every append having written nothing but its spend
+// the store takes too, every append having written nothing but its spend
 // there.
 //
 // Mutation: keep each call's output whole, and the log weighs 12.8 MiB of
@@ -428,7 +429,7 @@ func testANewRoundFoldsTheDroppedCallsIntoTheTurnsEarlierCalls(t *testing.T, s s
 // A PARKED STATE PAST ITS SHARE IS REFUSED, BEFORE ANYTHING IS WRITTEN. The park
 // condenses a state to fit (internal/agent/execstate), so one still past its
 // share of the row is a turn whose own context will not fit, and written it
-// would be refused by the broker on that write and every write after it. A
+// would be refused by the store on that write and every write after it. A
 // state at its share is written.
 //
 // Mutation: write the state whatever its size, and the run is parked on a row

@@ -35,7 +35,7 @@ var recordKey = recordseal.OneKey("k1", "test-material")
 // openAtlasLog is the atlas log on a broker of its own.
 func openAtlasLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

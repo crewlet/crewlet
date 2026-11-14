@@ -103,9 +103,11 @@ func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []gitlet
 			source.Reason)}
 		return nil
 	}
+	// MEASURED AS IT WILL BE PROPOSED (land's proposal): its principal and
+	// whom it is made for, which its committer stamps on a seat's entry.
 	opt := *ask.option
-	err := gitlet.Proposal{Principal: l.Principal, Via: l.Via, Node: s.o.NodeID, Commands: proposed,
-		Change: &opt}.ValidateCommands()
+	err := gitlet.Proposal{Principal: l.Principal, WrittenFor: l.WrittenFor, Via: l.Via, Node: s.o.NodeID,
+		Commands: proposed, Change: &opt}.ValidateCommands()
 	if err != nil {
 		detail := "this push cannot carry the change it asks for: " +
 			sentence(strings.TrimPrefix(err.Error(), gitlet.ErrInvalidProposal.Error()+": "))

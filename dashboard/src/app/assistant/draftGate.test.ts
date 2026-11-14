@@ -215,6 +215,11 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
+  "routes/atlas/AddEntry.tsx": "modal: a new atlas entry, in its dialog",
+  "routes/atlas/EntryActions.tsx":
+    "modal: a fact's value, an owner, a relation, a merge, a split or a purge, each in its dialog",
+  "routes/atlas/pickers.tsx":
+    "modal: the entry, owner and page fields of the atlas's dialogs, each dialog's own until its write",
   "routes/chatlet/Attach.tsx":
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/gitlet/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",

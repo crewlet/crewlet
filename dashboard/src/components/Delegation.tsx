@@ -20,6 +20,10 @@ import {
   Copyable,
   DescriptionList,
   FindingList,
+  Inline,
+  List,
+  ListItem,
+  Stack,
   Tag,
   Text,
   type DescriptionListEntry,
@@ -34,6 +38,7 @@ import {
   mergeMethodWords,
   releaseAllowWords,
   releaseApproverWords,
+  soleEscalation,
   verdictWords,
   withDelegateWords,
   type ReleaseRequest,
@@ -45,67 +50,80 @@ type Name = (handle: string) => string;
 /**
  * Who escalated a held call and what each delegate answered, then why it
  * reached people. Draw it only for a delegation that is escalated.
+ *
+ * SAID ONCE, QUIETLY: the heading names who escalated, the rule and, for a
+ * sole escalation, the confidence, so that answer has no line repeating them.
+ * A panel's answers, or one the engine overruled, each keep a line of their
+ * own, since the heading cannot say them all.
  */
 export function EscalationNote({ delegation, name }: { delegation: HeldDelegation; name: Name }) {
   const engine = delegation.escalated?.engine ?? [];
+  const sole = soleEscalation(delegation);
   return (
     <Callout
       variant="warning"
+      appearance="quiet"
       icon={<UsersGlyph size="md" />}
       title={escalatedByWords(delegation, name)}
-      className="delegation-note"
     >
-      {delegation.given.length === 0 ? (
-        <Text as="p" variant="caption">
-          No delegate answered.
-        </Text>
-      ) : (
-        delegation.given.map((g, i) => {
-          const verdict = verdictWords(g.verdict);
-          const who = name(g.by);
-          return (
-            <div key={`${g.by}:${i}`} className="col gap-1 delegation-answer">
-              <span className="row gap-2 wrap">
-                <strong>{who}</strong>
-                <Tag size="xs" variant={verdict.tone}>
-                  {verdict.label}
-                </Tag>
-                {confidenceWords(g.confidence) && (
-                  <Text as="span" variant="caption">
-                    {confidenceWords(g.confidence)}
+      <Stack gap={2}>
+        {delegation.given.length === 0 ? (
+          <Text as="p" variant="caption">
+            No delegate answered.
+          </Text>
+        ) : (
+          delegation.given.map((g, i) => {
+            const verdict = verdictWords(g.verdict);
+            const who = name(g.by);
+            return (
+              <Stack key={`${g.by}:${i}`} gap={1}>
+                {g === sole ? null : (
+                  <Inline gap={2} wrap>
+                    <strong>{who}</strong>
+                    <Tag size="xs" variant={verdict.tone}>
+                      {verdict.label}
+                    </Tag>
+                    {confidenceWords(g.confidence) && (
+                      <Text as="span" variant="caption">
+                        {confidenceWords(g.confidence)}
+                      </Text>
+                    )}
+                  </Inline>
+                )}
+                {g.reason && (
+                  <Text as="p" variant="inherit">
+                    {g.reason}
                   </Text>
                 )}
-              </span>
-              {g.reason && (
-                <Text as="p" variant="body">
-                  {g.reason}
-                </Text>
-              )}
-              {g.findings.length > 0 && (
-                <FindingList
-                  label={`What ${who} found`}
-                  findings={g.findings.map((f, n) => ({
-                    key: String(n),
-                    tone: "warning" as const,
-                    message: f,
-                  }))}
-                  toneLabels={{ warning: "Finding" }}
-                />
-              )}
-            </div>
-          );
-        })
-      )}
-      {engine.length > 0 && (
-        <div className="col gap-1 delegation-answer">
-          <strong>Why it reached you</strong>
-          <ul className="delegation-reasons">
-            {engine.map((sentence, i) => (
-              <li key={i}>{sentence}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+                {g.findings.length > 0 && (
+                  <FindingList
+                    density="compact"
+                    label={`What ${who} found`}
+                    findings={g.findings.map((f, n) => ({
+                      key: String(n),
+                      tone: "warning" as const,
+                      message: f,
+                    }))}
+                    toneLabels={{ warning: "Finding" }}
+                  />
+                )}
+              </Stack>
+            );
+          })
+        )}
+        {engine.length > 0 && (
+          <Stack gap={1}>
+            <Text as="p" variant="label">
+              Why it reached you
+            </Text>
+            <List variant="bulleted" density="compact" aria-label="Why it reached you">
+              {engine.map((sentence, i) => (
+                <ListItem key={i}>{sentence}</ListItem>
+              ))}
+            </List>
+          </Stack>
+        )}
+      </Stack>
     </Callout>
   );
 }

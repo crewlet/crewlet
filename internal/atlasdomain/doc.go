@@ -27,10 +27,15 @@
 //     before it was published. A claim is kept, never updated, but for being
 //     REPLACED: a voice's newer claim on the same slot ([atlas.Claim.Slot])
 //     marks its older one, which stays as the entry's history.
+//     A READ OF A REPOSITORY'S FILES is an integration's `read` record at
+//     version 4 (ADR-0133), in the repository's voice: it only ever claims
+//     and withdraws, and the engine's own actor writes it ([Writer.Read]).
 //     An AGENT's claim is the same record at version 3 (ADR-0132), written by
 //     [Writer.Observe]: its source is the seat, with the turn it recorded in
 //     and the evidence the engine checked behind it, so its confidence is
-//     read off the record and chosen by nobody. It replaces only the seat's
+//     read off the record and chosen by nobody. From version 5 it also names
+//     the cited call's tool, by name and never as a value shaped like a
+//     credential, which is what a person reviewing the claim is shown. It replaces only the seat's
 //     own earlier claim on the slot, is conditioned on no version, and an
 //     agent's denial is a dispute the fold never lets win.
 //   - `read` records one integration's read of the entry (ADR-0129): the

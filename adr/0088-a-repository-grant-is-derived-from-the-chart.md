@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet`
-- **Enforced-by:** `internal/gitlet.TestGrantsFollowTheChart`, `internal/gitlet.TestAPersonsGrantAsksNoRoster`, `internal/gitlet.TestRefRuleTable`, `internal/gitlet.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/gitlet/host.TestAnUnboundTokenCannotPush`, `internal/gitlet/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/gitlet/query.TestAGitletNodeBehindItsConfigurationServesNoSeat`, `internal/gitlet.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/gitlet.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/gitlet/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/gitlet.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/gitlet.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/gitlet.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/gitlet.TestAnAgentCannotLoosenAProtection`, `internal/gitlet.TestEveryProtectionControlIsJudged`, `internal/gitlet.TestAnAgentCannotLoosenAGate`, `internal/gitlet.TestAnAgentMayTightenAGate`, `internal/gitlet.TestEveryGateFieldIsJudged`, `internal/gitlet.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/gitlet.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/gitlet.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/gitlet.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Enforced-by:** `internal/gitlet.TestGrantsFollowTheChart`, `internal/gitlet.TestAPersonsGrantAsksNoRoster`, `internal/gitlet.TestRefRuleTable`, `internal/gitlet.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/gitlet/host.TestAnUnboundTokenCannotPush`, `internal/gitlet/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/gitlet/query.TestAGitletNodeBehindItsConfigurationServesNoSeat`, `internal/gitlet.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/gitlet.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/gitlet/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/gitlet.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/gitlet.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/gitlet.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/gitlet.TestAnAgentCannotLoosenAProtection`, `internal/gitlet.TestEveryProtectionControlIsJudged`, `internal/gitlet.TestAnAgentCannotLoosenAGate`, `internal/gitlet.TestAnAgentMayTightenAGate`, `internal/gitlet.TestEveryGateFieldIsJudged`, `internal/gitlet.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/gitlet.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/gitlet.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/gitlet.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/gitlet.TestACodeWakeIsWrittenForWhomItsAgentWroteIt`, `internal/engine.TestATurnAWriteWakesIsHeldToWhoeverTheWriteWasMadeFor`, and the Gitlet fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -88,18 +88,16 @@ protection and then force it.
 
 A box's own grant on top of the seat's (M3 P6), read-side directory access lists (not planned: sensitive code
 goes in its own repository with `visibility: unit`), the review and merge levels' use (M4, M5). Nor a ceiling carried
-past its turn: a colleague a seat asks answers
-in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is
-decided for whoever woke it and never for whoever woke the asker — as the artifacts tools' ceiling is — and
-nothing here bounds what a seat already knows, from its memory or a read made in a turn nobody woke.
+past its turn, which [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s amendments decide (the
+amendment "a ceiling crosses an ask, an answer and a write" below), and nothing here bounds what a seat already
+knows, from its memory or a read made in a turn nobody woke.
 
 ## Amendment: the requester's apps bound a seat's verbs
 
 A person still bounds no repository relation: a person maintains everywhere.
 Since [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md), the requester's apps bound every app verb a seat takes in a
-turn they woke. The code verbs name no app yet. Once Gitlet is an app (piece
-5 of crewlet#733), a turn woken by a person without it reaches no repository,
-and its executor is given none.
+turn they woke. Gitlet is an app (the next amendment), so a turn woken by a
+person without it reaches no repository, and its executor is given none.
 
 ## Amendment: a person reaches a repository through the gitlet app
 
@@ -114,5 +112,27 @@ person who may not act, and a person or a credential without the app use no app,
 for them, the seat's own work included. The ceiling of nobody stays for the one requester left that
 uses the app and pushes to no repository itself, a credential bound to no seat
 ([ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)): its turn steers the seat's
-own work alone. Everything else this record decides is unchanged: the derivation for seats,
+own work alone — the writes of its code tools, and of its executor: the box's pushes, held under the
+credential's own grant, and the change its run opens
+([ADR-0093](0093-a-box-reaches-git-with-its-runs-credential.md)'s amendment). Everything else this record
+decides is unchanged: the derivation for seats,
 `visibility`, the reserved namespace, protections and a colleague seat's ceiling.
+
+## Amendment: a ceiling crosses an ask, an answer and a write
+
+When this record was written, a colleague a seat asks answered in a turn the asking seat woke, and
+the answer woke the asker in a turn of its own work, so the record left a ceiling carried past its
+turn undecided. [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s amendments
+have decided it since. A colleague the seat asks with `a2a_ask` answers in a turn worked for
+whoever the asking turn worked for, and the answer wakes the asking seat in a turn worked for them
+too. What a seat writes on the engine's own surfaces in a turn somebody woke wakes its colleague in
+a turn worked for them as well: on Worklet, Doclet and Chatlet, and since crewlet#798's piece 4c-i
+on Gitlet, where a change, a review, a comment, a push, a merge and an enqueue carry them, the
+pushes of the seat's executor and the change its run opens among them. So a seat's read and write
+in a turn a colleague's ask, answer or write woke are decided again for whom that colleague worked
+for, by the rules above: for the colleague's grant as well as the seat's only where the colleague
+worked for nobody but itself, and otherwise for the person, the credential or, along a chain, the
+colleague it carried. What carries nobody stays outside: a vendor's surface, and, until
+crewlet#798's piece 4c-ii, the records the engine writes on Gitlet about an earlier write and the
+merge queue's close of a landed change's work item, which wake their seats for a seat rather than
+for whom that write was made for. Nothing here bounds what a seat already knows.

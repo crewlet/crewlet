@@ -62,10 +62,19 @@ const (
 	PurposeOperate CertificatePurpose = "operate"
 	// PurposeTest is an administrator's Test connection.
 	PurposeTest CertificatePurpose = "test"
+	// PurposeInventory is the engine's own read of a server for the atlas,
+	// one certificate per command, held by [EngineHolder].
+	PurposeInventory CertificatePurpose = "inventory"
 )
 
-// CertificatePurposes are the four.
-var CertificatePurposes = []CertificatePurpose{PurposeRead, PurposeBoxRead, PurposeOperate, PurposeTest}
+// CertificatePurposes are the five.
+var CertificatePurposes = []CertificatePurpose{PurposeRead, PurposeBoxRead, PurposeOperate, PurposeTest,
+	PurposeInventory}
+
+// EngineHolder is who holds a certificate and a command that are the engine's
+// own, in the place a seat's handle takes. No seat can be named it: a handle
+// holds no underscore.
+const EngineHolder = "_engine"
 
 // Valid reports whether a purpose off the wire is one this build knows.
 func (p CertificatePurpose) Valid() bool { return slices.Contains(CertificatePurposes, p) }

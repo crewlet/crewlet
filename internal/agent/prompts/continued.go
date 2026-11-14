@@ -229,12 +229,12 @@ const lateSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stan
 // carriedRound): the collection takes a submission only from the calls made
 // after the round's last answer, so one made before a run's question, or
 // before an earlier answer, is not the round's; a round lost, or refused on a
-// replaced sign-in, whose calls since that answer hold one is collected on it,
-// never carried on, so a brief carrying such a round on tells only one made
-// before that answer; and a send-back's continuation can tell the submission
-// its review sent back. Told as `→ success` with no such word, it read as the
-// work's: a run that took it for done could end without its own, and the work
-// be rescued as incomplete.
+// replaced sign-in or by its provider in a session it continued, whose calls
+// since that answer hold one is collected on it, never carried on, so a brief
+// carrying such a round on tells only one made before that answer; and a
+// send-back's continuation can tell the submission its review sent back. Told
+// as `→ success` with no such word, it read as the work's: a run that took it
+// for done could end without its own, and the work be rescued as incomplete.
 const earlierSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's" +
 	" submission: the work was carried on after it. When your work is done, call `" + toolname.SubmitWork +
 	"` yourself."

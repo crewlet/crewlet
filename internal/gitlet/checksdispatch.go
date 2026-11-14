@@ -115,13 +115,10 @@ import (
 // a target row one a branch the repository's changes have targeted. Both go
 // with the repository's purge.
 //
-// # Base format, as a stated condition
+// # Base format
 //
-// The op and its payload are in the base format, under the condition the
-// checks subject states (checks.go): once a build without them has run, the
-// op takes {Name: "MutationRecord.Op check_dispatched", Since: 2, Path:
-// []string{"op"}, Equals: "check_dispatched"} in versionedFields, with the
-// companions the subject names.
+// The op and its payload are in the base format, as the checks subject is
+// (checks.go).
 
 // MaxDispatchRows is the most rows one check_dispatched record names, its
 // heads and its attempts together: 500, an eighth of MaxRecordRows — the
@@ -147,17 +144,17 @@ const MaxDispatchBytes = MaxRecordBytes / 2
 
 // CheckDispatched records a repository's home's reading of a target branch's
 // checks file at its tip and the change heads it dispatched under it
-// ([OpCheckDispatched]), WITH THE ATTEMPTS THE DISPATCH QUEUES at those heads
-// — each check the file defines queued at a head for the target, recorded
-// skipped by its paths, or errored for a file that does not run — decided in
-// the one snapshot of the record's decide and applied in its one transaction,
-// each attempt's row a join as a check_queued record's is (M5-D18). Every
-// attempt is at a head the record names, so a head's dispatch lands whole —
-// its attempts and the row that takes it off its home's list, never one
-// without the other — and the home's dispatch of a head costs it one append,
-// not one an attempt. With no heads it is a refresh of the target's reading
-// alone. Every field is in the base format, under the condition the subject
-// states.
+// ([OpCheckDispatched]), WITH THE ATTEMPTS THE DISPATCH QUEUES at those
+// heads — each check the file defines queued at a head for the target,
+// recorded skipped by its paths, or errored for a file that does not run —
+// decided in the one snapshot of the record's decide and applied in its one
+// transaction, each attempt's row a join as a check_queued record's is
+// (M5-D18). Every attempt is at a head the record names, so a head's dispatch
+// lands whole — its attempts and the row that takes it off its home's list,
+// never one without the other — and the home's dispatch of a head costs it one
+// append, not one an attempt. With no heads it is a refresh of the target's
+// reading alone. Every field is in the base format, as the checks subject is
+// (checks.go).
 type CheckDispatched struct {
 	RepoID string `json:"repo_id"`
 	// Target is the branch, as a ref.
@@ -176,11 +173,7 @@ type CheckDispatched struct {
 	// home's dispatch, one a check of a commit. With Heads, at most
 	// [MaxDispatchRows].
 	//
-	// BASE FORMAT, under the condition the subject states: once a build
-	// without it has run it takes {Name: "CheckDispatched.Attempts", Since:
-	// 2, Op: "check_dispatched", Path: []string{"mutation", "attempts"}},
-	// which an older build defers the record by rather than record a head
-	// dispatched with none of its attempts queued.
+	// BASE FORMAT, as the checks subject is (checks.go).
 	Attempts []CheckQueued `json:"attempts,omitempty"`
 	// DispatchedAt is the home's instant.
 	DispatchedAt time.Time `json:"dispatched_at"`
@@ -353,9 +346,8 @@ const (
 // CheckWork is what a `checks_due` read says a change's head owes its checks
 // (the file's head says how each is owed and what takes it off the list): the
 // change named by the [ChangeDue] it rides. AN ESTATE ANSWER'S FIELD, NOT A
-// RECORD'S, so it takes no versionedFields row; as a stated condition, as
-// [ChangeDue.RefreshDue]'s: no build that carries the code domain has run
-// without it.
+// RECORD'S, so it takes no versionedFields row; the domain landed on main with
+// it ([RecordVersion]).
 type CheckWork struct {
 	// Dispatch is a head no dispatch of which for its target names the
 	// checks file its target's row holds.

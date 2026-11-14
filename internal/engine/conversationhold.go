@@ -14,9 +14,11 @@ import (
 )
 
 // A conversation whose context did not fit twice in a row, the second time on
-// a fresh session, or whose runs' harness the kernel killed for memory twice in
-// a row, is held: its seat starts no turn on it until a person writes on it or
-// the settings it failed on change, and its other conversations go on (ADR-0117).
+// a fresh session, whose provider refused its request twice in a row, the
+// second time on a fresh session, or whose runs' harness the kernel killed for
+// memory twice in a row, is held: its seat starts no turn on it until a person
+// writes on it or the settings it failed on change, and its other conversations
+// go on (ADR-0117).
 
 // The failures that hold a conversation rather than its seat.
 const (
@@ -24,6 +26,9 @@ const (
 	failureContextExhausted failureKind = "context_exhausted"
 	// failureOutOfMemory is a conversation whose work does not fit its box's memory.
 	failureOutOfMemory failureKind = "out_of_memory"
+	// failureRequestRefused is a conversation whose provider refuses the request
+	// its runs make as built, a fresh session's included.
+	failureRequestRefused failureKind = "request_refused"
 )
 
 // conversationFailures are the collected endings that hold a conversation, by
@@ -31,6 +36,7 @@ const (
 var conversationFailures = map[string]failureKind{
 	types.ExecutorErrorContextExhausted: failureContextExhausted,
 	types.ExecutorErrorOutOfMemory:      failureOutOfMemory,
+	types.ExecutorErrorRequestRefused:   failureRequestRefused,
 }
 
 // conversationRun is one seat's conversation.
@@ -73,8 +79,9 @@ func (h *heldConversations) forget(seat uuid.UUID) {
 	delete(h.held, seat)
 }
 
-// noteConversationRun is a publish listener: a run that ran out of context
-// after one that did, on a fresh session, holds its conversation.
+// noteConversationRun is a publish listener: a run that ran out of context, or
+// that its provider refused, after one that did, on a fresh session, holds its
+// conversation.
 func (e *Engine) noteConversationRun(ctx context.Context, _ string, ev *events.Event) {
 	rec, ok := events.DataAs[*types.ExecutorCollected](ev)
 	if !ok || rec == nil || rec.ConversationKey == "" {
@@ -94,8 +101,8 @@ func (e *Engine) noteConversationRun(ctx context.Context, _ string, ev *events.E
 	if !e.conversations.failedAgain(conversationRun{seat, rec.ConversationKey}, kind) {
 		return
 	}
-	if kind == failureContextExhausted && rec.HarnessSessionContinued {
-		return // a long session, not the brief: a fresh one may fit
+	if (kind == failureContextExhausted || kind == failureRequestRefused) && rec.HarnessSessionContinued {
+		return // the session, not the brief or the tools: a fresh one may be taken
 	}
 	handle, known := e.seatHandle(rec.Agent)
 	if !known {

@@ -77,6 +77,9 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 		builtin.CodeCreateRepoTool: "makes a new repository, named by the `name` it " +
 			"will be listed under — on the other domains' tools a name is text, not " +
 			"an object, so it is not declared",
+		builtin.AtlasRefreshTool: "asks the collect duty to read one source, named by its " +
+			"`integration`: the ask is a record in the coordination store, and a source " +
+			"is no object of a native domain",
 		builtin.AtlasAddEntryTool: "adds an entry, named by the `kind` and `key` that make " +
 			"its id: there is no entry to name until it lands, and the answer names its id",
 		builtin.CodeImportRepoTool: "makes a new repository filled from another " +
@@ -154,6 +157,7 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 		Atlas: builtin.AtlasDeps{Settings: runsAcme, Records: atlasLogOnly(newAtlasLedger())},
 		AtlasWrite: builtin.AtlasWriteDeps{Log: newAtlasLedger(), Actor: builtin.PrincipalActor,
 			Org: func() *org.Organization { return company }},
+		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
 	}) {
 		props, _ := tool.Parameters()["properties"].(map[string]any)
 		out[tool.Name()] = props

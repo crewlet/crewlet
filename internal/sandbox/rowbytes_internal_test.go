@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events"
@@ -787,10 +788,11 @@ func worstRow(t *testing.T) PendingRun {
 		holds[i] = uuid.NewString() + ":" + fmt.Sprintf("%032x", i)
 	}
 	floor := fmt.Sprintf("%s@%d:%d", plain(64), uint64(math.MaxUint64), uint64(math.MaxUint64))
-	// WHO THE TURN WORKS FOR ([types.WorkingFor], ADR-0109), on the row and on
-	// the colleague's ask it answers: every field set, a seat's handle and a
-	// credential's login each at [iam.MaxLogin] beside every app, though one
-	// names a seat or a credential and never both. Beside it on the row, the
+	// WHO THE TURN WORKS FOR ([types.WorkingFor], ADR-0109), on the row, on
+	// its code writes as its checkout composed it ([PendingRun.CodeWorkingFor])
+	// and on the colleague's ask it answers: every field set, a seat's handle
+	// and a credential's login each at [iam.MaxLogin] beside every app, though
+	// one names a seat or a credential and never both. Beside it on the row, the
 	// credential that woke the turn ([PendingRun.RequesterLogin]), kept beside
 	// a requester seat here though the row keeps it only where it names none,
 	// and the answers whose deliveries woke the turn ([PendingRun.Answered]):
@@ -848,7 +850,8 @@ func worstRow(t *testing.T) PendingRun {
 		TraceID: plain(32), SpanID: plain(16), DelegationDepth: math.MaxInt, DelegationChain: handles(32),
 		ExecuteState: json.RawMessage(state), Charged: true, CompanyCharged: true,
 		CodeHolds: holds, Repos: repos, CodeFloor: floor, CodeLaunch: floor, CodeCeiling: plain(64),
-		PauseTTLSeconds: math.MaxFloat64, PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
+		CodeWorkingFor: workingFor(), PauseTTLSeconds: math.MaxFloat64,
+		PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt,
@@ -913,6 +916,27 @@ func worstLog(t *testing.T) BridgeLog {
 
 // elidedWorst is how many calls the worst log drops.
 const elidedWorst = 100
+
+// A RUN'S VALUES ARE BUDGETED TO WHAT ONE KEY OF THE STORE HOLDS.
+//
+// Every share in rowbytes.go is a share of what one value of a run may weigh,
+// and the coordination store refuses a value past what one of its keys holds
+// (coord.MaxValueBytes) — the largest whose leader's read crosses a leaf's
+// link, about a quarter under the transport's eight mebibytes. Closed at the
+// transport instead, the shares passed a row of seven megabytes, and every
+// write of its run — its lease, its status, each call its log appended — was
+// refused in the store; the budget tests below hold a row and a log to these
+// shares, so they hold them to the store.
+//
+// Mutation: budget a value to the transport's ceiling rather than to what one
+// key holds, and it is past the store's bound.
+func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
+	t.Parallel()
+	if RowBytes > coord.MaxValueBytes {
+		t.Errorf("a run's value may weigh %d bytes, past the %d one key of the store holds: every "+
+			"write of a value between the two is refused", RowBytes, coord.MaxValueBytes)
+	}
+}
 
 // THE WHOLE ROW FITS ITS BUDGET: the arithmetic in rowbytes.go, held to the
 // row's own encoder. Every field is at its bound in the bytes that escape the

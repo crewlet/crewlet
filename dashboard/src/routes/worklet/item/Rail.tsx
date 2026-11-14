@@ -1,7 +1,7 @@
 /**
  * Everything about the task that is not its prose, down its right-hand side:
- * its fields, what it is related to, the pages it cites, what it has cost and
- * who follows it.
+ * its fields, what it is related to, the pages it cites, the atlas entries it
+ * touches, what it has cost and who follows it.
  *
  * # Every field a writer can change is changed where it is read
  *
@@ -25,8 +25,18 @@
  * has cost nothing, which IS a measurement, and says so in words.
  */
 
-import { useMemo, type ReactNode } from "react";
-import { Button, EmptyValue, IconButton, Input, Menu, Tag, Text, cx } from "@crewlethq/ui";
+import { useMemo, useState, type ReactNode } from "react";
+import {
+  Button,
+  EmptyValue,
+  IconButton,
+  Input,
+  LockedLabel,
+  Menu,
+  Tag,
+  Text,
+  cx,
+} from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   CalendarGlyph,
@@ -35,8 +45,12 @@ import {
   FileTextGlyph,
   LinkGlyph,
   PencilGlyph,
+  PlusGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
+import { LayerBoundary } from "~/app/boundaries.tsx";
+import { lazyScreen } from "~/app/lazyScreen.ts";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { href } from "~/app/router.tsx";
 import { PropertiesRail, type Property, type PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
@@ -48,10 +62,13 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { DOCLET, accessNames, holds } from "~/lib/access.ts";
+import { ATLAS, DOCLET, accessNames, holds, lockReason } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
+import type { AtlasNamed, AtlasSummary } from "~/contract/atlas.ts";
 import { ListedArtifactCard } from "~/routes/artifacts/parts.tsx";
+import { KindGlyph } from "~/routes/atlas/glyph.tsx";
+import { KINDS as ENTRY_KINDS } from "~/routes/atlas/words.ts";
 import { NewArtifactMenu } from "~/routes/artifacts/new/NewArtifactMenu.tsx";
 import {
   fmtCount,
@@ -106,6 +123,18 @@ export function linkHeading(link: WorkLink): string {
     default:
       return "Related";
   }
+}
+
+/** The relation a task names an atlas entry by (`worklet.RelationEntry`). */
+const ATLAS_ENTRY = "atlas_entry";
+
+/**
+ * Whether a link's other end is a task (`worklet.RelationKind.NamesTask`): a
+ * page and an atlas entry are named by their own ids, and each has a group of
+ * its own.
+ */
+function namesTask(link: WorkLink): boolean {
+  return link.kind !== "page" && link.kind !== ATLAS_ENTRY;
 }
 
 interface RailProps {
@@ -453,6 +482,7 @@ export function ItemRail({
       <PropertiesRail groups={groups} headings="sentence" />
       <Relations detail={detail} chrome={chrome} />
       <PageLinks links={(detail.links ?? []).filter((l) => l.kind === "page")} />
+      <EntryLinks detail={detail} />
       <ArtifactLinks item={detail.task.key} />
       {!compact && <Cost detail={detail} />}
       <Watching detail={detail} chrome={chrome} />
@@ -933,7 +963,7 @@ function unitProperty(label: string, unit: WorkUnitRef | undefined, stored: stri
  * the task it is filed under first, then its dependencies and relations.
  */
 export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrome }) {
-  const links = (detail.links ?? []).filter((l) => l.kind !== "page");
+  const links = (detail.links ?? []).filter(namesTask);
   const parent = detail.parent;
   if (links.length === 0 && !parent && !detail.task.parent) return null;
   return (
@@ -1022,6 +1052,173 @@ function PageLink({ id }: { id: string }) {
           : page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
       </RailName>
     </a>
+  );
+}
+
+/** The link dialog, out of the atlas's chunk: mounted only while open, as the New task sheet is. */
+const LinkEntryDialog = lazyScreen("atlas", (module) => module.LinkEntryDialog);
+
+/** How often a task's entries are named again: an entry is renamed rarely. */
+const ENTRY_NAMES_POLL_MS = 300_000;
+
+/**
+ * The atlas entries the task touches, as chips that open each entry's sheet.
+ *
+ * AN ENTRY IS THE ATLAS'S, so it is named only for a reader holding Atlas.
+ * Anybody else reads how many the task names and the access that would name
+ * them: the engine leaves those links out of their answer and counts them
+ * (`entries_withheld`), and nothing here asks the atlas on their behalf.
+ */
+function EntryLinks({ detail }: { detail: WorkItemDetail }) {
+  const viewer = useViewer();
+  const ids = useMemo(
+    () => (detail.links ?? []).filter((l) => l.kind === ATLAS_ENTRY).map((l) => l.other),
+    [detail.links],
+  );
+  if (viewer.loading) return null;
+  if (!holds(viewer.grants, ATLAS)) {
+    const count = detail.entries_withheld ?? ids.length;
+    if (count === 0) return null;
+    return (
+      <section className="task-rail-section" aria-label="Atlas entries">
+        <div className="task-lbl">Atlas entries</div>
+        <span className="t-caption">
+          <LockedLabel reason={lockReason([ATLAS])}>
+            {plural(count, "atlas entry", "atlas entries")}
+          </LockedLabel>
+        </span>
+      </section>
+    );
+  }
+  return <NamedEntries ids={ids} itemKey={detail.task.key} />;
+}
+
+/** Take links off the task: the ids the task holds, and what a sentence calls their entry. */
+type Unlink = (ids: readonly string[], name: string) => void;
+
+/** One entry the task names, with every id the task holds it under. */
+interface LinkedEntry {
+  entry: AtlasSummary;
+  /** The ids as the task stores them, which is what a removal names. */
+  stored: string[];
+}
+
+/**
+ * The entries a read names, one per entry. A task that named two members of
+ * one merged entry holds two ids of it, and the engine answers both under the
+ * entry they merged into: it is drawn once, and removed by every id.
+ */
+function linkedEntries(named: readonly AtlasNamed[]): LinkedEntry[] {
+  const byEntry = new Map<string, LinkedEntry>();
+  for (const { id, entry } of named) {
+    const held = byEntry.get(entry.id);
+    if (held) held.stored.push(id);
+    else byEntry.set(entry.id, { entry, stored: [id] });
+  }
+  return [...byEntry.values()];
+}
+
+/** What a link to an entry the atlas no longer holds is called. */
+const GONE_ENTRY = "an entry no longer in the atlas";
+
+/** The entries a holder of Atlas reads by name, each removable and one more linkable by a writer. */
+function NamedEntries({ ids, itemKey }: { ids: readonly string[]; itemKey: string }) {
+  const edits = useItemEdits();
+  const [adding, setAdding] = useState(false);
+  const asked = useMemo(() => ({ ids: ids.join(",") }), [ids]);
+  const named = useQuery("atlas_named", asked, {
+    pollMs: ENTRY_NAMES_POLL_MS,
+    enabled: ids.length > 0,
+  });
+  const can = Boolean(edits?.can);
+  const linked = useMemo(() => linkedEntries(named.data?.named ?? []), [named.data]);
+  if (ids.length === 0 && !can) return null;
+  const missing = named.data?.missing ?? [];
+  // A GESTURE THE ENGINE RESOLVES AS IT LANDS, so it carries no version: a
+  // link taken off composes with whatever else moved on the task.
+  const unlink: Unlink | undefined =
+    edits && can
+      ? (stored, name) =>
+          void edits.edit(
+            { linked_entries: { remove: [...stored] } },
+            `Unlinked ${name} from ${itemKey}`,
+            false,
+          )
+      : undefined;
+  return (
+    <section className="task-rail-section" aria-label="Atlas entries">
+      <div className="task-lbl">Atlas entries</div>
+      {linked.length + missing.length > 0 && (
+        <span className="row wrap gap-1">
+          {linked.map((one) => (
+            <EntryChip key={one.entry.id} linked={one} onUnlink={unlink} />
+          ))}
+          {missing.map((id) => (
+            <Tag
+              key={id}
+              variant="warning"
+              appearance="outline"
+              size="sm"
+              title="The atlas no longer holds this entry"
+              onRemove={unlink ? () => unlink([id], GONE_ENTRY) : undefined}
+              removeAriaLabel={`Unlink ${GONE_ENTRY}`}
+            >
+              Missing entry
+            </Tag>
+          ))}
+        </span>
+      )}
+      {!named.data && !named.loading && ids.length > 0 && (
+        <p className="t-caption">
+          {named.detail ??
+            `The atlas could not be read, so ${plural(ids.length, "entry", "entries")} could not be named.`}
+        </p>
+      )}
+      {missing.length > 0 && (
+        <p className="t-caption">
+          {`${plural(missing.length, "entry", "entries")} ${missing.length === 1 ? "is" : "are"} no longer in the atlas.`}
+        </p>
+      )}
+      {edits && can && (
+        <Button
+          size="small"
+          variant="ghost"
+          leadingIcon={<PlusGlyph size="sm" />}
+          onClick={() => setAdding(true)}
+        >
+          Link an atlas entry
+        </Button>
+      )}
+      {edits && adding && (
+        <LayerBoundary title="Link an atlas entry" onClose={() => setAdding(false)}>
+          <LinkEntryDialog
+            item={edits.item}
+            named={edits.label}
+            linked={[...ids, ...linked.map((one) => one.entry.id)]}
+            onClose={() => setAdding(false)}
+          />
+        </LayerBoundary>
+      )}
+    </section>
+  );
+}
+
+/** One entry as its chip: its kind's glyph and its name, opening its sheet. */
+function EntryChip({ linked, onUnlink }: { linked: LinkedEntry; onUnlink: Unlink | undefined }) {
+  const { open } = usePeekControls();
+  const { entry, stored } = linked;
+  return (
+    <Tag
+      appearance="outline"
+      size="sm"
+      leadingIcon={<KindGlyph kind={entry.kind} size="xs" />}
+      title={`${ENTRY_KINDS[entry.kind].word} · ${entry.key}`}
+      onClick={() => open({ kind: "atlas", id: entry.id })}
+      onRemove={onUnlink ? () => onUnlink(stored, entry.name) : undefined}
+      removeAriaLabel={`Unlink ${entry.name}`}
+    >
+      {entry.name}
+    </Tag>
   );
 }
 

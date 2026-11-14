@@ -1,6 +1,7 @@
 package operator_test
 
 import (
+	"context"
 	"slices"
 	"sort"
 	"strconv"
@@ -380,6 +381,13 @@ func fullSurface(t *testing.T) *operator.Server {
 			// hosting code serves.
 			Code: builtin.CodeDeps{Code: code, Requesters: noRequesters{}, Chart: authz.NoChart{},
 				Writer: code, Holder: code},
+			// THE ATLAS WITH ITS WRITES, so Company › Atlas's rows are held to
+			// the catalogue a node that reaches the atlas's log serves.
+			Atlas: builtin.AtlasDeps{Settings: func(context.Context) (builtin.AtlasSettings, bool) {
+				return builtin.AtlasSettings{}, false
+			}},
+			AtlasWrite:   builtin.AtlasWriteDeps{Log: struct{ builtin.AtlasLog }{}},
+			AtlasRefresh: builtin.AtlasRefreshDeps{Sources: struct{ builtin.AtlasSourceDesk }{}},
 		}),
 		Org:    func() *org.Organization { return nil },
 		Runs:   builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}},

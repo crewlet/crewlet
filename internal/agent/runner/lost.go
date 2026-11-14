@@ -113,7 +113,8 @@ func (l Lost) Continuation() string {
 
 // carried is a run whose round a resume carries on rather than collects: one
 // that asked a person and was answered ([Asked]), one lost with its host
-// ([Lost]), or one refused on a sign-in replaced while it ran ([Rotated]).
+// ([Lost]), one refused on a sign-in replaced while it ran ([Rotated]), or one
+// whose continued session its provider refused ([Refused]).
 // [Runner.continueAgentRun] relaunches each the same way.
 type carried interface {
 	// session is the run's own harness session, which the relaunch continues
@@ -136,7 +137,8 @@ type carried interface {
 	// record, for a later brief to a session that may lack the one this opens
 	// to tell again (leads.go), nil where the engine's own words carry it on: a
 	// loss's and a replaced sign-in's, which the cut-off section of every
-	// later brief says as well.
+	// later brief says as well, and a provider's refusal's, whose run did no
+	// work for a later session to lack ([Refused]).
 	lead() *sandbox.Lead
 	// keeps says the round may be carried on in the turn's kept session at
 	// all (continued.go); branch is the work-in-progress branch the run

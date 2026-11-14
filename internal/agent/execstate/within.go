@@ -17,8 +17,8 @@ import (
 //
 // # Why a share, and why these give way
 //
-// The state rides the run's row in the coordination store, which is one broker
-// message and held to a byte budget every field of the row has a share of
+// The state rides the run's row in the coordination store, held to what a key
+// holds and to a byte budget every field of the row has a share of
 // (internal/sandbox's ExecuteStateBytes, rowbytes.go). What grows in a state is
 // its CLOSED ROUNDS: each round's intent, text and review, and every call its
 // executor's run made — up to two hundred a round, and a turn's rounds are
@@ -81,7 +81,7 @@ import (
 // endings — which no resume can do without and no condensing touches; or its
 // closed rounds, condensed as far as they go, of which a turn whose
 // `max_iterations` has no ceiling can carry more than any share holds. Either
-// way a park that big would be refused by the broker on its write and every
+// way a park that big would be refused by the store on its write and every
 // write of the row after it.
 
 // ErrTooLarge is a parked state past its budget even with its closed rounds

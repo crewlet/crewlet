@@ -488,10 +488,11 @@ func (s *Server) ClientListener() string {
 // stopped but one: a consumer's state write already in flight, which
 // nats-server waits for for at most 100 ms. A write that a loaded machine
 // stretches past that lands afterwards. So the caller's next step — a
-// test's TempDir removing the store, a scratch store being deleted, a process
-// exiting with its consumers' last acknowledgements on disk — can still meet
-// one late write. It is rare on an idle host and measured under contention in
-// [shutdownAndClean], which also says what would remove it.
+// test removing the store, a scratch store being deleted, a process exiting
+// with its consumers' last acknowledgements on disk — can still meet one late
+// write. It is rare on an idle host and measured under contention in
+// [shutdownAndClean], which also says what would remove it, and what a test
+// does until then.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
 		s.embedded.shutdown()
@@ -837,9 +838,13 @@ func routeURLs(peers []string, username, password string) ([]*url.URL, error) {
 }
 
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	// A TEST'S BROKER DECLARES ITS SIZE, before anything is built for it
-	// ([ErrUndeclaredSize]).
+	// A TEST'S BROKER DECLARES ITS SIZE AND KEEPS ITS STORE IN A
+	// brokertest.TempDir, both before anything is built for it
+	// ([ErrUndeclaredSize], [ErrStoreOutsideTempDir]).
 	if err := undeclaredSize(ctx, cfg); err != nil {
+		return nil, err
+	}
+	if err := storeOutsideTempDir(cfg); err != nil {
 		return nil, err
 	}
 	// THE AUTHENTICATOR, with this start's own keys: the engine's on every
@@ -1580,7 +1585,13 @@ type stoppable interface {
 // flight or landing after this returned (0 of 1,200 in the lighter harness
 // above). With the stop joining the flush loop instead of polling for it, the
 // same runs gave 0 of 1,531. That change is nats-server's to make; nothing
-// here can join a goroutine the server keeps no handle to.
+// here can join a goroutine the server keeps no handle to. Until a pinned
+// release makes it, a TEST keeps its store in brokertest.TempDir, whose
+// removal tries again while a late write leaves the directory not empty
+// (crewlet/crewlet#1079), where a t.TempDir's single removal failed the case,
+// and a test binary refuses to start a broker whose store is anywhere else
+// ([ErrStoreOutsideTempDir]); that retry and that refusal go, and this
+// paragraph with them, once the pin joins the loop.
 //
 // It exists because the two shapes had drifted: the ordinary teardown waited
 // and the two failure paths inside [startEmbedded] did not, which is the

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -61,6 +62,12 @@ type ghRepo struct {
 	runs        []map[string]any
 	deployments []map[string]any
 	statuses    map[int64][]map[string]any
+	// head is the default branch's commit, files every file of its tree
+	// and links the symbolic links beside them, by path.
+	head      string
+	files     map[string]string
+	links     map[string]string
+	truncated bool
 }
 
 // forge is a GitHub organization as the atlas reads it. A path named in
@@ -85,6 +92,9 @@ var (
 	runsRoute      = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/runs$`)
 	deploysRoute   = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/deployments$`)
 	statusesRoute  = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/deployments/(\d+)/statuses$`)
+	refRoute       = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/git/ref/heads/(.+)$`)
+	treeRoute      = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/git/trees/([0-9a-f]+)$`)
+	blobRoute      = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/git/blobs/([0-9a-f]+)$`)
 )
 
 func (f *forge) serve(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +211,51 @@ func (f *forge) serve(w http.ResponseWriter, r *http.Request) {
 		m := statusesRoute.FindStringSubmatch(path)
 		id, _ := strconv.ParseInt(m[2], 10, 64)
 		answer(http.StatusOK, paged(f.repos[m[1]].statuses[id]))
+	case refRoute.MatchString(path):
+		if !may("contents") {
+			return
+		}
+		m := refRoute.FindStringSubmatch(path)
+		repo := f.repos[m[1]]
+		switch {
+		case repo.head == "":
+			answer(http.StatusConflict, map[string]string{"message": "Git Repository is empty."})
+		case m[2] != repo.row["default_branch"]:
+			answer(http.StatusNotFound, map[string]string{"message": "Not Found"})
+		default:
+			answer(http.StatusOK, map[string]any{"ref": "refs/heads/" + m[2],
+				"object": map[string]any{"sha": repo.head, "type": "commit", "url": canaryText}})
+		}
+	case treeRoute.MatchString(path):
+		if !may("contents") {
+			return
+		}
+		m := treeRoute.FindStringSubmatch(path)
+		repo := f.repos[m[1]]
+		if m[2] != repo.head || q.Get("recursive") != "1" {
+			answer(http.StatusBadRequest, map[string]string{"message": "the read asked for the wrong tree"})
+			return
+		}
+		answer(http.StatusOK, map[string]any{"sha": m[2], "tree": repo.tree(), "truncated": repo.truncated})
+	case blobRoute.MatchString(path):
+		if !may("contents") {
+			return
+		}
+		m := blobRoute.FindStringSubmatch(path)
+		for _, body := range f.repos[m[1]].files {
+			if gitBlob(body) == m[2] {
+				// AS GITHUB WRITES IT: base64 broken into lines.
+				encoded := base64.StdEncoding.EncodeToString([]byte(body))
+				var lines []string
+				for len(encoded) > 60 {
+					lines, encoded = append(lines, encoded[:60]), encoded[60:]
+				}
+				answer(http.StatusOK, map[string]any{"sha": m[2], "size": len(body), "encoding": "base64",
+					"content": strings.Join(append(lines, encoded), "\n") + "\n"})
+				return
+			}
+		}
+		answer(http.StatusNotFound, map[string]string{"message": "Not Found"})
 	default:
 		answer(http.StatusNotFound, map[string]string{"message": "Not Found"})
 	}

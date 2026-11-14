@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -70,7 +72,8 @@ func TestEveryNativeSourceNamesItsSendersByHandle(t *testing.T) {
 	// (internal/alarmwake), so nobody on it is a person to resolve.
 	parsers := slices.DeleteFunc(slices.Clone(registered), func(p notify.Parser) bool {
 		// NOR THE ACCESS REVIEWS', which name their seat and no sender.
-		return p.Source() == alarmwake.Source || p.Source() == accessreview.Source
+		return p.Source() == alarmwake.Source || p.Source() == accessreview.Source ||
+			p.Source() == atlaswake.Source
 	})
 	if len(parsers) != 4 {
 		t.Fatalf("a company running every half natively registered %d parsers beside "+
@@ -297,7 +300,8 @@ func deliveredTo(t *testing.T, o *org.Organization, reg *notify.Registry, handle
 		worklet.NewParser(worklet.ParserOptions{}),
 		doclet.NewParser(doclet.ParserOptions{}),
 		chatlet.NewParser(),
-	}, notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt()), delivery)
+		gitlet.NewParser(gitlet.ParserOptions{}),
+	}, notify.NewPrompts(worklet.Prompt{}, doclet.Prompt{}, chatlet.NewPrompt(), gitlet.Prompt{}), delivery)
 }
 
 // deliveredWith is [deliveredTo] through one parser and its prompt.

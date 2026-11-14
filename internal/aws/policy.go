@@ -26,8 +26,12 @@ const (
 	// The two certificate identities, per company. The provisioner's CN opens
 	// only the provisioner; a seat's CN opens only the broker, which can only
 	// become seats. "-seat-" keeps every seat CN apart from "-provisioner".
-	provisionerCN   = "crewlet-{company}-provisioner"
-	seatCNPrefix    = "crewlet-{company}-seat-"
+	provisionerCN = "crewlet-{company}-provisioner"
+	seatCNPrefix  = "crewlet-{company}-seat-"
+	// The atlas's own role and certificate name: the reader the atlas-collect
+	// duty signs in as, so CloudTrail names the atlas and never an agent.
+	atlasName       = "crewlet-{company}-atlas"
+	atlasCN         = "crewlet-{company}-atlas"
 	boundaryName    = "crewlet-{company}-seat-boundary"
 	levelRead       = "crewlet-{company}-level-read"
 	levelOperate    = "crewlet-{company}-level-operate"
@@ -54,6 +58,7 @@ const (
 	crewletRoles   = "arn:{partition}:iam::{account}:role/crewlet/{company}/*"
 	provisionerARN = "arn:{partition}:iam::{account}:role/crewlet/{company}/" + provisionerName
 	brokerARN      = "arn:{partition}:iam::{account}:role/crewlet/{company}/" + brokerName
+	atlasARN       = "arn:{partition}:iam::{account}:role/crewlet/{company}/" + atlasName
 	denyAllARN     = "arn:{partition}:iam::aws:policy/AWSDenyAll"
 )
 
@@ -93,12 +98,17 @@ func with(s obj, op, key string, vals ...string) obj {
 }
 
 // Read: metadata, metrics, logs and the audit trail; no object, item,
-// parameter or secret contents, no IAM, no billing.
+// parameter or secret contents, no IAM, no billing. LAMBDA IS NAMED ACTION BY
+// ACTION: listing functions or their versions, and reading a function's
+// configuration, answer its environment, so none of the three is here.
 var readActions = []string{
 	"ec2:Describe*", "autoscaling:Describe*", "application-autoscaling:Describe*", "elasticloadbalancing:Describe*",
 	"ecs:Describe*", "ecs:List*", "eks:Describe*", "eks:List*",
-	"lambda:List*", "lambda:GetAccountSettings", "lambda:GetAlias", "lambda:GetFunctionConfiguration",
-	"lambda:GetFunctionConcurrency", "lambda:GetEventSourceMapping", "lambda:GetPolicy",
+	"lambda:ListAliases", "lambda:ListEventSourceMappings", "lambda:ListFunctionEventInvokeConfigs",
+	"lambda:ListFunctionUrlConfigs", "lambda:ListLayers", "lambda:ListLayerVersions",
+	"lambda:ListProvisionedConcurrencyConfigs", "lambda:ListTags", "lambda:GetAccountSettings", "lambda:GetAlias",
+	"lambda:GetFunctionConcurrency", "lambda:GetFunctionEventInvokeConfig", "lambda:GetFunctionUrlConfig",
+	"lambda:GetRuntimeManagementConfig", "lambda:GetEventSourceMapping", "lambda:GetPolicy",
 	"rds:Describe*", "rds:ListTagsForResource",
 	"s3:ListAllMyBuckets", "s3:ListBucket", "s3:GetBucket*", "s3:GetLifecycleConfiguration",
 	"s3:GetEncryptionConfiguration", "s3:GetReplicationConfiguration", "s3:GetAccountPublicAccessBlock",
@@ -115,6 +125,16 @@ var readActions = []string{
 	"ecr:GetLifecyclePolicy", "ecr:GetRepositoryPolicy",
 	"acm:DescribeCertificate", "acm:ListCertificates", "kms:DescribeKey", "kms:ListAliases", "kms:ListKeys",
 	"tag:GetResources", "tag:GetTagKeys", "tag:GetTagValues", "health:Describe*",
+}
+
+// atlasActions is everything the atlas's role may do: one listing per thing
+// the atlas draws, each named whole and none a wildcard. NOTHING HERE ANSWERS
+// A SECRET: no Lambda action (every one that lists functions answers their
+// environment), no instance attribute (user data), no parameter, no object.
+var atlasActions = []string{
+	"ec2:DescribeRegions", "ec2:DescribeInstances", "rds:DescribeDBInstances",
+	"elasticloadbalancing:DescribeLoadBalancers", "sqs:ListQueues", "s3:ListAllMyBuckets",
+	"route53:ListHostedZones", "route53:ListResourceRecordSets", "iam:ListAccountAliases",
 }
 
 // Operate: running state, never topology or access. Restart, scale, invalidate,
@@ -291,7 +311,8 @@ func provisionerDoc() obj {
 			"iam:UploadSSHPublicKey", "iam:UploadSigningCertificate", "iam:CreateOpenIDConnectProvider",
 			"iam:CreateSAMLProvider", "sts:GetFederationToken"}),
 		stmt("NeverTouchItselfOrTheBroker", "Deny", []string{"iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole",
-			"iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription"}, provisionerARN, brokerARN),
+			"iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription"}, provisionerARN, brokerARN,
+			atlasARN),
 	)
 }
 
@@ -316,6 +337,20 @@ func provisionerTrustDoc(issuerCN string) obj {
 // become the broker and a seat's certificate cannot become the provisioner.
 func brokerTrustDoc(issuerCN string) obj {
 	return rolesAnywhereTrust(issuerCN, "StringLike", seatCNPrefix+"*")
+}
+
+// atlasTrustDoc admits exactly the atlas's CN, which opens nothing else.
+func atlasTrustDoc(issuerCN string) obj {
+	return rolesAnywhereTrust(issuerCN, "StringEquals", atlasCN)
+}
+
+// atlasDoc is the atlas's reach: its listings, and a deny of everything else,
+// so a policy somebody attaches to the role by hand widens nothing.
+func atlasDoc() obj {
+	return doc(
+		stmt("CrewletAtlasRead", "Allow", atlasActions),
+		obj{"Sid": "NothingElse", "Effect": "Deny", "NotAction": atlasActions, "Resource": []string{"*"}},
+	)
 }
 
 // brokerDoc can only become seat roles; a broker session reaches nothing else.

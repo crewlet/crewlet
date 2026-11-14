@@ -37,7 +37,7 @@ import (
 // each once the leaf's clients reach the member's JetStream.
 func leafFleet(t *testing.T, memberPayload, leafPayload int32) (hub *server.Server, member, leaf *nats.Conn) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	hub = startServer(t, &server.Options{
 		ServerName: "memsync-member", JetStream: true, JetStreamDomain: jsapi.Domain,
 		Port: -1, DontListen: true, StoreDir: dir, MaxPayload: memberPayload,

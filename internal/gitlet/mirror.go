@@ -51,19 +51,8 @@ import (
 // not_permitted ([remoteCredentialRefusal]), a declaration naming one is
 // refused by the configuration's validation, and the dial sends no other.
 //
-// BASE FORMAT, AS A STATED CONDITION: no build that carries the code domain
-// has run without these fields — none of the domain is on main, so no image
-// and no release holds them — and while that is so, every build that meets a
-// record carrying them reads them. Once a build without them has run, each op
-// whose payload carries settings (create, settings, restore) takes {Name:
-// "RepoSettings.MirrorFrom", Since: 2, Op: <the op>, Path: []string{"mutation",
-// "settings", "mirror_from"}} and the same for "RepoSettings.MirrorTo" at
-// "mirror_to", and the create takes {Name: "CreateRepo.Import", Since: 2, Op:
-// "create", Path: []string{"mutation", "import"}}, in versionedFields — with
-// RecordVersion at 2, their lines under "What each version added" and a
-// Carrying record in the statelogtest candidate — since such a build would
-// apply a repository's settings without its mirrors, and a create without its
-// import, and the rows it wrote would read as none on that node for ever.
+// BASE FORMAT ([RecordVersion]): the domain landed on main with these fields,
+// so every build that meets a record carrying them reads them.
 
 // MirrorSource is the repository a PULL MIRROR follows ([RepoSettings.MirrorFrom]):
 // the one it is imported from when it becomes a mirror, and synced from after.

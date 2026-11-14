@@ -7,13 +7,19 @@
 
 import { VendorMark } from "@crewlethq/icons";
 import { ArrowUpRightGlyph, CornerDownLeftGlyph } from "@crewlethq/icons/glyphs";
-import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { EmptyValue, EntityChip, IconTile, StatusDot, Tag, VisuallyHidden } from "@crewlethq/ui";
+import {
+  EmptyValue,
+  EntityChip,
+  IconTile,
+  StatusDot,
+  Tag,
+  Text,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import type {
   AtlasCoverage,
   AtlasHealth,
-  AtlasKind,
   AtlasRead,
   AtlasSource,
   AtlasSummary,
@@ -25,14 +31,21 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { seatPath, unitByKey, useOrgIndex } from "~/lib/seats.ts";
 import { andList } from "~/lib/words.ts";
-import { COVERAGE, HEALTH, KINDS, RECORDS, VENDORS, WORDS, entries, valueWord } from "./words.ts";
+import {
+  COVERAGE,
+  EVIDENCE,
+  HEALTH,
+  RECORDS,
+  VENDORS,
+  WORDS,
+  entries,
+  valueWord,
+} from "./words.ts";
+import { KindGlyph } from "./glyph.tsx";
 // THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
 import "~/styles/atlas.css";
 
-/** The kind's glyph, decorative: the kind word is always said beside it. */
-export function KindGlyph({ kind, size = "sm" }: { kind: AtlasKind; size?: "sm" | "md" }) {
-  return <NamedGlyph name={KINDS[kind].glyph} size={size} />;
-}
+export { KindGlyph };
 
 /** A vendor's mark, where the kit draws one: decorative, its name is beside it. */
 export function VendorLead({ vendor }: { vendor: AtlasVendor | undefined }) {
@@ -146,6 +159,7 @@ const MONO = new Set<AtlasValue["type"]>([
   "version",
   "account_ref",
   "branch",
+  "image",
 ]);
 
 /** A fact's value as the engine canonicalised it, with an internal address marked as one. */
@@ -195,6 +209,8 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
       return RECORDS[name] ?? name;
     case "integration":
       return INTEGRATION_NAMES[name] ?? VENDORS[name as AtlasVendor]?.name ?? name;
+    case "code":
+      return `the files of ${name}`;
     case "agent":
     case "person":
       return seatName(name);
@@ -202,9 +218,10 @@ export function sourceName(source: AtlasSource, seatName: (handle: string) => st
 }
 
 /**
- * Where a claim came from as a by-line: set by the settings or a person, seen
- * by an integration or the engine's records, observed by an agent in its turn,
- * with the confidence word after the actor and when it was last seen.
+ * Where a claim came from as a by-line: set by the settings, a person or a
+ * repository's files, seen by an integration or the engine's records,
+ * observed by an agent in its turn, with the confidence word after the actor
+ * and when it was last seen.
  */
 export function sourceSetBy(
   claim: { source: AtlasSource; word?: AtlasWord; observed_at: string },
@@ -229,6 +246,27 @@ export function sourceSetBy(
     actorKind: source.kind === "agent" ? "agent" : source.kind === "person" ? "human" : "system",
     turnId: source.turn,
   };
+}
+
+/**
+ * The call an agent's claim rests on, under its by-line: the tool it cited,
+ * as the turn recorded it, and what a call of that tool is evidence of. A
+ * record made before the engine kept the tool's name says only the class.
+ */
+export function Cited({ source }: { source: AtlasSource }) {
+  if (source.kind !== "agent" || !source.evidence) return null;
+  return (
+    <Text variant="caption" tone="secondary" className="atlas-cited">
+      {source.tool ? (
+        <>
+          Cited its call of <span className="mono">{source.tool}</span>: {EVIDENCE[source.evidence]}
+          .
+        </>
+      ) : (
+        <>Cited {EVIDENCE[source.evidence]}.</>
+      )}
+    </Text>
+  );
 }
 
 /** At most this many vendors are named in the coverage line before "and N more". */

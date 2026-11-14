@@ -231,6 +231,41 @@ is one. A conversation that keeps running out on fresh sessions, whose brief or
 window is the problem rather than any one session, is reported as
 [`executor.context_exhausted_loop`](../guides/engine-issue-reports.md).
 
+## A session its provider refuses is retired too
+
+A continued session sends what it holds on every request, so a session that
+holds something the model's provider will not take (a tool definition under a
+name outside the provider's pattern, a message it no longer accepts) is refused
+before the model reads a word, on every launch. The harness answers such a
+request as text, under its own failure flag and the provider's status. The
+engine reads the status, never the sentence:
+
+- **The launch failed, with a kind of its own.** Its record says
+  `error_kind` `request_refused` and carries the provider's message as `error`.
+  It is never the run's report, so no reviewer judges it and the stall guard
+  does not compare it with the round before.
+- **The session is retired**, exactly as one out of context is: nothing of it is
+  kept (`session_not_kept` says why), no relaunch continues it, and the turn's
+  end takes it off every ended row of the conversation, so the next turn, a
+  schedule's next fire included, starts a session of its own.
+- **The round is carried on once, in a fresh session**, where the refused job
+  had continued one: the same round, relaunched on the fresh brief, told that
+  the session before it was retired. The launch logs
+  `run_relaunched_fresh_session`.
+- **A refusal a fresh session does not cure ends the turn.** A job refused in a
+  session it started, or refused again after that one relaunch, ends its turn
+  `failed` with a `turn.guard_breach` of kind `request_refused`, whose `detail`
+  is the provider's message.
+- **Twice in a row on a fresh session holds the conversation.** It stands as a
+  platform notice (`conversation.held`, cause `request_refused`) until a person
+  writes on it or the seat's models or the company's tool servers change, so a
+  schedule whose every fire is refused stops firing into the refusal and an
+  administrator is told ([Advisor](../guides/advisor.md)).
+
+The statuses read as a refusal are 400, 413 and 422. A spent plan (429), an
+outage and a refused sign-in are each handled as before, and a conversation
+past its model's context keeps its own kind.
+
 ## Where a session lives
 
 **On the executor log, the same on every data node.** A turn's row — its

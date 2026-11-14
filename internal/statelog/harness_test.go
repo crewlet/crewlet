@@ -812,7 +812,7 @@ func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger
 	// of it, a fact about the machine rather than about the case. A case
 	// about a full log fills the log's own ceiling, which this does not
 	// move.
-	return buildHarness(t, domain, js.Config{StoreDir: t.TempDir(),
+	return buildHarness(t, domain, js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes}, logger)
 }
 

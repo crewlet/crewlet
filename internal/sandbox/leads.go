@@ -375,13 +375,13 @@ type TurnLeads struct {
 // each numbered as the part took it in ([KeptLead.Appended]).
 //
 // THE PART IS ONE VALUE OF ITS OWN, held to [RowBytes] as the row and the log
-// are ([RowBytes]: one value is one broker message), and split:
+// are ([RowBytes]: what one key of the store holds), and split:
 //
 //	the leads it keeps .............. MaxKeptLeadBytes          524,288  (512 KiB)
 //	its own fields, measured ........ measuredLeadsFields            85
-//	to spare, measured .............. measuredLeadsSpare      7,860,139
+//	to spare, measured .............. measuredLeadsSpare      5,766,169
 //	                                                          ---------
-//	                                  RowBytes                8,384,512
+//	                                  RowBytes                6,290,542
 //
 // Its own fields are the run it is of, a launch id, and how many leads it has
 // taken, at their widest, with the keys and the braces around the leads; the
@@ -415,7 +415,7 @@ type leadsPart struct {
 // change that moves either restates both here and in the table.
 const (
 	measuredLeadsFields = 85
-	measuredLeadsSpare  = 7_860_139
+	measuredLeadsSpare  = 5_766_169
 )
 
 // MarshalJSON writes the part with the keys a later build added to it.

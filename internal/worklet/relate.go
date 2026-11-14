@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -171,8 +173,17 @@ func dedupeRelations(in []Relation) []Relation {
 // bytes. So `waiting_on` is bounded at [MaxWaitingOn] and everything else
 // together at [MaxOtherRelations].
 func checkRelations(taskID string, relations []Relation) error {
-	waiting, other := 0, 0
+	waiting, other, entries := 0, 0, 0
 	for _, r := range relations {
+		if r.Kind == RelationEntry {
+			// AN ENTRY IS NAMED BY ITS ID IN ITS CANONICAL SPELLING, so one
+			// entry is one edge on every node and no name is ever stored.
+			if id, err := uuid.Parse(r.Other); err != nil || id.String() != r.Other {
+				return invalid("task %s carries an %s relation whose other "+
+					"end is not an atlas entry's id", taskID, r.Kind)
+			}
+			entries++
+		}
 		switch {
 		case !r.Kind.Valid():
 			return invalid("task %s carries a relation of kind %q, "+
@@ -204,10 +215,16 @@ func checkRelations(taskID string, relations []Relation) error {
 			"milestone, and the milestone is the thing to track",
 			taskID, waiting, MaxWaitingOn)
 	}
+	if entries > MaxEntries {
+		return invalid("task %s would name %d atlas entries and the "+
+			"maximum is %d: work that touches more systems than that is "+
+			"about the company at large, and its project is the thing to link",
+			taskID, entries, MaxEntries)
+	}
 	if other > MaxOtherRelations {
-		return invalid("task %s would carry %d links, duplicates "+
-			"and page references together and the maximum is %d — a set "+
-			"larger than that is a field rather than a relation",
+		return invalid("task %s would carry %d links, duplicates, "+
+			"page references and atlas entries together and the maximum is "+
+			"%d: a set larger than that is a field rather than a relation",
 			taskID, other, MaxOtherRelations)
 	}
 	return nil

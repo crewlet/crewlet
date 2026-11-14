@@ -45,8 +45,9 @@ var lateStagedCases = []struct {
 }
 
 // carryRoundOn relaunches turnID's run carrying its round on — as a loss's
-// relaunch, an answered question's and a replaced sign-in's do — and answers
-// the new job, after checking it is of the round the row held before.
+// relaunch, an answered question's, a replaced sign-in's and a refused
+// session's do — and answers the new job, after checking it is of the round
+// the row held before.
 func carryRoundOn(t *testing.T, s sandbox.PendingStore, turnID string) string {
 	t.Helper()
 	round := mustGet(t, s, turnID).Round
@@ -120,16 +121,16 @@ func listsExactly(t *testing.T, calls []sandbox.BridgeCall, want []wantCall) {
 
 // A LATE CALL OF THE ROUND IS LISTED, MARKED, AND PAID BY NO JOB. A call still
 // running when a relaunch carried its round on — a loss's relaunch, an answered
-// question's, a replaced sign-in's — finishes after the log was opened to the
-// next job. It is a call of the round, and its effect happened: the log lists
-// it as it lists every call, at the place the bridge gave it and numbered past
-// every call the round's log took before it, and MARKS it, so no save point of
-// the round holds it. Its spend is nobody's: the next job's record keeps its
-// own total, which that job's resume pays, and the job it was made in is over.
-// The next job's own call beside it is listed unmarked, its spend written, as
-// every job's own call is. And an append that names no round — what served
-// its job knew none — is dropped once its job is replaced, as every late
-// append once was.
+// question's, a replaced sign-in's, a refused session's — finishes after the
+// log was opened to the next job. It is a call of the round, and its effect
+// happened: the log lists it as it lists every call, at the place the bridge
+// gave it and numbered past every call the round's log took before it, and
+// MARKS it, so no save point of the round holds it. Its spend is nobody's: the
+// next job's record keeps its own total, which that job's resume pays, and the
+// job it was made in is over. The next job's own call beside it is listed
+// unmarked, its spend written, as every job's own call is. And an append that
+// names no round — what served its job knew none — is dropped once its job is
+// replaced, as every late append once was.
 //
 // Mutation: take a late append by the job alone, as before, and it is not
 // listed; list it without its mark, and this goes red.

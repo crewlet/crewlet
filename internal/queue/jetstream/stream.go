@@ -78,7 +78,7 @@
 // client crosses the network to it, and the engine allows such a link to be as
 // slow as the object store's floor, a mebibyte in thirty seconds
 // (objstore.MiBPace). The connection's pace is decided once, where it is made
-// (linkPaceOf), and every crossing on it reads it: a read's reply (DomainLog.At,
+// (linkOf), and every crossing on it reads it: a read's reply (DomainLog.At,
 // the dead letters' frames) and a write's request alike. So a write whose
 // caller set no deadline waits the request term (jsapi.RequestTerm, five
 // seconds) and, where its connection crosses a link, its bytes at that pace
@@ -336,6 +336,39 @@ func budgetFor(cfg Config) int {
 	}
 	return maxDeliver
 }
+
+// keepRetries is how many deliveries past its budget the broker still makes
+// of a subscription's message ([backstopFor]): the deliveries a dead letter's
+// keep has to land in once the budget is spent.
+//
+// WHY THE BROKER'S BACKSTOP STANDS PAST THE BUDGET. The consume loop retires a
+// message at its budget's delivery by keeping its copy and then terminating it
+// (attachment.retire), and a keep can fail for nothing wrong with the message
+// — a stop that closes the connection under it, a node killed while it
+// crosses, a dead-letter stream electing its leader. With the backstop AT the
+// budget that delivery was the broker's last, so a failed keep had nothing to
+// fall back on: terminated, the copy was gone; left unacknowledged, the broker
+// dropped it at its acknowledgement window. Past it, the message goes back and
+// its next delivery — a handler's first, which may handle it — keeps the copy
+// under the message's own identity, so a keep that had stored its entry and
+// lost its answer is stored as nothing.
+//
+// FIVE: each comes back at the failure path's ceiling, about thirty seconds,
+// so five span two and a half minutes of keeps — an election of the
+// dead-letter stream's leader many times over, and the redelivery of a
+// message a stopped or killed node held, which comes back once, at the end
+// of its acknowledgement window ([DefaultAckWait]). A dead-letter stream that
+// refuses every keep for longer refuses for a reason no retry answers — full,
+// or an external account's limits — and the keep at the backstop's own
+// delivery then says the copy is lost.
+const keepRetries = 5
+
+// backstopFor is the broker's own MaxDeliver for a subscription's consumer:
+// its budget, and [keepRetries] past it. The consume loop retires a message at
+// its budget, never the broker, so this bounds only how often a keep that
+// failed is made again, and a bug in that path cannot circle a message for
+// ever.
+func backstopFor(cfg Config) int { return budgetFor(cfg) + keepRetries }
 
 // DefaultAckWait bounds how long a fetched-unacked message stays invisible.
 //
@@ -608,6 +641,20 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			retention:  jetstream.LimitsPolicy,
 			maxAge:     eventRetention,
 			duplicates: queue.DeadLetterWindow,
+		},
+		{
+			// Which of a subscription's messages failed as themselves at
+			// a delivery: an empty mark per message, ONE PER SUBJECT, so
+			// whether a message is marked is one read of its subject's
+			// newest message (failuremarks.go). By the event stream's
+			// age, as the dead letters it decides the subject of: a
+			// mark nobody deleted — its message settled by a member that
+			// never wrote it — goes with them.
+			name:          streamFailures,
+			subjects:      []string{failurePrefix + ">"},
+			retention:     jetstream.LimitsPolicy,
+			maxAge:        eventRetention,
+			maxPerSubject: 1,
 		},
 	}
 }

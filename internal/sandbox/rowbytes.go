@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -24,10 +24,12 @@ import (
 // row ([PendingRun]), read and written whole by every mutation (coordstore.go),
 // and beside it the parts a job can make large: the bridged call log
 // ([BridgeLog]), read and written whole by every append, the secrets the job's
-// box was handed, and the turn's leads ([PendingStore.Leads]). One value is one
-// broker message, held to [queue.MaxPayloadBytes] with its headers, and past it
-// every write of the value is refused at the broker: for the row, a lease
-// stamped on the run, a status flip, the hold a turn takes on its next scratch
+// box was handed, and the turn's leads ([PendingStore.Leads]). One value is
+// held to what one key of the store holds, [coord.MaxValueBytes] (the largest
+// whose read a node without `data` takes back across its leaf link,
+// base64-encoded in its stream leader's reply), and past it every write of the
+// value is refused ([coord.ErrValueTooLarge]): for the row, a lease stamped on
+// the run, a status flip, the hold a turn takes on its next scratch
 // repository; for the log, every call's append. The bridged call log grew one
 // call at a time with nothing measuring it (two hundred builtin answers of
 // 64 KiB are 12.8 MiB), so a long run's log stopped taking writes, and its
@@ -44,9 +46,9 @@ import (
 //
 //	the parked turn's state ......... ExecuteStateBytes   2,097,152  (2 MiB)
 //	everything else, and the room
-//	  a later build adds fields in .. RestBytes           6,287,360  (6 MiB less 4 KiB)
+//	  a later build adds fields in .. RestBytes           4,193,390  (4 MiB less 914 bytes)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // and the log's three ways, beside it, a split that closes as its figures are
 // stated (TestACallInFlightIsHeldToItsShare):
@@ -56,9 +58,9 @@ import (
 //	the turn's earlier rounds' tool
 //	  names, the log's own fields,
 //	  and the room a later build
-//	  adds keys to the log in ....... LogRestBytes        3,862,528  (3.68 MiB)
+//	  adds keys to the log in ....... LogRestBytes        1,768,558  (1.69 MiB)
 //	                                                      ---------
-//	                                  RowBytes            8,384,512
+//	                                  RowBytes            6,290,542
 //
 // The handed set beside them ([PendingStore.Handed]) is the third value, at
 // most [MaxHandedBytes] before it is sealed: a fraction of [RowBytes], which
@@ -110,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,032,970
-//	to spare, measured .............. measuredSpare           2,656,908
+//	every other field, measured ..... measuredOtherFields     2,033,249
+//	to spare, measured .............. measuredSpare             562,659
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -135,12 +137,13 @@ import (
 // reads its session holds only as a count ([SessionCapture.Omitted]); and what
 // the job may do on Gitlet: the holds of its turn ([MaxCodeHolds]), its
 // repositories ([MaxRunRepos], each held to its grammar, its cone and its
-// change's title, [MaxChangeTitleBytes], among them) and its floors. Every one
+// change's title, [MaxChangeTitleBytes], among them), its floors and whom its
+// pushes and its change are made for ([PendingRun.CodeWorkingFor]). Every one
 // of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and a
 // box's account of its session are each held to their share by the write that
 // puts them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
 // [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
-// broker; and the turn's read of its conversation is held to its line by
+// store; and the turn's read of its conversation is held to its line by
 // construction, made of a read the executor log bounds field by field
 // ([NewConversationBase]), the largest of which a test holds under it.
 //
@@ -160,10 +163,13 @@ import (
 const (
 	// RowBytes is what one value of a run may weigh as the coordination store
 	// holds it — its row, and each part beside it, the bridged call log
-	// first: the broker's payload bound less the room its headers take inside
-	// it — a KV update carries its expected-revision header in the same
-	// max_payload, about seventy bytes, and four KiB is that with room.
-	RowBytes = queue.MaxPayloadBytes - 4<<10
+	// first: what one key holds, the store's own bound on a value, which
+	// every backend refuses a write past ([coord.MaxValueBytes]). The
+	// transport's ceiling is not it: a value that large has a leader's read
+	// a leaf's link closes on, so the store holds a value to the largest whose
+	// read crosses, and a share budgeted to the transport would be one the
+	// store refuses every write of.
+	RowBytes = coord.MaxValueBytes
 
 	// BridgeLogBytes is the bridged call log's share of its value: `calls`,
 	// `elided`, `elided_calls` and `absorbed_calls` together. The rest of the
@@ -288,8 +294,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_032_970
-	measuredSpare       = 2_656_908
+	measuredOtherFields = 2_033_249
+	measuredSpare       = 562_659
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -444,7 +450,7 @@ const (
 	// [InFlightBytes] — [MaxCallsInFlight] raised, say — fails
 	// TestACallInFlightIsHeldToItsShare until this figure, and the table and
 	// docs/concepts/code-sandbox.md that state it, move with it.
-	LogRestBytes = 3_862_528
+	LogRestBytes = 1_768_558
 
 	// MaxPriorCalls bounds [BridgeLog.PriorCalls]: the tool names a turn's
 	// earlier rounds called with success. Five hundred and twelve is past
@@ -461,7 +467,7 @@ const rowRecord kept.Record = "the run's record"
 
 // ErrStateTooLarge is a parked turn's state past its share of the row
 // ([ExecuteStateBytes]), refused by [PendingStore.MarkSuspended] rather than by
-// the broker: a row that big would refuse every write after it.
+// the store: a row that big would refuse every write after it.
 var ErrStateTooLarge = errors.New("sandbox: the parked turn's state is past its share of the run's row")
 
 // ErrAnswerTooLarge is a reply past its share of the row ([MaxAnswerBytes]) as

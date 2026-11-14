@@ -1239,6 +1239,11 @@ type resumeInput struct {
 	// run ended refused on a sign-in replaced while it ran, so the turn
 	// carries its round on once with the new one ([Engine.signInReplaced]).
 	Rotated *runner.Rotated
+
+	// Refused is set by the resume itself too: the run's provider refused
+	// the request it made in a session it continued, so the turn carries its
+	// round on once in a fresh session ([Engine.requestRefused]).
+	Refused *runner.Refused
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1355,6 +1360,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
 	in.Rotated = e.signInReplaced(ctx, company, in)
+	in.Refused = requestRefused(ctx, in)
 	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
 	// its box asleep, and before anything of its turn runs: a limit its
 	// review's chain already knows refuses it, which the coordinator holds on
@@ -1855,6 +1861,11 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
 		// [Engine.signInReplaced].
 		Rotated: in.Rotated,
+		// A CONTINUED SESSION ITS PROVIDER REFUSED CARRIES THE ROUND ON, once,
+		// in a fresh one; a refusal past that is the round's ending. See
+		// [requestRefused].
+		Refused:        in.Refused,
+		RequestRefused: refusedSaid(in),
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
@@ -2341,7 +2352,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Deadline = tel.deadline
 	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
 	// closed rounds condensed where the state is past it, and a state still
-	// past it refused by name rather than by the broker, which would refuse
+	// past it refused by name rather than by the store, which would refuse
 	// this write and every write of the row after it — the name saying which
 	// of the two is past the share, the turn's own context or its closed rounds.
 	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
@@ -4790,6 +4801,52 @@ func underlay(env, defaults map[string]string) map[string]string {
 		}
 	}
 	return env
+}
+
+// requestRefused decides whether a collected run is carried on because its
+// provider refused the request it made (sandbox.RunEnding.Refused) IN A SESSION
+// IT CONTINUED: that session is retired at the collection, so the round is
+// relaunched once in a session of its own, which holds nothing of what was
+// refused.
+//
+// ALL OF IT MUST HOLD: a completion; a refused ending; a job that is not itself
+// such a relaunch (once per round); and a session its box said it continued. A
+// job refused in a session it started has nothing a fresh one would leave
+// behind, and is collected ([refusedSaid]).
+func requestRefused(ctx context.Context, in resumeInput) *runner.Refused {
+	run := in.Run
+	if in.Asked != nil || in.Lost != nil || !in.Ended.Refused ||
+		run.Launch.FollowUp == sandbox.FollowUpRequestRefused ||
+		run.Launch.SessionStart != sandbox.SessionStartContinued {
+		return nil
+	}
+	log.InfoContext(ctx, "run_relaunched_fresh_session", "turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID, "session", run.SessionRan(),
+		"detail", "the provider refused the request the run made in a session it continued; the "+
+			"session is retired and the round is carried on once in a fresh one")
+	return &runner.Refused{Said: refusedMessage(in.Ended), BoxKept: run.SandboxID != ""}
+}
+
+// refusedSaid is the provider's message where the collected run ended refused
+// and its round is NOT carried on ([requestRefused]): what ends the turn.
+func refusedSaid(in resumeInput) string {
+	if in.Asked != nil || in.Lost != nil || !in.Ended.Refused || in.Refused != nil {
+		return ""
+	}
+	return refusedMessage(in.Ended)
+}
+
+// refusedMessage is what the provider said of a refused request, redacted: the
+// run's error, else its text, else that it said nothing.
+func refusedMessage(ended sandbox.RunEnding) string {
+	said := strings.TrimSpace(ended.Error)
+	if said == "" {
+		said = strings.TrimSpace(ended.Text)
+	}
+	if said == "" {
+		return "the provider gave no message"
+	}
+	return events.ClipDiagnostic(redact.Secrets(said))
 }
 
 // signInReplaced decides whether a collected run is carried on because a

@@ -187,29 +187,35 @@ func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*e
 	if limit <= 0 {
 		return nil, nil
 	}
-	return q.peek(ctx, stream, topic, info.AckFloor.Stream+1, limit)
+	return q.peek(ctx, stream, []string{topic}, info.AckFloor.Stream+1, limit)
 }
 
-// DeadLetters reports the events a subscription gave up on.
+// DeadLetters reports the events a subscription gave up on: what both of its
+// pair's dead-letter subjects hold, its poison and its unhandled deliveries
+// ([queue.RetiredTo]), in the order the stream kept them.
 //
 // Sized from the stream for the same reason as Backlog, and with the same
 // second benefit: the fixed limit this used to pass meant every call waited
 // out the fetch deadline, because a fetch returns early only once it has the
 // whole batch it asked for and there are never 256 dead letters.
 func (q *Queue) DeadLetters(ctx context.Context, topic, group string) ([]*events.Event, error) {
-	subject := topics.DeadLetter(topic, group)
-	stream, err := q.streamFor(ctx, subject)
+	subjects := []string{topics.DeadLetter(topic, group), topics.Unhandled(topic, group)}
+	stream, err := q.streamFor(ctx, subjects[0])
 	if err != nil {
 		return nil, err
 	}
-	stored, _, err := q.storedOn(ctx, stream, subject)
-	if err != nil {
-		return nil, err
+	stored := 0
+	for _, subject := range subjects {
+		held, _, err := q.storedOn(ctx, stream, subject)
+		if err != nil {
+			return nil, err
+		}
+		stored += held
 	}
 	if stored == 0 {
 		return nil, nil
 	}
-	return q.peek(ctx, stream, subject, 1, stored)
+	return q.peek(ctx, stream, subjects, 1, stored)
 }
 
 // storedOn reports how many messages the stream still holds on one subject,
@@ -269,39 +275,30 @@ const peekBackstop = 30 * time.Second
 // cancelled.
 const peekCleanup = 5 * time.Second
 
-// peek reads up to limit messages from a subject, starting at a stream
-// sequence, WITHOUT consuming them — through a throwaway ack-none consumer.
-// Inspecting a backlog must never change it.
+// peek reads up to limit messages from subjects, in the stream's order,
+// starting at a stream sequence, WITHOUT consuming them — through a throwaway
+// ack-none consumer. Inspecting a backlog must never change it.
 func (q *Queue) peek(
 	ctx context.Context,
-	stream, subject string,
+	stream string,
+	subjects []string,
 	from uint64,
 	limit int,
 ) ([]*events.Event, error) {
-	q.noteConsumerProposal()
-	cons, err := q.js.CreateConsumer(ctx, stream, jetstream.ConsumerConfig{
-		FilterSubject: subject,
+	subject := strings.Join(subjects, ", ")
+	cons, drop, err := q.throwaway(ctx, stream, jetstream.ConsumerConfig{
+		FilterSubjects: subjects,
 		// By sequence rather than DeliverAll, so a caller that knows what
 		// it has already finished with can say so. A filtered consumer
 		// starts at the first MATCHING message at or after the sequence,
 		// so a floor pointing at another subject's message is harmless.
-		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
-		OptStartSeq:       from,
-		AckPolicy:         jetstream.AckNonePolicy,
-		InactiveThreshold: peekBackstop,
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:   from,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("peek consumer: %w", err)
 	}
-	defer func() {
-		// WithoutCancel because a cleanup that inherits the cancellation
-		// it is cleaning up after does nothing at all — and then its OWN
-		// bound, because WithoutCancel drops the deadline along with the
-		// cancellation.
-		cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), peekCleanup)
-		defer stop()
-		_ = q.js.DeleteConsumer(cleanupCtx, stream, cons.CachedInfo().Name)
-	}()
+	defer drop()
 
 	var out []*events.Event
 	for len(out) < limit {

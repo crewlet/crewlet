@@ -365,6 +365,13 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"atlas_facets":   string(iam.GrantAtlas),
 		"atlas_log":      string(iam.GrantAtlas),
 		"atlas_activity": string(iam.GrantAtlas),
+		"atlas_review":   string(iam.GrantAtlas),
+		"atlas_sources":  string(iam.GrantAtlas),
+		// THE WORK ON ENTRIES: the atlas's app opens each, and the tracker
+		// is read inside only for an asker who uses Worklet (ADR-0140).
+		"atlas_work":       string(iam.GrantAtlas),
+		"atlas_entry_work": string(iam.GrantAtlas),
+		"atlas_named":      string(iam.GrantAtlas),
 		// GITLET'S ROWS, each asked behind the gitlet app (ADR-0110) and
 		// decided per repository by the grant the serving node derives from
 		// its chart (gitlet.GrantOf, ADR-0088): a listing leaves out what the

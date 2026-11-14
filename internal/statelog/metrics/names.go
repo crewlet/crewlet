@@ -104,6 +104,7 @@ const (
 	CodeSeatworkHeld                 = "crewlet.code.seatwork.held"
 	CodeSeatworkWaits                = "crewlet.code.seatwork.waits"
 	HistoryAnswers                   = "crewlet.history.answers"
+	NotifyInboundDeadLetterExpired   = "crewlet.notify.inbound.dead_letter_expired"
 	ObjectsS3Attempts                = "crewlet.objects.s3.attempts"
 	ObjectsS3GateLimit               = "crewlet.objects.s3.gate.limit"
 	ObjectsS3GateWaiting             = "crewlet.objects.s3.gate.waiting"

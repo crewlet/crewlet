@@ -16,6 +16,7 @@ export type AtlasKind =
   | "endpoint"
   | "certificate"
   | "service"
+  | "workload"
   | "host"
   | "datastore"
   | "queue"
@@ -96,6 +97,8 @@ export type AtlasFact =
   | "address"
   | "port"
   | "containers"
+  | "open_port"
+  | "image"
   | "engine"
   | "engine_version"
   | "default_branch"
@@ -142,13 +145,14 @@ type AtlasValueType =
   | "account_ref"
   | "branch"
   | "label"
-  | "instant";
+  | "instant"
+  | "image";
 
 /** Where a claim came from (`atlas.SourceKind`). */
-export type AtlasSourceKind = "settings" | "records" | "integration" | "agent" | "person";
+export type AtlasSourceKind = "settings" | "records" | "integration" | "code" | "agent" | "person";
 
 /** What backs an agent's claim, as the engine checked it (`atlas.Evidence`). */
-type AtlasEvidence = "call" | "file" | "none";
+export type AtlasEvidence = "call" | "file" | "none";
 
 /** How far a claim can be trusted, derived from its source (`atlas.Confidence`),
  *  the most trusted first. */
@@ -214,6 +218,12 @@ type AtlasChange =
   | "joined"
   | "kept_apart"
   | "withdrawn";
+
+/** Why an entry waits for a person (`atlas.ReviewKind`): its sources disagree
+ *  on a fact or a relation, or only an agent reported it, with nothing the
+ *  engine could check (`unconfirmed`) or backed by a call or a file (`likely`).
+ *  What only a repository's files declare is likely and waits for nobody. */
+export type AtlasReviewKind = "disagreement" | "unconfirmed" | "likely";
 
 /** A place an atlas read reads (`gather.SourceName`). */
 export type AtlasCoverageSource =
@@ -356,6 +366,15 @@ export interface AtlasSource {
   revision?: string;
   turn?: string;
   evidence?: AtlasEvidence;
+  /** An agent's alone: the tool whose answer the claim cited, by name. */
+  tool?: string;
+}
+
+/** One agent's word on an entry (`atlas.Report`): who reported it, in which
+ *  turn, citing which call, and when. */
+export interface AtlasReport {
+  source: AtlasSource;
+  observed_at: string;
 }
 
 /** Another source's live claim beside the value the atlas holds. */
@@ -544,3 +563,417 @@ export interface AtlasActivityAnswer extends AtlasRead {
   days: number[];
   entries: AtlasEntryActivity[];
 }
+
+/** How a source's last read went (`collect.State`): never read, read whole,
+ *  read with some part refused, or not finished. */
+export type AtlasSourceState = "never" | "read" | "partial" | "failed";
+
+/** One part of a vendor a source was refused (`collect.Finding`), and what
+ *  to grant. `scope` names the server the part belongs to, where it has one. */
+interface AtlasSourceFinding {
+  part: string;
+  scope?: string;
+  detail?: string;
+}
+
+/** One part of a source with a standing of its own (`collect.Scope`): a
+ *  server of the SSH source. `last_read_at` is its last whole read, absent
+ *  where it has none, and `unread` how many of its parts the last read was
+ *  refused. */
+export interface AtlasSourceScope {
+  id: string;
+  last_read_at?: string;
+  unread?: number;
+}
+
+/** One source as a reader is shown it (`collect.Standing`). The counts are
+ *  the last complete read's; `withheld` counts the values left out for their
+ *  shape, which are never shown. `last_error` is sent to an administrator
+ *  alone. `next_read_at` is absent where the source is due now,
+ *  `refresh_requested_at` where no ask waits on it, and `refreshable_at`
+ *  where an ask is honoured at once. */
+export interface AtlasSourceStanding {
+  kind: string;
+  state: AtlasSourceState;
+  last_attempt_at?: string;
+  last_complete_at?: string;
+  entries: number;
+  calls: number;
+  withheld: number;
+  recorded: number;
+  retired: number;
+  purged: number;
+  missing: number;
+  last_error?: string;
+  unread: AtlasSourceFinding[];
+  unread_overflow: number;
+  scopes: AtlasSourceScope[];
+  next_read_at?: string;
+  refresh_requested_at?: string;
+  refresh_requested_by?: string;
+  refreshable_at?: string;
+}
+
+/** `atlas_sources`: each source the atlas reads for the company, in the order
+ *  of their names, and the cadence they are read on. */
+export interface AtlasSourcesAnswer {
+  sources: AtlasSourceStanding[];
+  refresh_interval_seconds: number;
+  refresh_floor_seconds: number;
+}
+
+/** One thing that waits for a person (`atlas.ReviewItem`), computed on every
+ *  read and stored nowhere. `fact` or `relation` is what the sources disagree
+ *  on, with every other value beside the one shown; both are absent for an
+ *  entry that waits as a whole. `target` names what a relation points at. */
+export interface AtlasReviewItem {
+  id: string;
+  kind: AtlasReviewKind;
+  entry: AtlasSummary;
+  fact?: AtlasFactView;
+  relation?: AtlasEdge;
+  target?: AtlasLineTarget;
+  /** For an entry that waits as a whole: each agent's newest word on it,
+   *  newest first, at most five. */
+  reports?: AtlasReport[];
+  /** The newest claim the item rests on. */
+  since: string;
+}
+
+/** `atlas_review`: one page of what waits for a person, disagreements first.
+ *  `total` counts every item of the asked kind and `counts` each kind's,
+ *  whatever the page holds; `next_cursor` is absent on the last page. */
+export interface AtlasReviewAnswer extends AtlasRead {
+  items: AtlasReviewItem[];
+  next_cursor?: string;
+  total: number;
+  counts: Partial<Record<AtlasReviewKind, number>>;
+}
+
+/** A count of tasks the engine may have stopped at its ceiling: `capped`
+ *  says `total` is a floor. */
+interface AtlasWorkTotal {
+  total: number;
+  capped?: boolean;
+}
+
+/** `atlas_work`: how many open tasks name each entry, by the entry's id.
+ *  `unread` is the engine's sentence for why no work was read (the asker does
+ *  not use Worklet, or the company's work is not kept there), and `open` is
+ *  empty with it. `capped` says more entries have open work than one read
+ *  counts, and which were left out is not known. */
+export interface AtlasWorkAnswer {
+  unread?: string;
+  open: Record<string, number>;
+  capped?: boolean;
+}
+
+/** `atlas_entry_work`: the tasks naming one entry, the open ones most
+ *  recently changed first and the ones finished in the last 30 days, each
+ *  list with its whole count. `Row` is the tracker's own list row, bound
+ *  where the wire's questions are declared. */
+export interface AtlasEntryWorkAnswer<Row> {
+  unread?: string;
+  open: Row[];
+  recent: Row[];
+  open_total: AtlasWorkTotal;
+  recent_total: AtlasWorkTotal;
+}
+
+/** One asked id and the entry it names: `id` exactly as asked, and the
+ *  entry it merged into, so two ids of one merged entry carry one `entry.id`. */
+export interface AtlasNamed {
+  id: string;
+  entry: AtlasSummary;
+}
+
+/** `atlas_named`: the entries a list of ids names, as the asker reads them:
+ *  one item per distinct asked id that names an entry, in the order asked,
+ *  and the asked ids that name no entry the asker's atlas holds. */
+export interface AtlasNamedAnswer {
+  named: AtlasNamed[];
+  missing: string[];
+}
+
+/** What each fact admits (`atlas.Fact.Spec`): the grammar its value is written
+ *  in, the closed words of a word fact, the kinds that carry it (none listed:
+ *  every kind), and its traits. `many` is a fact an entry holds several values
+ *  of, `meaning` one only a person decides, `per_host` one each host of a
+ *  merged entry keeps its own value of. Held to the engine's, fact by fact, by
+ *  `TestTheDashboardKnowsWhatEachFactAndRelationAdmits`. */
+export const ATLAS_FACT_SPECS = {
+  name: { type: "label", traits: [], words: [], kinds: [] },
+  purpose: { type: "label", traits: ["meaning"], words: [], kinds: [] },
+  environment: {
+    type: "word",
+    traits: ["meaning"],
+    words: ["production", "staging", "development", "test"],
+    kinds: [],
+  },
+  importance: {
+    type: "word",
+    traits: ["meaning"],
+    words: ["critical", "standard", "experimental"],
+    kinds: [],
+  },
+  vendor: {
+    type: "word",
+    traits: [],
+    words: [
+      "aws",
+      "anthropic",
+      "atlassian",
+      "cloudflare",
+      "cursor",
+      "datadog",
+      "digitalocean",
+      "e2b",
+      "expo",
+      "github",
+      "gitlab",
+      "gitlet",
+      "google",
+      "google_cloud",
+      "mattermost",
+      "openai",
+      "scaleway",
+      "slack",
+      "xai",
+      "other",
+    ],
+    kinds: ["vendor_account", "model_provider", "tool_server"],
+  },
+  capability: {
+    type: "word",
+    traits: ["many"],
+    words: [
+      "chat",
+      "tracker",
+      "knowledge",
+      "code_hosting",
+      "ci",
+      "monitoring",
+      "alerting",
+      "dns",
+      "cdn",
+      "compute",
+      "object_storage",
+      "database",
+      "email",
+      "model_api",
+      "app_delivery",
+      "identity",
+    ],
+    kinds: ["vendor_account"],
+  },
+  account_ref: { type: "account_ref", traits: [], words: [], kinds: ["vendor_account"] },
+  account_name: { type: "label", traits: [], words: [], kinds: ["vendor_account"] },
+  site: { type: "url", traits: [], words: [], kinds: ["vendor_account"] },
+  region: {
+    type: "region",
+    traits: ["many"],
+    words: [],
+    kinds: ["vendor_account", "host", "datastore", "queue", "bucket"],
+  },
+  integration: { type: "word", traits: [], words: ["on", "off"], kinds: ["vendor_account"] },
+  inbound_url: { type: "url", traits: ["many"], words: [], kinds: ["vendor_account"] },
+  url: {
+    type: "url",
+    traits: ["many"],
+    words: [],
+    kinds: ["hostname", "model_provider", "tool_server"],
+  },
+  address: { type: "address", traits: ["many"], words: [], kinds: ["host"] },
+  port: { type: "port", traits: [], words: [], kinds: ["host", "datastore", "queue"] },
+  containers: { type: "word", traits: [], words: ["yes", "no"], kinds: ["host"] },
+  open_port: { type: "port", traits: ["many"], words: [], kinds: ["host"] },
+  image: { type: "image", traits: [], words: [], kinds: ["workload"] },
+  engine: {
+    type: "word",
+    traits: [],
+    words: [
+      "postgres",
+      "mysql",
+      "mariadb",
+      "sqlite",
+      "redis",
+      "valkey",
+      "mongodb",
+      "elasticsearch",
+      "opensearch",
+      "clickhouse",
+      "nats",
+      "kafka",
+      "rabbitmq",
+      "other",
+    ],
+    kinds: ["datastore", "queue"],
+  },
+  engine_version: { type: "version", traits: [], words: [], kinds: ["datastore", "queue"] },
+  default_branch: { type: "branch", traits: [], words: [], kinds: ["repository"] },
+  visibility: {
+    type: "word",
+    traits: ["per_host"],
+    words: ["company", "unit", "public", "private", "internal"],
+    kinds: ["repository"],
+  },
+  status: {
+    type: "word",
+    traits: [],
+    words: ["importing", "active", "archived"],
+    kinds: ["repository"],
+  },
+  pull_mirror_of: { type: "url", traits: [], words: [], kinds: ["repository"] },
+  push_mirror_to: { type: "url", traits: [], words: [], kinds: ["repository"] },
+  imported_from: { type: "url", traits: [], words: [], kinds: ["repository"] },
+  last_result: {
+    type: "word",
+    traits: [],
+    words: ["queued", "running", "passed", "failed", "errored", "cancelled", "skipped"],
+    kinds: ["pipeline"],
+  },
+  runner: { type: "word", traits: [], words: ["engine", "external"], kinds: ["pipeline"] },
+  required: { type: "word", traits: [], words: ["yes", "no"], kinds: ["pipeline"] },
+  pipeline_state: { type: "word", traits: [], words: ["active", "disabled"], kinds: ["pipeline"] },
+  harness: { type: "label", traits: [], words: [], kinds: ["model_provider"] },
+  model: { type: "label", traits: [], words: [], kinds: ["model_provider"] },
+  sign_in: {
+    type: "word",
+    traits: [],
+    words: ["subscription", "api_key", "inherit_env", "env"],
+    kinds: ["model_provider"],
+  },
+  chain_position: { type: "int", traits: [], words: [], kinds: ["model_provider"] },
+  transport: { type: "word", traits: [], words: ["stdio", "http"], kinds: ["tool_server"] },
+  command: { type: "label", traits: [], words: [], kinds: ["tool_server"] },
+  shared: { type: "word", traits: [], words: ["yes", "no"], kinds: ["tool_server"] },
+  server_name: { type: "label", traits: [], words: [], kinds: ["tool_server"] },
+  server_version: { type: "version", traits: [], words: [], kinds: ["tool_server"] },
+  tool_count: { type: "int", traits: [], words: [], kinds: ["tool_server"] },
+  oauth_issuer: { type: "url", traits: [], words: [], kinds: ["tool_server"] },
+  sign_in_expires: { type: "instant", traits: [], words: [], kinds: ["tool_server"] },
+  covers: { type: "hostname", traits: ["many"], words: [], kinds: ["certificate"] },
+  expires: { type: "instant", traits: [], words: [], kinds: ["certificate"] },
+  issuer: { type: "label", traits: [], words: [], kinds: ["certificate"] },
+  validity: {
+    type: "word",
+    traits: [],
+    words: ["active", "pending", "failed", "expired", "inactive"],
+    kinds: ["certificate"],
+  },
+  certificate_type: {
+    type: "word",
+    traits: [],
+    words: ["universal", "advanced", "custom"],
+    kinds: ["certificate"],
+  },
+  monitor_state: {
+    type: "word",
+    traits: [],
+    words: ["ok", "warn", "alert", "no_data", "unknown"],
+    kinds: ["monitor"],
+  },
+  state_since: { type: "instant", traits: [], words: [], kinds: ["monitor"] },
+} as const;
+
+/** What each relation may join (`atlas.Relation.Joins` and `Names`): the kinds
+ *  it runs from, the kinds it runs to, and the identities outside the atlas it
+ *  names instead. Held to the engine's by the same gate. */
+export const ATLAS_RELATION_PAIRS = {
+  runs_on: {
+    from: ["service", "workload", "datastore", "queue"],
+    to: ["host", "vendor_account"],
+    externals: [],
+  },
+  depends_on: {
+    from: ["service"],
+    to: [
+      "service",
+      "datastore",
+      "queue",
+      "bucket",
+      "endpoint",
+      "vendor_account",
+      "model_provider",
+      "tool_server",
+    ],
+    externals: [],
+  },
+  exposes: { from: ["service"], to: ["endpoint"], externals: [] },
+  resolves_to: { from: ["hostname"], to: ["host", "endpoint", "hostname"], externals: [] },
+  in_zone: { from: ["hostname", "certificate"], to: ["domain"], externals: [] },
+  fronted_by: { from: ["hostname", "endpoint", "service"], to: ["vendor_account"], externals: [] },
+  served_by: { from: ["domain"], to: ["vendor_account"], externals: [] },
+  built_from: { from: ["service", "pipeline"], to: ["repository"], externals: [] },
+  deployed_by: { from: ["service", "endpoint", "hostname"], to: ["pipeline"], externals: [] },
+  monitored_by: {
+    from: ["service", "endpoint", "hostname", "host", "datastore", "queue"],
+    to: ["monitor", "vendor_account"],
+    externals: [],
+  },
+  secured_by: { from: ["hostname"], to: ["certificate"], externals: [] },
+  belongs_to: {
+    from: [
+      "domain",
+      "hostname",
+      "endpoint",
+      "service",
+      "host",
+      "datastore",
+      "queue",
+      "bucket",
+      "repository",
+      "pipeline",
+      "monitor",
+      "model_provider",
+      "tool_server",
+      "certificate",
+    ],
+    to: ["vendor_account"],
+    externals: [],
+  },
+  documented_in: {
+    from: [
+      "domain",
+      "hostname",
+      "endpoint",
+      "certificate",
+      "service",
+      "workload",
+      "host",
+      "datastore",
+      "queue",
+      "bucket",
+      "vendor_account",
+      "repository",
+      "pipeline",
+      "monitor",
+      "tool_server",
+      "model_provider",
+    ],
+    to: [],
+    externals: ["page"],
+  },
+  owned_by: {
+    from: [
+      "domain",
+      "hostname",
+      "endpoint",
+      "certificate",
+      "service",
+      "workload",
+      "host",
+      "datastore",
+      "queue",
+      "bucket",
+      "vendor_account",
+      "repository",
+      "pipeline",
+      "monitor",
+      "tool_server",
+      "model_provider",
+    ],
+    to: [],
+    externals: ["seat", "unit"],
+  },
+} as const;

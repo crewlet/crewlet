@@ -134,10 +134,10 @@
 // ([PendingStore.MarkHeldCall]). See heldcall.go.
 //
 // AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
-// store is one broker message, so the run's row and the log beside it are each
-// held to [RowBytes], in the bytes their encoder writes, and every field has a
-// share of its value's. The log's calls have theirs ([BridgeLogBytes]), each
-// call held to its own and the calls it counts without listing kept as
+// store is held to what a key holds, so the run's row and the log beside it are
+// each held to [RowBytes], in the bytes their encoder writes, and every field
+// has a share of its value's. The log's calls have theirs ([BridgeLogBytes]),
+// each call held to its own and the calls it counts without listing kept as
 // identities ([ElidedCall]); on the row, the parked state has its own
 // ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
 // past, and the rest is every other field held by the write that puts it there
@@ -790,6 +790,15 @@ type Result struct {
 	// succeed. The box's word: a run that forges it costs only its own
 	// conversation's session, whose transcript it could spoil anyway.
 	ContextExhausted bool
+
+	// RequestRefused says the run ended because its provider refused the
+	// request the harness made as it was built (an invalid tool definition, a
+	// message the session carries that the provider no longer takes): what the
+	// same session sends again on every launch. It names such a run on its
+	// record (types.ExecutorErrorRequestRefused), and no later launch continues
+	// the session it ran ([requestRefused]). Read only on a run that did not
+	// succeed, and the box's word, as ContextExhausted is.
+	RequestRefused bool
 
 	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's

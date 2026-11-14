@@ -218,6 +218,11 @@ type Observation struct {
 	// Evidence is what the cited call of that turn is evidence of, derived
 	// from the call's tool by the engine and never passed by the agent.
 	Evidence atlas.Evidence
+
+	// Tool is the cited call's tool, by name, so a person reviewing the
+	// claim is told which call it rests on. Empty where the name is not one
+	// a record keeps ([atlas.CitableTool]).
+	Tool string
 }
 
 // Observe writes one agent's claim on its entry (ADR-0132): an entry, a fact
@@ -244,7 +249,11 @@ func (w *Writer) Observe(ctx context.Context, c Call, claim atlas.Claim, seen Ob
 		return statelog.Result{}, invalid("an agent's claim names the turn it was recorded in, in at most %d bytes",
 			MaxTurnBytes)
 	}
-	return w.claim(ctx, c, claim, atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence), NoIfMatch)
+	if seen.Tool != "" && !atlas.CitableTool(seen.Tool) {
+		return statelog.Result{}, invalid("the tool an agent's claim cites is named by its name, in at most " +
+			"128 letters, digits and separators, and never by a value shaped like a credential")
+	}
+	return w.claim(ctx, c, claim, atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence).Citing(seen.Tool), NoIfMatch)
 }
 
 // claim publishes one claim as src, judged and conditioned as [Writer.Record]
@@ -430,9 +439,10 @@ func expirableBefore(ctx context.Context, tx *sql.Tx, before int64) (bool, error
 // ---- an integration's read ---------------------------------------------- //
 
 // ReadInput is one integration's read of one entry, as the collect duty hands
-// it to the log (ADR-0129): the voice it speaks in, the entry, the claims the
-// read holds on it that are new or changed, the slots of the voice's earlier
-// claims it no longer holds, and when the read saw it.
+// it to the log (ADR-0129), or one repository's files' as the code scan does
+// (ADR-0133): the voice it speaks in, the entry, the claims the read holds on
+// it that are new or changed, the slots of the voice's earlier claims it no
+// longer holds, and when the read saw it.
 type ReadInput struct {
 	Source     atlas.Source
 	Entry      atlas.Ref
@@ -441,8 +451,9 @@ type ReadInput struct {
 	ObservedAt time.Time
 }
 
-// Read writes one integration's read of one entry. The caller is the engine's
-// own duty, never a person or an agent; the source is an integration's; every
+// Read writes one read of one entry. The caller is the engine's own duty,
+// never a person or an agent; the source is an integration's or a
+// repository's files'; every
 // claim is on the entry, in the read's voice, judged by the vocabulary's
 // grammar with credentials refused in its value and in every key it names;
 // and a slot is withdrawn or claimed, never both. A read on, naming or
@@ -455,8 +466,9 @@ func (w *Writer) Read(ctx context.Context, c Call, in ReadInput) (statelog.Resul
 		return statelog.Result{}, invalid("an integration's read is the engine's own record: a %s records a claim",
 			c.By.Kind)
 	}
-	if in.Source.Kind != atlas.SourceIntegration {
-		return statelog.Result{}, invalid("a read speaks as an integration, not as a %s", in.Source.Kind)
+	if in.Source.Kind != atlas.SourceIntegration && in.Source.Kind != atlas.SourceCode {
+		return statelog.Result{}, invalid("a read speaks as an integration or as a repository's files, "+
+			"not as a %s", in.Source.Kind)
 	}
 	if _, err := atlas.Exists(in.Entry, in.Source, w.now()); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)

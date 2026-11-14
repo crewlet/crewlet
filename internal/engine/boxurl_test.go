@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -63,7 +64,7 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 				// UNSEEDED: that nothing is at the store's path
 				// afterwards is half the assertion.
 				boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
-					b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+					b.Stream.StoreDir = filepath.Join(brokertest.TempDir(t), "stream")
 				})
 				e, err := engine.New(t.Context(), engine.Options{
 					Bootstrap:   boot,

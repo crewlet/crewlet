@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessreview"
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -59,7 +60,7 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	// this case holds is that the halves' parsers are chat's and nothing else.
 	var sources []string
 	for _, p := range parsers {
-		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source {
+		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source && p.Source() != atlaswake.Source {
 			sources = append(sources, p.Source())
 		}
 	}
@@ -72,7 +73,7 @@ func chatContributesBothHalves(t *testing.T, e *Engine) {
 	sources = nil
 	var chats []notify.Prompt
 	for _, p := range prompts {
-		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source {
+		if p.Source() != alarmwake.Source && p.Source() != accessreview.Source && p.Source() != atlaswake.Source {
 			sources = append(sources, p.Source())
 			chats = append(chats, p)
 		}

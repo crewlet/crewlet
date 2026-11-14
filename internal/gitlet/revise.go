@@ -166,7 +166,7 @@ type SkippedOwner struct {
 // is against its target's tip, as the repository's home Gitlet node read them,
 // and the path owners whose globs its touched paths match.
 //
-// Every field is in the base format, under the condition [OpRevise] states.
+// Every field is in the base format, as [OpRevise] is.
 type Revise struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
@@ -189,13 +189,7 @@ type Revise struct {
 	// which a later revision holding the same pair holds the same code as
 	// (this file's head, "A revision's classes ride its facts").
 	//
-	// BASE FORMAT, under the condition [OpRevise] states: fields the op
-	// gained after it landed, so once a build without them has run they take
-	// {Name: "Revise.BaseTree", Since: 2, Op: "revise", Path:
-	// []string{"mutation", "base_tree"}} and {Name: "Revise.HeadTree", Since:
-	// 2, Op: "revise", Path: []string{"mutation", "head_tree"}}, which an
-	// older build defers the record by rather than record facts no approval
-	// could be carried by.
+	// BASE FORMAT, as [OpRevise] is.
 	BaseTree string `json:"base_tree"`
 	HeadTree string `json:"head_tree"`
 	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
@@ -212,13 +206,8 @@ type Revise struct {
 	// Classes is the path classes of the touched files' changes, each named
 	// by its place in Touched ([RevisionClasses]).
 	//
-	// BASE FORMAT, under the condition [OpRevise] states: a field the op
-	// gained after it landed, so once a build without it has run it takes
-	// {Name: "Revise.Classes", Since: 2, Op: "revise", Path:
-	// []string{"mutation", "classes"}}, which an older build defers the
-	// record by rather than record facts that class nothing. Omitted where
-	// it is the zero value — nothing classed, the classification incomplete
-	// — which an older build's facts mean already.
+	// BASE FORMAT, as [OpRevise] is. Omitted where it is the zero value:
+	// nothing classed, the classification incomplete.
 	Classes RevisionClasses `json:"classes,omitzero"`
 	// Node is the Gitlet node that recorded the facts: the repository's home as
 	// it took itself to be, which asked for them.
@@ -237,14 +226,7 @@ type Revise struct {
 	// the repository's rules' human paths they were matched against
 	// ([HumanPathsDigest]), which the decide holds its own snapshot's to.
 	//
-	// BASE FORMAT, under the condition [OpRevise] states: fields the op
-	// gained after it landed, so once a build without them has run they take
-	// {Name: "Revise.HumanPaths", Since: 2, Op: "revise", Path:
-	// []string{"mutation", "human_paths"}} and {Name:
-	// "Revise.HumanPathsDigest", Since: 2, Op: "revise", Path:
-	// []string{"mutation", "human_paths_digest"}}, which an older build
-	// defers the record by rather than record facts no gate can judge a
-	// person's approval by.
+	// BASE FORMAT, as [OpRevise] is.
 	HumanPaths       HumanPathMatch `json:"human_paths,omitzero"`
 	HumanPathsDigest string         `json:"human_paths_digest"`
 

@@ -32,6 +32,7 @@ describe("an alarm kind is read as words", () => {
     ["records_gated", "Records gated"],
     ["feed_unreadable", "Feed unreadable"],
     ["feed_dead_lettered", "Feed dead lettered"],
+    ["inbound_dead_lettered", "Inbound dead lettered"],
     ["maintenance_open", "Maintenance open"],
     ["volume_low", "Volume low"],
     ["wal_large", "WAL large"],

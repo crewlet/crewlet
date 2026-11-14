@@ -61,7 +61,7 @@
 // than a wrong one.
 //
 // AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
-// coordination store and so one broker message: [EncodeWithin] condenses the
+// coordination store, held to what a key holds: [EncodeWithin] condenses the
 // closed rounds past it — their payloads first, then their intents past their
 // opening, then their tallies' digests, then their calls folded into those
 // tallies by identity and then by tool, the names of their read tools with

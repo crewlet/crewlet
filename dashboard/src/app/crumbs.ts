@@ -525,6 +525,12 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
         : [root(row, false)];
     case "atlas":
       return [root(row, false)];
+    case "atlas-changes":
+      return [root(row, true), { label: "Changes" }];
+    case "atlas-review":
+      return [root(row, true), { label: "Review" }];
+    case "atlas-sources":
+      return [root(row, true), { label: "Sources" }];
     case "atlas-entry":
       // AN ENTRY'S NAME is its page's answer; until then the trail says
       // "Entry", never the uuid the address bar already carries.

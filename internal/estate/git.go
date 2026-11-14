@@ -818,6 +818,14 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 		w.note("%s: %s", r.self, unreadyDetail(err))
 		return nil, false, unreadyReason(err).PassesFill(), nil
 	}
+	if unread := unreadHere(spec, x, r.self, err); unread != nil {
+		// A BUILD THAT DOES NOT KNOW A VALUE THE REQUEST NAMES RAN NOTHING OF
+		// IT, in process as on the wire ([unreadHere]): the next Gitlet node
+		// is asked, and the fill passes on, as a peer's refusal unread passes
+		// it ([passesFill]).
+		w.unreadBy(r.self, unread)
+		return nil, false, true, nil
+	}
 	return value, true, false, err
 }
 

@@ -26,6 +26,25 @@ func TestAgentsRecordInTheAtlasUnlessTurnedOff(t *testing.T) {
 	}
 }
 
+// AN ENTRY'S OWNING AGENT IS WOKEN WHEN IT DRIFTS UNLESS THE COMPANY TURNS IT
+// OFF: unset is on, and only an explicit false stops it.
+//
+// Mutation: read the pointer's zero as off and a company that says nothing
+// wakes nobody.
+func TestOwnersAreWokenUnlessTurnedOff(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	for _, tc := range []struct {
+		name string
+		a    Atlas
+		want bool
+	}{{"unset", Atlas{}, true}, {"true", Atlas{OwnerWakes: &on}, true}, {"false", Atlas{OwnerWakes: &off}, false}} {
+		if got := tc.a.WakesOwners(); got != tc.want {
+			t.Errorf("owner_wakes %s: owners are woken = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // THE ATLAS'S HISTORY IS KEPT BETWEEN A QUARTER OF A YEAR AND TEN YEARS, a year
 // and a month when the company says nothing, as the access history's is.
 //

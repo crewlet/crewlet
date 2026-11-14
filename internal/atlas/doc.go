@@ -12,8 +12,9 @@
 // first) is COMPUTED when the atlas is read and never stored, so a fact the
 // settings declare cannot drift from its declaration and needs no writer. What
 // only somebody can tell the engine (a person, an agent in a named turn, an
-// integration's read) is RECORDED, on a log of its own. Both are claims, and
-// one fold reads them. ADR-0126 records the decision.
+// integration's read, a repository's deploy and dependency files) is
+// RECORDED, on a log of its own. Both are claims, and one fold reads them.
+// ADR-0126 records the decision.
 //
 // # A closed vocabulary, typed values
 //
@@ -45,7 +46,9 @@
 //
 // A claim's [Confidence] is a function of its source and the evidence the
 // engine checked, so no caller passes one in and no model can be steered into
-// raising it. Six levels order the fold; a reader is shown three words.
+// raising it. Six levels order the fold; a reader is shown three words. What
+// a repository's files declare ([CodeSource], ADR-0133) is inferred, as what
+// an agent read in a file is: likely, and never confirmed by the file alone.
 //
 // # The fold
 //

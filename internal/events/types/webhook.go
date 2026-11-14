@@ -65,6 +65,24 @@ type RawWebhook struct {
 	// state log's and a position's three fields travel as one value.
 	// Absent on a vendor's delivery, which has no floor to observe.
 	Trigger string `json:"trigger,omitempty"`
+
+	// FirstParty marks a delivery the engine's OWN producer made — a change
+	// feed's relay of a committed record, an alarm transition's wake, an
+	// access review's ask, an atlas entry's drift wake — and never a
+	// vendor's, which the API edge builds from a request and never marks. A
+	// node whose build has no parser for the delivery's source tells by it a
+	// source a NEWER build added, whose wake a peer on that build reads, from
+	// a vendor's webhook nothing here parses (internal/notify's Service).
+	FirstParty bool `json:"first_party,omitempty"`
+
+	// Replayed marks a delivery a REPLAY relayed — a change feed's of its
+	// dead letters, which a node's start publishes one after another — rather
+	// than one its source made as it happened. Its wakes piled up while no
+	// node could read them and arrive in a burst the live path would have
+	// spread, so the notification service paces it by the rate valve, as it
+	// paces its own replay's copies, rather than skip a wake the valve
+	// refuses (internal/notify's Service).
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 // EventType is the wire name every transport subscribes under.

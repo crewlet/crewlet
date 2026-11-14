@@ -236,7 +236,8 @@ type LaunchRequest struct {
 
 	// Continue is set when this job CONTINUES the job before it, which
 	// parked on a person's question that has now been answered, was lost
-	// with its host ([PendingRun.Lost]) or was refused on a sign-in replaced
+	// with its host ([PendingRun.Lost]), was refused by its provider in the
+	// session it continued ([FollowUpRequestRefused]) or on a sign-in replaced
 	// while it ran — and so is the same round of the turn, carried on rather
 	// than begun again. Nil for every other launch. The row keeps the round's
 	// bridged calls: the ones made before the question, or the loss, are this
@@ -372,6 +373,12 @@ type LaunchRequest struct {
 	// whose own grant bounds the box's on every repository of Spec.Repos
 	// ([PendingRun.CodeCeiling]); "" for none. Set only where Spec.Repos is.
 	CodeCeiling string
+
+	// CodeWorkingFor is whom the launching turn works for, as the checkout
+	// that gave it Spec.Repos composed it ([PendingRun.CodeWorkingFor]): what
+	// the box pushes, and the change its collection opens, carry it. Nil for
+	// a turn that works for its own seat. Set only where Spec.Repos is.
+	CodeWorkingFor *types.WorkingFor
 
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
 	// that is minted for the job itself, such as its access to
@@ -810,7 +817,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// is admitted against the row, and it can come before this
 		// launch returns.
 		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
-		CreatedAt: now(),
+		CodeWorkingFor: req.CodeWorkingFor,
+		CreatedAt:      now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -1179,8 +1187,8 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 // ([RunRepo.ValidateFor] [CloneCoding]), one named twice — by its name or by
 // its id, since either would give one repository two grants and one checkout
 // directory two clones — or a floor that does not go with them, set exactly
-// when repositories are; or a colleague's ceiling on a run given none, which
-// would bound nothing.
+// when repositories are; or a colleague's ceiling, or whom its pushes are
+// made for, on a run given none, which would bound and carry nothing.
 func checkRepos(req LaunchRequest) (err error) {
 	defer origin.Stamp(&err)
 	repos := req.Spec.Repos
@@ -1206,6 +1214,8 @@ func checkRepos(req LaunchRequest) (err error) {
 		return fmt.Errorf("sandbox: a run given no repositories has no code floor")
 	case len(repos) == 0 && req.CodeCeiling != "":
 		return fmt.Errorf("sandbox: a run given no repositories has no colleague's ceiling on them")
+	case len(repos) == 0 && req.CodeWorkingFor != nil:
+		return fmt.Errorf("sandbox: a run given no repositories has nobody its pushes are made for")
 	}
 	return nil
 }

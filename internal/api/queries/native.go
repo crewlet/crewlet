@@ -164,6 +164,10 @@ type WorkReader interface {
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
 	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
+	// EntryMarks and EntryWork are the work that names atlas entries, read
+	// for the atlas's questions about it and only for a Worklet reader.
+	EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error)
+	EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now time.Time) (worklet.EntryWork, error)
 }
 
 // Keeper is a native source that can say, before anything is read from it,
@@ -437,6 +441,11 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		if _, err := s.mayReadItem(ctx, principal, object); err != nil {
 			return nil, err
 		}
+	}
+	if !principal.Can(iam.GrantAtlas) {
+		// THE ATLAS IS ITS HOLDERS': a reader without it is told how many
+		// entries the task names and none of them (ADR-0140).
+		return detail.WithoutEntries(), nil
 	}
 	return detail, nil
 }

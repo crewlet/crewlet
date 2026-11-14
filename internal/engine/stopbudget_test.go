@@ -77,7 +77,7 @@ import (
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
@@ -411,7 +411,7 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)

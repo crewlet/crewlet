@@ -22,11 +22,12 @@ import (
 
 // WHAT A FRESH RUN CARRYING A ROUND ON IS TOLD OF THE ROUND, AND WHAT A SESSION
 // HOLDS OF WHAT ITS BRIEFS TOLD. A run that starts a session of its own carrying
-// a round on (a lost job's, an answered one's, one a replaced sign-in cut off)
-// remembers none of the round's calls, so its brief tells every one of them,
-// within the prior-work ledger's budgets; and a brief that counts reads past the
-// ledger's read cap rather than listing them leaves a session that holds those
-// reads only as a count, which the next brief to it tells.
+// a round on (a lost job's, an answered one's, one a replaced sign-in cut off,
+// one whose continued session its provider refused) remembers none of the
+// round's calls, so its brief tells every one of them, within the prior-work
+// ledger's budgets; and a brief that counts reads past the ledger's read cap
+// rather than listing them leaves a session that holds those reads only as a
+// count, which the next brief to it tells.
 
 const (
 	// calledBeforeHeading opens the calls a run of its own is told the runs
@@ -88,7 +89,8 @@ func relaunchOf(t *testing.T, resume runner.Resume, launcher interface {
 
 // freshRelaunch is the request a relaunch carrying the round on with resume
 // makes where its launcher continues no kept capture: a lost job's, an answered
-// or a rotated one's whose box is gone, so its run is handed the fresh brief.
+// or a rotated one's whose box is gone, or a refused one's, which continues no
+// session at all, so its run is handed the fresh brief.
 func freshRelaunch(t *testing.T, resume runner.Resume, opts buildOpts) runner.AgentRunRequest {
 	t.Helper()
 	again := relaunchOf(t, resume, &playLauncher{}, opts)
@@ -158,6 +160,29 @@ func TestAFreshRunCarryingARotatedRoundIsToldEveryCallOfIt(t *testing.T) {
 	line := "- slack_post({\"text\":\"the refused job's post\"}) → success"
 	if reseedAt < 0 || calledAt < reseedAt || strings.Index(again.Brief, line) < calledAt {
 		t.Fatalf("the fresh run is not told the round's calls after how the run before it was cut off:\n%s",
+			again.Brief)
+	}
+}
+
+// A FRESH RUN CARRYING A REFUSED ROUND ON IS TOLD EVERY CALL OF IT. A job whose
+// provider refused every request of the session it continued did nothing, and
+// that session is retired, so the round is carried on in a session of its own,
+// which remembers nothing the round's earlier jobs did: told why the run before
+// it could not start its work, and then every call of the round, the post of
+// the job whose session the refused one continued among them.
+//
+// Mutation: leave the round's calls out of a refused round's fresh brief alone,
+// and the case goes red.
+func TestAFreshRunCarryingARefusedRoundIsToldEveryCallOfIt(t *testing.T) {
+	t.Parallel()
+	posted := numbered("slack_post", map[string]any{"text": "the earlier job's post"}, 1, 1)
+	again := freshRelaunch(t, runner.Resume{Bridged: []runner.BridgedCall{posted},
+		Refused: &runner.Refused{Said: providerRefusal}}, buildOpts{})
+	reseedAt := strings.Index(again.Brief, "could not start its work")
+	calledAt := strings.Index(again.Brief, calledBeforeHeading)
+	line := "- slack_post({\"text\":\"the earlier job's post\"}) → success"
+	if reseedAt < 0 || calledAt < reseedAt || strings.Index(again.Brief, line) < calledAt {
+		t.Fatalf("the fresh run is not told the round's calls after why the run before it could not start:\n%s",
 			again.Brief)
 	}
 }

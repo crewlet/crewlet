@@ -437,6 +437,107 @@ func (s *suite) runBatch(t *testing.T) {
 		})
 	})
 
+	// A PASSED PARTITION GOES BACK FOR A PEER, BEHIND THE WAITING MAIL, AND THE
+	// REST OF ITS DRAIN RUNS. A backend answers a partition's outcome in a
+	// switch of its own, so the batch path owes what the single path owes a
+	// pass (Core's
+	// a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent):
+	// the passed conversation comes back behind the mail that was waiting
+	// when it was passed, and again until its budget is spent, and is then
+	// dead-lettered with the group's unhandled deliveries; the other
+	// conversation of the same flush is handled once; and the attachment is
+	// never quiesced.
+	//
+	// QUEUED BEFORE THE ATTACHMENT, so c1 and c2 are one flush, for
+	// failing_partition_redelivers_only_itself's reason.
+	//
+	// THE WAITING MAIL IS A THIRD CONVERSATION, c3, published while c1's
+	// first delivery is handled: after the flush was taken, so it waits for
+	// the next, and before c1 is passed. From then on a drain takes ONE event
+	// (BatchOptions.Set, read at the next cycle), so the next drain holds c3
+	// or the returned c1 and never both: inside one drain partitions are
+	// ordered by their events' timestamps, which would put c1, the older,
+	// first however it had been returned. c3 must be handled before c1 comes
+	// back. Nothing races the shipped spacing: c3 is stored before c1 is
+	// passed, as the single path's case holds its mail before it is
+	// published. On the twin the order is the return's place in the
+	// mailbox, exactly; on JetStream it is the spacing's, since a return
+	// made at once and the next fetch reach the broker through two queues
+	// of its own, which is why internal/queue/jetstream pins the spacing of
+	// each message of a passed partition itself
+	// (TestAPassedPartitionIsSpacedByEachMessagesDeliveries).
+	//
+	// Mutation: return a passed partition at the head, as a deferral's, and
+	// c1 comes back ahead of c3 on the twin (and on JetStream its messages
+	// are not spaced, which the backend's own case reads); leave the pass
+	// out of a backend's partition
+	// outcomes, and c1 is never returned or dead-lettered; quiesce on a
+	// passed partition, and c2 is never handled; count a passed partition as
+	// a failure of its messages, and its copy is kept with the group's poison.
+	t.Run("a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs", func(t *testing.T) {
+		t.Parallel()
+		newQueueWithAttempts := s.needAttempts(t)
+		deadLetters := s.needDeadLetters(t)
+		quiescing := s.needQuiescing(t)
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
+		queueBacklog(ctx, t, q, "t", "g", newConvEvent("a", "c1"), newConvEvent("b", "c2"))
+
+		opts := queue.NewBatchOptions(lingerFor.Seconds(), 20)
+		var passedOnce atomic.Bool
+		attempts := newJournal()
+		if err := q.SubscribeBatch(ctx, "t", "g",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				conv := firstConv(t, evs)
+				attempts.record(conv)
+				if conv != "c1" {
+					return queue.Ack()
+				}
+				if passedOnce.CompareAndSwap(false, true) {
+					opts.Set(0, 1)
+					// Recorded rather than fataled: this is not the
+					// test goroutine.
+					if err := q.Publish(hctx, "t", newConvEvent("c", "c3")); err != nil {
+						attempts.record("publish failed: " + err.Error())
+					}
+				}
+				return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+			}, convKey, opts); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		attempts.await(t, "c1 to spend its budget on passes while c2 and c3 run once", func(seen []string) bool {
+			counts := map[string]int{}
+			for _, conv := range seen {
+				counts[conv]++
+			}
+			return counts["c1"] == 3 && counts["c2"] == 1 && counts["c3"] == 1
+		})
+		attempts.staysAt(ctx, t, 5, "a dead-lettered partition kept being redelivered")
+		seen := attempts.all()
+		var c1s int
+		for _, conv := range seen {
+			if conv == "c3" {
+				break
+			}
+			if conv == "c1" {
+				c1s++
+			}
+		}
+		if c1s != 1 {
+			t.Errorf("the conversations were handled as %v: c1 came back %d time(s) before c3, "+
+				"want none — a passed partition returns behind the mail that was waiting when "+
+				"it was passed", seen, c1s-1)
+		}
+		if quiescing(q, "t", "g") {
+			t.Error("a passed partition quiesced the attachment: nothing is wrong with a " +
+				"node that passes a message, and a quiesced one takes none of its other mail")
+		}
+		awaitState(t, "c1's event to reach the dead-letter subject", func() bool {
+			return equalStrings(labelsOf(deadLetters(q, "t", "g")), []string{"a"})
+		})
+		keptUnhandled(ctx, t, q, "t", "g", "a")
+	})
+
 	t.Run("batch_key_failure_falls_back_to_unique_key", func(t *testing.T) {
 		t.Parallel()
 		// Key derivation must never block delivery — a key function that
@@ -1285,6 +1386,43 @@ func (s *suite) runBatch(t *testing.T) {
 				"remainder to charge and this case never ran the loop it is named "+
 				"for. See holdForOneBatch.)", handed, fresh, fresh)
 		}
+	})
+
+	t.Run("a_drain_the_backend_hands_back_itself_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
+		t.Parallel()
+		// WHERE THE BACKEND'S OWN HAND-BACK KEEPS A MESSAGE IT SPENT. A
+		// partition the consumer was told mid-drain it may not run — here,
+		// by the deferral of the partition before it — is handed back by
+		// the backend itself, no handler run, and that hand-back spends a
+		// delivery as every return does (an_undispatched_partition_pays_for_
+		// its_hand_back). On the budget's last delivery it retires the
+		// message, and a hand-back is no failure: the copy is kept with the
+		// group's unhandled deliveries, where a reader that can handle it
+		// finds it, beside the deferred partition's own.
+		//
+		// A BUDGET OF ONE, so the drain's one delivery of each is its last.
+		// Filled while held, for an_undispatched_partition_pays_for_its_
+		// hand_back's reason, so the two are one drain.
+		//
+		// Mutation: charge the backend's own hand-back of an undispatched
+		// partition as a failure (the twin's restoreLocked, JetStream's
+		// handBackUndispatched), and b's copy is kept with the poison.
+		newQueueWithAttempts := s.needAttempts(t)
+		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 1))
+
+		const topic, group = "topic.handed_drain", "grp"
+		fill := holdForOneBatch(ctx, t, q, topic, group)
+		j := newJournal()
+		subscribeBatch(ctx, t, q, topic, group,
+			func(_ context.Context, evs []*events.Event) queue.Result {
+				j.record(firstConv(t, evs))
+				return queue.Defer(queue.DeferShedding, "the node sheds")
+			}, queue.NewBatchOptions(lingerFor.Seconds(), 20))
+
+		fill("a", "b")
+		j.awaitLabels(t, "the first partition to be deferred", "a")
+		keptAs(ctx, t, q, topic, group, false, "a", "b")
+		j.staysAt(ctx, t, 1, "a partition the backend handed back was run")
 	})
 
 	t.Run("a_publish_during_the_batch_does_not_move_the_splice", func(t *testing.T) {

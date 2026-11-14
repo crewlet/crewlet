@@ -569,12 +569,13 @@ func (r *Runner) checkoutName() string {
 // after the round's last answer ([sinceAnswer]), and an asking job's own
 // calls, one it made before its question among them, fall below the cut its
 // answer's opening takes (internal/sandbox's BridgeLog.opened); a lost round,
-// or one refused on a replaced sign-in, whose calls since that answer hold one
-// is collected on it, never carried on ([Resume.carriedRound]), so one told
-// here was made before an answer; and a send-back's continuation can tell the
-// submission its review sent back. Listed as `→ success` and nothing more, it
-// read as the round's: a run carrying the round on could take it for done,
-// end without its own and be rescued as incomplete.
+// or one refused on a replaced sign-in or by its provider in a session it
+// continued, whose calls since that answer hold one is collected on it, never
+// carried on ([Resume.carriedRound]), so one told here was made before an
+// answer; and a send-back's continuation can tell the submission its review
+// sent back. Listed as `→ success` and nothing more, it read as the round's: a
+// run carrying the round on could take it for done, end without its own and be
+// rescued as incomplete.
 //
 // AND ONE THE SESSION HOLDS IS SAID NOT TO STAND, FIRST AND WHETHER OR NOT A
 // CALL IS LISTED ([prompts.AfterSave.HeldSubmission]): a successful

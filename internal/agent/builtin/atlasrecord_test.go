@@ -38,7 +38,7 @@ func (l *atlasLedger) Observe(_ context.Context, c atlasdomain.Call, claim atlas
 	if c.By.Kind != iam.ActorAgent {
 		return statelog.Result{}, fmt.Errorf("%w: not an agent's", atlasdomain.ErrInvalid)
 	}
-	claim.Source = atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence)
+	claim.Source = atlas.AgentSource(c.By.Name, seen.Turn, seen.Evidence).Citing(seen.Tool)
 	claim.Position = uint64(len(l.claims) + 1)
 	if err := errors.Join(claim.Recordable(), claim.Validate()); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: %w", atlasdomain.ErrInvalid, err)
@@ -184,6 +184,8 @@ func ordersDB() map[string]any {
 // entry, its facts and where it runs, each a claim in the seat's voice naming
 // the turn, at the confidence the engine reads off the cited call. An SSH
 // read of a server makes the entry likely, and the agent passed no confidence.
+// Each claim names the tool of the call it cited, as the turn recorded it, so
+// a person reviewing it is told which call it rests on.
 //
 // Mutation: make grounded.shownBy answer true for every claim (the grounding
 // check, broken on purpose) and TestAnUncitedValueIsRefused goes red; make
@@ -203,8 +205,9 @@ func TestAnAgentRecordsWhatACallOfItsTurnShowed(t *testing.T) {
 		t.Fatalf("the record made %d claims, want the entry, three facts and a relation: %+v", len(claims), claims)
 	}
 	for _, c := range claims {
-		if c.Source != atlas.AgentSource("sre", "run-1", atlas.EvidenceCall) {
-			t.Errorf("the %s claim is %+v, want sre's in run-1 on a call's evidence", c.Facet.Kind, c.Source)
+		if c.Source != atlas.AgentSource("sre", "run-1", atlas.EvidenceCall).Citing(builtin.SSHReadTool) {
+			t.Errorf("the %s claim is %+v, want sre's in run-1 on a call's evidence, citing its tool",
+				c.Facet.Kind, c.Source)
 		}
 		if c.Denied {
 			t.Errorf("a record denied something: %+v", c)

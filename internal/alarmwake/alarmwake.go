@@ -131,7 +131,10 @@ func Encode(t statelog.AlarmTransition) (types.RawWebhook, error) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return types.RawWebhook{}, fmt.Errorf("alarmwake: encode transition %s: %w", t.ID, err)
 	}
-	return types.RawWebhook{Body: body, BodyRaw: raw}, nil
+	// FIRST-PARTY, so a node of a build that has no parser for this source
+	// hands it to a peer that has rather than acknowledge it away
+	// (types.RawWebhook.FirstParty).
+	return types.RawWebhook{Body: body, BodyRaw: raw, FirstParty: true}, nil
 }
 
 // Decode is the transition a delivery carries.

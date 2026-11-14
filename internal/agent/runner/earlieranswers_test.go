@@ -165,6 +165,28 @@ func TestAFreshRunIsToldTheAnswersThatCarriedItsTurnOn(t *testing.T) {
 	}
 }
 
+// A FRESH RUN CARRYING A REFUSED ROUND ON IS TOLD THE TURN'S ANSWERS. A person
+// answered the asking run's question, and the session the job that answer
+// carried on continued was refused by its provider before its model read a
+// word, so the round is carried on in a session of its own, which holds none of
+// the briefs before it: its brief tells the answer, after the turn's own brief
+// and before why the run before it could not start its work.
+//
+// Mutation: leave the turn's answers out of a refused round's fresh brief alone,
+// and this goes red.
+func TestAFreshRunCarryingARefusedRoundIsToldTheTurnsAnswers(t *testing.T) {
+	t.Parallel()
+	again := freshRelaunch(t, runner.Resume{Refused: &runner.Refused{Said: providerRefusal},
+		Leads: []runner.ResumeLead{toldLead(answerOf("job-1", 1, 1, "use the release branch"))}}, buildOpts{})
+	task, told, refused := strings.Index(again.Brief, "## Task"), strings.Index(again.Brief, answersHeading),
+		strings.Index(again.Brief, "could not start its work")
+	if task < 0 || told < task || refused < told ||
+		!strings.Contains(answersOf(again.Brief), "founder answered: use the release branch") {
+		t.Errorf("the refused round's fresh run is not told the turn's answer after the turn's brief and "+
+			"before why the run before it could not start:\n%s", again.Brief)
+	}
+}
+
 // A FRESH RUN IS TOLD EVERY ANSWER OF ITS TURN, NAMING ITS ROUND. An answer is
 // an instruction to the turn, not to the round it came in: a run carrying round
 // 2 on afresh is told the answer that carried round 1 on, before a review sent

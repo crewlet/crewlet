@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -57,7 +58,7 @@ var noEnviron config.Source = config.MapSource(nil)
 // answering "what would you migrate" could never answer it.
 func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 
 	out, _, err := cli(t, "migrate", "-config", cfg, "-check")
@@ -89,7 +90,7 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 // about what "applied" means.
 func TestMigrateAppliesAndThenIsQuiet(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 
 	out, _, err := cli(t, "migrate", "-config", cfg)
@@ -170,7 +171,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 	if err != nil {
 		t.Fatalf("split %q: %v", serverURL, err)
 	}
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	// A COMPLETE SERVING POSTURE, because a served API now requires one:
 	// an external URL, an admin posture, a credential of its own that
 	// clears the entropy floor, and a keyring. A fixture short of any of
@@ -446,7 +447,7 @@ func TestAnExportedTokenAndAURLNeedNoConfig(t *testing.T) {
 // the engine is not running, because that is where this state lives.
 func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: 127.0.0.1\n  port: 1\n"+
 		"  external_url: \"http://127.0.0.1:1\"\n"+
@@ -472,7 +473,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 // dialling port 0 and reporting whatever the network layer makes of it.
 func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
 		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
 	cfg := filepath.Join(dir, "config.yaml")
@@ -527,7 +528,7 @@ var _ = time.Now
 // operator never named.
 func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 	other := filepath.Join(dir, "other.yaml")
 	if err := os.WriteFile(other, []byte("node:\n  id: other\n"), 0o600); err != nil {
@@ -560,7 +561,7 @@ func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
 // checks that they do. `run` already had this guard; migrate did not.
 func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 
 	_, _, err := cli(t, "migrate", cfg, "-config", cfg, "-check")
@@ -576,7 +577,7 @@ func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
 // firing rather than positional support being removed.
 func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	cfg := bootstrapForStore(t, dir)
 
 	if _, _, err := cli(t, "migrate", cfg); err != nil {
@@ -653,7 +654,7 @@ func TestOfflineStoreCommandsRefuseAScratchStore(t *testing.T) {
 // must not open it at all.
 func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	elsewhere := filepath.Join(t.TempDir(), "estate.db")
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n  replicated_path: %s\n"+
 		"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: %q\n",

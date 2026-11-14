@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -558,6 +562,68 @@ func frameOf(ctx context.Context, t *testing.T, q queue.EventQueue, subject stri
 	return frame
 }
 
+// keptUnhandled holds the dead letters of topic and group to one unhandled
+// copy, the event labelled label ([keptAs]).
+func keptUnhandled(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group, label string) {
+	t.Helper()
+	keptAs(ctx, t, q, topic, group, false, label)
+}
+
+// keptAs holds the dead letters of topic and group to one copy of each event
+// labelled labels, in any order: kept with no header on the subject the pair
+// keeps a message that did, or did not, fail as itself on ([queue.RetiredTo]),
+// failed, and none on the other — the subject being what a reader that can
+// handle a copy now finds it by, and the body what it handles.
+func keptAs(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, failed bool,
+	labels ...string) {
+
+	t.Helper()
+	kept, other := queue.RetiredTo(topic, group, failed), queue.RetiredTo(topic, group, !failed)
+	what := "unhandled"
+	if failed {
+		what = "poison"
+	}
+	head, _, _ := strings.Cut(topic, ".")
+	under := topics.DeadLettersUnder(head)
+	// THE KEEPS FIRST: a handler's return is settled after the handler has
+	// recorded it, so a listing taken the moment a case saw the delivery
+	// can come before the keep that delivery's return makes.
+	awaitState(t, fmt.Sprintf("%d %s copies to be kept", len(labels), what), func() bool {
+		return marksOf(ctx, t, q, under).Counts[kept] >= uint64(len(labels))
+	})
+	got := listedAsMarked(ctx, t, q, under, kept)
+	if len(got) != len(labels) {
+		t.Fatalf("%s lists %d entries, want the %s copies of %q: %q", kept, len(got), what,
+			labels, headersOf(got))
+	}
+	var read []string
+	for _, k := range got {
+		if len(k.Header) != 0 {
+			t.Errorf("a copy is kept under %q, want no header: its subject says what it is", k.Header)
+		}
+		var ev events.Event
+		if err := json.Unmarshal(frameOf(ctx, t, q, kept, k.Seq), &ev); err != nil {
+			t.Errorf("a %s copy reads back as no event (%v): a reader that found it would have "+
+				"nothing to handle", what, err)
+		}
+		read = append(read, labelOf(&ev))
+	}
+	slices.Sort(read)
+	if want := slices.Sorted(slices.Values(labels)); !slices.Equal(read, want) {
+		t.Errorf("the %s copies read back as %q, want %q", what, read, want)
+	}
+	if held := listedAsMarked(ctx, t, q, under, other); len(held) != 0 {
+		if failed {
+			t.Errorf("the pair's unhandled subject holds %d entries, want none: a message that "+
+				"failed as itself, kept there, is poison a reader handles again and again", len(held))
+		} else {
+			t.Errorf("the pair's poison subject holds %d entries, want none: a copy no failure "+
+				"retired, kept with the poison, is read as a failure's and never replayed",
+				len(held))
+		}
+	}
+}
+
 // headersOf is each entry's header as text, for a failure message.
 func headersOf(kept []queue.Kept) []string {
 	out := make([]string, len(kept))
@@ -575,3 +641,139 @@ func frameErr(_ []byte, _ bool, err error) error { return err }
 
 // marksErr is second for the marks of a subtree.
 func marksErr(_ queue.Marks, err error) error { return err }
+
+// RunCeilingCopy runs the dead letters' one case at the transport's ceiling: a
+// copy a pass retired at that ceiling is kept whole where its group finds it.
+// newQueue builds a fresh UNSTARTED queue, as [Capabilities.WithDeliveryAttempts]
+// does, that hands a persistently passed event over exactly attempts times,
+// and whose ack window outlasts the keep of a copy at the ceiling, as
+// production's does: a window a harness shortened redelivers the message
+// mid-keep, a redelivery production never makes, and a copy at the ceiling has
+// no room for the identity that collapses a second keep.
+//
+// OUTSIDE THE PARALLEL SUITE ([RunWith]): the case moves megabytes four times
+// (the publish, the delivery, the keep and a read back) and the suite runs its
+// cases side by side, so on a loaded runner under the race detector it
+// starved. A member's read of the frame was cut at its read term, and a leaf's
+// delivery came minutes late (crewlet/crewlet#1132's CI). So each backend runs
+// it where nothing else runs beside it: JetStream's from a package of the solo
+// roster (internal/solo), and the in-memory twin's from its own package, whose
+// copies are pointers.
+func RunCeilingCopy(t *testing.T, newQueue func(t *testing.T, attempts int) queue.EventQueue) {
+	t.Helper()
+	ctx := t.Context()
+	// A COPY A PASS RETIRED IS KEPT ON ITS GROUP'S UNHANDLED SUBJECT
+	// WHATEVER ITS SIZE (queue.RetiredTo). A delivery is as large as the
+	// transport carries, so a copy at that ceiling has no room for a
+	// header beside it: marked by a header, it was kept with none, read
+	// as the group's poison and never replayed. Marked by where it is
+	// kept, every byte of it is where a reader of the group's unhandled
+	// deliveries lists it, reads it and drops it.
+	//
+	// THE PAD fills the copy to within half the framing of the ceiling:
+	// past the room a header and its framing would have needed, and no
+	// more than the transport carries. A probe measures the bytes a copy
+	// carries beside the pad — its kept frame, exactly what the backend
+	// keeps, whatever it stamps on a delivery — so the large event lands
+	// there on every backend. One timestamp for both, so the two encode
+	// alike but for the pad.
+	//
+	// READ BACK BY ITS FRAME AND DROPPED, as the reader that replays it
+	// reads and drops it: on the JetStream backend's run through a leaf,
+	// across the leaf's link, raw where the leader's reply would not
+	// cross it (internal/queue/jetstream's copyread.go).
+	//
+	// THE KEEP'S OWN COMPLETION DECIDES IT, never a wait on the clock: a
+	// copy at the ceiling moves its megabytes three times more before it
+	// is kept, as long as that takes on the machine. Once the large event
+	// is in its handler, a drain returns when its return is settled, and
+	// settling the pass that spends its budget is the keep
+	// (WaitForHandlers). Its queue's ack window outlasts the keep, as
+	// production's does.
+	//
+	// Mutation: count a pass as a failure of its message, and its copy is
+	// kept with the pair's poison while the unhandled subject holds
+	// nothing.
+	q := newQueue(t, 1)
+	if err := q.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
+	// THE READS SET THEIR OWN DEADLINE, as a production caller may: a read of
+	// a frame of megabytes that sets none is held to its read term, which a
+	// loaded runner under the race detector outlasted on a member's own
+	// connection. keepFor only ends a hang.
+	reads, endReads := context.WithTimeout(ctx, keepFor)
+	defer endReads()
+	const topic, group = "passed.large", "grp"
+	handed, handedOnce := make(chan struct{}), sync.Once{}
+	subscribe(ctx, t, q, topic, group, func(_ context.Context, ev *events.Event) queue.Result {
+		if labelOf(ev) == "large" {
+			handedOnce.Do(func() { close(handed) })
+		}
+		return queue.Pass("newer_record", errors.New("a peer on a newer build reads it"))
+	})
+	unhandled, poison := topics.Unhandled(topic, group), topics.DeadLetter(topic, group)
+	under := topics.DeadLettersUnder("passed")
+	at := time.Now().UTC()
+	padded := func(label string, pad int) *events.Event {
+		ev := newEvent(label)
+		ev.Timestamp = at
+		ev.Payload = map[string]any{"pad": strings.Repeat("x", pad)}
+		return ev
+	}
+
+	publish(ctx, t, q, topic, padded("probe", 0))
+	var probe []queue.Kept
+	awaitState(t, "the passed probe to be dead-lettered", func() bool {
+		probe = listedAsMarked(ctx, t, q, under, unhandled)
+		return len(probe) == 1
+	})
+	carried := len(frameOf(reads, t, q, unhandled, probe[0].Seq))
+	// HALF THE FRAMING SHORT OF THE CEILING: a header and the framing
+	// need more room than that, and the transport carries it.
+	pad := queue.MaxPayloadBytes - queue.LetterFraming/2 - carried
+	publish(ctx, t, q, topic, padded("large", pad))
+
+	select {
+	case <-handed:
+	case <-time.After(keepFor): //fixedwait:liveness
+		t.Fatal("the large event never reached its handler")
+	}
+	if err := q.PauseDelivery(ctx); err != nil {
+		t.Fatalf("PauseDelivery: %v", err)
+	}
+	if remaining, err := q.WaitForHandlers(ctx, keepFor); err != nil || remaining != 0 {
+		t.Fatalf("the large copy's keep never settled: %d in flight (%v)", remaining, err)
+	}
+	got := listedAsMarked(ctx, t, q, under, unhandled)
+	if len(got) != 2 {
+		t.Fatalf("once its keep returned the unhandled subject lists %d entries, want the "+
+			"probe and the large copy", len(got))
+	}
+	if len(got[1].Header) != 0 {
+		t.Errorf("a passed copy is kept under %q, want none: its subject says what it is, "+
+			"and the transport has no room beside it", got[1].Header)
+	}
+	var large events.Event
+	if err := json.Unmarshal(frameOf(reads, t, q, unhandled, got[1].Seq), &large); err != nil ||
+		labelOf(&large) != "large" {
+		t.Fatalf("the large copy reads back as no event labelled large (%v)", err)
+	}
+	if kept, _ := large.Payload["pad"].(string); len(kept) != pad {
+		t.Errorf("the large copy kept %d bytes of its %d-byte pad: a copy is kept whole",
+			len(kept), pad)
+	}
+	if held := listedAsMarked(ctx, t, q, under, poison); len(held) != 0 {
+		t.Errorf("the pair's poison subject holds %d entries, want none: a passed copy "+
+			"kept there is read as a failure's", len(held))
+	}
+
+	if err := q.DropDeadLetter(reads, unhandled, got[1].Seq); err != nil {
+		t.Fatalf("DropDeadLetter: %v", err)
+	}
+	if left := listedAsMarked(ctx, t, q, under, unhandled); len(left) != 1 || left[0].Seq != probe[0].Seq {
+		t.Errorf("after the large copy's drop the unhandled subject lists %d entries, want "+
+			"the probe alone", len(left))
+	}
+}

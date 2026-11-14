@@ -265,6 +265,35 @@ func TestAContinuationOfAJobCutOffAfterTellingALeadAgainIsStillToldIt(t *testing
 	}
 }
 
+// A CARRY IN THE ENGINE'S OWN WORDS KEEPS NO LEAD. What carries a round on after
+// a loss or a replaced sign-in is the engine's account of how its run was cut
+// off, which the cut-off section of every later brief says again; after its
+// provider refused the session its job continued, the account of a run that did
+// nothing, which no later session lacks. Of the carries, only a person's answer
+// is a lead. So such a relaunch hands its launch no lead of its own, with the
+// fresh brief or with its copy's, for the run to keep and a later brief to tell
+// again.
+//
+// Mutation: give a loss's, a replaced sign-in's or a refusal's carry a lead, and
+// its row goes red.
+func TestACarryInTheEnginesOwnWordsKeepsNoLead(t *testing.T) {
+	t.Parallel()
+	for name, resume := range map[string]runner.Resume{
+		"a loss":               {Lost: lostWithItsBox()},
+		"a replaced sign-in":   {Rotated: &runner.Rotated{SessionID: "sess-1"}},
+		"a provider's refusal": {Refused: &runner.Refused{Said: providerRefusal}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			carried := freshRelaunch(t, resume, buildOpts{}).Continue
+			if len(carried.Fresh.Own) != 0 || len(carried.Told.Own) != 0 {
+				t.Errorf("the relaunch hands on leads of its own, %+v with the fresh brief and %+v with its "+
+					"copy's, want none", carried.Fresh.Own, carried.Told.Own)
+			}
+		})
+	}
+}
+
 // A LEAD A COPY COULD NOT READ IS HANDED ON BY ITS NUMBER. Where the resume could
 // not read the run's leads at all, it knows the ones the job's brief told by
 // their numbers alone, off the job's record: a continuation of a session that

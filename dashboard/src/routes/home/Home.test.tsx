@@ -457,6 +457,18 @@ describe("the decisions", () => {
     expect(group.innerHTML).not.toContain("ring-");
     expect(card.textContent).toContain("Hold the 2.4 release until the scheduler migration lands?");
     expect(card.querySelector(".decision-rec")?.textContent).toBe("Recommended: Hold release");
+    // ONE BUTTON LANGUAGE ON EVERY DECISION ROW: the first answer filled, the
+    // other outlined, as a held call draws Allow once and Deny. A text-only
+    // Change beside them read as a different kind of row.
+    const kinds = ["Accept", "Change"].map((name) =>
+      within(card)
+        .getByRole("button", { name })
+        .className.match(/crewlet-btn--(\w+)/g),
+    );
+    expect(kinds[0]).toContain("crewlet-btn--primary");
+    expect(kinds[1]).toContain("crewlet-btn--secondary");
+    expect(kinds[0]).toContain("crewlet-btn--small");
+    expect(kinds[1]).toContain("crewlet-btn--small");
     await act(async () => {
       fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });

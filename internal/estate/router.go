@@ -586,6 +586,13 @@ type exchange struct {
 	// decode is a remote answer's result, in the caller's type.
 	decode func(raw json.RawMessage) (any, error)
 
+	// unread is the keys a serving node of this build refuses the arguments
+	// for, read from their encoding as a request off the wire is read
+	// ([decodeInput], [inputs]): what this node's own copy answers a request it
+	// was handed in process and refused for naming a value its build does not
+	// know ([unreadHere]).
+	unread func() ([]string, error)
+
 	// written is the asking turn's [worklet.WriteLog], which every node
 	// that RAN the operation remotely answers into ([reply.Written]) — the
 	// one an answer kept is not the only one that committed, since a walk
@@ -806,8 +813,42 @@ func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, writte
 			// decodes from JSON anywhere else (internal/caveat's peer.go).
 			return out, caveat.RebuildFromPeer(raw, &out)
 		},
+		unread: func() ([]string, error) {
+			var in A
+			return decodeInput(encoded, &in)
+		},
 		written: written,
 	}, nil
+}
+
+// unreadHere is this node's own copy refusing a request it was handed IN
+// PROCESS for naming a value its build does not know — the refusal a request's
+// own decoder makes of a name its build does not declare (jsonv2.ErrUnknownName
+// at its place), which a code write's request makes in its Validate too, of a
+// kind or an app whom it is made for names (gitlet.IsUnknownToThisBuild) —
+// answered AS THE WIRE ANSWERS THE SAME REQUEST: the keys a serving node of this
+// build refuses its arguments for, read from what the walk would send any peer
+// ([exchange.unread]), with this node among the nodes whose build does not
+// declare them. So the walk moves on from this node's copy as from a peer that
+// refused the request unread, and asks a node of a build that knows the value
+// — a carrier a run's row holds, which another build may have written, reaches
+// a node of that build where one serves — never ending at this node with a
+// refusal of the request as malformed. Nil for every other answer, and for a
+// request that reads whole, which none so refused does.
+func unreadHere(spec *opSpec, x exchange, node string, err error) *ErrUnknownKeys {
+	if _, unknown := unknownMember(err); !unknown || x.unread == nil {
+		return nil
+	}
+	keys, decodeErr := x.unread()
+	if decodeErr != nil || len(keys) == 0 {
+		// A REQUEST THIS BUILD'S OWN DECODER CANNOT READ BACK, or one that
+		// reads whole, names no key a peer of this build would refuse: no
+		// refusal of unread keys, so the answer this node's copy gave stands,
+		// as every other answer does.
+		//nolint:nilerr // Deliberate: see the paragraph above.
+		return nil
+	}
+	return &ErrUnknownKeys{Op: spec.name, Keys: prefixed("args", keys), Nodes: []string{node}}
 }
 
 // ErrUnserved is an operation no data node ran: every node the asker's view
@@ -1260,6 +1301,7 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	b.ServerSeams = r.seams
 	b.verifiers = r.env.verifiers
 	value, refusal, why, ran := r.runLocal(ctx, spec, b, x, acceptLagging, w.spent)
+	unread := unreadHere(spec, x, r.self, ran)
 	switch {
 	case why != "":
 		// IN-PROCESS, so nothing is remembered: asking this node's own
@@ -1276,6 +1318,13 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 			w.waitedOut(r.floorsFor(spec))
 		}
 		w.note("%s: %s", r.self, why)
+	case unread != nil:
+		// A BUILD THAT DOES NOT KNOW A VALUE THE REQUEST NAMES RAN NOTHING OF
+		// IT, in process as on the wire ([unreadHere], and [Router.settle]'s
+		// peer that refused it unread): the walk asks the next node, and where
+		// none serves it the caller is told so. Nothing is remembered, as for
+		// every in-process refusal.
+		w.unreadBy(r.self, unread)
 	case unvouched(spec, value, ran):
 		w.fallback = &held{value: value, err: ran}
 	case refusedHere(spec, ran):

@@ -258,6 +258,22 @@ integrations:
 | `provisioning.access_key` | yes | The provisioner key's access key, `SCW` followed by 17 capital letters or digits, or a `${VAR}`. It names the key and grants nothing alone. |
 | `provisioning.secret_key` | yes | The [provisioner key's](#creating-the-provisioner-key) secret. Keep it a `${VAR}` reference into the secret store; the dashboard seals it as `SCALEWAY_SECRET_KEY`. |
 
+## What the atlas reads
+
+The engine reads the Organization's projects for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It reads under the provisioner key, with the `ProjectReadOnly` permission set its policy already holds. Nothing at Scaleway is changed.
+
+| Part | Calls | Permission set | What the atlas gains |
+|---|---|---|---|
+| Projects | `GET /account/v3/projects`, 100 a page | `ProjectReadOnly` on the Organization | the Organization, and each project as an account, with its id and its name |
+
+**The default project is the Organization.** Scaleway gives the default project the Organization's own id, so the atlas shows the two as the one account the settings already name.
+
+**Nothing inside a project is read.** The provisioner's policy holds project read and IAM management and no product's permission set, so the atlas does not know which products a project uses. No description, no creator and no key is read from a project either.
+
+**A refusal is a finding, never a failed read.** Where Scaleway refuses the listing with a `403` (the provisioner's policy lost `ProjectReadOnly`), the source's standing on the atlas says what to grant, and the projects an earlier read recorded stay as they were. A key Scaleway does not know fails the read as a rejected credential.
+
+**Cost and limits.** A read costs one call per hundred projects. A `429` is waited out as every call of this integration does; a longer wait, or a listing that fails part way, stops the read, which records nothing and is made again five minutes later. A project that two complete reads at least a day apart both miss is retired from the atlas.
+
 ## Scaleway's limits worth knowing
 
 These are Scaleway's, not Crewlet's.

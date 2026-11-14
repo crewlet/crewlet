@@ -1074,6 +1074,9 @@ type capturePoint struct {
 	// exhausted says the job ran out of its model's context ([ranOutOfContext]),
 	// so its capture is refused untaken.
 	exhausted bool
+	// refused says the job's provider refused the request its session makes
+	// ([requestRefused]), so its capture is refused untaken too.
+	refused bool
 }
 
 // readCapture is the capture a box read takes of a job that is OVER — by
@@ -1098,6 +1101,27 @@ func readCapture(read BoxRead, result Result, over bool) capturePoint {
 const exhaustedNotKept = "the job ran out of its model's context, so no launch continues its session and it " +
 	"is not kept"
 
+// refusedNotKept is why a job whose provider refused its request left no
+// capture: what its launch's record and the log say.
+const refusedNotKept = "the provider refused the request the job's session makes, so no launch continues " +
+	"its session and it is not kept"
+
+// requestRefused reports whether a job FAILED because its provider refused the
+// request its harness made as built ([Result.RequestRefused]): what the session
+// sends again on every launch, so it is retired as one out of context is. A
+// job stopped, lost or parked on a question did not fail, and one out of
+// context is named for that.
+func requestRefused(run PendingRun, result Result) bool {
+	return result.RequestRefused && !result.ContextExhausted && !result.Success &&
+		run.Stop == nil && run.Lost == nil && !run.asked()
+}
+
+// sessionSpent reports whether a job failed in a way every later launch of its
+// session meets again: out of context, or refused by its provider.
+func sessionSpent(run PendingRun, result Result) bool {
+	return ranOutOfContext(run, result) || requestRefused(run, result)
+}
+
 // ranOutOfContext reports whether a job FAILED because its conversation no longer
 // fits its model's context, as its launch's record says ([collectedRecord]): a job
 // stopped, lost or parked on a question did not fail, whatever its harness said.
@@ -1119,7 +1143,8 @@ func asCollected(run PendingRun, result Result, ended bool) (PendingRun, Result)
 	return run, result
 }
 
-// sessionsRanOutOfContext are the sessions such a job may have run, in the row's word
+// sessionsRanOutOfContext are the sessions a job whose session is spent
+// ([sessionSpent]) may have run, in the row's word
 // ([PendingRun.SessionRan]): both of its launch's where the box never said which, and
 // the box's own only where the row holds none, for a harness that mints its id.
 func sessionsRanOutOfContext(run PendingRun, result Result) []string {
@@ -1350,11 +1375,15 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if !policy.Keep {
 		return nil, nil
 	}
-	if at.exhausted {
+	if at.exhausted || at.refused {
 		// REFUSED UNTAKEN: no launch would continue it, and its upload could release
 		// another conversation's session against the seat's budget. Stamped, so the
 		// end names it ([unkeptOf]) and the row stops naming anything older.
-		return nil, refuse(nil, exhaustedNotKept)
+		why := exhaustedNotKept
+		if at.refused {
+			why = refusedNotKept
+		}
+		return nil, refuse(nil, why)
 	}
 	// A TAKER LEASE THE CAPTURE CAN BE TAKEN UNDER, asked before the take: a
 	// begun stamp is waited on for as long as the lease it names holds, so

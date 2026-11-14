@@ -188,3 +188,30 @@ func TestWhatEveryBriefLeftOutReachesTheSandboxLayer(t *testing.T) {
 		}
 	}
 }
+
+// WHY A ROUND IS CARRIED ON ONCE REACHES THE SANDBOX LAYER. A round cut off by a
+// replaced sign-in, or by its provider's refusal of the session its job
+// continued, is carried on once: the relaunch's job is recorded as that
+// follow-up (sandbox.LaunchRecord.FollowUp), which the resume that collects the
+// job reads before it carries the round on again, so the same refusal a second
+// time is collected rather than carried on ([Engine.signInReplaced],
+// [requestRefused]). The engine carries the runner's word into the sandbox
+// layer's reason ([sandboxContinuation]); a word dropped here records the
+// relaunch's job as no follow-up at all.
+//
+// Mutation: drop either reason, or record one as the other, and its row goes red.
+func TestWhyARoundIsCarriedOnOnceReachesTheSandboxLayer(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		carry runner.Continuation
+		want  sandbox.FollowUpReason
+	}{
+		"a replaced sign-in":             {runner.Continuation{SignInReplaced: true}, sandbox.FollowUpSignInReplaced},
+		"a session its provider refused": {runner.Continuation{RequestRefused: true}, sandbox.FollowUpRequestRefused},
+		"an answer or a loss":            {runner.Continuation{SessionID: "sess-1"}, ""},
+	} {
+		if got := sandboxContinuation(&tc.carry).Reason; got != tc.want {
+			t.Errorf("%s: the relaunch's job is recorded as a follow-up for %q, want %q", name, got, tc.want)
+		}
+	}
+}

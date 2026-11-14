@@ -20,6 +20,13 @@
 // each of the constants below records what happens when the obvious one is
 // used instead. They were established against a live organization; the
 // published reference disagrees with two of them.
+//
+// # The atlas reads the organization's products
+//
+// The workspace listing that discovers the agents' site is also what the
+// atlas reads (ADR-0138, atlas.go): every site as an account, and each
+// product as a capability of the account it is on. It is read to its end,
+// and nobody a row names is decoded.
 package atlassian
 
 import (
@@ -131,6 +138,11 @@ type APIError struct {
 	Method string
 	Path   string
 	Detail string
+
+	// RetryAfter is how long a 429 asked the call to wait, zero otherwise.
+	RetryAfter time.Duration
+	// Unwaited is why the call handed a 429 back rather than waiting it out.
+	Unwaited string
 }
 
 func (e *APIError) Error() string {
@@ -138,7 +150,11 @@ func (e *APIError) Error() string {
 	if detail == "" {
 		detail = http.StatusText(e.Status)
 	}
-	return fmt.Sprintf("atlassian: %s %s: %d: %s", e.Method, e.Path, e.Status, detail)
+	s := fmt.Sprintf("atlassian: %s %s: %d: %s", e.Method, e.Path, e.Status, detail)
+	if e.Unwaited != "" {
+		s += fmt.Sprintf(" (asked to wait %s; %s)", e.RetryAfter, e.Unwaited)
+	}
+	return s
 }
 
 // Status is the HTTP status behind an error, or 0 when it was not one of
@@ -153,14 +169,22 @@ func Status(err error) int {
 
 // Client calls an Atlassian organization's admin APIs.
 type Client struct {
-	base string
-	http *http.Client
+	base  string
+	http  *http.Client
+	limit httpx.RateLimit
 }
 
 // ClientOptions configure a client.
 type ClientOptions struct {
 	// BaseURL overrides api.atlassian.com, for a test server.
 	BaseURL string
+
+	// HTTP overrides the transport, for a test or a caller that counts its
+	// requests; nil is the vendor clients' own.
+	HTTP *http.Client
+
+	// Wait replaces the sleep a rate limit takes, for a test.
+	Wait func(ctx context.Context, d time.Duration) error
 }
 
 // NewClient builds a client.
@@ -169,10 +193,13 @@ func NewClient(opts ClientOptions) *Client {
 	if base == "" {
 		base = AdminBaseURL
 	}
-	return &Client{
-		base: base,
-		http: httpx.Client(ClientTimeout),
+	hc := opts.HTTP
+	if hc == nil {
+		hc = httpx.Client(ClientTimeout)
 	}
+	limit := httpx.VendorRateLimit()
+	limit.Wait = opts.Wait
+	return &Client{base: base, http: hc, limit: limit}
 }
 
 // The product keys a grant names, one per lane a seat can be on. One
@@ -436,33 +463,18 @@ func (c *Client) DeleteServiceAccount(ctx context.Context, key, accountID string
 // Jira workspace is preferred over a Confluence one only for the host it
 // carries; both name the same cloud id on a single-site organization.
 func (c *Client) DiscoverSite(ctx context.Context, key, orgID string) (*Site, error) {
-	var out struct {
-		Data []struct {
-			ID         string `json:"id"`
-			Attributes struct {
-				Type    string `json:"type"`
-				HostURL string `json:"hostUrl"`
-			} `json:"attributes"`
-		} `json:"data"`
-	}
-	err := c.call(ctx, key, http.MethodPost, fmt.Sprintf(workspacesPath, orgID),
-		map[string]any{}, &out)
+	workspaces, err := c.Workspaces(ctx, key, orgID)
 	if err != nil {
 		return nil, err
 	}
 	site := &Site{}
-	for _, w := range out.Data {
-		cloudID := cloudIDFromARI(w.ID)
+	for _, w := range workspaces {
+		cloudID := w.CloudID()
 		if cloudID == "" {
 			continue
 		}
-		host := strings.TrimRight(w.Attributes.HostURL, "/")
-		// A Confluence host carries the /wiki suffix; the site is the
-		// address underneath it, and each product's own address is derived
-		// from that rather than stored twice.
-		host = strings.TrimSuffix(host, "/wiki")
-		if site.CloudID == "" || strings.HasPrefix(w.Attributes.Type, "Jira") {
-			site.CloudID, site.HostURL = cloudID, host
+		if site.CloudID == "" || strings.HasPrefix(w.Type, "Jira") {
+			site.CloudID, site.HostURL = cloudID, w.SiteURL()
 		}
 	}
 	if site.CloudID == "" {
@@ -471,6 +483,116 @@ func (c *Client) DiscoverSite(ctx context.Context, key, orgID string) (*Site, er
 				"is nowhere for an agent's account to work")
 	}
 	return site, nil
+}
+
+// Workspace is one product of an organization, as the listing answers it:
+// its identifier, which product it is, and the address it is reached at.
+// CLOSED FIELDS: a row also carries who created the workspace and who owns
+// it, which nothing here decodes.
+type Workspace struct {
+	// ID is the workspace's ARI, `ari:cloud:<product>::site/<cloud id>` for
+	// a product on a site.
+	ID string
+	// TypeKey is the product's key (`jira-software`, `confluence`), and Type
+	// its display name.
+	TypeKey string
+	Type    string
+	HostURL string
+}
+
+// CloudID is the id of the site the workspace is on, "" for a product that
+// sits on no site.
+func (w Workspace) CloudID() string { return cloudIDFromARI(w.ID) }
+
+// SiteURL is the address of the site the workspace is on. A Confluence host
+// carries the /wiki suffix; the site is the address underneath it, and each
+// product's own address is derived from that rather than stored twice.
+func (w Workspace) SiteURL() string {
+	return strings.TrimSuffix(strings.TrimRight(w.HostURL, "/"), "/wiki")
+}
+
+// Product is the product's key: the listing's own, or the one the ARI
+// names where an older row carries none.
+func (w Workspace) Product() string {
+	if key := strings.ToLower(strings.TrimSpace(w.TypeKey)); key != "" {
+		return key
+	}
+	rest, ok := strings.CutPrefix(w.ID, "ari:cloud:")
+	if !ok {
+		return ""
+	}
+	product, _, _ := strings.Cut(rest, ":")
+	return strings.ToLower(product)
+}
+
+// Workspaces is every product of the organization, to the listing's end.
+//
+// EVERY PAGE, following the listing's own cursor, because the site the
+// agents work in can sit past the first page of an organization with many
+// products, and a caller that reads the organization whole would otherwise
+// take what it did not reach for gone.
+func (c *Client) Workspaces(ctx context.Context, key, orgID string) ([]Workspace, error) {
+	path := fmt.Sprintf(workspacesPath, url.PathEscape(orgID))
+	var out []Workspace
+	cursor := ""
+	for range listPageLimit {
+		body := map[string]any{}
+		if cursor != "" {
+			body["cursor"] = cursor
+		}
+		var page struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Attributes struct {
+					TypeKey string `json:"typeKey"`
+					Type    string `json:"type"`
+					HostURL string `json:"hostUrl"`
+				} `json:"attributes"`
+			} `json:"data"`
+			Links struct {
+				Next string `json:"next"`
+			} `json:"links"`
+		}
+		if err := c.call(ctx, key, http.MethodPost, path, body, &page); err != nil {
+			return nil, err
+		}
+		for _, w := range page.Data {
+			out = append(out, Workspace{ID: w.ID, TypeKey: w.Attributes.TypeKey, Type: w.Attributes.Type,
+				HostURL: w.Attributes.HostURL})
+		}
+		next, err := cursorOf(page.Links.Next)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		if next == cursor {
+			return nil, errors.New("atlassian: the workspace listing answered the page it was asked for as its next")
+		}
+		cursor = next
+	}
+	return nil, fmt.Errorf("atlassian: the workspace listing did not finish after %d pages", listPageLimit)
+}
+
+// cursorOf is the cursor a listing's next link carries, "" where there is no
+// next page. The listing takes its cursor in the request's body, and its
+// link is the cursor itself or an address carrying it as `cursor`: either is
+// read, and a link that is neither is an error, since a listing cut short
+// there would read as a whole one.
+func cursorOf(next string) (string, error) {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return "", nil
+	}
+	if !strings.Contains(next, "/") && !strings.Contains(next, "?") {
+		return next, nil
+	}
+	link, err := url.Parse(next)
+	if err != nil || link.Query().Get("cursor") == "" {
+		return "", errors.New("atlassian: the workspace listing's next link carries no cursor")
+	}
+	return link.Query().Get("cursor"), nil
 }
 
 // cloudIDFromARI pulls the site id out of `ari:cloud:jira::site/<uuid>`.
@@ -482,15 +604,38 @@ func cloudIDFromARI(ari string) string {
 	return strings.TrimSpace(id)
 }
 
-// call performs one request and decodes its answer.
+// call performs one request and decodes its answer, waiting out a short 429
+// as Atlassian asks. A 429 is the rate limiter refusing a request before it
+// is processed, so sending it again repeats nothing, whatever its method.
 func (c *Client) call(ctx context.Context, key, method, path string, body, out any) error {
-	var payload io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
+		var err error
+		if encoded, err = json.Marshal(body); err != nil {
 			return fmt.Errorf("atlassian: encode %s %s: %w", method, path, err)
 		}
-		payload = bytes.NewReader(encoded)
+	}
+	for attempt := 0; ; attempt++ {
+		err := c.once(ctx, key, method, path, encoded, out)
+		api, ok := errors.AsType[*APIError](err)
+		if !ok || api.Status != http.StatusTooManyRequests {
+			return err
+		}
+		unwaited := c.limit.WaitOut(ctx, attempt, api.RetryAfter)
+		if unwaited == nil {
+			continue
+		}
+		api.Unwaited = unwaited.Error()
+		return api
+	}
+}
+
+// once sends one request and decodes its answer. It is the only place a
+// request is built.
+func (c *Client) once(ctx context.Context, key, method, path string, body []byte, out any) error {
+	var payload io.Reader
+	if body != nil {
+		payload = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, payload)
 	if err != nil {
@@ -513,10 +658,18 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 		return fmt.Errorf("atlassian: read %s %s: %w", method, path, err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return &APIError{
+		api := &APIError{
 			Status: resp.StatusCode, Method: method, Path: path,
 			Detail: detailFrom(resp.Header.Get("Content-Type"), answer),
 		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			wait, named := httpx.RetryAfter(resp.Header, time.Now())
+			if !named {
+				wait = httpx.DefaultRetryAfter
+			}
+			api.RetryAfter = wait
+		}
+		return api
 	}
 	if out == nil || len(answer) == 0 {
 		return nil

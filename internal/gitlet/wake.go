@@ -3,6 +3,7 @@ package gitlet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -236,9 +237,10 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		// it: a person as the seat they hold, a seat as itself — a revision's
 		// facts and a landing, which the home records, as whoever pushed the
 		// revision and the push the home found merging the change — and
-		// nobody, the engine, for the home's other records. The record's ACTOR
-		// is the deciding node for every code record, so the routing's actor
-		// is the writer here.
+		// nobody, the engine, for the home's other records; a seat with whom
+		// it wrote for, where the routing carries it. The record's ACTOR is
+		// the deciding node for every code record, so the routing's actor is
+		// the writer here.
 		Writer: writerOf(r),
 		// WHAT STARTS THE TURN THIS WAKES: the change, as the Gitlet screens
 		// name it, under this recipient's own reason — so the turn a review
@@ -258,9 +260,14 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 // and a token bound to nobody asks nothing of this domain (LifecycleRequest's
 // Actor), so a writer here is never one a turn is worked for by its apps.
 //
-// AND NOBODY AN AGENT WROTE FOR, yet: a change's routing carries no carrier,
-// so the turn a seat's code record wakes works for that seat (ADR-0109's edge
-// until crewlet#798's piece 4c carries one on code's records).
+// AND WHOM AN AGENT WROTE FOR, as the routing carries it beside its actor
+// ([ChangeRouting.WorkingFor], ADR-0109): the turn the record wakes works for
+// them, held to what they may use. Handed for an agent's actor alone, and
+// FirstPartyWriter keeps it for nobody else: a person and the engine write
+// for nobody but themselves, so a carrier on such a routing is no request
+// this wake works for. The engine's records that name an earlier actor carry
+// none yet (concerns.go's head, "Whom the actor acted for"), so the turn
+// such a record wakes works for that actor's seat.
 func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	switch {
 	case r.Actor == "":
@@ -268,7 +275,7 @@ func writerOf(r *ChangeRouting) *types.NotificationWriter {
 	case r.Person(r.Actor):
 		return notify.FirstPartyWriter(iam.ActorHuman, r.Actor, nil, nil)
 	}
-	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil, nil)
+	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil, r.WorkingFor)
 }
 
 // wakeText is what a woken seat reads of what the record says about change:
@@ -309,6 +316,14 @@ func wakeText(payload any, change string) (string, provenance.Source) {
 // recordFromBody recovers the record the feed relayed, through the domain's
 // own decoder, so a record a newer build wrote reaches the parser with
 // everything it carried.
+//
+// A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
+// build ([notify.Defer]), never refused as a payload nobody can read: the
+// notify service acks what a parser refuses, on the ONE group every node takes
+// inbound mail from, so the wake the newer node's feed relayed was gone for
+// the whole fleet when an older node won its delivery during a roll
+// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
+// on this side of the relay.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, fmt.Errorf("gitlet: the delivery carries no record")
@@ -317,5 +332,10 @@ func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if err != nil {
 		return MutationRecord{}, fmt.Errorf("gitlet: read the delivery: %w", err)
 	}
-	return Decode(data)
+	record, err := Decode(data)
+	var future *ErrFutureVersion
+	if errors.As(err, &future) {
+		return MutationRecord{}, notify.Defer(notify.DeferNewerRecord, err)
+	}
+	return record, err
 }

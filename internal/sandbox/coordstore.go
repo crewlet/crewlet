@@ -361,10 +361,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// the previous job that is still pushing is refused by the launch id
 		// it was minted for. Unlike the holds above, which the turn may still
 		// depend on whichever job named them. And the colleague the job
-		// works for is the one its own resolution read for.
+		// works for, and whom its pushes are made for, are the ones its own
+		// resolution read for.
 		existing.Repos = run.Repos
 		existing.CodeFloor, existing.CodeLaunch = run.CodeFloor, run.CodeLaunch
-		existing.CodeCeiling = run.CodeCeiling
+		existing.CodeCeiling, existing.CodeWorkingFor = run.CodeCeiling, run.CodeWorkingFor
 		// THE BOX'S HOST STAYS WITH THE BOX: the row still names the
 		// previous job's box, which is on the host of the node that
 		// launched that job, and the attach that names this job's box names

@@ -35,7 +35,7 @@ import (
 func TestADeclaredStoreLimitIsTheBudgetsLimit(t *testing.T) {
 	t.Parallel()
 	const declared = int64(9) << 30
-	q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: declared})
+	q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: declared})
 
 	budget, err := q.StreamBudget(t.Context())
 	if err != nil {
@@ -79,7 +79,7 @@ func (f accountInfoFails) AccountInfo(context.Context) (*jetstream.AccountInfo, 
 func TestAnUnreadableAccountStillReportsTheServersOwnCap(t *testing.T) {
 	t.Parallel()
 	const declared = int64(9) << 30
-	q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: declared})
+	q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: declared})
 
 	live := q.js
 	q.js = accountInfoFails{JetStream: live, err: errors.New("no responders")}
@@ -105,7 +105,7 @@ func TestAnUnreadableAccountStillReportsTheServersOwnCap(t *testing.T) {
 // one, and the caller reads no limit as room for the volume it measured.
 func TestAnUnreadableAccountFailsWhereItIsTheOnlyLimit(t *testing.T) {
 	t.Parallel()
-	q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 
 	// AN EXTERNAL QUEUE IS ONE WITH NO EMBEDDED SERVER, which is the field
 	// [Queue.StreamBudget] branches on and nothing else.
@@ -143,7 +143,7 @@ func TestAnUnreadableAccountFailsWhereItIsTheOnlyLimit(t *testing.T) {
 // limit table is not changed by a member arriving.
 func TestAStreamWithNoApplicableLimitNamesTheTierAndIsNotReadBack(t *testing.T) {
 	t.Parallel()
-	q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: 8 << 30})
+	q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: 8 << 30})
 
 	js := &capacityJS{JetStream: q.js, refusal: &jetstream.APIError{
 		ErrorCode: 10120, Code: 400,
@@ -227,7 +227,7 @@ func TestAConsumerWithNoApplicableLimitNamesTheTierOnBothPaths(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			q := newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+			q := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 			js := &noLimitConsumerJS{JetStream: q.js, refusal: refusal}
 			q.js, q.cfg.Replicas = js, 3
 

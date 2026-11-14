@@ -5,30 +5,21 @@
  * search the map and the catalogue share, the sheet and an entry's page.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import { ToastProvider } from "@crewlethq/ui";
-import { Router } from "~/app/router.tsx";
-import { SessionReading } from "~/lib/frameSession.ts";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
-import { InertWebSocket } from "~/test/client.tsx";
 import {
-  activityAnswer,
   disputedServer,
-  entriesAnswer,
   entryAnswer,
-  facetsAnswer,
+  fact,
   generatedCompany,
   grownCompany,
-  logAnswer,
   mapAnswer,
   sparseCompany,
   summary,
   traceAnswer,
   type AtlasFixture,
 } from "~/test/atlas.ts";
+import { mountAtlas } from "~/test/atlasMount.tsx";
 import type { AtlasEntryAnswer } from "~/contract/atlas.ts";
 import { Atlas } from "./Atlas.tsx";
 import { AtlasPeek } from "./AtlasPeek.tsx";
@@ -46,8 +37,6 @@ afterEach(() => {
   location.hash = "";
 });
 
-type Asked = { what: string; params: Record<string, unknown> };
-
 /** Mount `children` over a socket that answers the atlas questions for `fixture`, recording each ask. */
 function mount(
   hash: string,
@@ -55,83 +44,7 @@ function mount(
   fixture: AtlasFixture,
   entry: (id: string) => AtlasEntryAnswer | undefined = () => undefined,
 ) {
-  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = hash;
-  const asked: Asked[] = [];
-  const store = new Store();
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string, params?: unknown) => Promise<unknown> }).query = (
-    what,
-    raw,
-  ) => {
-    const params = (typeof raw === "string" ? JSON.parse(raw) : (raw ?? {})) as Record<
-      string,
-      unknown
-    >;
-    asked.push({ what, params });
-    const id = String(params.id ?? "");
-    const from = fixture.nodes.find((node) => node.id === id);
-    switch (what) {
-      case "atlas_facets":
-        return Promise.resolve(facetsAnswer(fixture));
-      case "atlas_map": {
-        // A SEARCH LEAVES THE ENTRIES WHOSE NAME HOLDS IT, as the engine's does.
-        const q = String(params.q ?? "").toLowerCase();
-        return Promise.resolve(
-          mapAnswer(
-            q === ""
-              ? fixture
-              : {
-                  ...fixture,
-                  nodes: fixture.nodes.filter((node) => node.name.toLowerCase().includes(q)),
-                },
-          ),
-        );
-      }
-      case "atlas_entries":
-        return Promise.resolve(
-          entriesAnswer(
-            fixture,
-            Number(params.limit ?? 50),
-            Number(params.cursor ?? 0),
-            String(params.sort ?? ""),
-          ),
-        );
-      case "atlas_activity":
-        return Promise.resolve(activityAnswer(fixture));
-      case "atlas_log":
-        return Promise.resolve(logAnswer(fixture, id));
-      case "atlas_entry": {
-        const answer = entry(id) ?? (from ? entryAnswer(from) : undefined);
-        return answer ? Promise.resolve(answer) : new Promise(() => {});
-      }
-      case "atlas_trace":
-        return from
-          ? Promise.resolve(
-              traceAnswer(
-                fixture,
-                from,
-                params.direction === "down" ? "down" : "up",
-                Number(params.depth ?? 6),
-              ),
-            )
-          : new Promise(() => {});
-      default:
-        return new Promise(() => {});
-    }
-  };
-  const view = render(
-    <ToastProvider>
-      <ClientContext.Provider value={{ store, socket }}>
-        <SessionReading>
-          <ViewerProvider>
-            <Router>{children}</Router>
-          </ViewerProvider>
-        </SessionReading>
-      </ClientContext.Provider>
-    </ToastProvider>,
-  );
-  return { view, asked };
+  return mountAtlas(hash, children, fixture, { entry });
 }
 
 describe("the coverage line", () => {
@@ -522,5 +435,45 @@ describe("an entry", () => {
     expect(screen.getAllByText("Internal").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/seen by AWS/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /export|print|share/i })).toBeNull();
+  });
+
+  // WHAT A REPOSITORY'S FILES DECLARE IS LIKELY, and named for the repository
+  // whose files said it. Mutation: drop the code case from sourceName and the
+  // by-line reads the bare repository name.
+  test("a fact a repository's files declared names the repository, as likely", async () => {
+    const company = grownCompany();
+    const declared = entryAnswer(company.ordersDb, {
+      facts: [
+        fact(
+          "engine",
+          { type: "word", text: "postgres" },
+          { source: { kind: "code", name: "shop" }, confidence: "inferred", word: "likely" },
+        ),
+      ],
+      entry: {
+        state: "discovered",
+        confidence: "inferred",
+        word: "likely",
+        sources: [{ kind: "code", name: "shop" }],
+      },
+    });
+    const answer = (id: string) => (id === company.ordersDb.id ? declared : undefined);
+    mount(
+      `#/company/atlas/${company.ordersDb.id}`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect((await screen.findAllByText(/set by the files of shop/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/likely/i).length).toBeGreaterThan(0);
+    cleanup();
+    mount(
+      `#/company/atlas/${company.ordersDb.id}?tab=sources`,
+      <EntryPage id={company.ordersDb.id} />,
+      company,
+      answer,
+    );
+    expect(await screen.findByText("The files of shop")).toBeTruthy();
+    expect(screen.getByText("A repository's deploy and dependency files")).toBeTruthy();
   });
 });

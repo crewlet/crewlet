@@ -105,12 +105,9 @@ type CandidateRow struct {
 // that failed on what it was tested in, or the paths its merge conflicted on —
 // and when.
 //
-// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
-// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
-// has run without it — none of the domain is on main — so a build answering a
-// `queue` read with no ejections is one nobody ran; were one ever to run
-// first, its answer would leave the field out and a reader would draw no
-// ejection, which is what such a build knows.
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
+// domain landed on main with it ([RecordVersion]), so every build that answers
+// a `queue` read answers its ejections.
 type EjectedRow struct {
 	RepoID    string `json:"repo_id"`
 	Repo      string `json:"repo"`
@@ -318,7 +315,7 @@ func (q ReadQuery) validateQueueDue() error {
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
-		{"checks_queued", q.ChecksQueued != nil},
+		{"checks_queued", q.ChecksQueued != nil}, {"default_tips", q.DefaultTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a queue_due read lists the repositories holding a live entry, or one "+

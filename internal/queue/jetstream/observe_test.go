@@ -332,9 +332,9 @@ func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 }
 
 // THE ENGINE STREAMS ARE BYTE-IDENTICAL to what they were before domain
-// streams existed — the six that predate them, and the custody stream, which
-// was born in their shape — but for the one domain field set on purpose: the
-// dead letters' duplicate window.
+// streams existed — the six that predate them, and the custody stream and the
+// failure marks, which were born in their shape — but for the one domain field
+// set on purpose: the dead letters' duplicate window.
 //
 // A stream is created once and never updated, so a spec that changed shape is
 // not a migration — it is a difference between the streams on a deployment
@@ -352,8 +352,8 @@ func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 	t.Parallel()
 	specs := engineStreams(0)
-	if len(specs) != 7 {
-		t.Fatalf("the engine defines %d streams, want 7", len(specs))
+	if len(specs) != 8 {
+		t.Fatalf("the engine defines %d streams, want 8", len(specs))
 	}
 	for _, spec := range specs {
 		t.Run(spec.name, func(t *testing.T) {

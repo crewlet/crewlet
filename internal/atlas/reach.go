@@ -294,7 +294,9 @@ func Writers(entries []Entry) (writers []provenance.Author, listed bool) {
 				w = provenance.Author{Kind: iam.ActorOperator}
 			case SourceRecords:
 				w = provenance.Author{Kind: iam.ActorSystem}
-			case SourceIntegration:
+			case SourceIntegration, SourceCode:
+				// A REPOSITORY'S FILES ARE TEXT ANYBODY WITH A PUSH WROTE, as
+				// a vendor's listing is text its users wrote.
 				listed = true
 				continue
 			default:

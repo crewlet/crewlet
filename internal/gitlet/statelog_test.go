@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -34,11 +35,10 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 			// Migrate is nil: the tables ship in the replicated estate's
 			// own migration, so the suite proves the schema that ships.
 			Encode: encodeSuiteRecord,
-			// EMPTY: every field this domain writes is in the base format,
-			// so there is no record to carry — the first versioned field
-			// brings a Carrying case, which the suite refuses to run
-			// without.
+			// EVERY VERSIONED FIELD, each on a record carrying it alone:
+			// whom an agent's write was made for, version 2.
 			Fields:        gitlet.VersionedFields(),
+			Carrying:      carryingSuiteRecord,
 			Kinds:         suiteKinds(),
 			Rows:          gitlet.NewRows,
 			Write:         suiteWrite,
@@ -53,6 +53,59 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 
 // suiteAt is every authored instant the suite's records carry.
 var suiteAt = time.Unix(1_700_000_000, 0).UTC()
+
+// carryingSuiteRecord is a record carrying exactly field, through the
+// production encoder, which stamps it at the field's version: each a seat's
+// write made for the person's seat founder — a routing's beside its agent
+// actor on a dequeue, a push entry's routing's on the change the push merges,
+// an enqueue's own, and a seat's push entry's own.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
+	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
+	seat := gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "dev"}
+	routing := func(carrier *types.WorkingFor) gitlet.ChangeRouting {
+		return gitlet.ChangeRouting{ChangeID: "0190f3c4-0000-7000-8000-0000000000c1", ChangeRef: "web!1",
+			RepoName: "web", Title: "Retry the upload", Actor: "dev", Owner: "cto",
+			OwnerKind: gitlet.PartyAgent, Authors: []string{"cto"}, Merged: true, WorkingFor: carrier}
+	}
+	entry := gitlet.PushEntry{PushID: "push-carrying", Principal: seat, Via: gitlet.ViaEngine, Node: "suite-node",
+		Commands:   []gitlet.Command{{Ref: mainRef, Old: oidOf("A"), New: oidOf("B"), Result: gitlet.ResultOK}},
+		ReceivedAt: suiteAt, Day: suiteAt.Format(time.DateOnly)}
+	var (
+		op      gitlet.OpKind
+		payload any
+	)
+	switch field.Name {
+	case "ChangeRouting.WorkingFor":
+		r := routing(founder)
+		op, payload = gitlet.OpDequeue, gitlet.Dequeue{RepoID: repo,
+			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Principal: seat, Routing: &r}
+	case "PushEntry.Routing.WorkingFor":
+		entry.Routing = []gitlet.ChangeRouting{routing(founder)}
+		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
+	case "Mutation.WorkingFor":
+		op, payload = gitlet.OpEnqueue, gitlet.Enqueue{RepoID: repo,
+			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", ChangeID: "0190f3c4-0000-7000-8000-0000000000c1",
+			TargetRef: mainRef, HeadOID: oidOf("B"), Method: gitlet.MergeMethodMerge, Principal: seat,
+			WorkingFor: founder}
+	case "PushEntry.WorkingFor":
+		entry.WorkingFor = founder
+		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return gitlet.Encode(gitlet.MutationRecord{
+		RecordEnvelope: gitlet.RecordEnvelope{
+			OpID: "suite-carrying", Subject: gitlet.RepoSubject(repo), Op: op, CreatedAt: suiteAt,
+			Gen: 1, Writer: "suite-node", Scope: gitlet.Scope{gitlet.RepoPath(repo)},
+		},
+		Mutation: body, Actor: "suite-node", ActorKind: gitlet.ActorSystem,
+	})
+}
 
 // suiteSettings are a declared repository's settings, as a reconcile hands
 // them over.
@@ -205,7 +258,10 @@ func suitePack(id string) *gitlet.PackRef {
 // account, whose row keeps the commit it deleted (its Old). Its
 // committer counted both of the seat's on the company day of the suite's
 // instant — so every column a push row has, and the seat's count of its day
-// (code_seat_days), are ones the suite's replays and identity claims compare.
+// (code_seat_days), are ones the suite's replays and identity claims compare,
+// but whom a seat's push was made for: a record carrying it is stamped above
+// the base every ordinary record of the suite is held to, and
+// TestACodeRowKeepsWhomItsWriteWasMadeFor replays the rows that keep it.
 func suitePush(id string) gitlet.PushBatch {
 	bound := strings.Repeat("r", gitlet.MaxProvenanceBytes)
 	return gitlet.PushBatch{RepoID: id, Pushes: []gitlet.PushEntry{{

@@ -1,6 +1,12 @@
 // Package mattermost is the Mattermost integration: turning a post into a
 // notification, and everything a self-hosted chat backend needs that a
 // hosted one does not.
+//
+// # The atlas asks which team this is
+//
+// The team's own id and display name are said on the server's account of the
+// atlas (ADR-0139, atlas.go), read with one GET under one agent's bot token.
+// Nobody in the team is read.
 package mattermost
 
 import (

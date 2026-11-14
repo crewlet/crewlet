@@ -75,8 +75,8 @@ func ChangeOptionKeys() []string {
 // proposes beside the push ([Proposal.Change]) and what an entry whose decide
 // opens it carries into the record ([PushEntry.Change]).
 //
-// BASE FORMAT, AS A STATED CONDITION, as [PushEntry.Change] states it: every
-// field below rides that one field and takes no row of its own.
+// BASE FORMAT, as [PushEntry.Change] is: every field below rides that one
+// field and takes no row of its own.
 type ChangeOption struct {
 	// Target is the branch the change proposes its source into, as a ref
 	// (refs/heads/main). A proposal leaves it empty to ask for the

@@ -536,6 +536,20 @@ without one, and the next turn in that thread opens on the new wording.
 
 ---
 
+## What the atlas reads
+
+The engine asks Slack which workspace the agents' apps are installed in, for the company's [atlas](../concepts/atlas.md#what-integrations-read), once an hour unless the company's `atlas.refresh_interval_seconds` says otherwise. It adds the workspace's own id, name and address to the Slack account the atlas already shows. Nothing at Slack is changed.
+
+| Part | Calls | Scope | What the atlas gains |
+|---|---|---|---|
+| Workspace | `auth.test`, once | none: every bot token may call it | the workspace's id, its name and its address |
+
+**Which token.** The bot token of the first agent, by handle, whose Slack app is switched on. Where Slack says that token no longer works (the app was uninstalled), the next agent's is asked. An agent whose app is switched off is never asked through, and a company none of whose agents has a Slack app is not read.
+
+**Nobody is read.** `auth.test` also answers which bot user asked; the engine does not read it. No member, channel or message is ever listed.
+
+**A refusal is a finding, never a failed read.** Where Slack refuses every agent's bot token, the source's standing on the atlas says so, and what an earlier read recorded stays as it was. When Slack answers with its rate limit, the call waits as long as Slack asks, up to three times and thirty seconds a wait; past that, or on any other failure, the read stops and records nothing, and the engine asks again five minutes later.
+
 ## Thread Routing
 
 By default, agents only receive thread replies in threads they are **following**. Top-level channel messages are always delivered.

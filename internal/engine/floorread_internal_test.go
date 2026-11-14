@@ -148,6 +148,13 @@ func (f *listingsHeld) AccessReviewRevisions(ctx context.Context) (map[string]ui
 	return f.wrappedFleet.AccessReviewRevisions(ctx)
 }
 
+func (f *listingsHeld) AtlasWakes(ctx context.Context) (map[string]coord.AtlasWake, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.AtlasWakes(ctx)
+}
+
 func (f *listingsHeld) MaintenanceAcks(ctx context.Context, stream string) ([]coord.MaintenanceAck, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err
@@ -277,7 +284,7 @@ func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

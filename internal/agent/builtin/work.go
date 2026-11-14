@@ -403,6 +403,10 @@ type WorkDeps struct {
 	// request's key does — the one rule every family of write tools takes
 	// ([operations]), set by [OperatorTools] alone. Its zero value takes no
 	// `op_id`, which is every surface but the operator's.
+	// entries reads the atlas as a call's caller, for `linked_entries`:
+	// pushed down by [Register] and [OperatorTools] beside Authorize.
+	entries atlasReader
+
 	ops operations
 }
 
@@ -1505,6 +1509,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			"the newest comments.", GetWorkItemTool, ReadRefusalSentence(err))), nil
 	case err != nil:
 		return readFailure(ctx, GetWorkItemTool, err), nil
+	}
+	if !t.deps.readsAtlas(ctx) {
+		// THE ATLAS IS ITS HOLDERS': counted, never named (ADR-0140).
+		detail = detail.WithoutEntries()
 	}
 	// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT. It used to be cut to
 	// four kilobytes here, with a `body: true` argument to get the rest —
@@ -2713,6 +2721,9 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			"blocking":     setArgSchema("The items blocked BY this one. " + itemRefs),
 			"linked":       setArgSchema("Related items, with no blocking meaning. " + itemRefs),
 			"linked_pages": setArgSchema("Knowledge-base pages this item references, by page id."),
+			"linked_entries": setArgSchema("Entries of the company's atlas this item touches (the " +
+				"servers, services, databases, domains or accounts the work changes), each by its id " +
+				"as " + AtlasSearchTool + " answers it, or by its exact name or key."),
 			"fields": map[string]any{
 				"type": "object",
 				"description": "Custom fields, keyed by SLUG — read them with " +
@@ -2886,7 +2897,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// a dependency has two ends: a `linked` edge is one collection on one
 	// item, while `waiting_on` is an authored edge on one item and a
 	// mirrored entry on another, which is a sequence rather than a field.
-	inert, relationRefusal := t.deps.inertRelations(ctx, UpdateWorkItemTool, args,
+	inert, relationRefusal := t.deps.inertRelations(ctx, turn, UpdateWorkItemTool, args,
 		before.Task)
 	if relationRefusal != nil {
 		return *relationRefusal, nil
