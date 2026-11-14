@@ -1074,6 +1074,49 @@ func TestTheBacklogsTakeTurnsInWhatTheOwnPassesLeave(t *testing.T) {
 	}
 }
 
+// A BACKLOGS' TURN THAT REACHED EVERY SEAT STARTS THE NEXT AT THE FIRST.
+//
+// A backlogs' turn that ran out starts the next where it ran out, and one
+// that called every held seat's backlog has left no seat behind, so the next
+// starts at the first seat: kept where an earlier turn ran out, it would start
+// a later turn part-way through the seats for no seat's sake. Here the first
+// cycle's backlogs' turn runs out in b's backlog after moving marks, the
+// second's starts at b and reaches every seat, and the third's starts at a.
+//
+// Mutation: keep the last resume after a backlogs' turn that reached every
+// seat, and this goes red.
+func TestABacklogsTurnThatReachedEverySeatStartsTheNextAtTheFirst(t *testing.T) {
+	t.Parallel()
+	cut := false
+	m := &scriptedMemory{play: completes, playBacklog: func(ctx context.Context, seat string,
+		runOut func(),
+	) (memsync.Carried, error) {
+		if seat == "b" && !cut {
+			cut = true
+			return runsOut(ctx, runOut, draining)
+		}
+		return movedMarks, nil
+	}}
+	loop := &memorySync{}
+	own := []string{"own:a", "own:b", "own:c"}
+	for cycle, backlogs := range [][]string{
+		{"backlog:a", "backlog:b"},
+		{"backlog:b", "backlog:c", "backlog:a"},
+		{"backlog:a", "backlog:b", "backlog:c"},
+	} {
+		m.cycle(t, loop, "a", "b", "c")
+		if want := slices.Concat(own, backlogs); !slices.Equal(m.order, want) {
+			t.Fatalf("cycle %d called %s, want %s: a backlogs' turn that ran out starts the "+
+				"next where it ran out, and one that reached every seat starts it at the first",
+				cycle+1, words.And(m.order), words.And(want))
+		}
+	}
+	if loop.backlogResume != "" {
+		t.Errorf("after a backlogs' turn that reached every seat the next starts at %q, want "+
+			"the first seat", loop.backlogResume)
+	}
+}
+
 // THE BACKLOGS' TURN READS THE SEATS HELD AS IT BEGINS.
 //
 // A cycle's lap reads the seats held as the cycle begins, and its backlogs'
