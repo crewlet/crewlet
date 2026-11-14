@@ -569,7 +569,8 @@ export function Inbox() {
     answered: allAnswered,
     answer: updatesRead.data,
     bound: notices,
-    error: Boolean(updatesRead.error || decisions.error),
+    // A FAILED VIEWER READ ASKED NOTHING, so nothing was checked and clear.
+    error: Boolean(updatesRead.error || decisions.error || viewer.failed),
     shown: needs.length + others.length + updates.length,
     watched: watchedIn("seat", unwatched),
   });
