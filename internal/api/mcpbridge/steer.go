@@ -370,7 +370,10 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 // holder ([holderRetryCeiling]), because that holder is what serves the
 // session's next opening: a node that is going hands its seats on, and an
 // opening that ended was replaced, moved with its seat, or ended with its run,
-// whose route then answers 401.
+// whose route then answers 401. No client keeps to it: OpenCode's notes
+// plugin, the route's one client, reads no Retry-After and asks again after a
+// pause of its own, a second doubling to thirty (internal/sandbox/executor,
+// opencode_steer.js).
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {

@@ -34,7 +34,13 @@ again, since the run goes on with the seat's next holder. So is a request that
 opens a session on an opening that ended after the holder's routing found it,
 on its own route and a relayed one alike: the MCP handler serves the opening
 the routing found, never a second reading of the token, and never answers it
-with the 400 a harness takes for its own malformed request.
+with the SDK's 400 "no server available", which Claude Code never makes again
+at a box's startup. Measured on Claude Code 2.1.310 and 2.1.322, which read no
+Retry-After: a request opening a session that meets a 503 at a box's startup
+is made again three times within about six seconds, and a call that meets one
+is not made again, the CLI keeping the server and its session. The bridge does
+not route the opening's request again itself: that 503 fires only where the
+opening ended in the instant between the routing and the session's hold.
 
 **A session with a caller of its own is pinned to the process that opened
 it.** The Dashboard Assistant's deep work

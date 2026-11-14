@@ -976,7 +976,8 @@ func New(opts Options) (*Bridge, error) {
 	// the routing and the handler, or named the opening a recovery put in its
 	// place, which no step had held to the session the box started
 	// ([Bridge.serveBegun]); and a nil server here is the SDK's 400 "no server
-	// available", which a harness takes for its own malformed request.
+	// available", which Claude Code never makes again at a box's startup
+	// ([Bridge.serveMCP]).
 	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		opened, _ := r.Context().Value(servedOpening{}).(*binding)
 		if opened == nil {
@@ -1697,8 +1698,28 @@ func opensSession(r *http.Request) bool {
 // refused where the run is over. NEVER SERVED THERE: a session opened on an
 // ended opening is one its end never closes, which answers every call made on
 // it as one not run, a box told to call again calling on it again. And never
-// the SDK's 400 "no server available", which a harness takes for its own
-// malformed request rather than for one to make again.
+// the SDK's 400 "no server available", which Claude Code never makes again at
+// a box's startup (below).
+//
+// WHAT A BOX DOES WITH THE 503, measured on Claude Code 2.1.310 and 2.1.322,
+// which behave alike and read no Retry-After. A request opening a session at
+// the box's startup is made again three times, about 0.5, 2 and 6 seconds
+// after the first, and the server is given up for the run where all three
+// meet a 503 too; one opening a session again after the box's session was
+// lost mid-run is made again five times within about 15 seconds, then up to
+// eight more times in the background, minutes apart, while the answer stays a
+// 503. A call that meets a 503 ([Bridge.forward], [Bridge.heldOnly]) is not
+// made again: the model's call fails, a hook's call is a hook error the run
+// goes on past, and the CLI keeps the server and its session. The 400 this
+// 503 replaced was never made again at a box's startup, which left the box
+// without its tools for the run. OpenCode's own MCP client was not measured;
+// its notes plugin, the notes route's one client, asks again on its own
+// backoff and reads no Retry-After either.
+//
+// THE BRIDGE DOES NOT ROUTE THE REQUEST AGAIN ITSELF: the 503 fires only where
+// the opening ended in the instant between the routing that found it and the
+// session's hold, in which [Bridge.serveBegun] runs nothing but
+// [binding.begin], and the box's own next try is routed afresh.
 //
 // A request on a session it names needs neither: that session is closed by the
 // opening's end, and the SDK answers a request on a closed one with the 404

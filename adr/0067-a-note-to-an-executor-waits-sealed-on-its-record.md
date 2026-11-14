@@ -322,13 +322,14 @@ records nothing and says so (`mcpbridge.ErrInboxNotServing`), and the
 bridge turns the confirmation away to ask again, as it turns away one that
 reaches a session whose end took the inbox already. Answered done, the plugin
 never confirmed the note again, and the ending reported unconfirmed a note
-OpenCode had delivered. The confirmation made again reaches the inbox that
-serves the job now, or is refused where the run is over. So is a
-confirmation reaching a run whose tools are closed, which takes nothing more
-from its notes: a seat leaving its node closes them before its release ends
-its session there, and the confirmation made again reaches the seat's next
-holder, which records it. And no session serves an inbox not yet bound: a
-run's inbox is bound to its job before the bridge files the session
+OpenCode had delivered. The plugin makes the confirmation again on its own
+backoff, a second doubling to thirty, and reads no Retry-After; made again, it
+reaches the inbox that serves the job now, or is refused where the run is
+over. So is a confirmation reaching a run whose tools are closed, which takes
+nothing more from its notes: a seat leaving its node closes them before its
+release ends its session there, and the confirmation made again reaches the
+seat's next holder, which records it. And no session serves an inbox not yet
+bound: a run's inbox is bound to its job before the bridge files the session
 (`Engine.openBridge`), which a recovery's box reaches the moment it is filed.
 An inbox whose job its record takes no read of any more says so the same way,
 for a note named that its take left waiting: the job's completion claimed the

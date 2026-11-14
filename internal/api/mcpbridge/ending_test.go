@@ -951,15 +951,16 @@ func TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans(t *testing.T) {
 // opening ended before the MCP handler served the request: the run ended, the
 // seat left this node, or a recovery opened the job again. The handler read the
 // token a second time and found no opening, and the SDK answered 400 "no server
-// available", which a harness takes for its own malformed request, never for
-// one to make again; after a recovery it found the recovery's opening instead,
-// and served the request there, on an opening no step had held to the session
-// the box started. So the handler is handed the opening the routing found and
-// reads the token no more: a token that expires while its request waits is
-// still the credential the request was admitted under. After the recovery the
-// box's next connect is served by the opening that serves it now. And a
-// request that is truly malformed keeps its 400: one that names a server the
-// opening does not serve.
+// available", which Claude Code never made again at a box's startup (measured
+// on 2.1.310 and 2.1.322, where it makes an opening's 503 again three times
+// within about six seconds: Bridge.serveMCP); after a recovery it found the
+// recovery's opening instead, and served the request there, on an opening no
+// step had held to the session the box started. So the handler is handed the
+// opening the routing found and reads the token no more: a token that expires
+// while its request waits is still the credential the request was admitted
+// under. After the recovery the box's next connect is served by the opening
+// that serves it now. And a request that is truly malformed keeps its 400: one
+// that names a server the opening does not serve.
 //
 // Mutation: serve a request that opens a session whatever its opening's state,
 // and every ending answers it 200, on an opening that has ended; read the token
