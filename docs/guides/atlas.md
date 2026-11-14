@@ -139,6 +139,14 @@ its name.
 
 Drag to pan, scroll or use the zoom bar to zoom, press `0` to fit the whole
 map, and use the fullscreen button in the zoom bar to give the map the screen.
+The map keeps a signal you can read at every zoom. From half size down an
+entry is a tile: its kind's glyph filling the cell, its name at a size that
+still reads and cut to what fits, and the whole cell in its health colour when
+it is not quiet. Zoomed out further than a name fits, each entry is a filled
+mark in its health colour, and every cluster keeps its title, its count and
+its tally of entries that need a look at their own size, so the picture reads
+as how much of each cluster is quiet. A tile is pressed like a card; zoom in
+to press a mark.
 With the keyboard, Tab onto the map, move with the arrow keys, press Enter to
 select an entry or open a group and Escape to clear; typing a name finds it.
 The moving dashes stand still for a reader who asked the system for less

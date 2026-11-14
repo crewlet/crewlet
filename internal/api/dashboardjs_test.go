@@ -2394,7 +2394,11 @@ const (
 	// and a skeleton on the screens that drew nothing while their read was
 	// out added 4,142 bytes, nearly all script, and took it to 5979.1 KiB
 	// (6,122,607 bytes): 5980 KiB.
-	treeBudget = 5<<20 + 860<<10
+	// Kit 0.126.0 (a map's three levels of detail with its held titles, and a
+	// pill row that scrolls with its ring inside the tab), less this tree's
+	// own copy of the pill row's scroll rule, added 2,540 bytes, script and
+	// sheet, and took it to 5981.6 KiB (6,125,147 bytes): 5982 KiB.
+	treeBudget = 5<<20 + 862<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
