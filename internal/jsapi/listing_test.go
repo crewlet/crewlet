@@ -661,64 +661,6 @@ func TestAReadOfAWholePieceIsGivenItsCrossing(t *testing.T) {
 	}
 }
 
-// A READ OF A MESSAGE AS LARGE AS THE TRANSPORT, ON A MEMBER'S OWN CONNECTION,
-// IS ASKED ONCE WHILE ITS REPLY IS STILL BEING BUILT.
-//
-// A member's own connection crosses no link, but a reply of eleven megabytes —
-// a dead letter at the transport's ceiling, base64-encoded in JSON — is still
-// built by the stream's leader and decoded by its reader, in the engine's own
-// process, which under load takes seconds. Read at the bare read term, such a
-// read was asked again at two seconds and at four while the leader was still
-// building the first reply, each re-ask another whole reply built beside it,
-// and ran out its bound with none of them answered (crewlet/crewlet#1153).
-// Carrying the transport's ceiling at no pace, the read is given that reply's
-// handling: here a leader that takes longer than a term and a re-ask to answer
-// is asked once, and answered; the plain read, the control, is asked again at
-// two seconds.
-//
-// Mutation: give a carrying read no handling, so a member's own read of a
-// message as large as the transport keeps the bare read term, and it is asked
-// again while its reply is still being built.
-func TestAReadOfAMessageAsLargeAsTheTransportOnAMembersOwnConnectionIsAskedOnce(t *testing.T) {
-	t.Parallel()
-	const transport = 8 << 20
-	if handling := jsapi.Handling(transport); handling <= jsprovision.ReadTerm+jsprovision.ReAsk {
-		t.Fatalf("a reply of the transport's ceiling is given %v to be handled, which a leader "+
-			"answering after a term and a re-ask does not fall inside", handling)
-	}
-	slow := jsprovision.ReadTerm + jsprovision.ReAsk + jsprovision.ReadTerm/2
-	for _, tc := range []struct {
-		name     string
-		carrying bool
-		asked    int
-	}{
-		{"carrying the transport's ceiling", true, 1},
-		{"control", false, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			f := fakeBroker(t, fmt.Sprintf(server.JSApiMsgGetT, "OBJ"), func(int, []byte) any {
-				time.Sleep(slow) //fixedwait:simulated a leader building, and its reader decoding, a reply of eleven megabytes on a loaded node
-				return server.JSApiMsgGetResponse{
-					ApiResponse: server.ApiResponse{Type: server.JSApiMsgGetResponseType},
-					Message:     &server.StoredMsg{Subject: "obj.c.x", Sequence: 1, Data: []byte("letter")},
-				}
-			})
-			leader := mustLeader(t, f.js)
-			if tc.carrying {
-				leader = leader.Carrying(transport, 0)
-			}
-			msg, err := leader.At(context.Background(), 1)
-			if err != nil || string(msg.Data) != "letter" {
-				t.Fatalf("At = %q, %v, want the letter", msg.Data, err)
-			}
-			if got := len(f.offsets(t)); got != tc.asked {
-				t.Errorf("the read was asked %d times, want %d", got, tc.asked)
-			}
-		})
-	}
-}
-
 // mustLeader is a leader reader of the stream OBJ through js.
 func mustLeader(t *testing.T, js jetstream.JetStream) *jsapi.Leader {
 	t.Helper()

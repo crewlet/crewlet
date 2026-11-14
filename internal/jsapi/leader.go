@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -124,7 +123,10 @@ type Message struct {
 // never answered at all, and the one asked again two seconds later was
 // answered by the new leader.
 type Leader struct {
-	conn   *nats.Conn
+	// conn is what the reads are asked on: the client's connection, the one
+	// call they make of it ([requester]), so a case inside a bubble can
+	// answer them on the bubble's clock.
+	conn   requester
 	stream string
 	// msgGet and info are the stream's MSG.GET and STREAM.INFO subjects in
 	// the API the client speaks.
