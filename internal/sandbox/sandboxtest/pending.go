@@ -123,6 +123,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
 		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
+		{"AReleaseRecordsWhatTheHostsStoreLastSaid", testAReleaseRecordsWhatTheHostsStoreLastSaid},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -2359,6 +2360,61 @@ func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.P
 			got.Launch.CollectFailures)
 	}
 	mustRelease(t, s, claimed)
+}
+
+// A RELEASE RECORDS WHAT THE STORE OF THE HOST OF THE JOB'S BOX LAST SAID, on
+// the job's record, where its claim learned anything of it: a release whose
+// collection found that store silent marks the job, one whose collection read
+// the box clears the mark, and one that learned nothing leaves it as it
+// stands. A release cannot say both, and one that does is refused and writes
+// nothing. The job's next launch starts without it: the host of its box, and
+// what that host's store says, are that job's.
+func testAReleaseRecordsWhatTheHostsStoreLastSaid(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	silent := releaseOf(mustClaim(t, s, "t1"))
+	silent.HostStoreSilent = true
+	if released, err := s.ReleaseClaim(ctx, "t1", silent); err != nil || !released {
+		t.Fatalf("release of a collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || !got.Launch.HostStoreSilent {
+		t.Fatalf("the row reads %s, its host's store silent %v; want it running and marked", got.Status,
+			got.Launch.HostStoreSilent)
+	}
+
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilent {
+		t.Fatal("a release that learned nothing of the host's store cleared what an earlier one recorded")
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	both := releaseOf(claimed)
+	both.HostStoreSilent, both.HostStoreAnswered = true, true
+	if _, err := s.ReleaseClaim(ctx, "t1", both); err == nil {
+		t.Error("a release that says the host's store was both silent and answering was accepted")
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || !got.Launch.HostStoreSilent {
+		t.Errorf("the refused release wrote the row: %s, its host's store silent %v", got.Status,
+			got.Launch.HostStoreSilent)
+	}
+	answered := releaseOf(claimed)
+	answered.HostStoreAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a collection that read the box = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.HostStoreSilent {
+		t.Fatal("a release whose collection read the box left the job marked")
+	}
+
+	marked := releaseOf(mustClaim(t, s, "t1"))
+	marked.HostStoreSilent = true
+	if released, err := s.ReleaseClaim(ctx, "t1", marked); err != nil || !released {
+		t.Fatalf("release marking the job again = %v, %v", released, err)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.Launch.HostStoreSilent {
+		t.Error("the job's next launch inherited what the last job's host's store said")
+	}
 }
 
 func testAReleaseNeverClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {

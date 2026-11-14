@@ -244,6 +244,22 @@ type Release struct {
 	// would start a run of its own each time and never be given up.
 	BoxAnswered bool
 
+	// HostStoreSilent is whether the claim's collection left this node's
+	// clock on the store of the host of the job's box running
+	// ([Coordinator.hostClocked]): that host last answered that its store did
+	// not answer its read of the run's row. The release records it on the
+	// job's record ([LaunchRecord.HostStoreSilent]), so a node that restarts,
+	// or the seat's next holder, reads it there before it acknowledges a
+	// delivery of the job's completion.
+	//
+	// HostStoreAnswered is whether the claim's collection read the job's box,
+	// or found it failing to be read, which its host could say only where its
+	// store answered: the release clears that record. Neither leaves it as it
+	// stands: a claim that learned nothing of that store, a host that did not
+	// answer at all among them. A release cannot say both, and one that does
+	// is refused.
+	HostStoreSilent, HostStoreAnswered bool
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -4620,6 +4636,29 @@ type LaunchRecord struct {
 	// with nothing to say why, read it as one that ended by itself, and parked
 	// it on the question it asked on its way out.
 	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
+
+	// HostStoreSilent says the host of this job's box last answered a
+	// collection of it that its own coordination store did not answer its
+	// read of the run's row ([BoxReadReply.Unsettled]), and has answered
+	// nothing since that says its store answers: the DURABLE TWIN of the
+	// collecting node's clock on that host's store ([hostUnsettled]), written
+	// by the release of every claim whose collection found it so
+	// ([Release.HostStoreSilent]) and cleared by the release of one whose
+	// collection read the box ([Release.HostStoreAnswered]). A release that
+	// learned nothing of that store, a host that did not answer at all among
+	// them, leaves it as it stands, and the job's next launch starts without
+	// it.
+	//
+	// ON THE JOB'S RECORD because the clock is in one node's memory: while
+	// that host's store is silent its waiter announces nothing, so a
+	// completion's delivery is the one copy of it, and a node that restarted,
+	// or the seat's next holder, refused that delivery on a condition and
+	// acknowledged it before any collection of its own had started a clock,
+	// which left the job announced by nothing until that store answered. Every
+	// node reads the row before it acknowledges a delivery no clock of its own
+	// covers, and hands back and renews one whose job this says is unannounced
+	// (renew.go).
+	HostStoreSilent bool `json:"host_store_silent,omitempty"`
 
 	// HarnessEnd is how the job's harness ended, as the read that collected
 	// the job found it ([Coordinator.readBox], [PendingStore.MarkHarnessEnd]):

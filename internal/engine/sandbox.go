@@ -3883,8 +3883,10 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //
 // THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
 // BROKER IS WHILE IT DOES NOT. While the coordinator keeps a clock on the store
-// of the host of a run's box, that host's waiter reads the run's record through
-// a store that does not answer it and announces nothing, and a completion the
+// of the host of a run's box, or the run's record says what such a clock would
+// (the job's own record of that host's silence, or the job lost with it and
+// its round not yet carried on), that host's waiter reads the run's record
+// through a store that does not answer it and announces nothing, and a completion the
 // coordinator keeps for its condition is in this node's memory alone, which a
 // restart or a seat let go of forgets. So the coordinator marks every delivery
 // it hands back meanwhile [sandbox.ErrUnannounced], and a refusal so marked is

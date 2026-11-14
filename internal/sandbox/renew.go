@@ -20,7 +20,10 @@ import (
 // ([Coordinator.hostClocked]): the claim is handed back uncounted and the
 // completion NAK'd, and asked again until the host's store answers or the box
 // timeout passes, when the job is recorded lost with that host and its round
-// carried on ([Coordinator.loseWithHost]).
+// carried on ([Coordinator.loseWithHost]). And the claim's release writes what
+// the host said onto the job's record ([LaunchRecord.HostStoreSilent]), the
+// clock's durable twin, which the release of a collection that reads the box
+// clears.
 //
 // WHILE THAT CLOCK RUNS, THE BROKER'S REDELIVERY IS ALL THAT ASKS AGAIN. Every
 // other hand-back of a running, unheld job has the waiter that drives its box
@@ -35,10 +38,11 @@ import (
 // recorded lost, and the seat was held behind a run nothing drove again until
 // the host's store answered.
 //
-// SO NO DELIVERY OF THE COMPLETION IS ACKNOWLEDGED WHILE THE CLOCK RUNS,
-// unless the run settled, which drops the clock ([hostUnsettled]): every other
-// answer hands it back, marked [ErrUnannounced], and renews it, WHATEVER ITS
-// KIND ([Coordinator.renewing]). The host's own answer that its store did not
+// SO NO DELIVERY OF THE COMPLETION IS ACKNOWLEDGED WHILE THE CLOCK RUNS, OR
+// WHILE THE RUN'S ROW SAYS NO WAITER ANNOUNCES ITS JOB ([unannouncedOnRow]),
+// unless the run settled, which drops the clock ([hostUnsettled]) and moves the
+// row on: every other answer hands it back, marked [ErrUnannounced], and
+// renews it, WHATEVER ITS KIND ([Coordinator.renewing]). The host's own answer that its store did not
 // answer; a claim this node's own store does not answer, or one this node
 // refuses while a release it owes is out ([errReleaseOwed]); a host that does not
 // answer the read at all ([ErrBoxHostSilent]), which is acknowledged only where
@@ -58,6 +62,37 @@ import (
 // whose condition nothing signals clearing, and a resume held on its row each
 // had their completion acknowledged, and each left the job with nothing to
 // drive it.
+//
+// AND ON THE ROW, NEVER ON ONE NODE'S MEMORY ALONE ([Coordinator.unannouncedJob]).
+// The clock goes with a restart, and the seat's next holder starts with none,
+// while the host's waiter still announces nothing. So a node that keeps no
+// clock reads the run's row before it lets a delivery go, and keys the same
+// hand-back on what the row says durably: the job recorded lost with that host
+// for its store's silence ([LossLaunchNodeStoreSilent]), until its round is
+// carried on, which a carry's failure after a restart has no collection to
+// start the clock again for, since such a loss's carry reads no box; or the
+// job's record saying that host last found its store silent, which a refusal
+// on a restarted node or the seat's next holder meets before any collection of
+// its own has started a clock. Kept by memory alone, a carry that failed after
+// a restart was NAK'd until its budget was spent, and such a refusal was
+// acknowledged, each leaving the job with nothing to announce it until that
+// host's store answered.
+//
+// ONE PATH IS LEFT, and no row can close it: a refusal of a job no collection
+// has read since its host's store went silent. Nothing durable says so then,
+// since no node has heard that host say it, so the refusal is acknowledged as
+// any is where a waiter stands behind it, and kept for its condition's signal,
+// whose re-fire's collection starts the clock and renews the completion at
+// once. Should this node restart, or let the seat go, before that signal, the
+// job waits for that host's store to answer, when its waiter announces it
+// again on its schedule (reannounce.go, TestAnUnclaimedCompletionIsAnnouncedAgain).
+//
+// WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
+// NAK'd again at the queue's backoff, at most every thirty seconds, one claim
+// attempt each, and renewed about every two and a half minutes
+// ([renewReserve]); the longest such is a carry whose resume its row holds for
+// the seat's budget while the clock runs, for as long as that hold lasts. A
+// duplicate the claim makes once, and nothing dead-letters.
 // Before the delivery in hand is the last its budget allows ([renewReserve],
 // [queue.DeliveriesLeftFor]), the completion is announced afresh: a new event
 // of the same completion ([events.New]: a fresh id, which the stream's
@@ -77,15 +112,16 @@ import (
 // it, the delivery refused while the clock ran is in flight still, handed back
 // and renewed on its own budget, and a re-fire that announced it afresh beside
 // it would leave two announcements in flight, and more with every refusal and
-// re-fire after. Nor does any delivery bring back a re-fire whose renewal the
+// re-fire after; and so does one the run's row handed back, which it carries
+// the same way. Nor does any delivery bring back a re-fire whose renewal the
 // broker does not take, so this node makes that renewal again on its own timer
 // until one lands or this node settles the run ([refirePublish]), past the
-// seat's release and a lease it lost, and its own line says so, never that a delivery was handed back to make the
-// renewal again: WHAT A REFUSED RENEWAL LEAVES IS ITS CALLER'S TO SAY
-// ([Coordinator.renewing], [Coordinator.refire]).
+// seat's release and a lease it lost, and its own line says so, never that a
+// delivery was handed back to make the renewal again: WHAT A REFUSED RENEWAL
+// LEAVES IS ITS CALLER'S TO SAY ([Coordinator.renewing], [Coordinator.refire]).
 //
-// NOTHING IS RENEWED WHILE NO CLOCK RUNS: a step this node's own store did not
-// answer is NAK'd and nothing more, since the waiter that drives the box, whose
+// NOTHING IS RENEWED WHILE NEITHER THE CLOCK NOR THE ROW SAYS SO: a step this
+// node's own store did not answer is NAK'd and nothing more, since the waiter that drives the box, whose
 // store does answer or answers once the silence is over, announces the job
 // again on its schedule ([Coordinator.collectFailedAt]); and a delivery whose
 // count the transport did not state is NAK'd as before this existed, since a
@@ -110,8 +146,10 @@ const renewReserve = 5
 // ErrUnannounced marks a delivery of a job's completion handed back because
 // nothing announces the completion again but that delivery: this node keeps a
 // clock on the store of the host of the job's box ([Coordinator.hostClocked]),
-// whose waiter reads the run's row through that store and announces nothing,
-// and the run has not settled, which would have dropped the clock. A delivery
+// or the run's row says what such a clock would ([unannouncedOnRow]), whose
+// waiter reads the run's row through that store and announces nothing, and
+// the run has not settled, which would have dropped the clock and moved the
+// row on. A delivery
 // so marked is never acknowledged, whatever refusal it carries
 // (internal/engine's controlOutcome): it is handed back, and renewed before
 // its last (renew.go).
@@ -134,10 +172,12 @@ func unannounced(ev types.ExecutorFinished, err error) error {
 // renewing is what a delivery of ev's completion leaves with the broker, err
 // being what the coordinator made of it ([Coordinator.OnCompleted]): err as it
 // is, unless this node keeps a clock on the store of the host of the job's box
-// ([Coordinator.hostClocked]) once that answer is in. Then the run has not
-// settled, which drops the clock, so the delivery is handed back marked
-// [ErrUnannounced], err or no err; and where trigger, the delivery in hand, has
-// at most [renewReserve] deliveries left, the completion is announced afresh
+// ([Coordinator.hostClocked]) once that answer is in, or, keeping none, the
+// run's row says nothing else announces the job ([Coordinator.unannouncedJob]).
+// Then the run has not settled, which drops the clock and moves the row on,
+// so the delivery is handed back marked [ErrUnannounced], err or no err; and
+// where trigger, the delivery in hand, has at most [renewReserve] deliveries
+// left, the completion is announced afresh
 // ([Coordinator.renew]) and nil is answered instead, so the delivery is
 // acknowledged and the fresh one carries the completion on. A renewal the
 // broker does not take answers the hand-back beside why, so the delivery is
@@ -146,7 +186,7 @@ func unannounced(ev types.ExecutorFinished, err error) error {
 func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
 	err error,
 ) error {
-	if trigger == nil || !c.hostClocked(ev.TurnID, ev.LaunchID) {
+	if trigger == nil || !c.unannouncedJob(ctx, ev) {
 		return err
 	}
 	err = unannounced(ev, err)
@@ -165,6 +205,40 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 			"could not be announced afresh; the delivery in hand is handed back, and the renewal "+
 			"is made again when it comes back")
 	return fmt.Errorf("%w; %w", err, refused)
+}
+
+// unannouncedJob reports whether nothing but a delivery of ev's completion
+// announces it again: this node keeps a clock on the store of the host of the
+// job's box ([Coordinator.hostClocked]), or, where it keeps none, the run's
+// row says so ([unannouncedOnRow]), read here.
+//
+// THE ROW, NEVER THIS NODE'S MEMORY ALONE: the clock does not outlive a
+// restart, and the seat's next holder starts with none, while the host's
+// waiter reads the row through its silent store and announces nothing either
+// way. A row this node's own store does not answer says nothing, and the
+// delivery is left as it came: the waiter, whose store answers once this
+// node's does, announces the job again then.
+func (c *Coordinator) unannouncedJob(ctx context.Context, ev types.ExecutorFinished) bool {
+	if c.hostClocked(ev.TurnID, ev.LaunchID) {
+		return true
+	}
+	run, found, err := c.pending.Get(ctx, ev.TurnID)
+	return err == nil && found && unannouncedOnRow(run, ev.LaunchID)
+}
+
+// unannouncedOnRow reports whether run's row says that nothing but a delivery
+// of its job launch's completion announces it again, while its run has not
+// settled (still running or claimed, with no ending decided, on that job): the
+// job is recorded lost with the host of its box because that host's store did
+// not answer it ([LossLaunchNodeStoreSilent]), and its round is not carried
+// on yet, which the job's next launch or the run's ending is; or its record
+// says that host last found its store silent ([LaunchRecord.HostStoreSilent]).
+func unannouncedOnRow(run PendingRun, launch string) bool {
+	if run.LaunchID != launch || run.Ending != nil ||
+		(run.Status != StatusRunning && run.Status != StatusResumed) {
+		return false
+	}
+	return run.Launch.HostStoreSilent || (run.Lost != nil && run.Lost.Cause == LossLaunchNodeStoreSilent)
 }
 
 // renew announces ev's completion afresh on its seat's control topic, for a

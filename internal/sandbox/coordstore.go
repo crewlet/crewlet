@@ -988,6 +988,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, errors.New("sandbox: a release cannot both count a failed collection and end the run " +
 			"of failures it counts onto")
 	}
+	if release.HostStoreSilent && release.HostStoreAnswered {
+		return false, errors.New("sandbox: a release cannot say both that the host of the job's box found its " +
+			"coordination store silent and that it answered")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -1044,6 +1048,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		if release.BoxAnswered {
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
+		}
+		// AND WHAT THE CLAIM'S COLLECTION LEARNED OF THE STORE OF THE HOST OF
+		// THE JOB'S BOX, where it learned anything ([LaunchRecord.HostStoreSilent]).
+		switch {
+		case release.HostStoreSilent:
+			run.Launch.HostStoreSilent = true
+		case release.HostStoreAnswered:
+			run.Launch.HostStoreSilent = false
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it

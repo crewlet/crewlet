@@ -1099,3 +1099,179 @@ func linesSaying(logs, msg string) []string {
 	}
 	return said
 }
+
+// restart has the seat's control topic handled from here on by a fresh
+// coordinator over the rig's store, broker and box host ([coordRig.restart]),
+// made at a delivery ([renewRig.atDelivery]), on the goroutine that hands the
+// coordinator that delivery next.
+func (r *renewRig) restart(t *testing.T, node string, fence Fence, gate TurnGate) {
+	t.Helper()
+	r.coordRig.restart(t, r.tee, node, fence, gate)
+	r.coordinator.boxes = r.host
+}
+
+// restart replaces the rig's coordinator with a fresh one over the same store,
+// box host and publisher (q), as node, holding the seat under fence and
+// admitting through gate (nil for none): this node after a restart, or the
+// seat's next holder, which keeps nothing of what the coordinator before it
+// held in memory, its clock on the box's host first. The one before it no
+// longer holds the seat.
+func (r *coordRig) restart(t *testing.T, q Publisher, node string, fence Fence, gate TurnGate) {
+	t.Helper()
+	old := r.coordinator
+	old.lease = notLeased
+	fresh, err := NewCoordinator(CoordinatorOptions{
+		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
+		Pushes:      r.pushes, Audience: r.audience, Answers: rigAnswers(),
+		Queue: q, Pending: old.pending, Manager: r.manager,
+		Resume: r.resumer, Account: r.accountant,
+		Now: old.now, After: r.retries.after, Lease: leased(fence), Gate: gate, Node: node,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(fresh.Stop)
+	fresh.boxes = old.boxes
+	fresh.endWait, fresh.endPoll = old.endWait, old.endPoll
+	r.coordinator = fresh
+}
+
+// A JOB NO WAITER ANNOUNCES IS RENEWED BY WHAT ITS ROW SAYS, NOT BY ONE NODE'S
+// MEMORY. The clock on the store of the host of a job's box is in the
+// collecting node's memory: a restart forgets it, and the seat's next holder
+// starts with none. But that host's waiter reads the run's row through its
+// silent store and announces nothing either way, so a delivery that node
+// acknowledged, or NAK'd and nothing more, was the completion's last copy. So
+// a job recorded LOST with that host keeps its completion renewed until its
+// round is carried on ([LossLaunchNodeStoreSilent]), and so does one whose
+// record says that host last found its store silent
+// ([LaunchRecord.HostStoreSilent]), which every claim's release writes: a
+// node that keeps no clock reads the row before it acknowledges a delivery.
+//
+// Mutation: key the renewal on this node's clock alone, and a carry that fails
+// after a restart runs one message's budget out to its dead letter, and a
+// refusal after a restart, or on the seat's next holder, is acknowledged with
+// nothing left to announce the job; write no record of the host's silence on
+// the release, and the refusals are acknowledged the same way.
+func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
+	t.Parallel()
+	// past is how many refusals or failed carries a case goes on for: past one
+	// message's whole budget, so one acknowledged, or NAK'd and nothing more,
+	// leaves the job unannounced or dead-lettered first.
+	past := 3 * (renewBudget + 1)
+
+	t.Run("a carry of a job lost with its host that fails after a restart", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE LOSS IS RECORDED at the bound, and the carry that follows it
+			// waits on a watch of the run's log this node's store does not
+			// answer, for past a budget; the node restarts at the first
+			// delivery after the loss.
+			mine := &unansweredWatches{PendingStore: r.coordinator.pending, silent: past}
+			r.coordinator.pending = mine
+			restarted := false
+			r.atDelivery(func(int) {
+				if !restarted && r.get("t1").Lost != nil {
+					restarted = true
+					r.restart(t, "node-b", rigLease, nil)
+				}
+			})
+			r.announce(t)
+			if !restarted {
+				t.Fatal("the premise: the job was never recorded lost, so nothing restarted")
+			}
+			r.lostWithItsHostOnTheBroker(t)
+			if watched := mine.watched(); watched <= mine.silent {
+				t.Fatalf("the premise: the carry watched the run's log %d times; want it handed back past the %d "+
+					"watches its store did not answer", watched, mine.silent)
+			}
+		})
+	})
+
+	t.Run("a job lost with its host, whatever its record says of that host's store", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		_, run := unsettledHost(t, rig)
+		// THE ROW SAYS THE JOB IS LOST WITH NODE-A because its store did not
+		// answer it, and nothing more: this node keeps no clock, and the job's
+		// record holds no word of that store. The carry's watch of the run's
+		// log goes unanswered by this node's own store.
+		if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID, JobLoss{
+			Cause: LossLaunchNodeStoreSilent, Node: "node-a", At: rig.now,
+		}); err != nil || !marked {
+			t.Fatalf("the premise: recording the loss = %v, %v", marked, err)
+		}
+		if got := rig.get("t1"); got.Launch.HostStoreSilent || clocked(rig) {
+			t.Fatalf("the premise: the record says the host's store is silent (%v), clocked %v; want neither",
+				got.Launch.HostStoreSilent, clocked(rig))
+		}
+		rig.coordinator.pending = &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog"}}
+		_, ev := rig.completion("t1")
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err, ErrUnannounced) {
+			t.Fatalf("the carry of a job lost with its host that failed = %v; want its delivery handed back as no "+
+				"waiter's to announce again", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Lost == nil {
+			t.Fatalf("the failed carry left the row %s, lost %+v; want it running, still lost", got.Status, got.Lost)
+		}
+	})
+
+	t.Run("a re-fire while a delivery its row handed back is in flight", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		// THE NODE RESTARTS: the clock on the host is gone with it, and the
+		// job's record still says the host's store is silent. Its gate
+		// refuses the next delivery, which its row hands back, and the
+		// condition then clears into a collection that starts the clock
+		// again.
+		gate := &turnGate{}
+		gate.refuse(true)
+		rig.restart(t, rig.queue, "node-b", rigLease, gate.admit)
+		_, ev := rig.completion("t1")
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err, errLeaving) ||
+			!errors.Is(err, ErrUnannounced) {
+			t.Fatalf("a refusal after the restart = %v; want it handed back as no waiter's to announce again", err)
+		}
+		gate.refuse(false)
+		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.inflight.Wait()
+		if !clocked(rig) {
+			t.Fatal("the premise: the re-fire's collection did not start the clock on the host")
+		}
+		if renewed := renewedOn(rig); len(renewed) != 0 {
+			t.Fatalf("a re-fire made while the delivery its row handed back was in flight announced the "+
+				"completion %d times; want none, that delivery carrying it", len(renewed))
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		node  string
+		fence Fence
+	}{
+		{name: "a refusal after a restart, before its first collection", node: "node-b", fence: rigLease},
+		{name: "a refusal on the seat's next holder, before its first collection", node: "node-c",
+			fence: Fence{Owner: "node-c", Epoch: rigLease.Epoch + 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := newRenewRig(t)
+				// THE FIRST COLLECTION finds the host's store silent, and
+				// hands its claim back; the node restarts, or the seat moves,
+				// at the next delivery, and the gate there refuses on a
+				// condition nothing signals, for past a budget, before it
+				// clears and the host's store answers.
+				r.atDelivery(func(n int) {
+					if n == 2 {
+						gate := &refusingGate{refuse: past, cleared: r.store.answer}
+						r.restart(t, tc.node, tc.fence, gate.gate)
+					}
+				})
+				r.announce(t)
+				r.resumedOnTheBroker(t)
+			})
+		})
+	}
+}

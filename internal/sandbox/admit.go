@@ -192,7 +192,8 @@ type refusedCompletion struct {
 //
 // THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
 // BROKER IS WHILE IT DOES NOT. While this node keeps a clock on the store of
-// the host of the job's box ([Coordinator.hostClocked]), that host's waiter
+// the host of the job's box ([Coordinator.hostClocked]), or the run's row says
+// what such a clock would ([Coordinator.unannouncedJob]), that host's waiter
 // reads the run's row through a store that does not answer it and announces
 // nothing, and what is kept here is this node's memory alone: a restart, a
 // letting go of the seat, or a clearing nothing signals would leave the job
@@ -382,28 +383,23 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // delivery to make it again on, so this node makes it again on its own timer
 // until one lands or this node settles the run, whoever holds the seat by then
 // ([refirePublish]).
-// WHERE THE CLOCK RAN BEFORE IT, NOTHING IS ANNOUNCED: the delivery
-// refused while the clock ran was handed back, never acknowledged, and is in
-// flight still, renewed on its own budget, so an announcement made here beside
-// it would leave two in flight, and one more with every refusal and re-fire
-// after it.
+// WHERE THE CLOCK RAN BEFORE IT, OR THE RUN'S ROW SAID WHAT IT WOULD, NOTHING
+// IS ANNOUNCED: the delivery refused then was handed back, never acknowledged,
+// and is in flight still, renewed on its own budget, so an announcement made
+// here beside it would leave two in flight, and one more with every refusal
+// and re-fire after it.
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
 		return
 	}
-	before := c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID)
+	before := c.unannouncedJob(ctx, kept.ev)
 	err := c.OnCompleted(ctx, kept.ev, kept.trigger)
 	after := c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID)
 	switch {
-	case !after && err == nil:
-		return
-	case !after:
-		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
-			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
-			"error", err.Error(),
-			"detail", "the completion re-fired when its condition cleared was not settled; "+
-				"the waiter announces it again on its schedule")
+	case !before && after:
+		// RENEWED BELOW: nothing else carries it.
+	case err == nil:
 		return
 	case before:
 		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
@@ -412,6 +408,13 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 			"detail", "the completion re-fired when its condition cleared was not settled; its box's host "+
 				"cannot read the coordination store, so no waiter announces it, and the delivery handed back "+
 				"when it was refused carries it on")
+		return
+	default:
+		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+			"error", err.Error(),
+			"detail", "the completion re-fired when its condition cleared was not settled; "+
+				"the waiter announces it again on its schedule")
 		return
 	}
 	err = unannounced(kept.ev, err)

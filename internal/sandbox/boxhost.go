@@ -97,11 +97,12 @@ type BoxReader interface {
 // fleet's waiter, which has the run's round carried on in a box of its own
 // ([Waiter.goneAfter], [LossLaunchNodeGone]).
 // Counted, a host that restarted for a minute would have its runs given up as
-// unreadable. ACKNOWLEDGED ONLY WHERE NO CLOCK RUNS ON THAT HOST'S STORE: a
-// host whose last answer was that its store did not answer it reads the run's
-// row through that store once it is back, and announces nothing, so its
-// collection's completion is handed back for the queue's backoff and renewed
-// instead ([Coordinator.hostClocked], renew.go).
+// unreadable. ACKNOWLEDGED ONLY WHERE NO CLOCK RUNS ON THAT HOST'S STORE, AND
+// THE RUN'S ROW SAYS NOTHING OF ONE: a host whose last answer was that its
+// store did not answer it reads the run's row through that store once it is
+// back, and announces nothing, so its collection's completion is handed back
+// for the queue's backoff and renewed instead ([Coordinator.hostClocked],
+// [Coordinator.unannouncedJob], renew.go).
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
 
 // ErrStoreSilent is a step a collection cannot go on without that the
@@ -507,7 +508,11 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 //
 // IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
 // or the seat's next holder starts it again, which can only make the verdict
-// later. A silence this node's own store shares gives nothing up: no claim of
+// later. What it says of the host is not left to memory, though: every
+// claim's release writes it onto the job's record ([LaunchRecord.HostStoreSilent],
+// [Coordinator.hostStoreSeen]), so a restart or the seat's next holder hands
+// back and renews the job's completion as the clock would before its own
+// first collection starts one (renew.go). A silence this node's own store shares gives nothing up: no claim of
 // the job lands while it lasts, so no collection is made to judge it.
 //
 // IT IS KEPT UNTIL THE RUN SETTLES, and goes where the run's collection lands
@@ -587,6 +592,22 @@ func (c *Coordinator) hostClocked(turnID, launch string) bool {
 	defer c.mu.Unlock()
 	kept, ok := c.unsettled[turnID]
 	return ok && kept.launch == launch
+}
+
+// hostStoreSeen is what a claim of run's job learned of the store of the host
+// of its box, for the release that gives the claim back to record on the job
+// ([Release.HostStoreSilent], [LaunchRecord.HostStoreSilent]): silent where
+// this node's clock on that store still runs once the claim's collection is
+// done ([Coordinator.hostClocked]); answered where the collection read the
+// box, or counted a failure to read it, which the host could say only with
+// its store answering (failed is what the release counts); and neither for a
+// claim that learned nothing of it, a host that did not answer at all among
+// them, which leaves the record as it stands.
+func (c *Coordinator) hostStoreSeen(run PendingRun, failed failure) (silent, answered bool) {
+	if c.hostClocked(run.TurnID, run.LaunchID) {
+		return true, false
+	}
+	return false, run.BoxAnswered || run.Collected || !failed.collectFailed.IsZero()
 }
 
 // ReadHostedBox makes, for the node that asked, the read of a box on this
