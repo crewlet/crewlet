@@ -456,7 +456,7 @@ func TestACollectedRunsCopyOfItsAnswerSaysTheResponseHoldsIt(t *testing.T) {
 		t.Errorf("the copy keeps %d bytes ending %q, want its opening within %d, saying the response holds it",
 			kept.Quoted(copied), copied[max(len(copied)-80, 0):], answerCopyBytes)
 	}
-	if rows := keptNarration(roundNarration(res.Result.Narration)); rows[0]["content"] != copied {
+	if rows := keptNarration(roundNarration(res.Result.Narration), narrationBytes); rows[0]["content"] != copied {
 		t.Error("the record cut the copy again")
 	}
 }
@@ -480,5 +480,158 @@ func TestARecordsToolNamesKeepTheirOrderAndCountTheRest(t *testing.T) {
 	}
 	if few, more := keptNames(names[:3]); len(few) != 3 || more != 0 {
 		t.Error("a short list lost names")
+	}
+}
+
+// liveFrameBytes is the most a running phase's frame may weigh at its worst:
+// a MiB, the sum of its live shares (recordbytes.go, "The live frame") and its
+// round window's records beside its trigger, with room to spare.
+const liveFrameBytes = 1 << 20
+
+// worstRunning is a phase in flight at its worst: the worst record's rounds,
+// calls and prose, a hundred calls in flight with arguments past their share,
+// and a round being written with three abandoned attempts, each of the byte
+// that escapes the most.
+func worstRunning() toolloop.Result {
+	res := worstRecord(false).Result
+	for i := range 100 {
+		res.Running = append(res.Running, toolloop.RunningCall{ID: named(64), Round: worstRounds,
+			Name: fmt.Sprintf("%d%s", i, worst(2*sandbox.MaxBridgeCallNameBytes)), Args: worstArgs(200)})
+	}
+	res.Partial = &toolloop.Partial{Round: worstRounds + 1, Content: worst(1 << 20)}
+	for range 3 {
+		res.Partial.Abandoned = append(res.Partial.Abandoned, toolloop.Narration{Round: worstRounds + 1,
+			Content: worst(1 << 20)})
+	}
+	return res
+}
+
+// A RUNNING PHASE'S FRAME AT EVERY BOUND STAYS UNDER A MIB. It is republished
+// whole five times a second to every dashboard open on its seat, and the
+// socket hub queues hundreds for a client that falls behind: past its live
+// shares it keeps the newest of what grows — its calls, its prose, its calls
+// in flight, the attempts at the round in flight — and its round window, and
+// says what it left out.
+//
+// Mutation: carry the frame's calls, its prose, its calls in flight or its
+// abandoned attempts whole, or drop its round window, and the frame is past
+// its budget; count nothing it leaves out, and a reader takes the frame for
+// the whole phase.
+func TestARunningPhasesFrameAtEveryBoundStaysUnderAMiB(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	worstEmitter(pub, &mu).progress(context.Background(), phase.Review, 1, worstRunning(),
+		roundCaps{max: worstRounds, ceiling: worstRounds})
+	ev, size := published(t, pub)
+	if size > liveFrameBytes {
+		t.Fatalf("the frame weighs %d bytes, past its %d", size, liveFrameBytes)
+	}
+	t.Logf("the frame weighs %d bytes, %d short of its budget", size, liveFrameBytes-size)
+	frame := *ev.Data.(*types.AgentTurnProgress)
+	if frame.CallsElided == 0 || frame.RoundsElided == 0 || frame.RunningElided == 0 || len(frame.ElidedCalls) == 0 {
+		t.Errorf("the frame says it left out %d calls (%d tallies), %d rounds and %d calls in flight; want each",
+			frame.CallsElided, len(frame.ElidedCalls), frame.RoundsElided, frame.RunningElided)
+	}
+}
+
+// A RUNNING PHASE'S OPENING FRAME KEEPS ITS PROMPTS TO A RECORD'S SHARE, part by
+// part with the outline rewritten to the kept text, as the phase's record does:
+// the frame is sent once, and the prompt the model was sent is not changed. The
+// user's prompt rides it twice, as its `prompt` and as its second message, so
+// the frame is held to three shares and its trigger.
+//
+// Mutation: send the prompts whole, and a company's document at length puts
+// megabytes on a frame every open dashboard is sent.
+func TestARunningPhasesOpeningFrameKeepsItsPromptsToTheirShare(t *testing.T) {
+	t.Parallel()
+	pub := &collector{}
+	var mu sync.Mutex
+	worstEmitter(pub, &mu).prompted(context.Background(), phase.Review, 1, worstPrompt(1<<20, 8),
+		worstPrompt(1<<20, 8), roundCaps{})
+	ev, size := published(t, pub)
+	if size > 3*promptBytes+64<<10 {
+		t.Fatalf("the opening frame weighs %d bytes, past its prompts' shares", size)
+	}
+	frame := *ev.Data.(*types.AgentTurnProgress)
+	for _, m := range frame.PromptMessages {
+		if kept.Quoted(m.Content) > promptBytes || len(m.Sections) != 8 {
+			t.Errorf("the %s message keeps %d bytes in %d parts, want it within %d, every part kept", m.Role,
+				kept.Quoted(m.Content), len(m.Sections), promptBytes)
+		}
+	}
+}
+
+// A RUNNING PHASE'S LIST PAST ITS SHARE KEEPS ITS NEWEST CALLS, none of its
+// first: a reader of a running phase watches what arrives, and its record keeps
+// how it began once it completes. Every dropped call is counted by tool.
+//
+// Mutation: keep the record's first half, and a reader watching a long phase
+// sees its first calls and not the one it just made.
+func TestARunningPhasesListKeepsItsNewestCalls(t *testing.T) {
+	t.Parallel()
+	var execs []toolloop.Execution
+	for i := range 400 {
+		execs = append(execs, toolloop.Execution{Round: 1, Name: fmt.Sprintf("tool_%03d", i),
+			Args: worstArgs(20), Output: worst(4 << 10)})
+	}
+	got := keptList(liveExecutions(execs), liveList, nil)
+	if got.Elided == 0 || got.Elided+len(got.Rows) != len(execs) || listBytes(got.Rows) > liveListBytes {
+		t.Fatalf("the list keeps %d rows (%d bytes) and counts %d, want the newest within %d and the rest counted",
+			len(got.Rows), listBytes(got.Rows), got.Elided, liveListBytes)
+	}
+	if first, last := got.Rows[0]["name"], got.Rows[len(got.Rows)-1]["name"]; last != "tool_399" ||
+		first != fmt.Sprintf("tool_%03d", len(execs)-len(got.Rows)) {
+		t.Errorf("the list runs %v to %v, want the newest calls through tool_399", first, last)
+	}
+}
+
+// A RUNNING PHASE'S CALLS IN FLIGHT KEEP THEIR SHARE, each one's arguments held
+// to the identifiers a reader scans it for, the first that fit listed and how
+// many more were running counted.
+//
+// Mutation: keep a running call's arguments whole, or every call, and a
+// harness's fan-out puts its bodies on every frame.
+func TestARunningPhasesCallsInFlightKeepTheirShare(t *testing.T) {
+	t.Parallel()
+	got, more := keptRunning(runningCalls(worstRunning().Running))
+	raw, _ := json.Marshal(got)
+	if len(got) == 0 || len(raw) > liveRunningBytes || more == 0 || len(got)+more != 100 {
+		t.Errorf("the frame lists %d calls in flight (%d bytes) and counts %d more, want the first within %d and "+
+			"the rest counted", len(got), len(raw), more, liveRunningBytes)
+	}
+	for _, call := range got {
+		if kept.Quoted(call.Arguments) > liveRunningArgsBytes {
+			t.Errorf("a call in flight keeps %d bytes of arguments, past %d", kept.Quoted(call.Arguments),
+				liveRunningArgsBytes)
+		}
+	}
+}
+
+// A ROUND IN FLIGHT KEEPS ITS NEWEST ABANDONED ATTEMPTS' TAILS. A provider that
+// gave up partway left text a reader already watched arrive, and the frame keeps
+// what it saw last of each of the newest attempts, as it keeps the round's own
+// text, the attempts together held to their share.
+//
+// Mutation: keep each attempt's opening, and the frame shows a reader text it
+// scrolled past rather than where the attempt died; keep every attempt, and an
+// outage's retries outgrow the share.
+func TestARoundInFlightKeepsItsNewestAbandonedAttemptsTails(t *testing.T) {
+	t.Parallel()
+	attempt := worst(1<<20) + "where it died"
+	var abandoned []toolloop.Narration
+	for range liveAbandonedAttempts + 2 {
+		abandoned = append(abandoned, toolloop.Narration{Round: 2, Content: attempt})
+	}
+	out := partialRound(&toolloop.Partial{Round: 2, Content: "now", Abandoned: abandoned})
+	rows, _ := out["abandoned"].([]types.RoundNarration)
+	if len(rows) != liveAbandonedAttempts || listBytes(rows) > liveAbandonedBytes {
+		t.Fatalf("the round keeps %d attempts (%d bytes), want the newest %d within %d", len(rows),
+			listBytes(rows), liveAbandonedAttempts, liveAbandonedBytes)
+	}
+	for _, row := range rows {
+		if content, _ := row["content"].(string); !strings.HasSuffix(content, "where it died") {
+			t.Errorf("an attempt keeps %.40q…, want its tail", content)
+		}
 	}
 }

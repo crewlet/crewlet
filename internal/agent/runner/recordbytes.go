@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -118,34 +119,97 @@ type RecordCalls struct {
 //
 // rows is never changed: a row it cuts is a copy.
 func keptExecutions(rows []types.ToolExecution, tally []types.ElidedCalls) RecordCalls {
+	return keptList(rows, recordList, tally)
+}
+
+// listRule is how a list of calls is kept to its share: the share, the most
+// rows it lists past it, how many of those are its first (the rest its
+// newest), and how one row is held to the bridged call's shares, the newest
+// successful submission told apart.
+type listRule struct {
+	share, rows, head int
+	row               func(row types.ToolExecution, submission bool) types.ToolExecution
+}
+
+// recordList is a durable record's rule (see the file comment): its first
+// half and newest half of sandbox.MaxBridgeCalls, as the run's own record
+// keeps a long run's.
+var recordList = listRule{share: toolListBytes, rows: sandbox.MaxBridgeCalls,
+	head: sandbox.MaxBridgeCalls / 2, row: keptRow}
+
+// keptList is rows held to rule's share as the event encodes them: whole
+// within it; past it every row held to the bridged call's shares (rule.row);
+// and past that the rows between the first rule.head and the newest dropped
+// into the tally — as few as leave the list within its share, the tally's own
+// room taken off it, and never more listed than rule.rows. A row past what is
+// left of the share after the rows before it is dropped like the rest.
+func keptList(rows []types.ToolExecution, rule listRule, tally []types.ElidedCalls) RecordCalls {
 	total := tallied(tally)
-	if listBytes(rows) <= toolListBytes {
+	if listBytes(rows) <= rule.share {
 		return RecordCalls{Rows: rows, Elided: total, ByTool: keptTally(tally)}
 	}
 	kept := make([]types.ToolExecution, len(rows))
 	submission := newestSubmission(rows)
 	for i, row := range rows {
-		kept[i] = keptRow(row, i == submission)
+		kept[i] = rule.row(row, i == submission)
 	}
-	if listBytes(kept) <= toolListBytes || len(kept) <= sandbox.MaxBridgeCalls {
+	if listBytes(kept) <= rule.share {
 		return RecordCalls{Rows: kept, Elided: total, ByTool: keptTally(tally)}
 	}
-	head := sandbox.MaxBridgeCalls / 2
-	tail := len(kept) - (sandbox.MaxBridgeCalls - head)
-	dropped := kept[head:tail]
+	// WHAT IS LEFT FOR THE ROWS: the share less the list's brackets and the
+	// most its tally could take — every row's call counted, held to its
+	// census — measured before any row is chosen, so no choice can outgrow it.
+	all := slices.Clone(tally)
+	for _, row := range kept {
+		all = append(all, droppedCall(row))
+	}
+	budget := rule.share - 2 - tallyBytes(keptTally(all))
+	n := len(kept)
+	used, head := 0, 0
+	for head < min(rule.head, n) && used+mapBytes(kept[head])+1 <= budget {
+		used += mapBytes(kept[head]) + 1
+		head++
+	}
+	newest := 0
+	for head+newest < min(rule.rows, n) {
+		i := n - 1 - newest
+		if used+mapBytes(kept[i])+1 > budget {
+			break
+		}
+		used += mapBytes(kept[i]) + 1
+		newest++
+	}
+	dropped := kept[head : n-newest]
 	tally = slices.Clip(tally)
 	for _, row := range dropped {
-		name, _ := row["name"].(string)
-		failed := 0
-		if ok, _ := row["success"].(bool); !ok {
-			failed = 1
-		}
-		tally = append(tally, types.ElidedCalls{Name: name, Calls: 1, Failed: failed})
+		tally = append(tally, droppedCall(row))
 	}
-	out := make([]types.ToolExecution, 0, sandbox.MaxBridgeCalls)
+	out := make([]types.ToolExecution, 0, head+newest)
 	out = append(out, kept[:head]...)
-	out = append(out, kept[tail:]...)
+	out = append(out, kept[n-newest:]...)
 	return RecordCalls{Rows: out, Elided: total + len(dropped), ByTool: keptTally(tally)}
+}
+
+// droppedCall is row as a tally counts it: one call of its tool, failed or not.
+func droppedCall(row types.ToolExecution) types.ElidedCalls {
+	name, _ := row["name"].(string)
+	failed := 0
+	if ok, _ := row["success"].(bool); !ok {
+		failed = 1
+	}
+	return types.ElidedCalls{Name: name, Calls: 1, Failed: failed}
+}
+
+// tallyBytes is what a tally weighs as the event encodes it.
+func tallyBytes(tally []types.ElidedCalls) int {
+	if len(tally) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(tally)
+	if err != nil {
+		return int(^uint(0) >> 1)
+	}
+	return len(raw)
 }
 
 // listBytes is what rows weigh as the event encodes them.
@@ -167,6 +231,22 @@ func listBytes(rows []types.ToolExecution) int {
 // comment), its arguments to the submission's share where it is the list's
 // newest successful submission. A copy: row is not changed.
 func keptRow(row types.ToolExecution, submission bool) types.ToolExecution {
+	out := liveRow(row, submission)
+	for _, key := range []string{"result", "error"} {
+		if answer, ok := out[key].(string); ok {
+			if text, whole := recordTally.Text(answer, sandbox.MaxBridgeOutputBytes); whole > 0 {
+				out[key] = text
+			}
+		}
+	}
+	return out
+}
+
+// keptIdentity is a copy of row with its name held to
+// sandbox.MaxBridgeCallNameBytes and an id its harness gave it that the log
+// would not keep left off (sandbox.ValidCallID): what a row says of which call
+// it was, held as the run's own record holds it.
+func keptIdentity(row types.ToolExecution) types.ToolExecution {
 	out := make(types.ToolExecution, len(row))
 	for k, v := range row {
 		out[k] = v
@@ -176,22 +256,6 @@ func keptRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	}
 	if id, ok := out["call_id"].(string); ok && !sandbox.ValidCallID(id) {
 		delete(out, "call_id")
-	}
-	argsShare := sandbox.MaxBridgeArgsBytes
-	if submission {
-		argsShare = sandbox.MaxSubmissionArgsBytes
-	}
-	if args, ok := out["arguments"].(string); ok {
-		if text, whole := recordTally.Args(args, argsShare); whole > 0 {
-			out["arguments"] = text
-		}
-	}
-	for _, key := range []string{"result", "error"} {
-		if answer, ok := out[key].(string); ok {
-			if text, whole := recordTally.Text(answer, sandbox.MaxBridgeOutputBytes); whole > 0 {
-				out[key] = text
-			}
-		}
 	}
 	return out
 }
@@ -426,10 +490,11 @@ func fairCap(costs []int, budget int) int {
 const minCutPart = 160
 
 // keptNarration is a record's model prose, every round's together within
-// [narrationBytes] as the event encodes it: whole within it, and past it each
-// round's opening within the one cap that fits them all ([keptParts]).
-func keptNarration(rows []types.RoundNarration) []types.RoundNarration {
-	if listBytes(rows) <= narrationBytes {
+// share bytes as the event encodes it — a durable record's [narrationBytes], a
+// live frame's [liveNarrationBytes] — whole within it, and past it each round's
+// opening within the one cap that fits them all ([keptParts]).
+func keptNarration(rows []types.RoundNarration, share int) []types.RoundNarration {
+	if listBytes(rows) <= share {
 		return rows
 	}
 	contents := make([]string, len(rows))
@@ -444,7 +509,7 @@ func keptNarration(rows []types.RoundNarration) []types.RoundNarration {
 		bare["content"] = ""
 		shells += mapBytes(bare) + 1
 	}
-	contents = keptParts(contents, narrationBytes-shells-2)
+	contents = keptParts(contents, share-shells-2)
 	out := make([]types.RoundNarration, len(rows))
 	for i, row := range rows {
 		out[i] = maps.Clone(row)
@@ -562,3 +627,113 @@ func roundOf(row map[string]any) int {
 	}
 	return 0
 }
+
+// # The live frame
+//
+// A running phase's live frame ([types.AgentTurnProgress]) is republished
+// whole five times a second for the length of the phase (internal/agent/
+// toolloop's partialInterval), to every dashboard open on its seat, and the
+// socket hub queues up to 512 frames for a client that falls behind: so its
+// shares answer a tab's stream and a slow client's queue, not one message.
+// Past them the frame keeps the NEWEST of what grows — what a reader of a
+// running phase is watching arrive — and says what it left out; the phase's
+// record keeps the first and the newest once the phase completes. A frame
+// within every share is published as it was built.
+const (
+	// liveListBytes is the frame's tool list. A QUARTER MIB is 1.25 MiB a
+	// second at five frames, a long phase's whole list of ordinary calls, and
+	// what a slow client's queue holds of the list at its fullest is 128 MiB.
+	liveListBytes = 256 << 10
+
+	// liveNarrationBytes is the frame's prose of the rounds it has committed,
+	// every round's together: the round in flight rides beside it, held to
+	// its tail ([partialTail]), and the rounds before are on the record once
+	// the phase completes. SIXTY-FOUR KIB is a long round's prose whole.
+	liveNarrationBytes = 64 << 10
+
+	// liveAbandonedBytes is the attempts at the round in flight that a
+	// provider gave up on partway, the newest liveAbandonedAttempts of them,
+	// each its END within its even part of the share ([liveTail]): what a
+	// reader watched arrive last before the attempt died. FOUR is more than
+	// a fallback chain gives up in one round but on an outage, and the
+	// round's own text replaces every attempt once it completes.
+	liveAbandonedBytes    = 16 << 10
+	liveAbandonedAttempts = 4
+
+	// liveRunningBytes is the frame's calls in flight, and
+	// liveRunningArgsBytes each one's arguments: TWO KIB is the identifiers a
+	// reader scans a running call for ("which file is it reading now?"), its
+	// body on the record once it settles, and THIRTY-TWO KIB a dozen such
+	// calls at once at their widest, more than a harness runs side by side.
+	liveRunningBytes     = 32 << 10
+	liveRunningArgsBytes = 2 << 10
+)
+
+// liveList is the live frame's rule: its newest calls that fit its share, the
+// first of them none, since a reader watches what is arriving and the record
+// keeps how the phase began.
+var liveList = listRule{share: liveListBytes, rows: sandbox.MaxBridgeCalls, row: liveRow}
+
+// liveRow is a row of the live frame's list held to the bridged call's shares
+// for its name, its id and its arguments; its answer is already held to its
+// tail ([liveExecutions]), what a reader of a running call watches arrive.
+func liveRow(row types.ToolExecution, submission bool) types.ToolExecution {
+	out := keptIdentity(row)
+	argsShare := sandbox.MaxBridgeArgsBytes
+	if submission {
+		argsShare = sandbox.MaxSubmissionArgsBytes
+	}
+	if args, ok := out["arguments"].(string); ok {
+		if text, whole := recordTally.Args(args, argsShare); whole > 0 {
+			out["arguments"] = text
+		}
+	}
+	return out
+}
+
+// keptRunning is the frame's calls in flight within [liveRunningBytes], each
+// one's name and arguments held to their shares, in the order they began
+// while they fit, and how many more were running: a call the frame does not
+// list as running is on the list once it settles.
+func keptRunning(calls []types.RunningCall) ([]types.RunningCall, int) {
+	used := 2
+	for i := range calls {
+		calls[i].Name = textcut.Within(calls[i].Name, sandbox.MaxBridgeCallNameBytes)
+		if text, whole := recordTally.Args(calls[i].Arguments, liveRunningArgsBytes); whole > 0 {
+			calls[i].Arguments = text
+		}
+		raw, err := json.Marshal(calls[i])
+		if err != nil {
+			return calls[:i:i], len(calls) - i
+		}
+		used += len(raw) + 1
+		if used > liveRunningBytes {
+			return calls[:i:i], len(calls) - i
+		}
+	}
+	return calls, 0
+}
+
+// liveTail is s's END within budget bytes as the event encodes it — what a
+// reader of a running phase watched arrive last — cut on a character, with the
+// cut marked at its start as internal/textcut's Tail marks it.
+func liveTail(s string, budget int) string {
+	if kept.Quoted(s) <= budget {
+		return s
+	}
+	room := budget - 2 - kept.Len(tailMarker)
+	used, cut := 0, len(s)
+	for cut > 0 {
+		_, size := utf8.DecodeLastRuneInString(s[:cut])
+		cost := kept.Len(s[cut-size : cut])
+		if used+cost > room {
+			break
+		}
+		used += cost
+		cut -= size
+	}
+	return tailMarker + s[cut:]
+}
+
+// tailMarker is what starts a tail [liveTail] cut.
+const tailMarker = "…"

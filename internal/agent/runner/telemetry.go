@@ -546,6 +546,9 @@ func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 	if !e.on() {
 		return
 	}
+	// HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part (keptPrompt): the
+	// frame is sent once, and the prompt the model was sent is not changed.
+	system, user = keptPrompt(system), keptPrompt(user)
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -871,6 +874,18 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 	if !e.on() {
 		return
 	}
+	// WHAT GROWS ON THE FRAME, EACH HELD TO ITS LIVE SHARE (recordbytes.go,
+	// "The live frame"): the frame is republished whole five times a second,
+	// so past a share it keeps the newest and says what it left out.
+	rounds := keptRounds(recordRounds{
+		Rounds:      phaseRounds(res.Rounds),
+		Invocations: phaseInvocations(res.Invocations),
+		Steers:      phaseSteers(res.Steers),
+		Narration:   roundNarration(res.Narration),
+		Calls:       liveExecutions(res.Executions),
+	})
+	calls := keptList(rounds.Calls, liveList, rounds.Dropped)
+	running, runningElided := keptRunning(runningCalls(res.Running))
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -899,21 +914,25 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		TotalTokens:      res.InputTokens + res.OutputTokens,
 		CacheReadTokens:  res.CacheRead,
 		CacheWriteTokens: res.CacheWrite,
-		Rounds:           phaseRounds(res.Rounds),
-		Steers:           phaseSteers(res.Steers),
+		Rounds:           rounds.Rounds,
+		Steers:           rounds.Steers,
+		RoundsElided:     rounds.Elided,
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
 		RunStartedAt:     utcOrZero(res.RunStartedAt),
-		RunningCalls:     runningCalls(res.Running),
-		Invocations:      phaseInvocations(res.Invocations),
+		RunningCalls:     running,
+		RunningElided:    runningElided,
+		Invocations:      rounds.Invocations,
 		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
-		ToolExecutions: liveExecutions(res.Executions),
-		RoundNarration: roundNarration(res.Narration),
+		ToolExecutions: calls.Rows,
+		CallsElided:    calls.Elided,
+		ElidedCalls:    calls.ByTool,
+		RoundNarration: keptNarration(rounds.Narration, liveNarrationBytes),
 		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
@@ -1154,7 +1173,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// and reads it the same way; without this half of the pair, every
 		// delegated worker rendered as bare tool rows with nothing that
 		// asked for them.
-		RoundNarration:   keptNarration(rounds.Narration),
+		RoundNarration:   keptNarration(rounds.Narration, narrationBytes),
 		Rounds:           rounds.Rounds,
 		RoundsElided:     rounds.Elided,
 		InputTokens:      res.InputTokens,
@@ -1239,7 +1258,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ToolExecutions:   k.calls.Rows,
 		CallsElided:      k.calls.Elided,
 		ElidedCalls:      k.calls.ByTool,
-		RoundNarration:   keptNarration(k.rounds.Narration),
+		RoundNarration:   keptNarration(k.rounds.Narration, narrationBytes),
 		Rounds:           k.rounds.Rounds,
 		Steers:           k.rounds.Steers,
 		Invocations:      k.rounds.Invocations,
@@ -1670,22 +1689,30 @@ func partialRound(p *toolloop.Partial) map[string]any {
 		"content": tail(p.Content),
 	}
 	if len(p.Abandoned) > 0 {
-		out["abandoned"] = roundNarration(p.Abandoned)
+		// THE NEWEST ATTEMPTS, EACH ITS END within its even part of their
+		// share (liveTail): a reader saw each one arrive and die, and the
+		// round's own text replaces them all once it completes.
+		attempts := slices.Clone(p.Abandoned[max(len(p.Abandoned)-liveAbandonedAttempts, 0):])
+		each := liveAbandonedBytes/len(attempts) - narrationRowRoom
+		for i := range attempts {
+			attempts[i].Content = liveTail(attempts[i].Content, each)
+		}
+		out["abandoned"] = roundNarration(attempts)
 	}
 	return out
 }
 
-// liveExecutions is the round's tool calls with their OUTPUT bounded.
+// liveExecutions is the round's tool calls with their OUTPUT held to its tail.
 //
-// Only on the live event: the durable record keeps every result verbatim, and
-// this is the copy that is republished five times a second for the length of
-// the phase. A tool result is routinely the largest thing on the frame — a
-// knowledge search, a file read — and it is already final: the reader opens it
-// on the completed record, where it is whole.
+// Only on the live event: this is the copy that is republished five times a
+// second for the length of the phase, and the phase's record keeps each
+// result's opening, whole within its share. A tool result is routinely the
+// largest thing on the frame — a knowledge search, a file read — and it is
+// already final: the reader opens it on the completed record.
 //
-// The arguments are NOT bounded. They are what a reader scans a running phase
-// for ("which file is it reading now?"), they are small, and cutting JSON in
-// the middle produces something no consumer can parse.
+// The arguments, the names and the list itself are held where the frame keeps
+// the list to its share ([liveList]): an argument's largest values left out
+// with the cut said, never JSON cut in the middle, which no consumer can parse.
 func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	out := toolExecutions(execs)
 	for _, row := range out {
