@@ -144,7 +144,9 @@ type LostRun struct {
 // of the read's steps is no box that did not answer: the claim is handed back
 // for as long as the store is silent, and the round is not carried on without
 // the read for it, unless the silence is the box's host's alone and has lasted
-// the box timeout, as a silent host's would ([Coordinator.collectGivenUp]).
+// the box timeout, as a silent host's would ([Coordinator.collectGivenUp]). A
+// read that failed is judged ONCE, at one reading of the clock, and the
+// hand-back acts on that verdict ([collectVerdict]).
 //
 // IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
 // that claimed the completion under the node's admission
@@ -160,6 +162,13 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 	)
 	if loss.Cause.leavesBox() {
 		boxed, _, err := c.boxResult(ctx, run, BoxReadCollect)
+		// ONE VERDICT ON A READ THAT FAILED, at one reading of the clock, and
+		// the hand-back below acts on that verdict rather than judging the
+		// failure again ([collectVerdict]).
+		var verdict collectVerdict
+		if err != nil {
+			verdict = c.collectGivenUp(run, err, c.now())
+		}
 		switch {
 		case err == nil:
 			// THE BOX ANSWERED, which ends the run of failed reads behind
@@ -168,9 +177,8 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 			// back with that run ended ([Release.BoxAnswered]).
 			result, read = boxed, true
 			run.BoxAnswered = true
-		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent),
-			!c.collectGivenUp(run, err, c.now()):
-			return nil, c.collectFailed(ctx, run, err)
+		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent), !verdict.givenUp:
+			return nil, c.collectFailedAt(ctx, run, err, verdict)
 		default:
 			log.WarnContext(ctx, "sandbox_lost_run_unread", "turn_id", run.TurnID,
 				"launch_id", run.LaunchID, "error", err.Error(),
@@ -261,11 +269,36 @@ func cutOff(result Result, cause LossCause) Result {
 	return result
 }
 
-// collectGivenUp reports whether a collection that failed with cause, at now,
-// is past asking again: its box is gone, or it has failed for
-// [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last
-// collection that read the box — the waiter's own bound on an unreachable box.
-// See [Coordinator.collectFailed].
+// collectVerdict is what one collection attempt decided about a failure of its
+// read: whether it is past asking again ([Coordinator.collectGivenUp]), and,
+// where the failure is the box's host answering that its coordination store did
+// not answer it, for how long that host has ([hostUnsettled]).
+//
+// DECIDED ONCE PER ATTEMPT, at one reading of the clock, by the step that judges
+// the failure first, and handed to every step after it that acts on the same
+// failure. A lost job's read is judged by its carry ([Coordinator.carryOnLost]),
+// which asks again where the read is not past asking again, through the
+// collection's hand-back ([Coordinator.collectFailed]); each judged the failure
+// at its own reading of the clock, so a bound crossed between the two had the
+// hand-back give up, and end as unreachable, the run of a lost job whose carry
+// had just found its read too young to carry the round on without it.
+type collectVerdict struct {
+	// at is the reading of the clock the attempt was judged at.
+	at time.Time
+	// givenUp is whether the collection is past asking again.
+	givenUp bool
+	// unsettled is whether the failure is the box's host's own answer that its
+	// store did not answer it, timed by the clock on that host, and
+	// unsettledFor how long that clock had run at at.
+	unsettled    bool
+	unsettledFor time.Duration
+}
+
+// collectGivenUp is the verdict on a collection that failed with cause, at now
+// ([collectVerdict]): whether it is past asking again, which it is where its box
+// is gone, or where it has failed for [MinConnectFailures] attempts spanning
+// [ConnectGiveUp] since the last collection that read the box — the waiter's
+// own bound on an unreachable box. See [Coordinator.collectFailed].
 //
 // NEVER A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]),
 // whatever the window counted before it: the bound is on a box that does not
@@ -287,20 +320,24 @@ func cutOff(result Result, cause LossCause) Result {
 // handed back for as long as the partition lasted, its seat held behind it.
 // Every other step the store did not answer is this node's own store's, and no
 // bound of a host's ends it: nothing this node writes would land.
-func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
+func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) collectVerdict {
+	verdict := collectVerdict{at: now}
 	switch {
 	case errors.Is(cause, ErrStoreSilent):
-		unsettledFor, unsettled := c.hostUnsettledFor(run, cause, now)
+		verdict.unsettledFor, verdict.unsettled = c.hostUnsettledFor(run, cause, now)
 		m := c.mgr()
-		return unsettled && m != nil && unsettledFor >= m.BoxTimeout()
+		verdict.givenUp = verdict.unsettled && m != nil && verdict.unsettledFor >= m.BoxTimeout()
+		return verdict
 	case errors.Is(cause, ErrBoxGone):
-		return true
+		verdict.givenUp = true
+		return verdict
 	}
 	since := run.Launch.CollectFailingSince
 	if since.IsZero() {
 		since = now
 	}
-	return run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
+	verdict.givenUp = run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
+	return verdict
 }
 
 // lostNote is the launch record's account of a lost job — see

@@ -1983,7 +1983,22 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // does not answer a collection's step is very often the one that does not
 // answer its release, and a run ended there was announced claim_unreverted,
 // "its result is lost", while its box held the result.
+//
+// ONE VERDICT PER FAILURE, at one reading of the clock ([collectVerdict]):
+// whether a store's silence is handed back and whether the collection is given
+// up are both read off it, and a caller that judged the failure already hands
+// its own verdict on ([Coordinator.collectFailedAt]).
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
+	return c.collectFailedAt(ctx, run, cause, c.collectGivenUp(run, cause, c.now()))
+}
+
+// collectFailedAt is [Coordinator.collectFailed] on the verdict its caller
+// judged cause by: the attempt that read the box and decided from its failure
+// whether to ask again ([Coordinator.carryOnLost]) hands that decision on, so
+// the hand-back never decides apart from it at a later reading of the clock.
+func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause error,
+	verdict collectVerdict,
+) error {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
 			"error", cause.Error(),
@@ -2012,8 +2027,8 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		_ = c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil)
 		return nil
 	}
-	now := c.now()
-	if errors.Is(cause, ErrStoreSilent) && !c.collectGivenUp(run, cause, now) {
+	now := verdict.at
+	if errors.Is(cause, ErrStoreSilent) && !verdict.givenUp {
 		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
 		// go on without ([ErrStoreSilent]), which says nothing about the box:
 		// handed back uncounted, and the completion NAK'd for the queue's
@@ -2039,15 +2054,14 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		since = now
 	}
 	gone := errors.Is(cause, ErrBoxGone)
-	if c.collectGivenUp(run, cause, now) {
-		unsettledFor, unsettled := c.hostUnsettledFor(run, cause, now)
+	if verdict.givenUp {
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
-			"box_gone", gone, "store_silent", unsettled, "unsettled_for_s", unsettledFor.Seconds(),
-			"error", cause.Error())
+			"box_gone", gone, "store_silent", verdict.unsettled,
+			"unsettled_for_s", verdict.unsettledFor.Seconds(), "error", cause.Error())
 		detail := "the executor's launch finished but its box could not be read back, so its " +
 			"result is lost; the work it pushed, if any, is on its branch"
-		if unsettled {
+		if verdict.unsettled {
 			detail = collectUnsettledDetail
 		}
 		c.forgetUnsettled(run.TurnID)
