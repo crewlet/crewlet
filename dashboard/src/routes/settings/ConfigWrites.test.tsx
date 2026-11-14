@@ -8,9 +8,10 @@
  * REST surface, as the frame mounts it (`test/settingsScreen.tsx`).
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
+import { pageSnapshot, resetPageContextForTest, setFramePage } from "~/app/assistant/context.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -27,6 +28,7 @@ import { ConfigScreen } from "./Config.tsx";
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -281,6 +283,33 @@ test("a save checks first, then stores the document under the read's revision wi
   expect(save.body).toBe(edited);
   // SAVED: the editor gives way to the document as the engine now serves it.
   expect(screen.queryByLabelText("The company document, as YAML")).toBeNull();
+});
+
+// THE DOCUMENT NEVER REACHES THE ASSISTANT: a person writes every credential
+// in it as its value, so the editor declares it open with no value, and the
+// summary is the one field the assistant may propose.
+test("the editor tells the assistant the document is open and never sends its text", async () => {
+  setFramePage({
+    screen: "config",
+    title: "Settings › Configuration",
+    path: ["settings", "config"],
+    params: {},
+    query: {},
+  });
+  stubEngine(() => yamlAnswer());
+  await show(<ConfigScreen />, "#/settings/config");
+  await press(screen.getByRole("button", { name: "Edit" }));
+  type(screen.getByLabelText("The company document, as YAML"), `${YAML}api_key: SENTINEL\n`);
+  type(screen.getByLabelText("Summary"), "rotate the key");
+  const field = (path: string) =>
+    pageSnapshot()?.context.draft?.fields.find((f) => f.path === path);
+  // THE SNAPSHOT IS THE LIVE DRAFT: it carries the summary typed a moment ago,
+  // so an absent sentinel means the text was left out, not that nothing was read.
+  await waitFor(() => expect(field("summary")?.value).toBe("rotate the key"));
+  expect(field("summary")?.editable).toBe(true);
+  expect(field("document")).toMatchObject({ redacted: true, value: "" });
+  expect(field("document")?.editable).toBeUndefined();
+  expect(JSON.stringify(pageSnapshot())).not.toContain("SENTINEL");
 });
 
 // A WARNING THE DOCUMENT BRINGS is said before it is stored, and only a

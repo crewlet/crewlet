@@ -59,6 +59,13 @@ import {
   RotateCcwGlyph,
   UploadGlyph,
 } from "@crewlethq/icons/glyphs";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  type DraftFieldSpec,
+} from "~/app/assistant/draft.ts";
 import { useLeaveGuard } from "~/app/router.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -413,6 +420,32 @@ function introduced(outcome: Extract<ConfigWriteOutcome, { kind: "valid" }>): Co
   return outcome.warnings.filter((w) => w.introduced === true);
 }
 
+/** What the document editor declares to the assistant: its text, and its save's summary. */
+interface ConfigDraft {
+  document: string;
+  summary: string;
+}
+
+/** The editor's two fields: the document, a credential, and the summary, which may be proposed. */
+const CONFIG_DRAFT_FIELDS: readonly DraftFieldSpec<ConfigDraft>[] = [
+  {
+    path: "document",
+    label: "The company document, as YAML",
+    secret: true,
+    read: (draft) => draft.document,
+  },
+  {
+    path: "summary",
+    label: "Summary",
+    hint: "why, in one line",
+    read: (draft) => draft.summary,
+    write: (draft, value) =>
+      typeof value === "string" && !value.includes("\n")
+        ? { ...draft, summary: value }
+        : refuse("A summary is one line of text."),
+  },
+];
+
 /**
  * The company document as YAML, edited in place on the Active lens: check it,
  * import a file over it, save it with a summary.
@@ -425,9 +458,9 @@ export function DocumentEditor({
   onStored: (stored: Stored) => void;
 }) {
   const [opened, setOpened] = useState<Opened>({ kind: "reading" });
-  const [text, setText] = useState("");
+  const [text, setText] = useDraftState("");
   const [checked, setChecked] = useState<Checked>({ kind: "idle" });
-  const [summary, setSummary] = useState("");
+  const [summary, setSummary] = useDraftState("");
   const [summaryErr, setSummaryErr] = useState<string | undefined>();
   const [discarding, setDiscarding] = useState<null | (() => void)>(null);
   const editor = useRef<SourceEditorHandle>(null);
@@ -479,6 +512,32 @@ export function DocumentEditor({
   const ready = opened.kind === "ready" ? opened : null;
   const dirty = ready !== null && text !== ready.text;
   const busy = checked.kind === "checking" || checked.kind === "saving";
+
+  // WHAT IS OPEN, for the assistant: the company document, in this editor,
+  // and the summary its save carries. THE DOCUMENT NEVER LEAVES THE PAGE: a
+  // person writes every credential in it as its value (all of them when it
+  // replaces an unreadable revision), so it is declared as a credential, sent
+  // with no value and never set. Checking and saving stay the person's.
+  const draft: ConfigDraft = { document: text, summary };
+  useAssistantDraft<ConfigDraft>(
+    ready
+      ? {
+          kind: "client",
+          revision: ready.etag,
+          scope: "The company document you are editing (not saved)",
+          help:
+            "The person is editing the company document as YAML. Its text holds credentials, " +
+            "so it is never shown to you and you cannot change it; you can propose the " +
+            "summary the revision history shows for this edit. Checking and saving stay theirs.",
+          value: draft,
+          fields: CONFIG_DRAFT_FIELDS,
+          write: writeParts(draft, { document: setText, summary: setSummary }, () =>
+            setSummaryErr(undefined),
+          ),
+          blocked: () => (busy ? "The document is being checked or saved." : null),
+        }
+      : null,
+  );
 
   useLeaveGuard(
     dirty
