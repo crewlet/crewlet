@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // leaderReadsToken is what accountQueue's broker requires: the dial refuses an
@@ -835,6 +836,38 @@ func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 		if c.q.link != c.want {
 			t.Errorf("%s crosses %+v, want %+v", c.name, c.q.link, c.want)
 		}
+	}
+}
+
+// A MEMBER'S DEAD LETTERS ARE READ GIVEN THE HANDLING OF THE LARGEST REPLY.
+//
+// A member's own connection crosses no link, but a dead letter may be as large
+// as the transport, and the leader's reply to a read of one — eleven
+// megabytes, the entry base64-encoded in JSON — is built by the leader and
+// decoded by this process. Read at the bare read term, such a read was asked
+// again at two seconds and at four while the leader was still building the
+// first reply under load, every re-ask another whole reply, and ran out its
+// five seconds with none of them answered (crewlet/crewlet#1153). So a
+// member's dead letters are read through a leader carrying the transport's
+// ceiling at no pace: its term is the read term and that reply's handling.
+//
+// Mutation: read a member's dead letters through the plain leader, and its
+// term is the bare read term.
+func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.T) {
+	t.Parallel()
+	q := openForTest(t, Config{})
+	letters, err := q.deadLetters(t.Context(), topics.DeadLetter("member.letters", "grp"))
+	if err != nil {
+		t.Fatalf("open the dead letters: %v", err)
+	}
+	if letters.copies != nil {
+		t.Fatal("a member's own connection reads its dead letters through copies, where no leaf's " +
+			"link stands between it and the leader")
+	}
+	want := jsprovision.ReadTerm + jsapi.Handling(int(q.nc.MaxPayload()))
+	if got := letters.leader.Term(); got != want {
+		t.Errorf("a member's dead letters are read at a term of %v, want the read term and the "+
+			"handling of a reply as large as the transport carries, %v", got, want)
 	}
 }
 
