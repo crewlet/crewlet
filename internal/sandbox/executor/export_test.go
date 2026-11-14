@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"io"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -67,6 +69,9 @@ type OpenCodeTimes struct {
 	// its MCP servers to connect, Sync how often it exports a login it was
 	// given, and Stop how long it gives a process of its own to go.
 	Listen, MCP, Sync, Stop time.Duration
+	// Call and SessionCall are how long it waits for each kind of call to its
+	// own server ([openCodeBounded]).
+	Call, SessionCall time.Duration
 	// Clock is the command the script reads the time from, in whole seconds.
 	Clock string
 }
@@ -75,11 +80,24 @@ type OpenCodeTimes struct {
 // for the cases about a wait running out, a sync coming round or a stop that
 // must not wait, at lengths a test can tell apart.
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
+	run := openCodeRunTimes()
 	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
-		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
-		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
-		clock: cmp.Or(times.Clock, openCodeClock),
+		listen: cmp.Or(times.Listen, run.listen), mcp: cmp.Or(times.MCP, run.mcp),
+		sync: cmp.Or(times.Sync, run.sync), stop: cmp.Or(times.Stop, run.stop),
+		call: cmp.Or(times.Call, run.call), sessionCall: cmp.Or(times.SessionCall, run.sessionCall),
+		clock: cmp.Or(times.Clock, run.clock),
 	}))
+}
+
+// OpenCodeEndPath is the most a run's script spends after an end request
+// reaches it while its harness runs, at the waits Command runs it at
+// ([openCodeEndPath]).
+func OpenCodeEndPath() time.Duration { return openCodeEndPath(openCodeRunTimes()) }
+
+// OpenCodeEndCallTags is the tags of every call a run's script makes to its own
+// server that no end request ends ([openCodeEndCalls]), sorted.
+func OpenCodeEndCallTags() []string {
+	return slices.Sorted(maps.Keys(openCodeEndCalls(openCodeRunTimes())))
 }
 
 // ClaudeCodeCommandTimed is [ClaudeCode.Command] with the harness given stop to

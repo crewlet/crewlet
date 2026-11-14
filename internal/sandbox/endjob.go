@@ -88,7 +88,11 @@ type JobEnder interface {
 // stops, in a tenth of a second, and in three with a stdio MCP server still
 // connecting, which it stops itself. A process past it is wedged rather than
 // slow, and a run's done marker waits on its script: a process that ignored
-// SIGTERM would otherwise hold the run open for ever.
+// SIGTERM would otherwise hold the run open for ever. OpenCode's run client on
+// 2.2.7 and 2.3.0 is such a process at an end request: it begins its shutdown
+// at the SIGTERM and never finishes it, so every end of such a run spends the
+// whole grace and kills it (measured; on 2.0.32 and 2.1.4 the client is gone
+// within a fifth of a second), and the end is recorded as killed.
 const JobStopGrace = 5 * time.Second
 
 // JobKillWait is the most [Sandbox.KillJob] waits for a job to be gone: SIGTERM
@@ -108,8 +112,11 @@ const JobKillWait = 2 * JobStopGrace
 // bound, and the minute it keeps for a harness to come up, which an OpenCode
 // script's export through its own running server does not spend and its `api`
 // calls do; and the script's own stops of its login exporter and its server,
-// a grace each. A job not over by then has a pack that is stuck, or an `api`
-// call that is wedged, and is killed — its session then packed by the read.
+// a grace each. A job not over by then has a pack that is stuck, and is killed
+// — its session then packed by the read. An OpenCode script's calls to its own
+// server, its export among them, are each bounded, and the calls on an end
+// request's way out add up to less than this wait (internal/sandbox/executor's
+// openCodeEndPath), so none of them is what the kill finds wedged.
 // NOTHING ELSE: the pages of its session's message list an OpenCode script asks
 // for the measure of its session's newest request (internal/sandbox/executor's
 // openCodeContext) are never asked on an end request, whose round no relaunch

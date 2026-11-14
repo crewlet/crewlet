@@ -837,10 +837,11 @@ func TestTheScriptAsksNothingOnAnEndRequest(t *testing.T) {
 	})
 }
 
-// A REQUEST WHILE THE PAGES ARE ASKED STOPS THE ASKING AT THE NEXT PAGE. The round a
+// A REQUEST WHILE THE PAGES ARE ASKED STOPS THE ASKING AT ONCE. The round a
 // request ends is one no relaunch continues in place, and the pages would spend the
 // end's wait the export needs: so a request that comes while the script waits on
-// a page lets that page's answer land, a failed step's whose cursor names another,
+// a page — a failed step's, whose cursor names another — ends that page's call
+// (crewlet#1088's bounded call, which an end request ends where it is a page),
 // and asks no other.
 //
 // Mutation: test for a request once, before the first page, and the page the

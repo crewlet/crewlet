@@ -98,6 +98,43 @@ const openCodeClock = "date +%s"
 // would, and says so on stderr.
 const openCodeMCPWait = 60 * time.Second
 
+// openCodeCallWait bounds one call a run's script makes to its own server
+// whose answer is a few KiB at most — the readiness loop's `mcp.list`,
+// `session.get` before and after the run, the leftover steers'
+// `session.inbox.list` and each `session.inbox.cancel`, the end request's
+// `session.interrupt`, and the login's `auth export` — past which the call is
+// ended and the script goes on as it goes on where the server is gone
+// ([openCodeBounded]).
+//
+// TEN SECONDS, about fifteen times the slowest such call measured: 687 ms (a
+// readiness `mcp.list` in a run's own script, OpenCode 2.2.7), each kind's
+// slowest under 0.7 s in a run's script and under 0.26 s twenty at a time
+// with both of a 2-core box's cores kept busy, on 2.0.32, 2.1.4, 2.2.7 and
+// 2.3.0 (crewlet#1088's probe, its runtime's start included). Room for a box
+// far busier than that, since past it the call costs what a server that is
+// gone costs: a usage line, a steer cancelled, a step the interrupt did not
+// settle. And no shorter bound is OpenCode's own: a client whose server
+// answered its first request (`GET /api/info`) waits on the call for as long
+// as the server takes, measured to the probe's 150 s.
+const openCodeCallWait = 10 * time.Second
+
+// openCodeSessionCallWait bounds one call a run's script makes to its own
+// server whose answer holds the session or one message of it — the session's
+// export, which is the run's capture ([openCodeCapture]), and a page of the
+// session's message list ([openCodeContext]) — whose answer is bounded in
+// count and not in bytes: a message carries a file a tool read as a data URI
+// of whatever size the tool produced.
+//
+// THIRTY SECONDS, about five times the slowest measured: 6,397 ms for the
+// export of a 256 MiB session (the most a kept session's export holds
+// unpacked, sandbox's SessionMaxBytes at the scrub's eightfold) with both of
+// a 2-core box's cores kept busy, on OpenCode 2.1.4; a page holding one
+// message of that size took 1,779 ms. Past it nothing is lost but the wait: a
+// capture whose export it ended is packed on demand once the job is over,
+// beside a database no server holds any more ([OpenCode.Pack]), and a page it
+// ended leaves the figure carried along the copy's lineage.
+const openCodeSessionCallWait = 30 * time.Second
+
 // openCodeLoginSync is how often a run that was given a login exports it over
 // the box's copy while it works — see [OpenCode.Command].
 //
@@ -255,17 +292,35 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // the server listens starts no server and no run; one while the run waits for
 // its MCP servers starts no run. A SIGTERM, SIGINT or SIGHUP is a teardown's,
 // as it always was.
+//
+// AND NO CALL TO ITS OWN SERVER WAITS WITHOUT A BOUND ([openCodeBounded]): a
+// server that takes a call and never answers it held the run's start, its
+// readiness loop, its end or its tail until the job was stopped, and the
+// capture and the usage line with it. Each call is ended past its kind's
+// bound — [openCodeCallWait] for a call whose answer is small,
+// [openCodeSessionCallWait] for one that holds the session or a message of it —
+// and the script goes on as it goes on where the server
+// is gone; those along an end request's path add up to less than the engine
+// waits for an ended job ([openCodeEndPath]).
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeRunTimes()))
+}
+
+// openCodeRunTimes is the waits every run's script runs at ([openCodeTimes]).
+func openCodeRunTimes() openCodeTimes {
+	return openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: sandbox.JobStopGrace,
+		call: openCodeCallWait, sessionCall: openCodeSessionCallWait,
 		clock: openCodeClock,
-	}))
+	}
 }
 
 // openCodeTimes is how long a run's script waits for its server to listen
 // ([openCodeListenWait]) and for its MCP servers to connect
-// ([openCodeMCPWait]), how often it exports a login ([openCodeLoginSync]), and
-// how long it gives a process of its own to go ([sandbox.JobStopGrace]): a value
+// ([openCodeMCPWait]), how often it exports a login ([openCodeLoginSync]), how
+// long it gives a process of its own to go ([sandbox.JobStopGrace]), and how
+// long it waits for each kind of call to its own server ([openCodeCallWait],
+// [openCodeSessionCallWait]): a value
 // rather than the constants read inline, so a case about a wait runs it at a
 // length that case can tell apart — a bound run out at one a test can afford,
 // or a stop stretched to one no prompt end could be mistaken for. And the
@@ -273,8 +328,14 @@ func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ 
 // running out decides when it does rather than racing the wall clock.
 type openCodeTimes struct {
 	listen, mcp, sync, stop time.Duration
+	call, sessionCall       time.Duration
 	clock                   string
 }
+
+// secs is a wait as the script reads one: whole seconds, never under one, since
+// the script's clock reads whole seconds ([openCodeClock]) and a bound of zero
+// would end every call as it starts.
+func secs(d time.Duration) int { return max(1, int(d/time.Second)) }
 
 // newOpenCodeSession mints the id a run's session is created under: 32 lowercase
 // hexadecimal characters from crypto/rand, which [OpenCode.Session] prefixes
@@ -358,7 +419,7 @@ func (OpenCode) Pack(paths Paths, session, staged, dest string, _ bool) string {
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
-		openCodePack(paths, staged, dest, "--standalone") +
+		openCodePack(paths, staged, dest, "--standalone", "") +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
@@ -446,16 +507,25 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// its harness: the session interrupted through the run's own server first,
 	// which settles the step in flight — the tool call it was running marked
 	// interrupted, the message finished — so the export the end goes on to
-	// holds it, and which ends the run's client by itself within a fifth of a
-	// second; then the client ended within the grace. Ended alone, the client
+	// holds it, and which on 2.0.32 and 2.1.4 ends the run's client by itself
+	// within a fifth of a second; then the client ended within the grace. On
+	// 2.2.7 and 2.3.0 that client begins its shutdown at the SIGTERM and never
+	// finishes it, so it is killed when the grace is up, and the job's end is
+	// recorded as killed (measured: 5.9 s after the request, against 0.7 to
+	// 0.8 s on the earlier two): the end protocol holds it all the same, at the
+	// cost of the grace. Ended alone, the client
 	// went at once and the server worked on: the session's export, right after
 	// and five seconds on, held nothing of the step, and its tool call still
 	// ran in the box (measured on 2.0.32 and 2.1.4, whose API names the call
 	// `session.interrupt` and answers `session.abort`, the first release's
 	// name, with "Operation not found"). url is the run's server's, which the
-	// harness never runs without.
+	// harness never runs without. The interrupt is BOUNDED ([openCodeBounded]),
+	// and never by the request it serves: a server that never answers it
+	// leaves the step unsettled, as a server that is gone does, and the client
+	// is ended within the grace all the same, so no end waits on the server.
 	b.WriteString(endPrologue(paths, times.stop))
-	b.WriteString(endHarness(`[ -z "$url" ] || opencode api --server "$url" session.interrupt --param sessionID="$sid" < /dev/null > /dev/null 2>&1`))
+	b.WriteString(endHarness(fmt.Sprintf(`[ -z "$url" ] || bounded interrupt %d - opencode api --server "$url" session.interrupt --param sessionID="$sid" > /dev/null 2>&1`,
+		secs(times.call))))
 
 	// ABSENT AND FAILING ARE TWO ANSWERS. One sentence for any failure of
 	// `--version` told a run whose opencode was installed but could not start
@@ -477,11 +547,15 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		cfg, cfg)
 	line(`imported= spid= xpid= xout=%s url=`, loop)
 	b.WriteString(openCodeStops())
+	b.WriteString(openCodeBounded(paths, times))
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
-	// keep FILE FLAGS...: one export into FILE, moved over the document only
-	// where it holds a login and differs from what the document holds.
-	line(`keep() { f=$1; shift; if opencode auth export "$@" < /dev/null > "$f" 2> /dev/null && holds "$f" && [ "$(cat "$f")" != "$(cat %s)" ]; then mv -f "$f" %s; else rm -f "$f"; fi; }`, doc, doc)
+	// keep TAG FILE FLAGS...: one export into FILE, moved over the document
+	// only where it holds a login and differs from what the document holds;
+	// bounded as TAG ([openCodeBounded]), each caller its own, since the
+	// loop's export and the run's last one are two calls of two shells.
+	line(`keep() { kt=$1 f=$2; shift 2; if bounded "$kt" %d - opencode auth export "$@" > "$f" 2> /dev/null && holds "$f" && [ "$(cat "$f")" != "$(cat %s)" ]; then mv -f "$f" %s; else rm -f "$f"; fi; }`,
+		secs(times.call), doc, doc)
 	// quit: a signal's end — a teardown's, never an end request's — with the
 	// end request ignored from here on; the run's client ended (it runs in
 	// the background, so the group's signal has not stopped the script's wait
@@ -490,8 +564,9 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// with the others, because quit has done everything it would: left set,
 	// the `exit` ran its stops a second time, over processes quit had already
 	// stopped — under busybox ash, before end tested for an empty pid, ten
-	// seconds of waiting for nothing.
-	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep %s --standalone; stop; exit "$1"; }`, next)
+	// seconds of waiting for nothing. A call to the server the signal found in
+	// flight is ended first, and reaped ([openCodeBounded]'s unbound).
+	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	line(`if [ -s %s ]; then`, doc)
@@ -544,13 +619,25 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`  xpid=$!`)
 	line(`fi`)
 
+	// One file for the answers the script reads of its own server's calls, a
+	// call at a time: an answer is never a command substitution of the call,
+	// which would run the call in a subshell that an end request never reaches
+	// ([openCodeBounded]).
+	ans := sandbox.ShellQuote(paths.WorkDir() + "/opencode-answer")
+
 	if checks := openCodeReadiness(req.MCPServers); checks != "" {
 		line(`deadline=$(( $(%s) + %d ))`, times.clock, int(times.mcp.Seconds()))
 		line(`while :; do`)
 		// A REQUEST HERE starts no run, and leaves the run's own tail to
-		// export the session through the server that is up.
+		// export the session through the server that is up — and ends a
+		// call it finds in flight.
 		line(`  [ -z "$endasked" ] || break`)
-		line(`  s=$(opencode api --server "$url" mcp.list < /dev/null 2> /dev/null)`)
+		// EACH CALL BOUNDED BY WHAT IS LEFT OF THE LOOP'S WAIT, and by
+		// [openCodeCallWait]: the loop's deadline was read only between
+		// calls, so a call that never returned never reached it.
+		line(`  mr=$(( deadline - $(%s) )); [ "$mr" -le %d ] || mr=%d; [ "$mr" -ge 1 ] || mr=1`,
+			times.clock, secs(times.call), secs(times.call))
+		line(`  bounded mcp "$mr" e opencode api --server "$url" mcp.list > %s 2> /dev/null; s=$(cat %s 2> /dev/null); rm -f %s`, ans, ans, ans)
 		b.WriteString(openCodeShadowCheck(req.MCPServers))
 		line(`  ready=1`)
 		b.WriteString(checks)
@@ -566,28 +653,28 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// that starts a session of its own needs none: its session's totals begin
 	// at the run.
 	if session.Continues {
-		line(`if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac; fi`,
-			openCodeUsageBefore)
+		line(`if [ "$k" = yes ] && bounded before %d e opencode api --server "$url" session.get --param sessionID="$sid" > %s 2> /dev/null; then before=$(cat %s) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac; fi; rm -f %s`,
+			secs(times.call), ans, ans, openCodeUsageBefore, ans)
 	}
 	b.WriteString(launchHarness(strings.Join(run, " "), paths))
 	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
 	// ended: see [openCodeLeftoverSteers].
 	if req.Steer.Set() {
-		line(`%s`, openCodeLeftoverSteers())
+		line(`%s`, openCodeLeftoverSteers(ans, times))
 	}
-	line(`report=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
-		openCodeUsageEvent)
+	line(`if bounded report %d - opencode api --server "$url" session.get --param sessionID="$sid" > %s 2> /dev/null; then report=$(cat %s) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac; fi; rm -f %s`,
+		secs(times.call), ans, ans, openCodeUsageEvent, ans)
 	// NOTHING TO EXPORT of a session the run never started: a request before
 	// its client started leaves a session of its own — never run — that
 	// OpenCode does not hold, and only a continued one to export.
 	line(`if [ "$endedas" != before ] || [ "$k" = yes ]; then`)
-	b.WriteString(openCodeCapture(paths))
+	b.WriteString(openCodeCapture(paths, times))
 	line(`fi`)
 	// WHAT THE SESSION'S NEWEST REQUEST CARRIED, asked of its server once it is
 	// exported, and never on an end request: see [openCodeContext].
-	b.WriteString(openCodeContext(paths))
+	b.WriteString(openCodeContext(paths, times))
 	line(`unsync`)
-	line(`[ -z "$imported" ] || keep %s --server "$url"`, next)
+	line(`[ -z "$imported" ] || keep last %s --server "$url"`, next)
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
@@ -760,8 +847,17 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 //
 // A BOX WITHOUT GZIP, or an export that failed, is said on the error stream,
 // and the run's own status is never the export's.
-func openCodeCapture(paths Paths) string {
-	return openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(), `--server "$url"`)
+//
+// AND THE EXPORT IS BOUNDED ([openCodeSessionCallWait], [openCodeBounded]): one
+// past it is ended, gzip finishes on what it was handed, and that archive is
+// never moved into place, as an export that failed is not. The server is then
+// stopped as the script goes, so the read that takes the session finds no
+// capture and packs one on demand beside a database no server holds
+// ([OpenCode.Pack]): a server that stopped answering costs the bound, never
+// the session.
+func openCodeCapture(paths Paths, times openCodeTimes) string {
+	return openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(), `--server "$url"`,
+		fmt.Sprintf("bounded export %d - ", secs(times.sessionCall)))
 }
 
 // openCodePack is [openCodeCapture] exporting through server — the run's own
@@ -779,13 +875,23 @@ func openCodeCapture(paths Paths) string {
 // being written, which a job packed while it runs leaves out, and not the
 // session's note inbox, so a note the run's plugin admitted and OpenCode never
 // delivered rides no capture whichever server exports it.
-func openCodePack(paths Paths, staged, dest, server string) string {
+//
+// call prefixes the export: the run's script bounds its export through its own
+// server ([openCodeCapture]); a pack made on demand runs it as it is (""), with
+// a server of its own (`--standalone`) over the box's database, which no other
+// server's hold makes it wait on: OpenCode keeps the database in WAL mode, and
+// measured on 2.0.32, 2.1.4, 2.2.7 and 2.3.0 such an export completed beside
+// the run's live idle server, beside one stopped while its run streamed a step,
+// and after one killed, the slowest in 2.1 s with five other standalone calls
+// at once on two cores. The pack is the engine's own command, held to the
+// engine's wait on the box ([sandbox.SessionPackWait]).
+func openCodePack(paths Paths, staged, dest, server, call string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), packDigest(paths, "sid", staged),
+	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { %sopencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), call, server, q(staged+"/error"), q(staged+"/capture"), packDigest(paths, "sid", staged),
 		q(staged+"/capture"), q(dest), q(staged+"/error"))
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
@@ -836,15 +942,21 @@ func openCodePack(paths Paths, staged, dest, server string) string {
 // NEVER ON AN END REQUEST: a stop's, a loss's and a turn's cap end the round the
 // job ran, which no relaunch continues in place, and the pages would spend the
 // end's wait the export needs (internal/sandbox's JobEndWait). A request that
-// comes while the pages are asked stops the asking at the next page.
-func openCodeContext(paths Paths) string {
+// comes while the pages are asked stops the asking at once, the page in flight
+// ended ([openCodeBounded]).
+//
+// AND EACH PAGE IS BOUNDED ([openCodeSessionCallWait]): a page past it is ended, and
+// the asking stops there with what the pages before it printed, as it stops at
+// a page the server could not answer.
+func openCodeContext(paths Paths, times openCodeTimes) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-context"),
 		openCodeContextBytes)
 	line(`while [ -z "$endasked" ] && [ "$ctxn" -lt %d ]; do`, openCodeContextPages)
 	line(`  ctxn=$((ctxn + 1))`)
-	line(`  opencode api --server "$url" session.message.list --param sessionID="$sid" --param type=assistant --param limit=1 ${ctxcur:+--param cursor="$ctxcur"} < /dev/null > "$ctxfile" 2> /dev/null || break`)
+	line(`  bounded page %d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param type=assistant --param limit=1 ${ctxcur:+--param cursor="$ctxcur"} > "$ctxfile" 2> /dev/null || break`,
+		secs(times.sessionCall))
 	line(`  ctxsize=$(wc -c < "$ctxfile") || break; ctxsize=$((ctxsize))`)
 	line(`  [ "$ctxsize" -gt 0 ] || break`)
 	line(`  if [ "$ctxsize" -gt "$ctxleft" ]; then printf '{"type":"%s","skipped":%%s}\n' "$ctxsize"; break; fi`,
@@ -898,6 +1010,124 @@ unsync() { end "$xpid" again; xpid=; [ -z "$xout" ] || rm -f "$xout"; }
 `
 }
 
+// openCodeBounded is the script's one way to call its run's own server, and to
+// end such a call: `bounded TAG WAIT ENDS CMD...` runs CMD — its stdin
+// /dev/null, its output wherever the caller sends the helper's — ends it past
+// WAIT seconds on the script's clock and, where ENDS is `e`, at an end request
+// as well — and starts none at all where that request has come already; it
+// answers CMD's own status, or 124 where it ended the call or started none.
+// `unbound` ends the call in flight, if any, and reaps it, for a
+// signal's trap that goes while one is out.
+//
+// WHY EVERY CALL (crewlet#1088): a server that took a call and never answered
+// it held the script there, its own deadlines read only between calls, until
+// the job was stopped — the run's start, its readiness loop, an end request's
+// interrupt, the export and the usage of its tail — and the capture with it.
+// Past its bound a call goes the way a call to a server that is gone goes, at
+// every site.
+//
+// THE CALL IS A GRANDCHILD, AND ITS END A FILE: a subshell starts CMD in the
+// background, writes its pid, waits for it and writes its status. So the pid a
+// stop signals is the call's own — a subshell signalled would leave its child
+// running — and whether the call is over is whether its status was written,
+// never `kill -0`, which reads a child that has exited and is not yet reaped as
+// one still running (crewlet#1164). The subshell reaps the call and the script
+// reaps the subshell, so nothing the helper starts outlives it, but a process
+// the kernel holds past SIGKILL (uninterruptible I/O), which is left to the
+// job's teardown rather than waited on without a bound. A teardown's SIGTERM
+// or SIGHUP to the whole job reaches the subshell too, which then writes the
+// status before it goes, so the script's own stop of the call (quit's
+// unbound) finds it over at once rather than spending its grace on a status
+// no one would write; the call, a process of its own with the default action
+// for both, goes with the same signal. A SIGINT, which an asynchronous list
+// ignores, leaves both to that stop.
+//
+// ENDED AS EVERY PROCESS OF THE RUN'S OWN IS ([sandbox.JobStopGrace]): SIGTERM,
+// then SIGKILL past the grace. Measured on 2.0.32, 2.1.4, 2.2.7 and 2.3.0, a
+// client waiting on a server that never answers runs no process of its own,
+// and goes at its SIGTERM within 57 ms, so the grace is a bound for a client
+// that does not, never a wait a call spends.
+//
+// A TENTH OF A SECOND AT A TIME, the clock read once in ten: a call takes about
+// a second, most of it the runtime starting (as [openCodeListenWait] measures),
+// so the poll adds a tenth at most and a handful of short processes, and the
+// clock reads whole seconds ([openCodeClock]), so it is read no oftener than it
+// moves.
+//
+// THE CALLS BESIDE NO SERVER ARE NOT BOUNDED: the session gate's `session.get`,
+// `session delete` and `session import`, the login's `auth import`, quit's
+// `keep --standalone`, and the pack on demand's `session.get` and `session
+// export` ([OpenCode.Pack]), each a private server of its own over the box's
+// database (`--standalone`).
+//
+//   - What bounds them from outside: the script's are the job's own processes,
+//     so an end request's wait and the read's kill past it ([sandbox.JobEndWait],
+//     [sandbox.JobKillWait]), and the turn's cap, end them with the job; the pack
+//     on demand is the engine's own command, held to the engine's wait on the
+//     box ([sandbox.SessionPackWait]).
+//   - What was measured, and what was not: on 2.0.32, 2.1.4, 2.2.7 and 2.3.0 each
+//     completed beside the run's live idle server, beside one stopped while its
+//     run streamed a step, and after one killed, the slowest in 2.6 s with five
+//     others at once on two cores. The probe never stopped a server while it
+//     held the database's write lock — none of 300 stops caught one — so that
+//     case is read, never measured.
+//   - Why no writer among them meets a live server's write: OpenCode keeps its
+//     database in WAL mode, so a reader (`session.get`, an export) never waits
+//     on a writer; and the writers (the gate's delete and import, the login's
+//     import) run before the run's own server starts, beside no server but a
+//     stray of an earlier job its end and the read's kill could not reach (a
+//     container job whose box names no process group of the job's). And a
+//     writer that meets a write lock all the same waits OpenCode's busy_timeout
+//     at most, then fails: 5 s on every release read (`PRAGMA busy_timeout =
+//     5000` in the 2.0.32 and 2.1.4 bundles; five seconds by default in 2.2.7's
+//     and 2.3.0's, which retry the switch to WAL within it), a failure the gate
+//     reads as a session it could not import or delete — the run starts a
+//     session of its own in its place, and says why — and the login's import
+//     as a login refused.
+//
+// ONE CALL A TAG, its files under the work dir named by it: the main flow's
+// calls go one at a time; the end request's interrupt runs while the main flow
+// waits on the harness, never inside a call; and the login loop's exports run
+// in a shell of their own, under a tag of their own.
+func openCodeBounded(paths Paths, times openCodeTimes) string {
+	grace := int(times.stop / (100 * time.Millisecond))
+	return fmt.Sprintf(`bcur=
+bounded() { bt=$1 bw=$2 bx=$3; shift 3; bf=%[1]s"$bt"; if [ "$bx" = e ] && [ -n "$endasked" ]; then return 124; fi; rm -f "$bf.pid" "$bf.done"; ( trap 'echo 143 > "$bf.done"; exit 143' TERM HUP; "$@" < /dev/null & echo $! > "$bf.pid"; wait $!; echo $? > "$bf.done" ) & bs=$! bcur=$bt bn=0; bd=$(( $(%[2]s) + bw )); until [ -s "$bf.done" ]; do if { [ "$bx" = e ] && [ -n "$endasked" ]; } || { [ $((bn %% 10)) = 0 ] && [ "$(%[2]s)" -ge "$bd" ]; }; then unbound; return 124; fi; sleep 0.1; bn=$((bn + 1)); done; wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; bc=$(cat "$bf.done"); rm -f "$bf.pid" "$bf.done"; bcur=; return "$bc"; }
+unbound() { [ -n "$bcur" ] || return 0; bf=%[1]s"$bcur" bi=0; until [ -s "$bf.pid" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; bp=$(cat "$bf.pid" 2> /dev/null); [ -z "$bp" ] || [ -s "$bf.done" ] || kill "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; if [ ! -s "$bf.done" ] && [ -n "$bp" ]; then kill -9 "$bp" 2> /dev/null; bi=0; until [ -s "$bf.done" ] || [ "$bi" -ge %[3]d ]; do sleep 0.1; bi=$((bi + 1)); done; fi; [ ! -s "$bf.done" ] || wait "$bs" 2> /dev/null || wait "$bs" 2> /dev/null; rm -f "$bf.pid" "$bf.done"; bcur=; }
+`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-call-"), times.clock, grace)
+}
+
+// openCodeEndCalls is every call a run's script makes to its own server that
+// no end request ends — every `bounded` call whose ENDS is `-` ([openCodeBounded]),
+// by the tag it is bounded under — and its kind's bound: each runs on an end
+// request's way out. The interrupt, the leftover steers' listing and their
+// cancels (held together to one bound), the usage, the export, and the login's
+// export (keep's, under its caller's tag: on that way the run's last; the
+// loop's is stopped before it, and quit's is a teardown's).
+func openCodeEndCalls(times openCodeTimes) map[string]time.Duration {
+	return map[string]time.Duration{
+		"interrupt": times.call, "inbox": times.call, "cancel": times.call, "report": times.call,
+		"export": times.sessionCall, `"$kt"`: times.call,
+	}
+}
+
+// openCodeEndPath is the most an OpenCode run's script spends after an end
+// request reaches it while its harness runs: every call on the way at its
+// bound ([openCodeEndCalls]) with the grace a call that does not go at its
+// SIGTERM is given after it, and the three processes the script stops on the
+// way at a grace each — its harness, its login loop and its server. The engine
+// waits [sandbox.JobEndWait] for an ended job before it kills it and packs its
+// session on demand, so the path is held under it
+// (TestAnEndedRunsPathFitsTheEnginesWait, which also holds openCodeEndCalls to
+// the calls the rendered script makes with no end request ending them).
+func openCodeEndPath(times openCodeTimes) time.Duration {
+	var path time.Duration
+	for _, call := range openCodeEndCalls(times) {
+		path += call + times.stop
+	}
+	return path + 3*times.stop
+}
+
 // openCodeExporter is the login exporter: a subshell that exports the login
 // into file and over the document every sync ([openCodeLoginSync]) while the
 // run works, until [openCodeStops]' unsync stops it.
@@ -938,8 +1168,17 @@ unsync() { end "$xpid" again; xpid=; [ -z "$xout" ] || rm -f "$xout"; }
 // After a move there is nothing to remove. An exporter still in an export
 // when the stop's bound runs out is killed, and no trap runs: unsync drops
 // the file for that one ([openCodeStops]).
+//
+// AND AN EXPORT THE STOP FINDS IN FLIGHT IS ENDED, and reaped, before the
+// exporter goes. Each export is bounded ([openCodeCallWait],
+// [openCodeBounded]), so the exporter is in no foreground command of the
+// export's own when the stop is acted on — it acts between the bounded call's
+// polls — and an exporter that went then left the export running in the
+// job's group. So the trap ends the call first (unbound), with further stops
+// ignored, since unsync tells the exporter again until it goes, and a stop
+// acted on again would end the exporter part way through that.
 func openCodeExporter(sync time.Duration, file string) string {
-	return fmt.Sprintf(`( z= w= s= out=%[2]s; trap 'if [ -n "$w" ]; then s=1; else [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; rm -f "$out"; exit 0; fi' TERM; while :; do w=1; sleep %[1]s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep "$out" --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
+	return fmt.Sprintf(`( z= w= s= out=%[2]s; trap 'if [ -n "$w" ]; then s=1; else trap "" TERM; unbound; [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; rm -f "$out"; exit 0; fi' TERM; while :; do w=1; sleep %[1]s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep sync "$out" --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
 		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
 }
 
@@ -968,11 +1207,21 @@ func openCodeExporter(sync time.Duration, file string) string {
 // own text cannot match it: its quotes are escaped in the listing. A failed
 // listing or cancel costs nothing more than the duplicate it was there to
 // prevent.
-func openCodeLeftoverSteers() string {
-	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID="$sid"` +
-		` < /dev/null 2> /dev/null) && for id in $(printf '%s\n' "$pending" | grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
-		`opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"` +
-		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done`
+//
+// EACH CALL BOUNDED ([openCodeCallWait], [openCodeBounded]), the listing read
+// from the file ans its answer went to; and THE CANCELS TOGETHER within one
+// bound more, each held to what is left of it, none asked once nothing is:
+// however many notes a person left, the run's tail, an end request's path
+// among them, spends two bounds on them at most ([openCodeEndPath]). A cancel
+// that failed goes on to the next while there is time.
+func openCodeLeftoverSteers(ans string, times openCodeTimes) string {
+	return fmt.Sprintf(`if bounded inbox %[2]d - opencode api --server "$url" session.inbox.list --param sessionID="$sid" > %[1]s 2> /dev/null; then `+
+		`kd=$(( $(%[3]s) + %[2]d )); `+
+		`for id in $(grep -o '"id":"msg_[0-9a-f]\{32\}"' %[1]s | sed 's/^"id":"//; s/"$//' | sort -u); do `+
+		`kr=$(( kd - $(%[3]s) )); [ "$kr" -ge 1 ] || break; `+
+		`bounded cancel "$kr" - opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"`+
+		` --param inboxID="$id" > /dev/null 2>&1; done; fi; rm -f %[1]s`,
+		ans, secs(times.call), times.clock)
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`, against

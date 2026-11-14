@@ -110,6 +110,16 @@ import (
 // FAKE_SERVE=password-first one that prints its password a second before it
 // says where it listens. Each writes `serve-settled` once it has printed all it
 // ever will.
+//
+// FAKE_HANG names, space-separated, the kinds of call to the run's own server
+// that server takes and never answers — an `api` operation by its name
+// (`session.get`), `session.export` and `auth.export` for the two exports
+// through it: such a call records its kind and its pid in `hung`, as it is
+// taken, and then waits, as a client waits on a server that never answers,
+// until it is ended — and with FAKE_HANG_DEAF set it ignores SIGTERM, so only
+// SIGKILL ends it; with FAKE_HANG_ONCE set only the first call of each kind
+// hangs, and every later one is answered. A call beside the server
+// (`--standalone`) never hangs.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
@@ -118,6 +128,13 @@ printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
+}
+hangs() {
+  case " ${FAKE_HANG-} " in *" $1 "*) ;; *) return 0;; esac
+  if [ -n "${FAKE_HANG_ONCE:-}" ]; then [ ! -e "$d/hung-$1" ] || return 0; : > "$d/hung-$1"; fi
+  echo "$1 $$" >> "$d/hung"
+  [ -z "${FAKE_HANG_DEAF:-}" ] || trap '' TERM
+  exec sleep 3600
 }
 hold() { mkdir -p "$d/sessions" && : > "$d/sessions/$1"; }
 held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
@@ -130,7 +147,7 @@ auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
   export)
-    [ "$3" != --server ] || authed
+    [ "$3" != --server ] || { authed; hangs auth.export; }
     if [ -n "${FAKE_EXPORT_SLEEP:-}" ]; then : > "$d/exporting"; sleep "$FAKE_EXPORT_SLEEP"; fi
     cat "$d/db" 2> /dev/null ;;
   esac ;;
@@ -156,7 +173,7 @@ serve)
   [ -z "$minted" ] || echo "server password $pw"
   serving ;;
 api)
-  if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; fi
+  if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
@@ -190,7 +207,7 @@ api)
 session)
   case "$2" in
   export)
-    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
+    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || { authed; hangs session.export; }; id=$5; fi
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
@@ -1524,13 +1541,17 @@ func TestNothingOfARunOutlivesIt(t *testing.T) {
 //
 // Every kill the script makes and every sleep it starts and sees end are
 // recorded, by functions standing in for both, and the exporter is stopped
-// part way through an export.
+// part way through an export. The tenth-of-a-second waits a shell polls with
+// — end's, and a bounded call's, which the exporter's exports are — are no
+// sleep the exporter starts, and are left out: one in the exporter's own
+// shell would be recorded under that shell's pid, which the script's stop
+// signals by design.
 //
 // Mutation: keep the sleep's pid after its wait, and the trap kills it.
 func TestTheLoginExporterSignalsNoPidItHasReaped(t *testing.T) {
 	t.Parallel()
 	const recorder = `kill() { echo "kill $*" >> "$FAKE_DIR/pids"; command kill "$@"; }
-sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids"; command sleep "$@"; echo "end $__p" >> "$FAKE_DIR/pids"; }
+sleep() { [ "$1" != 0.1 ] || { command sleep "$@"; return; }; __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids"; command sleep "$@"; echo "end $__p" >> "$FAKE_DIR/pids"; }
 `
 	j := startScript(t, scriptOpts{
 		shell: boxShell{name: "sh-recording-pids", prelude: recorder},
@@ -1596,7 +1617,7 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 func TestAnExporterStoppedAsItStartsGoesAtOnce(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\n"+
+		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\nunbound() { :; }\n"+
 			executor.OpenCodeStops(stretchedStop)+"n=0\nwhile [ \"$n\" -lt 20 ]; do\n"+
 			executor.OpenCodeExporter(time.Hour, "sync")+" &\nxpid=$!\nunsync\n"+
 			"n=$((n+1))\ndone\n")
@@ -1630,7 +1651,7 @@ func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
 		exporter = strings.Replace(exporter, cut.old, cut.new, 1)
 	}
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		j := startPieces(t, sh, "keep() { :; }\n"+exporter+" &\nwait $!\n")
+		j := startPieces(t, sh, "keep() { :; }\nunbound() { :; }\n"+exporter+" &\nwait $!\n")
 		run := j.waitWithin(promptEnd, "an exporter that stopped itself did not go")
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
