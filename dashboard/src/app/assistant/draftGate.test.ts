@@ -257,6 +257,16 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a new schedule, or a schedule's owner, cron, task and who runs it, in its dialog",
   "routes/settings/DelegatedRuleDialog.tsx":
     "modal: a delegated-decision rule's kinds and delegates, in its sheet",
+  "routes/chatlet/RoomAdmin.tsx":
+    "modal: a room's retention in days, or an erase's typed reason, each in its dialog",
+  "routes/gitlet/NewRepo.tsx": "modal: a new repository's name, unit, description and branch",
+  "routes/gitlet/commit/CommitWrites.tsx":
+    "modal: a revert's or a cherry-pick's branch and commit message, in their dialogs",
+  "routes/gitlet/repo/BranchWrites.tsx": "modal: a new branch's name, in its dialog",
+  "routes/gitlet/repo/FileWrites.tsx":
+    "modal: a file's path, content and commit message, or a delete's message, in their dialogs",
+  "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
+  "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
   "routes/settings/Limits.tsx":
     "saved per change: one limit's value, in the panel its pencil opens, written by that " +
     "panel's own Save",

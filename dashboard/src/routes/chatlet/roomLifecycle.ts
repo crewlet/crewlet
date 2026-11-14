@@ -75,7 +75,7 @@ export function archiveArgs(channelID: string, archived: boolean) {
 
 /** A room's own write path, under `/chatlet/channels/{id}/`. */
 function roomPath(channelID: string, verb: "retention" | "prune" | "erase"): string {
-  return `/chatlet/channels/${pathSegment(channelID)}/${verb}`;
+  return `/chatlet/channels/${pathSegment(channelID)}/${pathSegment(verb)}`;
 }
 
 /**
