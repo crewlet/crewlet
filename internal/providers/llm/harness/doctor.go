@@ -320,7 +320,8 @@ func (d Diagnosis) executorLines() []string {
 // seat's executor can run on it. Passed in rather than read here, so `doctor`
 // reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
-	// Smoke runs the real completion and the two tool probes.
+	// Smoke runs the real completion and the two tool probes; with Values,
+	// the completion alone.
 	Smoke bool
 
 	// ExecutorSeats are the agent seats whose executor chain holds this
@@ -373,6 +374,14 @@ type DiagnoseOptions struct {
 	// and removed for it when Home is empty: a candidate tested beside the
 	// entry's login would be tested with that login seeded next to it, and
 	// whichever the harness preferred would be what answered.
+	//
+	// AND IT MAKES ONE CALL, the smoke run, which is what signs the harness
+	// in with the candidate. The shell and web probes read what the ENTRY
+	// lets its harness reach, which a credential changes nothing of: run for
+	// a candidate, they were two or three more real calls on a credential
+	// nothing had stored, inside one person's wait, and a probe that misread
+	// its answer refused a credential the vendor had accepted. The entry's
+	// own check probes them.
 	Values map[string]string
 
 	// Home is a state directory of the diagnosis's own, in place of the
@@ -626,6 +635,12 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		c.set(CheckSmoke, outcome.verdict)
 		if outcome.kind != "" {
 			c.fail(CheckSmoke, outcome.kind, outcome.verdict)
+		}
+		if opts.Values != nil {
+			// A CANDIDATE IS TESTED BY ITS ONE CALL ([DiagnoseOptions.Values]).
+			c.set(CheckShell, stance+"; "+candidateProbeSkipped)
+			c.set(CheckWeb, web+"; "+candidateProbeSkipped)
+			break
 		}
 		verdict, problem := p.shellProbe(ctx)
 		if verdict == refusedVerdict {
@@ -908,6 +923,10 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 
 // refusedVerdict is a probe that found its tool refused.
 const refusedVerdict = "probe: refused"
+
+// candidateProbeSkipped is the shell and web lines' verdict on a candidate's
+// diagnosis, which runs the smoke call alone ([DiagnoseOptions.Values]).
+const candidateProbeSkipped = "probe skipped: a candidate credential is tested by its one call"
 
 // fileProbe asks the harness to read a file the doctor has just written on the
 // engine host, outside the seat's home, and reports whether it did, on the

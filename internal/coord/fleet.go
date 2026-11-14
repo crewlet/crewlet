@@ -62,7 +62,8 @@ import (
 // each operating insight it shares ([InsightRecords]),
 // each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
 // ([MCPSignIns]), the definition each MCP tool's level was decided on
-// ([MCPAccepted]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
+// ([MCPAccepted]), the [DeviceSignIns] in progress and each model entry's
+// latest check ([ModelChecks]), the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -2114,6 +2115,7 @@ type Fleet interface {
 	SeatPauses
 	ModelRetries
 	DeviceSignIns
+	ModelChecks
 	MCPListings
 	MCPRestarts
 	MCPChecks
