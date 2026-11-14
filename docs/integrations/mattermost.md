@@ -1044,65 +1044,68 @@ Copy the pair, then make five edits to the company copy:
 cp examples/nimbus.company.yaml nimbus.mattermost.company.yaml
 ```
 
-1. **The axis.** Set `chat.backend: vendor` and delete the `chat.chatlet`
-   block (a Chatlet policy on a vendor company describes nothing, and is
-   refused). `typing_status: addressed` moves to the Mattermost block below.
-2. **The workspace.** Add the block the bootstrap prints, under a new
-   `integrations:` key:
+**1. The axis.** Set `chat.backend: vendor` and delete the `chat.chatlet`
+block (a Chatlet policy on a vendor company describes nothing, and is
+refused). `typing_status: addressed` moves to the Mattermost block below.
 
-   ```yaml
-   integrations:
-     mattermost:
-       enabled: true
-       url: "${MATTERMOST_URL}"          # the bootstrap writes it
-       team: nimbus
-       typing_status: addressed
-       provisioning:
-         admin_token: "${MATTERMOST_ADMIN_TOKEN}"
-         username_prefix: ""           # the handles already start agent-
-         channels: [leadership, product, engineering]
-         display_name_suffix: " (AI)"
-   ```
+**2. The workspace.** Add the block the bootstrap prints, under a new
+`integrations:` key:
 
-   Leave `username_prefix` empty: the handles already start with `agent-`,
-   and a prefix would produce `@agent-agent-ceo`. The three channels are the
-   ones the copy's units already name (`channel:` on Leadership, Product and
-   Engineering), which on a vendor surface name that workspace's channels.
-3. **How a seat sends.** Add the Mattermost tool server under a new
-   `mcp_servers:` key — the websocket fleet only receives, so without it an
-   agent reasons about a message and has no tool to answer with:
+```yaml
+integrations:
+  mattermost:
+    enabled: true
+    url: "${MATTERMOST_URL}"          # the bootstrap writes it
+    team: nimbus
+    typing_status: addressed
+    provisioning:
+      admin_token: "${MATTERMOST_ADMIN_TOKEN}"
+      username_prefix: ""           # the handles already start agent-
+      channels: [leadership, product, engineering]
+      display_name_suffix: " (AI)"
+```
 
-   ```yaml
-   mcp_servers:
-     - name: mattermost
-       shared: false                   # each agent's own instance, on its own bot token
-       command: uvx
-       args: ["mcp-server-mattermost==0.6.1"]
-       tool_prefix: "mattermost_"
-       env:
-         MATTERMOST_URL: "${MATTERMOST_URL}"
-   ```
+Leave `username_prefix` empty: the handles already start with `agent-`,
+and a prefix would produce `@agent-agent-ceo`. The three channels are the
+ones the copy's units already name (`channel:` on Leadership, Product and
+Engineering), which on a vendor surface name that workspace's channels.
 
-   It is pinned because the bundled tool skills trigger on its tool names
-   ([Configure in YAML](#configure-in-yaml)).
-4. **Each agent's bot.** On every agent seat, the bot the engine creates for
-   it, in the channels its unit talks in:
+**3. How a seat sends.** Add the Mattermost tool server under a new
+`mcp_servers:` key — the websocket fleet only receives, so without it an
+agent reasons about a message and has no tool to answer with:
 
-   ```yaml
-   integrations:
-     mattermost:
-       enabled: true
-       roles: [system_user]
-       channels: [leadership, product, engineering]
-   ```
+```yaml
+mcp_servers:
+  - name: mattermost
+    shared: false                   # each agent's own instance, on its own bot token
+    command: uvx
+    args: ["mcp-server-mattermost==0.6.1"]
+    tool_prefix: "mattermost_"
+    env:
+      MATTERMOST_URL: "${MATTERMOST_URL}"
+```
 
-5. **The founder.** On Chatlet she was reached as her seat; on Mattermost she
-   is reached by the account she signs in as, so give her seat a `contact`:
+It is pinned because the bundled tool skills trigger on its tool names
+([Configure in YAML](#configure-in-yaml)).
 
-   ```yaml
-   contact:
-     mattermost_user_id: founder       # what the bootstrap creates
-   ```
+**4. Each agent's bot.** On every agent seat, the bot the engine creates for
+it, in the channels its unit talks in:
+
+```yaml
+integrations:
+  mattermost:
+    enabled: true
+    roles: [system_user]
+    channels: [leadership, product, engineering]
+```
+
+**5. The founder.** On Chatlet she was reached as her seat; on Mattermost she
+is reached by the account she signs in as, so give her seat a `contact`:
+
+```yaml
+contact:
+  mattermost_user_id: founder       # what the bootstrap creates
+```
 
 The Chatlet tools leave the seats' surface with the backend, so nothing else
 changes: the policies, the schedules and every brief say "chat" rather than
