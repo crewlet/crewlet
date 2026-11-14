@@ -351,14 +351,14 @@ const (
 	// AccessLogMaxBytesCeiling bound it.
 	//
 	// THE LOG GROWS WITH WHAT SEATS ARE TOLD AND THE SSH THEY USE, NOT WITH
-	// THE DISK. At the reference company's 100 seats: thirty linearizable
-	// dispatch reads a seat a day (accessdomain.LinearizableReadsPerSeatDay),
-	// each a barrier of about 140 bytes, about 420 KB a day; a told record of
-	// about 8 KiB signed whenever a seat's access changes, a few a week; and
-	// for ten seats at SSH about one certificate and three commands a turn,
-	// about 1.5 MB a day. About 2 MB a day in all, so 128 MiB is about two
-	// months of a COMPLETELY BLOCKED trim against a `trim_blocked` alarm
-	// raised after a day. The records go with the company's own
+	// THE DISK. At the reference company's 100 seats: sixty linearizable
+	// reads a seat a day, a turn's dispatch and its prefetch
+	// (accessdomain.LinearizableReadsPerSeatDay), each a barrier of about 140
+	// bytes, about 840 KB a day; a told record of about 8 KiB signed whenever
+	// a seat's access changes, a few a week; and for ten seats at SSH about
+	// one certificate and three commands a turn, about 1.5 MB a day. About
+	// 2.4 MB a day in all, so 128 MiB is about seven weeks of a COMPLETELY
+	// BLOCKED trim against a `trim_blocked` alarm raised after a day. The records go with the company's own
 	// `access_history.retention_days`, whatever the log holds.
 	//
 	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT, for the assistant's
@@ -377,10 +377,11 @@ const (
 	//
 	// THE LOG GROWS WITH WHAT PEOPLE RECORD, NOT WITH THE DISK. At the
 	// reference company's 100 seats, about twenty edits a day of about a
-	// kibibyte each, signed, and no read barriers
-	// (atlasdomain.LinearizableReadsPerSeatDay): tens of kilobytes a day, and
-	// well under a mebibyte with the agents' and the integrations' records
-	// later versions of the log add. So 128 MiB is about four months of a
+	// kibibyte each, signed, and thirty barriers a seat a day of about 140
+	// bytes each, one for each turn whose atlas tools read it
+	// (atlasdomain.LinearizableReadsPerSeatDay): about 450 KB a day, and
+	// about a mebibyte with the agents' and the integrations' records later
+	// versions of the log add. So 128 MiB is about four months of a
 	// COMPLETELY BLOCKED trim against a `trim_blocked` alarm raised after a
 	// day, the access log's horizon at a fraction of its rate. The history
 	// goes with the company's own `atlas.retention_days`, whatever the log

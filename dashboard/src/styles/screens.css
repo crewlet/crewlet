@@ -6521,6 +6521,23 @@ a.work-cal-chip {
 .home-decisions-icon {
   color: var(--color-feedback-warning-ink);
 }
+/* THE LINE IN PLACE OF AN EMPTY FIRST GROUP, above the second: it opens the
+   card, so it carries no rule over it. */
+.home-card-note--lead {
+  border-top: none;
+}
+/* WHAT THE READER MAY ANSWER THAT WAITS ON SOMEBODY ELSE, under a rule and
+   a quiet heading of its own: never read as more of what waits on them. */
+.home-decisions-others {
+  border-top: 1px solid var(--color-border-default);
+}
+.home-decisions-others-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4) 0;
+}
 
 /* ---- Home's board ------------------------------------------------------ */
 

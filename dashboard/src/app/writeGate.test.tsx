@@ -499,6 +499,8 @@ const NOBODY: ViewerState = {
   anonymous: true,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",

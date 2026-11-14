@@ -194,6 +194,7 @@ export function modelsData({
     assistant: assistant ?? { enabled: runsAssistant !== null, key: runsAssistant },
     loading: false,
     error: null,
+    failed: null,
     reload,
   };
 }

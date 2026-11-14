@@ -316,6 +316,9 @@ store:
   `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the
   broker can grant — on an embedded fleet through a member's loopback client
   listener with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool).
+  A single embedded node has no listener, so its bucket keeps its reservation:
+  make room by moving the files with `crewlet objects migrate -to s3`, or by
+  letting the collector remove what nothing names.
 - **A bucket with no ceiling is bounded by the figure you write, or refused.**
   Every bucket an engine built before the reservation created holds none, as
   does one made by hand or by another tool. A node configured with

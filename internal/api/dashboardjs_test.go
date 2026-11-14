@@ -1417,7 +1417,15 @@ const (
 	// wording for the count. The rail's group, the link dialog, the Work tab
 	// and the marks are the Worklet and atlas chunks'. So it moved to 408
 	// KiB, 2.23 seconds.
-	initialBudget = 408 << 10
+	// The Inbox badge counting what waits on the reader, and nothing else,
+	// took it to 408.5 KiB: the frame now reads the engine's decisions and
+	// counts the stopped seats the reader can act on and the conditions they
+	// decide, so the stopped-seat rule left a lazy row module for the entry's
+	// decisions module, and the attention queue gained each platform notice's
+	// fix destination and the reader's put-off marks (a small store beside
+	// the Home board's). Every list that draws these rows stays lazy. So it
+	// moved to 409 KiB, 2.23 seconds.
+	initialBudget = 409 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2403,6 +2411,13 @@ const (
 	// in words with its Edit view, and Subgroup by placed with the grouping
 	// added 3,450 bytes, nearly all script, and took it to 5992.4 KiB
 	// (6,136,170 bytes): 5993 KiB.
+	// What waits on a person in one place (the engine's standing on every
+	// parked run read by Home, the Inbox, Live and a seat's page, the Inbox's
+	// group of what a reader may answer for somebody else, a badge counting
+	// what waits on them alone, a platform notice's fix and put-off marks,
+	// which standing alarms are in Needs you, and a failed read said with its
+	// Try again on every screen that drew it as empty) added 8,775 bytes,
+	// nearly all script, and took it to 5983.2 KiB (6,126,802 bytes): 5984 KiB.
 	treeBudget = 5<<20 + 873<<10
 )
 

@@ -325,9 +325,13 @@ test("an unbound reader's own day is the one kept under their login", async () =
   // A TOKEN THE NODE'S CONFIG DECLARES cannot be bound, so it is told the two
   // ways that hold a seat instead.
   expect(
-    screen.getByText(/sign in as a person, or use a service account bound to an open seat/),
+    screen.getByText(/sign in as yourself, or use a service account bound to an open seat:/),
   ).toBeTruthy();
-  expect(screen.getByText("crewlet iam bind <id> <seat>")).toBeTruthy();
+  const command = screen.getByText("crewlet iam bind <id> <seat>");
+  // THE COMMAND IS NEVER INSIDE PARENTHESES, which a line break split from it.
+  const line = command.parentElement?.textContent ?? "";
+  expect(line).not.toMatch(/\(\s*crewlet iam bind/);
+  expect(line).not.toMatch(/<seat>\s*\)/);
   expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
   // THE LOGIN IS NAMED BY THE NOTE ABOVE THE DAY, never as a link: a login is
   // not a seat, and a seat page for it would answer "no such seat".

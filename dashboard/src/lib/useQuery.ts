@@ -122,6 +122,23 @@ export function retryDelayMs(code: QueryErrorCode, err: unknown): number | null 
   return unavailableRetryMs(err instanceof QueryError ? err.refusal : null);
 }
 
+/**
+ * Every read on screen that the engine failed to answer, each the refetch it
+ * asks again with: what one "Try again" asks again ([retryFailedReads]).
+ */
+const failedReads = new Set<() => void>();
+
+/**
+ * ASK AGAIN EVERY READ THAT FAILED, whatever screen drew it: the one control a
+ * failed read's banner offers (`components/common.tsx`' QueryState). A banner
+ * that said only that the engine failed to answer, and to check logs a
+ * dashboard reader has no access to, left the reader nothing to do but
+ * reload the page.
+ */
+export function retryFailedReads(): void {
+  for (const ask of [...failedReads]) ask();
+}
+
 export function useQuery<K extends QueryName>(
   what: K,
   params?: Record<string, unknown>,
@@ -245,6 +262,16 @@ export function useQuery<K extends QueryName>(
       if (SessionFloors.moves(what, domain, refreshes)) refetch();
     });
   }, [enabled, what, refetch]);
+
+  // A FAILED READ IS ASKED AGAIN BY "Try again" ([retryFailedReads]), and by
+  // nothing else new: its poll and its reconnect still ask as they did.
+  useEffect(() => {
+    if (!enabled || state.error === null) return;
+    failedReads.add(refetch);
+    return () => {
+      failedReads.delete(refetch);
+    };
+  }, [enabled, state.error, refetch]);
 
   // A TAB COMING BACK ASKS AGAIN.
   //

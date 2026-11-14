@@ -53,6 +53,8 @@ vi.mock("~/lib/viewer.ts", async () => {
       anonymous: false,
       loading: false,
       asking: false,
+      failed: null,
+      failedRefusal: null,
     }),
   };
 });

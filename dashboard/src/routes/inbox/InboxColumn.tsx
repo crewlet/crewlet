@@ -68,6 +68,7 @@ import {
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
+import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { heldRunTitle } from "~/lib/heldCall.ts";
 import { runAskTexts } from "~/lib/runs.ts";
@@ -113,8 +114,16 @@ export interface Later {
   onOpenChange: (open: boolean) => void;
 }
 
+/** The heading of what the reader may answer that waits on somebody else. */
+export const OTHERS_LABEL = "Waiting on others, you can answer";
+
+/** The heading of the platform notices this reader put off on this browser. */
+export const PUT_OFF_LABEL = "Put off on this browser";
+
 export function InboxColumn({
   needs,
+  others = [],
+  putOff,
   updates,
   snoozed,
   snoozedCount,
@@ -136,6 +145,17 @@ export function InboxColumn({
   elsewhere = null,
 }: {
   needs: readonly InboxRow[];
+  /**
+   * The runs the reader may answer that wait on somebody else, in an open
+   * group of their own after Needs you: answered the same way, and never
+   * counted as waiting on the reader (`lib/decisions.ts`).
+   */
+  others?: readonly InboxRow[];
+  /**
+   * The platform notices this reader put off on this browser, in a closed,
+   * counted group: still listed, each with the way back (`lib/putOff.ts`).
+   */
+  putOff?: UpdatesGroup;
   /** What reached the reader and is not read yet, in its closed group. */
   updates: UpdatesGroup;
   snoozed: Later;
@@ -214,6 +234,11 @@ export function InboxColumn({
           {needs.map((row) => item(row, { onClosed: closed }))}
         </InboxGroup>
       )}
+      {others.length > 0 && (
+        <InboxGroup label={OTHERS_LABEL} count={others.filter((r) => !settled.has(r.key)).length}>
+          {others.map((row) => item(row))}
+        </InboxGroup>
+      )}
       {elsewhere && (
         <Text as="p" variant="caption" className="inbox-note">
           {elsewhere}
@@ -230,6 +255,18 @@ export function InboxColumn({
           onOpenChange={updates.onOpenChange}
         >
           {updates.rows.map((row) => item(row))}
+        </InboxGroup>
+      )}
+      {putOff && putOff.rows.length > 0 && (
+        // CLOSED UNTIL OPENED, and counted: accepted for now, never gone.
+        <InboxGroup
+          label={PUT_OFF_LABEL}
+          count={putOff.rows.length}
+          collapsible
+          open={putOff.open}
+          onOpenChange={putOff.onOpenChange}
+        >
+          {putOff.rows.map((row) => item(row))}
         </InboxGroup>
       )}
       {answered.rows.length > 0 && (
@@ -253,7 +290,7 @@ export function InboxColumn({
       )}
       {more && updates.open && (
         <Text as="p" variant="caption" className="inbox-note">
-          More unread below. Read these to see them.
+          {`These are the newest ${INBOX_PAGE} unread updates. Mark them read to see older ones.`}
         </Text>
       )}
       {bound && (
@@ -362,7 +399,8 @@ function LaterRows({
  * names the row opening.
  */
 export function rowSpoken(row: InboxRow, index: OrgIndex): string {
-  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text}`;
+  // THE LABEL'S COLON is for the eye, before the excerpt; spoken alone it ends the sentence.
+  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text.replace(/:$/, "")}`;
 }
 
 /** What a row says under the name, and the quieter words after it. */
@@ -390,9 +428,12 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     case "answered":
       return { text: answeredPreview(row.answered) };
     case "notice": {
+      // THE REASON IS A LABEL AND WHAT WAS SAID FOLLOWS IT, so a colon ends
+      // the label: the kit joins the two with a space, and "You reported it
+      // Mobile PR #22 is merged" read as one run-on sentence.
       const said = noticeText(row.notice, index);
       return said
-        ? { text: noticeTitle(row.notice), excerpt: said }
+        ? { text: `${noticeTitle(row.notice)}:`, excerpt: said }
         : { text: noticeTitle(row.notice) };
     }
     case "change":

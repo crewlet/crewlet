@@ -44,6 +44,7 @@ import {
   queryErrorCode,
 } from "~/protocol/index.ts";
 import { goSignIn, page } from "~/lib/session.ts";
+import { retryFailedReads } from "~/lib/useQuery.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {
@@ -406,15 +407,18 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   timeout: (
-    <Callout variant="warning" icon={<ClockGlyph size="md" />}>
-      The engine didn’t answer in time.
+    <Callout variant="warning" icon={<ClockGlyph size="md" />} action={<TryAgain />}>
+      This didn’t load: the engine didn’t answer in time.
     </Callout>
   ),
   // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
   // this query", which is wrong about each of them in a different way.
+  // A FAILED READ SAYS WHAT DID NOT LOAD AND OFFERS THE ONE THING A READER
+  // CAN DO, ask again: it told them to check logs a dashboard reader usually
+  // cannot open, and left a reload as the only way on.
   query_failed: (
-    <Callout variant="danger">
-      The engine failed to answer. You can check logs for the details.
+    <Callout variant="danger" action={<TryAgain />}>
+      This didn’t load: the engine failed to answer.
     </Callout>
   ),
   closed: (
@@ -425,6 +429,18 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
 };
+
+/**
+ * Ask again every read on screen that failed (`lib/useQuery.ts`'
+ * retryFailedReads): one control for every failed read's banner.
+ */
+export function TryAgain() {
+  return (
+    <Button size="small" variant="secondary" onClick={retryFailedReads}>
+      Try again
+    </Button>
+  );
+}
 
 /**
  * A refusal on authority that says WHY: the access any one of which would

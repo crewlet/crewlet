@@ -70,6 +70,12 @@ function heldRun(over: Partial<ExecutorRow> = {}): ExecutorRow {
       held_at: "2026-11-01T11:50:00Z",
     },
     held_arguments: { issue: 42 },
+    // WHERE IT STANDS FOR THE READER, as the engine states it: put to them,
+    // and theirs to answer.
+    put_to: ["cto"],
+    put_to_you: true,
+    may_answer: true,
+    needs_you: true,
     ...over,
   } as ExecutorRow;
 }
@@ -211,7 +217,7 @@ test("every decision row draws a filled first answer and outlined others", async
 });
 
 test("a run parked on a plain question is no held call", () => {
-  expect(heldCallOf(heldRun({ held_call: undefined }))).toBeNull();
+  expect(heldCallOf(heldRun({ held_call: undefined }), (h) => h)).toBeNull();
 });
 
 // EVERY OTHER PLACE A PARKED RUN IS ANSWERED (the live run's banner, a seat's
@@ -430,4 +436,23 @@ test("a held merge's arguments are drawn as the merge, its reason as text", asyn
   expect(within(row).getByText(reason)).toBeTruthy();
   expect(row.querySelector("dl a, dl strong, pre")).toBeNull();
   expect(within(row).getByRole("button", { name: "Review and allow once" })).toBeTruthy();
+});
+
+// A RUN THE READER MAY ANSWER THAT WAITS ON SOMEBODY ELSE says whom it waits
+// on, in place of "Needs you", and still offers the answer the engine says the
+// reader may give; one the reader may not answer says whom it waits on and
+// offers nothing. Both read the engine's facts, never a rule of the row's own.
+test("a held call waiting on somebody else says whom, and offers the answer only to who may give it", async () => {
+  await mount(heldRun({ put_to: ["cto"], put_to_you: false, may_answer: true, needs_you: false }));
+  expect(screen.queryByText("Needs you")).toBeNull();
+  expect(document.querySelector(".decision-state")?.textContent).toMatch(/^Waiting on /);
+  expect(screen.getByText(/you can answer/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
+  cleanup();
+
+  await mount(heldRun({ put_to: ["cto"], put_to_you: false, may_answer: false, needs_you: false }));
+  expect(document.querySelector(".decision-state")?.textContent).toMatch(/^Waiting on /);
+  expect(screen.queryByText(/you can answer/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Deny" })).toBeNull();
 });

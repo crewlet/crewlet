@@ -621,6 +621,14 @@ type DecisionItem struct {
 	Ask *worklet.AskRow `json:"ask,omitempty"`
 	Run map[string]any  `json:"run,omitempty"`
 
+	// PutToYou, MayAnswer and NeedsYou are where it stands for the CALLER:
+	// put to them, theirs to answer, and waiting on them ([runanswer.Waiting]).
+	// A run's are its row's own ([serialiseRun]); an ask on the caller's own
+	// record is put to them and theirs to answer.
+	PutToYou  bool `json:"put_to_you"`
+	MayAnswer bool `json:"may_answer"`
+	NeedsYou  bool `json:"needs_you"`
+
 	// AccessChanged is set on a question its agent asked before an access
 	// change it has not reviewed yet (ADR-0111).
 	AccessChanged *AccessChanged `json:"access_changed,omitempty"`
@@ -687,6 +695,23 @@ func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) 
 // most [worklet.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
+// # And, on the caller's own record, what they may unblock
+//
+// A person may answer more than is put to them: a run whose question went to
+// a delegate, or to somebody else, is still theirs to answer where they lead
+// its seat or administer the company ([runanswer.May], the verb and object
+// the answer's own route decides on). Those are listed too, each item saying
+// where it stands for the caller (`put_to_you`, `may_answer`, `needs_you`), so
+// Home and the Inbox draw them as a group of their own beside what is put to
+// the person. Only on the caller's own record: whether somebody else may
+// answer a run is theirs to be asked, not a lead's to read off.
+//
+// `total` IS WHAT WAITS ON THE PERSON, the figure a badge says: the asks and
+// runs put to them and, on their own record, the runs they may answer that
+// their delegates escalated or left past the deadline ([runanswer.Waiting.NeedsYou]).
+// `answerable` is the rest of what they may answer, which waits on somebody
+// else in good time and asks nothing of them yet.
+//
 // THE SAME SCOPE RULE AS `work_my_work` — see [Sources.recordHandle]: no
 // `handle` is the caller's own record, and naming anybody else's is
 // [authz.ActionPersonRead] — theirs, whoever leads them, or an admin, each
@@ -708,6 +733,10 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE CALLER'S OWN RECORD, where what they may answer is listed beside
+	// what is put to them.
+	principal, _ := iam.From(ctx)
+	own := handle == iam.RecordOwner(principal)
 	var items []DecisionItem
 	total, capped := 0, false
 	var oldest *time.Time
@@ -744,7 +773,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		for i := range asks.Asks {
 			ask := asks.Asks[i]
 			items = append(items, DecisionItem{Kind: "ask", At: ask.AskedAt, Ask: &ask,
-				AccessChanged: changes.of(ctx, ask.AskedBy, ask.AskedAt)})
+				AccessChanged: changes.of(ctx, ask.AskedBy, ask.AskedAt),
+				PutToYou:      own, MayAnswer: own, NeedsYou: own})
 		}
 		total += asks.Total.Total
 		capped = asks.Total.Capped
@@ -754,6 +784,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		answer["read_level"] = asks.Level
 		answer["complete"] = asks.Complete
 	}
+	answerable := 0
 	if s.Sandbox != nil {
 		runs, err := s.Sandbox.ListActive(ctx)
 		if err != nil {
@@ -761,27 +792,46 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		reach := s.runReach(ctx)
 		for _, run := range runs {
+			r := reach(run)
+			waiting, err := s.waiting(ctx, run, r.Record)
+			if err != nil {
+				return nil, err
+			}
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
 			// this person: [putTo] asks both, as the board's audience
-			// filter does.
-			if !putTo(run, handle, s.delegating) {
+			// filter does. Or, on the caller's own record, theirs to answer
+			// though put to somebody else.
+			put := putTo(run, handle, s.delegating)
+			if !put && (!own || !waiting.MayAnswer) {
 				continue
 			}
 			at := waitingSince(run)
-			r := reach(run)
 			calls, err := s.runCalls(ctx, run, r)
 			if err != nil {
 				return nil, err
 			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run:           serialiseRun(run, calls, r, s.opened(run)),
-				AccessChanged: changes.of(ctx, run.AgentHandle, askedAt(run))})
+				Run:           serialiseRun(run, calls, r, s.opened(run), waiting),
+				AccessChanged: changes.of(ctx, run.AgentHandle, askedAt(run)),
+				PutToYou:      waiting.PutToYou, MayAnswer: waiting.MayAnswer, NeedsYou: waiting.NeedsYou()})
+			if !put && !waiting.NeedsYou() {
+				answerable++
+				continue
+			}
 			total++
 			older(at)
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].At.After(items[j].At) })
+	// WHAT WAITS ON THE PERSON FIRST, so the page's cut never drops one of
+	// those for a run that waits on somebody else; each half newest first.
+	waits := func(item DecisionItem) bool { return !own || item.NeedsYou }
+	sort.SliceStable(items, func(i, j int) bool {
+		if waits(items[i]) != waits(items[j]) {
+			return waits(items[i])
+		}
+		return items[i].At.After(items[j].At)
+	})
 	if len(items) > worklet.MaxDecisions {
 		items = items[:worklet.MaxDecisions]
 	}
@@ -790,6 +840,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	}
 	answer["items"] = items
 	answer["total"] = total
+	answer["answerable"] = answerable
 	answer["capped"] = capped
 	if oldest != nil {
 		answer["oldest_at"] = oldest.UTC()
