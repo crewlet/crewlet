@@ -641,13 +641,17 @@ func TestANewerRowUnderTheLastRowLeadsWhereNoCheckpointNamesALeaf(t *testing.T) 
 // walk takes, for a parent it cannot follow, the record of the latest time at
 // or before the current one's, at most 5,000 ms before it, of the same
 // isSidechain as written, not walked, the first in the file on a tie,
-// whether written before or after; and stops where none is.
+// whether written before or after; and stops where none is. A parent of a
+// string that is no uuid is no root: it names no record, so the walk takes
+// the fallback there too.
 //
 // Mutation: take 4,999 ms for the window, and the record 5,000 ms before is
 // not taken; take only a record strictly before, and the one of the same
 // time is not; ignore isSidechain, and a record that carries none is taken
 // for one that carries false; take the last on a tie, and the other record
-// is; or take a record walked already, and the walk turns round its loop.
+// is; take a record walked already, and the walk turns round its loop; or
+// read a parent of a string that is no uuid as a root, and the walk stops at
+// its record.
 func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.T) {
 	t.Parallel()
 	prompt := rcPrompt(0, 1, 0)
@@ -679,6 +683,10 @@ func TestAParentNamingNoRecordIsFollowedByTheNearestEarlierTimestamp(t *testing.
 			rcPrompt(rcNowhere, 3, 3000), rcReply(3, 4, "msg_b", 2500, rcSaid("b"))},
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain)},
 			[]int{1, 2, 3, 4}},
+		"a parent of a string that is no uuid": {[]string{prompt, rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+			ctReplace(t, rcReply(2, 3, "msg_b", 3000, rcSaid("b")), `"parentUuid":"`+rcUUID(2)+`"`,
+				`"parentUuid":"not-a-uuid"`)},
+			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain)}, []int{1, 2, 3}},
 		"a record naming itself": {[]string{prompt, rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
 			rcReply(3, 3, "msg_b", 2000, rcSaid("b"))},
 			map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain)}, []int{1, 2, 3}},
@@ -830,11 +838,16 @@ func TestARecoveredRecordIsPlacedByItsPlaceInTheFile(t *testing.T) {
 // so the whole thread is cannot tell (whyResultByCall); and one with neither
 // is placed by its parent alone, definite. A result is held to its own
 // parent's calls alone, so one under a later reply, of a call an earlier
-// reply made and had answered, is cannot tell too.
+// reply made and had answered, is cannot tell too; and so is one whose
+// parent, a reply of no id, made one of its calls, where a reply of an id
+// made that call too: with the flag on the resume hangs it under that reply,
+// the one its map of calls keeps, and recovers it with it.
 //
 // Mutation: read the flag as off, and a result it may hang elsewhere is
-// placed under its parent; or hold a result to the calls of every reply met
-// before its parent, and the one under the later reply reads as answered.
+// placed under its parent; hold a result to the calls of every reply met
+// before its parent, and the one under the later reply reads as answered; or
+// read only the first reply that made a call, and the result whose parent
+// made it reads as placed by its parent.
 func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 	t.Parallel()
 	sourced := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
@@ -848,6 +861,10 @@ func TestAResultTiedToItsCallByIDIsCannotTell(t *testing.T) {
 		rcResults(2, 3, 2000, "x1"), rcReply(3, 4, "msg_b", 3000, rcCalls("x2")), rcResults(4, 5, 4000, "x1"))
 	answered.expectCannotTell(t, "a result under a later reply, of a call an earlier one made and had answered",
 		whyResultByCall)
+	shared := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "", 1000, rcCalls("x1")),
+		rcReply(2, 3, "msg_c", 1100, rcCalls("x1")), rcResults(2, 4, 2000, "x1", "x9"),
+		rcReply(3, 5, "msg_z", 3000, rcSaid("z")))
+	shared.expectCannotTell(t, "a result whose call its parent of no id and another reply made", whyResultByCall)
 	alone := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
 		rcResults(2, 3, 2000, "x9"))
 	alone.expect(t, "a result whose call nobody made", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
