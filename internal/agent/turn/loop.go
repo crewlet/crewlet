@@ -731,7 +731,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Iterations = append(res.Iterations, ledger.Iteration{
 			Iteration: round,
 			Intent:    work.Summary,
-			Calls:     work.Calls,
+			Calls:     closedCalls(work.Calls),
 			Elided:    work.Elided,
 			Absorbed:  work.Absorbed,
 			// Only the reads actually CALLED, not the whole surface's
@@ -819,6 +819,23 @@ func names(calls []ledger.Call) []string {
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, c.Name)
+	}
+	return out
+}
+
+// closedCalls is a round's calls as its closed record keeps them: every call
+// whole but a SUCCESSFUL call's output, which nothing reads once its round has
+// closed — the prior-work ledger shows a failed call's error alone, a delivery
+// check reads names and outcomes, and a seed reads identities — and which a
+// parked turn would otherwise carry on its run's row for every round it closed.
+// A failed call keeps its error, which the next round reads. calls itself is
+// never changed.
+func closedCalls(calls []ledger.Call) []ledger.Call {
+	out := slices.Clone(calls)
+	for i := range out {
+		if !out[i].Failed {
+			out[i].Result = ""
+		}
 	}
 	return out
 }

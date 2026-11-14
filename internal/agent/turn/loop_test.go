@@ -630,6 +630,41 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 	}
 }
 
+// A CLOSED ROUND KEEPS NO SUCCESSFUL CALL'S OUTPUT, and a failed call keeps its
+// error: nothing reads a successful output once its round has closed — the
+// prior-work ledger shows a failed call's error alone — and a parked turn
+// carries every round it closed on its run's row. The round's own call list is
+// left as it came.
+//
+// Mutation: close the round with its calls as they came, and the successful
+// call's output is still on the record.
+func TestAClosedRoundKeepsNoSuccessfulOutput(t *testing.T) {
+	t.Parallel()
+	first := delivered("first")
+	first.Calls = []ledger.Call{
+		{Name: "slack_post", Result: "posted at 12:00"},
+		{Name: "slack_history", Result: "rate limited", Failed: true},
+	}
+	f := &fake{
+		works:    []turn.Work{first, delivered("second")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
+	}
+	res, _ := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("")})
+	if len(res.Iterations) != 1 {
+		t.Fatalf("ledger = %d entries, want the one closed round", len(res.Iterations))
+	}
+	want := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history", Result: "rate limited", Failed: true}}
+	if got := res.Iterations[0].Calls; len(got) != len(want) || got[0].Name != want[0].Name ||
+		got[0].Result != want[0].Result || got[1].Result != want[1].Result || !got[1].Failed {
+		t.Errorf("the closed round keeps %+v, want %+v", got, want)
+	}
+	if first.Calls[0].Result != "posted at 12:00" {
+		t.Errorf("closing the round changed the round's own call list: %+v", first.Calls)
+	}
+}
+
 // A CLOSED ROUND KEEPS THE CALLS ITS RECORD DID NOT LIST. A long round's run
 // keeps its calls' head and tail and a tally of the middle it dropped (Elided),
 // and of the calls its calls' own work made (Absorbed): the round the loop
