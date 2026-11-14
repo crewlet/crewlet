@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -19,10 +22,13 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -768,8 +774,10 @@ roles:
 // leaves room for goes out at once, and one past the room is held at once. A
 // seat that leaves the node between the two windows takes nothing of the park
 // to its next holder, which parks it once more: it goes out in the third. And
-// the delivery's launch TAKES the park's record, so a later delivery's launch
-// in the same window, which never waited, is held to its floor and parked.
+// the park's record is the delivery's, kept under its events' ids and dropped
+// once the dispatch that launched it acknowledged it, so a later delivery's
+// launch in the same window, which never waited, is held to its floor and
+// parked.
 //
 // ONLY A LAUNCH'S REFUSAL BELOW ITS FLOOR IS RECORDED. A first window that
 // refused the turn's round, or whose gate parked the seat before any turn ran,
@@ -790,8 +798,8 @@ roles:
 // refusal or the gate's, read the window as turned over in the window it
 // names, keep a session its window still leaves no room for, keep the record
 // when the seat leaves the node or drop it only after the park's hold is
-// lifted, read the record rather than take it, or say a waited floor is the
-// floor its launch was refused below; and a case goes red.
+// lifted, hand a later delivery the window of one that waited, or say a waited
+// floor is the floor its launch was refused below; and a case goes red.
 func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 	t.Parallel()
 	// A DAY OF 30000 UNDER A FLOOR OF 25000, and a thousand tokens of context
@@ -927,8 +935,11 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 					}
 					return turn.Result{}, err
 				}
+				// THE DELIVERY THE TURN WAS DISPATCHED FOR, as the turn's
+				// dispatch hands its launcher it.
 				l := &agentLauncher{engine: r.e, company: c, seat: seat,
-					turn: &turnctx.Turn{RunID: "t1", Seat: seat, Budget: m.auxiliary()}}
+					delivery: deliveryOf(r.turning().Events),
+					turn:     &turnctx.Turn{RunID: "t1", Seat: seat, Budget: m.auxiliary()}}
 				req := runner.AgentRunRequest{Brief: brief}
 				if tc.session > 0 {
 					req.Session = &runner.SessionContinuation{Brief: "carry on", Replaced: "carry on",
@@ -1040,6 +1051,262 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 					got, r.runs(), r.holds())
 			}
 		})
+	}
+}
+
+// A WAITED LAUNCH'S TURNOVER IS ITS OWN DELIVERY'S. The park records the window
+// a launch was refused below its floor in for the delivery whose launch it was,
+// and its release hands the seat's mail back in the seat's order, which is not
+// the order its deliveries were refused in: a person who writes to the seat
+// while it is parked rides the seat's priority lane, which every drain takes
+// first. Kept for the seat, the window went to the person's launch, which never
+// waited, held at the static floor below its own brief's floor, and the
+// delivery that waited found nothing, was refused at its floor again and parked
+// again, in every window a person wrote to the seat. So, in a busy company, a
+// background delivery whose brief takes its floor to the room is refused and
+// parked, and a person writes meanwhile: at the turnover, whichever of the two
+// runs first, the person's launch goes out on its own floor, held at nothing,
+// and the delivery that waited goes out held at the static floor; and once it
+// has gone out, nothing of its wait is left on the seat.
+//
+// Mutation: key the record by the seat, record the wait under none of the
+// delivery's events, drop nothing once a delivery is gone, or drop the seat's
+// every wait with one delivery's, and a case goes red.
+func TestAWaitedLaunchsTurnoverIsItsOwnDeliverys(t *testing.T) {
+	t.Parallel()
+	// THE BUSY COMPANY: a day of 30000, the smallest ceiling, every turn's
+	// context assembly 1000 and the other seats' spend 1000 before every
+	// launch reads the window, which leaves the launch 28000 of a room of
+	// 29000.
+	const ceiling, static, assembly, others = 30_000, 25_000, 1_000, 1_000
+	// THE BAND: the waited delivery's brief takes its floor to the room,
+	// 29000, past the 28000 the busy window leaves; the person's is short,
+	// its floor 25100, which every window here leaves room for.
+	const waitedBrief, personBrief = 4_000, 100
+	for name, lane := range map[string]bool{
+		"a person's message on the seat's priority lane, run first":             true,
+		"a person's message in the seat's inbox, run after the one that waited": false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newFlooredParkRig(t, fmt.Sprint(2*ceiling), fmt.Sprint(static))
+			r.e.epoch.current.Store(companyFor(t, strings.NewReplacer("%c", fmt.Sprint(ceiling),
+				"%d", fmt.Sprint(2*ceiling), "%f", fmt.Sprint(static)).Replace(busyLeadDoc)))
+			colleague := coord.AgentScope(seatOf("colleague").String())
+			waited, person := uuid.New(), uuid.New()
+			// launched is one launch a turn made: the delivery it was for, the
+			// floor it was held to, and whether it went out.
+			type launched struct {
+				id    uuid.UUID
+				floor launchFloor
+				out   bool
+			}
+			var mu sync.Mutex
+			var launches []launched
+			r.mu.Lock()
+			r.turnFn = func() (turn.Result, error) {
+				ctx := t.Context()
+				evs := r.turning().Events
+				c := r.e.Company()
+				seat := c.Org.AgentSeatByHandle("lead")
+				// THE TURN'S CONTEXT ASSEMBLY through its meter, and the other
+				// seats' spend in the company's window, before the launch
+				// reads it.
+				m := r.e.meterFor(c, "lead")
+				if err := m.Record(ctx, assembly, r.clock()); err != nil {
+					return turn.Result{}, err
+				}
+				if _, err := r.fleet.PostCharge(ctx, colleague, others,
+					coord.WindowsAt(r.clock(), c.Config.Location())); err != nil {
+					return turn.Result{}, err
+				}
+				brief := personBrief
+				if evs[0].ID == waited {
+					brief = waitedBrief
+				}
+				// THE DELIVERY THE TURN WAS DISPATCHED FOR, as the turn's
+				// dispatch hands its launcher it.
+				l := &agentLauncher{engine: r.e, company: c, seat: seat, delivery: deliveryOf(evs),
+					turn: &turnctx.Turn{RunID: newRunID(), Seat: seat, Budget: m.auxiliary()}}
+				_, floor := l.continuedFloor(ctx, runner.AgentRunRequest{Brief: strings.Repeat("a", 4*brief)},
+					nil, true)
+				err := executorHeadroom(ctx, r.e.remainingFor(c, "lead"), floor)
+				mu.Lock()
+				launches = append(launches, launched{id: evs[0].ID, floor: floor, out: err == nil})
+				mu.Unlock()
+				return turn.Result{}, err
+			}
+			r.mu.Unlock()
+			publish := func(id uuid.UUID, prioritized bool) {
+				ev := &events.Event{ID: id, Type: "task_assigned", Timestamp: r.clock()}
+				if prioritized {
+					queue.Prioritize(ev)
+				}
+				if err := r.q.Publish(t.Context(), seatInbox(r.e, "lead"), ev); err != nil {
+					t.Fatalf("Publish: %v", err)
+				}
+			}
+			publish(waited, false)
+			alarms := r.alarms.live()
+			mu.Lock()
+			first := slices.Clone(launches)
+			mu.Unlock()
+			if len(first) != 1 || first[0].out || len(alarms) != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+				t.Fatalf("precondition: the delivery's launch, its floor at the room, was not refused and its "+
+					"seat parked (launches %+v, alarms %d, holds %v)", first, len(alarms), r.holds())
+			}
+			// A PERSON WRITES WHILE THE SEAT IS PARKED, a minute later in the
+			// same window: the park holds the message with the seat's mail.
+			r.mu.Lock()
+			r.now = r.now.Add(time.Minute)
+			r.mu.Unlock()
+			publish(person, lane)
+			if got := r.runs(); got != 1 {
+				t.Fatalf("the parked seat ran %d turns, want only the one refused before its park", got)
+			}
+			// THE TURNOVER, whose alarm releases the seat's mail.
+			r.renew(t)
+			r.mu.Lock()
+			r.now = berlinMidnight.Add(time.Second)
+			r.mu.Unlock()
+			alarms[0].fire()
+			mu.Lock()
+			after := slices.Clone(launches[1:])
+			mu.Unlock()
+			order := []uuid.UUID{waited, person}
+			if lane {
+				order = []uuid.UUID{person, waited}
+			}
+			if len(after) != 2 || after[0].id != order[0] || after[1].id != order[1] {
+				t.Fatalf("after the turnover the turns launched %+v, want the person's and the waited "+
+					"delivery's in the order %v", after, order)
+			}
+			for _, l := range after {
+				switch l.id {
+				case person:
+					if !l.out || l.floor.waited.Valid() || l.floor.tokens() != static+personBrief {
+						t.Errorf("the person's launch went out %v held to %d (waited %+v), want it out on its "+
+							"own floor, %d: it never waited", l.out, l.floor.tokens(), l.floor.waited,
+							static+personBrief)
+					}
+				case waited:
+					if !l.out || !l.floor.waited.Valid() || l.floor.tokens() != static {
+						t.Errorf("the delivery that waited went out %v held to %d (waited %+v), want it out "+
+							"held at the static floor, %d, a turnover after its launch was refused", l.out,
+							l.floor.tokens(), l.floor.waited, static)
+					}
+				}
+			}
+			// AND NOTHING OF THE WAIT IS LEFT once the delivery that waited
+			// went out and the dispatch that launched it acknowledged it.
+			if left := r.e.floorWaits.waited(seatOf("lead"), []uuid.UUID{waited}); len(left) != 0 {
+				t.Errorf("the seat keeps the wait %+v of a delivery whose launch went out", left)
+			}
+		})
+	}
+}
+
+// A WAIT OUTLASTS EVERY REFUSAL BUT ITS FLOOR'S. A delivery's launch reads the
+// window its park recorded and never takes it, the record lasting as long as
+// the delivery: so a try that waited a turnover and was then refused for
+// something else, the one runner of its chain sitting out its plan, leaves the
+// try after it held as it was. Taken by that try, the wait was spent where the
+// try went no further, and the next was held to its floor again: refused in
+// the busy window, its seat parked, a turnover lost to a limit that had
+// nothing to do with its floor.
+//
+// Mutation: take the record as the launch reads it, and the try after the
+// limit is refused at its floor.
+func TestAWaitOutlastsEveryRefusalButItsFloors(t *testing.T) {
+	t.Parallel()
+	static := new(config.TurnEngine).ExecutorFloor()
+	const ceiling, others, brief = 30_000, 2_000, 4_000
+	band := strings.Repeat("a", 4*brief)
+	if need := static + brief; need <= ceiling-others || need > ceiling {
+		t.Fatalf("a floor of %d is not past the %d the window leaves and within its %d ceiling: the case is "+
+			"not the one it means", need, ceiling-others, ceiling)
+	}
+	// THE CHAIN'S ONE RUNNER SITTING OUT ITS PLAN, in a busy company: the
+	// company's day the smallest ceiling, the seat's twice it.
+	member := chainMember{key: "plan", agent: executor.ClaudeCodeName, model: "claude-golden"}
+	limited, seat := chainCompany(t, chainMember{key: member.key, agent: member.agent, model: member.model,
+		spent: true})
+	seat.TokenBudget = org.TokenCeilings{period.Day: 2 * ceiling}
+	limited.Org.TokenBudget = org.TokenCeilings{period.Day: ceiling}
+	e, jobs := launchRig(t, limited, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	e.backends.Fleet = coordmemory.NewFleet()
+	othersSpent(t, e, others)
+	// THE DELIVERY WAITED: its launch was refused below its floor the day
+	// before, and its seat's park recorded that window for it.
+	id, ok := limited.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	day := e.meterFor(limited, seat.Handle()).windows()[0]
+	delivery := []uuid.UUID{uuid.New()}
+	e.floorWaits.parked(id, delivery, sandbox.BudgetWindow{Period: day.Period, Label: day.Shift(-1).Label})
+
+	l := launcherOn(e, limited, seat, "t1")
+	l.delivery = delivery
+	req := launchRequest(l, nil)
+	req.Brief = band
+	_, err := l.LaunchExecutor(t.Context(), req)
+	var exhausted *chain.Error
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("the try that waited = %v, want it held past its floor and refused by its chain sitting out",
+			err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+	// THE PLAN BACK: the same company, its runner no longer sitting out.
+	back := *limited
+	models, err := phase.NewRegistry([]phase.Entry{{Key: member.key, Provider: harnessProvider(t, member)}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	back.Models = models
+	again := launcherOn(e, &back, seat, "t2")
+	again.delivery = delivery
+	req = launchRequest(again, nil)
+	req.Brief = band
+	if _, err := again.LaunchExecutor(t.Context(), req); err != nil || len(jobs.Started()) != 1 {
+		t.Fatalf("the try after the limit = %v, %d jobs started; want it launched, held at the static floor, %d",
+			err, len(jobs.Started()), static)
+	}
+}
+
+// A DELIVERY ANY OF WHOSE EVENTS WAITED A TURNOVER IS HELD. A redelivery can
+// merge newer mail into the delivery that waited, and a park records its
+// window under each event of the delivery whose launch it refused, so one turn
+// can carry two windows: one its newer events were refused in, which may still
+// be current, and an earlier one that has turned over. The turn's work waited
+// that turnover, and its launch is held for it, whichever its events name
+// first.
+//
+// Mutation: read only the first window recorded for the delivery, and the
+// launch is held to its floor for a window still current.
+func TestADeliveryAnyOfWhoseEventsWaitedIsHeld(t *testing.T) {
+	t.Parallel()
+	static := new(config.TurnEngine).ExecutorFloor()
+	const ceiling, brief = 30_000, 4_000
+	e, l, _ := busyFloorRig(t, ceiling)
+	id, ok := l.company.Org.AgentIDFor(l.seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	day := e.meterFor(l.company, l.seat.Handle()).windows()[0]
+	today := sandbox.BudgetWindow{Period: day.Period, Label: day.Label}
+	before := sandbox.BudgetWindow{Period: day.Period, Label: day.Shift(-1).Label}
+	newer, older := uuid.New(), uuid.New()
+	e.floorWaits.parked(id, []uuid.UUID{newer}, today)
+	e.floorWaits.parked(id, []uuid.UUID{older}, before)
+	l.delivery = []uuid.UUID{newer, older}
+	_, floor := l.continuedFloor(t.Context(), runner.AgentRunRequest{Brief: strings.Repeat("a", 4*brief)},
+		nil, true)
+	if floor.waited != before || floor.tokens() != static {
+		t.Errorf("a delivery one of whose events waited out %s is held to %d, waited %+v; want it held at the "+
+			"static floor, %d, for that turnover", before.Label, floor.tokens(), floor.waited, static)
 	}
 }
 

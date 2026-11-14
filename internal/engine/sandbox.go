@@ -1735,7 +1735,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// its job's record, so this segment's relaunch waits for its brief's
 		// room no longer than that window ([agentLauncher.continuedFloor]).
 		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil, nil,
-			notes, &refusedIn),
+			nil, notes, &refusedIn),
 		Budget: tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives

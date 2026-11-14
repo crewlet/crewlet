@@ -64,8 +64,11 @@ below the floor with its brief, or with a session's context, waits one turnover
 at most**: in a busy company the other seats spend in the window first after
 every turnover, so a figure within that room can be past what every window
 leaves the launch when it reads it. In the window after the one it was refused
-in, the launch is held at the floor alone, as above, and continues a session
-only where that window leaves room for it. A reviewer sending the work back for another run
+in, that launch's next try is held at the floor alone, as above, and continues
+a session only where that window leaves room for it: the next try of the same
+message's delivery, or of the same turn's relaunch, and never the launch of a
+person's message the seat is handed first once its window turns over, which is
+held to its own floor. A reviewer sending the work back for another run
 on a window that cannot pay for it **holds** the job the turn just collected: it waits collected in its paused box, with its seat held
 behind it, and the turn resumes once the window turns over or a revision raises
 the ceiling (`sandbox_resume_held` in the log), rather than reviewing it again

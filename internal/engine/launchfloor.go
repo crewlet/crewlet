@@ -108,16 +108,20 @@ import (
 // continuation's, a measured session's. Waited for, it was refused in every
 // window, where a launch held to the static floor alone, its brief uncounted,
 // went out in the first. So the window a launch is refused below its floor in
-// rides its wait (on a dispatch, the seat's park on this node, [floorWaits]; on
-// a resume, its hold, onto the job's record,
-// [sandbox.LaunchRecord.RelaunchRefusedIn]), and its next try, in a window
-// after it, holds its fresh brief's floor as one past the room is held
-// ([launchFloor.after]) and drops a session whose floor that window still
-// leaves no room for ([launchFloor.stillShort]): it goes out wherever a launch
-// held to the static floor alone would, one turnover later at most. A seat that
-// moves to another node between the two may wait one window more, the record
-// being its park's, and a record that holds no window, as a build without it
-// wrote it, reads as never refused, which costs the same.
+// rides its wait, kept for the work whose launch it refused (on a dispatch, the
+// seat's park on this node, under the ids of the delivery's events,
+// [floorWaits]; on a resume, its hold, onto the job's record,
+// [sandbox.LaunchRecord.RelaunchRefusedIn]), and the next try of that work, and
+// of no other, in a window after it, holds its fresh brief's floor as one past
+// the room is held ([launchFloor.after]) and drops a session whose floor that
+// window still leaves no room for ([launchFloor.stillShort]): it goes out
+// wherever a launch held to the static floor alone would, one turnover later at
+// most. Kept for the seat, the wait went to whichever launch the park's release
+// handed the seat first, a person's message on its priority lane before the
+// delivery that waited, which was refused again. A seat that moves to another
+// node between the two may wait one window more, the record being its park's,
+// and a record that holds no window, as a build without it wrote it, reads as
+// never refused, which costs the same.
 //
 // AND NEITHER IS A SESSION THE LAUNCH'S MODEL CANNOT CARRY: a Claude Code run's
 // window is its model's own ([sandbox.ClaudeCodeWindow]), and a session kept under
