@@ -4386,6 +4386,55 @@ a.knowledge-reader-how:hover {
   border-radius: var(--radius-pill);
   background: var(--color-brand-accent);
 }
+/* THE BAR OVER A PICKED LIST (`routes/worklet/taskMenu.tsx`), a gap above the
+   grid it acts on so its sticky edge does not sit on the head row. */
+.task-selection-bar {
+  margin-block-end: var(--spacing-2);
+}
+
+/* A NARROWING THE SHAPE SETS ASIDE (`lib/work.ts` filterChips' `inert`): its
+   words are muted, and its sentence says why. */
+.work-chip-inert {
+  opacity: 0.6;
+}
+/* A TASK'S OWN MENU (`routes/worklet/taskMenu.tsx`), beside a board card or a
+   timeline row's name rather than inside it, since each is a link: drawn on
+   the row's corner while the pointer or focus is on the row or the menu is
+   open, and always on a screen with no hover, where nothing would reveal it. */
+.work-col-slot,
+.tl-name-row {
+  position: relative;
+}
+.work-col-slot > .task-row-menu,
+.tl-name-row > .task-row-menu {
+  position: absolute;
+  right: var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-default);
+}
+.work-col-slot > .task-row-menu {
+  top: var(--spacing-1);
+  box-shadow: var(--shadow-sm);
+}
+.tl-name-row > .task-row-menu {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.work-col-slot:hover > .task-row-menu,
+.work-col-slot:focus-within > .task-row-menu,
+.tl-name-row:hover > .task-row-menu,
+.tl-name-row:focus-within > .task-row-menu,
+.task-row-menu:has([aria-expanded="true"]) {
+  opacity: 1;
+}
+@media (hover: none) {
+  .work-col-slot > .task-row-menu,
+  .tl-name-row > .task-row-menu {
+    opacity: 1;
+  }
+}
 /* THE REST OF THE LANE — a link to the list narrowed to it, drawn as the
    approved dashed row at the lane's foot. */
 .work-col-more {
@@ -6245,6 +6294,13 @@ a.work-cal-chip {
 }
 .tl-name.selected {
   background: var(--color-brand-accent-soft);
+}
+
+/* THE REST OF A BAND, under it: the list narrowed to that band. */
+.tl-band-more {
+  display: inline-block;
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-compact);
 }
 
 .tl-aside {

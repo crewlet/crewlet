@@ -147,6 +147,9 @@ const ALL_SET: TrackerFilters = {
   sort: "-updated",
   blocked: true,
   due: "overdue",
+  start: "thisweek",
+  created: "last7",
+  updated: "lastmonth",
   removed: true,
   fields: { "f.area": "api" },
 };
@@ -292,7 +295,7 @@ const ARRANGEMENT: Record<
     at: "#/worklet?group_by=status",
     press: async () => {
       await openDisplay();
-      pick(await screen.findByRole("combobox", { name: "Then by" }), "Priority");
+      pick(await screen.findByRole("combobox", { name: "Subgroup by" }), "Priority");
     },
     writes: "group_by2=priority",
   },

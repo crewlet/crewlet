@@ -2392,7 +2392,18 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
-	treeBudget = 5<<20 + 856<<10
+	// A task's own menu on every Worklet shape and its page (Move to project,
+	// Move to trash with the subtask question and Undo, Restore and Delete
+	// permanently with its confirmation), a list's selection and its bar, the
+	// Start, Created and Updated filters, group by parent, and one writer for
+	// the grouping keys added 14,693 bytes, nearly all script, and took it to
+	// 5989.0 KiB (6,132,720 bytes): 5990 KiB.
+	// My work's Watching and Collaborating as the work list with its toolbar,
+	// the Queue's order folded into a phone's More, a saved view's settings
+	// in words with its Edit view, and Subgroup by placed with the grouping
+	// added 3,450 bytes, nearly all script, and took it to 5992.4 KiB
+	// (6,136,170 bytes): 5993 KiB.
+	treeBudget = 5<<20 + 873<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

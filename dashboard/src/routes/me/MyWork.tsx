@@ -116,7 +116,14 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
-import { askedByParams, pageCount, type Scope, itemPath } from "~/lib/work.ts";
+import {
+  askedByParams,
+  buildItemsParams,
+  NO_FILTERS,
+  pageCount,
+  type Scope,
+  itemPath,
+} from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/worklet/ItemsView.tsx";
 import type {
   WorkClaimTotal,
@@ -158,6 +165,15 @@ const ASSIGNED_OPENS: Record<string, string> = { group_by: "due:bucket", sort: "
  * where an answer may be about to arrive.
  */
 const ASKED_OPENS: Record<string, string> = { show_closed: "true", sort: "-updated" };
+
+/**
+ * WHAT A PERSON FOLLOWS opens as the engine's own block does: everything, open
+ * or finished, the most recently changed first.
+ */
+const WATCHING_OPENS: Record<string, string> = { show_closed: "true", sort: "-updated" };
+
+/** AND WHAT THEY WERE BROUGHT ONTO, open work, the most recently changed first. */
+const COLLABORATING_OPENS: Record<string, string> = { sort: "-updated" };
 
 /**
  * A COUNT READ ASKS FOR ONE ROW. The two tabs the tracker counts (the Queue and
@@ -337,6 +353,25 @@ export function MyWork({ section }: { section: MeSection }) {
     }),
     [whose, they],
   );
+  // AND THE TWO LISTS OF OTHER PEOPLE'S WORK somebody is on, the same list
+  // again: drawn as a bare block, a forty-row Watching could not be searched,
+  // filtered, grouped or paged past its first twenty.
+  const watchingHost = useMemo<ItemsHost>(
+    () => ({
+      lock: { watcher: whose },
+      opens: WATCHING_OPENS,
+      empty: (scope: Scope) => followEmpty("watching", scope, they),
+    }),
+    [whose, they],
+  );
+  const collaboratingHost = useMemo<ItemsHost>(
+    () => ({
+      lock: { collaborator: whose },
+      opens: COLLABORATING_OPENS,
+      empty: (scope: Scope) => followEmpty("collaborating", scope, they),
+    }),
+    [whose, they],
+  );
 
   // EVERY COUNT, ALWAYS, on the section tabs the page header draws — which is
   // what replaces the stacking: a section nobody has opened still says how
@@ -344,7 +379,40 @@ export function MyWork({ section }: { section: MeSection }) {
   // its ceiling is a floor — `pageCount` writes it with a `+`, which a bare
   // number would report as a fact about somebody's day — and it is absent,
   // never "0", while its read is in flight.
-  const listed = { assigned: ownDay ? ownQueue : theirQueue, askedBy: listTotal(askedBy.data) };
+  // AND THE TWO FOLLOWING LISTS' COUNTS, the question each list asks with no
+  // arrangement, for the reason the Queue's and Asked by me's are.
+  const followCount = (lock: "watcher" | "collaborator", opens: Record<string, string>) =>
+    whose
+      ? buildItemsParams({
+          container: "workspace",
+          shape: "list",
+          view: {},
+          filters: { ...NO_FILTERS, fields: {}, scope: opens.show_closed ? "all" : "open" },
+          lock: lock === "watcher" ? { watcher: whose } : { collaborator: whose },
+        })
+      : undefined;
+  const watching = useQuery(
+    "work_items",
+    followCount("watcher", WATCHING_OPENS) && {
+      ...followCount("watcher", WATCHING_OPENS),
+      limit: COUNT_ONLY,
+    },
+    { enabled: trackerReads, pollMs: 60_000, refetchOnInboxOf: whose },
+  );
+  const collaborating = useQuery(
+    "work_items",
+    followCount("collaborator", COLLABORATING_OPENS) && {
+      ...followCount("collaborator", COLLABORATING_OPENS),
+      limit: COUNT_ONLY,
+    },
+    { enabled: trackerReads, pollMs: 60_000, refetchOnInboxOf: whose },
+  );
+  const listed = {
+    assigned: ownDay ? ownQueue : theirQueue,
+    askedBy: listTotal(askedBy.data),
+    watching: listTotal(watching.data),
+    collaborating: listTotal(collaborating.data),
+  };
   useSectionCounts(
     mine
       ? figures({
@@ -367,7 +435,26 @@ export function MyWork({ section }: { section: MeSection }) {
     nav.to(["me"], { order: "priorities", ...(handle ? { handle } : {}) });
   // THE TWO WAYS OUT, as the bar's "More" offers them on a phone — the same
   // two links the bar draws inline everywhere wider.
+  // THE QUEUE'S ORDER FOLDS WITH THE LINKS ON A PHONE, as its two answers:
+  // beside the whose-day picker the switch ran past a 390px bar and its
+  // second word was cut under "More".
   usePageMenu([
+    ...(section === "queue"
+      ? [
+          {
+            key: "order-due",
+            label: "Order by due",
+            checked: order === "due",
+            onSelect: () => setOrder("due"),
+          },
+          {
+            key: "order-priorities",
+            label: "Order by priorities",
+            checked: order === "priorities",
+            onSelect: () => setOrder("priorities"),
+          },
+        ]
+      : []),
     { key: "inbox", label: "Inbox", onSelect: () => nav.to(["inbox"]) },
     { key: "all-work", label: "All work", onSelect: () => nav.to(["worklet", "tasks"]) },
   ]);
@@ -414,27 +501,29 @@ export function MyWork({ section }: { section: MeSection }) {
             asks to be seen — somebody else ordered this queue. The title
             names the PERSON, as the banner does, never the handle. */}
         {section === "queue" && (
-          <SegmentedControl<Order>
-            semantics="radio"
-            activate="manual"
-            label="Order the queue by"
-            value={order}
-            onValueChange={setOrder}
-            options={[
-              { value: "due", label: "Due", icon: <NamedGlyph name="calendar" size="xs" /> },
-              {
-                value: "priorities",
-                label: "Priorities",
-                icon: <NamedGlyph name={setBy ? "flag" : "list"} size="xs" />,
-                title: setBy ? `Ordered by ${setByName}` : undefined,
-              },
-            ]}
-          />
+          <span className="page-action-folds">
+            <SegmentedControl<Order>
+              semantics="radio"
+              activate="manual"
+              label="Order the queue by"
+              value={order}
+              onValueChange={setOrder}
+              options={[
+                { value: "due", label: "Due", icon: <NamedGlyph name="calendar" size="xs" /> },
+                {
+                  value: "priorities",
+                  label: "Priorities",
+                  icon: <NamedGlyph name={setBy ? "flag" : "list"} size="xs" />,
+                  title: setBy ? `Ordered by ${setByName}` : undefined,
+                },
+              ]}
+            />
+          </span>
         )}
-        {/* FOLDED ON A PHONE into the bar's "More" (published above): the
-            whose-day picker and the Queue's order switch are what a reader
-            uses here, and with the two links beside them the bar ran past a
-            390px screen's edge. */}
+        {/* FOLDED ON A PHONE into the bar's "More" (published above), with
+            the Queue's order switch: the whose-day picker is what a reader
+            uses here, and with the switch and the two links beside it the bar
+            ran past a 390px screen's edge. */}
         <span className="page-action-folds row gap-3">
           <a className="t-link" href={href(["inbox"])}>
             Inbox →
@@ -582,26 +671,8 @@ export function MyWork({ section }: { section: MeSection }) {
                     />
                   </>
                 ))}
-              {tab === "collaborating" && (
-                <Block
-                  rows={mine.collaborating}
-                  total={mine.totals.collaborating}
-                  now={now}
-                  chrome={chrome}
-                  hint="Brought on without owning."
-                  empty="Not on anyone else’s tasks."
-                />
-              )}
-              {tab === "watching" && (
-                <Block
-                  rows={mine.watching_recent}
-                  total={mine.totals.watching_recent}
-                  now={now}
-                  chrome={chrome}
-                  hint="Followed, and changed recently."
-                  empty={`Nothing ${ownDay ? "you follow" : "they follow"} has moved lately.`}
-                />
-              )}
+              {tab === "collaborating" && <ItemsView host={collaboratingHost} />}
+              {tab === "watching" && <ItemsView host={watchingHost} />}
               {tab === "checklist" &&
                 (mine.checklist_items.length === 0 ? (
                   <EmptyState
@@ -857,7 +928,12 @@ function countFor(
   // kept, so its tab carries no figure (see `DayReviews`).
   tab: Exclude<Tab, "priorities" | "reviews">,
   mine: WorkMyWork,
-  listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
+  listed: {
+    assigned?: WorkClaimTotal;
+    askedBy?: WorkClaimTotal;
+    watching?: WorkClaimTotal;
+    collaborating?: WorkClaimTotal;
+  },
 ): string {
   const totals = mine.totals;
   const claim: WorkClaimTotal | undefined = {
@@ -866,8 +942,8 @@ function countFor(
     "asked-of-me": totals.asked_of_me,
     unblocked: totals.unblocked_recent,
     "holding-up": totals.holding_up,
-    collaborating: totals.collaborating,
-    watching: totals.watching_recent,
+    collaborating: listed.collaborating,
+    watching: listed.watching,
     checklist: totals.checklist_items,
   }[tab];
   if (claim === undefined) return "";
@@ -942,6 +1018,34 @@ function assignedEmpty(scope: Scope, they: string): { title: string; description
  * What Asked by me says when it holds nothing and nothing is narrowing it —
  * in this person's voice, per scope, for the reason [assignedEmpty] gives.
  */
+/**
+ * What the Watching and Collaborating lists say when they hold nothing, in
+ * that person's voice: other people's work they follow, or were brought onto.
+ */
+function followEmpty(
+  list: "watching" | "collaborating",
+  scope: Scope,
+  they: string,
+): { title: string; description: string } {
+  const own = they === "you";
+  if (list === "watching") {
+    return {
+      title: `${own ? "You follow" : "They follow"} nothing here`,
+      description:
+        scope === "all"
+          ? "Tasks you follow and do not hold appear here, the most recently changed first."
+          : "Switch to All to see finished work too.",
+    };
+  }
+  return {
+    title: `${own ? "You are" : "They are"} not on anyone else’s tasks${scope === "all" ? "" : " here"}`,
+    description:
+      scope === "all"
+        ? "Tasks somebody brings you onto without handing them over appear here."
+        : "Finished work is under Closed.",
+  };
+}
+
 function askedEmpty(scope: Scope, they: string): { title: string; description: string } {
   const who = they === "you" ? "You are" : "They are";
   const subject = they === "you" ? "you" : "they";

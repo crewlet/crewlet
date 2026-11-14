@@ -91,6 +91,7 @@ import {
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
+import { TaskSelectionBar, taskTargetOf, useTaskActions } from "./taskMenu.tsx";
 import {
   Button,
   Callout,
@@ -230,6 +231,8 @@ const ITEMS_POLL_MS = 20_000;
 
 /** No lanes put away, as a set that keeps its identity across renders. */
 const NOTHING_HIDDEN: ReadonlySet<string> = new Set();
+/** No row picked: one value, so a cleared selection is the same set every time. */
+const NOTHING_PICKED: ReadonlySet<string> = new Set();
 
 export function ItemsView({
   project = "",
@@ -313,6 +316,9 @@ export function ItemsView({
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");
+  const [start] = useParam("start", "");
+  const [created] = useParam("created", "");
+  const [updated] = useParam("updated", "");
   const [removed] = useParam("removed", "");
   // THE COLUMN SET IS THE SHAPE'S, so there is a key per grid shape rather
   // than one `cols=` read against whichever set happens to be on. Both are
@@ -372,7 +378,27 @@ export function ItemsView({
   // on it, so a board showing no bugs would offer no way to ask for one.
   const catalogue = useQuery("work_catalogue", undefined, { pollMs: 300_000 });
 
-  const views = strip.data?.views ?? [];
+  // A VIEW SAVED ON A TEAM OR ON A PERSON IS IN NO STRIP this screen asks:
+  // the strip is the workspace's (or the project's), and `viewRun` sends every
+  // view that is not a project's here. Looked up only in the strip, such a
+  // view's params read as none, and a pin opened the whole company's list
+  // beside the count the engine had taken over the view's own question. So a
+  // `view=` the strip does not hold is found among every view this reader can
+  // see, which is the inventory and the sidebar's own read.
+  const stripViews = strip.data?.views;
+  const elsewhere = useQuery("work_saved_views", undefined, {
+    enabled:
+      !host &&
+      viewKey !== "" &&
+      stripViews !== undefined &&
+      !stripViews.some((v) => v.key === viewKey),
+    pollMs: 120_000,
+  });
+  const views = useMemo(() => {
+    const own = stripViews ?? [];
+    const found = elsewhere.data?.views?.find((v) => v.key === viewKey);
+    return found && !own.some((v) => v.key === viewKey) ? [...own, found] : own;
+  }, [stripViews, elsewhere.data, viewKey]);
   // THE STRIP IS WHAT SOMEBODY SAVED. The five builtins are ways of DRAWING an
   // answer and live in the Display menu; mixed into the strip they made a
   // saved view and a shape read as the same kind of thing.
@@ -453,6 +479,9 @@ export function ItemsView({
     sort,
     blocked: blocked === "true",
     due,
+    start,
+    created,
+    updated,
     removed: removed === "true",
     fields,
   };
@@ -473,6 +502,7 @@ export function ItemsView({
         filters,
         range: weeks.length ? gridRange(weeks) : undefined,
         lock: host?.lock,
+        archivedContainer: Boolean(project && detail?.archived),
       }),
     // The filters object is a fresh literal on every render; its content is
     // what the query depends on. THE LOCK IS A DEPENDENCY IN ITS OWN RIGHT: it
@@ -487,6 +517,8 @@ export function ItemsView({
       views,
       viewOwn,
       JSON.stringify(host?.lock),
+      project,
+      detail?.archived,
       weeks,
       JSON.stringify(filters),
     ],
@@ -554,6 +586,33 @@ export function ItemsView({
     return list ? { list } : undefined;
   }, [params]);
   usePeekNeighbours(neighbours, listQuery);
+
+  // A TASK'S MENU (move, trash, restore, delete), one hook for every row's
+  // menu and the selection's bar, whose dialogs this screen mounts once.
+  const actions = useTaskActions();
+  // THE ROWS PICKED for the selection bar, by id, on the two grid shapes. A
+  // pick is of a row the reader is looking at, so it is dropped with the
+  // question: another container, another shape or another trash is another
+  // list of rows.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(NOTHING_PICKED);
+  const pickedFor = `${container}|${shape}|${String(params.removed ?? "")}`;
+  const [pickedIn, setPickedIn] = useState(pickedFor);
+  if (pickedIn !== pickedFor) {
+    setPickedIn(pickedFor);
+    setPicked(NOTHING_PICKED);
+  }
+  const pickedTargets = useMemo(
+    () => drawn.filter((row) => picked.has(row.id)).map(taskTargetOf),
+    [drawn, picked],
+  );
+  const selection = useMemo(
+    () => ({
+      selected: picked,
+      onChange: setPicked,
+      rowLabel: (row: WorkSummary) => `Select ${row.key}`,
+    }),
+    [picked],
+  );
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
   // its holder's state, and — for a bound reader — the executors parked
@@ -672,7 +731,7 @@ export function ItemsView({
       }),
       ...urlAction("work.arrange.set", {
         scope: "How the work list is drawn (not saved to a view)",
-        keys: workKeys("arrangement", labels),
+        keys: workKeys("arrangement", labels, !project),
         nav,
       }),
     },
@@ -736,7 +795,7 @@ export function ItemsView({
   // THE EFFECTIVE AXIS, for the same reason the pickers take it: a column
   // narrowing is named by the axis it was cut on, and a view supplying that
   // axis left the chip labelled "Column" over a board grouped by assignee.
-  const chips = filterChips({ ...filters, groupBy: axis }, labels);
+  const chips = filterChips({ ...filters, groupBy: axis }, labels, shape);
 
   // WHETHER THE READER NARROWED THIS, which decides both what an empty list
   // says and what the foot of a full one calls its rows. `anyFilter` counts a
@@ -1020,6 +1079,8 @@ export function ItemsView({
                 weekly={scope === "recent"}
                 laneSlot={laneSlot}
                 cardOmit={cardOmit}
+                actions={actions}
+                inTrash={inTrash}
                 // A LANE'S `+` FILES INTO THAT LANE: the one sheet, told what
                 // puts a task in the lane (the board decides which lanes take
                 // one, from [presetForLane]) and the project this list is
@@ -1038,6 +1099,16 @@ export function ItemsView({
                 a second arm here would be a second copy of every prop they
                 already share, which is what let the two drift apart in the
                 first place. */}
+            {/* WHAT IS PICKED, and what can be done to all of it, over the
+                grid it was picked in. */}
+            {!nothingShown && isGridShape(shape) && (
+              <TaskSelectionBar
+                selected={pickedTargets}
+                onClear={() => setPicked(NOTHING_PICKED)}
+                actions={actions}
+                inTrash={inTrash}
+              />
+            )}
             {!nothingShown && isGridShape(shape) && (
               <WorkGrid
                 shape={shape}
@@ -1071,18 +1142,39 @@ export function ItemsView({
                 // BACK TO THE DEFAULT IS NO KEY, so the view's own order
                 // (or the container's) applies again.
                 onSort={setSort}
+                actions={actions}
+                selection={selection}
               />
             )}
             {!nothingShown && shape === "timeline" && (
               <TimelineView
                 rows={rows}
                 groups={bands}
+                heading={(group) => headingOf(String(params.group_by ?? ""), group, labels)}
+                // THE REST OF A BAND, as the list narrowed to it: a list
+                // pages, and a band of a timeline is a page of its column.
+                overflowHref={(key) => {
+                  const axis = String(params.group_by ?? "");
+                  return patchedHref(route.path, route.query, {
+                    shape: "list",
+                    group_by: axis,
+                    group: key,
+                  });
+                }}
+                onOverflow={(key) =>
+                  openOverflow(
+                    { shape: "list", group_by: String(params.group_by ?? ""), group: key },
+                    "push",
+                  )
+                }
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={today}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 more={pageMore}
+                actions={actions}
+                inTrash={inTrash}
               />
             )}
             {!nothingShown && shape === "calendar" && (
@@ -1103,6 +1195,7 @@ export function ItemsView({
           </QueryState>
 
           {inTrash && <TrashBand records={purges} answer={tombstones.data ?? undefined} />}
+          {actions.dialog}
         </div>
       </div>
     </div>

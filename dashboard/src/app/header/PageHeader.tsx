@@ -111,6 +111,11 @@ export interface PageMenuEntry {
   description?: string;
   /** The glyph the inline control wears, so the menu reads the same. */
   icon?: ReactNode;
+  /**
+   * One answer of a choice the bar draws as a switch (a segmented control
+   * folded on a phone): the current one is checked, as the switch marks it.
+   */
+  checked?: boolean;
 }
 
 export function PageHeader({
@@ -726,6 +731,7 @@ export function PageMore({
     onSelect: e.onSelect,
     disabled: e.disabled,
     description: e.description,
+    ...(e.checked !== undefined ? { checked: e.checked } : {}),
   }));
   // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
   // whose own entries carry it, or for a tab that has not learned who reads
