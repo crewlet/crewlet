@@ -6,17 +6,21 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// rowCrossingRate is the pace the cases below hold a leaf's link to, towards
-// its member: 160 KiB a second, about five times the slowest a link is
-// allowed to be (internal/objstore's MiBPace), so a run's row at its bound
-// takes about thirty-eight seconds to cross — past the five seconds each write
-// below was held to, and far inside what a row at its bound is given at the
-// slowest pace allowed.
+// rowCrossingRate is the pace the cases below hold a leaf's link to, each way:
+// 160 KiB a second, about five times the slowest a link is allowed to be
+// (internal/objstore's MiBPace), so a run's row at its bound takes about
+// thirty-eight seconds to cross towards the member as a write, and its
+// leader's reply to a read of it about fifty-one back — each past the five
+// seconds each change below was held to, the read past the thirty seconds a
+// read was ever asked for, and far inside what a row at its bound is given at
+// the slowest pace allowed.
 const rowCrossingRate = 160 << 10
 
 // rowCrossingRoom is how far short of what one key holds a case's row is
@@ -28,17 +32,21 @@ const rowCrossingRoom = 8 << 10
 //
 // A node without the `data` role reaches the coordination store across its
 // leaf link, and a run's row weighs up to what one key holds (sandbox.RowBytes,
-// six megabytes), written whole by every write of it. The engine wrote two
-// facts onto it under five seconds of their own — which session a job's box
-// started, and that a job's harness has asked for notes — which a row of
-// megabytes cannot cross on a link slower than about 1.2 MiB a second: cut
-// while its bytes were still crossing, each read as a store that did not
-// answer (crewlet/crewlet#1076). Here the link carries 160 KiB a second
-// towards the member, so each row takes about thirty-eight seconds to cross,
-// and each write lands before the call that made it returns.
+// six megabytes), read whole and written whole by every change of it. The
+// engine wrote two facts onto it under five seconds of their own — which
+// session a job's box started, and that a job's harness has asked for notes —
+// which a row of megabytes cannot cross on a link slower than about 1.2 MiB a
+// second: cut while its bytes were still crossing, each read as a store that
+// did not answer (crewlet/crewlet#1076); and the read each change begins with
+// was asked for no longer than thirty seconds, which a reply of eight
+// mebibytes cannot cross on a link slower than about 280 KiB a second
+// (crewlet/crewlet#1149). Here the link carries 160 KiB a second each way, so
+// each row's read takes about fifty-one seconds and its write thirty-eight,
+// and each change lands before the call that made it returns.
 //
-// Mutation: hold either write to its five seconds again, without the crossing
-// of a row at its bound (sandbox.RowBudget), and its row goes red.
+// Mutation: hold either change to its five seconds again, without the
+// crossing of a change of a row at its bound (sandbox.RowBudget), or read the
+// row without its reply's arrival, and its row goes red.
 func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) {
 	t.Parallel()
 	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
@@ -87,11 +95,13 @@ func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) 
 			c.write(t.Context(), sandbox.NewCoordStore(across.Leaf), turnID)
 			// READ BACK THROUGH THE MEMBER the moment the write returned: a
 			// write cut short is still crossing then, and the row does not
-			// hold it yet. Asked for as long as a leader read is ever asked
-			// ([jsprovision.LookupBudget]), since its reply carries the row
-			// whole: a reply that long in the making is the runner's load,
-			// never what the case asks.
-			read, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)
+			// hold it yet. Asked for as long as a leader read of a row at its
+			// bound is ever asked on a member's own connection — the lookup
+			// ceiling and the reply's handling — since its reply carries the
+			// row whole: a reply that long in the making is the runner's
+			// load, never what the case asks.
+			read, cancel := context.WithTimeout(t.Context(),
+				jsprovision.LookupBudget+jsapi.Handling(coord.MaxValueBytes))
 			defer cancel()
 			run, found, err := sandbox.NewCoordStore(across.Member).Get(read, turnID)
 			if err != nil || !found {

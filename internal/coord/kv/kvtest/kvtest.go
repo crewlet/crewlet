@@ -1,11 +1,12 @@
 // Package kvtest stands up one company's coordination store as two nodes reach
 // it: a member, in its own process, and a node without `data`, joined to that
-// member as a leaf across a link that carries what the leaf sends slowly
-// (internal/queue/jetstream/linktest). A case writes through the leaf to show
-// what a write waits for when its bytes take a while to cross, and sets up and
-// reads back through the member, whose own connection crosses nothing, so its
-// setup costs none of the link's time and its reads are never held behind a
-// write still crossing.
+// member as a leaf across a link that carries what the leaf sends, and what it
+// is sent back, slowly (internal/queue/jetstream/linktest). A case changes a
+// value through the leaf to show what a change waits for when its read's reply
+// and its write's bytes take a while to cross, and sets up and reads back
+// through the member, whose own connection crosses nothing, so its setup costs
+// none of the link's time and its reads are never held behind a change still
+// crossing.
 //
 // ONE HELPER FOR EVERY PACKAGE whose writes of the store cross a leaf's link —
 // the sandbox's run rows, and the engine's writes of them — so the cases share
@@ -48,8 +49,8 @@ type Across struct {
 }
 
 // SlowLeaf starts a member serving leaves, a link in front of its leaf
-// listener carrying rate bytes a second towards it ([linktest.Slow]), and a
-// leaf joined to the member across that link, and opens the fleet store on
+// listener carrying rate bytes a second each way ([linktest.SlowEachWay]), and
+// a leaf joined to the member across that link, and opens the fleet store on
 // each: one company's buckets under one prefix, the member's reached in its
 // own process and the leaf's across its link. Everything ends with the case.
 func SlowLeaf(t testing.TB, rate int64) Across {
@@ -64,7 +65,7 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 		t.Fatalf("start a member serving leaves: %v", err)
 	}
 	t.Cleanup(member.Shutdown)
-	link := linktest.Slow(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()), rate)
+	link := linktest.SlowEachWay(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()), rate)
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
 		LeafURLs: []string{"nats-leaf://" + link.Addr()}, FleetAuth: fleetAuth()})
 	if err != nil {

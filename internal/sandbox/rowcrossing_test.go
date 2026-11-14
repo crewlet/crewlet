@@ -5,17 +5,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
-// rowCrossingRate is the pace the cases below hold a leaf's link to, towards
-// its member: 160 KiB a second, about five times the slowest a link is
-// allowed to be (internal/objstore's MiBPace), so a run's row at its bound
-// takes about thirty-eight seconds to cross — past every flat budget a write
-// of a row was held to, five seconds and thirty, and far inside what a row at
-// its bound is given at the slowest pace allowed.
+// rowCrossingRate is the pace the cases below hold a leaf's link to, each way:
+// 160 KiB a second, about five times the slowest a link is allowed to be
+// (internal/objstore's MiBPace), so a run's row at its bound takes about
+// thirty-eight seconds to cross towards the member as a write, and its
+// leader's reply to a read of it, base64-encoded a third larger, about
+// fifty-one seconds back — each past every flat budget a change of a row was
+// held to, five seconds and thirty, and the read past the thirty seconds a
+// read was ever asked for, and far inside what a row at its bound is given at
+// the slowest pace allowed.
 const rowCrossingRate = 160 << 10
 
 // rowCrossingRoom is how far short of what one key holds a case's row is
@@ -44,30 +49,35 @@ type rowCrossingCase struct {
 	landed func(PendingRun) (bool, string)
 }
 
-// A RUN'S ROW AT ITS BOUND, WRITTEN ACROSS A LEAF'S LINK, LANDS — through every
-// path that writes one under a budget of its caller's.
+// A RUN'S ROW AT ITS BOUND, CHANGED ACROSS A LEAF'S LINK, LANDS — through every
+// path that changes one under a budget of its caller's.
 //
 // A node without the `data` role reaches the coordination store across its
 // leaf link, and a run's row weighs up to what one key holds (RowBytes, six
-// megabytes), written whole by every write of it. Each path below held its
-// write to a flat budget of its caller's — a resumed turn's carry to five
-// seconds, a capture's stamp to thirty for every attempt together, a turn's
-// owed end to a teardown's thirty — which a row of megabytes cannot cross on a
-// link slower than about 1.2 MiB a second at five, or 200 KiB a second at
-// thirty. Cut while its bytes were still crossing, the write read as a store
-// that did not answer: the carry went unrecorded, the stamp was asked again
-// sending the whole row from its first byte until its budget ended, and the
-// end was refused (crewlet/crewlet#1076). Here the link carries 160 KiB a
-// second towards the member, so each row takes about thirty-eight seconds to
-// cross, and each path's write lands, and its caller hears that it did.
+// megabytes), read whole and written whole by every change of it. Each path
+// below held its change to a flat budget of its caller's — a resumed turn's
+// carry to five seconds, a capture's stamp to thirty for every attempt
+// together, a turn's owed end to a teardown's thirty — which a row of
+// megabytes cannot cross on a link slower than about 1.2 MiB a second at
+// five, or 200 KiB a second at thirty. Cut while its bytes were still
+// crossing, the write read as a store that did not answer: the carry went
+// unrecorded, the stamp was asked again sending the whole row from its first
+// byte until its budget ended, and the end was refused (crewlet/crewlet#1076).
+// And the read every change begins with was asked again at two seconds and at
+// four while its reply was still on its way, each re-ask another whole reply
+// on the link, and never for longer than thirty seconds, which a reply of
+// eight mebibytes cannot cross on a link slower than about 280 KiB a second
+// (crewlet/crewlet#1149). Here the link carries 160 KiB a second each way, so
+// each row's read takes about fifty-one seconds and its write thirty-eight,
+// and each path's change lands, and its caller hears that it did.
 //
-// Mutation: hold any of these writes to its caller's flat budget again,
-// without the crossing of a row at its bound (RowBudget), and its row goes
-// red.
+// Mutation: hold any of these changes to its caller's flat budget again,
+// without the crossing of a change of a row at its bound (RowBudget), or read
+// the row without its reply's arrival, and its row goes red.
 func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 	t.Parallel()
 	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
-	// case's write is the only thing on the link, and the runner builds one
+	// case's change is the only thing on the link, and the runner builds one
 	// reply of a row at its bound at a time — each case its own row, under a
 	// turn of its own.
 	across := kvtest.SlowLeaf(t, rowCrossingRate)
@@ -143,11 +153,13 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			}
 			// READ BACK THROUGH THE MEMBER the moment the path returned: a
 			// write its caller gave up on is still crossing then, and the
-			// row does not hold it yet. Asked for as long as a leader read
-			// is ever asked ([jsprovision.LookupBudget]), since its reply
+			// row does not hold it yet. Asked for as long as a leader read of
+			// a row at its bound is ever asked on a member's own connection
+			// — the lookup ceiling and the reply's handling — since its reply
 			// carries the row whole: a reply that long in the making is the
 			// runner's load, never what the case asks.
-			read, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)
+			read, cancel := context.WithTimeout(t.Context(),
+				jsprovision.LookupBudget+jsapi.Handling(coord.MaxValueBytes))
 			defer cancel()
 			run, found, err := NewCoordStore(across.Member).Get(read, c.row.TurnID)
 			if err != nil || !found {
