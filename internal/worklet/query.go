@@ -268,8 +268,13 @@ type Query struct {
 	StatusNot    []Status
 	StatusGroups []StatusGroup
 
-	Assignee          []string
-	Collaborator      []string
+	Assignee     []string
+	Collaborator []string
+	// AssigneeNot is `assignee=!<handle>`: the work that handle does NOT
+	// hold, `!none` the work somebody does. Spelled as `status=` spells
+	// its negation, so a person's list of what they follow or were brought
+	// onto can leave out what they hold, which their own queue already is.
+	AssigneeNot       []string
 	Reporter          []string
 	Watcher           []string
 	ChecklistAssignee []string
@@ -648,7 +653,17 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err := q.parseStatus(p); err != nil {
 		return Query{}, err
 	}
-	q.Assignee = csv(p.String("assignee"))
+	for _, handle := range csv(p.String("assignee")) {
+		if rest, negated := strings.CutPrefix(handle, "!"); negated {
+			if rest == "" {
+				return Query{}, fmt.Errorf("worklet: assignee=! names nobody to " +
+					"leave out; it is !<handle>, or !none for the work somebody holds")
+			}
+			q.AssigneeNot = append(q.AssigneeNot, rest)
+			continue
+		}
+		q.Assignee = append(q.Assignee, handle)
+	}
 	q.Collaborator = csv(p.String("collaborator"))
 	q.Reporter = csv(p.String("reporter"))
 	q.Watcher = csv(p.String("watcher"))
