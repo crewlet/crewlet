@@ -3485,6 +3485,11 @@ test("a parked run is answered from its seat with its context and options", asyn
               recommended: "three",
               role: "contributor",
             },
+            // PUT TO THE READER, as the engine states it.
+            put_to: ["jane"],
+            put_to_you: true,
+            may_answer: true,
+            needs_you: true,
           },
         ],
       },

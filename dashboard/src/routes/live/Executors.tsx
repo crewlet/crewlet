@@ -93,6 +93,7 @@ import {
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { andList } from "~/lib/words.ts";
+import { mergeRuns } from "~/lib/runs.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { droppedWords } from "~/lib/dropped.ts";
 import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
@@ -100,7 +101,6 @@ import type {
   BridgeCall,
   EventRecord,
   ExecutorEnding,
-  ExecutorEntry,
   ExecutorRow,
   ExecutorStatus,
 } from "~/protocol/index.ts";
@@ -155,77 +155,6 @@ function waitsOnAPerson(run: ExecutorRow): boolean {
  */
 function withDelegate(run: ExecutorRow): HeldDelegation | null {
   return run.ending || !AWAITING.includes(run.status) ? null : delegationWaiting(run.held_call);
-}
-
-/**
- * A live projection entry as the executor's row it stands for.
- *
- * The fields the projection has never held are left EMPTY rather than guessed:
- * a placement of `""` is "this node has not written the row yet", and the
- * durable row replaces the whole entry the moment the store catches up. A
- * fabricated `direct` here would be a placement a reader plans against.
- */
-function fromLiveBox(box: ExecutorEntry): ExecutorRow {
-  return {
-    turn_id: box.turn_id,
-    agent_handle: box.agent_handle,
-    role: box.role,
-    // The live projection types its status as a plain string because it
-    // mirrors whatever the executor reported; it is the same vocabulary.
-    status: box.status as ExecutorStatus,
-    harness: box.harness,
-    ...(box.provider_key ? { provider_key: box.provider_key } : {}),
-    ...(box.model ? { model: box.model } : {}),
-    placement: "",
-    // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
-    // from this reader, who is told so (`body_withheld`) rather than shown an
-    // executor with no task.
-    ...(box.task !== undefined ? { task_description: box.task } : {}),
-    ...(box.question !== undefined ? { question: box.question } : {}),
-    question_context: box.question_context,
-    ...(box.decision ? { decision: box.decision } : {}),
-    ...(box.body_withheld ? { body_withheld: true } : {}),
-    audience: box.audience ?? "",
-    // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
-    // the durable row alone, which replaces this entry once it is read.
-    audience_handles: [],
-    audience_fallback: false,
-    branch: "",
-    trace_id: "",
-    owner: "",
-    box_exists: true,
-    paused_at: "",
-    pause_ttl_seconds: 0,
-    started_at: box.started_at,
-    updated_at: box.started_at,
-    answerable_in_chat: false,
-  };
-}
-
-/**
- * The durable record and the live projection, as one list, newest first.
- *
- * ONE ROW PER TURN and the DURABLE row wins: it carries the placement, the
- * branch, the owner and the pause deadline the projection never held, and it
- * is the only one that survives the box being reclaimed. A live entry the
- * store has not caught up with still belongs on screen, which is the other
- * half — an executor that launched two seconds ago is exactly what somebody
- * watching this screen is watching for.
- *
- * Exported because Live now draws the same rows from the same two sources:
- * two screens folding "what is in a box" their own way is how they come to
- * disagree about whether anything is.
- */
-export function mergeRuns(durable: ExecutorRow[], live: ExecutorEntry[]): ExecutorRow[] {
-  const byTurn = new Map<string, ExecutorRow>();
-  for (const run of durable) byTurn.set(run.turn_id, run);
-  for (const box of live) {
-    if (byTurn.has(box.turn_id)) continue;
-    byTurn.set(box.turn_id, fromLiveBox(box));
-  }
-  return [...byTurn.values()].sort(
-    (a, b) => tsKey(b.updated_at || b.started_at) - tsKey(a.updated_at || a.started_at),
-  );
 }
 
 /**
@@ -294,7 +223,7 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
 /**
  * The engine's own status word, toned.
  *
- * Exported for the same reason [mergeRuns] is: Live now draws these executors too,
+ * Exported for the same reason `lib/runs.ts`' [mergeRuns] is shared: Live now draws these executors too,
  * and a second spelling of one status is how one screen comes to call a
  * `reseed` unremarkable while this one calls it a caution.
  */

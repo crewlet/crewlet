@@ -142,7 +142,9 @@ import {
   useSeatSetup,
   type Seat,
 } from "~/lib/seats.ts";
-import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
+import { useAgents, useExecutors, useOrg } from "~/lib/store-hooks.ts";
+import { useRuns } from "~/lib/runs.ts";
+import { runStanding } from "~/lib/runStanding.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, GITLET, WORKLET } from "~/lib/access.ts";
 import { RunQuestionNotice } from "~/components/RunQuestion.tsx";
@@ -774,13 +776,20 @@ function Notices({
   now: number;
   nameOf: (key: string) => string;
 }) {
-  const executors = useExecutors();
+  // THE SEAT'S RUN AS EVERY SCREEN FOLDS IT (`lib/runs.ts`): the durable row
+  // first, with what the engine states about it for this reader.
+  // THE DURABLE ROW IS ASKED FOR ONCE THE PUSH SHOWS THE SEAT'S RUN PARKED:
+  // it is what says whether the question waits on this reader and whether
+  // they may answer it, and it wins over a push that has not caught up.
+  const pushed = seatRun(useExecutors(), seat);
+  const shared = seatRun(useRuns(pushed !== null && awaitingPerson(pushed.status)).runs, seat);
   if (seat.kind === "human" || !agent) return null;
   const state = shownStateOf(agent);
   const paused = agent.paused ?? null;
   const failure = agent.last_error ?? null;
-  const sandbox = seatRun(executors, seat);
+  const sandbox = shared;
   const asking = !!sandbox && awaitingPerson(sandbox.status);
+  const standing = sandbox ? runStanding(sandbox, nameOf) : null;
   // A PAUSE THE SEAT HAS NOT REACHED YET: its turn still finishing, or its executor asking.
   const note = pauseNoteOf(agent);
   if (!failure && state !== "stopped" && state !== "paused" && !asking && !note) return null;
@@ -870,12 +879,16 @@ function Notices({
           {failureFacts}
         </Callout>
       )}
-      {sandbox && asking && (
+      {sandbox && asking && standing && (
         <Callout
           variant="warning"
           icon={<CircleQuestionMarkGlyph size="md" />}
-          action={<AnswerRunButton run={sandbox} seat={seat.name} />}
+          action={standing.answers ? <AnswerRunButton run={sandbox} seat={seat.name} /> : undefined}
         >
+          {/* WHOM IT WAITS ON, as the engine says it for this reader: the
+              question is not theirs to answer where it is put to somebody
+              else they may not answer for. */}
+          {!standing.needs && <strong>{standing.word}. </strong>}
           {sandbox.held_call ? (
             <>
               This seat's executor asks to call <code>{sandbox.held_call.tool}</code> on{" "}
