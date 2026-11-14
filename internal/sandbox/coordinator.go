@@ -1077,10 +1077,11 @@ type Coordinator struct {
 	claiming map[string]int
 	// writing are the writes this node has out that move a run between its
 	// seat's sets, by the run's job, each recorded before it is sent and
-	// dropped, with its move made, in the step that takes its answer: a park's
-	// question, and an answer's record, claim and decline (countwrite.go). A
-	// recount counts a run with a write out where the moves made so far leave
-	// it ([Coordinator.syncSeat]). Under mu.
+	// dropped, with its move made, in the step that takes its answer, or, while
+	// a write recorded before it on the run is still out, in the step that
+	// takes that one's: a park's question, and an answer's record, claim and
+	// decline (countwrite.go). A recount counts a run with a write out where the
+	// moves made so far leave it ([Coordinator.syncSeat]). Under mu.
 	writing map[jobKey]*runWrites
 	// unsettled is the clock on each job's host that answered this node's
 	// collections that its own coordination store did not answer, by turn

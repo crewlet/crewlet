@@ -86,8 +86,11 @@ func countOf(status string) seatRuns {
 // writingCount records, before it is sent, a write that moves run from the
 // status from to the status to, and returns it for
 // [Coordinator.wroteCountLocked] to take its answer. Until run has no write
-// out, a recount counts it where the moves made so far leave it: in from's set,
-// until one is made.
+// out, a recount counts it where the moves made so far leave it: in from's set
+// for a run with no other write out, until a move is made. A write recorded
+// while another is out on run sets no count of its own: the run stays counted
+// where the earlier write's moves leave it, and this write's move follows that
+// one's.
 func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite {
 	w := &countWrite{key: jobKey{turn: run.TurnID, launch: run.LaunchID}, handle: run.AgentHandle,
 		from: from, to: to}
