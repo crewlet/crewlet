@@ -734,6 +734,10 @@ interface Handle {
 
 const HANDLES: Handle[] = [
   {
+    name: "task-watching",
+    why: "routes/worklet/item/Rail.tsx puts it on the rail's Watching section so routes/worklet/item/thread.layout.test.tsx can find it among the rail's sections. The section draws as every other `.task-rail-section`; its one row is `.task-watching-row`.",
+  },
+  {
     name: "btable-name",
     why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
   },

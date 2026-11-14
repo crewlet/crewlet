@@ -3718,7 +3718,15 @@ A change is a sentence about the task ("Jane Founder filed this in ENG",
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
-is a card with its ask, answer or choice and a **Reply**. A turn is the
+is a card with its ask, answer or choice and a **Reply**, under its author and
+the day and minute it was written. Its prose keeps a reading measure of about
+seventy characters while a table or a block of code in it takes the card's
+whole width, and a report's headings step it into sections. A comment much
+longer than a screenful is folded behind **Show more** (the kit's `Clamp`),
+except the newest, which a reader of a standing task opened the page for; a
+focus landing in a folded comment opens it. Once the thread runs to six
+entries the head offers **Jump to latest**, which brings the newest entry into
+view and moves the focus to it, with the box to answer it under it. A turn is the
 artboard's card: "SWE ran turn 1", its phases as checked steps — the one a failed
 turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
@@ -3751,8 +3759,11 @@ because the reporter row and the record already say who filed it and when. Then 
 of LEAD-12 2.4 release" first, then each link named from this end — the pages
 it cites by their titles, **What this task has cost** (turns, tokens and agent
 time from the task's own counters — tokens only, never money) with the
-hand-offs against the engine's budget, and who is watching with **Watch** /
-**Unwatch**.
+hand-offs against the engine's budget, and who is watching: the kit's avatar
+stack under the section's label, one size and one overlap for people and
+agents alike and named once ("Watching: Jane Founder, SWE and CTO"), with
+**Watch** / **Unwatch** at the end of its row. The rail starts on the main
+column's own top line, so its first field stands level with the title.
 
 **Every change is made as you, and never hidden.** The fields share one
 `update_work_item` and one refusal line, conditional on the version the page
