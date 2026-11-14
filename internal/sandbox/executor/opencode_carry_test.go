@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -357,6 +358,45 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 		}
 		if want := "id " + session + "\ncontinued no\nwhy \n"; !strings.HasPrefix(recordOf(t, run), want) {
 			t.Errorf("the record is %q, want it to begin %q", recordOf(t, run), want)
+		}
+	})
+}
+
+// A SESSION IS CAPTURED WHOLE BY AN OPENCODE THAT CUTS WHAT IT WRITES INTO A
+// PIPE. Into a pipe, OpenCode 2.0.32 and 2.1.4 stop writing a large answer
+// after a 64 KiB multiple and exit 0, and the run's capture piped the session's
+// export into gzip: a session whose export is 615,676 bytes was captured as
+// 327,680 of them on 2.0.32, with status 0, and the take's scrub refused the
+// cut archive on an unexpected EOF, so the session was not kept. The export is
+// written to a file and gzipped from there, so the capture of a session whose
+// export runs past the cut gunzips to all of it, and that whole archive's
+// digest is the one the box keeps, under every sh a box may run the script
+// with.
+//
+// Mutation: pipe the export into gzip again, and the capture holds the first
+// 64 KiB of it.
+func TestAnOpenCodeSessionIsCapturedWholePastWhatAPipeHolds(t *testing.T) {
+	t.Parallel()
+	messages := longMessages(3 * pipeCut)
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, exportMessages: messages,
+			env: []string{"FAKE_PIPE_CUT=" + strconv.Itoa(pipeCut)}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		session := sessionOf(t, run)
+		raw, err := os.ReadFile(filepath.Join(run.home, ".crewlet", "session-capture"))
+		if err != nil {
+			t.Fatalf("the session was not captured: %v\n%s", err, run.stderr)
+		}
+		want := exportOf(session, messages)
+		if export := gunzipped(t, raw); string(export) != want {
+			t.Errorf("the capture holds %d bytes of the session's %d-byte export, want all of it",
+				len(export), len(want))
+		}
+		if !keeps(t, run, session, raw) {
+			t.Errorf("the box keeps no digest of the archive it captured: %q",
+				readIn(t, filepath.Join(run.home, ".crewlet"), "session-digests"))
 		}
 	})
 }

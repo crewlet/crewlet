@@ -310,9 +310,17 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // database beside the run's live server. Whether the job may still be working
 // changes nothing of the export, which holds only the messages that settled
 // either way, so the pack reads nothing of it but where it goes (dest).
+//
+// THE PROBE'S ANSWER, AS EVERY ANSWER, GOES TO A FILE ([openCodeScript]): in
+// the pack's own staging directory, before the export makes the directory anew
+// ([openCodePack]).
 func (OpenCode) Pack(paths Paths, session, staged, dest string, _ bool) string {
-	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
-		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
+	q := sandbox.ShellQuote
+	answer := q(staged + "/answer")
+	return "sid=" + q(session) + " packed=\n" +
+		fmt.Sprintf(`rm -rf %[1]s; mkdir -p %[1]s || { echo 'crewlet: the pack could not make its staging directory' >&2; exit %[3]d; }`+"\n"+
+			`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[2]s 2>&1; then probe=$(cat %[2]s); held=$probe; else probe=$(cat %[2]s 2> /dev/null); held=; fi; rm -rf %[1]s`+"\n",
+			q(staged), answer, packFailed) +
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
@@ -354,6 +362,19 @@ func (OpenCode) Continues(box, writer string) (bool, string) {
 // script's stdin is, and writes nowhere but a file or /dev/null: its stdout is
 // the event stream.
 //
+// EVERY ANSWER OF OPENCODE'S IT READS IS WRITTEN TO A FILE AND READ BACK FROM
+// THERE, never through a pipe, `$(opencode …)` or `opencode … |`: into a pipe,
+// OpenCode 2.0.32 and 2.1.4 stop writing an answer after a 64 KiB multiple and
+// exit 0, while into a regular file every release measured writes it whole
+// ([openCodePack] has the figures). One rule with no exception, rather than an
+// argument per answer about how long it may grow: the export, `mcp.list` (every
+// server the image's and the repository's configuration declare too, a failed
+// one with its error), the inbox listing, `session.get`, the words an import or
+// a delete answers, `--version`. Each answer goes to the run's answer file
+// ([openCodeAnswerFile]), is read back with cat or grep, and is removed; a
+// pack's goes to its own staging directory ([OpenCode.Pack], [openCodePack]).
+// TestNoOpenCodeAnswerIsReadThroughAPipe holds every script rendered to it.
+//
 // THE LOGIN'S EXPORTS ARE SERIALISED, because three of them can write the
 // document — the loop while the run works, the last one when it ends, the one
 // a signal asks for — and two renames racing would leave whichever landed
@@ -382,6 +403,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
 	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
 	vrr := sandbox.ShellQuote(paths.WorkDir() + "/opencode-version")
+	ans := openCodeAnswerFile(paths)
 	cfg := sandbox.ShellQuote(paths.OpenCodeConfig())
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
@@ -422,8 +444,9 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// was written.
 	line(`command -v opencode > /dev/null || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	// 1.x prints a bare version, 2.x `opencode v2.…`.
-	line(`v=$(opencode --version < /dev/null 2> %s) || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s; exit 1; }`, vrr, vrr, vrr)
-	line(`rm -f %s`, vrr)
+	line(`opencode --version < /dev/null > %s 2> %s || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s %s; exit 1; }`,
+		ans, vrr, vrr, ans, vrr)
+	line(`v=$(cat %s); rm -f %s %s`, ans, ans, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
 	// THE RUN'S CONFIGURATION, read before anything starts, and refused where
@@ -508,7 +531,12 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		// A REQUEST HERE starts no run, and leaves the run's own tail to
 		// export the session through the server that is up.
 		line(`  [ -z "$endasked" ] || break`)
-		line(`  s=$(opencode api --server "$url" mcp.list < /dev/null 2> /dev/null)`)
+		// THE ANSWER FROM A FILE, never a pipe, which 2.0.32 and 2.1.4 cut
+		// ([openCodeScript]). Cut, it hid every server listed past the cut: one
+		// the run declares was waited for to the bound, and one that takes the
+		// names of the engine's tools ([openCodeShadowCheck]) let the run start.
+		line(`  opencode api --server "$url" mcp.list < /dev/null > %s 2> /dev/null; s=$(cat %s 2> /dev/null); rm -f %s`,
+			ans, ans, ans)
 		b.WriteString(openCodeShadowCheck(req.MCPServers))
 		line(`  ready=1`)
 		b.WriteString(checks)
@@ -524,17 +552,17 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// that starts a session of its own needs none: its session's totals begin
 	// at the run.
 	if session.Continues {
-		line(`if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac; fi`,
-			openCodeUsageBefore)
+		line(`if [ "$k" = yes ]; then if opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null > %[1]s 2> /dev/null; then before=$(cat %[1]s) && case "$before" in '{'*) printf '{"type":"%[2]s","report":%%s}\n' "$before";; esac; fi; rm -f %[1]s; fi`,
+			ans, openCodeUsageBefore)
 	}
 	b.WriteString(launchHarness(strings.Join(run, " "), paths))
 	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
 	// ended: see [openCodeLeftoverSteers].
 	if req.Steer.Set() {
-		line(`%s`, openCodeLeftoverSteers())
+		line(`%s`, openCodeLeftoverSteers(paths))
 	}
-	line(`report=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
-		openCodeUsageEvent)
+	line(`if opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null > %[1]s 2> /dev/null; then report=$(cat %[1]s) && case "$report" in '{'*) printf '{"type":"%[2]s","report":%%s}\n' "$report";; esac; fi; rm -f %[1]s`,
+		ans, openCodeUsageEvent)
 	// NOTHING TO EXPORT of a session the run never started: a request before
 	// its client started leaves a session of its own — never run — that
 	// OpenCode does not hold, and only a continued one to export.
@@ -546,6 +574,17 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeAnswerFile is the file a run's script has OpenCode write each answer
+// the script reads into, and reads it back from, quoted for the script: one
+// answer at a time, each removed once it is read ([openCodeScript]). One file
+// serves them all because the script makes one OpenCode call at a time, and
+// nothing it starts beside itself writes here: the login exporter exports into
+// a file of its own, and the run's client prints its stream to the job's
+// stdout.
+func openCodeAnswerFile(paths Paths) string {
+	return sandbox.ShellQuote(paths.WorkDir() + "/opencode-answer")
 }
 
 // openCodeSessionGate is the part of a run's script that decides, before the
@@ -635,8 +674,9 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	carried := q(paths.SessionCarried())
 	digests := q(paths.SessionDigests())
 	export := q(staged + "/export.json")
+	ans := openCodeAnswerFile(paths)
 	line(`sid=%s k=yes w= h= d= own=`, q(session.ID))
-	line(`held=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2> /dev/null) || held=`)
+	line(`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[1]s 2> /dev/null; then held=$(cat %[1]s); else held=; fi; rm -f %[1]s`, ans)
 	line(`case "$held" in *%s*) h=1;; esac`, q(`"id":"`+session.ID+`"`))
 	// THE EXPORT'S DIGEST, where one was carried in and the box can take it:
 	// the box's copy is kept unless the export is one it does not hold, which
@@ -657,9 +697,10 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`    rm -rf %s`, q(staged))
 	line(`    if ! { mkdir -p %s && gzip -dc < %s > %s 2> /dev/null; }; then w='its export could not be unpacked'`,
 		q(staged), carried, export)
-	line(`    elif [ -n "$own" ] && ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`)
+	line(`    elif [ -n "$own" ] && ! opencode session delete --standalone "$sid" < /dev/null > %[1]s 2>&1; then out=$(cat %[1]s); w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`,
+		ans)
 	line(`    else`)
-	line(`      out=$(opencode session import --standalone --directory "$PWD" %s < /dev/null 2>&1)`, export)
+	line(`      opencode session import --standalone --directory "$PWD" %s < /dev/null > %s 2>&1; out=$(cat %s)`, export, ans, ans)
 	// AN IMPORT IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED, and read back
 	// ([recordDigest]): continued with no line of the export in the list — a
 	// full disk, a cksum that failed — the box's copy would go on past an
@@ -671,7 +712,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`      case "$out" in *%s*) %s || w=%s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
 		q("Imported session: "+session.ID), recordDigest(paths, "sid", "d"), q(restoreDigestUnrecorded))
 	line(`    fi`)
-	line(`    rm -rf %s`, q(staged))
+	line(`    rm -rf %s %s`, q(staged), ans)
 	line(`  fi`)
 	line(`fi`)
 	line(`rm -f %s`, carried)
@@ -734,14 +775,31 @@ func openCodeCapture(paths Paths) string {
 // being written, which a job packed while it runs leaves out, and not the
 // session's note inbox, so a note the run's plugin admitted and OpenCode never
 // delivered rides no capture whichever server exports it.
+//
+// THE EXPORT IS WRITTEN TO A FILE, AND THE FILE GZIPPED, never piped into gzip
+// ([openCodeScript]). Into a pipe, OpenCode 2.0.32 and 2.1.4 stop writing a
+// large answer after a 64 KiB multiple and exit 0; into a regular file every
+// release measured (2.0.32, 2.1.4, 2.2.7 and 2.3.0) writes it whole. Piped, a
+// run's capture of a session whose export is about 600 KiB held 327,680 bytes
+// of it on 2.0.32 and 262,144 on 2.1.4, and this pack's standalone export of a
+// 16 MiB one 3,080,192 and 7,077,888 bytes, each with status 0: the cut archive
+// was moved into place, and the take's scrub refused it on an unexpected EOF.
+// So on those releases a session past about 64 KiB was not kept, and a pack on
+// demand failed the same way. The export's status is the export command's own,
+// and gzip reads the file once that command has ended. It costs the plain
+// export on the box's disk beside its archive while the pack lasts, room a box
+// already needs: the session gate unpacks a carried export into its staging
+// directory before it imports it ([openCodeSessionGate]). The staging
+// directory's removal takes the file with it.
 func openCodePack(paths Paths, staged, dest, server string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
+	export, capture, failed := q(staged+"/export.json"), q(staged+"/capture"), q(staged+"/error")
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), packDigest(paths, "sid", staged),
-		q(staged+"/capture"), q(dest), q(staged+"/error"))
+	line(`  rm -rf %s; if mkdir -p %s && opencode session export %s "$sid" < /dev/null > %s 2> %s && gzip -c < %s > %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), server, export, failed, export, capture, packDigest(paths, "sid", staged),
+		capture, q(dest), failed)
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
 	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)
@@ -858,11 +916,19 @@ func openCodeExporter(sync time.Duration, file string) string {
 // own text cannot match it: its quotes are escaped in the listing. A failed
 // listing or cancel costs nothing more than the duplicate it was there to
 // prevent.
-func openCodeLeftoverSteers() string {
-	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID="$sid"` +
-		` < /dev/null 2> /dev/null) && for id in $(printf '%s\n' "$pending" | grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
+//
+// THE LISTING IS READ FROM THE RUN'S ANSWER FILE ([openCodeScript]), never a
+// pipe: it carries every pending item's whole text, five of the plugin's notes
+// at the engine's bounds already come within 3 KiB of 64 KiB before a long
+// sender's name or anything else pending, and a 2.0.32 or 2.1.4 client writing
+// it into a pipe cut it, leaving every note listed past the cut pending.
+func openCodeLeftoverSteers(paths Paths) string {
+	listing := openCodeAnswerFile(paths)
+	return `opencode api --server "$url" session.inbox.list --param sessionID="$sid"` +
+		` < /dev/null > ` + listing + ` 2> /dev/null && for id in $(grep -o '"id":"msg_[0-9a-f]\{32\}"' ` + listing +
+		` | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
 		`opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"` +
-		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done`
+		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done; rm -f ` + listing
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`, against
