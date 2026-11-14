@@ -444,16 +444,27 @@ func TestTheResumeStartsFromACheckpointTheLastRowDoesNotDescendFrom(t *testing.T
 // one, and not where it made that one alone. Nor where the results the
 // checkpoint hangs off answer none of the reply's calls, though another of
 // its results lies under the last row, or where the one under the last row
-// answers only the checkpoint's call again.
+// answers only the checkpoint's call again. The walk up from the last row
+// takes a record of the reply's below another as one beside it only while
+// the records between are of its run, so a prompt between them leaves the
+// checkpoint's leaf; the reply's run up from it goes on over its result, so
+// a last row below the reply's earlier record keeps its leaf; and a
+// compaction's boundary hangs off no reply, so a checkpoint naming one leads
+// to the nearest turn above it rather than through its batch.
 //
 // Mutation: skip the descent through the batch, and the resume starts from
 // the checkpoint in the first; skip the reply's other record below or above
 // the checkpoint's call, and it does in the next two; read the hook's reply
 // as one of more calls where it made one, and the hook's case of one call
 // keeps the last row; read the checkpoint's results as answering a call of
-// the reply whatever their ids, and the case of none keeps it too; or take
-// the result under the last row for one of another call whatever it
-// answers, and so does the last case.
+// the reply whatever their ids, and the case of none keeps it too; take the
+// result under the last row for one of another call whatever it answers, and
+// so does the case of a call answered again; keep the mark of a record beside
+// the reply's past a prompt, and the case of a prompt between walks from the
+// last row; run the reply's run up over its own records alone, and the case
+// of its run over a result walks from the checkpoint; or take a compaction's
+// boundary for a record that hangs off a reply, and the case of a boundary
+// walks from the last row.
 func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) {
 	t.Parallel()
 	batch := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
@@ -505,6 +516,29 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 	again.expect(t, "a checkpoint's results whose call the last row's result answers again", map[int]rcAnswer{
 		1: yes(whyChain), 2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 5: yes(whyRecoveredResult),
 		6: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 5}, allVariants})
+
+	between := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+		rcResults(2, 3, 2000, "x1"), rcCheckpoint(3), rcPrompt(2, 5, 2500), rcReply(5, 6, "msg_a", 2600, rcCalls("x3")),
+		rcReply(6, 7, "msg_z", 3000, rcSaid("z")))
+	between.expect(t, "a prompt between the reply and another record of it", map[int]rcAnswer{1: yes(whyChain),
+		2: yes(whyChain), 3: yes(whyChain), 5: no(whyOffConversation), 6: yes(whyRecoveredReply),
+		7: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 6}, allVariants})
+	between.expectLeaf(t, "a prompt between the reply and another record of it", 3)
+	overResult := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")),
+		rcResults(2, 3, 2000, "x1"), rcReply(3, 4, "msg_a", 2100, rcCalls("x2")), rcCheckpoint(4),
+		rcReply(2, 6, "msg_z", 3000, rcSaid("z")))
+	overResult.expect(t, "the reply's run up over its result", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
+		3: yes(whyRecoveredResult), 4: yes(whyRecoveredReply), 6: yes(whyChain)},
+		rcOrder{[]int{1, 2, 3, 4, 6}, allVariants})
+	overResult.expectLeaf(t, "the reply's run up over its result", 6)
+	boundary := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")),
+		rcResults(2, 3, 2000, "x1"),
+		rcSystem(3, 4, 2100, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`), rcCheckpoint(4),
+		rcResults(2, 6, 3000, "x2"), rcReply(6, 7, "msg_z", 4000, rcSaid("z")))
+	boundary.expect(t, "a compaction's boundary the checkpoint names", map[int]rcAnswer{1: yes(whyChain),
+		2: yes(whyChain), 3: yes(whyChain), 4: cannot(whyTail), 6: yes(whyRecoveredResult),
+		7: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3, 6}, allVariants})
+	boundary.expectLeaf(t, "a compaction's boundary the checkpoint names", 3)
 }
 
 // A LEAF ONLY AN UNSEEN FLAG MOVES IS CANNOT TELL: where the checkpoint is a
@@ -514,11 +548,19 @@ func TestALastRowDescendingThroughTheCheckpointsBatchKeepsItsLeaf(t *testing.T) 
 // leaf hands and the other does not is cannot tell (whyLeafFlag), each order
 // handed with its variants, and no leaf is every variant's. A near miss of
 // each of q1t's clauses is definite, one order: the later reply no later than
-// the checkpoint, one that says nothing, a record hanging off the checkpoint,
-// and a turn hanging off the last row.
+// the checkpoint, or written at its own time, one that says nothing, a record
+// hanging off the checkpoint, and a turn hanging off the last row. The
+// checkpoint's run is its own: q1t asks whether the last row descends to what
+// lies above the records of the checkpoint's id it hangs from, so a
+// checkpoint on a reply's second record splits the leaf as one on its first
+// would.
 //
 // Mutation: read q1t in no variant, or drop any one of its clauses, and a case
-// here hands one order where the flag hands two, or two where it hands one.
+// here hands one order where the flag hands two, or two where it hands one;
+// read a time as later where it is the same, and the near miss written at the
+// checkpoint's time hands two; or stop at the checkpoint's own parent rather
+// than above its run, and the checkpoint on a reply's second record hands
+// one.
 func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 	t.Parallel()
 	head := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcCheckpoint(2)}
@@ -529,8 +571,9 @@ func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 	split.expectLeaf(t, "q1t's shape", 0)
 
 	for name, last := range map[string]string{
-		"a later reply written no later":  rcReply(1, 4, "msg_b", 500, rcSaid("later")),
-		"a later reply that says nothing": rcReply(1, 4, "msg_b", 3000, `[{"type":"thinking","thinking":"hm"}]`),
+		"a later reply written no later":    rcReply(1, 4, "msg_b", 500, rcSaid("later")),
+		"a later reply written at its time": rcReply(1, 4, "msg_b", 1000, rcSaid("later")),
+		"a later reply that says nothing":   rcReply(1, 4, "msg_b", 3000, `[{"type":"thinking","thinking":"hm"}]`),
 		"a later reply of the harness's own": ctReplace(t, rcReply(1, 4, "msg_b", 3000, rcSaid("later")),
 			`"model":"claude-sonnet-4-5"`, `"model":"<synthetic>"`),
 	} {
@@ -547,17 +590,27 @@ func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 		rcReply(1, 5, "msg_b", 3000, rcSaid("later")))...)
 	followed.expect(t, "a turn hanging off the last row", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
 		4: no(whyOffConversation), 5: no(whyOffConversation)}, rcOrder{[]int{1, 2}, allVariants})
+
+	second := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("first")),
+		rcReply(2, 3, "msg_a", 1001, rcCalls("x1")), rcCheckpoint(3), rcReply(1, 5, "msg_b", 3000, rcSaid("later")))
+	second.expect(t, "q1t's shape at a reply's second record", map[int]rcAnswer{1: yes(whyChain),
+		2: cannot(whyLeafFlag), 3: cannot(whyLeafFlag), 5: cannot(whyLeafFlag)},
+		rcOrder{[]int{1, 2, 3}, allVariants &^ variantsMetcalfe}, rcOrder{[]int{1, 5}, variantsMetcalfe})
+	second.expectLeaf(t, "q1t's shape at a reply's second record", 0)
 }
 
 // A NEWER ROW UNDER THE LAST ROW LEADS WHERE NO CHECKPOINT NAMES A LEAF: where
 // the newest row is not the last, the resume starts from the record of the
 // latest time whose walk reaches the last row, the later in the file on a
-// tie; and not where any checkpoint carries leafUuid, null among it.
+// tie; and not where any checkpoint carries leafUuid, null among it. The
+// newest row is the first row of the latest time, so a last row written at
+// the newest row's time leaves the newest row leading.
 //
 // Mutation: ignore the newer row, and the first case walks from the last row;
-// take the earlier on a tie, and the second walks from the other; or apply the
+// take the earlier on a tie, and the second walks from the other; apply the
 // rule though a checkpoint carries leafUuid, and the third walks from the
-// newer row.
+// newer row; or take the last row of the latest time for the newest, and the
+// last case walks from the last row.
 func TestANewerRowUnderTheLastRowLeadsWhereNoCheckpointNamesALeaf(t *testing.T) {
 	t.Parallel()
 	newer := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
@@ -576,6 +629,12 @@ func TestANewerRowUnderTheLastRowLeadsWhereNoCheckpointNamesALeaf(t *testing.T) 
 		`"leafUuid":null,"sessionId":"`+ctSession+`"}`)...)
 	nulled.expect(t, "a checkpoint whose leaf is null", map[int]rcAnswer{1: yes(whyChain), 2: yes(whyChain),
 		3: no(whyOffConversation), 4: yes(whyChain)}, rcOrder{[]int{1, 2, 4}, allVariants})
+
+	sameTime := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+		rcReply(4, 3, "msg_b", 5000, rcSaid("b")), rcPrompt(2, 4, 5000))
+	sameTime.expect(t, "a last row written at the newest row's time", map[int]rcAnswer{1: yes(whyChain),
+		2: yes(whyChain), 3: yes(whyChain), 4: yes(whyChain)}, rcOrder{[]int{1, 2, 4, 3}, allVariants})
+	sameTime.expectLeaf(t, "a last row written at the newest row's time", 3)
 }
 
 // A PARENT NAMING NO RECORD IS FOLLOWED BY THE NEAREST EARLIER TIMESTAMP: the
