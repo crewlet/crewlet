@@ -262,8 +262,14 @@
 // the ending waits for each as it waits for a refusal ([binding.holdHook]). A
 // take of the run's notes whose write is on the run's record, answered into
 // the close, would leave the notes handed to a step that never had them, with
-// no cancel to say so; and a hook's call that fails costs its run the bridge,
-// which its harness drops and re-initialises.
+// no cancel to say so. And a hook's call answered with an error costs its run
+// the bridge, which its harness drops and re-initialises: measured on Claude
+// Code 2.1.263 and 2.1.310 (internal/sandbox/executor's claudecode.go and
+// steerprobe_test.go). AN ANSWER THE CLOSE WOULD CUT OFF IS HELD TO THE SAME
+// WAIT WITHOUT HAVING BEEN MEASURED: the close ends a hook's request with no
+// answer at all, which is no error answer, and not every failure costs the
+// bridge, since a hook's call the bridge turns away with a 503 is a hook error
+// the run goes on past, the bridge kept ([Bridge.serveMCP]).
 //
 // AND SO IS A REQUEST THAT OPENED A SESSION ON THE OPENING before its end
 // ([binding.holdSessionOpen]): the SDK opens the session as it serves the

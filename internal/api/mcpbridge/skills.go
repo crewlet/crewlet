@@ -41,12 +41,13 @@ import (
 //     a hook calls. NEVER LISTED, so no model is offered it, and no model
 //     can unlock a skill it never read; answered by the server's receiving
 //     middleware, so the hook's call never reaches the run's surface itself;
-//     and its answer is ALWAYS empty text, never an error — Claude Code
-//     answers a hook's failed call by re-initialising the whole bridge. The
-//     opening's end waits for that answer before it closes the box's
-//     sessions, for as long as the box waits for it, as for a take's
-//     ([binding.holdHook]), since an answer the close refused fails the call
-//     all the same.
+//     and its answer is ALWAYS empty text, never an error: a hook's call
+//     answered with an error makes Claude Code drop and re-initialise the
+//     whole bridge (measured, see steer.go). The opening's end waits for
+//     that answer before it closes the box's sessions, for as long as the
+//     box waits for it, as for a take's ([binding.holdHook]), since an
+//     answer the close refused fails the call all the same, at a cost no
+//     probe has measured.
 //   - THE SKILL ROUTE ([SkillPattern]), which a plugin posts each load to:
 //     POST `{"skill": "<name>"}`, answered 204 — and 404 for a session
 //     handed no skills, which has no skill route at all.

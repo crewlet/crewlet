@@ -36,8 +36,9 @@ import (
 //     bridge kept (2.1.310 and 2.1.322, [Bridge.serveMCP]). And the opening's
 //     end waits for that answer before it closes the box's sessions, for as
 //     long as the box waits for it ([binding.holdHook]): an answer the close
-//     refused would fail the call all the same, and a take's notes would be
-//     recorded handed over to a step that never had them.
+//     refused would fail the call all the same, at a cost no probe has
+//     measured, and a take's notes would be recorded handed over to a step
+//     that never had them.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered, each recorded served to the run's

@@ -530,7 +530,9 @@ func (o *binding) holdSessionOpen(served <-chan struct{}) bool {
 // begun. A take whose write had landed on the run's record answered into that
 // close: the record held its notes handed to a step that never had them, and
 // nothing said otherwise, since a box sends no cancel for an answer it never
-// got. And the hook's call failed, which Claude Code answers by dropping and
+// got. And the hook's call failed, its request ended with no answer, which no
+// probe has measured a harness's handling of: what was measured is a hook's
+// call answered with an error, which Claude Code answers by dropping and
 // re-initialising the whole bridge (see steer.go's note inbox).
 //
 // THE HOLD FIRST, THE INBOX AFTER, UNDER ONE LOCK: an end either came before,

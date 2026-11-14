@@ -701,9 +701,10 @@ func (h *heldTake) Take(ctx context.Context, event string) string {
 // so an end holds a hook's answer as it holds a refusal's, and closes the box's
 // sessions only once that answer is out. A take of the run's notes whose write
 // landed, answered into the close, would leave its notes handed to a step that
-// never had them, with no cancel to say so; and a hook's call that fails costs
-// its run the whole bridge. So, as the opening ends, the box reads the hook's
-// answer, never the close's failure:
+// never had them, with no cancel to say so; and a hook's call the close cuts
+// off fails, at a cost no probe has measured, where one answered with an error
+// costs its run the whole bridge. So, as the opening ends, the box reads the
+// hook's answer, never the close's failure:
 //   - of a take held in its store write as the end comes, which the end waits
 //     for: the box reads its notes once it is let go, and only then are the
 //     box's sessions closed and the end returns;
