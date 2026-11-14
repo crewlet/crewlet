@@ -18,11 +18,13 @@ import (
 // one rule with no exception: no `opencode` call inside a command
 // substitution, and none in a pipeline element a `|` follows, whether the call
 // is that element or sits in a group, a subshell or a compound command that is,
-// or in a function called there. The run's script is rendered for a run that
-// starts a session and for one that continues one, its copy compared or
-// replaced, with the readiness loop, its shadow check and the notes' cancel in
-// it; and the pack's for a pack on demand. A scan that saw none of the script's
-// calls would prove nothing, so it has to have seen every kind the scripts make.
+// or in a function called there; each finding names its line. The run's
+// script is rendered for a run that starts a session and for one that
+// continues one, its copy compared or replaced, steered and with MCP servers,
+// so with the readiness loop, its shadow check and the notes' cancel in it, as
+// well as the login's import and exports every run's script carries; and the
+// pack's for a pack on demand. A scan that saw none of the script's calls
+// would prove nothing, so it has to have seen every kind the scripts make.
 //
 // Mutation: put any one call back into `$(…)`, or the export back into
 // `| gzip`, and this goes red.
@@ -121,6 +123,16 @@ func TestThePipeScannerSeesEveryWayOfReadingThroughAPipe(t *testing.T) {
 			t.Errorf("the scanner read %q without an error: a construct it does not read has to fail the scan", unread)
 		}
 	}
+	// A FINDING NAMES ITS LINE, one in a trap's body or in backquotes counted
+	// from where that sits in the script.
+	for _, script := range []string{"a\nb\nx=$(opencode --version)", "a\ntrap 'b\nx=$(opencode --version)' TERM",
+		"a\nx=`b\nopencode --version`"} {
+		_, piped, err := openCodePipes(script)
+		if err != nil || len(piped) != 1 || !strings.Contains(piped[0], "line 3:") {
+			t.Errorf("in %q the scanner reported %s (%v), want one finding on line 3", script,
+				strings.Join(piped, "; "), err)
+		}
+	}
 }
 
 // openCodePipes reads a POSIX sh script and answers the second word of every
@@ -152,9 +164,9 @@ func openCodePipes(script string) (calls, piped []string, err error) {
 		}
 		switch {
 		case c.inSubst:
-			piped = append(piped, "inside a command substitution: "+c.text)
+			piped = append(piped, fmt.Sprintf("inside a command substitution, line %d: %s", c.line, c.text))
 		case c.piped:
-			piped = append(piped, "into a pipe: "+c.text)
+			piped = append(piped, fmt.Sprintf("into a pipe, line %d: %s", c.line, c.text))
 		}
 	}
 	return calls, piped, nil
@@ -166,6 +178,7 @@ func openCodePipes(script string) (calls, piped []string, err error) {
 type shCommand struct {
 	words   []string
 	text    string
+	line    int    // the script's line it starts on, from 1
 	inSubst bool   // inside a command substitution
 	piped   bool   // in a pipeline element a `|` follows, at some level
 	fn      string // the function whose body it is in, or ""
@@ -195,6 +208,7 @@ func (c *shCommand) calls(names map[string]bool) bool {
 // else it does not read, is an error.
 type shScan struct {
 	src   string
+	line  int // the script's line src starts on
 	pos   int
 	subst int
 	fn    []string
@@ -206,7 +220,7 @@ type shError string
 func (e shError) Error() string { return string(e) }
 
 func scanShell(src string) (cmds []*shCommand, err error) {
-	s := &shScan{src: src}
+	s := &shScan{src: src, line: 1}
 	defer func() {
 		if r := recover(); r != nil {
 			e, ok := r.(shError)
@@ -237,6 +251,11 @@ func (s *shScan) peek() byte {
 		return 0
 	}
 	return s.src[s.pos]
+}
+
+// lineAt is the script's line that offset i of src is on.
+func (s *shScan) lineAt(i int) int {
+	return s.line + strings.Count(s.src[:min(i, len(s.src))], "\n")
 }
 
 // blanks skips spaces, tabs, escaped newlines and a comment.
@@ -464,6 +483,7 @@ func (s *shScan) simple() []int {
 		c.fn = s.fn[len(s.fn)-1]
 	}
 	var raws []string
+	var starts []int
 	redirected := false
 	for {
 		s.blanks()
@@ -473,8 +493,9 @@ func (s *shScan) simple() []int {
 				s.fail("no command")
 			}
 			c.text = strings.TrimSpace(s.src[start:s.pos])
+			c.line = s.lineAt(start)
 			s.cmds = append(s.cmds, c)
-			s.trapBody(raws)
+			s.trapBody(raws, starts)
 			return []int{len(s.cmds) - 1}
 		case ch == '<' || ch == '>':
 			s.redirect()
@@ -491,8 +512,9 @@ func (s *shScan) simple() []int {
 			s.fn = s.fn[:len(s.fn)-1]
 			return nil
 		default:
+			at := s.pos
 			raw, plain := s.word()
-			raws = append(raws, raw)
+			raws, starts = append(raws, raw), append(starts, at)
 			if !plain {
 				raw = ""
 			}
@@ -502,18 +524,18 @@ func (s *shScan) simple() []int {
 }
 
 // trapBody reads the single-quoted action of a `trap` as the code it is.
-func (s *shScan) trapBody(raws []string) {
+func (s *shScan) trapBody(raws []string, starts []int) {
 	if len(raws) < 2 || raws[0] != "trap" || len(raws[1]) < 2 || raws[1][0] != '\'' ||
 		strings.Count(raws[1], "'") != 2 || !strings.HasSuffix(raws[1], "'") {
 		return
 	}
-	s.nested(raws[1][1:len(raws[1])-1], s.subst)
+	s.nested(raws[1][1:len(raws[1])-1], starts[1]+1, s.subst)
 }
 
 // nested reads code held in a word as a script of its own, its commands
 // recorded beside this one's.
-func (s *shScan) nested(src string, subst int) {
-	inner := &shScan{src: src, subst: subst, fn: slices.Clone(s.fn), cmds: s.cmds}
+func (s *shScan) nested(src string, at, subst int) {
+	inner := &shScan{src: src, line: s.lineAt(at), subst: subst, fn: slices.Clone(s.fn), cmds: s.cmds}
 	inner.list()
 	if inner.blanksAndNewlines(); !inner.eof() {
 		inner.fail("nothing ends the nested list here")
@@ -613,13 +635,14 @@ func (s *shScan) doubleQuoted() {
 // backquoted reads an old-style command substitution, its escapes undone.
 func (s *shScan) backquoted() {
 	var inner strings.Builder
+	open := s.pos
 	for s.pos++; ; {
 		switch {
 		case s.eof():
 			s.fail("an unterminated backquote")
 		case s.peek() == '`':
 			s.pos++
-			s.nested(inner.String(), s.subst+1)
+			s.nested(inner.String(), open+1, s.subst+1)
 			return
 		case s.peek() == '\\' && s.pos+1 < len(s.src) && strings.IndexByte("`\\$", s.src[s.pos+1]) >= 0:
 			inner.WriteByte(s.src[s.pos+1])
