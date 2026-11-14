@@ -1013,10 +1013,11 @@ Worklet, its workspace and My work's Worklet sections leave the sidebar, the
 palette and the `g` chords (My work itself leaves only where the engine hosts
 no code either, since its Reviews is Gitlet's, `workspaceShown`), and
 so does every way to file or move a task (New task, the palette's
-Create task, Ask an agent and Assign, a seat's Message and Assign, every
+Create task, Ask an agent and Assign, a seat's ask (its Message, or its Ask
+as a task where Message is a conversation) and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
 task); without Doclet, its workspace does; without Chatlet, Chatlet
-does, with a seat's Direct message and Chatlet's Home widgets; and where the
+does, with Chatlet's Home widgets, and a seat's Message is the ask; and where the
 engine hosts no code, Gitlet does, with My work › Reviews, a seat's Code section, a
 task's Changes tab, Home's Code waiting on a person and Settings › Gitlet. The
 Inbox stays, because
@@ -4042,24 +4043,23 @@ so the panel, then that link, is the way from the company running to a turn
 running, with no link nested inside a chart card's tree item, which a
 keyboard and a screen reader could not reach as itself. **Message**, the
 primary, and **Assign task** are the rail's foot, pinned to its bottom edge,
-with **Direct message** in its More at the row's end
-(`useDirectMessageEntry`, the seat page's own), since a third button pushed
+with **Ask as a task** in its More at the row's end where Message is a
+conversation (`useAskTaskEntry`, the seat page's own), since a third button pushed
 Assign task onto a row of its own. The rail's own bar holds the way to the
 profile at every width (its **Open**, to the same page), so the foot offers
 no second one. Beside them, for an admin, the
 seat's gestures as buttons (**Invite** and **Add person** on a
 vacant seat, **Cancel invitation** on an invited one), which on a phone are
-the only place they are; Message opens the New task sheet with
-the seat as assignee and `ask` set — on the project filed under the seat's own
-unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox. Where the
-company runs the engine's own chat and you hold Chatlet, **Direct message** sits
-beside it and opens a conversation with the seat instead
-(`#/chatlet?dm={handle}`), a remark that obliges nothing; it never replaces
-Message. Message files a task, so where the company does not run
-Worklet it is not drawn, nor is a seat's Assign (see
-[the sidebar](#the-sidebar)). **The peek of your own seat is your own seat's page in
-small**: Message and Direct message are held, saying it is your own seat — held by the button
+the only place they are. Where the company runs the engine's own chat and you
+hold Chatlet, Message opens a conversation with the seat
+(`#/chatlet?dm={handle}`); elsewhere it opens the New task sheet with the seat
+as assignee and `ask` set (on the project filed under the seat's own unit, or
+the nearest unit above it that has one), so the question is filed as work the
+seat owes an answer on and the answer lands in the Inbox, and that ask is
+Ask as a task where Message is the conversation. Where there is neither chat
+nor Worklet Message is not drawn, and without Worklet neither is a seat's
+Assign (see [the sidebar](#the-sidebar)). **The peek of your own seat is your own seat's page in
+small**: Message and Ask as a task are held, saying it is your own seat, held by the button
 itself (`useMessageSeatAccess`), never by the screen drawing it, because the
 page held it while the peek drew it bare and offered a person who found
 themselves on the chart an enabled Message to themselves — and under the state
@@ -4145,12 +4145,16 @@ card keeps its own **Watch live**.
 **The page bar's actions are write controls, each held with its reason** for
 a reader who cannot make it:
 
-- **Message** opens the New task sheet with the seat as assignee and `ask` set:
-  the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. Where the company runs the engine's own chat and
-  the reader holds Chatlet, **Direct message** beside it opens chat's New direct
-  message with the seat chosen — a conversation rather than an ask, so neither
-  stands in for the other; it folds into "More" on a phone.
+- **Message** writes to the seat. Where the company runs the engine's own chat
+  and the reader holds Chatlet it opens chat's New direct message with the seat
+  chosen (`#/chatlet?dm={handle}`), which is what the word means; the tracker's
+  ask, a task the seat owes an answer on whose answer lands in the asker's
+  Inbox, is then **Ask as a task** in the bar's More. Elsewhere (a vendor's
+  chat, none, or a reader without Chatlet) Message is that ask, opening the New
+  task sheet with the seat as assignee and `ask` set. It once filed the ask
+  even on a company running Chatlet, so what a person typed as a message
+  became a task in a project they never chose (`lib/seatMessage.ts`'
+  `useSeatMessage`). Filing work for the seat is Assign task either way.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -4162,7 +4166,7 @@ a reader who cannot make it:
   Table and the seat panel draw (`components/seatControls.tsx`), for an admin
   or a lead above the seat and held with that reason for anybody else:
   **Pause** or **Resume** in the bar, and the rest in the bar's More menu
-  (beside Direct message, "Events" and "Edit in org"), since all of them in
+  (beside Ask as a task, "Events" and "Edit in org"), since all of them in
   the bar cut the trail's own name and wrapped it onto two rows: **Pause and
   stop** while a turn runs, a paused
   seat's whose turn is still finishing included, which the dashboard did not
@@ -5458,8 +5462,8 @@ a tool arrives in it with the control that sends it. The controls
 | A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
-| Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
-| Direct message (chat's New direct message, the seat chosen) | A seat's page and peek, on the engine's own chat | `open_dm{to}` — opening one that exists is that conversation |
+| Message, where the company runs the engine's own chat and you hold Chatlet (chat's New direct message, the seat chosen) | A seat's page and peek | `open_dm{to}`: opening one that exists is that conversation |
+| Message elsewhere, and Ask as a task in More where Message is the conversation (the same sheet, titled "Ask {seat}") | A seat's page and peek | `create_work_item{title, project, assignee, ask, …}`: the answer lands in your Inbox |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |

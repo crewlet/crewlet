@@ -28,6 +28,7 @@ import * as seatControls from "~/components/seatControls.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ActionTool } from "~/protocol/act.ts";
+import type { OrgServices } from "~/contract/services.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -362,6 +363,8 @@ interface Fixture {
    * whom the engine refuses on this seat however many changes it makes for them.
    */
   seatRule?: true;
+  /** What the company runs, where the control's change turns on it; every service otherwise. */
+  services?: OrgServices;
 }
 
 /** A running agent seat the reader leads, as a screen hands it to a seat's controls. */
@@ -428,7 +431,15 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     name: /^View$/,
     tool: "save_work_view",
   },
-  MessageSeatButton: { props: { handle: "swe" }, name: /^Message$/, tool: "create_work_item" },
+  // THE ASK, on a company whose chat is a vendor's: where the company runs
+  // Chatlet, Message is a direct conversation for a reader who holds it
+  // (`open_dm`), which `routes/agents/AskTask.test.tsx` holds.
+  MessageSeatButton: {
+    props: { handle: "swe" },
+    name: /^Message$/,
+    tool: "create_work_item",
+    services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "gitlet" },
+  },
   AssignToSeatButton: {
     props: { handle: "swe", name: "SWE" },
     name: /^Assign task$/,
@@ -707,13 +718,14 @@ describe.each(
     })),
   ),
 )("$control", ({ Control, fixture }) => {
-  const { props, name, tool, handed, fill, notServed, seatRule } = fixture;
+  const { props, name, tool, handed, fill, notServed, seatRule, services } = fixture;
 
   test.each(READERS)("is drawn for $who, enabled only where it can act", (reader) => {
     const viewer = reader.viewer(tool);
     // THE SEAT'S RULE ADMITS AN ADMIN OR A LEAD, and none of these readers leads the seat.
     const reason = reader.reason === null && seatRule && !viewer.admin ? notServed! : reader.reason;
     vi.mocked(useViewer).mockReturnValue(viewer);
+    if (services) vi.mocked(useOrg).mockReturnValue({ name: "Acme", services } as never);
     // THE FRAME'S ROUTER AND LIVE REGION, as every screen has them: a remedy
     // opens the seat panel, and a selection bar says its count aloud.
     render(

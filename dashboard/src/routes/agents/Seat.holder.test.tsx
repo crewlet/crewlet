@@ -154,7 +154,7 @@ async function mount(handle: string, grants: string[], as = "ana") {
     grants,
     handle: as,
     owner: as,
-    acts: ["create_work_item", "update_work_item"],
+    acts: ["create_work_item", "update_work_item", "open_dm"],
   };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "viewer" ? Promise.resolve(viewer) : Promise.resolve(ANSWERS[what] ?? {});
