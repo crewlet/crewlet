@@ -31,13 +31,24 @@ import (
 // adds to it, since End lets go of nothing the chain filed before it returns;
 // and the MiB live once End decided, the chain and the last message held,
 // after a collection forced (live-MiB), each less what was live before the
-// read. Its peak heap is read off the runtime's GC trace (GODEBUG=gctrace=1),
-// one case a process, between the two lines it writes to standard error
-// around its read: a sampling ticker would be a clock in test code. Each case
-// holds the chain to the answer its thread is built for, so a change that
-// turns a case into a cheaper answer fails it rather than measure that.
+// read. What the read holds at its most is read off the runtime's GC trace
+// (GODEBUG=gctrace=1), one case a process, between the two lines the case
+// writes to standard error around its read, since a sampling ticker would be
+// a clock in test code. Each cycle's line there reads `start->end->live MB`
+// (MiB): what is HELD AT MOST, [threadChain]'s THE BOUNDS' figure, is the
+// largest live heap, the third figure, of a cycle between the two lines with
+// the collector at GOGC=10, which runs a cycle at every tenth of the heap's
+// growth, so no growth goes long unsampled; and the PEAK is the largest heap
+// at a cycle's start or end, the first two figures, at the default GOGC,
+// which adds the collector's headroom. Each case holds the chain to the
+// answer its thread is built for, so a change that turns a case into a
+// cheaper answer fails it rather than measure that.
 //
+//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 //	GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAThreadChainAtItsBounds$/^<case>$' -benchtime 1x -benchmem
+//
+// The first gives what is held at most and the second the peak; End's
+// end-ms and look-ms come from either.
 //
 // A THREAD OF MORE THAN 5,242,880 BYTES IS MODELLED ONLY WHERE IT IS PATH-FREE
 // ([threadChain], THE LARGE FILE), and every thread at the records bound is

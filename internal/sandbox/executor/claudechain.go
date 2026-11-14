@@ -895,22 +895,24 @@ const chainPrefixBytes = 10
 // is whyBound and the chain drops what it filed, and See still decodes and
 // hands back each user and assistant message, with pastChainBound.
 //
-// MEASURED on two cores, one case a process (BenchmarkAThreadChainAtItsBounds;
-// the heap off the runtime's GC trace, what is held sampled at every tenth of
-// its growth):
+// MEASURED on two cores, one case a process, in four runs
+// (BenchmarkAThreadChainAtItsBounds, whose doc says how each figure is read
+// off the runtime's GC trace): a time is the range of the four, and what is
+// HELD AT MOST the largest live heap a collection left during the read, the
+// collector run at every tenth of the heap's growth (GOGC=10):
 //
 //   - at both bounds, 2^17 replies each of its own id making a call of its
-//     own and naming a parent written after it: read in 1.3 s, End's 32 ms of
-//     it; the chain holds 35 MiB as End starts, End allocates 12 MiB more, and
-//     18 MiB stay once it decided: 43 MiB held at most;
-//   - a node's collection's read of a thread at the plaintext's bound,
-//     130,242 lines of a call and its result in turn: 2.1 s, End's 29 ms,
-//     33 MiB held at most;
+//     own and naming a parent written after it: read in 1.2 to 1.4 s, End's
+//     27 to 37 ms of it; the chain holds 35 MiB as End starts, End allocates
+//     12 MiB more, and 18 MiB stay once it decided: 43 MiB held at most;
+//   - a thread at the plaintext's bound read by the chain alone, 130,242
+//     lines of a call and its result in turn: 2.0 to 2.3 s, End's 26 to
+//     29 ms, 33 MiB held at most;
 //   - END'S WORST, a walk of [threadChainMaxSpread] records whose 10,922
 //     replies' windows each open before the one before ends: 1.4 s, nearly
 //     all of it the recovery's rescan of each window's walked records, which
 //     the resume makes as well; End took every other case at a bound in
-//     32 ms or less;
+//     29 ms or less;
 //   - THE COINCIDENT WORST, the reading's worst line (one at [threadLineMax]
 //     of the smallest results a message holds) decoded by See beside the
 //     chain at both bounds, before it passes them: 101 MiB held at most. By
@@ -919,9 +921,17 @@ const chainPrefixBytes = 10
 //     it files is 123 MiB; End's 43 MiB comes after the last line, beside
 //     only what a reading keeps of the thread. Each is within the about
 //     133 MiB a seat's read for words holds at its worst in the one slot
-//     both take ([SeatTranscriptReadsAtOnce]), so both bounds stay at 2^17.
+//     both take ([SeatTranscriptReadsAtOnce]), so against that slot both
+//     bounds stay at 2^17.
 //     The heap peaks over what is held by the collector's headroom: at its
 //     default, 157 MiB for that line and 63 MiB at both bounds.
+//
+// NOT YET MEASURED is the slot a node's collection reads in: the chain is
+// charged to the collection read's own pass and slot, beside the resumed
+// count's walk of the same thread, which is not on main beside the chain yet
+// (crewlet/crewlet#1093). Whichever of the two lands second measures the
+// resumed count's worst reading beside the chain's worst in that one pass,
+// and lowers both bounds where the sum passes that slot.
 //
 // MISUSE IS ANSWERED, NEVER A PANIC, where a node's collection could reach
 // it: a line handed out of turn is whyLineGap; a question asked before End, or
@@ -2188,8 +2198,9 @@ type chainSide struct {
 // arrays, so 4,096 of them take well under a millisecond. And it bounds what
 // the looks cost: each is a call through every context the caller wrapped,
 // and one in 4,096 steps is nothing End could measure. MEASURED at the
-// chain's bounds (BenchmarkAThreadChainAtItsBounds), End never ran 13 ms
-// without a look, its longest stretches each a pass that counts no step,
+// chain's bounds in four runs (BenchmarkAThreadChainAtItsBounds), End's
+// longest stretch without a look was 11 to 15 ms at both bounds and shorter in
+// every other case, its longest stretches each a pass that counts no step,
 // one pass over the records or one sort of them (resolving every parent,
 // sorting the fallback's candidates), and through its worst case, 1.4 s of
 // steps, it looked at least every 11 ms; so the count stands.
