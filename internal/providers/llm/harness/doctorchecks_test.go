@@ -3,6 +3,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -259,4 +260,57 @@ func TestOnlyADiagnosisOnTheEntrysSignInIsRecordedOnIt(t *testing.T) {
 	if p.Plan().State(time.Now()).LastAnswer.IsZero() {
 		t.Error("the entry's own answered diagnosis was not recorded on its sign-in")
 	}
+}
+
+// A SIGN-IN-ONLY DIAGNOSIS IS ONE HARNESS RUN. A candidate credential's test
+// asks whether the value signs the harness in, which the smoke run answers; the
+// local-tool and web probes are the same with any credential, and each is
+// another whole run a person who pasted a token would wait through. Their
+// lines say they were left out rather than reporting a stance nothing
+// measured, and a probe left out is no problem.
+//
+// Mutation: let a sign-in-only diagnosis fall through to the probes, and the
+// harness is run three times.
+func TestASignInOnlyDiagnosisRunsTheHarnessOnce(t *testing.T) {
+	t.Parallel()
+	rec := t.TempDir()
+	p := candidateEntry(t, map[string]string{
+		"FAKE_STDOUT":             `{"message":"","tool_calls":[{"name":"crewlet_smoke","arguments":{"ok":true}}]}`,
+		"FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply, "FAKE_WEB_PROBE_STDOUT": noWebReply,
+		"FAKE_RECORD_ARGV": rec,
+	})
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true, SignInOnly: true, Home: t.TempDir(),
+		Values: map[string]string{"FAKE_TOKEN": "candidate"}})
+	if calls := harnessRuns(t, rec); len(calls) != 1 {
+		t.Fatalf("the harness ran %d times, want the one run that signs it in: %q", len(calls), calls)
+	}
+	if smoke, _ := d.Check(CheckSmoke); smoke.Detail == "" || strings.Contains(smoke.Detail, "skipped") {
+		t.Errorf("the smoke run was not made: %+v", smoke)
+	}
+	for _, name := range []CheckName{CheckShell, CheckWeb} {
+		line, _ := d.Check(name)
+		if !line.OK || !strings.Contains(line.Detail, "probe skipped") {
+			t.Errorf("%s = %+v, want a probe said to be skipped and no problem", name, line)
+		}
+	}
+
+	whole := t.TempDir()
+	q := candidateEntry(t, map[string]string{
+		"FAKE_STDOUT":             `{"message":"","tool_calls":[{"name":"crewlet_smoke","arguments":{"ok":true}}]}`,
+		"FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply, "FAKE_WEB_PROBE_STDOUT": noWebReply,
+		"FAKE_RECORD_ARGV": whole,
+	})
+	q.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if calls := harnessRuns(t, whole); len(calls) < 3 {
+		t.Errorf("the whole doctor ran the harness %d times, want the smoke run and both probes", len(calls))
+	}
+}
+
+// harnessRuns is the calls a diagnosis made of its harness, as [recordedArgv]
+// recorded them, without the version probe, which starts no run.
+func harnessRuns(t *testing.T, dir string) [][]string {
+	t.Helper()
+	return slices.DeleteFunc(recordedArgv(t, dir), func(argv []string) bool {
+		return slices.Contains(argv, "-test.run=NoSuchTest")
+	})
 }
