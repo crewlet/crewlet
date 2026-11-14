@@ -767,24 +767,30 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // Hook alone, and an origin that is no object leaves the message and the hooks
 // whole and is refused by OriginKind alone. A reply's stop_reason that is no
 // string, null among them, leaves its message, its report of the edits
-// applied, its usage and its hooks whole, and is refused by StopReason alone,
-// never read as ""; its report of the edits applied, of the wrong shape,
-// leaves its message, its stop_reason and its usage whole and is refused by
-// ToolResultsCleared alone; and its usage of the wrong shape, or its id or
-// model of the wrong type, leaves its message, its stop_reason, its report and
-// its hooks whole and is refused by Usage alone. A record's own uuid that is
-// no string (null, a number, an object, a boolean), on the harness's
-// bookkeeping, on a model's call or on a hook's record, leaves everything else
-// the record hands out as it reads with its uuid as written, and is refused by
-// UUID alone. As written, each reads: an origin's kind, and a user record's
-// own toolUseResult, raw, which no other record hands out.
+// applied, its usage, its model and its hooks whole, and is refused by
+// StopReason alone, never read as ""; its report of the edits applied, of the
+// wrong shape, leaves its message, its stop_reason, its usage and its model
+// whole and is refused by ToolResultsCleared alone; its usage of the wrong
+// shape leaves its message, its stop_reason, its report, its model, its id
+// and its hooks whole and is refused by Usage alone; and its model or its id
+// of the wrong type, each a key two readers read, leaves its message and its
+// stop_reason whole and is refused by those two alone, Usage and Model, or
+// Usage and MessageID. An attachment that is no object is refused by
+// AttachmentType too, never read as one of no type, and a checkpoint whose
+// leafUuid is neither a string nor null by Checkpoint alone. A record's own
+// uuid that is no string (null, a number, an object, a boolean), on the
+// harness's bookkeeping, on a model's call or on a hook's record, leaves
+// everything else the record hands out as it reads with its uuid as written,
+// and is refused by UUID alone. As written, each reads: an origin's kind, and
+// a user record's own toolUseResult, raw, which no other record hands out.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
 // attachment is not one is no record at all; hold the stop_reason, the report
 // or the usage in Message, and a reply whose key is reshaped reads no message;
 // read a null stop_reason as none, and it reads as a reply that did not stop
-// for its calls; hold the uuid to its type in the head, and every record here
-// whose uuid is reshaped is no record at all.
+// for its calls; read the model in Usage's decode, and a reply whose usage is
+// reshaped names no model; hold the uuid to its type in the head, and every
+// record here whose uuid is reshaped is no record at all.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -799,6 +805,22 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	}
 	if _, _, err := attachment.Hook(); err == nil {
 		t.Error("an attachment that is no object reads as a hook's record or none, never as one it cannot read")
+	}
+	if kind, err := attachment.AttachmentType(); err == nil {
+		t.Errorf("an attachment that is no object reads as one of the type %q, never as one it cannot read", kind)
+	}
+	if leaf, marked, err := attachment.Checkpoint(); leaf != "" || marked || err != nil {
+		t.Errorf("a record whose attachment is no object reads as the checkpoint %q (%t), %v", leaf, marked, err)
+	}
+	for name, leaf := range map[string]string{"a number": `7`, "an object": `{"uuid":"` + ctUUID(5) + `"}`,
+		"a boolean": `true`, "a list": `["` + ctUUID(5) + `"]`} {
+		line := ctLine(t, ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, `"leafUuid":`+leaf))
+		if got, marked, err := line.Checkpoint(); err == nil {
+			t.Errorf("a checkpoint whose leafUuid is %s names %q (%t), want an error", name, got, marked)
+		}
+		if h := line.Head; h.Type != recordLastPrompt || h.Chained() {
+			t.Errorf("a checkpoint whose leafUuid is %s reads with the head %+v", name, h)
+		}
 	}
 	summary := ctSummary(ctUUID(15), ctUUID(16))
 	for name, record := range map[string]string{
@@ -866,6 +888,12 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			t.Errorf("a reply whose stop_reason is %s says its request took %+v (%t), %v; want its usage", name,
 				usage, ok, err)
 		}
+		if model, err := line.Model(); model != "claude-sonnet-4-5" || err != nil {
+			t.Errorf("a reply whose stop_reason is %s was written by %q, %v; want its model", name, model, err)
+		}
+		if id, err := line.MessageID(); id != "msg_test" || err != nil {
+			t.Errorf("a reply whose stop_reason is %s is the reply %q, %v; want its id", name, id, err)
+		}
 	}
 	for name, report := range map[string]string{
 		"a string": `"cleared"`,
@@ -885,6 +913,12 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		if usage, ok, err := line.Usage(); !ok || err != nil || usage.ID != "msg_test" || usage.Input != 100 {
 			t.Errorf("a reply whose report is %s says its request took %+v (%t), %v; want its usage", name, usage,
 				ok, err)
+		}
+		if model, err := line.Model(); model != "claude-sonnet-4-5" || err != nil {
+			t.Errorf("a reply whose report is %s was written by %q, %v; want its model", name, model, err)
+		}
+		if id, err := line.MessageID(); id != "msg_test" || err != nil {
+			t.Errorf("a reply whose report is %s is the reply %q, %v; want its id", name, id, err)
 		}
 	}
 	for name, usage := range map[string]string{
@@ -909,10 +943,21 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		if _, isHook, err := line.Hook(); isHook || err != nil {
 			t.Errorf("a reply whose usage is %s reads as a hook's record %t, %v", name, isHook, err)
 		}
+		if model, err := line.Model(); model != "claude-sonnet-4-5" || err != nil {
+			t.Errorf("a reply whose usage is %s was written by %q, %v; want its model", name, model, err)
+		}
+		if id, err := line.MessageID(); id != "msg_test" || err != nil {
+			t.Errorf("a reply whose usage is %s is the reply %q, %v; want its id", name, id, err)
+		}
 	}
-	for name, tc := range map[string]struct{ from, to string }{
-		"an id that is a number": {from: `"id":"msg_test"`, to: `"id":7`},
-		"a model that is null":   {from: `"model":"claude-sonnet-4-5"`, to: `"model":null`},
+	for name, tc := range map[string]struct {
+		from, to string
+		// model is whether the key is the model's, which Model reads too; id
+		// whether it is the reply's id, which MessageID reads too.
+		model, id bool
+	}{
+		"an id that is a number": {from: `"id":"msg_test"`, to: `"id":7`, id: true},
+		"a model that is null":   {from: `"model":"claude-sonnet-4-5"`, to: `"model":null`, model: true},
 	} {
 		line := ctLine(t, ctReplace(t, call, tc.from, tc.to))
 		if got, ok, err := line.Usage(); err == nil {
@@ -923,6 +968,13 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if reason, err := line.StopReason(); reason != "tool_use" || err != nil {
 			t.Errorf("a reply whose message holds %s stopped for %q, %v; want tool_use", name, reason, err)
+		}
+		if model, err := line.Model(); (err != nil) != tc.model || (!tc.model && model != "claude-sonnet-4-5") {
+			t.Errorf("a reply whose message holds %s was written by %q, %v; want it refused %t", name, model, err,
+				tc.model)
+		}
+		if id, err := line.MessageID(); (err != nil) != tc.id || (!tc.id && id != "msg_test") {
+			t.Errorf("a reply whose message holds %s is the reply %q, %v; want it refused %t", name, id, err, tc.id)
 		}
 	}
 
@@ -1013,9 +1065,13 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // ctAll is everything a line hands out through every accessor, as text: its
 // head, its own uuid, its hook, its message and its calls, its origin's kind,
 // its own toolUseResult, whether it says tool results were cleared, why its
-// reply stopped and what its request took, each beside the error it answered.
-// A raw value it hands out is printed by [ctRaw], so an absent one and a null
-// one never read alike.
+// reply stopped, whether its harness wrote it for a failed request, the model
+// that wrote it, what its request took, the results it says its harness
+// replaced, the records it says its harness took back, what it says a
+// compaction kept, the reply it is, the leaf it says a resume starts from and
+// its attachment's type, each beside the error it answered. A raw value it
+// hands out is printed by [ctRaw], so an absent one and a null one never read
+// alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1052,9 +1108,34 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
 	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
+	failed, err := l.APIError()
+	fmt.Fprintf(&b, "a failed request's reply: %t; %v\n", failed, err)
+	model, err := l.Model()
+	fmt.Fprintf(&b, "model: %q; %v\n", model, err)
 	usage, used, err := l.Usage()
 	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
+	var replaced []string
+	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
+	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
+	var retracted []string
+	err = l.Retracted(func(uuid string) error {
+		retracted = append(retracted, uuid)
+		return nil
+	})
+	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	var listed []string
+	preserved, err := l.Preserved(func(uuid string) error {
+		listed = append(listed, uuid)
+		return nil
+	})
+	fmt.Fprintf(&b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
+	reply, err := l.MessageID()
+	fmt.Fprintf(&b, "reply: %q; %v\n", reply, err)
+	leaf, marked, err := l.Checkpoint()
+	fmt.Fprintf(&b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
+	attached, err := l.AttachmentType()
+	fmt.Fprintf(&b, "attachment type: %q; %v\n", attached, err)
 	return b.String()
 }
 
@@ -1075,12 +1156,16 @@ func ctRaw(v json.RawMessage) string {
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
 // uuid, a message, an attachment, an origin, a firing at the top, a record's
-// own toolUseResult), a hook's attachment, an origin, a message (its content,
-// its stop_reason, its id, its model and its usage), a message's blocks, its
-// usage's counts and iterations, each iteration's type and counts, its report
-// of the context edits applied, and each edit the report lists. So a line
-// hands out exactly what it hands out without the other key, through every
-// accessor. 2.1.322 already spells a call's id `toolUseId` (a subagent's
+// own toolUseResult, a reply's mark of an API error, a record's replacements,
+// a checkpoint's leaf and its marks, the uuids a record retracts, what a
+// compaction's boundary says it kept, its list's and its segment's keys), a
+// hook's attachment, an origin, a
+// message (its content, its stop_reason, its id, its model and its usage), a
+// message's blocks, its usage's counts and iterations, each iteration's type
+// and counts, its report of the context edits applied, each edit the report
+// lists, and each replacement a record lists (its kind and its call's id). So
+// a line hands out exactly what it hands out without the other key, through
+// every accessor. 2.1.322 already spells a call's id `toolUseId` (a subagent's
 // metadata names the call that started it so), a key away from a hook's
 // firing.
 //
@@ -1101,6 +1186,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 	other := "toolu_test_other"
 	retyped := ctReplace(t, brief, `"type":"user"`, `"type":"attachment"`)
 	cleared := ctReported(t, ctEdits(ctClearing))
+	synthetic := ctSynthetic(ctUUID(30), ctUUID(31))
+	replacing := ctReplacement("", ctReplaced(ctCall))
+	retracting := ctFallback(ctUUID(5), ctUUID(6), ctUUID(2))
+	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
+	segmenting := ctReplace(t, compacting, ctListed(ctUUID(11), ctUUID(3), ctUUID(4)), "")
 	// listing is the model's call whose usage lists entries as its iterations.
 	listing := func(entries ...string) string {
 		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[`+
@@ -1154,6 +1244,34 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
 		"ToolUseResult null alone": {record: brief, from: `"isSidechain":false`,
 			to: `"isSidechain":false,"ToolUseResult":null`},
+		"a mark of an API error, then IsApiErrorMessage": {record: synthetic, from: `"isApiErrorMessage":false`,
+			to: `"isApiErrorMessage":false,"IsApiErrorMessage":true`},
+		"IsApiErrorMessage alone": {record: call, from: `"type":"assistant"`,
+			to: `"IsApiErrorMessage":true,"type":"assistant"`},
+		"a replacements, then Replacements": {record: replacing, from: `"replacements":[` + ctReplaced(ctCall) + `]`,
+			to: `"replacements":[` + ctReplaced(ctCall) + `],"Replacements":[` + ctReplaced(other) + `]`},
+		"a checkpoint's leafUuid, then LeafUuid": {record: ctLastPrompt, from: `"leafUuid":"` + ctUUID(5) + `"`,
+			to: `"leafUuid":"` + ctUUID(5) + `","LeafUuid":"` + ctUUID(9) + `"`},
+		"a checkpoint's LEAFUUID alone": {record: ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`",`, ""),
+			from: `"type":"last-prompt"`, to: `"type":"last-prompt","LEAFUUID":"` + ctUUID(9) + `"`},
+		"a checkpoint's Explicit alone": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"type":"last-prompt","Explicit":true`},
+		"a checkpoint's Rewound alone": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"type":"last-prompt","Rewound":true`},
+		"a retractedMessageUuids, then RetractedMessageUuids": {record: retracting,
+			from: `"retractedMessageUuids":["` + ctUUID(2) + `"]`,
+			to:   `"retractedMessageUuids":["` + ctUUID(2) + `"],"RetractedMessageUuids":["` + ctUUID(9) + `"]`},
+		"RETRACTEDMESSAGEUUIDS alone": {record: ctRetry(ctUUID(5), ctUUID(6)), from: `"retractedMessageUuids":[]`,
+			to: `"retractedMessageUuids":[],"RETRACTEDMESSAGEUUIDS":["` + ctUUID(9) + `"]`},
+		"a compactMetadata, then CompactMetadata": {record: compacting, from: `,"slug":"` + ctSlug + `"`,
+			to: `,"CompactMetadata":{"preservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) +
+				`"]}},"slug":"` + ctSlug + `"`},
+		"a preservedMessages, then PreservedMessages": {record: compacting, from: `,"postTokens":2602`,
+			to: `,"PreservedMessages":{"anchorUuid":"` + ctUUID(9) + `","uuids":["` + ctUUID(9) + `"]},"postTokens":2602`},
+		"a list's uuids, then UUIDs": {record: compacting, from: `"allUuids":[`,
+			to: `"UUIDs":["` + ctUUID(9) + `"],"allUuids":[`},
+		"a segment's headUuid, then HeadUuid": {record: segmenting, from: `"anchorUuid":"` + ctUUID(11) + `","tailUuid"`,
+			to: `"HeadUuid":"` + ctUUID(9) + `","anchorUuid":"` + ctUUID(11) + `","tailUuid"`},
 		// A hook's attachment.
 		"an attachment's firing, then a call's toolUseId": {record: hook, from: firing,
 			to: firing + `,"toolUseId":"` + other + `"`},
@@ -1185,6 +1303,8 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"ID":"msg_other","type":"message"`},
 		"a reply's model, then Model": {record: call, from: `"model":"claude-sonnet-4-5"`,
 			to: `"model":"claude-sonnet-4-5","Model":"<synthetic>"`},
+		"a reply's Model alone": {record: ctReplace(t, call, `"model":"claude-sonnet-4-5",`, ""),
+			from: `"type":"message"`, to: `"Model":"<synthetic>","type":"message"`},
 		"a reply's usage, then Usage": {record: call, from: ctUsage, to: ctUsage + `,"Usage":{"input_tokens":7}`},
 		"a reply's Usage alone": {record: ctReplace(t, call, ","+ctUsage, ""), from: `"stop_sequence":null`,
 			to: `"stop_sequence":null,"Usage":{"input_tokens":7}`},
@@ -1234,6 +1354,11 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"type":"clear_tool_uses_20250919","Type":"clear_thinking_20251015"`},
 		"an edit's cleared_tool_uses, then Cleared_Tool_Uses": {record: cleared, from: `"cleared_tool_uses":18`,
 			to: `"cleared_tool_uses":18,"Cleared_Tool_Uses":0`},
+		// A record's replacements.
+		"a replacement's kind, then Kind": {record: replacing, from: `"kind":"tool-result"`,
+			to: `"kind":"tool-result","Kind":"other"`},
+		"a replacement's toolUseId, then ToolUseId": {record: replacing, from: `"toolUseId":"` + ctCall + `"`,
+			to: `"toolUseId":"` + ctCall + `","ToolUseId":"` + other + `"`},
 		// A key written twice.
 		"a type written twice": {record: retyped, from: `"type":"attachment"`, to: `"type":"user","type":"attachment"`},
 		"a uuid written twice": {record: brief, from: `"uuid":"` + ctUUID(1) + `"`,
@@ -1243,6 +1368,13 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		"a count written twice": {record: call, from: `"output_tokens":20`, to: `"output_tokens":7,"output_tokens":20`},
 		"an attachment's firing written twice": {record: hook, from: firing,
 			to: `"toolUseID":"` + other + `",` + firing},
+		"a checkpoint's leafUuid written twice": {record: ctLastPrompt, from: `"leafUuid":"` + ctUUID(5) + `"`,
+			to: `"leafUuid":"` + ctUUID(9) + `","leafUuid":"` + ctUUID(5) + `"`},
+		"a checkpoint's mark written twice": {record: ctLastPrompt, from: `"type":"last-prompt"`,
+			to: `"explicit":true,"type":"last-prompt","explicit":false`},
+		"a retractedMessageUuids written twice": {record: retracting,
+			from: `"retractedMessageUuids":["` + ctUUID(2) + `"]`,
+			to:   `"retractedMessageUuids":["` + ctUUID(9) + `"],"retractedMessageUuids":["` + ctUUID(2) + `"]`},
 	} {
 		variant := ctReplace(t, tc.record, tc.from, tc.to)
 		if got, want := ctAll(ctLine(t, variant)), ctAll(ctLine(t, tc.record)); got != want {
@@ -1437,6 +1569,13 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // its type: a model's reply whose replacesSpan is a string, and an attachment
 // whose replacesSpan is null, each read whole, and restart nothing.
 //
+// A ROOT IS WHAT CLAUDE CODE'S WALK READS AS ONE: a chained record whose
+// parentUuid is the empty string, a reply's or an attachment's, and a user
+// record or a reply that carries no parentUuid at all, each falsy to the
+// walk, restart the thread where they follow its first chained record; and a
+// brief of no parentUuid that opens the thread is its first chained record,
+// which roots it, and restarts nothing.
+//
 // Mutation: count every root, and the brief restarts every thread; count every
 // root but the first one seen, and the first root of a thread whose start is
 // gone is none; read a thread whose start is gone as whole, and one that never
@@ -1447,7 +1586,9 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 // replacesSpan by its presence, and one that is false restarts the thread;
 // read either kind off any record's type, and the attachment or the reply
 // restarts it; hold replacesSpan to its type on every record, and the reply
-// and the attachment that carry one of another type are no records.
+// and the attachment that carry one of another type are no records; root a
+// chain at null alone, and the empty string and the absent parent restart
+// nothing.
 func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 	t.Parallel()
 	brief, again := ctBrief(ctUUID(1)), ctBrief(ctUUID(4))
@@ -1503,6 +1644,19 @@ func TestARestartIsWhereWhatCameBeforeMayBeGone(t *testing.T) {
 		"a null replacesSpan on an attachment": {lines: after(ctReplace(t,
 			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"type":"attachment"`,
 			`"type":"attachment","replacesSpan":null`))},
+		"a reply whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"an attachment whose parentUuid is the empty string": {lines: after(ctReplace(t,
+			ctAttachment(ctUUID(3), ctUUID(7), ctTokens, ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`,
+			`"parentUuid":""`)), restarts: []int{5}},
+		"a user record with no parentUuid": {lines: after(ctReplace(t, ctSpan(ctUUID(3), ctUUID(7), ""),
+			`"parentUuid":"`+ctUUID(3)+`",`, "")), restarts: []int{5}},
+		"a reply with no parentUuid": {lines: after(ctReplace(t,
+			ctAssistant(ctUUID(3), ctUUID(7), `[{"type":"text","text":"batch 2."}]`), `"parentUuid":"`+ctUUID(3)+`",`,
+			"")), restarts: []int{5}},
+		"a brief with no parentUuid, opening its thread": {lines: []string{ctEnqueue,
+			ctReplace(t, brief, `"parentUuid":null,`, ""), tokens, reply}},
 	} {
 		got := ctRead(ctThread(tc.lines...), threadPlainMax)
 		if len(got.lines) != len(tc.lines) {
@@ -1861,6 +2015,493 @@ func TestAReplySaysWhyItStopped(t *testing.T) {
 			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
 		if got, err := ctLine(t, record).StopReason(); err == nil {
 			t.Errorf("%s stopped for %q, want an error", name, got)
+		}
+	}
+}
+
+// A REPLY SAYS WHETHER ITS HARNESS WROTE IT FOR A REQUEST THAT FAILED: APIError
+// reads an assistant record's own `isApiErrorMessage` as written, true where
+// it says so, false where it is false (the resume's own reply) or absent
+// (every model's reply measured); nothing on a record that is no assistant's,
+// whatever it carries there; and an error where the mark is no boolean, null
+// among it, never false, which its reader would take for a model's reply.
+//
+// Mutation: read the mark as false whatever it holds, and the failed
+// request's reply reads as a model's; or read a null as no mark, and it is no
+// error.
+func TestAReplySaysWhetherItsHarnessWroteItForAFailedRequest(t *testing.T) {
+	t.Parallel()
+	marked := func(mark string) string {
+		return ctReplace(t, ctSynthetic(ctUUID(30), ctUUID(31)), `"isApiErrorMessage":false`,
+			`"isApiErrorMessage":`+mark)
+	}
+	for name, tc := range map[string]struct {
+		record string
+		failed bool
+	}{
+		"a failed request's reply":         {marked("true"), true},
+		"the reply a resume writes":        {ctSynthetic(ctUUID(30), ctUUID(31)), false},
+		"a model's reply, which says none": {ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"done."}]`), false},
+		"a result carrying the mark": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"isApiErrorMessage":true,"type":"user"`), false},
+	} {
+		if failed, err := ctLine(t, tc.record).APIError(); failed != tc.failed || err != nil {
+			t.Errorf("%s reads as a failed request's %t, %v; want %t", name, failed, err, tc.failed)
+		}
+	}
+	for name, mark := range map[string]string{"null": `null`, "a string": `"true"`, "a number": `1`, "an object": `{}`} {
+		if failed, err := ctLine(t, marked(mark)).APIError(); err == nil {
+			t.Errorf("a reply whose mark is %s reads as a failed request's %t, want an error", name, failed)
+		}
+	}
+}
+
+// A REPLY SAYS WHICH MODEL WROTE IT: Model reads an assistant record's model
+// as written, "<synthetic>" on every reply its harness wrote itself in place
+// of a model's (the reply a resume writes, a failed request's), and "" where
+// the key is absent; nothing on a record that is no assistant's, whatever its
+// message carries; and an error where the model is no string, null among it,
+// or the record's message is no object, never "", which its reader would take
+// for a model's reply.
+//
+// Mutation: read the model off every record's message, and a result carrying
+// one names a model; read it as any JSON value, and a number reads as "";
+// read it as "" whatever it holds, and the harness's own replies read as a
+// model's.
+func TestAReplySaysWhichModelWroteIt(t *testing.T) {
+	t.Parallel()
+	text := ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)
+	failed := ctReplace(t, ctSynthetic(ctUUID(30), ctUUID(31)), `"isApiErrorMessage":false`,
+		`"isApiErrorMessage":true`)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record string
+		model  string
+	}{
+		"a model's reply":             {record: text, model: "claude-sonnet-4-5"},
+		"the reply a resume writes":   {record: ctSynthetic(ctUUID(30), ctUUID(31)), model: "<synthetic>"},
+		"a failed request's reply":    {record: failed, model: "<synthetic>"},
+		"a reply that names no model": {record: ctReplace(t, text, `"model":"claude-sonnet-4-5",`, "")},
+		"a result whose message carries one": {record: ctReplace(t, result, `"role":"user",`,
+			`"role":"user","model":"claude-sonnet-4-5",`)},
+		"a brief, which is no reply": {record: ctBrief(ctUUID(1))},
+	} {
+		if model, err := ctLine(t, tc.record).Model(); model != tc.model || err != nil {
+			t.Errorf("%s was written by %q, %v; want %q", name, model, err, tc.model)
+		}
+	}
+	for name, model := range map[string]string{
+		"null":      `null`,
+		"a number":  `7`,
+		"an object": `{"model":"claude-sonnet-4-5"}`,
+		"a list":    `["claude-sonnet-4-5"]`,
+		"a boolean": `true`,
+	} {
+		if got, err := ctLine(t, ctReplace(t, text, `"model":"claude-sonnet-4-5"`, `"model":`+model)).Model(); err == nil {
+			t.Errorf("a reply whose model is %s was written by %q, want an error", name, got)
+		}
+	}
+	for name, message := range map[string]string{
+		"a reply whose message is null": `"message":null,`,
+		"a reply with no message":       "",
+	} {
+		record := `{"parentUuid":"` + ctUUID(30) + `","isSidechain":false,` + message + `"type":"assistant","uuid":"` +
+			ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+		if got, err := ctLine(t, record).Model(); err == nil {
+			t.Errorf("%s was written by %q, want an error", name, got)
+		}
+	}
+}
+
+// ctReplacement is a content-replacement record of entries, each a JSON value,
+// in ctSession's thread of agent, "" for the main thread, whose record names
+// none. No run reached one, which waits on a flag only Anthropic's servers
+// set: its keys and their order are read from 2.1.310's and 2.1.322's code.
+func ctReplacement(agent string, entries ...string) string {
+	named := ""
+	if agent != "" {
+		named = `"agentId":"` + agent + `",`
+	}
+	return `{"type":"content-replacement","sessionId":"` + ctSession + `",` + named + `"replacements":[` +
+		strings.Join(entries, ",") + `]}`
+}
+
+// ctReplaced is the entry of a content-replacement record that replaces call
+// id's result, its preview abridged.
+func ctReplaced(id string) string {
+	return `{"kind":"tool-result","toolUseId":"` + id + `","replacement":"<persisted-output>\nOutput too large ` +
+		`(212.4KB). Full output saved to: /tmp/box/tool-results/` + id + `.txt\n</persisted-output>"}`
+}
+
+// ctQuoted is uuids, each quoted, joined as a JSON list's elements.
+func ctQuoted(uuids []string) string {
+	if len(uuids) == 0 {
+		return ""
+	}
+	return `"` + strings.Join(uuids, `","`) + `"`
+}
+
+// ctFallback is the system record 2.1.322 writes where a model refused a reply
+// as it streamed and the harness moved the request to another model, chained
+// to parent, naming the records it took back out of the conversation:
+// retracted, each a uuid as written. No run reached one, which waits on a
+// refusal: its keys and their order are read from 2.1.322's code, the
+// record's own beside the keys every chained record carries.
+func ctFallback(parent, uuid string, retracted ...string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"system","subtype":"model_refusal_fallback",` +
+		`"direction":"retry","scope":"session","content":"Switched to claude-sonnet-4-5","level":"warning",` +
+		`"trigger":"refusal","originalModel":"claude-opus-4-5","fallbackModel":"claude-sonnet-4-5",` +
+		`"requestId":"req_test","apiRefusalCategory":null,"apiRefusalExplanation":null,"retractedMessageUuids":[` +
+		ctQuoted(retracted) + `],"refusedUserMessageUuid":null,"isMeta":false,"timestamp":"` + ctStamp +
+		`","uuid":"` + uuid + `",` + ctTail("2.1.322") + `}`
+}
+
+// ctRetry is the meta user record 2.1.322 sends where it retries a reply whose
+// call it could not parse, chained to parent, naming the records of that reply
+// it took back: retracted, each a uuid as written. Abridged: its text is not
+// the harness's own. Read from 2.1.322's code, as ctFallback is.
+func ctRetry(parent, uuid string, retracted ...string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"promptId":"` + ctPrompt + `","type":"user",` +
+		`"message":{"role":"user","content":"The tool call could not be parsed; try again."},"isMeta":true,` +
+		`"turnCompanion":true,"uuid":"` + uuid + `","timestamp":"` + ctStamp + `","retractedMessageUuids":[` +
+		ctQuoted(retracted) + `],` + ctTail("2.1.322") + `}`
+}
+
+// A RECORD SAYS WHICH RECORDS ITS HARNESS TOOK BACK: Retracted hands each uuid
+// of a record's retractedMessageUuids, in order and as written, on a refused
+// reply's fallback (a system record of that subtype), on a malformed reply's
+// retry (a meta user record) and on a reply (an assistant record), the
+// records 2.1.322 reads the key on; nothing where the key is absent, or on a
+// system record of another subtype or an attachment, whatever it carries; and
+// an error where the key holds anything but a list of strings, null among it,
+// on a record it is read on. An error each returns ends the walk as it is.
+//
+// Mutation: read the key off every record, and a stop hook's summary
+// carrying it retracts; read it off a refusal's fallback alone, as 2.1.310
+// does, and a retry's names nothing; or pass an entry that is no string over,
+// as 2.1.322 does, and a list 2.1.310's resume throws on reads.
+func TestARecordSaysWhichRecordsItsHarnessTookBack(t *testing.T) {
+	t.Parallel()
+	named := []string{ctUUID(4), ctUUID(5)}
+	reply := ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"type":"assistant"`,
+		`"retractedMessageUuids":[`+ctQuoted(named)+`],"type":"assistant"`)
+	for name, tc := range map[string]struct {
+		record string
+		uuids  []string
+	}{
+		"a refused reply's fallback": {ctFallback(ctUUID(5), ctUUID(6), named...), named},
+		"a malformed reply's retry":  {ctRetry(ctUUID(5), ctUUID(6), named...), named},
+		"a reply":                    {reply, named},
+		"a fallback naming none":     {ctFallback(ctUUID(5), ctUUID(6)), nil},
+		"a fallback naming a uuid of another form": {ctFallback(ctUUID(5), ctUUID(6), "not a uuid"),
+			[]string{"not a uuid"}},
+		"a record that names none": {ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), nil},
+		"a stop hook's summary carrying the key": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)),
+			`"hookCount":1`, `"retractedMessageUuids":["`+ctUUID(4)+`"],"hookCount":1`), nil},
+		"an attachment carrying the key": {ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			`"retractedMessageUuids":["`+ctUUID(2)+`"],`), nil},
+	} {
+		var got []string
+		err := ctLine(t, tc.record).Retracted(func(uuid string) error {
+			got = append(got, uuid)
+			return nil
+		})
+		if err != nil || !slices.Equal(got, tc.uuids) {
+			t.Errorf("%s retracts %q, %v; want %q", name, strings.Join(got, ","), err, strings.Join(tc.uuids, ","))
+		}
+	}
+	fallback := ctFallback(ctUUID(5), ctUUID(6), named...)
+	for name, list := range map[string]string{"null": `null`, "a string": `"` + ctUUID(4) + `"`,
+		"an object": `{"uuid":"` + ctUUID(4) + `"}`, "a list holding a number": `["` + ctUUID(4) + `",7]`,
+		"a list holding null": `[null]`} {
+		for kind, record := range map[string]string{"a refused reply's fallback": fallback,
+			"a malformed reply's retry": ctRetry(ctUUID(5), ctUUID(6), named...)} {
+			line := ctLine(t, ctReplace(t, record, `"retractedMessageUuids":[`+ctQuoted(named)+`]`,
+				`"retractedMessageUuids":`+list))
+			if err := line.Retracted(func(string) error { return nil }); err == nil {
+				t.Errorf("%s whose retractedMessageUuids is %s retracts with no error; want one", kind, name)
+			}
+		}
+	}
+	stop := errors.New("stop")
+	var got []string
+	err := ctLine(t, fallback).Retracted(func(uuid string) error {
+		got = append(got, uuid)
+		return stop
+	})
+	if !errors.Is(err, stop) || !slices.Equal(got, named[:1]) {
+		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
+			got, named[0])
+	}
+}
+
+// ctListed is the list a compaction's boundary built by ctBoundary carries,
+// as written: its `preservedMessages`, the key before it included.
+func ctListed(summary string, kept ...string) string {
+	ids := ctQuoted(kept)
+	return `,"preservedMessages":{"anchorUuid":"` + summary + `","uuids":[` + ids + `],"allUuids":[` + ids + `]}`
+}
+
+// A COMPACTION'S BOUNDARY SAYS WHAT IT KEPT, as a resume relinks a thread by
+// it: Preserved reads a compact_boundary record's preservedMessages where it
+// carries one, its anchor and each uuid it lists handed in order, kept where
+// it lists any; else its preservedSegment, the anchor and the segment's two
+// ends; and nothing where the boundary carries neither, a null for either, or
+// no compactMetadata, null among it, or on a record of another type or
+// subtype, whatever it carries. Every other shape, a metadata, a list, an
+// anchor or an end of another type, an entry that is no string, is an error.
+// An error each returns ends the walk as it is.
+//
+// Mutation: read the segment where a list is, and the list's records go
+// unread; take a list of none for one that keeps records, and a boundary
+// that keeps nothing relinks; or read a null list as one, and a boundary
+// naming its segment alone is an error.
+func TestACompactionsBoundarySaysWhatItKept(t *testing.T) {
+	t.Parallel()
+	kept := []string{ctUUID(3), ctUUID(5), ctUUID(6)}
+	boundary := ctBoundary(ctUUID(7), ctUUID(8), kept...)
+	listed := ctListed(ctUUID(8), kept...)
+	segment := ctReplace(t, boundary, listed, "")
+	for name, tc := range map[string]struct {
+		record string
+		want   threadPreserved
+		uuids  []string
+	}{
+		"a boundary listing what it kept beside its segment": {boundary,
+			threadPreserved{Kept: true, Anchor: ctUUID(8)}, kept},
+		"a boundary naming its segment alone": {segment, threadPreserved{Kept: true, Anchor: ctUUID(8),
+			Segment: true, Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary whose list is null, beside its segment": {ctReplace(t, boundary, listed,
+			`,"preservedMessages":null`), threadPreserved{Kept: true, Anchor: ctUUID(8), Segment: true,
+			Head: ctUUID(3), Tail: ctUUID(6)}, nil},
+		"a boundary listing none": {ctReplace(t, segment, `"compactMetadata":{`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":[]},`),
+			threadPreserved{Anchor: ctUUID(8)}, nil},
+		"a boundary keeping nothing": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"},`, ""), threadPreserved{}, nil},
+		"a boundary whose segment is null": {ctReplace(t, segment, `"preservedSegment":{"headUuid":"`+ctUUID(3)+
+			`","anchorUuid":"`+ctUUID(8)+`","tailUuid":"`+ctUUID(6)+`"}`, `"preservedSegment":null`),
+			threadPreserved{}, nil},
+		"a boundary whose metadata is null": {ctReplace(t, ctReplace(t, boundary, listed, ""),
+			`"compactMetadata":{"trigger":"manual"`, `"compactMetadata":null,"was":{"trigger":"manual"`),
+			threadPreserved{}, nil},
+		"a microcompaction's boundary carrying a list": {ctReplace(t, boundary, `"subtype":"compact_boundary"`,
+			`"subtype":"microcompact_boundary"`), threadPreserved{}, nil},
+		"a stop hook's summary carrying a list": {ctReplace(t, ctSummary(ctUUID(15), ctUUID(16)), `"hookCount":1`,
+			`"compactMetadata":{"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`"]}},`+
+				`"hookCount":1`), threadPreserved{}, nil},
+	} {
+		var got []string
+		p, err := ctLine(t, tc.record).Preserved(func(uuid string) error {
+			got = append(got, uuid)
+			return nil
+		})
+		if err != nil || p != tc.want || !slices.Equal(got, tc.uuids) {
+			t.Errorf("%s keeps %+v, listing %q, %v; want %+v, listing %q", name, p, strings.Join(got, ","), err,
+				tc.want, strings.Join(tc.uuids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"a metadata that is a string": ctReplace(t, ctReplace(t, boundary, listed, ""), `"compactMetadata":{`,
+			`"compactMetadata":"kept","was":{`),
+		"a list that is a string": ctReplace(t, boundary, listed, `,"preservedMessages":"kept"`),
+		"a list's uuids that are a string": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":"`+ctUUID(3)+`"}`),
+		"a list's uuids holding a number": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"anchorUuid":"`+ctUUID(8)+`","uuids":["`+ctUUID(3)+`",7]}`),
+		"a list of no anchor": ctReplace(t, boundary, listed,
+			`,"preservedMessages":{"uuids":["`+ctUUID(3)+`"]}`),
+		"a segment whose head is a number": ctReplace(t, segment, `"headUuid":"`+ctUUID(3)+`"`, `"headUuid":3`),
+		"a segment of no tail":             ctReplace(t, segment, `,"tailUuid":"`+ctUUID(6)+`"`, ""),
+	} {
+		if p, err := ctLine(t, record).Preserved(func(string) error { return nil }); err == nil {
+			t.Errorf("%s keeps %+v with no error; want one", name, p)
+		}
+	}
+	stop := errors.New("stop")
+	var got []string
+	_, err := ctLine(t, boundary).Preserved(func(uuid string) error {
+		got = append(got, uuid)
+		return stop
+	})
+	if !errors.Is(err, stop) || !slices.Equal(got, kept[:1]) {
+		t.Errorf("a walk each stops at the first uuid answers %v, having handed %q; want each's own error at %q", err,
+			got, kept[0])
+	}
+}
+
+// A CONTENT-REPLACEMENT RECORD NAMES THE RESULTS IT REPLACED: ReplacedResults
+// hands the id of each entry of a content-replacement record whose kind is
+// "tool-result", in order, the main thread's record and a subagent's alike;
+// passes over an entry of another kind, as the harness's resume does; reads
+// nothing off a record of another type, though it lists replacements; and is
+// an error where the record lists them in no shape the harness writes: no
+// list, an object in its place, an entry that is no object, a kind that is no
+// string, and a tool's result named by no string.
+//
+// Mutation: read the ids off every record that lists replacements, or take
+// every entry for a tool's result whatever its kind, and a record that
+// replaces no result names a call.
+func TestAContentReplacementRecordNamesTheResultsItReplaced(t *testing.T) {
+	t.Parallel()
+	other := `{"kind":"image","toolUseId":"` + ctCall + `","replacement":"x"}`
+	listed := ctReplacement("", ctReplaced(ctCall))
+	for name, tc := range map[string]struct {
+		record string
+		ids    []string
+	}{
+		"the main thread's":   {ctReplacement("", ctReplaced(ctCall), ctReplaced(ctMCPCall)), []string{ctCall, ctMCPCall}},
+		"a subagent's":        {ctReplacement(ctAgent, ctReplaced(ctCall)), []string{ctCall}},
+		"one of another kind": {ctReplacement("", other, ctReplaced(ctMCPCall)), []string{ctMCPCall}},
+		"one of no entries":   {ctReplacement(""), nil},
+		"a result listing replacements": {ctReplace(t, ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn),
+			`"type":"user"`, `"replacements":[`+ctReplaced(ctCall)+`],"type":"user"`), nil},
+	} {
+		var got []string
+		err := ctLine(t, tc.record).ReplacedResults(func(id string) { got = append(got, id) })
+		if err != nil || !slices.Equal(got, tc.ids) {
+			t.Errorf("%s names the results %q, %v; want %q", name, strings.Join(got, ","), err,
+				strings.Join(tc.ids, ","))
+		}
+	}
+	for name, record := range map[string]string{
+		"no list":                    `{"type":"content-replacement","sessionId":"` + ctSession + `"}`,
+		"an object for its list":     strings.Replace(listed, `"replacements":[`, `"replacements":{"x":[`, 1) + "}",
+		"an entry that is no object": ctReplacement("", `"x"`),
+		"a kind that is no string":   ctReplacement("", `{"kind":1,"toolUseId":"`+ctCall+`"}`),
+		"a result naming no call":    ctReplacement("", `{"kind":"tool-result","replacement":"x"}`),
+		"a call named by null":       ctReplacement("", `{"kind":"tool-result","toolUseId":null}`),
+	} {
+		if err := ctLine(t, record).ReplacedResults(func(string) {}); err == nil {
+			t.Errorf("a record of %s replaces results with no error; want one", name)
+		}
+	}
+}
+
+// A REPLY SAYS WHICH REPLY IT IS: MessageID reads an assistant record's
+// message's id as written, which every record of one reply carries; "" where
+// the key is absent; nothing on a record that is no assistant's, whatever its
+// message carries; and an error where the id is no string, null among it, or
+// the record's message is no object, never "", which its reader would take
+// for a reply that recovers nothing. And an error where the id holds the
+// replacement character, as written or as the layer's decode reads a lone
+// surrogate or a byte that is no UTF-8: Claude Code compares ids a code unit
+// at a time, so two it holds apart could read here as one.
+//
+// Mutation: read the id off every record's message, and a result carrying one
+// is a reply; read it as any JSON value, and a number reads as ""; read it as
+// "" whatever it holds, and no reply recovers its siblings; or hand out an id
+// holding the replacement character, and `msg_\ud800` is `msg_\ud801`.
+func TestAReplySaysWhichReplyItIs(t *testing.T) {
+	t.Parallel()
+	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	for name, tc := range map[string]struct {
+		record string
+		id     string
+	}{
+		"a model's reply":           {record: call, id: "msg_test"},
+		"the reply a resume writes": {record: ctSynthetic(ctUUID(30), ctUUID(31)), id: ctUUID(902)},
+		"a reply that names no id":  {record: ctReplace(t, call, `"id":"msg_test",`, "")},
+		"a result whose message carries one": {record: ctReplace(t, result, `"role":"user",`,
+			`"role":"user","id":"msg_test",`)},
+		"a brief, which is no reply": {record: ctBrief(ctUUID(1))},
+	} {
+		if id, err := ctLine(t, tc.record).MessageID(); id != tc.id || err != nil {
+			t.Errorf("%s is the reply %q, %v; want %q", name, id, err, tc.id)
+		}
+	}
+	for name, id := range map[string]string{"null": `null`, "a number": `7`, "an object": `{"id":"msg_test"}`,
+		"a string holding a lone surrogate": `"msg_\ud800"`, "a string holding a byte that is no UTF-8": "\"msg_\xff\"",
+		"a string holding the replacement character": `"msg_�"`} {
+		if got, err := ctLine(t, ctReplace(t, call, `"id":"msg_test"`, `"id":`+id)).MessageID(); err == nil {
+			t.Errorf("a reply whose id is %s is the reply %q, want an error", name, got)
+		}
+	}
+	record := `{"parentUuid":"` + ctUUID(30) + `","isSidechain":false,"message":null,"type":"assistant","uuid":"` +
+		ctUUID(31) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+	if got, err := ctLine(t, record).MessageID(); err == nil {
+		t.Errorf("a reply whose message is null is the reply %q, want an error", got)
+	}
+}
+
+// A LAST-PROMPT RECORD SAYS THE LEAF ITS RESUME STARTS FROM: Checkpoint reads
+// its leafUuid where it is a string, "" where it is absent, null or the empty
+// string, each naming no leaf to the harness; it is marked where its
+// `explicit` or its `rewound` is the JSON true, a rewind's, a withdrawal's or
+// a fork's, and by nothing else, as the harness tests each (=== true); and a
+// record of another type is none, whatever keys it carries. A leafUuid of
+// another type is an error ([TestAKeyOneReaderReadsCostsThatReaderAlone]).
+//
+// Mutation: read a mark as set by any value but true, and a record whose
+// explicit is the string "true" moves the leaf; ignore rewound, and a rewind
+// does not; or read the keys off every record, and a reply carrying them is a
+// checkpoint.
+func TestALastPromptSaysTheLeafItsResumeStartsFrom(t *testing.T) {
+	t.Parallel()
+	leafed := func(to string) string {
+		return ctReplace(t, ctLastPrompt, `"leafUuid":"`+ctUUID(5)+`"`, to)
+	}
+	named := `"leafUuid":"` + ctUUID(5) + `"`
+	for name, tc := range map[string]struct {
+		record string
+		leaf   string
+		marked bool
+	}{
+		"its metadata, naming a leaf":   {record: ctLastPrompt, leaf: ctUUID(5)},
+		"naming none":                   {record: leafed(`"leafUuid":null`)},
+		"naming none, the empty string": {record: leafed(`"leafUuid":""`)},
+		"with no leafUuid":              {record: leafed(`"lastPromptAt":1`)},
+		"a rewind's": {record: leafed(named + `,"explicit":true,"rewound":true`), leaf: ctUUID(5),
+			marked: true},
+		"a withdrawal's":           {record: leafed(`"leafUuid":null,"explicit":true`), marked: true},
+		"rewound alone":            {record: leafed(named + `,"rewound":true`), leaf: ctUUID(5), marked: true},
+		"explicit false":           {record: leafed(named + `,"explicit":false`), leaf: ctUUID(5)},
+		"explicit the string true": {record: leafed(named + `,"explicit":"true"`), leaf: ctUUID(5)},
+		"rewound the number 1":     {record: leafed(named + `,"rewound":1`), leaf: ctUUID(5)},
+		"a reply carrying a checkpoint's keys": {record: ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"type":"assistant"`, named+`,"explicit":true,"type":"assistant"`)},
+	} {
+		leaf, marked, err := ctLine(t, tc.record).Checkpoint()
+		if leaf != tc.leaf || marked != tc.marked || err != nil {
+			t.Errorf("%s names the leaf %q, marked %t, %v; want %q, marked %t", name, leaf, marked, err, tc.leaf,
+				tc.marked)
+		}
+	}
+}
+
+// AN ATTACHMENT SAYS ITS TYPE: AttachmentType reads an attachment record's
+// attachment's type as written, a fork's briefing's among them; "" where the
+// attachment or its type is absent, and on a record that is no attachment,
+// whatever it carries; and an error where the attachment is no object or its
+// type no string, never "", which a reader can take for no fork's briefing
+// only by its own choice ([TestAKeyOneReaderReadsCostsThatReaderAlone]).
+//
+// Mutation: read the type off every record, and a reply carrying an
+// attachment reads as one; or read it as any JSON value, and a number reads as
+// "".
+func TestAnAttachmentSaysItsType(t *testing.T) {
+	t.Parallel()
+	briefing := ctAttachment(ctUUID(1), ctUUID(2), `{"type":"fork_briefing","text":"the fork's brief"}`, "")
+	for name, tc := range map[string]struct {
+		record string
+		kind   string
+	}{
+		"a fork's briefing": {record: briefing, kind: attachmentForkBriefing},
+		"a reminder of tokens": {record: ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered),
+			kind: "total_tokens_reminder"},
+		"an attachment of no type": {record: ctReplace(t, briefing, `"type":"fork_briefing",`, "")},
+		"a reply carrying an attachment": {record: ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"type":"assistant"`, `"attachment":{"type":"fork_briefing"},"type":"assistant"`)},
+	} {
+		if kind, err := ctLine(t, tc.record).AttachmentType(); kind != tc.kind || err != nil {
+			t.Errorf("%s is an attachment of the type %q, %v; want %q", name, kind, err, tc.kind)
+		}
+	}
+	for name, kind := range map[string]string{"null": `null`, "a number": `7`, "an object": `{}`} {
+		line := ctLine(t, ctReplace(t, briefing, `"type":"fork_briefing"`, `"type":`+kind))
+		if got, err := line.AttachmentType(); err == nil {
+			t.Errorf("an attachment whose type is %s is of the type %q, want an error", name, got)
 		}
 	}
 }

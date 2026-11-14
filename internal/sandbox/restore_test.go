@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ type keptRestore struct {
 	// what it carries the second — as a seal that does not authenticate does.
 	failOpen int
 	opened   int
+	// streamed counts the objects [keptRestore.Open] streamed, as a reading
+	// of what a session holds streams one.
+	streamed int
 	asked    []string
 	// unreadRows, when set, is every read's answer: a log that could not be
 	// read.
@@ -85,6 +89,27 @@ func (k *keptRestore) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.
 		return nil, errUnreadable
 	}
 	return sealed, nil
+}
+
+// Open streams the archive row's object holds, as the store streams one
+// opened: an object it does not hold, or every object where fetches fail, is
+// unreadable.
+func (k *keptRestore) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.streamed++
+	body, ok := k.archives[row.Object.Key.String()]
+	if k.unreadable || !ok {
+		return nil, errUnreadable
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+// streams is how many objects [keptRestore.Open] was asked to stream.
+func (k *keptRestore) streams() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.streamed
 }
 
 func (k *keptRestore) askedFor() []string {

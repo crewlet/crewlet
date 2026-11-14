@@ -108,6 +108,10 @@ func (a *appliedLog) OpenSpooled(executorkeep.TurnRow, io.Reader) (io.Reader, er
 	return nil, errNoArchive
 }
 
+func (a *appliedLog) Open(context.Context, executorkeep.TurnRow) (io.ReadCloser, error) {
+	return nil, errNoArchive
+}
+
 // ended is every end asked of the log, in order.
 func (a *appliedLog) ended() []EndRecord {
 	a.mu.Lock()

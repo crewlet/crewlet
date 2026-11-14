@@ -1989,39 +1989,45 @@ func (ClaudeCode) TotalsRestored(version string) bool {
 }
 
 // releaseAtLeast reports whether version, as a harness's `--version` printed it,
-// is at or after floor. Its numbers are read up to the first character that is
-// neither a digit nor a dot; a version with fewer than three numbers is one
-// this code cannot read, and is taken for a current release.
+// is at or after floor. A version this code cannot read ([releaseNumbers]) is
+// taken for a current release.
 func releaseAtLeast(version, floor string) bool {
-	read := func(v string) ([3]int, bool) {
-		if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
-			v = v[:cut]
-		}
-		fields := strings.Split(v, ".")
-		var out [3]int
-		if len(fields) < 3 {
-			return out, false
-		}
-		for i := range 3 {
-			n, err := strconv.Atoi(fields[i])
-			if err != nil {
-				return out, false
-			}
-			out[i] = n
-		}
-		return out, true
-	}
-	have, ok := read(strings.TrimSpace(version))
+	have, ok := releaseNumbers(version)
 	if !ok {
 		return true
 	}
-	want, _ := read(floor)
+	want, _ := releaseNumbers(floor)
 	for i := range 3 {
 		if have[i] != want[i] {
 			return have[i] > want[i]
 		}
 	}
 	return true
+}
+
+// releaseNumbers is the three numbers of version, as a harness's `--version`
+// printed it, read once its spaces are trimmed, up to the first character
+// that is neither a digit nor a dot. False for a version this code cannot
+// read: one with fewer than three numbers, or one of a number past what an
+// int holds.
+func releaseNumbers(version string) ([3]int, bool) {
+	v := strings.TrimSpace(version)
+	if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
+		v = v[:cut]
+	}
+	fields := strings.Split(v, ".")
+	var out [3]int
+	if len(fields) < 3 {
+		return out, false
+	}
+	for i := range 3 {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // claudeHookStopped is the terminal reason of a run whose loop a hook stopped.

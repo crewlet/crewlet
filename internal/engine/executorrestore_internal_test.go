@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -28,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // keptLog is the executor log and the session store a relaunch continues a kept
@@ -61,6 +64,16 @@ func (k *keptLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writ
 
 func (k *keptLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	return sealed, nil
+}
+
+func (k *keptLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	body, ok := k.archives[row.Object.Key.String()]
+	if !ok {
+		return nil, executordomain.ErrUnreadable
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 // keptLaunch is a seat whose turn t1 launched one job, whose session a capture
@@ -879,4 +892,81 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 			}
 		})
 	}
+}
+
+// THE RESTORE STREAMS THE OBJECT ITS ROW NAMES, OPENED AGAINST THAT ROW AS IT
+// STREAMS: a reading of what a kept session holds reads exactly the archive
+// the fetch and the spool's open hand a launch, every chunk of it
+// authenticated (the store's own stream, which spools nothing, so the case
+// checks no spool); the same object named by another turn's row does not
+// open, its seal being bound to the turn its row names; and a row naming no
+// object is unreadable, as the store says of one.
+//
+// Mutation: stream the object unopened, or open it against anything but its
+// own row, and the bytes differ or the turn's own stream fails; answer a row
+// naming no object, or another turn's, with an empty stream, and its case
+// goes red.
+func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
+	t.Parallel()
+	objects, err := objstore.NewStore(memobj.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{objects: &objectStore{store: objects}, boot: &config.Bootstrap{Secrets: config.Secrets{
+		ActiveKeyID: "k1", Keys: []config.SecretKey{{ID: "k1",
+			Material: base64.StdEncoding.EncodeToString([]byte("crewlet-test-sealing-key-32bytes"))}}}}}
+	sessions, err := e.ExecutorSessions()
+	if err != nil || sessions == nil {
+		t.Fatalf("ExecutorSessions: %v (a store: %t), want the store over the node's objects and keyring", err,
+			sessions != nil)
+	}
+	const turn, other = "4f2a6c1e-8b3d-4e5f-9a7b-1c2d3e4f5a6b", "0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b"
+	// PAST THREE SEALED CHUNKS, so the stream authenticates several.
+	archive := bytes.Repeat([]byte("0123456789abcdef"), 3*secrets.StreamChunkBytes/16+1)
+	sealed, err := sessions.Put(t.Context(), "swe", turn, io.NopCloser(bytes.NewReader(archive)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	restore := executorRestore{engine: e}
+	row := executorkeep.TurnRow{Handle: "swe", Turn: turn, Object: sealed.Object}
+
+	var spool bytes.Buffer
+	if err := restore.Fetch(t.Context(), row, &spool); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	opened, err := restore.OpenSpooled(row, &spool)
+	if err != nil {
+		t.Fatalf("OpenSpooled: %v", err)
+	}
+	spooled, err := io.ReadAll(opened)
+	if err != nil || !bytes.Equal(spooled, archive) {
+		t.Fatalf("the spool opened to %d bytes (%v), want the %d the turn's archive holds", len(spooled), err,
+			len(archive))
+	}
+	streamed, err := streamOf(t, restore, row)
+	if err != nil || !bytes.Equal(streamed, spooled) {
+		t.Fatalf("the restore streamed %d bytes (%v), want the %d the spool opens to", len(streamed), err,
+			len(spooled))
+	}
+	foreign := row
+	foreign.Turn = other
+	if _, err := streamOf(t, restore, foreign); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("the object streamed under another turn's row: %v, want it unreadable", err)
+	}
+	bare := executorkeep.TurnRow{Handle: "swe", Turn: turn}
+	if _, err := streamOf(t, restore, bare); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("a row naming no object streamed: %v, want it unreadable", err)
+	}
+}
+
+// streamOf is what the restore's stream of the object row names hands out,
+// read to its end, or the error its open or a read of it met.
+func streamOf(t *testing.T, restore executorRestore, row executorkeep.TurnRow) ([]byte, error) {
+	t.Helper()
+	body, err := restore.Open(t.Context(), row)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	return io.ReadAll(body)
 }
