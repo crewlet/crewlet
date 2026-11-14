@@ -1,5 +1,7 @@
 package sandbox
 
+import "context"
+
 // # Every write that moves a run between its seat's sets moves the count once
 //
 // A seat's two counts ([seatRuns]) are moved by the writes this node makes to
@@ -22,17 +24,21 @@ package sandbox
 // HAS ITS ROW ([Coordinator.countedLocked]): a delete that landed before the
 // listing leaves the run out of it, its move still to come; and the write's
 // answer makes its move once, under the lock, in the step that takes it
-// ([Coordinator.wroteCountLocked]). The writes are a park's question
-// ([Coordinator.park], resumed to awaiting), an answer's record
-// ([Coordinator.record], the question to answered), the claim that resumes the
-// answer ([Coordinator.resumeOwedAdmitted], answered to resumed), either decline
-// that lets it go ([Coordinator.dropUnopened], [Coordinator.declineAnswer],
-// answered back to the question), and the delete that ends a run this node
-// counts, from its status to no row at all ([Coordinator.finishEnding], for the
-// endings that count their run out: [Coordinator.settleNoted],
-// [Coordinator.StopSeat] and [Coordinator.abandon], [ending.counted]). A claim's
-// release keeps a record of its own, which a recount reads the same way
-// (claimrelease.go).
+// ([Coordinator.wroteCountLocked]). The writes are the open of a run's row
+// ([Coordinator.Launch], no row to launching, or the claim its resumed turn
+// relaunches to launching), a park's question ([Coordinator.park], resumed to
+// awaiting), an answer's record ([Coordinator.record], the question to
+// answered), the claim that resumes the answer
+// ([Coordinator.resumeOwedAdmitted], answered to resumed), either decline that
+// lets it go ([Coordinator.dropUnopened], [Coordinator.declineAnswer], answered
+// back to the question), the delete that ends a run this node counts, from its
+// status to no row at all ([Coordinator.finishEnding], for the endings that
+// count their run out: [Coordinator.settleNoted], [Coordinator.StopSeat] and
+// [Coordinator.abandon], [ending.counted]), and a recovery's takeover of each
+// run of the seat it acquires, from no set to the one it leaves the run in
+// ([Coordinator.RecoverSeat], answered once the recovery is done with the run).
+// A claim's release keeps a record of its own, which a recount reads the same
+// way (claimrelease.go).
 //
 // Each double count cost the seat something. Counted out of the question set
 // twice, a seat holding a second question read as having none open, and that
@@ -71,8 +77,8 @@ package sandbox
 // in the order the two were recorded, in the step that takes the earlier answer.
 // Made at once, as it was, the record's move counted the run out of the question
 // set before the park's had counted it in, which the clamp at zero
-// ([Coordinator.adjust]) swallowed on a seat with no other question, and the
-// park's move then counted the answered run as a question.
+// ([Coordinator.adjustLocked]) swallowed on a seat with no other question, and
+// the park's move then counted the answered run as a question.
 //
 // THE WRITES OF ONE RUN ARE KEYED BY ITS TURN, whatever job each names: a turn
 // has one row, which the store holds once, and a recount that counted a run's
@@ -114,9 +120,14 @@ func countOf(status string) seatRuns {
 // where the earlier write's moves leave it, and this write's move follows that
 // one's.
 func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite {
-	w := &countWrite{turn: run.TurnID, handle: run.AgentHandle, from: from, to: to}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.writingCountLocked(run, from, to)
+}
+
+// writingCountLocked is [Coordinator.writingCount] for a caller holding c.mu.
+func (c *Coordinator) writingCountLocked(run PendingRun, from, to string) *countWrite {
+	w := &countWrite{turn: run.TurnID, handle: run.AgentHandle, from: from, to: to}
 	writes := c.writing[w.turn]
 	if writes == nil {
 		writes = &runWrites{handle: run.AgentHandle, counted: countOf(from)}
@@ -124,6 +135,58 @@ func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite 
 	}
 	writes.out = append(writes.out, w)
 	return w
+}
+
+// takingOver records, before a recovery fences any of them, the takeover of
+// every run its listing found on handle's seat ([Coordinator.RecoverSeat]),
+// each from no set at all, and starts the seat's counts afresh from what this
+// node's writes out on the seat leave them, once they are recorded. It returns
+// the takeovers, one per run, for [Coordinator.takeoverAnswered] to answer.
+//
+// AFRESH, because whatever this node counted of the seat before its recovery
+// is a recount's, off the control topic the recovery attaches first, and the
+// recovery counts each run again where it leaves it: added to that recount's,
+// every run it took over was counted twice, and a tail it reaped stayed
+// counted. Nothing else of this node's moves the seat before its recovery: its
+// mailbox is not open, and a write of an earlier holding moves nothing
+// ([Coordinator.ReleaseSeat]). A recount whose listing was read before this
+// step reads again, as after any move ([Coordinator.syncSeat]).
+func (c *Coordinator) takingOver(ctx context.Context, handle string, runs []PendingRun) []*countWrite {
+	takeovers := make([]*countWrite, len(runs))
+	c.mu.Lock()
+	for i, run := range runs {
+		takeovers[i] = c.writingCountLocked(run, "", "")
+	}
+	var counts seatRuns
+	for _, writes := range c.writing {
+		if writes.handle == handle {
+			counts.holding += writes.counted.holding
+			counts.awaiting += writes.counted.awaiting
+		}
+	}
+	c.moves[handle]++
+	was := c.runs[handle]
+	if counts == (seatRuns{}) {
+		delete(c.runs, handle)
+	} else {
+		c.runs[handle] = counts
+	}
+	c.mu.Unlock()
+	c.seatFreed(handle, was, counts)
+	c.reconcileHold(ctx, handle)
+	return takeovers
+}
+
+// takeoverAnswered answers a takeover [Coordinator.takingOver] recorded:
+// status is the one the recovery leaves its run counted in
+// ([Coordinator.recoverRun]), and none for a run it counts in no set, which
+// moves nothing.
+func (c *Coordinator) takeoverAnswered(w *countWrite, status string) {
+	c.mu.Lock()
+	w.to = status
+	moved := c.wroteCountLocked(w, status != "")
+	c.mu.Unlock()
+	moved()
 }
 
 // wroteCountLocked takes the answer to w, landed or not, and makes the moves

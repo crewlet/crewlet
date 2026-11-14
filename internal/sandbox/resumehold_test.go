@@ -128,10 +128,13 @@ func TestAResumedRunKeepsItsSeatHeldThroughTheTurn(t *testing.T) {
 
 // A RESUMED TURN THAT LAUNCHES THE NEXT JOB HOLDS THE SEAT ONCE, not twice:
 // the claim's count and the relaunch's are one row, and a seat whose count
-// stayed at two after the first of them settled would be held for good.
+// stayed at two after the first of them settled would be held for good. The
+// relaunch counts its row as the claim it opens the job on
+// ([TestALaunchMovesItsSeatsCountOnce]), and the turn's frame recounts the
+// seat as it returns besides.
 //
-// Mutation: drop the recount from the relaunch branch, and the seat is still
-// held after the relaunched job settles.
+// Mutation: count the relaunch as opening a row nothing counted, and drop the
+// recount from the relaunch branch, and the seat counts the one run twice.
 func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

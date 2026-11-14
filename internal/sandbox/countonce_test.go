@@ -34,6 +34,18 @@ func (s *recountOnLanding) MarkAwaiting(ctx context.Context, turnID string, q Cl
 	return err
 }
 
+// countRun counts a run into the set status names on handle's seat, as the
+// write that put it there would have: for a case whose rows the rig writes
+// straight onto the store, which no write of the coordinator's counts.
+func (c *Coordinator) countRun(handle, status string) {
+	holding, awaiting := setOf(status)
+	c.mu.Lock()
+	was, runs := c.adjustLocked(handle, holding, awaiting)
+	c.mu.Unlock()
+	c.seatFreed(handle, was, runs)
+	c.reconcileHold(c.life, handle)
+}
+
 // seatCounts is what the rig's coordinator counts of the seat's runs.
 func seatCounts(rig *coordRig) seatRuns {
 	rig.coordinator.mu.Lock()
@@ -617,6 +629,172 @@ func TestAnEndingWhoseDeleteDidNotLandMovesNoCount(t *testing.T) {
 				2, 0)
 			rig.coordinator.syncSeat(t.Context(), "swe")
 			wantSeatCounts(t, rig, "recounted,", "t1, still on its row, and t2's claim holding", 2, 0)
+		})
+	}
+}
+
+// recountOnOpen is a run store that, once a launch has opened its run's row,
+// has the seat recounted before the open's answer is returned: a recount whose
+// listing was read after the row was written, and written before the launch
+// took the write's answer.
+type recountOnOpen struct {
+	PendingStore
+	recount func(ctx context.Context)
+}
+
+func (s *recountOnOpen) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
+	opened, err := s.PendingStore.BeginLaunch(ctx, run, fence)
+	if err == nil {
+		s.recount(ctx)
+	}
+	return opened, err
+}
+
+// besides names the two ways a case makes a write that moves a run's count:
+// with nothing recounting the seat beside it, its own move the only one, and
+// with a recount between the write's landing and its answer.
+var besides = []struct {
+	name    string
+	between bool
+}{
+	{"nothing recounting beside it", false},
+	{"a recount between the write and its answer", true},
+}
+
+// A LAUNCH MOVES ITS SEAT'S COUNT ONCE (countwrite.go). The write that opens a
+// run's row counts it holding as its answer is taken, recorded before it is
+// sent, so a recount between the two counts the run where it was: no row at
+// all for a launch, and the claim it was for a relaunch its resumed turn
+// makes, which counts it holding already. Counted after the write and outside
+// the lock, a recount whose listing was read after the row was written counted
+// the run holding, and the launch then counted it a second time; and a
+// relaunch counted holding a run its claim held the seat for already. Either
+// way the seat stayed held until a recount after the run had settled.
+//
+// Mutation: record the open after it lands, or record it against another run,
+// or record a relaunch as opening a row nothing counted; the run is counted
+// twice.
+func TestALaunchMovesItsSeatsCountOnce(t *testing.T) {
+	t.Parallel()
+	for _, b := range besides {
+		t.Run("a launch, "+b.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			claimedBeside(t, rig)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			if b.between {
+				rig.coordinator.pending = &recountOnOpen{PendingStore: rig.coordinator.pending,
+					recount: func(ctx context.Context) { rig.coordinator.syncSeat(ctx, "swe") }}
+			}
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			wantSeatCounts(t, rig, "once t1 launched,", "t1's job and t2's claim holding the seat", 2, 0)
+		})
+		t.Run("a relaunch in its resumed turn, "+b.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			if b.between {
+				rig.coordinator.pending = &recountOnOpen{PendingStore: rig.coordinator.pending,
+					recount: func(ctx context.Context) { rig.coordinator.syncSeat(ctx, "swe") }}
+			}
+			rig.runner.Finish(Result{Success: true})
+			var during seatRuns
+			rig.resumer.during = func(ctx context.Context, run PendingRun) {
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq(run.TurnID)); err != nil {
+					t.Errorf("relaunch: %v", err)
+				}
+				during = seatCounts(rig)
+			}
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if during.holding != 1 || during.awaiting != 0 {
+				t.Fatalf("once the resumed turn relaunched its job the seat counted %d holding and %d "+
+					"awaiting; want the one run, its claim relaunched, holding it once", during.holding,
+					during.awaiting)
+			}
+		})
+	}
+}
+
+// recountOnFence is a run store that, once a recovery's fence has landed on a
+// run, has the seat recounted before the fence's answer is returned: a recount
+// from the seat's control topic, which is attached before the recovery runs.
+type recountOnFence struct {
+	PendingStore
+	recount func(ctx context.Context)
+}
+
+func (s *recountOnFence) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+	won, err := s.PendingStore.ClaimOwnership(ctx, turnID, owner, epoch)
+	if err == nil && won {
+		s.recount(ctx)
+	}
+	return won, err
+}
+
+// A RECOVERY COUNTS EACH RUN IT TAKES OVER ONCE (countwrite.go). A node taking
+// a seat counts each run its recovery takes over where the recovery leaves it:
+// a running job holding, a question awaiting, and a tail the seat's last holder
+// left launching nowhere, since it is reaped. The seat's control topic is
+// attached before the recovery runs, so a recount from it can land before the
+// recovery, or between a run's fence and its count. The recovery starts the
+// seat's counts afresh as it records every run it takes over, and a recount
+// meanwhile counts each where the recovery has left it so far. Counted after
+// the fence and outside the lock, on top of whatever a recount had already
+// counted, the running job held the seat twice and the question was counted
+// twice (the seat's mail offered to an answer match with nothing more to
+// answer), and a recount that had counted the tail kept it holding after its
+// reap.
+//
+// Mutation: count a run after its fence without recording it first, or leave
+// the counts a recount made before the recovery standing; the seat counts a
+// run twice, or a reaped tail.
+func TestARecoveryCountsEachRunItTakesOverOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		before func(t *testing.T, rig *coordRig)
+	}{
+		{"nothing recounting beside it", func(*testing.T, *coordRig) {}},
+		{"a recount between each fence and its count", func(_ *testing.T, rig *coordRig) {
+			rig.coordinator.pending = &recountOnFence{PendingStore: rig.coordinator.pending,
+				recount: func(ctx context.Context) { rig.coordinator.syncSeat(ctx, "swe") }}
+		}},
+		{"a recount before it, off the seat's control topic", func(t *testing.T, rig *coordRig) {
+			if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
+				AgentHandle: "swe", TurnID: "t1",
+			}); err != nil {
+				t.Fatalf("OnStarted: %v", err)
+			}
+			if got := seatCounts(rig); got.holding != 2 || got.awaiting != 1 {
+				t.Fatalf("the premise: the recount counted %d holding and %d awaiting; want t1, the tail "+
+					"and t3's question", got.holding, got.awaiting)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.launching("t2")
+			rig.launch("t3")
+			rig.park("t3")
+			tc.before(t, rig)
+			if err := rig.recoverSeat(t.Context(), "node-b:1", 2); err != nil {
+				t.Fatalf("RecoverSeat: %v", err)
+			}
+			if _, found, err := rig.pending.Get(t.Context(), "t2"); err != nil || found {
+				t.Fatalf("the premise: the tail found %v (%v); want it reaped", found, err)
+			}
+			wantSeatCounts(t, rig, "once the recovery took the seat over,",
+				"t1's job holding it and t3's question awaiting", 1, 1)
+			rig.coordinator.syncSeat(t.Context(), "swe")
+			wantSeatCounts(t, rig, "recounted,", "t1's job holding it and t3's question awaiting", 1, 1)
 		})
 	}
 }
