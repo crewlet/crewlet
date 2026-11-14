@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -802,11 +803,19 @@ func TestTheReportedWindowIsTheLeastItsRunReported(t *testing.T) {
 // boundary restarts the identity alone, never the count, which restarts at a main
 // compact boundary alone.
 //
+// A canonical uuid, the one every chained record Claude Code writes carries, is
+// exactly [sandbox.RestartIDMaxBytes] long, and is named.
+//
 // Mutation: read the identity off compact boundaries alone, keep the first
-// restart, or restart the count at every restart, and a case goes red.
+// restart, restart the count at every restart, or hold a uuid of exactly
+// [sandbox.RestartIDMaxBytes] to be no identity, and a case goes red.
 func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 	t.Parallel()
 	brief, reply := cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)
+	const canonical = "0b9e8f1c-2d3a-4b5c-8d7e-6f5a4b3c2d1e"
+	if len(canonical) != sandbox.RestartIDMaxBytes {
+		t.Fatalf("the canonical uuid is %d bytes, want %d", len(canonical), sandbox.RestartIDMaxBytes)
+	}
 	micro := `{"parentUuid":"u2","isSidechain":false,"type":"system","subtype":"microcompact_boundary",` +
 		`"uuid":"mc-1"}`
 	span := `{"parentUuid":"u2","isSidechain":false,"type":"user","replacesSpan":true,` +
@@ -821,6 +830,8 @@ func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 		"a microcompaction's boundary": {lines: []string{brief, reply, micro}, restart: "mc-1", bound: 150 + cntCharge(micro)},
 		"a span replaced":              {lines: []string{brief, reply, span}, restart: "span-1", bound: 150 + cntCharge(span)},
 		"a later root":                 {lines: []string{brief, reply, cntUser("", "root-2", `"again"`)}, restart: "root-2", bound: 150 + cntCharge(cntUser("", "root-2", `"again"`))},
+		"a canonical uuid": {lines: []string{brief, reply, cntBoundary(canonical), cntUser(canonical, "u4", `"s"`),
+			cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: canonical, bound: 100},
 		"a trim that kept the newest": {lines: []string{cntUser("gone", "u3", `"kept"`), cntBoundary("b1"),
 			cntUser("b1", "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)}, restart: "b1", bound: 100},
 	} {
@@ -837,18 +848,92 @@ func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 // A NEWEST RESTART WHOSE UUID DOES NOT READ LEAVES NO COUNT: one with no uuid, an
 // empty one, or one past a uuid's thirty-six bytes is no identity, and a count
 // that cannot name its newest restart is unread, the side a relaunch tells more
-// on.
+// on. That holds after an older restart whose uuid does read too: the newer one
+// replaces what the older left, so the count never names the older as its newest,
+// which would read a job launched on the older restart as not restarted, and its
+// count as a bound.
 //
-// Mutation: read such a restart as none, and a case goes red.
+// Mutation: read such a restart as none, or keep what an older restart left
+// where a newer one does not read, and a case goes red.
 func TestANewestRestartWhoseUUIDDoesNotReadLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	for name, uuid := range map[string]string{"absent": ``, "empty": `,"uuid":""`,
-		"too long": `,"uuid":"` + strings.Repeat("a", 37) + `"`} {
+		"too long": `,"uuid":"` + strings.Repeat("a", sandbox.RestartIDMaxBytes+1) + `"`} {
 		boundary := `{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary"` + uuid + `}`
-		got := cntCount(cntUser("", "u1", `"the brief"`), boundary, cntUser("b1", "u4", `"s"`),
-			cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))
-		if got.Mark != sandbox.CountUnread || got.Restart != nil {
-			t.Errorf("%s: the count is %+v, want unread and no restart", name, got)
+		for after, lines := range map[string][]string{
+			"alone": {cntUser("", "u1", `"the brief"`), boundary, cntUser("b1", "u4", `"s"`),
+				cntAnchor("u4", "u5", "m2", 70, 0, 0, 30)},
+			"after a restart that reads": {cntUser("", "u1", `"the brief"`),
+				cntAnchor("u1", "u2", "m1", 100, 0, 0, 50), cntBoundary("b1"), cntUser("b1", "u4", `"s"`),
+				cntAnchor("u4", "u5", "m2", 70, 0, 0, 30), boundary, cntUser("b2", "u7", `"s2"`),
+				cntAnchor("u7", "u8", "m3", 60, 0, 0, 20)},
+		} {
+			if got := cntCount(lines...); got.Mark != sandbox.CountUnread || got.Restart != nil {
+				t.Errorf("%s, %s: the count is %+v (restart %s), want unread and no restart", name, after, got,
+					cntRestartOf(got))
+			}
+		}
+	}
+}
+
+// cntRestartOf says what a count names as its restart, for a failure's message.
+func cntRestartOf(c *sandbox.ResumedCount) string {
+	if c.Restart == nil {
+		return "none"
+	}
+	return strconv.Quote(*c.Restart)
+}
+
+// THE COUNT KEEPS NO RESTART'S UUID PAST AN IDENTITY'S BYTES: a uuid longer than
+// [sandbox.RestartIDMaxBytes] is no identity, so the reading keeps none of it
+// from line to line, whatever its length, and still answers the count unread.
+// Kept, a box's restart whose uuid fills a line held up to three times the line,
+// decoded (a byte no UTF-8 holds reads as U+FFFD), beside everything the one
+// walk of the thread holds after it.
+//
+// Mutation: keep the uuid whatever its length, reading it as no identity, and
+// this goes red.
+func TestTheCountKeepsNoRestartsUUIDPastAnIdentitysBytes(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("u", 1<<12)
+	boundary := `{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary","uuid":"` +
+		long + `"}`
+	var r resumedReading
+	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`), boundary,
+		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, &r)
+	if len(r.newest) > sandbox.RestartIDMaxBytes || !r.flagged {
+		t.Errorf("the count keeps a restart of %d bytes (flagged %v), want at most %d", len(r.newest), r.flagged,
+			sandbox.RestartIDMaxBytes)
+	}
+	if got := r.count(0); got.Mark != sandbox.CountUnread || got.Restart != nil {
+		t.Errorf("the count is %+v, want unread and no restart", got)
+	}
+}
+
+// A RUN'S ID IS READ WHOLE, HOWEVER LONG: the count keeps a digest of its run's
+// message id rather than the id, and the digest tells two ids apart as the ids
+// do, so a counted reply whose id differs from the run's only in its last byte
+// starts a run of its own, and one of the same id, however long, continues it.
+//
+// Mutation: digest a prefix of the id, or read every id as a new run, and a case
+// goes red.
+func TestARunsIDIsReadWholeHoweverLong(t *testing.T) {
+	t.Parallel()
+	id := strings.Repeat("m", 1<<12)
+	first := cntReply("u1", "u2", id+"1", "claude-sonnet-4-5", "",
+		`[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]`)
+	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
+	for name, tc := range map[string]struct {
+		counted string
+		bound   int64
+	}{
+		"the same id": {counted: cntAnchor("u3", "u4", id+"1", 100, 0, 0, 50),
+			bound: 150 + cntCharge(result) + cntCharge(cntAnchor("u3", "u4", id+"1", 100, 0, 0, 50))},
+		"an id differing in its last byte": {counted: cntAnchor("u3", "u4", id+"2", 100, 0, 0, 50), bound: 150},
+	} {
+		got := cntCount(cntUser("", "u1", `"the brief"`), first, result, tc.counted)
+		if bound, ok := got.Bound(); !ok || bound != tc.bound {
+			t.Errorf("%s: the count is %+v, want a bound of %d", name, got, tc.bound)
 		}
 	}
 }
