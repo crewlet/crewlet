@@ -60,9 +60,10 @@
 // server writes such an answer as it writes any, after the beat is stopped and
 // waited for. What the dispatcher may need besides is when that answer is out
 // ([Call.Over]: the request's end, which the SDK reaches only once the
-// answer's write has returned), since a session whose close has begun writes
-// no answer: the bridge waits on it before it closes the sessions of the
-// opening that ended.
+// answer's write has returned, unless the request was cancelled or its
+// connection failed first, when nobody reads the answer), since a session
+// whose close has begun writes no answer: the bridge waits on it before it
+// closes the sessions of the opening that ended.
 //
 // # No listener anywhere
 //

@@ -257,6 +257,30 @@
 // refused all the same, and its box reads the close's failure in place of that
 // refusal: the SDK writes no answer once a close has begun.
 //
+// A HOOK'S ANSWER IS ONE OF THOSE: steer_take's and skill_loaded's are given
+// by the opening's own server, in a middleware rather than through a call, and
+// the ending waits for each as it waits for a refusal ([binding.holdHook]). A
+// take of the run's notes whose write is on the run's record, answered into
+// the close, would leave the notes handed to a step that never had them, with
+// no cancel to say so. And a hook's call answered with an error costs its run
+// the bridge, which its harness drops and re-initialises: measured on Claude
+// Code 2.1.263 and 2.1.310 (internal/sandbox/executor's claudecode.go and
+// steerprobe_test.go). AN ANSWER THE CLOSE WOULD CUT OFF IS HELD TO THE SAME
+// WAIT WITHOUT HAVING BEEN MEASURED: the close ends a hook's request with no
+// answer at all, which is no error answer, and not every failure costs the
+// bridge, since a hook's call the bridge turns away with a 503 is a hook error
+// the run goes on past, the bridge kept ([Bridge.serveMCP]).
+//
+// AND SO IS A REQUEST THAT OPENED A SESSION ON THE OPENING before its end
+// ([binding.holdSessionOpen]): the SDK opens the session as it serves the
+// request, so the ending waits for the MCP handler to return the request,
+// whatever became of its box's connection, before it closes the box's
+// sessions, and that session is one of those it closes. A request that opens a
+// session once the opening has ended is never served there: its routing found
+// the opening a moment before, and it is turned away to ask again
+// ([Bridge.serveMCP]), since a session opened on an ended opening is one no
+// ending closes.
+//
 // PAST THAT BOUND THE ENDING DOES NOT WAIT: an answer still on its way is one a
 // box is not reading, and a box that does not read must not hold an ending. It
 // ends the opening's ledger and returns, and the bridge closes the sessions
@@ -951,18 +975,24 @@ func New(opts Options) (*Bridge, error) {
 	// larger body would be a call served on one node and refused on another.
 	// Stated here rather than left to the SDK's own default, which happens
 	// to be the same figure today and answers to nothing of the engine's.
+	//
+	// THE OPENING IS THE ONE THE REQUEST'S ROUTING FOUND, handed to the
+	// handler on the request ([Bridge.serveMCP]), and the token is never read
+	// again: read again, it named no opening where the opening ended between
+	// the routing and the handler, or named the opening a recovery put in its
+	// place, which no step had held to the session the box started
+	// ([Bridge.serveBegun]); and a nil server here is the SDK's 400 "no server
+	// available", which Claude Code never makes again at a box's startup
+	// ([Bridge.serveMCP]).
 	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		sub, ok := b.parse(r.PathValue("token"))
-		if !ok {
-			return nil
-		}
-		opened := b.held(sub)
+		opened, _ := r.Context().Value(servedOpening{}).(*binding)
 		if opened == nil {
 			return nil
 		}
 		// THE SERVER THE ROUTE NAMES: the engine's own at the job's endpoint,
 		// one of the seat's MCP servers beneath it ([ServerPattern]), and
-		// none for a server the opening does not serve.
+		// none for a server the opening does not serve, which keeps the SDK's
+		// 400: a request no opening of the job could serve.
 		ep := opened.endpoint(r.PathValue("server"))
 		if ep == nil {
 			return nil
@@ -1408,6 +1438,11 @@ func (b *Bridge) parse(token string) (subject, bool) {
 func (b *Bridge) held(sub subject) *binding {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	return b.heldLocked(sub)
+}
+
+// heldLocked is [Bridge.held], under b.mu.
+func (b *Bridge) heldLocked(sub subject) *binding {
 	if opened := b.sessions[sub.launch]; opened != nil && opened.session.RunID == sub.run {
 		return opened
 	}
@@ -1416,7 +1451,8 @@ func (b *Bridge) held(sub subject) *binding {
 
 // verdict is what THIS NODE can do for a token's job: serve its opening, say
 // that the run is over, or say it does not hold the run's seat — not yet, or no
-// longer.
+// longer. And the job's live opening here, nil where it holds none
+// ([Bridge.held]), read in the same moment as the verdict.
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -1437,23 +1473,27 @@ func (b *Bridge) held(sub subject) *binding {
 // A PINNED SESSION IS ITS OPENER'S FOR LIFE ([route]), and the relay has
 // already held a call to the incarnation its token names, so an opening that
 // is not here is a run that is over.
-func (b *Bridge) verdict(sub subject) httprelay.Verdict {
-	if sub.route.pinned() {
-		if b.held(sub) != nil {
-			return httprelay.Serve
-		}
-		return httprelay.Refuse
-	}
+//
+// ONE MOMENT FOR THE OPENING AND THE SEAT'S READINESS, read under one lock: a
+// seat leaving this node takes its readiness and its openings in one step
+// ([Bridge.ReleaseSeat]), and read apart, the readiness from before that step
+// and the opening from after it said that a run whose box goes on with the
+// seat's next holder is over, which the box's harness takes for good.
+func (b *Bridge) verdict(sub subject) (*binding, httprelay.Verdict) {
 	b.mu.RLock()
-	ready := b.ready[sub.route.seat]
-	b.mu.RUnlock()
+	defer b.mu.RUnlock()
+	opened := b.heldLocked(sub)
 	switch {
-	case !ready:
-		return httprelay.Elsewhere
-	case b.held(sub) != nil:
-		return httprelay.Serve
+	case sub.route.pinned() && opened != nil:
+		return opened, httprelay.Serve
+	case sub.route.pinned():
+		return nil, httprelay.Refuse
+	case !b.ready[sub.route.seat]:
+		return opened, httprelay.Elsewhere
+	case opened != nil:
+		return opened, httprelay.Serve
 	default:
-		return httprelay.Refuse
+		return nil, httprelay.Refuse
 	}
 }
 
@@ -1623,9 +1663,90 @@ func (b *Bridge) Reachable() bool {
 // fenced or not, or refuses.
 func (b *Bridge) Handler() http.Handler {
 	b.mounted.Store(true)
-	return b.routed(func(w http.ResponseWriter, r *http.Request, _ *binding) {
-		b.streamable.ServeHTTP(w, r)
-	})
+	return b.routed(b.serveMCP)
+}
+
+// servedOpening is the request context key [Bridge.serveMCP] hands the MCP
+// handler the request's opening under.
+type servedOpening struct{}
+
+// sessionHeader is the header a request of MCP's streamable HTTP transport names
+// its session in, and one that opens a session names none (the transport's
+// "Session Management": a client's initialize carries none, and every request
+// after it carries the id the server answered).
+const sessionHeader = "Mcp-Session-Id"
+
+// opensSession reports whether r asks the MCP handler to open a session: a POST
+// that names none. Every other request is served on the session it names, which
+// the opening's end closes, or refused by the handler for naming none.
+func opensSession(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.Header.Get(sessionHeader) == ""
+}
+
+// serveMCP serves a request of the job's endpoint, or of one of the seat's MCP
+// servers beneath it ([ServerPattern]), on the opening its routing found
+// ([Bridge.routed], or [Bridge.heldOnly] for a relayed call) and held to the
+// session the job's box started ([Bridge.serveBegun]).
+//
+// ON THAT OPENING AND NO OTHER: the MCP handler is handed it on the request
+// ([servedOpening]), and never reads the token again. The routing reads it once,
+// as the request arrives, and that is the request's credential to its end.
+//
+// A REQUEST THAT OPENS A SESSION ([opensSession]) IS SERVED ONLY BY AN OPENING
+// THAT HAS NOT ENDED, and that opening's end waits for the MCP handler to
+// return it before it closes the box's sessions ([binding.holdSessionOpen]), so
+// the session the SDK opens as it serves the request is among those the end
+// closes. One whose opening ended after its routing found it is TURNED AWAY TO
+// ASK AGAIN, a 503 with a Retry-After, as a call to the notes route is
+// ([Bridge.serveSteer]): the run ended, the seat left this node, or a recovery
+// opened the job again, and the request's next try is routed afresh, to the
+// opening that serves the box now, here or on the seat's next holder, or
+// refused where the run is over. NEVER SERVED THERE: a session opened on an
+// ended opening is one its end never closes, which answers every call made on
+// it as one not run, a box told to call again calling on it again. And never
+// the SDK's 400 "no server available", which Claude Code never makes again at
+// a box's startup (below).
+//
+// WHAT A BOX DOES WITH THE 503, measured on Claude Code 2.1.310 and 2.1.322,
+// which behave alike and read no Retry-After. A request opening a session at
+// the box's startup is made again three times, about 0.5, 2 and 6 seconds
+// after the first, and the server is given up for the run where all three
+// meet a 503 too; one opening a session again after the box's session was
+// lost mid-run is made five times within about 15 seconds, at once and then
+// 1, 2, 4 and 8 seconds apart, then up to eight more times in the background
+// over the minutes that follow while the answer stays a 503. A call that meets
+// a 503 ([Bridge.forward], [Bridge.heldOnly]) is not made again: the model's
+// call fails, a hook's call is a hook error the run goes on past, and the CLI
+// keeps the server and its session. The 400 this 503 replaced was never made
+// again at a box's startup, which left the box without its tools for the run.
+// OpenCode's own MCP client was not measured; its notes plugin, the notes
+// route's one client, asks again on its own backoff and reads no Retry-After
+// either.
+//
+// THE BRIDGE DOES NOT ROUTE THE REQUEST AGAIN ITSELF: the 503 fires only where
+// the opening ended in the instant between the routing that found it and the
+// session's hold, in which [Bridge.serveBegun] runs nothing but
+// [binding.begin], and the box's own next try is routed afresh.
+//
+// A request on a session it names needs neither: that session is closed by the
+// opening's end, and the SDK answers a request on a closed one with the 404
+// that has a client open a new session, through the routing.
+func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *binding) {
+	if opensSession(r) {
+		// HELD UNTIL THE HANDLER HAS RETURNED THE REQUEST, never only until
+		// the request's context ends ([binding.holdSessionOpen]).
+		served := make(chan struct{})
+		defer close(served)
+		if !opened.holdSessionOpen(served) {
+			log.InfoContext(r.Context(), "mcp_bridge_session_open_turned_away", "run_id", opened.session.RunID,
+				"launch_id", opened.id, "seat", opened.session.Handle,
+				"detail", "the run's session on this node ended as a request opening an MCP session on it "+
+					"reached it; the box is told to ask again, which reaches the opening that serves it now")
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(holderRetryCeiling))
+			return
+		}
+	}
+	b.streamable.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), servedOpening{}, opened)))
 }
 
 // routed is the routing every route under the bridge's prefix takes — the MCP
@@ -1681,7 +1802,19 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 
 // heldOnly serves a call relayed to this node on the opening the call's token
 // names, which the relay's admission already found here
-// ([Bridge.admitRelayed]); a token whose opening has gone since is refused.
+// ([Bridge.admitRelayed]).
+//
+// AN OPENING GONE SINCE IS ANSWERED AS THIS NODE CAN ANSWER IT NOW
+// ([Bridge.verdict]): the relay admits a call and starts its handler after, and
+// the opening can leave in between. Where the run is over, closed or replaced
+// by a relaunch's job, the call is refused, as one reaching this node's own
+// route is. Where the seat left this node ([Bridge.ReleaseSeat]), the run goes
+// on with the seat's next holder: the call is turned away to ask again, a 503
+// with a Retry-After, as one that found no holder in time is
+// ([Bridge.forward]), and its next try is relayed to that holder. NEVER
+// REFUSED THERE: a refusal says the run is over, which OpenCode's plugins read
+// as the end of the run's notes and of its skill reports, and a box's MCP
+// client as a refused credential, for a run that goes on.
 func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sub, ok := b.parse(r.PathValue("token"))
@@ -1689,13 +1822,19 @@ func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *bindin
 			b.refuse(w, r, "", "the token is forged, malformed or expired")
 			return
 		}
-		opened := b.held(sub)
-		if opened == nil {
+		opened, verdict := b.verdict(sub)
+		switch {
+		case opened != nil:
+			b.serveBegun(w, r, sub, opened, serve)
+		case verdict == httprelay.Elsewhere:
+			log.InfoContext(r.Context(), "mcp_bridge_relayed_seat_left", "run_id", sub.run,
+				"detail", "the seat left this node after the relay admitted the call; the box is "+
+					"told to call again, which reaches the seat's next holder")
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(holderRetryCeiling))
+		default:
 			_, reason := b.Miss(r.PathValue("token"))
 			b.refuse(w, r, sub.run, reason)
-			return
 		}
-		b.serveBegun(w, r, sub, opened, serve)
 	})
 }
 
@@ -1820,7 +1959,9 @@ type binding struct {
 	running map[*bridgedCall]struct{}
 	// refusals is the request's end of every answer the opening gave without
 	// running a call that may still be on its way
-	// ([binding.holdRefusalLocked]): what its end waits for too, before it
+	// ([binding.holdRefusalLocked]), a hook's answer among them
+	// ([binding.holdHook]), and of every request it let open a session
+	// ([binding.holdSessionOpen]): what its end waits for too, before it
 	// closes the box's sessions.
 	refusals []<-chan struct{}
 

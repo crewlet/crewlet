@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/node`
-- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test Go file in the module is parsed, the root package included; `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import; every other edge of the two chains to a turn is an unexported name matched on any operand; and the coordinator's `admitted` type may be named, in a signature or a body, only by `admitTurn`, which makes it, and the three frames that take it, each of which is called only from its one admitting caller; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler, outside the two packages (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted`; inside `internal/sandbox` only the guard holds who makes one), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestACompletionRefusedOnAWaitResumesOnceItClears`, `internal/sandbox.TestARefusedCompletionIsReFiredWhenItsConditionClears`, `internal/sandbox.TestAnUnclaimedCompletionIsAnnouncedAgain`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
+- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test Go file in the module is parsed, the root package included; `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import; every other edge of the two chains to a turn is an unexported name matched on any operand; and the coordinator's `admitted` type may be named, in a signature or a body, only by `admitTurn`, which makes it, and the three frames that take it, each of which is called only from its one admitting caller; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler, outside the two packages (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted`; inside `internal/sandbox` only the guard holds who makes one), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestACompletionRefusedOnAWaitResumesOnceItClears`, `internal/sandbox.TestARefusedCompletionIsReFiredWhenItsConditionClears`, `internal/sandbox.TestARefusalWhileTheClockOnItsHostRunsIsHandedBack`, `internal/sandbox.TestAnUnclaimedCompletionIsAnnouncedAgain`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
 - **Measured:** a draining engine (2026-10-27): `engine_draining` with two turns in flight, then two `sandbox_waiter_fired` completions 6 and 9 minutes into the drain, each resuming a full turn (the in-flight count rose from 1 to 2, then 3) on a node whose every mailbox was quiesced and whose API answered `api_refused_while_draining`. Both resumed turns ended `sandbox_resume_abandoned`, and the drain completed 16 minutes after it began, waiting on turns it should never have started.
 - **Cost-when-tried:** the admission lived inside the mailbox subscription's handler (`node.runTurn`), so it was a property of one road rather than of a turn. The sandbox coordinator re-entered suspended turns from the seat's control topic and from its own answer-retry timer, and neither road passed the ownership check, the `node.max_concurrent` slot or the drain's closed gate. A recorded answer's retry was not even counted by the drain, which waited only for the queue's handlers.
 - **Tag-status:** unreleased
@@ -26,24 +26,43 @@ node defers it, which quiesces the control topic for the rest of the drain and
 costs the one delivery every handoff costs. A condition that clears by waiting
 (the seat's ownership not yet proven again, or any limit a later change adds)
 acknowledges it, spending none of its deliveries and quiescing nothing, because
-the waiter that drives the run's box announces a finished run again on every
-poll until a node claims it: the fleet's for an `e2b` box, the box host's own
-for a `direct` or `container` one
-([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
+the waiter that drives the run's box announces a finished run again until a
+node claims it, on a schedule that doubles from one poll interval to twenty: the
+fleet's for an `e2b` box, the box host's own for a `direct` or `container` one
+([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)), save
+where that waiter cannot (below).
 Only a failure the refusal does not explain is a Nak. A new condition is
 handed back by the rule for its kind with no change to the hand-back.
 
-**An acknowledged completion resumes when its condition clears, within one
-poll at worst.** The coordinator keeps each completion its gate refused on a
-condition, and re-fires it when the engine signals that condition cleared for
-the seat (`Engine.readmitResumes`, the same `sandbox.Coordinator.Readmit` that
-wakes an answer waiting on it, and the hook whatever ends a new condition
-calls). That waiter is the backstop for a clearing nothing signals: it lists
-the active runs on every pass and polls each one it drives, whatever its seat
-is doing, so the wait is bounded by its poll interval (`sandbox.DefaultPollInterval`, 15 seconds). The
-claim is at-most-once, so the two arriving together resume the run once. A
+**An acknowledged completion resumes when its condition clears, at the
+waiter's next announcement of it at worst.** The coordinator keeps each
+completion its gate refused on a condition, and re-fires it when the engine
+signals that condition cleared for the seat (`Engine.readmitResumes`, the same
+`sandbox.Coordinator.Readmit` that wakes an answer waiting on it, and the hook
+whatever ends a new condition calls). That waiter is the backstop for a
+clearing nothing signals: it lists the active runs on every pass and polls each
+one it drives, whatever its seat is doing, and announces a finished run nobody
+has claimed again on its schedule, each announcement due at most twenty poll
+intervals after the last (`sandbox.DefaultPollInterval`, 15 seconds, so five
+minutes), which bounds the wait. The claim is at-most-once, so the two arriving
+together resume the run once. A
 seat this node lets go of drops its kept completions, for the waiter that
 drives each run's box to announce to the seat's next holder.
+
+**The waiter is the backstop while the store answers the box's host, and the
+broker is while it does not.** A `direct` or `container` box is driven by its
+host's waiter alone (ADR-0065), and while the coordinator keeps a clock on the
+store of that host (`sandbox.Coordinator.hostClocked`: the host last answered a
+collection that its store did not answer its read of the run's row), that
+waiter reads the row through the silent store and announces nothing, and a kept
+completion is this node's memory alone, which a restart or a seat let go of
+forgets and a clearing nothing signals never re-fires. So a refusal then is
+still kept for the signalled re-fire, and its delivery is not acknowledged: the
+coordinator marks it `sandbox.ErrUnannounced`, the control topic NAKs it
+whatever its condition (a drain's and a seat let go of still defer it), and the
+coordinator renews it before its last delivery. A duplicate is harmless, since
+the claim is made once, and a re-fire announces nothing afresh while that
+delivery is in flight.
 
 **A turn inside an admitted turn reuses that admission, and skips the
 ownership check for the inner turn.** The inline answer resume runs on the

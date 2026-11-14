@@ -23,7 +23,8 @@ import (
 //
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
-// record's top follows: [RunSteer], [RunNote], [NoteRead], [BridgeCall],
+// record's top follows: [RunSteer], [RunNote], [NoteRead], a hook's serve of a
+// note ([HookServed]) and the call it answered ([NoteCall]), [BridgeCall],
 // [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
 // [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
 // record, which grows a fact about the job with nearly every piece that touches
@@ -173,6 +174,44 @@ func (r *NoteRead) UnmarshalJSON(raw []byte) error {
 	}
 	*r = NoteRead(p)
 	r.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the serve with the keys a later build added to it.
+func (s HookServed) MarshalJSON() ([]byte, error) {
+	type plain HookServed
+	return marshalCarrying(plain(s), wireKeys(reflect.TypeFor[HookServed]()), s.Extra)
+}
+
+// UnmarshalJSON reads the serve and keeps the keys this build does not know.
+func (s *HookServed) UnmarshalJSON(raw []byte) error {
+	type plain HookServed
+	p := plain(*s)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[HookServed]()))
+	if err != nil {
+		return err
+	}
+	*s = HookServed(p)
+	s.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the call with the keys a later build added to it.
+func (c NoteCall) MarshalJSON() ([]byte, error) {
+	type plain NoteCall
+	return marshalCarrying(plain(c), wireKeys(reflect.TypeFor[NoteCall]()), c.Extra)
+}
+
+// UnmarshalJSON reads the call and keeps the keys this build does not know.
+func (c *NoteCall) UnmarshalJSON(raw []byte) error {
+	type plain NoteCall
+	p := plain(*c)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[NoteCall]()))
+	if err != nil {
+		return err
+	}
+	*c = NoteCall(p)
+	c.Extra = extra
 	return nil
 }
 

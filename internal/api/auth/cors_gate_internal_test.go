@@ -120,6 +120,13 @@ var withheldRequest = map[string]string{
 	// answer for a request no permitted page can make.
 	"Last-Event-ID": "same-origin only: the Dashboard Assistant's stream resumes " +
 		"by it, and answers nothing but a browser session",
+	// THE TOOL BRIDGE'S OWN: a box's harness names the MCP session it opened
+	// by it on every request after its initialize, and the bridge reads it to
+	// tell a request that opens a session from one served on a session. No
+	// page of any origin calls the bridge: a run's own token admits a request
+	// to it, never a browser session.
+	"Mcp-Session-Id": "the tool bridge's: a box's harness sends it, and no " +
+		"page of any origin calls the bridge",
 }
 
 // unexposedResponse are the response headers a route sets that a permitted

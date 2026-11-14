@@ -71,6 +71,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
 		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"AClaimsCollectionRecordsItsJobLostOnItsClaimAlone", testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone},
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
@@ -121,6 +122,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
+		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -232,8 +234,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
-			vanishing := &vanishingRuns{records: runs}
-			tc.fn(t, vanishing, over(vanishing))
+			overtaking := &overtakingRuns{records: runs}
+			tc.fn(t, overtaking, over(overtaking))
 		})
 	}
 }
@@ -858,6 +860,88 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 	}
 }
 
+// A CLAIM'S COLLECTION RECORDS ITS JOB LOST ON ITS CLAIM ALONE. The collection
+// of a job whose box only its node's host can read, from a host that has not
+// been able to read the run's row for the box timeout, records the job lost
+// with that host on the claim it holds, and that claim carries the job's round
+// on: the relaunch that does counts the loss. A job still running is the
+// waiter's to judge, and a verdict on another job, another node's box, or a
+// claim under a lease since outranked is one about a claim no collection
+// holds, which would have a round carried on that nothing found lost. Recorded
+// once, it stands at its first instant and cause.
+func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-claim-lost")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, Node: "node-a", At: at}
+	holder := sandbox.Fence{Owner: "node-b:1", Epoch: 3}
+	if _, err := s.ClaimOwnership(ctx, "t-claim-lost", holder.Owner, holder.Epoch); err != nil {
+		t.Fatalf("own: %v", err)
+	}
+
+	// RUNNING, the job is the waiter's to judge.
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || marked {
+		t.Fatalf("a verdict on a running job: marked=%v err=%v; want refused", marked, err)
+	}
+	mustClaim(t, s, "t-claim-lost")
+	for _, refused := range []struct {
+		name, launch, node string
+		fence              sandbox.Fence
+	}{
+		{"another job", "not-" + launch, "node-a", holder},
+		{"another node", launch, "node-b", holder},
+		{"no job", "", "node-a", holder},
+		{"a lease the claim's outranks", launch, "node-a", sandbox.Fence{Owner: "node-c:1", Epoch: 2}},
+	} {
+		loss := lost
+		loss.Node = refused.node
+		if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", refused.launch, loss, refused.fence); err != nil ||
+			marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
+	}
+
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || !marked {
+		t.Fatalf("the verdict on the claim's own job: marked=%v err=%v", marked, err)
+	}
+	got := mustGet(t, s, "t-claim-lost")
+	if got.Status != sandbox.StatusResumed || got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent || got.Lost.Node != "node-a" {
+		t.Fatalf("the row is %s and records %+v; want the claim kept with the verdict %+v on it",
+			got.Status, got.Lost, lost)
+	}
+	// It STANDS: asked again, the row still carries the first.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, again, holder); err != nil || !marked {
+		t.Errorf("a second verdict on the same claim: marked=%v err=%v; want the verdict standing", marked, err)
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
+	}
+
+	// THE RELAUNCH THAT CARRIES THE ROUND ON counts the loss, and its job is
+	// one nothing has judged.
+	next := run("t-claim-lost")
+	next.LaunchNode = "node-b"
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil || got.RoundLosses != 1 {
+		t.Errorf("the relaunch left the verdict %+v and counts %d losses; want it cleared and counted once",
+			got.Lost, got.RoundLosses)
+	}
+
+	// Nor does a run with no record.
+	if marked, err := s.MarkClaimLost(ctx, "t-none", "l", lost, holder); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
 // A ROUND COUNTS ITS LOST JOBS ACROSS THE RELAUNCHES THAT CARRY IT ON — each
 // one counted by the relaunch that follows it — and a new round starts from
 // none. The count is what stops a run that keeps taking its host down from
@@ -1451,6 +1535,10 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			return ok, err
 		},
 		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
+		"MarkClaimLost": func() (bool, error) {
+			return s.MarkClaimLost(ctx, "t1", launch,
+				sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, At: base}, sandbox.Fence{})
+		},
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {
@@ -2216,6 +2304,61 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 	if got := mustGet(t, s, "t1").Launch; got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
 	}
+}
+
+// A RELEASE WHOSE COLLECTION READ THE BOX ENDS THE RUN OF FAILURES WITHOUT
+// COLLECTING THE JOB. A collection whose read answered, and that a later step
+// handed back uncounted (a coordination store that did not answer the step, or
+// a node that stopped), ends the job's run of failed collections as a
+// collected one does, so the next failure starts a run of its own. But the job
+// is not collected: it stays stoppable, and the collection made again charges
+// and records it. And a release cannot both count a failed collection and end
+// the run of failures it counts onto.
+func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.CollectFailedAt = first
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release of a failed collection = %v, %v", released, err)
+	}
+
+	answered := releaseOf(mustClaim(t, s, "t1"))
+	answered.BoxAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a collection whose read answered = %v, %v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.Launch.CollectFailures != 0 ||
+		!got.Launch.CollectFailingSince.IsZero() {
+		t.Fatalf("the job's row reads %s with %d failed collections since %v; want it running with its "+
+			"run of failures ended", got.Status, got.Launch.CollectFailures, got.Launch.CollectFailingSince)
+	}
+	if got.Launch.Collected || !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release whose read answered recorded the job collected (%v at %v)", got.Launch.Collected,
+			got.Launch.CollectedAt)
+	}
+	stop := sandbox.RunStop{By: "founder"}
+	if decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	}); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job whose read answered = %+v, %v, %v; want it decided, the job uncollected",
+			decided.Stop, ok, err)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	claimed := mustClaim(t, s, "t2")
+	both := releaseOf(claimed)
+	both.BoxAnswered, both.CollectFailedAt = true, first
+	if _, err := s.ReleaseClaim(ctx, "t2", both); err == nil {
+		t.Error("a release that both counts a failed collection and ends the run it counts onto was accepted")
+	}
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed || got.Launch.CollectFailures != 0 {
+		t.Errorf("the refused release wrote the row: %s with %d failed collections", got.Status,
+			got.Launch.CollectFailures)
+	}
+	mustRelease(t, s, claimed)
 }
 
 func testAReleaseNeverClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {

@@ -212,7 +212,8 @@ func (w *Waiter) holdsDuty() bool {
 //     ([PendingStore.MarkLost], [LossLaunchNodeGone]) and its completion
 //     announced, which the seat's holder claims and carries the job's round
 //     on from in a box of its own ([Coordinator.carryOnLost]) — announced
-//     again on every pass until a claim takes it, as a finished job's is.
+//     again on its schedule until a claim takes it, as a finished job's is
+//     (reannounce.go).
 //   - A RUN PARKED ON A QUESTION, or answered and waiting on its resume, has
 //     its box released as an expired pause's is ([PendingStore.ExpirePause]),
 //     with nothing to kill: the run waits for its answer without a box, and

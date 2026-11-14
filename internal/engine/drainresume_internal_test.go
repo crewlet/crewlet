@@ -351,21 +351,30 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 // drain and the completion waits at the head for the seat's next holder. A
 // condition that clears by waiting is acked, which spends none of the broker's
 // deliveries and quiesces nothing: the run is left unclaimed and the waiter
-// announces it again on its next poll (TestAnUnclaimedCompletionIsAnnouncedAgain).
+// announces it again on its schedule (TestAnUnclaimedCompletionIsAnnouncedAgain).
 // A condition this build names nowhere yet, a provider's limit here, takes the
 // waiting rule with no change to the hand-back, which is the point of keying it
-// on the condition. Only a failure the refusal does not explain is a Nak.
+// on the condition. Only a failure the refusal does not explain is a Nak. And a
+// completion the coordinator marks as no waiter's to announce again
+// (sandbox.ErrUnannounced: the clock on its box's host runs, and that host's
+// waiter reads the run through a store that does not answer it) is never
+// acknowledged, whatever its refusal waits on: it is a Nak, but where a drain or
+// a seat let go of hands it on, which still defers it.
 //
 // Mutation: key the hand-back on node.ErrDraining again and the provider limit
 // is a Nak, walking a healthy completion to the dead-letter boundary one
 // delivery at a time; defer every refusal and a seat whose ownership merely
-// blipped quiesces its control topic for as long as this node holds it.
+// blipped quiesces its control topic for as long as this node holds it;
+// acknowledge a refusal no waiter announces again, and nothing does.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
 		return errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: cause,
 			Refusal: sandbox.Refusal{Condition: cond, Reason: cause.Error()}})
 	}
+	// unannounced is err as the coordinator hands back a delivery while the
+	// clock on its box's host runs.
+	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
@@ -379,11 +388,68 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 		"the seat was let go of":     {err: refusal(sandbox.SeatLost, sandbox.ErrSeatNotHeld), want: queue.OutcomeDefer},
 		"a newer lease, unconfirmed": {err: fmt.Errorf("record: %w", sandbox.ErrSeatNotHeld), want: queue.OutcomeNak},
 		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
+		"a wait no waiter announces again": {err: unannounced(refusal(waitOwnership, node.ErrSeatNotOwned)),
+			want: queue.OutcomeNak},
+		"a limit no waiter announces again": {err: unannounced(refusal("provider_limit",
+			errors.New("provider limit reached"))), want: queue.OutcomeNak},
+		"a drain no waiter announces again": {err: unannounced(refusal(waitDrain, node.ErrDraining)),
+			want: queue.OutcomeDefer},
+		"a seat let go of, no waiter announcing again": {err: refusal(sandbox.SeatLost,
+			unannounced(sandbox.ErrSeatNotHeld)), want: queue.OutcomeDefer},
+		"nothing settled while no waiter announces again": {err: fmt.Errorf("%w: its run is not settled",
+			sandbox.ErrUnannounced), want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := controlOutcome(tc.err).Outcome; got != tc.want {
 				t.Errorf("controlOutcome(%v) = %s, want %s", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
+// handed back because the coordination store did not answer a step
+// (sandbox.ErrStoreSilent: a collection's step, the claim, a claim refused while
+// its last release is owed), or handed back while no waiter can announce the
+// job (sandbox.ErrUnannounced, a renewal's NAK and a refusal's among them), is
+// returned on the same backoff as any failure and spends the same budget, so
+// the spacing the dead-letter inequality holds is the same; but it is the
+// node's (queue.NakNode), so a delivery whose budget it spends is kept with the
+// group's unhandled deliveries, never with its poison. A failure of the
+// completion itself stays the message's.
+//
+// Mutation: hand a store's silence back with queue.Nak, and a delivery spent
+// during a store outage is kept as poison.
+func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
+	t.Parallel()
+	silent := fmt.Errorf("sandbox: collecting t1: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent)
+	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
+	refusal := errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: node.ErrSeatNotOwned,
+		Refusal: sandbox.Refusal{Condition: waitOwnership, Reason: node.ErrSeatNotOwned.Error()}})
+	refused := errors.New("nats: no responders available for request")
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a step the store did not answer":       {err: silent, nodes: true},
+		"a claim the store did not answer":      {err: fmt.Errorf("sandbox: claiming t1: %w", silent), nodes: true},
+		"a hand-back no waiter announces again": {err: unannounced(silent), nodes: true},
+		"a refusal no waiter announces again":   {err: unannounced(refusal), nodes: true},
+		"a renewal the broker did not take":     {err: fmt.Errorf("%w; %w", unannounced(silent), refused), nodes: true},
+		"nothing settled while no waiter announces again": {
+			err: fmt.Errorf("%w: its run is not settled", sandbox.ErrUnannounced), nodes: true},
+		"a resume that failed": {err: errors.New("sandbox: resuming t1: the model provider did not answer")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := controlOutcome(tc.err)
+			if got.Outcome != queue.OutcomeNak {
+				t.Fatalf("controlOutcome(%v) = %s; want it handed back for a retry", tc.err, got.Outcome)
+			}
+			if got.FailsMessage() == tc.nodes {
+				t.Fatalf("controlOutcome(%v) counts it as the message's own failure: %v; want %v", tc.err,
+					got.FailsMessage(), !tc.nodes)
 			}
 		})
 	}
@@ -400,8 +466,9 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 //
 //   - the signal (readmitResumes, the hook whatever ends a condition calls),
 //     with both waiters stopped so nothing else could have brought it back;
-//   - the waiter's next poll alone, with no signal, which bounds the wait by
-//     one poll interval;
+//   - the waiter's next announcement alone, with no signal, which its schedule
+//     makes at most twenty poll intervals after its last, a second at this
+//     rig's cadence;
 //   - both at once, racing, which the at-most-once claim settles.
 //
 // Mutation: drop the kept completion from the coordinator's Readmit and the

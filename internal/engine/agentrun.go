@@ -403,7 +403,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 	// AND THE RUN'S NOTE INBOX, which its session serves to its harness between
-	// steps, bound to the job with the ledger once the job has a name.
+	// steps, bound to the job with the ledger once the job has a name, and
+	// before the bridge files the session ([Engine.openBridge]).
 	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
 	if inbox != nil {
 		session.Steer = inbox
@@ -558,6 +559,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			// closing it closes its inbox.
 			e.bridge.Close(l.turn.RunID)
 		} else {
+			// NO SESSION OPENED: the inbox's close stops the view a bind
+			// made ahead of the bridge's refusal started.
 			inbox.Close()
 		}
 		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
@@ -770,8 +773,16 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 // of the job's harness, for a run taken over while it works — each set here,
 // on the session the bridge opens, never on the launch's own literal.
 //
-// The inbox is bound once the session is open, never before: a session that
-// does not open serves no notes, and the caller closes the inbox.
+// THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE SESSION'S OPENING, never
+// after. A request reaches the opening the moment the bridge files it: a
+// recovery's box at once, with the token it already holds. And the bridge files
+// it before it ends the job's opening this node held until then, an end that
+// waits up to its bound for that opening's answers still on their way
+// ([mcpbridge.Bridge.Open]). Bound only once Open had returned, the inbox was
+// served unbound all that while: a poll of it spun, its wait handing back a
+// channel that is always closed, and a read was turned away as one no inbox
+// took. A session that does not open serves no notes, and the caller closes the
+// inbox, which stops the view its bind started.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -781,6 +792,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
+	inbox.Bind(ctx, job.LaunchID)
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
@@ -789,7 +801,6 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		return sandbox.Opening{}, fmt.Errorf("the tool bridge opened no session for run %s's "+
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
-	inbox.Bind(ctx, job.LaunchID)
 	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
 	// box's harness waits for one, on every server it is handed: the bridge
 	// keeps a running call's answer going, so nothing else bounds the wait

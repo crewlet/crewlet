@@ -145,7 +145,8 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		// A KEY THIS NODE DOES NOT HOLD, a build it cannot read, a request
 		// past its deadline or taken already: nothing is read, and only the
 		// node it names says so — the asker hears a host that did not
-		// answer, and the host's own next poll announces the run again.
+		// answer, and the host's own waiter announces the run again on its
+		// schedule.
 		if admitted.Request.Node == b.node {
 			log.WarnContext(ctx, "sandbox_box_read_refused", "disposition", string(admitted.Disposition),
 				"turn_id", admitted.Request.TurnID, "detail", admitted.Why+"; no box was read")
@@ -162,7 +163,10 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 			Node: b.node, Error: "this node runs no sandbox runtime to read the box with"})
 	}
 	// THE ASKER'S BUDGET, its share of it: a read still running when the
-	// asker stopped listening is an answer nobody reads.
+	// asker stopped listening is an answer nobody reads. Beneath it, this
+	// node's own lifetime as an answerer, which its withdrawal cancels: a
+	// read that ends cut by that is answered as the host stopping
+	// (sandbox.BoxReadReply.Withdrawn), never as the box's failure.
 	readCtx, cancel := context.WithTimeout(ctx,
 		time.Duration(float64(time.Until(req.Deadline))*sandbox.BoxReadAnswerShare))
 	defer cancel()

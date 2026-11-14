@@ -1234,7 +1234,8 @@ func openPlaces(calls BridgeLog, last int) []int {
 // notesHeld is the last note read ([RunSteer.Reads]) run's record says a
 // session packed from its job holds ([SessionCapture.NoteCursor]): every one
 // the record says was read, where its harness ended its own run, up to the
-// first read it marks unanswered; and NONE where it was cut off.
+// first read it marks unanswered or restarted, or the place of a note a hook
+// was served and nothing read; and NONE where it was cut off.
 //
 // NEVER PAST A READ MARKED UNANSWERED ([NoteRead.Unanswered]): its take's write
 // landed and its answer never reached the harness, so the session lacks that
@@ -1250,6 +1251,19 @@ func openPlaces(calls BridgeLog, last int) []int {
 // every capture after it, told again rather than never. An older build, which
 // tells a continuation every note past the cursor with no header, tells the
 // unanswered note too.
+//
+// NEVER PAST A NOTE A HOOK WAS SERVED AND NO STEP HAS READ ([RunNote.Place]):
+// served and never confirmed, or its serve lost to a cancel or to its
+// session's own record, it sits at its first serve's place among the reads,
+// and the session may lack it while it holds the reads after it. So the cursor
+// stops before that place, and a launch that continues the session tells it
+// and every note past it as notes it may already show, as for an unanswered
+// read. NOR PAST A READ MARKED RESTARTED ([NoteRead.Restarted]): the session
+// shows the hook took the note only before its last restart, and a resume
+// rebuilds its conversation from that restart on.
+//
+// AN ITEM FOR ONE JOB ([RunNote.For]) stops nothing: whatever its read, a
+// continuation is told the turn's notes, and an item is no person's note.
 //
 // NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
 // the write that answers the harness's ask, before the answer is handed back
@@ -1270,8 +1284,16 @@ func notesHeld(run PendingRun, cutOff bool) int {
 	}
 	held := run.Steer.Reads
 	for _, n := range run.Steer.Notes {
-		if n.Read != nil && n.Read.Unanswered && n.Read.Order > 0 && n.Read.Order <= held {
-			held = n.Read.Order - 1
+		stop := 0
+		switch {
+		case n.For != "":
+		case n.Read == nil:
+			stop = n.Place
+		case n.Read.Unanswered || n.Read.Restarted:
+			stop = n.Read.Order
+		}
+		if stop > 0 && stop <= held {
+			held = stop - 1
 		}
 	}
 	return held

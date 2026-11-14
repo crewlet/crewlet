@@ -427,7 +427,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// is whether its harness asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
 		// write that names it, so its harness can never take them again — and
-		// the box's, if the launch hands any, filed after them.
+		// the box's, if the launch hands any, filed after them. An item for
+		// the job before alone ([RunNote.For]) is that job's too, and goes:
+		// [openNotes] removes every one first.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
@@ -981,6 +983,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, errors.New("sandbox: a release cannot report a collection that both read its box " +
 			"back and failed to")
 	}
+	if release.BoxAnswered && !release.CollectFailedAt.IsZero() {
+		return false, errors.New("sandbox: a release cannot both count a failed collection and end the run " +
+			"of failures it counts onto")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -1030,6 +1036,13 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.CollectedAt.IsZero() && !release.CollectedAt.IsZero() {
 				run.Launch.CollectedAt = release.CollectedAt.UTC()
 			}
+		}
+		// AND AT ONE WHOSE READ ANSWERED though a later step handed it back
+		// uncounted: the box answered, and the job is not collected
+		// ([Release.BoxAnswered]).
+		if release.BoxAnswered {
+			run.Launch.CollectFailures = 0
+			run.Launch.CollectFailingSince = time.Time{}
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it
@@ -1733,6 +1746,45 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 	})
 	if err != nil {
 		return false, fmt.Errorf("sandbox: record run %s's job as lost: %w", turnID, err)
+	}
+	return won || stands, nil
+}
+
+// MarkClaimLost records on a claimed job the verdict that it was lost with the
+// host its box is on, for the claim's own collection. See the contract on
+// [PendingStore].
+//
+// FENCED, unlike [CoordStore.MarkLost]: the verdict is the claim holder's, made
+// under its lease, and licenses that holder's own carrying on of the round; a
+// newer lease owns the run, and its collection, from the moment it takes the
+// seat.
+func (s *CoordStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	stands := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Status != StatusResumed || outranked(*run, fence) ||
+			(loss.Node != "" && run.LaunchNode != loss.Node) {
+			return false
+		}
+		if run.Lost != nil {
+			stands = true
+			return false
+		}
+		at := loss.At
+		if at.IsZero() {
+			at = s.clock()
+		}
+		recorded := loss
+		recorded.At = at.UTC()
+		run.Lost = &recorded
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record run %s's claimed job as lost: %w", turnID, err)
 	}
 	return won || stands, nil
 }

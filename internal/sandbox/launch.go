@@ -563,9 +563,22 @@ type LaunchResult struct {
 // # The seat is held from the row, not from the announcement
 //
 // A run is counted into the seat's [Holding] set, and the seat's inbox hold
-// taken ([SeatHold]), in the step that writes its row — before the box is
-// provisioned, and so before the launching turn can return and its seat's
-// consumer go on to the next thing it has. It used to be counted when its
+// taken ([SeatHold]), in the step that takes the answer to the write that opens
+// its row, before the box is provisioned, and so before the launching turn can
+// return and its seat's consumer go on to the next thing it has. THROUGH THE
+// ONE MECHANISM EVERY WRITE THAT MOVES A RUN'S COUNT TAKES (countwrite.go): the
+// open is recorded before it is sent, so a recount between the row's write and
+// its answer counts the run where it was, and the answer counts it in once.
+// Counted after the write and outside the lock, a recount whose listing was
+// read after the row was written counted the run holding, and the launch then
+// counted it a second time, the seat held until a recount after the run had
+// settled. WHERE IT WAS is no row at all for a turn's launch, and the claim
+// its resumed turn holds for a relaunch that turn makes ([Coordinator.framing]),
+// which holds the seat already: counted in a second time, the claim and the
+// job it relaunched held the seat twice until the turn's frame recounted it.
+// A launch that resets a row no frame of this node holds, a kick-off
+// delivered again after the turn had launched, is counted as a new row, and
+// the recount its own announcement makes reads it once. It used to be counted when its
 // [types.ExecutorLaunched] was processed off the seat's control topic, which
 // is a separate subscription the launching turn does not wait for: mail
 // already drained beside the launching delivery (the next partition of the
@@ -574,10 +587,10 @@ type LaunchResult struct {
 // RECOUNTS the seat from the store wherever it is processed — that is what
 // carries a held seat across a restart or a handoff — but nothing waits for it.
 //
-// A launch that fails after the row is written gives the count back as it
-// abandons the row ([Coordinator.abandon]); one that fails to suspend into the
-// row is settled by [Coordinator.FailRun], whose ending gives it back the same
-// way.
+// A launch that fails after the row is written gives the count back as the
+// delete that abandons the row lands ([Coordinator.abandon]); one that fails to
+// suspend into the row is settled by [Coordinator.FailRun], whose ending gives
+// it back the same way.
 //
 // m is the manager the request's [Spec] was built with ([Manager.BuildSpec]),
 // passed rather than read off the coordinator here: an apply landing between
@@ -623,6 +636,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// until the turn writes the conversation a resume re-enters: nothing
 	// polls or claims a run in that window, which is what stops a job that
 	// finishes before the turn unwinds from being collected into nothing.
+	//
+	// RECORDED BEFORE IT IS SENT, from where the run is counted to holding:
+	// see "The seat is held from the row" above.
+	from := ""
+	if c.framing(req.Turn.TurnID) {
+		from = StatusResumed
+	}
+	write := c.writingCount(PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle},
+		from, StatusLaunching)
+	defer c.settleWrite(write)
 	opened, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		WorkSince:   req.Turn.WorkSince,
@@ -695,6 +718,15 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		CodeWorkingFor: req.CodeWorkingFor,
 		CreatedAt:      now(),
 	}, fence)
+	// HELD FROM HERE, before anything below can fail or the turn can
+	// return (see [Coordinator.Launch]). Every failure past this point
+	// gives it back through [Coordinator.abandon]. An open the store
+	// refused, or did not answer, counts nothing: a row it wrote all the
+	// same is counted where a recount reads it.
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
@@ -704,13 +736,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if req.Recorded != nil {
 		req.Recorded(opened.LaunchID)
 	}
-	// HELD FROM HERE, before anything below can fail or the turn can
-	// return — see [Coordinator.Launch]. Every failure past this point
-	// gives it back through [Coordinator.abandon].
-	c.countRun(req.Turn.AgentHandle, StatusLaunching)
 	// A STOP OF THE TURN'S LAST LAUNCH IS NOT THIS ONE'S: this job is new.
+	// Nor is a clock on the store of the last job's host, nor a re-fire's
+	// announcement of it this node still owes: that job's run settled here,
+	// whatever it came to ([hostUnsettled], [refirePublish]).
 	c.mu.Lock()
 	delete(c.launchStops, req.Turn.TurnID)
+	c.runSettledLocked(req.Turn.TurnID)
 	c.mu.Unlock()
 	// THE TURN'S FENCE AGAIN, now that a stop can find the row — see
 	// [LaunchRequest.Fence]. Refused, the launch is over before any box
@@ -1213,21 +1245,38 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	// a settle may no longer act on ([Coordinator.finish]). Where the two are
 	// one box — the attach landed — it is killed twice, which every provider
 	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
+	//
+	// AND THE SEAT GOES BACK AS THE DELETE LANDS, once ([ending.counted]): the
+	// launch counted the run holding as it opened the row, and the ending's
+	// delete moves it out as its answer is taken. A record that survives the
+	// delete is a launching row whose ending this node keeps and retries,
+	// holding the seat's mail behind it, and it stays counted where a
+	// recount reads it until its own delete lands. Given back here whether or
+	// not the record was deleted, the seat read that row as gone, and a
+	// recount whose listing was read after a delete that did land had
+	// counted it out already, so the seat whose other run still worked read
+	// free beside it. A row no longer this node's to end, ended by somebody
+	// else or owned by a newer lease, has no delete of this node's to move
+	// it, and the seat is recounted from the store instead.
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, err := c.endRecord(ctx, run, ending{
-		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true,
-	}); err != nil {
+	decided, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true, counted: true,
+	})
+	switch {
+	case err != nil:
 		log.WarnContext(ctx, "sandbox_launch_finish_kept",
 			"turn_id", req.Turn.TurnID, "error", err.Error(),
 			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
 				"the ending, and the seat's next recovery pass reaps the row if the seat "+
 				"moves first")
+	case decided == nil:
+		// THE RECOUNT WITHIN A TEARDOWN'S GRACE, as the kill above is
+		// ([detached]): the ending's context bounds none of the steps it
+		// does not make itself.
+		recountCtx, cancel := detached(ctx)
+		c.syncSeat(recountCtx, req.Turn.AgentHandle)
+		cancel()
 	}
-	// AND THE SEAT GOES BACK whether or not the record could be deleted:
-	// the launch is over and its box reclaimed, so nothing is driving a job
-	// the seat's mail must wait behind. A record that survived the delete is
-	// a launching row whose ending this node keeps and retries.
-	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
 // label is what the run is named by, cut by [summarise]: the caller's own

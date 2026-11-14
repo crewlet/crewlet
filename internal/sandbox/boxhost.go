@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -73,25 +74,91 @@ func (r BoxRead) Valid() bool { return slices.Contains(BoxReads, r) }
 // and refs bounded ([boundBox]), and whether its turn's cap ended it; the
 // asker fits the rest ([Coordinator.fitText]).
 //
-// THREE KINDS OF FAILURE, each told apart because each is handled apart: the
+// FOUR KINDS OF FAILURE, each told apart because each is handled apart: the
 // host said the box is gone (wrapping [ErrBoxGone]); the host did not answer
-// ([ErrBoxHostSilent]); and anything else the host said, which is the box's
-// own failure to be read, counted like one read here.
+// ([ErrBoxHostSilent]), or stopped as it read, which is the same fact, carried
+// apart from the host's own words ([BoxReadReply.Withdrawn]); the host's
+// coordination store did not answer its read of the run's row, which licenses
+// the read ([ErrStoreSilent]), carried apart the same way
+// ([BoxReadReply.Unsettled]); and anything else the host said, which is the
+// box's own failure to be read, counted like one read here.
 type BoxReader interface {
 	ReadBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error)
 }
 
 // ErrBoxHostSilent is a box read the node whose host the box is on did not
-// answer: it is stopped, restarting, or gone.
+// answer: it is stopped, restarting, or gone, or it stopped as it read
+// ([BoxReadReply.Withdrawn]).
 //
 // NOT A FAILURE OF THE BOX, which is why a collection handed it gives its
-// claim back UNCOUNTED and acknowledges the completion: the host announces the
-// completion again on its own next poll once it is back, and a host that never
-// comes back is found gone by the fleet's waiter, which has the run's round
-// carried on in a box of its own ([Waiter.goneAfter], [LossLaunchNodeGone]).
+// claim back UNCOUNTED and acknowledges the completion: the host's own waiter
+// announces the completion again on its schedule once the host is back
+// (reannounce.go), and a host that never comes back is found gone by the
+// fleet's waiter, which has the run's round carried on in a box of its own
+// ([Waiter.goneAfter], [LossLaunchNodeGone]).
 // Counted, a host that restarted for a minute would have its runs given up as
-// unreadable.
+// unreadable. ACKNOWLEDGED ONLY WHERE NO CLOCK RUNS ON THAT HOST'S STORE: a
+// host whose last answer was that its store did not answer it reads the run's
+// row through that store once it is back, and announces nothing, so its
+// collection's completion is handed back for the queue's backoff and renewed
+// instead ([Coordinator.hostClocked], renew.go).
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
+
+// ErrStoreSilent is a step a collection cannot go on without that the
+// coordination store did not answer: the host's read of the run's row, which
+// licenses a read of its box ([Coordinator.ReadHostedBox]); the watch of the
+// run's log a collection waits on its calls in flight by
+// ([Coordinator.awaitCalls]); the record of the sessions its job ran out of
+// context in or whose request its provider refused
+// ([PendingStore.RetireSessions]); the record of its job lost with the host
+// its box is on, where only that host has kept the box unread for the box
+// timeout ([PendingStore.MarkClaimLost], [Coordinator.loseWithHost]); and the
+// claim the collection is made under, where the store did not answer it or
+// this node refused it while the store has yet to take the release of the last
+// one ([Coordinator.claimCompletion]). Each wraps the store's error, or that
+// refusal, in it ([storeSilent]). A completion handed back for it is this
+// node's failure, never the message's: the engine's control handler hands it
+// back as the node's own, so a delivery whose budget a store outage spends is
+// not kept with its group's poison (internal/engine's controlOutcome).
+//
+// NOT A FAILURE OF THE BOX, which answered every read, nor of its host, which
+// is up: a collection handed it gives its claim back UNCOUNTED and has its
+// completion retried ([Coordinator.collectFailed]), and renewed where the
+// silence is its box's host's alone (renew.go), a lost job's round is not
+// carried on without its read for it ([Coordinator.collectGivenUp]), and a
+// stop's read of it is asked again. Each lasts for as long as a silent host is
+// waited for where the silence is the host's alone, a collection's by the
+// clock on its host ([hostUnsettled]), past which its job is lost with that host
+// ([LossLaunchNodeStoreSilent]), and a stop's from its decision
+// ([Coordinator.readStopped]), and for as long as the silence lasts where this
+// node's own store shares it. Counted, a store silent for the give-up window
+// settled a run whose box held its result as one whose result was lost, and
+// carried a lost job's round on uncharged while its box held what the job had
+// spent.
+var ErrStoreSilent = errors.New("sandbox: the coordination store did not answer a step a collection " +
+	"cannot go on without")
+
+// storeSilent is err, the store's error at a step a collection cannot go on
+// without, wrapped in [ErrStoreSilent]: the store did not answer it.
+//
+// UNLESS ctx HAS ENDED, which is then the cause and is returned as it is. ctx
+// is the context of the node that makes the step, which at the host's read of
+// the run's row ([Coordinator.ReadHostedBox]) is the HOST'S: its answerer's own
+// lifetime, held to its share of the asker's time. On the node that collects,
+// the collection judges it as it judges every read its context ended
+// ([Coordinator.collectFailed]): a cancellation of this node's own is handed
+// back uncounted whatever it cut, and a deadline the delivery ran out of is
+// counted, or a collection that always outlasts its delivery would be asked
+// again for ever, its last step the store's. On the host, the reply says which
+// ([AnswerBoxRead]): a cancellation is the host stopping as it read
+// ([BoxReadReply.Withdrawn]), which its asker hands back uncounted, and a
+// deadline is the read running out of the asker's time, which it counts.
+func storeSilent(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrStoreSilent, err)
+}
 
 // ErrBoxNotHosted is a box read refused by the node asked: the run is not one
 // whose box is on its host, or the run is not in the state the read is made
@@ -167,9 +234,10 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // the slowest pace allowed, must not be taken for. Ordinary reads answer in
 // seconds, a job ending in a few and a session of a day's work being a
 // mebibyte or two. A read that has not finished in that is a host that is not
-// answering, and is answered as one ([ErrBoxHostSilent]); it announces the
-// completion again from its own next poll. Only a node that asks ANOTHER
-// node's host waits on it: a box this node hosts it reads itself.
+// answering, and is answered as one ([ErrBoxHostSilent]); the host's own
+// waiter announces the completion again on its schedule once the host is back
+// (reannounce.go). Only a node that asks ANOTHER node's host waits on it: a
+// box this node hosts it reads itself.
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
@@ -269,19 +337,45 @@ type BoxReadReply struct {
 	Refused string `json:"refused,omitempty"`
 	// Error is a read that failed, in the host's own words.
 	Error string `json:"error,omitempty"`
+	// Unsettled is a read that failed because the host's coordination store
+	// did not answer a step it cannot go on without ([ErrStoreSilent]), Error
+	// saying which: a flag of its own, since Error is only words, and an asker
+	// that could not tell the store's silence from the box's failure would
+	// count it against a box that is up. Added within [BoxReadWireVersion] 1.
+	Unsettled bool `json:"unsettled,omitempty"`
+	// Withdrawn is a read the host's own lifetime cut short, Error saying
+	// where: the host withdrew as an answerer of box reads (internal/queue's
+	// AnswerFunc runs under the answerer's context, which its withdrawal
+	// cancels), draining or restarting, while it read. No failure of the
+	// box, which a host going away never finished reading: the asker reads it
+	// as a host that did not answer ([ErrBoxHostSilent]), whose reply still
+	// crosses the broker, so it learns that now rather than at its deadline.
+	// A read its share of the asker's time cut is no withdrawal: that is the
+	// box's read running out of time, said in Error alone. Added within
+	// [BoxReadWireVersion] 1: an asker that does not know the flag reads Error
+	// as the box's failure and counts it, as one always did.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 }
 
 // Answers is the id of the request this reply answers.
 func (r BoxReadReply) Answers() string { return r.Request }
 
-// Err is the reply as the asker acts on it — see [BoxReader] for the three
-// kinds of failure — or nil for a reply carrying the run's account.
+// Err is the reply as the asker acts on it (see [BoxReader] for the four kinds
+// of failure), or nil for a reply carrying the run's account. A failure the
+// reply flags reads as what its flag names, in the host's own words, with the
+// sentinel's sentence said once ([hostSaid]).
 func (r BoxReadReply) Err() error {
 	switch {
 	case r.Gone:
-		return fmt.Errorf("sandbox: node %s found the box gone: %s: %w", r.Node, r.Error, ErrBoxGone)
+		return hostSaid("sandbox: node "+r.Node+" found the box gone", r.Error, ErrBoxGone)
 	case r.Refused != "":
-		return fmt.Errorf("%w: node %s: %s", ErrBoxNotHosted, r.Node, r.Refused)
+		return hostSaid("sandbox: node "+r.Node+" refused the read", r.Refused, ErrBoxNotHosted)
+	case r.Withdrawn:
+		return hostSaid("sandbox: node "+r.Node+" stopped as it read the box", r.Error, ErrBoxHostSilent)
+	case r.Unsettled:
+		// THE HOST'S STORE, NEVER THE BOX: the row that licenses the read
+		// was not read, so no read of the box was made to fail.
+		return hostSaid("sandbox: node "+r.Node+"'s coordination store did not answer", r.Error, ErrStoreSilent)
 	case r.Error != "":
 		return fmt.Errorf("sandbox: node %s could not read the box: %s", r.Node, r.Error)
 	case r.Result == nil:
@@ -290,8 +384,46 @@ func (r BoxReadReply) Err() error {
 	return nil
 }
 
+// hostSaid is a failure a host's reply flags, as its asker reads it: lead, what
+// the flag names, then the host's own words, then kind's sentence, ONLY where
+// those words do not hold it already. A host's words are its error's text,
+// which holds the sentinel's sentence where that text was built around the
+// sentinel, as a refused read's and the store's silence's always are: the
+// sentence added again made the asker's log say each of those twice in one
+// line. A backend's own sentence for a box that is gone ([boxGone]) does not
+// hold it, the sentinel riding beside the text rather than in it, nor does a
+// read the host's withdrawal cut, and each is said with it once. errors.Is
+// answers kind, and no other sentinel, either way: the words are text, and only
+// the flag says what they are.
+func hostSaid(lead, words string, kind error) error {
+	text := lead + ": " + words
+	if !strings.Contains(words, kind.Error()) {
+		text += ": " + kind.Error()
+	}
+	return &flaggedFailure{text: text, kind: kind}
+}
+
+// flaggedFailure is a failure a host's reply flags ([hostSaid]): its text, and
+// the sentinel the flag stands for.
+type flaggedFailure struct {
+	text string
+	kind error
+}
+
+func (f *flaggedFailure) Error() string { return f.text }
+
+func (f *flaggedFailure) Unwrap() error { return f.kind }
+
 // AnswerBoxRead is a host's reply to one admitted box read: the read made by
 // host ([Coordinator.ReadHostedBox]), or why it was not.
+//
+// ctx IS THE HOST'S OWN: its answerer's lifetime, which its withdrawal cancels,
+// held to its share of the asker's time. A read that failed once it was
+// cancelled is said apart from every other failure, whatever step the
+// cancellation cut ([BoxReadReply.Withdrawn]), unless it had found the box gone
+// or the row refusing the read, which the host decided before it stopped; one
+// its deadline cut is the read running out of the asker's time, and is said in
+// the host's words alone.
 func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) BoxReadReply {
 	reply := BoxReadReply{Version: BoxReadWireVersion, Request: req.ID, Node: host.node}
 	result, ended, err := host.ReadHostedBox(ctx, req.TurnID, req.LaunchID, req.SandboxID, req.Read)
@@ -300,6 +432,13 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 		reply.Refused = err.Error()
 	case errors.Is(err, ErrBoxGone):
 		reply.Gone, reply.Error = true, err.Error()
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		// THE HOST STOPPING, not the box, nor its store: a step it cut
+		// fails with the cancellation's own error, which storeSilent leaves
+		// as it is, or with whatever the step saw as it ended.
+		reply.Withdrawn, reply.Error = true, err.Error()
+	case errors.Is(err, ErrStoreSilent):
+		reply.Unsettled, reply.Error = true, err.Error()
 	case err != nil:
 		reply.Error = err.Error()
 	default:
@@ -320,7 +459,8 @@ func (c *Coordinator) hosts(run PendingRun) bool {
 
 // boxResult is the part of a read that touches the box, made where the box
 // is: by this node where it hosts the box, and asked of the node that does
-// otherwise ([BoxReader]).
+// otherwise ([BoxReader]). A collection's answer from another node's host
+// keeps the clock on a host whose store alone is silent ([hostUnsettled]).
 func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	if c.hosts(run) {
 		return c.readBox(ctx, run, read)
@@ -333,7 +473,118 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 			"node was given no way to ask that node to read it", run.TurnID,
 			c.mgr().CellOf(run), run.LaunchNode)
 	}
-	return c.boxes.ReadBox(ctx, run, read)
+	result, ended, err := c.boxes.ReadBox(ctx, run, read)
+	if read == BoxReadCollect {
+		c.noteHostStore(ctx, run, err)
+	}
+	return result, ended, err
+}
+
+// hostUnsettled is how long the host of a job's box has answered this node's
+// collections of the job that its own coordination store did not answer
+// ([BoxReadReply.Unsettled]): since the first of them, one after the other.
+//
+// A HOST WHOSE STORE ALONE IS SILENT IS BOUNDED AS A SILENT HOST IS. Only the
+// host can read a box on its host, and a host that answers its store did not
+// answer the read of the run's row, which licenses the read, never reads the
+// box. Where this node's own store answers (its claim of the job, the write
+// every collection is made under, landed), the silence is the host's alone: a
+// partition that cuts the host off from the store's leader and not this node.
+// Handed back uncounted with no give-up, as every step the store does not
+// answer is, such a collection was asked again for as long as the partition
+// lasted, its seat held behind it, while a host that did not answer at all is
+// taken for gone after the box timeout ([Waiter.goneAfter]). So it is given
+// up after that same bound, measured here ([Coordinator.collectGivenUp]), as
+// that waiter gives a gone node's jobs up: recorded lost with the host, and their
+// rounds carried on ([Coordinator.loseWithHost], [LossLaunchNodeStoreSilent]).
+// And the bound is REACHED: no waiter announces such a job again, since the
+// host's own reads the run's row through its silent store, so while the clock
+// runs the collecting node renews the completion of every hand-back, whatever
+// its kind, before the broker's budget for its delivery runs out, which is
+// shorter than the box timeout (renew.go).
+//
+// IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
+// or the seat's next holder starts it again, which can only make the verdict
+// later. A silence this node's own store shares gives nothing up: no claim of
+// the job lands while it lasts, so no collection is made to judge it.
+//
+// IT IS KEPT UNTIL THE RUN SETTLES, and goes where the run's collection lands
+// its outcome, whatever that comes to: the job collected, its host answering a
+// read its store answered ([Coordinator.noteHostStore]); the run ended, its
+// collection given up or any ending of it decided ([Coordinator.collectFailed],
+// [Coordinator.endRun]); or the job lost and its round carried on, the turn
+// launching its next job here ([Coordinator.Launch]) or its end decided; and it
+// goes when the seat is let go ([Coordinator.ReleaseSeat]). It goes too at any
+// read its host answers with its store answering, whatever the read came to,
+// the box's own failure to be read included ([Coordinator.noteHostStore]): the
+// silence it times is over, and that host's waiter announces the job again
+// from there. A FAILED ATTEMPT IS OTHERWISE NO SETTLE, and keeps it: a
+// hand-back that has the job collected again, and a loss recorded with the
+// host ([Coordinator.loseWithHost]) whose carry or resume then fails, whose
+// next collection finds the bound passed at once and whose completion is
+// renewed meanwhile (renew.go), since the host's waiter still announces
+// nothing. Dropped at the recorded loss, a carry that failed
+// for longer than one delivery's budget left the run with nothing to drive it;
+// and kept until the seat was let go, a clock outlived every run that ended,
+// or went on to its next job, with no remote collection after it: a stop's, a
+// deadline's, a lost job's round carried on without its read.
+type hostUnsettled struct {
+	handle, launch string
+	since          time.Time
+}
+
+// noteHostStore keeps the clock on run's host's store ([hostUnsettled]) from
+// err, the host's answer to a collection's read of run's box: started at the
+// first answer that its store did not answer, kept through a host that did not
+// answer or stopped as it read and a read this node's own context ended, which
+// say nothing of that store, and forgotten at any other answer, which the host
+// could give only where its store answered its read of the row.
+func (c *Coordinator) noteHostStore(ctx context.Context, run PendingRun, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case errors.Is(err, ErrStoreSilent):
+		if kept, ok := c.unsettled[run.TurnID]; ok && kept.launch == run.LaunchID {
+			return
+		}
+		c.unsettled[run.TurnID] = hostUnsettled{handle: run.AgentHandle, launch: run.LaunchID, since: c.now()}
+	case errors.Is(err, ErrBoxHostSilent), ctx.Err() != nil:
+		// NO WORD OF THE HOST'S STORE: the clock stands as it is.
+	default:
+		delete(c.unsettled, run.TurnID)
+	}
+}
+
+// hostUnsettledFor is how long the host of run's box has answered this node's
+// collections of run's job that its store did not answer, where cause is the
+// host's own answer saying so ([BoxReadReply.Err]); false for every other
+// cause, a step this node's own store did not answer above all, which no
+// bound of the host's ends.
+func (c *Coordinator) hostUnsettledFor(run PendingRun, cause error, now time.Time) (time.Duration, bool) {
+	var flagged *flaggedFailure
+	if !errors.As(cause, &flagged) || !errors.Is(flagged.kind, ErrStoreSilent) {
+		return 0, false
+	}
+	c.mu.Lock()
+	kept, ok := c.unsettled[run.TurnID]
+	c.mu.Unlock()
+	if !ok || kept.launch != run.LaunchID {
+		return 0, false
+	}
+	return now.Sub(kept.since), true
+}
+
+// hostClocked reports whether this node keeps a clock on the store of the host
+// of the box of turnID's job launch ([hostUnsettled]): the host last answered a
+// collection of it that its store did not answer, and has answered nothing
+// else since. While it does, the host's waiter, which reads the run's row
+// through that store, announces nothing, and every hand-back of the job's
+// completion is renewed (renew.go).
+func (c *Coordinator) hostClocked(turnID, launch string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept, ok := c.unsettled[turnID]
+	return ok && kept.launch == launch
 }
 
 // ReadHostedBox makes, for the node that asked, the read of a box on this
@@ -363,7 +614,12 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
-		return Result{}, false, fmt.Errorf("sandbox: reading run %s to read its box: %w", turnID, err)
+		// THE STORE'S SILENCE, NEVER THE BOX'S ([ErrStoreSilent]): the row is
+		// the license, and a read it did not license was never made, so the
+		// asker hears that the store did not answer rather than that the box
+		// could not be read.
+		return Result{}, false, storeSilent(ctx, fmt.Errorf("sandbox: reading run %s to read its box: %w",
+			turnID, err))
 	}
 	switch {
 	case !found:

@@ -141,6 +141,40 @@ func (q *Queue) nakSpacing(n uint64) time.Duration {
 	return backoff.Doubling(int(min(n, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
 
+// LeastTimeToDeadLetter is the least time this backend carries a failing
+// message, at its defaults, from its first delivery to its dead letter: its
+// budget's deliveries ([maxDeliver]), every one but the last returned as a
+// failure to one attachment, each return spaced by [Queue.nakBackoff] at the
+// floor of its jitter. The spacings are 1, 2, 4, 8 and 16 s, then nineteen at
+// the 30 s ceiling, 601 s in all; at four fifths of each, about 481 s.
+//
+// FOR A LAYER ABOVE THAT LEANS ON A FAILING MESSAGE OUTLIVING A WAIT OF ITS
+// OWN, and holds the two apart in a test rather than in prose. internal/sandbox
+// is one: its waiter announces a finished job again on a schedule whose longest
+// gap is twenty poll intervals, while each announcement a node's own silent
+// store cannot claim is returned as a failure, so a fresh announcement has to
+// be out before the last one is dead-lettered.
+//
+// THE LEAST ON THE FAILURE PATH, NOT ON EVERY PATH. A hand-back returns at
+// once ([attachment.handBack]), and a failure to an attachment the message had
+// not failed on yet, another node's or this node's own after a re-attach, is
+// spaced from the first return again ([attachment.failures]), so a message
+// handed from node to node, or met by a re-attach, is dead-lettered sooner; and
+// a handler's own time adds to it. [Config.MaxDeliver], NakDelay and
+// NakCeiling, which only tests set, change it too.
+func LeastTimeToDeadLetter() time.Duration {
+	// THE DEFAULTS: a queue configured with nothing, whose spacing reads
+	// nothing else ([Queue.nakSpacing]). The floor is what [backoff.Jitter]
+	// returns at the far end of its spread.
+	defaults := &Queue{}
+	var least time.Duration
+	for n := uint64(1); n < uint64(budgetFor(defaults.cfg)); n++ {
+		spacing := defaults.nakSpacing(n)
+		least += spacing - time.Duration(float64(spacing)*nakJitter)
+	}
+	return least
+}
+
 // attachment is ONE consumer this process runs for a (topic, group) pair.
 //
 // A process may run several for one pair — the contract's "close this

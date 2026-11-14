@@ -1044,7 +1044,7 @@ type Coordinator struct {
 
 	// moves counts what this node has done to each seat's runs that a recount
 	// from the store must not be read across — every transition
-	// [Coordinator.adjust] applied, every record an ending of this node's
+	// [Coordinator.adjustLocked] applied, every record an ending of this node's
 	// deleted, and every recount written — so a recount can tell that one
 	// landed while it was reading. See [Coordinator.syncSeat].
 	moves map[string]uint64
@@ -1067,6 +1067,35 @@ type Coordinator struct {
 	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
 	// under mu.
 	retries map[string]*answerRetry
+	// releases are the claims' hand-backs this node is making or owes, by
+	// turn id, recorded before each is sent, each with its write in its
+	// run's entry ([Coordinator.writing]); and claiming counts the
+	// claims of a job's completion this node has asked the store for and not
+	// yet heard back on, by turn id. Between them no claim of a job is taken
+	// while its last claim's release is out, and none is given back by it
+	// (claimrelease.go). Under mu.
+	releases map[string]*claimRelease
+	claiming map[string]int
+	// writing are the writes this node has out that move a run between its
+	// seat's sets, by the run's turn, each recorded before it is sent and
+	// dropped, with its move made, in the step that takes its answer, or, while
+	// a write recorded before it on the run is still out, in the step that
+	// takes that one's: the open of a run's row, a recovery's takeover of a
+	// run, a park's question, an answer's record, claim and decline, a claim's
+	// release (out for as long as the release is out or owed), and the delete
+	// of an ending that counts its run out (countwrite.go). A recount counts
+	// every run of the seat with a write out where the moves made so far leave
+	// it, whether or not its listing has the run's row ([Coordinator.syncSeat]).
+	// Under mu.
+	writing map[string]*runWrites
+	// unsettled is the clock on each job's host that answered this node's
+	// collections that its own coordination store did not answer, by turn
+	// id, kept until the job's run settles ([hostUnsettled]). Under mu.
+	unsettled map[string]hostUnsettled
+	// republish is each re-fire's announcement afresh the broker did not
+	// take, by turn id, made again on this node's timer until one lands, the
+	// run settles or its seat is let go ([refirePublish]). Under mu.
+	republish map[string]*refirePublish
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
@@ -1232,6 +1261,11 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
+		releases:     map[string]*claimRelease{},
+		claiming:     map[string]int{},
+		writing:      map[string]*runWrites{},
+		unsettled:    map[string]hostUnsettled{},
+		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -1306,6 +1340,9 @@ func (c *Coordinator) Stop() {
 			c.inflight.Done()
 		}
 		r.stop = nil
+	}
+	for turnID := range c.republish {
+		c.dropRepublishLocked(turnID)
 	}
 	c.mu.Unlock()
 	c.end()
@@ -1415,37 +1452,9 @@ func (c *Coordinator) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// countRun and uncountRun take a run into and out of the set its status
-// belongs to, and moveRun carries one from one set to the other.
-//
-// A STATUS RATHER THAN A NUMBER at every call site, so a caller cannot count a
-// run into one set while the store has it in the other — the two sets are what
-// the screening branches on, and a run counted in the wrong one is either a
-// seat parked on nothing or an open question nothing offers a reply to.
-func (c *Coordinator) countRun(handle, status string)   { c.moveRun(handle, "", status) }
-func (c *Coordinator) uncountRun(handle, status string) { c.moveRun(handle, status, "") }
-
-// moveRun applies one transition under ONE lock, which is what
-// [Coordinator.SeatRuns] needs: a park is a decrement and an increment, and a
-// delivery screened between two separate writes would see a seat with no run
-// of either kind.
-//
-// AND THE SEAT'S INBOX HOLD FOLLOWS IT, outside the lock: a run entering
-// [Holding] holds the seat's inbox and the last one leaving lifts it (see
-// seathold.go), at the transition rather than at the next delivery.
-func (c *Coordinator) moveRun(handle, from, to string) {
-	if handle == "" {
-		return
-	}
-	fromHolding, fromAwaiting := setOf(from)
-	toHolding, toAwaiting := setOf(to)
-	c.adjust(handle, toHolding-fromHolding, toAwaiting-fromAwaiting)
-	c.reconcileHold(c.life, handle)
-}
-
 // setOf says which count a status belongs to. A status that owns no seat-level
-// state — a run that has ended, or the empty string moveRun passes for "no set
-// at all" — belongs to neither.
+// state (a run that has ended, or the empty string a write passes for no row
+// at all, countwrite.go) belongs to neither.
 func setOf(status string) (holding, awaiting int) {
 	switch {
 	case slices.Contains(Holding, status):
@@ -1456,18 +1465,25 @@ func setOf(status string) (holding, awaiting int) {
 	return 0, 0
 }
 
-// adjust applies the deltas, CLAMPED AT ZERO.
+// adjustLocked applies the deltas to handle's seat under c.mu, ONE STEP for
+// both counts, and reports the seat's counts before and after for the caller
+// to free the seat with once it has let go of the lock ([Coordinator.seatFreed]).
+// One step is what [Coordinator.SeatRuns] needs: a park is a decrement and an
+// increment, and a delivery screened between two separate writes would see a
+// seat with no run of either kind. AND THE SEAT'S INBOX HOLD FOLLOWS IT, outside
+// the lock, in what the caller runs next: a run entering [Holding] holds the
+// seat's inbox and the last one leaving lifts it (see seathold.go), at the
+// transition rather than at the next delivery.
 //
-// A decrement for a run this node never counted is ordinary rather than a bug
-// — a seat taken over mid-run, a start event that never arrived, a settle for
-// a run recovery already reaped — and left negative the count would then
-// swallow the next real increment, which is a seat that runs a turn while a
-// job holds it.
-func (c *Coordinator) adjust(handle string, holding, awaiting int) {
-	c.mu.Lock()
+// CLAMPED AT ZERO. A decrement for a run this node never counted is ordinary
+// rather than a bug (a seat taken over mid-run, a start event that never
+// arrived, a settle for a run recovery already reaped), and left negative the
+// count would then swallow the next real increment, which is a seat that runs a
+// turn while a job holds it.
+func (c *Coordinator) adjustLocked(handle string, holding, awaiting int) (was, runs seatRuns) {
 	c.moves[handle]++
-	was := c.runs[handle]
-	runs := was
+	was = c.runs[handle]
+	runs = was
 	runs.holding = max(runs.holding+holding, 0)
 	runs.awaiting = max(runs.awaiting+awaiting, 0)
 	if runs == (seatRuns{}) {
@@ -1475,15 +1491,16 @@ func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	} else {
 		c.runs[handle] = runs
 	}
-	c.mu.Unlock()
-	c.seatFreed(handle, was, runs)
+	return was, runs
 }
 
-// moved says that a seat's runs moved in the store under this node's hand
-// without a count it applied — an ending of this node's deleted a run's record —
-// so that a recount whose listing was read before is read again
-// ([Coordinator.syncSeat]) rather than written after the recount that follows
-// the delete.
+// moved says that a seat's runs moved in the store under this node's hand, as
+// an ending of this node's deleted a run's record, so that a recount whose
+// listing was read before is read again ([Coordinator.syncSeat]) rather than
+// written after the recount that follows the delete. Said for every delete of
+// this node's: one that moves the count ([ending.counted]) moves the seat as
+// its answer is taken as well, and one of a run this node does not count, or
+// whose seat its caller recounts after, moves nothing else.
 func (c *Coordinator) moved(handle string) {
 	if handle == "" {
 		return
@@ -1508,6 +1525,14 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // caller settling the delivery hands it on to the seat's holder by the
 // condition, as it hands on a draining node's, rather than retrying it here
 // until the broker dead-letters it.
+//
+// WHILE THIS NODE KEEPS A CLOCK ON THE STORE OF ITS BOX'S HOST, A COMPLETION'S
+// DELIVERY IS ACKNOWLEDGED ONLY WHERE ITS RUN SETTLED, which drops the clock:
+// every other answer, a refusal's and one that settled nothing included, hands
+// it back marked [ErrUnannounced], and it is RENEWED here, where the delivery in
+// hand is, whatever the hand-back: announced afresh before that delivery is the
+// last its budget allows, and acknowledged once the fresh announcement is out
+// (renew.go).
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -1516,7 +1541,7 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorLaunched:
 		return c.OnStarted(ctx, *payload)
 	case *types.ExecutorFinished:
-		return c.lost(payload.AgentHandle, c.OnCompleted(ctx, *payload, ev))
+		return c.lost(payload.AgentHandle, c.renewing(ctx, *payload, ev, c.OnCompleted(ctx, *payload, ev)))
 	case *types.ExecutorAnswerGiven:
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
 	}
@@ -1577,7 +1602,7 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) 
 // wrote its row, written back after the launch counted it, would drop the run
 // from the seat's count and lift the hold the launch just took — a seat freed
 // beside a job that is starting. So a recount during which this node moved the
-// seat is read again: a transition it counted ([Coordinator.adjust]), a record
+// seat is read again: a transition it counted ([Coordinator.adjustLocked]), a record
 // an ending of its deleted ([Coordinator.moved]), or ANOTHER RECOUNT WRITTEN,
 // whose listing may be newer than this one's. Two recounts of one seat run at
 // once — a resumed turn's frame recounts as it returns while the ending it
@@ -1588,6 +1613,30 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) 
 // it. Whichever is written second now reads again first. One that cannot
 // settle within [seatRecountRounds] reads leaves the counts alone, which is the
 // same answer a listing that failed gets.
+//
+// AND NEVER A WRITE TWICE. A write of this node's that moves a run between the
+// seat's sets moves the seat's count where the write put the run once that
+// write's answer is taken, not as the write lands on the store: a claim it
+// gives back (claimrelease.go), a park of its job's question, an answer's
+// record, the claim that resumes it and a decline that lets it go, and the
+// delete that ends a run it counts (countwrite.go). A release the store does
+// not answer keeps the claim, which holds the seat ([Coordinator.unclaimOwing]),
+// a park frees the seat only with its question on the row ([Coordinator.park]),
+// and a delete that did not land leaves its run on the row. A recount whose
+// listing was read after such a write landed, and written before its answer was
+// taken, counted the run where the write put it, and the answer's move then
+// counted it there again: an answer's release took the seat's holding count
+// down twice, freeing a seat that held another run beside it; a park counted
+// its one question twice, the seat offering its mail to an answer match with
+// nothing left to answer; an answer's record took a seat holding a second
+// question out of the question set altogether, that question's answer then run
+// as an unrelated turn; and an ending's delete, which leaves the run out of the
+// listing altogether, took it out a second time, freeing a seat whose other run
+// still worked. So a run whose release is out, or with another such write out,
+// is counted where the moves made so far leave it, whatever the listing found
+// it in and whether or not the listing has its row
+// ([Coordinator.countedLocked]), and the write's answer moves that count, once,
+// under the lock that ends that counting.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	for range seatRecountRounds {
 		c.mu.Lock()
@@ -1598,17 +1647,17 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
 			return
 		}
-		var counts seatRuns
-		for _, run := range runs {
-			holding, awaiting := setOf(run.Status)
-			counts.holding += holding
-			counts.awaiting += awaiting
-		}
 		c.mu.Lock()
 		if c.moves[handle] != moved {
 			c.mu.Unlock()
 			continue
 		}
+		// COUNTED UNDER THE LOCK that a write this node is making moves the
+		// count under once its answer is taken: a run it is moving between
+		// the seat's sets, a claim it is giving back included, is counted
+		// where the moves made so far leave it until then, its row listed or
+		// not.
+		counts := c.countedLocked(handle, runs)
 		// THIS RECOUNT MOVES THE SEAT TOO, for a recount whose listing is
 		// older than this one's and is still on its way here.
 		c.moves[handle]++
@@ -1627,6 +1676,32 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	log.WarnContext(ctx, "sandbox_busy_sync_unsettled", "agent", handle,
 		"detail", "the seat's runs kept moving under the recount, so the counts this node "+
 			"already kept stand")
+}
+
+// countedLocked is handle's seat's counts from a listing of its runs: each run
+// with no write out in the set its status names, and EVERY RUN OF THE SEAT
+// WITH A WRITE OUT where the moves made so far leave it ([Coordinator.writing]),
+// a claim whose release is out among them, whatever set the listing found it
+// in and whether or not the listing has its row at all: a create that landed
+// after the listing, or a delete that landed before it, has its move still to
+// come (countwrite.go). See [Coordinator.syncSeat]. Under mu.
+func (c *Coordinator) countedLocked(handle string, runs []PendingRun) seatRuns {
+	var counts seatRuns
+	for _, run := range runs {
+		if c.writing[run.TurnID] != nil {
+			continue
+		}
+		part := countOf(run.Status)
+		counts.holding += part.holding
+		counts.awaiting += part.awaiting
+	}
+	for _, writes := range c.writing {
+		if writes.handle == handle {
+			counts.holding += writes.counted.holding
+			counts.awaiting += writes.counted.awaiting
+		}
+	}
+	return counts
 }
 
 // seatRecountRounds bounds [Coordinator.syncSeat]'s listings.
@@ -1660,17 +1735,21 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
 	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
-	// waiter that drives its box announces its completion again on its next
-	// poll, and keeps the box meanwhile; the error carries the refusal, whose
-	// condition decides what the caller does with this delivery. What was
-	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
+	// waiter that drives its box announces its completion again on its
+	// schedule (reannounce.go), and keeps the box meanwhile; the error
+	// carries the refusal, whose condition decides what the caller does with
+	// this delivery, unless no waiter can announce the job (the clock on its
+	// box's host running), when the delivery is handed back whatever the
+	// condition (renew.go). What was signalled is read first, for the reason
+	// [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
 	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
 	// met a refusal after its claim that lifts at an instant, which the gate
 	// cannot see and would admit into again ([Coordinator.keepRefused]).
 	// Refused as the gate refuses, so the announcement is acknowledged and
-	// the waiter's next one asks again; quietly, since the hold itself was
-	// said when it was taken and the waiter repeats it on its schedule.
+	// the waiter's next one asks again, or, while no waiter can announce the
+	// job, handed back and renewed (renew.go); quietly, since the hold itself
+	// was said when it was taken and its announcements repeat it.
 	if refusal, held := c.stillRefused(ev); held {
 		if c.pastDeadline(ctx, ev) {
 			return c.completeAtDeadline(ctx, ev, fence, refusal.Reason)
@@ -1690,7 +1769,8 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
 			"detail", "this node may not start the turn the completion resumes, so the "+
-				"run is left unclaimed for the waiter to announce again, here once the "+
+				"run is left unclaimed for the waiter to announce again, or for this delivery "+
+				"where the box's host cannot read the coordination store, here once the "+
 				"condition clears or on the seat's next holder")
 		c.keepRefused(ev, trigger, refusalOf(err), false, seen)
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
@@ -1730,7 +1810,12 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence,
 ) error {
 	ctx := adm.ctx
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
+	// NOTHING OF THE JOB IS CLAIMED WHILE THIS NODE GIVES BACK, OR OWES, THE
+	// RELEASE OF ITS LAST CLAIM ([Coordinator.claimCompletion]): that release,
+	// made again, would give back a claim taken now while its collection is
+	// still working. The completion comes back on the queue's backoff, as one
+	// whose claim the store does not take does.
+	run, won, err := c.claimCompletion(ctx, ev, fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
 	}
@@ -1742,28 +1827,41 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		// that job asked, replaced by the turn's next launch, or over —
 		// or a newer lease than this node's owns it, or its resume is
 		// held on it (a duplicate queued behind the resume that held it,
-		// which the poll announces again once the hold lifts).
+		// which the poll announces again once the hold lifts). Where no
+		// poll can announce it (the clock on its box's host running), the
+		// delivery is handed back instead (renew.go).
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
 	}
 
-	if run.Lost != nil {
-		// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this
-		// completion is the waiter's announcement of that: what it left is
-		// no result, and its round is carried on, resumed here under this
-		// frame's admission.
+	// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this completion
+	// is the waiter's announcement of that: what it left is no result. Or the
+	// collection below finds it LOST WITH THE HOST ITS BOX IS ON, and records
+	// that on the claim ([Coordinator.loseWithHost]). Either way its round is
+	// carried on, resumed here under this frame's admission, and HERE ALONE:
+	// the resume under an admission is this frame's and resumeOwedAdmitted's,
+	// so a helper between them would be a road to a turn that
+	// internal/node's admission guard refuses (ADR-0063).
+	lost := run.Lost != nil
+	var result Result
+	if !lost {
+		var collected bool
+		run, result, collected, err = c.collectClaimed(ctx, run)
+		switch {
+		case !collected && run.Lost != nil:
+			lost = true
+		case !collected:
+			return err
+		}
+	}
+	if lost {
 		var carry *lostCarry
 		carry, err = c.carryOnLost(ctx, run)
 		if err != nil || carry == nil {
 			return err
 		}
 		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
-		return err
-	}
-
-	run, result, collected, err := c.collectClaimed(ctx, run)
-	if !collected {
 		return err
 	}
 
@@ -1801,16 +1899,31 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 // result, its charge and its launch's own record, carried on the claimed row
 // so that handing the claim back hands the record back with it. collected is
 // false where the collection could not read the box, and err is then
-// [Coordinator.collectFailed]'s answer, which is the caller's to return.
+// [Coordinator.collectFailed]'s answer, which is the caller's to return; or,
+// where only the box's host has kept it unread for the box timeout, the run
+// comes back LOST with that host, the loss recorded on the claim, for the
+// caller to carry its round on ([Coordinator.loseWithHost]).
 //
 // ONE COLLECTION FOR EVERY WAY A CLAIM ENDS, a resume ([Coordinator.completeAdmitted])
 // and an ending at the turn's deadline ([Coordinator.completeAtDeadline])
 // alike, so a run ended unresumed is still charged and recorded for what its
 // job did.
 func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
-	result, ended, err := c.collect(ctx, run)
+	// THE CLAIM AS THE READ LEAVES IT, marked once its box answered
+	// ([Coordinator.collect]): every hand-back from here on is made with it.
+	run, result, ended, err := c.collect(ctx, run)
 	if err != nil {
-		return run, Result{}, false, c.collectFailed(ctx, run, err)
+		// ONE VERDICT ON THE READ'S FAILURE ([collectVerdict]), which the
+		// hand-back acts on as it is: never judged again at a later reading
+		// of the clock. A read only the box's host has kept from it, for the
+		// box timeout, is no box that could not be read: its job is lost with
+		// that host, unless this node itself cut the collection short.
+		verdict := c.collectGivenUp(run, err, c.now())
+		if verdict.lostWithHost() && !errors.Is(ctx.Err(), context.Canceled) {
+			lost, lostErr := c.loseWithHost(ctx, run, err, verdict)
+			return lost, Result{}, false, lostErr
+		}
+		return run, Result{}, false, c.collectFailedAt(ctx, run, err, verdict)
 	}
 	// THE JOB'S CALLS STILL IN FLIGHT, waited for on the run's log before
 	// anything reads what the job did ([Coordinator.drainCalls]): its session
@@ -1849,11 +1962,13 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 
 	// WRITTEN BEFORE THE TURN RESUMES, since its reviewer's send-back relaunches
 	// on that frame and reads the row: a store that does not take it is a
-	// collection to ask again, which changes nothing else and asks the same.
+	// collection to ask again, which changes nothing else and asks the same,
+	// uncounted, since the store's silence is no failure of the box's
+	// ([ErrStoreSilent]).
 	if sessionSpent(run, result) {
 		sessions := sessionsRanOutOfContext(run, result)
 		if err = c.pending.RetireSessions(ctx, run.TurnID, sessions); err != nil {
-			return run, Result{}, false, c.collectFailed(ctx, run, err)
+			return run, Result{}, false, c.collectFailed(ctx, run, storeSilent(ctx, err))
 		}
 		run.ExhaustedSessions = withExhausted(run.ExhaustedSessions, sessions)
 	}
@@ -1911,14 +2026,21 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // within a bound, and then the run is given up.
 //
 // IT IS SAFE TO ASK AGAIN, which the claim protocol is what proves. Nothing
-// the tail writes happens before a collection succeeds — the charge, the
-// launch's record, the park and the resume all follow it — so a failed
-// collection has changed nothing but the claim, and handing that back
-// ([Coordinator.unclaim]) leaves the run exactly as the completion found it:
-// running, its box kept alive by the poll, its turn suspended. The completion
-// is then NAK'd and comes back on the queue's backoff, here or on the seat's
-// next owner, and the poll fires a fresh one on its next tick; whichever
-// claims first collects.
+// the tail writes happens before a collection succeeds (the charge, the
+// launch's record, the park and the resume all follow it), so a failed
+// collection has written nothing a retry does not find as it left it: the
+// claim, handed back ([Coordinator.unclaim]); the facts its read records as it
+// reads (the cap's sighting, the session it takes, how the job's harness
+// ended, the box's pause), each of which the collection made again finds as it
+// was left or makes again to the same effect; and, where its drain began or
+// its turn's cap had passed, the job's session on the bridge ended
+// ([CoordinatorOptions.Ended]), which a retry ends again to no effect. So the
+// run is left as the completion found it: running, its box kept alive by the
+// poll, its turn suspended. The completion is then NAK'd and comes back on the
+// queue's backoff, here or on the seat's next owner, and the waiter announces
+// the job again on its schedule, a fresh message at most
+// [reannounceCeilingPolls] poll intervals after its last (reannounce.go);
+// whichever claims first collects.
 // Settling on the first failure used to destroy the turn — and its charge and
 // its record — over one transport blip, or over the drain whose cancellation
 // was the failure.
@@ -1931,7 +2053,13 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // unreachable, as it always was. A collection that read the box ends the run
 // of failures behind it, as the waiter's reconnect that succeeds ends its
 // streak: a box collected and then handed back because its resume failed is a
-// box that answered, and its next failure starts a run of its own.
+// box that answered, and its next failure starts a run of its own. So is a box
+// whose read answered before a later step of its collection, one the
+// coordination store did not answer or one this node cut short, handed the
+// claim back uncounted ([Release.BoxAnswered]): left open, the run of failures
+// from before a store's silence was measured across it, and the first failure
+// after the silence gave up as lost a box that had answered every read. A later
+// step its delivery's deadline cut is counted onto the run instead, as below.
 //
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
 // box its provider reclaimed. It went between the poll that found its job over
@@ -1947,13 +2075,71 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // a reachable run up after one attempt. Only a cancellation is spared — a
 // deadline the delivery ran out of is counted, because a box whose collection
 // always outlasts it would otherwise be retried for ever.
+//
+// A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]) is handed
+// back WITHOUT being counted as well: the host's read of the run's row, the
+// drain's watch of its log and the record of the sessions its job ran out of
+// context in or whose request its provider refused are the store's, and the box answered every read, so counted, a
+// store silent for the window settled a run whose box still held its result as
+// one whose result was lost. Its completion is NAK'd for the queue's backoff,
+// as a counted retry's is, and not acknowledged as a silent host's is: that
+// host announces it again once it is back, and here the host and the box are
+// up. Where the store is this node's own, it has NO GIVE-UP OF ITS OWN: it is
+// retried as a claim the store does not take is ([Coordinator.completeAdmitted]),
+// each announcement bounded by the broker's deliveries of it and the waiter's
+// schedule announcing the job again, which loses nothing whatever the
+// deliveries come to ([Coordinator.collectFailedAt] says why), and a store
+// silent that long holds every run where it is, the claim first, while its own
+// alarms name it. Going on without the
+// step would read the run without what the step stands for (a call still in
+// flight, a session that ran out or was refused), and giving the run up would throw away a
+// result its box holds. But where the silence is the box's host's alone, its
+// store not answering the host's read of the run's row while this node's
+// answers the claim, that premise fails: every write of this node's lands, and
+// the collection was asked again for as long as the partition lasted. So such
+// a host is given up after the box timeout, as a silent host is
+// ([hostUnsettled], [Coordinator.collectGivenUp]): NOT HERE, by the collection
+// that read the box, which records a finished job lost with that host and
+// carries its round on ([Coordinator.loseWithHost]), and carries a lost job's
+// round on without the read ([Coordinator.carryOnLost]). Until then no waiter
+// announces the job again, since only that host's drives its box and it reads
+// the run's row through the silent store, so while this node keeps its clock on
+// that host's store, the completion of every hand-back is RENEWED before the
+// delivery in hand is its last, whatever the hand-back (renew.go): NAK'd and
+// nothing more, it was dead-lettered before the bound, which the broker's
+// budget falls short of. A store's silence that reaches this
+// hand-back is handed back, whatever the bound, and never ends the run as a box
+// that could not be read. A step its delivery's deadline cut is the deadline's,
+// and counted as above ([storeSilent]).
+//
+// EVERY HAND-BACK HERE THAT THE STORE DOES NOT ANSWER IS KEPT by this node and
+// made again once the store answers, never turned into an ending for its
+// silence ([Coordinator.unclaimAt], claimrelease.go): the store that
+// does not answer a collection's step is very often the one that does not
+// answer its release, and a run ended there was announced claim_unreverted,
+// "its result is lost", while its box held the result.
+//
+// ONE VERDICT PER FAILURE, at one reading of the clock ([collectVerdict]):
+// whether a store's silence is handed back and whether the collection is given
+// up are both read off it, and a caller that judged the failure already hands
+// its own verdict on ([Coordinator.collectFailedAt]).
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
+	return c.collectFailedAt(ctx, run, cause, c.collectGivenUp(run, cause, c.now()))
+}
+
+// collectFailedAt is [Coordinator.collectFailed] on the verdict its caller
+// judged cause by: the attempt that read the box and decided from its failure
+// whether to ask again ([Coordinator.carryOnLost]) hands that decision on, so
+// the hand-back never decides apart from it at a later reading of the clock.
+func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause error,
+	verdict collectVerdict,
+) error {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+
 				"handed back uncounted and the completion is retried")
-		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -1963,18 +2149,90 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		// THE BOX'S HOST DID NOT ANSWER, which says nothing about the box
 		// ([ErrBoxHostSilent]): handed back uncounted, and the completion
 		// acknowledged rather than retried on the queue's backoff — the
-		// host announces it again on its own next poll once it is back,
-		// and one that never comes back is found gone by the fleet.
+		// host's own waiter announces it again on its schedule once the
+		// host is back (reannounce.go), and one that never comes back is
+		// found gone by the fleet.
+		//
+		// UNLESS THIS NODE KEEPS A CLOCK ON THAT HOST'S STORE
+		// ([Coordinator.hostClocked]): the host last answered that its store
+		// did not answer its read of the run's row, and a host that did not
+		// answer since says nothing of that store, so its waiter, back or
+		// not, reads the row through a store that does not answer it and
+		// announces nothing. The delivery is then all that asks again: the
+		// completion is handed back for the queue's backoff, never
+		// acknowledged, and renewed before its last delivery as every
+		// hand-back is while that clock runs (renew.go).
+		clocked := c.hostClocked(run.TurnID, run.LaunchID)
 		log.WarnContext(ctx, "sandbox_collect_host_silent", "turn_id", run.TurnID,
-			"node", run.LaunchNode, "error", cause.Error(),
+			"node", run.LaunchNode, "store_silent", clocked, "error", cause.Error(),
 			"detail", "the node whose host the run's box is on did not answer the collection; "+
-				"the claim is handed back uncounted and that node announces the completion again")
-		// A hand-back that did not land ended and announced the run itself
-		// ([Coordinator.unclaim]), so either way nothing is retried here.
-		_ = c.unclaim(ctx, run, collectUnrevertedDetail)
-		return nil
+				"the claim is handed back uncounted and that node announces the completion again, "+
+				"or, where it last found its coordination store silent, the completion is asked "+
+				"again on the queue's backoff")
+		// A hand-back the store refused ended and announced the run
+		// itself, so nothing is retried off this delivery; and one it did
+		// not answer is this node's to make again ([Coordinator.unclaimAt]),
+		// after which only that host's waiter or this delivery asks again.
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil || !clocked {
+			//nolint:nilerr // Ended and announced where the hand-back was refused, as below; acknowledged
+			// otherwise, no clock running on that host's store.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
 	}
-	now := c.now()
+	now := verdict.at
+	if errors.Is(cause, ErrStoreSilent) {
+		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
+		// go on without ([ErrStoreSilent]), which says nothing about the box:
+		// handed back uncounted, and the completion NAK'd for the queue's
+		// backoff. A host whose store alone has been silent for the box
+		// timeout is given up by the collection that read the box, never
+		// here: its job is lost with that host ([collectVerdict.lostWithHost]).
+		//
+		// WHERE THE STORE IS THIS NODE'S OWN, THE NAK IS ALL IT TAKES. Once
+		// the claim is back (now, or when a release this node owes lands,
+		// claimrelease.go), the run's row is running and unheld, and the
+		// waiter that drives its box announces such a job's completion on
+		// its schedule for as long as the row stays so, never stopping
+		// (reannounce.go): each announcement a fresh message with a fresh
+		// budget, due at most [reannounceCeilingPolls] poll intervals after
+		// the last. So a delivery that dead-letters meanwhile loses nothing.
+		// And at production's cadence that ceiling, 300 s, is inside the
+		// broker's delivery budget, about 601 s from a message's first
+		// delivery to its dead letter and never under about 481 s with its
+		// jitter (internal/queue/jetstream's LeastTimeToDeadLetter): while
+		// the waiter's own store lists the row, a fresh announcement is out
+		// before the last can dead-letter, so the completion always has a
+		// delivery in flight, and no dead letter the silence leaves is its
+		// last copy (TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter).
+		// A waiter whose store is silent too announces nothing while it is,
+		// and its first pass that lists the row again announces the job at
+		// once, its wait long past.
+		//
+		// WHERE THE SILENCE IS THE BOX'S HOST'S ALONE, NO WAITER ANNOUNCES THE
+		// JOB AGAIN: the host's own drives its box, and reads the row through
+		// the silent store. The broker's redelivery is all that asks again,
+		// and its budget falls short of the box timeout, so while this node
+		// keeps its clock on that host's store, by the host's answer to this
+		// read or to one before it (a record of the job's loss with that
+		// host this node's own store did not take, [Coordinator.loseWithHost],
+		// among them), the completion is renewed before the delivery in
+		// hand is its last: announced afresh, and the delivery acknowledged
+		// once that is out, as every hand-back is while that clock runs
+		// (renew.go). The wait goes on until the host's store answers or the
+		// bound records the job lost with that host.
+		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
+			"error", cause.Error(),
+			"detail", "the coordination store did not answer a step the collection cannot go on "+
+				"without; the claim is handed back uncounted and the collection is asked again "+
+				"until the store answers, or until the box timeout where only the box's host "+
+				"finds it silent")
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil {
+			//nolint:nilerr // As below: the run has been ended and announced.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s: %w", run.TurnID, cause)
+	}
 	facts := run.Launch
 	attempts := facts.CollectFailures + 1
 	since := facts.CollectFailingSince
@@ -1982,10 +2240,11 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		since = now
 	}
 	gone := errors.Is(cause, ErrBoxGone)
-	if c.collectGivenUp(run, cause, now) {
+	if verdict.givenUp {
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
 			"box_gone", gone, "error", cause.Error())
+		c.runSettled(run.TurnID)
 		// The job is OVER even though collection failed. Free the seat and
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a
@@ -2001,7 +2260,16 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"collection is retried until it has failed for the poll's give-up window")
 	// COUNTED: the claim did not move the seat's holding count — running and
 	// resumed both hold it — and handing it back to running leaves it there.
-	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
+	// A release the store does not answer counts the failure once, when it
+	// lands ([Coordinator.unclaimAt]).
+	//
+	// AND COUNTED ONTO THE RUN OF FAILURES BEHIND IT, even where the box
+	// answered this attempt's read: what failed then is a step after it that
+	// the delivery's deadline cut, and a collection that always outlasts its
+	// delivery after the read would otherwise start a run of its own each
+	// time and never be given up ([Release.BoxAnswered]).
+	run.BoxAnswered = false
+	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -2081,7 +2349,13 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 // stopped waiting for it. A job that finished before the cap makes no call to
 // refuse, and a turn past its cap starts no round that would open the session
 // again.
-func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool, error) {
+//
+// THE CLAIM IS ANSWERED BACK beside the result, marked the moment the box
+// answered ([PendingRun.BoxAnswered]), so a step of this read that fails after
+// the box's own (what the run pushed, read once the box answered) hands the
+// claim back with the run of failed collections behind it ended, as every step
+// after the read does ([Coordinator.collectFailed]).
+func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
 	if c.ended != nil && run.PastDeadline(c.now()) {
 		c.ended(run.TurnID)
 	}
@@ -2090,8 +2364,16 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	// under the turn the result is fitted for.
 	result, ended, err := c.boxResult(ctx, run, BoxReadCollect)
 	if err != nil {
-		return Result{}, false, err
+		return run, Result{}, false, err
 	}
+	// THE BOX ANSWERED, which ends the run of failed collections behind this
+	// one whatever a later step does: a step after the read that the store
+	// does not answer, or that this node cuts short, hands the claim back
+	// uncounted with that run ended ([Release.BoxAnswered]). Marked here, at
+	// the box's answer, and not once this read returns: what the run pushed is
+	// read after it, and a read this node cut short there is one of those
+	// steps.
+	run.BoxAnswered = true
 	if ended {
 		result = endedAtDeadline(result, run.Deadline, run.Question)
 	}
@@ -2099,11 +2381,11 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	// WHAT IT PUSHED, read here, where the result is used: the push record is
 	// Gitlet's, which the seat's node reaches ([RunPushes]).
 	if result, err = c.readPushes(ctx, run, result); err != nil {
-		return Result{}, false, err
+		return run, Result{}, false, err
 	}
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
 	// so the launch's record, the park and the run's report carry one text.
-	return c.fitText(ctx, run, result), ended, nil
+	return run, c.fitText(ctx, run, result), ended, nil
 }
 
 // noteReader is a [Runner] whose harness takes a person's notes to its run's turn
@@ -2780,7 +3062,11 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		return fmt.Errorf("sandbox: announcing the question %s asked: %w", run.TurnID, err)
 	}
 
-	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
+	// BEING WRITTEN FROM HERE, so a recount counts the run as the claim it
+	// still is until the write's answer moves it (countwrite.go).
+	write := c.writingCount(run, StatusResumed, StatusAwaiting)
+	defer c.settleWrite(write)
+	err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		// And what condensing this collection cost, paid by the same resume.
@@ -2791,7 +3077,21 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// row said. See [PendingRun.AudienceHandles].
 		Answerers: c.audience.ResolveAudience(run, run.Audience),
 		AskedAt:   asked,
-	}); err != nil {
+	})
+	// FREED AND OPENED AS ONE MOVE, not two: a person can take days, the
+	// answer arrives on the seat's own inbox, and between two separate
+	// writes the seat would read as idle with nothing open, the state in
+	// which that answer is run as an unrelated turn. The claim took the row
+	// through [StatusResumed], so it is the holding side it leaves.
+	//
+	// AND IN THE STEP THAT ENDS THE WRITE'S COUNTING AS THE CLAIM: made after
+	// it, a recount that read the parked row in between counted the question
+	// already, and the move counted it a second time.
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil)
+	c.mu.Unlock()
+	moved()
+	if err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
 		// brought us here. Handed back, the completion poll fires again,
@@ -2814,14 +3114,6 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		}
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
-	// FREED AND OPENED AS ONE MOVE, not two: a person can take days, the
-	// answer arrives on the seat's own inbox, and between two separate
-	// writes the seat would read as idle with nothing open — the state in
-	// which that answer is run as an unrelated turn.
-	//
-	// The claim took the row through [StatusResumed], so it is the holding
-	// side it leaves.
-	c.moveRun(run.AgentHandle, StatusResumed, StatusAwaiting)
 
 	// THE AGENT HAS STOPPED, and this is the moment that becomes durable.
 	// Whatever the engine holds up while a turn works comes down here — see
@@ -3890,26 +4182,27 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// reverted below as the wait it is ([waitingRefusal]), uncharged.
 		var held *HeldError
 		if errors.As(err, &held) && !claimedAnswer(run) {
-			// THE CLAIM'S COUNT IS GIVEN BACK FIRST, as on the revert
+			// THE CLAIM'S COUNT MOVES WITH THE HAND-BACK, as on the revert
 			// below: the claim kept the seat counted through the resumed
-			// turn, and the hand-back counts the run again in the set it
-			// returns to. Left counted, the seat was counted twice and
-			// never let go.
-			c.uncountRun(run.AgentHandle, StatusResumed)
+			// turn, and the release that lands moves the count to the set it
+			// returns the run to, once ([Coordinator.unclaimOwing]), never
+			// before it, since one the store does not answer keeps the claim.
 			if unclaimErr := c.unclaimHeld(ctx, run, held.Refusal); unclaimErr != nil {
 				//nolint:nilerr // The run was ended in its place, as on
 				// the retry's path below: nothing is left to come back to.
 				return AnswerNotMine, nil
 			}
 			// THE COMPLETION IS SPENT: the hold is on the row, and the poll
-			// announces the job again when it lifts.
+			// announces the job again when it lifts. Where no poll can (the
+			// clock on its box's host running), its caller hands the
+			// delivery back instead (renew.go).
 			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
 		// conversation is permanently lost with the row stranded in resumed.
-		// The claim's count is given back first, and the hand-back counts
-		// the run in the set it returns to.
+		// The claim's count moves to the set the hand-back returns the run to
+		// once its release lands, and stays the claim's while it is owed.
 		//
 		// A resume the resumer REFUSED on a condition it names (its models
 		// all at their limit before it wrote anything, or an answer's resume
@@ -3954,8 +4247,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			}
 			failed.resumeFailed = now
 		}
-		c.uncountRun(run.AgentHandle, StatusResumed)
-		if unclaimErr := c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failed, nil); unclaimErr != nil {
+		if unclaimErr := c.unclaimAt(ctx, run, resumeUnrevertedDetail, failed, nil); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -4012,8 +4304,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		log.InfoContext(ctx, "sandbox_relaunched_in_turn",
 			"turn_id", run.TurnID, "status", latest.Status,
 			"sandbox_id", latest.SandboxID, "continued", latest.SandboxID == run.SandboxID)
-		// RECOUNTED: the claim's count and the relaunch's are the same row,
-		// which the store holds once.
+		// RECOUNTED, the store's answer under the counts: the claim and the
+		// relaunch are the same row, which the store holds once, and the
+		// relaunch counted it as the claim it opened the job on
+		// (countwrite.go), so the recount moves nothing unless the job has
+		// moved since.
 		c.syncSeat(ctx, run.AgentHandle)
 		return AnswerConsumed, nil
 	}
@@ -4212,7 +4507,7 @@ var claimedOnly = []string{StatusResumed}
 // endClaim ends a run WHILE IT IS STILL THE CLAIM THIS CALL TOOK — its status,
 // its job and its lease — for an ending decided WITHOUT knowing what the row
 // holds: a settle whose read of the row failed ([Coordinator.settleClaimed]),
-// and a claim whose release could not be confirmed ([Coordinator.unclaim]).
+// and a claim whose release the store refused ([Coordinator.unclaim]).
 // Reports whether it ended the run, and the ending's error where it was kept
 // for its retry ([errEndingOwed]).
 //
@@ -4347,6 +4642,12 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // then refused to let the reply go from a run that no longer read as the
 // claim, the reply was deleted with it.
 //
+// AND A RELEASE THE STORE DID NOT ANSWER IS NOT ENDED AT ALL, on any hand-back:
+// no answer is no refusal, and the store that did not answer it is very often
+// the silence the claim was handed back for. This node keeps that claim and
+// gives it back once the store answers ([Coordinator.oweRelease],
+// claimrelease.go); what is ended here is a release the store refused.
+//
 // # NO STOP IS REPORTED ON THE SUCCESSFUL PATH, on either route
 //
 // Which is a decision rather than an omission — see
@@ -4364,19 +4665,24 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // its own report through the ending it performs.
 //
 // Reports whether the run may still be in the hands of whatever will retry it:
-// nil where the claim went back (or had already moved on), or where the ending
+// nil where the claim went back (or had already moved on, or its release is
+// owed, which this node makes again until it lands), or where the ending
 // could not be finished and is kept — whether the hand-back landed is then
 // still open, and a signal that comes back finds the outcome — and the
 // release's own error where the run was ended in its place. The caller's own
 // error is not this answer — a retry keeps it, so the delivery comes back, and
 // an ending drops it, because there is nothing left to come back to.
 //
-// THE SEAT'S COUNT IS LEFT AS IT IS: every caller hands back a claim whose run
-// the seat still counts (a collection that failed, a park that did not land),
-// since running and resumed both hold it. A resume's failure gives the claim's
-// count back first and hands back through [Coordinator.unclaimAt].
+// THE SEAT'S COUNT MOVES WITH THE RELEASE, and with nothing before it: every
+// caller hands back a claim whose run the seat counts as the claim it is (a
+// collection that failed, a park that did not land, a resume that failed or
+// was held), and a release that lands moves that count to the set it returns
+// the run to, once, in the step that takes its answer ([Coordinator.unclaimOwing]),
+// which a recount reads past while the release is out ([Coordinator.syncSeat]). A
+// release the store did not answer keeps the claim, which still holds the seat
+// on the store's row.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string) error {
-	return c.unclaimAt(ctx, run, true, detail, failure{}, nil)
+	return c.unclaimAt(ctx, run, detail, failure{}, nil)
 }
 
 // unclaimHeld hands back a claim whose resume the seat's conditions refused,
@@ -4395,26 +4701,53 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
 		"detail", "the job stays collected in its paused box and its seat held behind it; "+
 			"its completion is announced again when the refusal lifts")
-	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failure{}, &refusal)
+	return c.unclaimAt(ctx, run, resumeUnrevertedDetail, failure{}, &refusal)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
 // collection it was taken for, or the resume after it, failed: failed is what
 // the release counts onto the job's record, and its zero value is any other
-// hand-back. counted is whether the seat still counts the run, so the release
-// counts it again only where it does not; and hold, where set, holds the
-// run's resume back ([Release.Hold]).
-func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
-	failed failure, hold *Refusal,
+// hand-back; detail is the sentence the run's ending reaches an operator's
+// board with where the store refuses the release; and hold, where set, holds
+// the run's resume back ([Release.Hold]).
+//
+// EVERY HAND-BACK IS MADE HERE, and a release the store did not answer is kept
+// owed rather than ended (claimrelease.go): RECORDED AS OUT FIRST, so no claim
+// of the job starts on this node while the release is on its way
+// ([Coordinator.claimCompletion]).
+func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail string, failed failure,
+	hold *Refusal,
 ) error {
-	ctx, cancel := c.detachedRecord(ctx)
-	defer cancel()
-	to := claimedFrom(run)
-	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
-		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
-		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, Fence: fenceOf(run), Hold: hold,
-	})
+	cr := &claimRelease{run: run, release: releaseFor(run, failed, hold), detail: detail}
+	// AND ITS WRITE IN THE RUN'S ENTRY, in the same step (claimrelease.go):
+	// a recount counts the run as the claim it still is for as long as the
+	// release is out, and a write recorded behind it moves after it.
+	//
+	// THE RELEASE IT TAKES THE PLACE OF IS ANSWERED FIRST, as one that did
+	// not land: an earlier job's, still owed, which can no longer land (see
+	// "A later job's release takes an earlier one's place" in
+	// claimrelease.go). Left out in the entry, it held every later move on
+	// the run behind it for as long as this node held the seat.
+	moved := func() {}
+	c.mu.Lock()
+	if earlier := c.releases[run.TurnID]; earlier != nil {
+		moved = c.wroteCountLocked(earlier.write, false)
+	}
+	cr.write = c.writingCountLocked(run, StatusResumed, cr.release.To)
+	c.releases[run.TurnID] = cr
+	c.mu.Unlock()
+	moved()
+	return c.unclaimOwing(ctx, cr)
+}
+
+// releaseAnswered acts on the store's answer to cr's release, released and err,
+// as [Coordinator.unclaimAt] reports it: a release that failed ends the run
+// while it is still the claim, and one that moved on is left to whatever moved
+// it. One that landed has had the seat's count of the run moved already, from
+// the claim to the set the release returns it to, in the step that took its
+// answer ([Coordinator.unclaimOwing]), and asks nothing more.
+func (c *Coordinator) releaseAnswered(ctx context.Context, cr claimRelease, released bool, err error) error {
+	run, to := cr.run, cr.release.To
 	switch {
 	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
@@ -4424,7 +4757,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 				"landed after all")
 		ended, endErr := c.endClaim(ctx, run, ending{
 			unused: claimedAnswer(run),
-			note:   &failureNote{reason: types.ExecutorFailureClaimStranded, detail: detail},
+			note:   &failureNote{reason: types.ExecutorFailureClaimStranded, detail: cr.detail},
 		})
 		// AUTHORITATIVE, not assumed: the ending moved the row, or found
 		// it moved, and this call moved the counts, and neither knows
@@ -4458,9 +4791,9 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 				"the resumed turn launched another job, the seat's next owner reaped it, "+
 				"or its ending let its answer go")
 		c.syncSeat(ctx, run.AgentHandle)
-	case !counted:
-		c.countRun(run.AgentHandle, to)
 	}
+	// LANDED: the claim's count moved with it as its answer was taken, in the
+	// step that settled it ([Coordinator.unclaimOwing]).
 	return nil
 }
 
@@ -4503,12 +4836,23 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 }
 
 // settleNoted is [Coordinator.settleFailed] over a whole announcement.
+//
+// OUT OF WHICHEVER SET THE RECORD WAS IN, as its delete lands: this path
+// settles a claimed run ([StatusResumed]) and a launch that never suspended
+// ([StatusLaunching]) alike, each counted by this node, and the delete's
+// answer moves it out once ([ending.counted]). Counted out after the ending
+// returned, a recount whose listing was read after the delete counted it out
+// already, and the seat whose other run still worked read free beside it; and
+// an ending kept for its retry, its record still on the row, was counted out
+// all the same. A run that is no longer this node's to end, somebody else
+// having ended it or a newer lease owning it, has no delete of this node's to
+// move it, and the seat is recounted from the store instead, which reads the
+// row as it stands, or none.
 func (c *Coordinator) settleNoted(ctx context.Context, run PendingRun, note *failureNote) bool {
-	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note})
-	// Out of whichever set the record was in: this path settles a claimed
-	// run ([StatusResumed]) and a launch that never suspended
-	// ([StatusLaunching]) alike, and a status names its own set.
-	c.uncountRun(run.AgentHandle, run.Status)
+	_, ours := c.finish(ctx, run, ending{fence: fenceOf(run), note: note, counted: true})
+	if !ours {
+		c.syncSeat(ctx, run.AgentHandle)
+	}
 	return ours
 }
 
@@ -4734,6 +5078,18 @@ type ending struct {
 	// but a stop's ([Coordinator.StopSeat]). It is announced in place of a
 	// note, so a stop never carries one.
 	stop *RunStop
+
+	// counted is whether this node counts the run in the set its status
+	// names, so that the delete that ends it moves it out of the seat's
+	// counts as the delete's answer is taken, once (countwrite.go): an
+	// ending of a run this node launched or claimed and settles itself
+	// ([Coordinator.settleNoted], [Coordinator.StopSeat],
+	// [Coordinator.abandon]). Kept with the ending, so the retry that
+	// finishes it moves the count as its own delete lands. Every other
+	// ending moves nothing at its delete: its run is one this node does not
+	// count yet (a recovery's), or its caller recounts the seat once the
+	// ending returns, which reads the store's own answer.
+	counted bool
 }
 
 // decision is the ending as the store records it.
@@ -4839,11 +5195,18 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	if !ok {
 		return nil, nil
 	}
+	// THE RUN IS SETTLED HERE, whatever finishes it: its end is decided, so no
+	// collection of its job is made again, and a clock on the store of its
+	// box's host goes now ([hostUnsettled]), a lost job's round carried on to
+	// its end included. Not at the record's delete, which an end the executor
+	// log is still owed keeps minutes behind the decision. And so does a
+	// re-fire's announcement this node still owes it ([refirePublish]).
+	c.runSettled(decided.TurnID)
 	c.reportStopped(ctx, decided)
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
 	c.noteLaunchStop(decided)
 	ending := *decided.Ending
-	finished, err := c.finishOnce(ctx, decided, mayAsk)
+	finished, err := c.finishOnce(ctx, decided, mayAsk, e.counted)
 	switch {
 	case !finished && !mayAsk:
 		// ANOTHER ATTEMPT ON THIS NODE IS FINISHING IT — and this node's
@@ -4912,7 +5275,7 @@ var errAwaitsFrame = errors.New("sandbox: the run's turn is still running on thi
 // the record gone and lets the seat's mail go at once; or it kept the ending
 // itself, and its own keep arms the retry again on the spacing its failure
 // earns.
-func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk bool) (bool, error) {
+func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk, counted bool) (bool, error) {
 	c.mu.Lock()
 	if c.finishing[run.TurnID] {
 		c.mu.Unlock()
@@ -4931,7 +5294,7 @@ func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk boo
 			c.scheduleOwedLocked(run.TurnID, 0)
 		}
 	}()
-	return true, c.finishEnding(ctx, run, mayAsk)
+	return true, c.finishEnding(ctx, run, mayAsk, counted)
 }
 
 // frameBegins and frameEnds bracket a resumed turn's frame on this node
@@ -5023,7 +5386,9 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //     [Coordinator.publishEnd]), and cleared from the row;
 //  10. the record is deleted ([PendingStore.Finish]), every call of the round
 //     its log still holds in flight named as it goes
-//     ([Coordinator.nameDeletedInFlight]).
+//     ([Coordinator.nameDeletedInFlight]); for an ending whose run this node
+//     counts ([ending.counted]), the delete is recorded before it is sent and
+//     its answer moves the run out of the seat's counts, once (countwrite.go).
 //
 // # Off any frame somebody waits on
 //
@@ -5062,11 +5427,16 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 // ([ErrHandBackOwed], [ErrAnswerOwed], [ErrEndOwed]), and hands back the row as
 // it stands; the steps run again against it. A step that does not land is
 // returned, and the caller keeps the ending.
-func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
+func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, counted bool) error {
 	// THE ROW AS IT STANDS, not as the caller's decision read it: an attempt
 	// before this one may have owed the turn's end, or recorded it, since —
 	// and a step decided off a stale copy is a step made twice. A row that is
 	// gone, or holds another ending, was finished by whoever got there first.
+	//
+	// AND WHETHER THIS NODE'S STORE ANSWERED IT, which a stop's read of a box
+	// whose host's store is silent is judged by ([Coordinator.readStopped]):
+	// that silence is the host's alone only where this node's is not.
+	rowRead := false
 	readCtx, readDone := c.endingCall(ctx)
 	current, found, err := c.pending.Get(readCtx, run.TurnID)
 	readDone()
@@ -5077,7 +5447,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	case !found || current.Ending == nil || current.Ending.ID != run.Ending.ID:
 		return nil
 	default:
-		run = current
+		run, rowRead = current, true
 	}
 	var handed []string
 	reclaimed, announced, ended, named := false, false, false, false
@@ -5116,7 +5486,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if !mayAsk && run.SandboxID != "" && run.CommandID != "" {
 				return errAskAway
 			}
-			collected, err := c.collectStopped(ctx, run)
+			collected, err := c.collectStopped(ctx, run, rowRead)
 			if err != nil {
 				return err
 			}
@@ -5218,14 +5588,14 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			c.nameDeletedInFlight(ctx, run)
 			named = true
 		}
-		finishCtx, finishDone := c.endingCall(ctx)
-		settled, deleted, err := c.pending.Finish(finishCtx, run.TurnID, run.Ending.ID)
-		finishDone()
+		settled, deleted, err := c.deleteRecord(ctx, run, counted)
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
 			// first: either way there is nothing left of it to do. A delete
 			// of this call's moves the seat for a recount already reading.
+			// The clock on the store of its box's host went with the
+			// decision, where the run settled ([Coordinator.endRun]).
 			if deleted {
 				c.moved(run.AgentHandle)
 			}
@@ -5239,6 +5609,32 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	}
 	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply, or the log its turn's "+
 		"end, after recording one", run.TurnID)
+}
+
+// deleteRecord is an ending's delete of run's record ([PendingStore.Finish]),
+// as an ending's call of the store ([Coordinator.endingCall]). For an ending
+// whose run this node counts ([ending.counted]) it moves the run out of the
+// seat's sets as its answer is taken: recorded before it is sent, so a recount
+// meanwhile counts the run where it is, its row listed or not, and settled on
+// every way out, a panic included, so that one whose answer was never taken
+// moves nothing (countwrite.go).
+func (c *Coordinator) deleteRecord(ctx context.Context, run PendingRun, counted bool,
+) (PendingRun, bool, error) {
+	if !counted {
+		finishCtx, finishDone := c.endingCall(ctx)
+		defer finishDone()
+		return c.pending.Finish(finishCtx, run.TurnID, run.Ending.ID)
+	}
+	write := c.writingCount(run, run.Status, "")
+	defer c.settleWrite(write)
+	finishCtx, finishDone := c.endingCall(ctx)
+	settled, deleted, err := c.pending.Finish(finishCtx, run.TurnID, run.Ending.ID)
+	finishDone()
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && deleted)
+	c.mu.Unlock()
+	moved()
+	return settled, deleted, err
 }
 
 // endingOfRun is how the turn of run — a loss or a stop — ended, from the
@@ -5713,17 +6109,43 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // a launch happening right now, microseconds from becoming resumable. A
 // boot-time scan proves nothing of the sort, because a peer could be
 // mid-resume on a seat this node never owned.
+//
+// # Each run it takes over is counted once
+//
+// The seat's control topic is attached before the recovery runs, so a recount
+// off it can land before the recovery or between a run's fence and its count.
+// So the recovery COUNTS THROUGH THE ONE MECHANISM every write that moves a
+// run's count takes (countwrite.go): before any fence it records the takeover
+// of every run its listing found, and starts the seat's counts afresh from
+// what this node's writes out on the seat leave them, setting aside whatever
+// a recount counted before it ([Coordinator.takingOver]); a recount meanwhile
+// counts each run where the recovery has left it so far, nothing until its
+// takeover is answered; and each takeover is answered once the recovery has
+// done with its run, counting it in the set the recovery leaves it in, or in
+// none ([Coordinator.takeoverAnswered]). Counted after the fence and outside
+// the lock, on top of whatever a recount had counted already, a running job
+// held the seat twice, a question was counted twice, the seat's mail offered
+// to an answer match with nothing more to answer, and a tail a recount had
+// counted kept the seat held after its reap.
 func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epoch int64) error {
 	active, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
 	}
+	takeovers := c.takingOver(ctx, handle, active)
+	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
+	// out holds every later move on its run (countwrite.go).
+	defer func() {
+		for _, w := range takeovers {
+			c.settleWrite(w)
+		}
+	}()
 	if len(active) == 0 {
 		return nil
 	}
 	var tally recovery
-	for _, run := range active {
-		c.recoverRun(ctx, run, owner, epoch, &tally, true)
+	for i, run := range active {
+		c.takeoverAnswered(takeovers[i], c.recoverRun(ctx, run, owner, epoch, &tally, true))
 	}
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", tally.running,
@@ -5757,18 +6179,23 @@ const (
 	reapOwed
 )
 
-// recoverRun takes over one run of a seat this node has just acquired.
+// recoverRun takes over one run of a seat this node has just acquired, and
+// reports the status the seat counts it in from here
+// ([Coordinator.takeoverAnswered]): a running job's, an answered run's or a
+// question's, and none for a run it ended, reaped, left to a newer lease or
+// found gone, nor for a dead claim whose revival it keeps owed, which holds the
+// seat's mail behind it.
 //
 // again is whether a run that turns out to have moved under this recovery's
 // fence is taken over once more as what it moved to: the fence reads the row
 // again ([Coordinator.fenceClaim], [Coordinator.fenceRun]), and a process that
-// lost the seat without noticing can still have written before it — the
+// lost the seat without noticing can still have written before it: the
 // release that hands its claim back, a run it parked, an ending it decided.
 // Once, because the fence is in place by then and nothing else can move the
 // row; an ending found decided is finished whichever pass finds it.
 func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner string, epoch int64,
 	tally *recovery, again bool,
-) {
+) (counted string) {
 	if run.Ending != nil {
 		// AN ENDING THE LAST HOLDER DECIDED AND DID NOT FINISH: it is this
 		// holder's to finish, on the terms recorded — the reply it hands
@@ -5783,7 +6210,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		} else if decided != nil {
 			tally.finished++
 		}
-		return
+		return ""
 	}
 	switch run.Status {
 	case StatusLaunching, StatusResumed:
@@ -5794,10 +6221,10 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 			// as the answered run it now is, exactly as an answer the last
 			// holder recorded and never resumed with.
 			tally.revived++
-			c.recoverRun(ctx, *moved, owner, epoch, tally, false)
+			return c.recoverRun(ctx, *moved, owner, epoch, tally, false)
 		case reapMoved:
 			if again {
-				c.recoverRun(ctx, *moved, owner, epoch, tally, false)
+				return c.recoverRun(ctx, *moved, owner, epoch, tally, false)
 			}
 		case reapEnded:
 			tally.abandoned++
@@ -5805,7 +6232,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 			// Another lease's to reap, gone, or a revival this node
 			// retries with the seat's mail held behind it.
 		}
-		return
+		return ""
 	}
 	// FENCED FIRST, AND TAKEN OVER AS THE FENCE FOUND IT ([Coordinator.fenceRun]):
 	// an ending the last holder decided after the listing is finished here,
@@ -5813,15 +6240,14 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	latest, served, gone := c.fenceRun(ctx, run, owner, epoch)
 	switch {
 	case gone:
-		return
+		return ""
 	case latest.Ending != nil || (again && latest.Status != run.Status):
-		c.recoverRun(ctx, latest, owner, epoch, tally, false)
-		return
+		return c.recoverRun(ctx, latest, owner, epoch, tally, false)
 	}
 	run = latest
 	switch run.Status {
 	case StatusRunning:
-		c.countRun(run.AgentHandle, run.Status)
+		counted = run.Status
 		tally.running++
 		// WHAT THE BOX CALLS IS SERVED HERE NOW — see
 		// [CoordinatorOptions.Recovered] — unless a newer lease already
@@ -5839,13 +6265,13 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// it again — and the seat's mail waits behind it here exactly
 		// as it did there. Scheduled rather than run, because this is
 		// the seat's preparation and the mailbox is not open yet.
-		c.countRun(run.AgentHandle, run.Status)
+		counted = run.Status
 		c.queueOwed(ctx, run)
 		tally.parked++
 	case StatusAwaiting, StatusReseed:
 		if c.settledUnresumable(ctx, run, Fence{Owner: owner, Epoch: epoch}) {
 			tally.abandoned++
-			return
+			return ""
 		}
 		// NOTHING IS DONE TO THE RUN — its answer is what moves it —
 		// but the new owner has to know the question is open, or the
@@ -5867,7 +6293,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// at the old holder's, the run could be answered and claimed by
 		// a node with no seat, and a run parked under no lease stayed
 		// at the zero epoch across every seat move.
-		c.countRun(run.AgentHandle, run.Status)
+		counted = run.Status
 		tally.parked++
 	}
 	// AND A REPLY A DECLINE OWES THE SEAT, whatever the run has done
@@ -5883,6 +6309,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {
 		c.queueOwed(ctx, run)
 	}
+	return counted
 }
 
 // SettleParked ends the seat's parked runs no build will resume
@@ -6477,6 +6904,11 @@ func seatLabel(seat uuid.UUID, handle string) string {
 // NOTHING IS TORN DOWN. A detached run belongs to its row, not to this
 // process, and the seat's next owner recovers it through RecoverSeat. Reaping
 // the box here would destroy work the successor is about to resume.
+//
+// AND NOTHING IT HAS OUT MOVES THE SEAT'S COUNTS AFTER IT: the writes out on
+// its runs go with its counts, so an answer taken after the release moves
+// nothing, and a recovery of the seat by this node counts each run once, where
+// it finds it (countwrite.go).
 func (c *Coordinator) ReleaseSeat(handle string) {
 	// The seat's answer-attempt counts go with it, for the reason they are
 	// per node at all: the successor gets a clean set of attempts at every
@@ -6488,14 +6920,31 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	c.releaseOwed(handle)
 	c.mu.Lock()
 	delete(c.runs, handle)
+	// AND THE WRITES IT HAS OUT ON THE SEAT'S RUNS, in the same step: an
+	// answer taken after it moves nothing, as a release's has not since it
+	// was dropped above, and a recovery of the seat by this node counts each
+	// run afresh where it finds it (countwrite.go).
+	maps.DeleteFunc(c.writing, func(_ string, w *runWrites) bool { return w.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: the seat's turns run
 	// on its next holder from here.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
 	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
-	// and the waiter that drives its box announces it to the successor.
+	// and the waiter that drives its box announces it to the successor, or,
+	// while that waiter cannot, the delivery handed back for it does
+	// (renew.go).
 	for turnID, kept := range c.refused {
 		if kept.ev.AgentHandle == handle {
 			delete(c.refused, turnID)
+		}
+	}
+	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
+	// successor's collections start one of their own. And any re-fire's
+	// announcement it still owed: the run's completion is the successor's
+	// to announce now, and its waiter's, or the delivery handed back for it.
+	maps.DeleteFunc(c.unsettled, func(_ string, u hostUnsettled) bool { return u.handle == handle })
+	for turnID, p := range c.republish {
+		if p.ev.AgentHandle == handle {
+			c.dropRepublishLocked(turnID)
 		}
 	}
 	c.mu.Unlock()

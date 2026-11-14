@@ -21,7 +21,10 @@ import (
 // written to say how far it got. Collected, its partial output was judged as
 // the round's result — a run that "did not succeed" for reasons it never had —
 // and where its box was gone the run ended the turn, which the park had
-// already acknowledged, so nothing would ever start it again.
+// already acknowledged, so nothing would ever start it again. And a job whose
+// box only its node's host can read, on a node cut off from the coordination
+// store for the box timeout, is as lost to the turn as one whose node left,
+// whether or not it finished ([Coordinator.loseWithHost]).
 //
 // SO A LOST JOB'S ROUND IS CARRIED ON, as a parked run's is once its question
 // is answered ([ResumeRequest.Lost], [ResumeRequest.Asked]): the turn resumes
@@ -75,10 +78,19 @@ const (
 	// that left the fleet and did not come back within the box timeout
 	// ([Waiter.goneAfter]).
 	LossLaunchNodeGone LossCause = "launch_node_gone"
+	// LossLaunchNodeStoreSilent is a job whose box is on the host of a node
+	// that answered every collection of it, for the box timeout, that its
+	// coordination store did not answer its read of the run's row, while the
+	// collecting node's store answered ([hostUnsettled]): its box is there,
+	// but only that node can read it, and it could not. Recorded by the
+	// collection that found it so, on its own claim ([Coordinator.loseWithHost]).
+	// A build that does not know it reads it as a cause it does not know,
+	// which leaves no box to read and is said in general terms.
+	LossLaunchNodeStoreSilent LossCause = "launch_node_store_silent"
 )
 
-// LossCauses are the three.
-var LossCauses = []LossCause{LossEngineRestarted, LossBoxGone, LossLaunchNodeGone}
+// LossCauses are the four.
+var LossCauses = []LossCause{LossEngineRestarted, LossBoxGone, LossLaunchNodeGone, LossLaunchNodeStoreSilent}
 
 // Valid reports whether this build knows c.
 func (c LossCause) Valid() bool { return slices.Contains(LossCauses, c) }
@@ -94,12 +106,17 @@ func (c LossCause) Why() string {
 		return "its box was lost from the host it ran on"
 	case LossLaunchNodeGone:
 		return "the node it ran on left the fleet for good, taking its box with it"
+	case LossLaunchNodeStoreSilent:
+		return "the node it ran on could not reach the coordination store for the box timeout, " +
+			"which left its box unreadable"
 	}
 	return "it was lost with the host it ran on"
 }
 
 // leavesBox reports whether a job lost to c left its box where it was, so what
-// it did up to then can still be read off it.
+// it did up to then can still be read off it. A box only a node cut off from
+// the coordination store can read ([LossLaunchNodeStoreSilent]) is still where
+// it was, but nothing reads it.
 func (c LossCause) leavesBox() bool { return c == LossEngineRestarted }
 
 // JobLoss is the verdict that a running job was lost with its host — see
@@ -140,7 +157,13 @@ type LostRun struct {
 // retry, so the job's spend is not lost to one transport blip. One that is gone
 // by now, or has not answered for the give-up window, is no reason to hold the
 // round any longer: it is carried on without the read, and the line says the
-// job's spend went with its box.
+// job's spend went with its box. A coordination store that did not answer one
+// of the read's steps is no box that did not answer: the claim is handed back
+// for as long as the store is silent, and the round is not carried on without
+// the read for it, unless the silence is the box's host's alone and has lasted
+// the box timeout, as a silent host's would ([Coordinator.collectGivenUp]). A
+// read that failed is judged ONCE, at one reading of the clock, and the
+// hand-back acts on that verdict ([collectVerdict]).
 //
 // IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
 // that claimed the completion under the node's admission
@@ -156,12 +179,23 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 	)
 	if loss.Cause.leavesBox() {
 		boxed, _, err := c.boxResult(ctx, run, BoxReadCollect)
+		// ONE VERDICT ON A READ THAT FAILED, at one reading of the clock, and
+		// the hand-back below acts on that verdict rather than judging the
+		// failure again ([collectVerdict]).
+		var verdict collectVerdict
+		if err != nil {
+			verdict = c.collectGivenUp(run, err, c.now())
+		}
 		switch {
 		case err == nil:
+			// THE BOX ANSWERED, which ends the run of failed reads behind
+			// this one whatever a later step does: a drain the store does
+			// not answer, or that this node cuts short, hands the claim
+			// back with that run ended ([Release.BoxAnswered]).
 			result, read = boxed, true
-		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent),
-			!c.collectGivenUp(run, err, c.now()):
-			return nil, c.collectFailed(ctx, run, err)
+			run.BoxAnswered = true
+		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent), !verdict.givenUp:
+			return nil, c.collectFailedAt(ctx, run, err, verdict)
 		default:
 			log.WarnContext(ctx, "sandbox_lost_run_unread", "turn_id", run.TurnID,
 				"launch_id", run.LaunchID, "error", err.Error(),
@@ -252,20 +286,150 @@ func cutOff(result Result, cause LossCause) Result {
 	return result
 }
 
-// collectGivenUp reports whether a collection that failed with cause, at now,
-// is past asking again: its box is gone, or it has failed for
-// [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last
-// collection that read the box — the waiter's own bound on an unreachable box.
-// See [Coordinator.collectFailed].
-func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) bool {
-	if errors.Is(cause, ErrBoxGone) {
-		return true
+// collectVerdict is what one collection attempt decided about a failure of its
+// read: whether it is past asking again ([Coordinator.collectGivenUp]), and,
+// where the failure is the box's host answering that its coordination store did
+// not answer it, for how long that host has ([hostUnsettled]).
+//
+// DECIDED ONCE PER ATTEMPT, at one reading of the clock, by the step that judges
+// the failure first, and handed to every step after it that acts on the same
+// failure. A lost job's read is judged by its carry ([Coordinator.carryOnLost]),
+// which asks again where the read is not past asking again, through the
+// collection's hand-back ([Coordinator.collectFailed]); each judged the failure
+// at its own reading of the clock, so a bound crossed between the two had the
+// hand-back give up, and end as unreachable, the run of a lost job whose carry
+// had just found its read too young to carry the round on without it.
+type collectVerdict struct {
+	// at is the reading of the clock the attempt was judged at.
+	at time.Time
+	// givenUp is whether the collection is past asking again.
+	givenUp bool
+	// unsettled is whether the failure is the box's host's own answer that its
+	// store did not answer it, timed by the clock on that host, and
+	// unsettledFor how long that clock had run at at.
+	unsettled    bool
+	unsettledFor time.Duration
+}
+
+// lostWithHost reports whether the verdict is that only the box's host has kept
+// it unread, for the box timeout: a collection of a job not yet lost records
+// the job LOST with that host and carries its round on ([Coordinator.loseWithHost]),
+// and a lost job's round is carried on without its read ([Coordinator.carryOnLost]).
+func (v collectVerdict) lostWithHost() bool { return v.givenUp && v.unsettled }
+
+// collectGivenUp is the verdict on a collection that failed with cause, at now
+// ([collectVerdict]): whether it is past asking again, which it is where its box
+// is gone, or where it has failed for [MinConnectFailures] attempts spanning
+// [ConnectGiveUp] since the last collection that read the box, the waiter's
+// own bound on an unreachable box. See [Coordinator.collectFailed].
+//
+// NEVER A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]),
+// whatever the window counted before it: the bound is on a box that does not
+// answer, and the store's silence says nothing about the box. The host's read
+// of the run's row comes before the box is asked at all, and every other such
+// step comes after the box's read, where the job's box is read at all (a lost
+// job whose box went with its host has none); a read the box answered ends the
+// run of failures behind it as the claim goes back ([Release.BoxAnswered]).
+// Given up, a lost job's round was carried on without its read
+// ([Coordinator.carryOnLost]), uncharged for what its box still held.
+//
+// BUT A HOST WHOSE STORE ALONE IS SILENT IS GIVEN UP AS A SILENT HOST IS: one
+// that has answered this node's collections of the job, for the box timeout,
+// that its store did not answer its read of the run's row, while this node's
+// own store answered the claim each collection was made under ([hostUnsettled]).
+// The box is up, but only that host can read it, and a host that cannot for
+// that long is as good as away, as the fleet takes a launch node absent for the
+// box timeout to be ([Waiter.goneAfter]): the job is LOST with it, its round
+// carried on, and never ended as a box that could not be read
+// ([collectVerdict.lostWithHost]). Never given up, the collection was handed
+// back for as long as the partition lasted, its seat held behind it. Every
+// other step the store did not answer is this node's own store's, and no bound
+// of a host's ends it: nothing this node writes would land.
+func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) collectVerdict {
+	verdict := collectVerdict{at: now}
+	switch {
+	case errors.Is(cause, ErrStoreSilent):
+		verdict.unsettledFor, verdict.unsettled = c.hostUnsettledFor(run, cause, now)
+		m := c.mgr()
+		verdict.givenUp = verdict.unsettled && m != nil && verdict.unsettledFor >= m.BoxTimeout()
+		return verdict
+	case errors.Is(cause, ErrBoxGone):
+		verdict.givenUp = true
+		return verdict
 	}
 	since := run.Launch.CollectFailingSince
 	if since.IsZero() {
 		since = now
 	}
-	return run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
+	verdict.givenUp = run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
+	return verdict
+}
+
+// loseWithHost records a job LOST with the host its box is on, on the claim its
+// collection holds ([LossLaunchNodeStoreSilent]), and answers the claim as that
+// left it, for the frame that took it to carry the job's round on as it carries
+// on every job the row holds lost ([Coordinator.carryOnLost]): or, at the turn's
+// deadline, to end it there as it ends one ([Coordinator.completeAtDeadline]).
+//
+// ITS COLLECTION IS PAST ASKING AGAIN: the box's host has answered every
+// collection of it, for the box timeout, that its coordination store did not
+// answer its read of the run's row, while this node's store answered the claim
+// each was made under ([collectVerdict.lostWithHost]). Only that host can read
+// the box, and a host that cannot for that long is as good as away, as the fleet
+// takes a launch node absent for the box timeout to be: the fleet's waiter
+// records such a node's running jobs lost with it, a finished job whose
+// completion nobody claimed yet among them, and the seat's holder carries each
+// one's round on in a box of its own ([Waiter.goneAfter]). Ended instead as a box
+// that could not be read (collect_unreachable), a job that finished had its turn
+// thrown away, where the round's calls, its submission among them where it made
+// one, and its pushed branch are all still there to carry on from.
+//
+// RECORDED ON THE CLAIM BEFORE ANYTHING IS CARRIED ON ([PendingStore.MarkClaimLost]),
+// as the waiter records a loss before it announces one: the relaunch that carries
+// the round on counts the loss toward the round's ([MaxRoundLosses]), and a claim
+// this node does not get to resume is carried on, never collected, by whichever
+// claim of the job comes next. A verdict the store does not take is a step this
+// node's own store did not answer, handed back uncounted with the clock on the
+// host kept, so the next collection records it at once; and one the claim no
+// longer holds (a newer lease took the run, or its ending was decided) is that
+// party's to settle, and answers the claim unlost with no error.
+//
+// THE CLOCK ON THE HOST IS KEPT PAST A VERDICT THAT LANDS, until the run
+// settles ([hostUnsettled]): the round is still to be carried on, by a carry
+// or a resume that can fail and be handed back, and the host's waiter, which
+// reads the run's row through the silent store, announces the job no more than
+// before. While the clock runs, every such hand-back's completion is renewed
+// (renew.go); dropped here, a carry that failed for longer than one delivery's
+// budget left the run, and its seat, with nothing to drive it.
+func (c *Coordinator) loseWithHost(ctx context.Context, run PendingRun, cause error,
+	verdict collectVerdict,
+) (PendingRun, error) {
+	loss := JobLoss{Cause: LossLaunchNodeStoreSilent, Node: run.LaunchNode, At: verdict.at.UTC()}
+	marked, err := c.pending.MarkClaimLost(ctx, run.TurnID, run.LaunchID, loss, fenceOf(run))
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_collect_loss_unrecorded", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "node", run.LaunchNode, "error", err.Error(),
+			"detail", "the run's job is lost with the node its box is on, which has not been able to read "+
+				"the run's record for the box timeout, but the coordination store did not record that; the "+
+				"claim is handed back uncounted and the next collection records it")
+		return run, c.collectFailed(ctx, run, storeSilent(ctx, err))
+	case !marked:
+		log.InfoContext(ctx, "sandbox_collect_claim_moved_on", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID,
+			"detail", "the run no longer holds this claim, so its job is not recorded lost here: a newer "+
+				"lease took the run, or its ending was decided, and that settles it")
+		return run, nil
+	}
+	run.Lost = &loss
+	log.WarnContext(ctx, "sandbox_collect_lost_with_host", "turn_id", run.TurnID,
+		"agent", run.AgentHandle, "launch_id", run.LaunchID, "node", run.LaunchNode,
+		"unsettled_for_s", verdict.unsettledFor.Seconds(), "error", cause.Error(),
+		"detail", "the node whose host the run's box is on has answered every collection of it, for the box "+
+			"timeout, that the coordination store did not answer its read of the run's record, so nothing can "+
+			"read the box back; the job is recorded lost with that node and its round carried on in a box of "+
+			"its own, as for a node that left the fleet")
+	return run, nil
 }
 
 // lostNote is the launch record's account of a lost job — see

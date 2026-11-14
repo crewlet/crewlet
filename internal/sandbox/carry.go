@@ -109,8 +109,10 @@ func ValidSessionID(id string) bool {
 // outsideIDCharset reports whether r is outside the characters an id a box
 // hands the engine is held to — letters, digits, `-` and `_` — which a
 // session's id ([ValidSessionID]) and a call's ([ValidCallID]) are each held
-// to, at bounds of their own: each is the box's word, and each written as
-// itself by the store's encoder, so neither costs more than its length.
+// to, at bounds of their own, and the call a hook's serve answered as well
+// ([keptCallOf]): each is the box's word, and each written as itself by the
+// store's encoder, so none costs more than its length but for a string id's
+// own two quotes.
 func outsideIDCharset(r rune) bool {
 	return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 }

@@ -1,6 +1,7 @@
 package mcpbridge
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,6 +39,12 @@ func OpeningServers(s *Session) []*mcp.Server {
 // running ([binding.endKeeping]).
 func AwaitClosing(b *Bridge) { b.calls.closing.Wait() }
 
+// Relayed is the handler the bridge's relay serves a call relayed to this node
+// with, once the relay's admission found the call's opening here
+// ([Bridge.relayed]): for a case whose opening leaves between that admission
+// and the handler, a moment no relay can be made to wait in.
+func Relayed(b *Bridge) http.Handler { return b.relayed() }
+
 // The answers a call is handed as its opening ends, or after it ended.
 const (
 	EndedNote        = endedNote
@@ -64,6 +71,10 @@ const SteerHold = steerHold
 
 // SteerTakeBudget bounds the inbox's answer to one hook.
 const SteerTakeBudget = steerTakeBudget
+
+// SteerPollRetry is the Retry-After a notes call its opening's end overtook is
+// turned away with.
+const SteerPollRetry = steerPollRetry
 
 // CallMargin is what a call's answer can take beyond its tool's own bound
 // ([Bridge.CallTimeout]).

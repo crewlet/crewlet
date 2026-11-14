@@ -216,7 +216,7 @@ func TestEveryWriteOfARunsRowIsGivenTheRowsCrossingBesideItsReason(t *testing.T)
 			want: []time.Duration{discardGrace + crossing},
 			path: func(ctx context.Context, c *Coordinator, run PendingRun) {
 				run.Status, run.ClaimedFrom = StatusResumed, StatusRunning
-				_ = c.unclaimAt(ctx, run, true, "", failure{}, nil)
+				_ = c.unclaimAt(ctx, run, "", failure{}, nil)
 			},
 		},
 		{

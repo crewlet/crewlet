@@ -406,17 +406,66 @@ func worstRow(t *testing.T) PendingRun {
 	// was read, and read by a take that named itself — the engine's takes name
 	// themselves by a fresh UUID — and was settled unanswered, and then by a
 	// launch's brief that told it again, keeping that take's read beside its
-	// own: every field of both reads at its widest.
+	// own: every field of both reads at its widest, marked restarted too. And
+	// each served to one job's hooks as often as a note may be
+	// ([MaxNoteServes]), every serve lost to a cancel, at the widest step, and
+	// keeping the call it answered at the widest the store keeps one, through
+	// the rule that keeps it ([keptCallOf]): each half at [MaxNoteCallBytes]
+	// in the id charset, which the encoder writes as itself, the id a JSON
+	// string, whose two quotes are the only bytes of a kept call it escapes.
+	//
+	// EVERY COUNTER AT THE WIDTH OF WHAT IT COUNTS. A read's and a serve's
+	// iteration is its job's, which the launch's own record below holds at
+	// math.MaxInt, turn_engine.max_iterations having no ceiling. A note's and
+	// an item's Seq is the turn's numbering ([RunSteer.Seq], at math.MaxInt
+	// below): a relaunch keeps it while its write removes every item, so the
+	// items a turn's jobs file push it past any index of the twenty the row
+	// holds. A read's round is the review's, which takes a handful, or a
+	// job's one: 99 is past both.
+	widestCall := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
+	if keptCallOf(&widestCall) == nil {
+		t.Fatalf("the store keeps no call at its widest, %+v", widestCall)
+	}
+	// AND NONE WIDER AS WRITTEN: a call at the bound holding one byte the
+	// encoder escapes, in its session, in a quoted id or in a bare one, would
+	// be written up to six bytes a byte, which this model never measures.
+	for _, escaping := range []NoteCall{
+		{Session: plain(MaxNoteCallBytes-1) + "<", ID: "7"},
+		{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-3) + `<"`},
+		{Session: plain(MaxNoteCallBytes), ID: plain(MaxNoteCallBytes-1) + "<"},
+	} {
+		if keptCallOf(&escaping) != nil {
+			t.Fatalf("the store keeps a call holding a byte its encoder escapes, %+v: a kept call is no longer "+
+				"written as itself, so this row no longer models its calls at their widest", escaping)
+		}
+	}
 	read := func() *NoteRead {
-		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
-			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}
+		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: math.MaxInt, Round: 99,
+			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
+			Restarted: true}
+	}
+	serves := func() []HookServed {
+		out := make([]HookServed, MaxNoteServes)
+		for i := range out {
+			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
+				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widestCall)}
+		}
+		return out
 	}
 	notes := make([]RunNote, 10)
 	for i := range notes {
 		told := read()
 		told.Retold = read()
-		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Read: told}
+		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+	}
+	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]), each sealed
+	// at a note's bound, for a job, served as often and read by its job's own
+	// step: no brief tells an item again, the next launch removing it.
+	for range MaxJobItems {
+		notes = append(notes, RunNote{ID: uuid.NewString(), Seq: math.MaxInt - len(notes),
+			Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt, Served: uuid.NewString(), Place: math.MaxInt,
+			Serves: serves(), For: uuid.NewString(), Read: read()})
 	}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), BridgeSeq: math.MaxInt,
@@ -698,6 +747,11 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 // and the rest overruns its share; and raise maxIncarnationBytes to 700,000,
 // and the row's incarnations at that bound — its owner's, and the taker and the
 // standby's taker of each capture it holds — overrun it too.
+//
+// And hold a served call to its length alone (keptCallOf's raw-length rule
+// before the id charset), which keeps a call its encoder escapes, and the
+// worst row refuses to be built: its calls would no longer be measured at
+// their widest.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)

@@ -406,7 +406,7 @@ func (lr *limitedResume) probe(t *testing.T) {
 }
 
 // announce offers the run's completion to the coordinator as the waiter's
-// next poll would, and returns what the coordinator answered.
+// next announcement would, and returns what the coordinator answered.
 func (lr *limitedResume) announce(t *testing.T) error {
 	t.Helper()
 	run := lr.r.run(t, lr.e, "t1")
@@ -501,10 +501,10 @@ func TestACompletionAtALimitWaitsForItsParkNotItsInstant(t *testing.T) {
 }
 
 // A PUBLISHED COMPANY BUILDS EVERY ENTRY AFRESH, so a completion kept for a
-// limit is re-checked under it at once rather than at the waiter's next poll or
-// the park's probe: one its resume met mid-turn, and one whose collected
-// resume met a limit its entry already knew. Each parked its seat, and the new
-// models release the park and re-fire the job.
+// limit is re-checked under it at once rather than at the waiter's next
+// announcement or the park's probe: one its resume met mid-turn, and one whose
+// collected resume met a limit its entry already knew. Each parked its seat,
+// and the new models release the park and re-fire the job.
 //
 // Mutation: drop the release of a park whose models changed from the converge
 // (reconcileProviderParks), and each parked seat's completion waits for a probe.

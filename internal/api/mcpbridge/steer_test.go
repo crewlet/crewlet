@@ -63,9 +63,14 @@ func (i *fakeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <
 	return out, i.changed
 }
 
+// Read records the read, or, AS THE CONTRACT SAYS, takes none once the inbox is
+// closed and says so.
 func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.closed {
+		return mcpbridge.ErrNoteUntaken
+	}
 	i.reads = append(i.reads, ids)
 	return i.readErr
 }
@@ -92,6 +97,14 @@ func (i *fakeInbox) taken() []string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return slices.Clone(i.takes)
+}
+
+// readIDs is the notes of every read the inbox was asked to record, a read a
+// slice, in the order they came.
+func (i *fakeInbox) readIDs() [][]string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Clone(i.reads)
 }
 
 // steerFixture is a bridge serving one run whose session holds an inbox, on
@@ -153,6 +166,14 @@ type polled struct {
 	notes   []mcpbridge.SteerNote
 	refusal string
 	took    time.Duration
+}
+
+// status is the answer's status, or 0 where the call failed on the wire.
+func (p polled) status() int {
+	if p.res == nil {
+		return 0
+	}
+	return p.res.StatusCode
 }
 
 // answer is one GET of the notes route, read whole.
@@ -335,6 +356,294 @@ func wantTurnedAway(t *testing.T, got polled, code string) {
 	}
 }
 
+// A NOTES CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK
+// AGAIN, as a poll the opening can no longer hold is: a 503 with a
+// Retry-After, which the poller pauses on before it asks again. The routing
+// found the call's opening, and the opening ended before the route served the
+// call: the run ended, the seat left this node, or a recovery opened the job
+// again. Its end took its inbox, and the route answered what it answers a
+// session that never had one, a 404, which the OpenCode plugin reads as it
+// reads a refused token: the run has no notes route, and it stops asking for
+// the rest of the run. A box that goes on, served by the seat's next holder or
+// by the recovery's opening, was then never handed a note between its steps
+// again. A poll and a read alike; the read is recorded nowhere, and after a
+// recovery the box's next call is served by the opening that serves it now.
+//
+// Mutation: answer an opening whose end took its inbox as a session that never
+// had one (the 404 for every opening without an inbox), and every case goes
+// red; answer a session that never had an inbox as an ended opening, and
+// TestTheNotesRouteIsAbsentForASessionWithNoInbox goes red.
+func TestANotesCallReachingItsOpeningAsItEndsIsTurnedAwayToAskAgain(t *testing.T) {
+	t.Parallel()
+	for _, end := range []struct {
+		name string
+		end  func(t *testing.T, f *steerFixture)
+		// recovers is an end after which this node serves the box's next
+		// call itself, from the opening that replaced the ended one.
+		recovers bool
+	}{
+		{name: "the run ends", end: func(_ *testing.T, f *steerFixture) { f.bridge.Close("run-1") }},
+		{name: "the seat leaves this node",
+			end: func(_ *testing.T, f *steerFixture) { f.bridge.ReleaseSeat(seat()) }},
+		{name: "a recovery opens the job again", recovers: true, end: func(t *testing.T, f *steerFixture) {
+			if f.bridge.Open(t.Context(), f.session) == "" {
+				t.Fatal("the recovery minted no endpoint")
+			}
+		}},
+	} {
+		for _, call := range notesCalls() {
+			t.Run(end.name+", "+call.name, func(t *testing.T) {
+				t.Parallel()
+				parked := newParkedFence()
+				f := newSteerFixtureWith(t, time.Minute, func(s *mcpbridge.Session) { s.Fence = parked.fence })
+				t.Cleanup(parked.letGo)
+				f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
+
+				parked.arm()
+				answered := make(chan polled, 1)
+				go func() { answered <- call.make(t.Context(), t, f) }()
+				// THE ROUTING FOUND THE CALL'S OPENING, and the call waits in
+				// the session's fence, short of the route that serves it.
+				<-parked.entered
+				end.end(t, f)
+				parked.letGo()
+				got := <-answered
+				if got.res == nil {
+					t.Fatalf("%s reaching its opening as it ended failed on the wire", call.name)
+				}
+				if got.res.StatusCode != http.StatusServiceUnavailable {
+					t.Fatalf("%s reaching its opening as it ended was answered %d %q, want a 503 to ask again",
+						call.name, got.res.StatusCode, got.refusal)
+				}
+				wantTurnedAway(t, got, "unavailable")
+				if reads := f.inbox.readIDs(); len(reads) != 0 {
+					t.Errorf("the inbox recorded the reads %q of a call its opening's end turned away", reads)
+				}
+				if end.recovers {
+					call.served(t, f, call.make(t.Context(), t, f))
+				}
+			})
+		}
+	}
+}
+
+// notesCall is one call a harness's plugin makes on the notes route.
+type notesCall struct {
+	name string
+	// make makes the call on the fixture's job, naming the note n-1 where it
+	// names one.
+	make func(ctx context.Context, t *testing.T, f *steerFixture) polled
+	// served fails the case unless got is the answer of an opening that
+	// serves the call, with n-1 waiting on the fixture's inbox.
+	served func(t *testing.T, f *steerFixture, got polled)
+}
+
+// notesCalls is a poll and a read.
+func notesCalls() []notesCall {
+	return []notesCall{
+		{
+			name: "a poll",
+			make: func(ctx context.Context, t *testing.T, f *steerFixture) polled {
+				return f.answer(ctx, t, mcpbridge.SteerURL(f.url)+"/notes")
+			},
+			served: func(t *testing.T, _ *steerFixture, got polled) {
+				t.Helper()
+				if got.res == nil || got.res.StatusCode != http.StatusOK || len(got.notes) != 1 ||
+					got.notes[0].ID != "n-1" {
+					t.Errorf("the box's next poll was answered %v %+v, want the note waiting", got.res, got.notes)
+				}
+			},
+		},
+		{
+			name: "a read",
+			make: func(ctx context.Context, t *testing.T, f *steerFixture) polled {
+				return readWith(ctx, t, f.server.Client(), mcpbridge.SteerURL(f.url)+"/read", "n-1")
+			},
+			served: func(t *testing.T, f *steerFixture, got polled) {
+				t.Helper()
+				if got.res == nil || got.res.StatusCode != http.StatusNoContent {
+					t.Errorf("the box's next read was answered %v, want 204", got.res)
+				}
+				if reads := f.inbox.readIDs(); len(reads) != 1 || !slices.Equal(reads[0], []string{"n-1"}) {
+					t.Errorf("the inbox recorded the reads %q, want the read of n-1 alone", reads)
+				}
+			},
+		},
+	}
+}
+
+// readWith is one read of the notes route through client, naming ids, read
+// whole: the response, and the error code of a refusal.
+func readWith(ctx context.Context, t *testing.T, client *http.Client, url string, ids ...string) polled {
+	t.Helper()
+	body, err := json.Marshal(map[string][]string{"ids": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return polled{}
+	}
+	defer res.Body.Close()
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	if res.StatusCode != http.StatusNoContent {
+		if err := json.NewDecoder(res.Body).Decode(&refusal); err != nil {
+			t.Errorf("decode the read's answer: %v", err)
+		}
+	}
+	return polled{res: res, refusal: refusal.Error}
+}
+
+// A READ ITS OPENING'S END OVERTOOK ON ITS WAY IN IS TURNED AWAY TO ASK AGAIN,
+// never answered done with nothing recorded. The route found the opening
+// serving its inbox, read the read's body, and the opening ended before the
+// read reached the inbox: the run ended, the seat left this node, or a
+// recovery opened the job again with an inbox of its own. The end closed the
+// inbox, which then took no read and said nothing of it, and the route answered
+// 204: the plugin never confirmed the note again, and the record kept it served
+// and unread, which the run's ending reports unconfirmed and a later launch
+// tells again as one the session may already show. So a closed inbox says it
+// took nothing ([mcpbridge.ErrNoteUntaken]); and a read on a run whose
+// tools are closed is turned away too: the seat leaves this node's grants,
+// which closes the fence, before its release ends the opening, so a read
+// meets the closed fence whether or not the release has come yet. Each is
+// turned away as a call reaching its opening as it ends is, a 503 with the
+// Retry-After a poll the opening cannot hold is given, never as a record that
+// could not be written. After the recovery the box's read made again is
+// recorded by the opening that serves it now.
+//
+// Mutation: answer a read its inbox did not take done, or as a record that
+// could not be written, and the run's end and the recovery go red; answer a
+// fenced run's read done, and the seat's leaving goes red, before its release
+// and after it.
+func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
+	t.Parallel()
+	for _, end := range []struct {
+		name string
+		// end ends the opening, closing the seat's fence first where the
+		// seat leaves, or closes the fence alone where the seat's release is
+		// still to come, and answers the inbox the box's next read reaches,
+		// nil where none on this node serves it.
+		end func(t *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox
+	}{
+		{"the run ends", func(_ *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
+			f.bridge.Close("run-1")
+			return nil
+		}},
+		{"the seat leaves this node", func(_ *testing.T, f *steerFixture, fenced *atomic.Bool) *fakeInbox {
+			fenced.Store(true)
+			f.bridge.ReleaseSeat(seat())
+			return nil
+		}},
+		{"the seat's grants drop, its release still to come", func(_ *testing.T, _ *steerFixture,
+			fenced *atomic.Bool) *fakeInbox {
+			fenced.Store(true)
+			return nil
+		}},
+		{"a recovery opens the job again", func(t *testing.T, f *steerFixture, _ *atomic.Bool) *fakeInbox {
+			inbox := newFakeInbox()
+			if f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: f.ledger, Steer: inbox}) == "" {
+				t.Fatal("the recovery minted no endpoint")
+			}
+			return inbox
+		}},
+	} {
+		t.Run(end.name, func(t *testing.T) {
+			t.Parallel()
+			parked := newParkedFence()
+			var asks atomic.Int32
+			var fenced atomic.Bool
+			// THE READ'S OWN ASK OF THE FENCE IS THE SECOND: the routing asks
+			// first, and the read asks once its route found the inbox serving
+			// and read its body, as the last step before the inbox.
+			f := newSteerFixtureWith(t, time.Minute, func(s *mcpbridge.Session) {
+				s.Fence = func() error {
+					if asks.Add(1) == 2 {
+						_ = parked.fence()
+					}
+					if fenced.Load() {
+						return errors.New("the seat left this node")
+					}
+					return nil
+				}
+			})
+			t.Cleanup(parked.letGo)
+			parked.arm()
+			url := mcpbridge.SteerURL(f.url) + "/read"
+			answered := make(chan polled, 1)
+			go func() { answered <- readWith(t.Context(), t, f.server.Client(), url, "n-1") }()
+			<-parked.entered
+			next := end.end(t, f, &fenced)
+			parked.letGo()
+			got := <-answered
+			if got.res == nil {
+				t.Fatal("a read its opening's end overtook failed on the wire")
+			}
+			if got.res.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("a read its opening's end overtook was answered %d %q, want a 503 to ask again",
+					got.res.StatusCode, got.refusal)
+			}
+			wantTurnedAway(t, got, "unavailable")
+			if after := got.res.Header.Get("Retry-After"); after != strconv.Itoa(int(mcpbridge.SteerPollRetry/time.Second)) {
+				t.Errorf("the read is told to ask again after %q, want %s, as a call its opening's end "+
+					"overtook is", after, mcpbridge.SteerPollRetry)
+			}
+			if reads := f.inbox.readIDs(); len(reads) != 0 {
+				t.Errorf("the ended opening's inbox recorded the reads %q", reads)
+			}
+			if next == nil {
+				return
+			}
+			if again := readWith(t.Context(), t, f.server.Client(), url, "n-1"); again.status() != http.StatusNoContent {
+				t.Errorf("the box's read made again was answered %d %q, want 204", again.status(), again.refusal)
+			}
+			if reads := next.readIDs(); len(reads) != 1 || !slices.Equal(reads[0], []string{"n-1"}) {
+				t.Errorf("the recovery's inbox recorded the reads %q, want the read of n-1 alone", reads)
+			}
+		})
+	}
+}
+
+// parkedFence is a session's fence that holds every request asking it once it
+// is armed, until it is let go: on the notes route, a call whose opening the
+// routing found and the route has not yet served ([mcpbridge.Bridge.SteerHandler]),
+// which is where the opening's end can come between the two.
+type parkedFence struct {
+	armed   chan struct{}
+	arm     func()
+	entered chan struct{}
+	enter   sync.Once
+	release chan struct{}
+	letGo   func()
+}
+
+func newParkedFence() *parkedFence {
+	p := &parkedFence{armed: make(chan struct{}), entered: make(chan struct{}), release: make(chan struct{})}
+	p.arm = sync.OnceFunc(func() { close(p.armed) })
+	p.letGo = sync.OnceFunc(func() { close(p.release) })
+	return p
+}
+
+// fence is the session's fence: open, and once armed, open only once it is let
+// go, entered closed by the first request it holds.
+func (p *parkedFence) fence() error {
+	select {
+	case <-p.armed:
+		p.enter.Do(func() { close(p.entered) })
+		<-p.release
+	default:
+	}
+	return nil
+}
+
 // A HELD POLL ENDS AT ITS HOLD, with nothing: a gateway between a box and the
 // bridge cuts a request held longer than its own timeout, so the bridge answers
 // first and the poller asks again.
@@ -485,10 +794,16 @@ func TestSteerTakeIsServedUnlistedAndNeverRecorded(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE TOOLS ARE CLOSED TAKES NOTHING MORE FROM ITS NOTES — the seat
-// moved, or a person stopped it — on either way in: its steer_take answers
+// A RUN WHOSE TOOLS ARE CLOSED TAKES NOTHING MORE FROM ITS NOTES, its seat moved
+// or a person having stopped it, on either way in: its steer_take answers
 // nothing, its poll holds as though nothing waited, and its read records
-// nothing. The notes wait for whatever reads the turn next.
+// nothing. The notes wait for whatever reads the turn next. AND ITS READ IS
+// TURNED AWAY TO ASK AGAIN, never answered done: the plugin would never confirm
+// the notes again, though OpenCode delivered them, and the read's next try
+// reaches the seat's next holder, which records it, or the run's end, which
+// refuses it.
+//
+// Mutation: answer a fenced run's read done, and the read goes red.
 func TestAFencedRunTakesNothingMoreFromItsNotes(t *testing.T) {
 	t.Parallel()
 	const hold = 300 * time.Millisecond
@@ -511,19 +826,15 @@ func TestAFencedRunTakesNothingMoreFromItsNotes(t *testing.T) {
 	if res == nil || res.StatusCode != http.StatusOK || len(notes) != 0 || took < hold {
 		t.Errorf("a fenced run's poll answered %v %+v after %s, want nothing at its hold", res, notes, took)
 	}
-	read, err := f.server.Client().Post(mcpbridge.SteerURL(url)+"/read", "application/json",
-		strings.NewReader(`{"ids":["n-1"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = read.Body.Close()
+	read := readWith(t.Context(), t, f.server.Client(), mcpbridge.SteerURL(url)+"/read", "n-1")
 	inbox.mu.Lock()
 	reads, takes := len(inbox.reads), len(inbox.takes)
 	inbox.mu.Unlock()
-	if read.StatusCode != http.StatusNoContent || reads != 0 || takes != 0 {
-		t.Errorf("a fenced run's read answered %d; the inbox was read %d and taken %d times",
-			read.StatusCode, reads, takes)
+	if read.status() != http.StatusServiceUnavailable || reads != 0 || takes != 0 {
+		t.Fatalf("a fenced run's read answered %d %q; the inbox was read %d and taken %d times, "+
+			"want a 503 to ask again and neither", read.status(), read.refusal, reads, takes)
 	}
+	wantTurnedAway(t, read, "unavailable")
 }
 
 // THE NOTES ROUTE REACHES THE SESSION'S HOLDER THROUGH THE RELAY, like every

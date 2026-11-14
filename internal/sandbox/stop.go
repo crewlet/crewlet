@@ -59,7 +59,11 @@ import (
 // A silent host is no verdict about the box, and its spend is not written off
 // for it: only a box found gone, or a host silent for as long as the fleet
 // waits before it takes a launch node for gone, is ended with nothing read
-// ([Coordinator.readStopped]).
+// ([Coordinator.readStopped]). A host whose coordination store did not answer
+// its read of the run's row ([ErrStoreSilent]) is waited for the same way where
+// this node's own store answers, since only that host can read the box; where
+// this node's store is silent too, nothing the ending writes would land, and
+// the stop is kept for as long as that lasts.
 //
 // # Not the seat fence
 //
@@ -118,17 +122,32 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	if err != nil {
 		return fmt.Errorf("sandbox: listing seat %s's runs to stop them: %w", handle, err)
 	}
+	// A RUN THAT MOVED ON BEFORE ITS STOP has no delete of this node's to move
+	// it, and one somebody else ended meanwhile is gone: the seat is
+	// recounted from the store once the stops are made, which reads each such
+	// row as it stands, or none.
+	movedOn := false
 	for _, run := range runs {
 		if run.Ending != nil || !slices.Contains(Stoppable, run.Status) {
 			continue
 		}
-		c.stopRun(ctx, handle, fence, by, run)
+		if c.stopRun(ctx, handle, fence, by, run) {
+			movedOn = true
+		}
+	}
+	if movedOn {
+		// UNDER A CONTEXT OF ITS OWN, as every teardown takes ([detached]):
+		// the caller is a watch whose context ends with the node.
+		recountCtx, cancel := detached(ctx)
+		c.syncSeat(recountCtx, handle)
+		cancel()
 	}
 	return nil
 }
 
 // stopRun stops one of the seat's runs [Coordinator.StopSeat] listed, as a
-// person's stop by asks.
+// person's stop by asks, and reports whether the run had moved on before its
+// stop could be decided, which leaves the seat to StopSeat's recount.
 //
 // UNDER A CONTEXT OF ITS OWN, as every ending a teardown makes runs
 // ([detachedEnding]): the caller is a watch whose context ends with the node,
@@ -137,7 +156,7 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 // crossing ([Coordinator.endingCall]): one grace shared by every run of the
 // seat gave whichever row crossed first the time every other's needed, and
 // one shared by an ending's writes gave its first the time its next needed.
-func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, by RunStop, run PendingRun) {
+func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, by RunStop, run PendingRun) bool {
 	endCtx, done := detachedEnding(ctx)
 	defer done()
 	if run.Launch.Collected {
@@ -147,11 +166,17 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 			"detail", "the run's job is over and was collected; whatever its turn's resume "+
 				"waited on is ended, and the resume is stopped by the seat's fence at its "+
 				"first round")
-		return
+		return false
 	}
+	// OUT OF THE SET THE RUN HELD THE SEAT IN as the delete that ends it
+	// lands, as every ending this node made of a run it counts gives it
+	// back ([ending.counted]): the run is over once its record is gone,
+	// and until then it is still on its row, ending under this node's
+	// retry, which holds the seat's mail behind it.
 	stop := by
 	decided, err := c.endRecord(endCtx, run, ending{
 		fence: fence, whileIn: Stoppable, launch: run.LaunchID, reclaim: true, stop: &stop,
+		counted: true,
 	})
 	switch {
 	case err != nil:
@@ -167,23 +192,21 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 		log.InfoContext(ctx, "sandbox_stop_declined", "turn_id", run.TurnID, "seat", handle,
 			"detail", "the run moved on before it could be stopped; the turn's own fence "+
 				"or the pause itself holds it from here")
-		return
+		return true
 	default:
 		log.InfoContext(ctx, "executor_stopped", "turn_id", run.TurnID, "seat", handle,
 			"launch_id", run.LaunchID, "status", run.Status, "by", by.By,
 			"by_kind", by.ByKind, "operator_id", by.OperatorID)
 	}
-	// THE SEAT GOES BACK out of the set the run held it in, as every
-	// ending this node made gives it back ([Coordinator.settleFailed]):
-	// the run is over, or ending under this node's retry.
-	c.uncountRun(handle, run.Status)
+	return false
 }
 
 // endCollectedWait ends whatever the resume of run's collected job waits on, for
 // a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted, so the
-// waiter's next poll announces the job, and a completion of it this node kept
-// for a condition, held here or refused at the gate ([Coordinator.keepRefused]),
-// is re-fired at once. Reports whether this node was holding the job itself.
+// waiter announces the job again on its schedule, and a completion of it this
+// node kept for a condition, held here or refused at the gate
+// ([Coordinator.keepRefused]), is re-fired at once. Reports whether this node
+// was holding the job itself.
 //
 // WHY A STOP ENDS THE WAIT. The stop leaves a collected job to its turn, whose
 // fence closes it as stopped at its first round, before any model call or
@@ -249,9 +272,24 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 // ONCE PER ENDING, for the reason a release records its charge: the collection
 // is recorded with the charge and the publish it made, so an attempt after a
 // crash finds it done.
-func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (PendingRun, error) {
+//
+// A STOP ENDED WITH NOTHING READ IS SAID SO ONCE THAT WRITE LANDS
+// (`sandbox_stop_unread`), and never before it. The write is a step of this
+// node's store, which can fall silent after the attempt's own read of the run's
+// row answered, and the stop is then kept for this node's retry, which reads
+// the box again and charges whatever that read finds. Said before the write,
+// the log had a stop still kept ended with its spend written off, whatever its
+// read had come to, and a stop kept on a silence both nodes share said ended
+// all the same. A write whose answer was lost though it landed is found
+// recorded by the next attempt, which goes on past it and says nothing of it:
+// no attempt can tell its own landed write from another's.
+//
+// rowRead is whether this attempt at the ending read the run's row off this
+// node's own store ([Coordinator.finishEnding]), which the read judges a silent
+// store by ([Coordinator.readStopped]).
+func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRead bool) (PendingRun, error) {
 	collection := StopCollection{Ending: run.Ending.ID}
-	result, read, err := c.readStopped(ctx, run)
+	result, read, unread, err := c.readStopped(ctx, run, rowRead)
 	if err != nil {
 		return PendingRun{}, err
 	}
@@ -270,6 +308,14 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 			run.TurnID, err)
 	}
 	if won {
+		if unread != nil {
+			log.WarnContext(ctx, "sandbox_stop_unread", "turn_id", run.TurnID,
+				"sandbox_id", run.SandboxID, "gone", errors.Is(unread, ErrBoxGone),
+				"host_silent", errors.Is(unread, ErrBoxHostSilent),
+				"store_silent", errors.Is(unread, ErrStoreSilent), "error", unread.Error(),
+				"detail", "what the stopped run had spent could not be read off its box, so none "+
+					"of it is charged; the run is ended all the same")
+		}
 		return written, nil
 	}
 	// NOT THIS ATTEMPT'S TO RECORD: another attempt at the same ending did
@@ -292,7 +338,10 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 
 // readStopped reads what a stopped run's job had done by now off its box — the
 // job ended first, as the read's own step ([Coordinator.readBox]) — reporting
-// whether there was anything to read, or why it cannot be read yet.
+// whether there was anything to read, or why it cannot be read yet. Where the
+// box was asked and nothing could be read off it, unread is why: the stop ends
+// with nothing charged, which [Coordinator.collectStopped] says once its record
+// of that lands, and never here, before the write that can fail.
 //
 // NOTHING TO READ, and the stop finishes with nothing charged, where nothing
 // can be read: a job that never started — a launch stopped before its command
@@ -308,42 +357,78 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 // the same answer. For as long as the fleet's waiter waits before it judges a
 // silent launch node gone: the box timeout ([Manager.BoxTimeout]), from the
 // stop's decision. Past it, the host is taken for gone and the run's spend is
-// unknowable, which the log says.
+// unknowable, which the log says once the stop's record of that lands.
+//
+// NOT YET, TOO, where the coordination store did not answer a step the read
+// cannot go on without ([ErrStoreSilent]): the host's read of the run's row,
+// which licenses the read. The box and its host are up, so the ending is kept
+// and asked again on the same spacing: ended uncharged at once for it, the stop
+// wrote off a spend the box still held. For how long turns on whose silence it
+// is, which rowRead says: whether this attempt's own read of the row, off this
+// node's store, was answered ([Coordinator.finishEnding]).
+//   - Answered, the silence is the host's alone (a partition that cuts the host
+//     off from the store's leader and not this node), and only the host can
+//     read the box: a host that cannot is as good as away, so the stop waits
+//     for it as for a silent host, the box timeout from its decision, and is
+//     then ended with nothing read. Unbounded, it held the seat's mail behind
+//     it for as long as the partition lasted, while every write of the
+//     ending's would land.
+//   - Unanswered, the silence is this node's too: nothing the ending writes
+//     would land, so the stop is kept whatever the box timeout says, and never
+//     said ended for it. An attempt reaches the read in such a silence only
+//     where it began after the retry's own read of the row and its decision,
+//     which come first and keep the ending as they fail
+//     ([Coordinator.retryOwed]).
 //
 // The result is the run's own, as a collection reads it — floored, held to the
 // record's bound — and marked as a run that did not finish: never a success,
 // never a question, whatever it had written ([stoppedResult]).
-func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, bool, error) {
+func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead bool) (result Result, read bool,
+	unread, err error) {
 	if run.SandboxID == "" || run.CommandID == "" {
-		return Result{}, false, nil
+		return Result{}, false, nil, nil
 	}
 	// READ WHERE THE BOX IS — here, or on the node whose host it is on
 	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
-	result, _, err := c.boxResult(ctx, run, BoxReadStop)
+	result, _, err = c.boxResult(ctx, run, BoxReadStop)
 	silent := errors.Is(err, ErrBoxHostSilent)
+	unsettled := errors.Is(err, ErrStoreSilent)
 	switch {
 	case err == nil:
-		return stoppedResult(c.fitText(ctx, run, result)), true, nil
+		return stoppedResult(c.fitText(ctx, run, result)), true, nil, nil
+	case unsettled && (!rowRead || !c.hostGivenUp(run)):
+		detail := "the coordination store did not answer the host's read of the stopped run's row, " +
+			"which licenses its read; the stop is kept, with its session closed, and its box asked " +
+			"again until the store answers the host or the box timeout since the stop has passed"
+		if !rowRead {
+			detail = "the coordination store did not answer the host's read of the stopped run's row, " +
+				"nor this node's own; the stop is kept, with its session closed, and its box asked " +
+				"again until the store answers, whatever the box timeout says"
+		}
+		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", !rowRead,
+			"error", err.Error(), "detail", detail)
+		return Result{}, false, nil, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			run.TurnID, err)
 	case silent && !c.hostGivenUp(run):
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
-			"sandbox_id", run.SandboxID, "node", run.LaunchNode,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "host",
 			"detail", "the node whose host the stopped run's box is on did not answer; the stop "+
 				"is kept, with its session closed, and its box asked again until that node is "+
 				"back or the box timeout since the stop has passed")
-		return Result{}, false, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+		return Result{}, false, nil, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
 			run.TurnID, err)
 	}
-	log.WarnContext(ctx, "sandbox_stop_unread", "turn_id", run.TurnID,
-		"sandbox_id", run.SandboxID, "gone", errors.Is(err, ErrBoxGone), "host_silent", silent,
-		"error", err.Error(),
-		"detail", "what the stopped run had spent could not be read off its box, so none "+
-			"of it is charged; the run is ended all the same")
-	return Result{}, false, nil
+	// NOTHING READ, and the stop ends with nothing charged: said once the stop's
+	// record of that lands ([Coordinator.collectStopped]), never here, before
+	// the write that can fail.
+	return Result{}, false, err, nil
 }
 
-// hostGivenUp reports whether a stopped run's silent host has been waited for
-// as long as a silent launch node is before the fleet takes it for gone: the box
-// timeout, from the stop's decision ([Coordinator.readStopped]).
+// hostGivenUp reports whether a stopped run's silent host, or a host whose
+// store alone is silent, has been waited for as long as a silent launch node is
+// before the fleet takes it for gone: the box timeout, from the stop's decision
+// ([Coordinator.readStopped]).
 func (c *Coordinator) hostGivenUp(run PendingRun) bool {
 	m := c.mgr()
 	if m == nil || run.Ending == nil {

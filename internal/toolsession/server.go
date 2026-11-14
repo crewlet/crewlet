@@ -106,17 +106,21 @@ type Call struct {
 	// Over is closed once the request is OVER ON ITS TRANSPORT, nothing more
 	// to be written for it: its answer's write has returned — written,
 	// refused, or failed — or the request was cancelled, or the connection it
-	// came on failed. NEVER BEFORE THE ANSWER'S WRITE HAS RETURNED, which is
+	// came on failed. For a request neither cancelled nor on a connection
+	// that failed, NEVER BEFORE THE ANSWER'S WRITE HAS RETURNED, which is
 	// what a dispatcher that answers a call while its tool runs on waits for
 	// before it closes the session the call came on: the SDK refuses every
 	// answer not yet written once a session's close has begun. It is the
 	// request's context's Done, which the SDK ends only after the answer's
 	// write (go-sdk v1.8.0; held by this package's
 	// TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten, since it is the SDK's
-	// behaviour and not its promise); and unlike [Call.Abandoned] nothing here
-	// widens it: a progress that finds the call's response gone, and the
-	// handler's own return, close Abandoned and leave Over to the transport.
-	// Nil, never closed, for a call no request carries.
+	// behaviour and not its promise), unless it cancels the request first: on
+	// the harness's `notifications/cancelled`, while the answer is still to
+	// come, and on the connection's failure. Then nobody reads the answer, so a
+	// wait on Over that lets go before its write loses nothing. And unlike
+	// [Call.Abandoned] nothing here widens it: a progress that finds the call's
+	// response gone, and the handler's own return, close Abandoned and leave
+	// Over to the transport. Nil, never closed, for a call no request carries.
 	Over <-chan struct{}
 
 	// Running is for the dispatcher to call once, the moment it starts

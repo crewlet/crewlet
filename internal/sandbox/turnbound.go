@@ -16,7 +16,8 @@ import (
 // it. A resume that fails is handed back, and one that meets a condition that
 // ends by waiting (a model's usage limit, a spent budget, a paused seat) is
 // held until that condition clears. Either way the waiter announces the job
-// again on its next poll, so the job comes round until its resume runs.
+// again on its schedule (reannounce.go), so the job comes round until its
+// resume runs.
 //
 // Two bounds keep that from going on for ever, and both END THE RUN, announced
 // on the board under a reason of its own, with the seat freed:
@@ -99,7 +100,9 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorFinished, fence Fence,
 	why string,
 ) error {
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
+	// A CLAIM OF THE JOB LIKE ANY OTHER, held to what this node still owes
+	// the job's last claim ([Coordinator.claimCompletion]).
+	run, won, err := c.claimCompletion(ctx, ev, fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s to end it at its deadline: %w", ev.TurnID, err)
 	}
@@ -111,8 +114,11 @@ func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorF
 	c.forgetRefused(ev.TurnID)
 	var result Result
 	if run.Lost == nil {
+		// A JOB THIS COLLECTION FINDS LOST with the host its box is on
+		// ([Coordinator.loseWithHost]) is ended here as a job the row held
+		// lost is: unread, at its deadline.
 		var collected bool
-		if run, result, collected, err = c.collectClaimed(ctx, run); !collected {
+		if run, result, collected, err = c.collectClaimed(ctx, run); !collected && run.Lost == nil {
 			return err
 		}
 	}

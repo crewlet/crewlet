@@ -188,6 +188,20 @@ type refusedCompletion struct {
 // itself, and the poll is the backstop for a clearing nothing signals. Both
 // may arrive: the claim is at-most-once, so the run resumes once.
 //
+// # Unless no waiter can announce it
+//
+// THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
+// BROKER IS WHILE IT DOES NOT. While this node keeps a clock on the store of
+// the host of the job's box ([Coordinator.hostClocked]), that host's waiter
+// reads the run's row through a store that does not answer it and announces
+// nothing, and what is kept here is this node's memory alone: a restart, a
+// letting go of the seat, or a clearing nothing signals would leave the job
+// with nothing to announce it. So the refusal is still kept for the signalled
+// re-fire, and its delivery is handed back as well, never acknowledged, and
+// renewed before its last ([ErrUnannounced], renew.go). A duplicate is
+// harmless, since the claim is made once, and the re-fire announces nothing
+// afresh while that delivery is in flight ([Coordinator.refire]).
+//
 // A RESUME REFUSED AFTER ITS CLAIM is kept the same way: one whose models were
 // all at their limit before its turn wrote anything is reverted, so the run is
 // back to running as the gate would have left it, and its refusal names the
@@ -228,11 +242,11 @@ type refusedCompletion struct {
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the
 // gate's answer and the keep would leave the completion kept for a signal that
-// has already been and gone, until the next poll. So the caller reads what was
-// signalled BEFORE it asks the gate (seen), and the keep, under the lock
-// Readmit takes, re-fires at once instead of keeping when the condition has been
-// signalled for the seat since: the same rule [Coordinator.waitOwed] applies
-// to an answer.
+// has already been and gone, until the waiter's next announcement of it. So the
+// caller reads what was signalled BEFORE it asks the gate (seen), and the keep,
+// under the lock Readmit takes, re-fires at once instead of keeping when the
+// condition has been signalled for the seat since: the same rule
+// [Coordinator.waitOwed] applies to an answer.
 //
 // NOR IS A PERSON'S STOP. A stop ends a collected job's wait by re-firing what is
 // kept for it ([Coordinator.endCollectedWait]), and it leaves a run whose
@@ -246,9 +260,10 @@ type refusedCompletion struct {
 //
 // A refusal that names no condition is not kept: nothing would signal its end.
 // Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
-// waiter that drives its box announces it to the seat's next holder. A drain's
-// is kept and never re-fired, since nothing signals a drain's end, until that
-// release drops it.
+// waiter that drives its box announces it to the seat's next holder, or, while
+// no waiter can, the delivery handed back for it does. A drain's is kept and
+// never re-fired, since nothing signals a drain's end, until that release
+// drops it.
 //
 // NOR ONE THAT LANDS AFTER THAT RELEASE. The release waits for no resume, and a
 // resume refused after its claim returns once its review has run, minutes on:
@@ -356,16 +371,67 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // refire offers a kept completion to [Coordinator.OnCompleted] again, under
 // the coordinator's own lifetime, as the waiter's next announcement would. A
 // refusal keeps it again; any other failure is left to that announcement.
+//
+// BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
+// re-fire has no delivery in hand for the broker to bring back. Where its own
+// attempt started this node's clock on that host's store
+// ([Coordinator.hostClocked]), the delivery that carried the completion was
+// acknowledged when it was kept, no clock running then, so the re-fire's
+// completion is announced afresh at once, whatever the hand-back (renew.go),
+// and a renewal the broker does not take is said here, as what it leaves: no
+// delivery to make it again on, so this node makes it again on its own timer
+// until one lands, the run settles or the seat is let go ([refirePublish]).
+// WHERE THE CLOCK RAN BEFORE IT, NOTHING IS ANNOUNCED: the delivery
+// refused while the clock ran was handed back, never acknowledged, and is in
+// flight still, renewed on its own budget, so an announcement made here beside
+// it would leave two in flight, and one more with every refusal and re-fire
+// after it.
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
 		return
 	}
-	if err := c.OnCompleted(ctx, kept.ev, kept.trigger); err != nil {
+	before := c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID)
+	err := c.OnCompleted(ctx, kept.ev, kept.trigger)
+	after := c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID)
+	switch {
+	case !after && err == nil:
+		return
+	case !after:
 		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
 			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
 			"error", err.Error(),
 			"detail", "the completion re-fired when its condition cleared was not settled; "+
-				"the waiter's next poll announces it again")
+				"the waiter announces it again on its schedule")
+		return
+	case before:
+		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+			"error", unannounced(kept.ev, err).Error(),
+			"detail", "the completion re-fired when its condition cleared was not settled; its box's host "+
+				"cannot read the coordination store, so no waiter announces it, and the delivery handed back "+
+				"when it was refused carries it on")
+		return
 	}
+	err = unannounced(kept.ev, err)
+	refused := c.renew(ctx, kept.ev, kept.trigger)
+	if refused == nil {
+		// ONE ANNOUNCEMENT IN FLIGHT: an earlier re-fire's this node still
+		// owed is this one's now.
+		c.mu.Lock()
+		c.dropRepublishLocked(kept.ev.TurnID)
+		c.mu.Unlock()
+		return
+	}
+	delay, armed := c.armRepublish(kept, 1, nil)
+	if !armed {
+		return
+	}
+	log.WarnContext(ctx, "sandbox_completion_refire_unsettled",
+		"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+		"attempts", 1, "retry_in_s", delay.Seconds(), "error", err.Error()+"; "+refused.Error(),
+		"detail", "the completion re-fired when its condition cleared was handed back, and its "+
+			"box's host cannot read the coordination store, so no waiter announces it; it could not "+
+			"be announced afresh either, and this node announces it again on its timer until one "+
+			"lands, the run settles or the seat is let go")
 }

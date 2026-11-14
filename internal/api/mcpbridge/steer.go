@@ -29,9 +29,16 @@ import (
 //     it is answered by the server's own receiving middleware, so the call never
 //     reaches the run's surface and is never recorded on its ledger: it is the
 //     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
-//     — never an error: measured on Claude Code, a hook's call that failed made
-//     the harness drop and re-initialise the whole bridge, telling the model its
-//     tools were still connecting.
+//     — never an error: measured on Claude Code 2.1.263 and 2.1.310, a hook's
+//     call answered with an error made the harness drop and re-initialise the
+//     whole bridge, telling the model its tools were still connecting; one the
+//     bridge turns away with a 503 is a hook error the run goes on past, the
+//     bridge kept (2.1.310 and 2.1.322, [Bridge.serveMCP]). And the opening's
+//     end waits for that answer before it closes the box's sessions, for as
+//     long as the box waits for it ([binding.holdHook]): an answer the close
+//     refused would fail the call all the same, at a cost no probe has
+//     measured, and a take's notes would be recorded handed over to a step
+//     that never had them.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered, each recorded served to the run's
@@ -79,13 +86,39 @@ type SteerInbox interface {
 	// earlier read of the same job recorded is reported again, as the same
 	// record; an error is a read that could not be confirmed written, and its
 	// notes wait, or, where the write landed, are reported when the harness
-	// confirms them again.
+	// confirms them again. An inbox that serves no job, not yet bound or
+	// closed, takes no read and answers [ErrNoteUntaken], and so does one
+	// whose job the run's record takes no read of any more, for a note named
+	// that still waits. So does one that cannot open a note named that still
+	// waits for the job, its node not holding the key the note is sealed
+	// under, once it has taken every other note named.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
-	// handed out closes, and every later call answers nothing.
+	// handed out closes, every later Take and Wait answers nothing, and every
+	// later Read [ErrNoteUntaken].
 	Close()
 }
+
+// ErrNoteUntaken is what a [SteerInbox] answers a [SteerInbox.Read] with
+// where it left a note the read names untaken that the read made again can
+// have taken. One that serves no job that takes notes recorded nothing:
+// closed, the opening that served it having ended; not yet bound to its job,
+// which no opening serves (the engine binds a run's inbox before the bridge
+// files the opening that serves it, so a box that reaches the opening the
+// moment it is filed finds the inbox serving); or bound to a job the run's
+// record takes no read of any more, a note the read names still waiting
+// there: the job's completion claimed the run while its opening still serves,
+// the run's ending is decided, or a later job carries it on. And one whose
+// node does not hold the key a note the read names is sealed under, that note
+// still waiting for the job, recorded every other note named, as ever, and
+// not that one, which no read of that node's can take. Declared here, by the
+// consumer, which tells it from a write that could not be confirmed: the read
+// is turned away to ask again, as one reaching its opening as it ends is
+// ([Bridge.serveSteer]), and its next try reaches the inbox that serves the
+// job now, the run that goes on once a claim is handed back, or a node that
+// holds the key.
+var ErrNoteUntaken = errors.New("mcpbridge: the run's note inbox left a note the read names untaken, for the read made again")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -168,12 +201,31 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 // address and the Host ([loopbackRefusal]), are judged by the routing it
 // shares with the MCP endpoint ([Bridge.routed]) before it is reached, and a
 // relayed call for a held session never reaches it ([Bridge.admitRelayed]).
+//
+// A CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN, as a
+// poll the opening can no longer hold is ([Bridge.pollNotes]): a 503 with a
+// Retry-After. The routing found the opening before its end took it out of
+// the bridge's table, and the end took its inbox before the call was served:
+// the run ended, the seat left this node, or a recovery opened the job again.
+// The call's next try is routed afresh, to the opening that serves the box
+// now, here or on the seat's next holder, or refused where the run is over.
+// NEVER THE 404 of a session that never had an inbox, which says the run has
+// no notes route at all: the OpenCode plugin reads that as it reads a refused
+// token, and stops asking for the rest of its run, so a box that goes on
+// would never be handed a note between its steps again. And the same holds
+// for a read whose opening the end overtakes after this check, on its way to
+// the inbox ([readNotes]).
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
+	if opened.session.Steer == nil {
+		// A SESSION WITH NO INBOX (a run with nothing to steer, the
+		// assistant's deep work) has no notes route at all.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		return
+	}
 	inbox := opened.inbox()
 	if inbox == nil {
-		// A SESSION WITH NO INBOX — a run with nothing to steer, the
-		// assistant's deep work — has no notes route at all.
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		// THE OPENING ENDED, which took the inbox its session has.
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
 	switch verb := r.PathValue("verb"); {
@@ -314,11 +366,17 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with: the pace the bridge's own relay reads a seat's lease again at
-// while it waits for the seat's next holder ([holderRetryCeiling]), because
-// that holder is what serves the session's next opening — a node that is
-// going hands its seats on, and an opening that ended was replaced, moved
-// with its seat, or ended with its run, whose route then answers 401.
+// away with, and a read that reached its opening as it ended, that its inbox
+// did not take ([ErrNoteUntaken]), or that a run whose tools are closed
+// takes no more ([Bridge.serveSteer], [readNotes]): the pace the bridge's own
+// relay reads a seat's lease again at while it waits for the seat's next
+// holder ([holderRetryCeiling]), because that holder is what serves the
+// session's next opening: a node that is going hands its seats on, and an
+// opening that ended was replaced, moved with its seat, or ended with its run,
+// whose route then answers 401. No client keeps to it: OpenCode's notes
+// plugin, the route's one client, reads no Retry-After and asks again after a
+// pause of its own, a second doubling to thirty (internal/sandbox/executor,
+// opencode_steer.js).
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
@@ -328,9 +386,37 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 	httpjson.Write(w, http.StatusOK, steerNotes{Notes: notes})
 }
 
-// readNotes records the notes a read names — none for a run whose tools are
-// closed, which takes nothing more from its notes (see [Bridge.pollNotes]); its
-// read is answered as done, because there is nothing for the poller to retry.
+// readNotes records the notes a read names through the opening's inbox.
+//
+// A READ IS RECORDED OR TURNED AWAY TO ASK AGAIN, NEVER ANSWERED DONE WITH
+// NOTHING RECORDED: the plugin would never confirm its notes again, and the
+// record would keep each served and unread, for the run's ending to report
+// unconfirmed though OpenCode delivered it, and a later launch to tell again
+// as one the session may already show. It is turned away as a read that
+// reached the opening after its end took the inbox is ([Bridge.serveSteer]),
+// at either of its last two steps:
+//
+//   - A RUN WHOSE TOOLS ARE CLOSED takes nothing more from its notes (see
+//     [Bridge.pollNotes]), and records no read either, whether or not its
+//     opening has ended yet. A seat leaving this node leaves its grants,
+//     which closes the fence, before its release ends the opening, and its
+//     box goes on with the seat's next holder, which the read's next try
+//     reaches and which records it. A person's stop closes the fence too, and
+//     the run's end then refuses the read's next try. Answered done, the read
+//     was recorded nowhere, and the seat's next holder was never asked.
+//   - AN INBOX THAT SERVES NO JOB says it took the read nowhere
+//     ([ErrNoteUntaken]): the end closed it after the route found it
+//     serving. The inbox decides that under its own lock, which its close
+//     takes, so a read either found it serving and is recorded through the
+//     store, which a later close does not touch, or did not and is not
+//     recorded at all. And so does an inbox whose job the run's record takes
+//     no read of any more, though it still serves: the job's completion
+//     claimed the run before the reclaim closes its session, so the read
+//     made again is recorded where the claim is handed back and the run goes
+//     on in its box, and refused once the run is over. And so does an inbox
+//     whose node does not hold the key a note the read names is sealed
+//     under, once it has taken the rest: the read made again is recorded
+//     where it reaches a node that holds the key.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
@@ -348,17 +434,20 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		return
 	}
 	if fence(opened.session) != nil {
-		w.WriteHeader(http.StatusNoContent)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
-	if err := inbox.Read(r.Context(), body.IDs); err != nil {
+	switch err := inbox.Read(r.Context(), body.IDs); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNoteUntaken):
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+	default:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_read_failed", "error", err.Error(),
 			"detail", "the notes wait; the poller confirms them again, and the review "+
 				"reads any it never does")
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(time.Second))
-		return
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // Shutdown releases every poll for notes this bridge holds — one it serves from
@@ -406,10 +495,15 @@ type steerArgs struct {
 }
 
 // takeSteer is steer_take's answer: the inbox's, for a boundary of the main
-// agent's loop, and nothing for any other.
+// agent's loop, and nothing for any other. Whatever it answers, the opening's
+// end waits for that answer to be out before it closes the box's sessions
+// ([binding.holdHook]), so a take whose write landed is never answered into
+// the close while its box still waits for it: a box that gave the call up, or
+// whose connection failed, lets the hold go before any write, and reads no
+// answer.
 func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
-	inbox := o.inbox()
-	if inbox == nil || o.over() {
+	inbox := o.holdHook(ctx.Done())
+	if inbox == nil {
 		return ""
 	}
 	var args steerArgs

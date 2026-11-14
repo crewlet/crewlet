@@ -57,6 +57,26 @@ var noteCases = []struct {
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
 	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
 	{"ANoteIsServedOnlyToItsJobWhileItWaits", testANoteIsServedOnlyToItsJobWhileItWaits},
+	{"AHooksServeRecordsTheServeAndNoRead", testAHooksServeRecordsTheServeAndNoRead},
+	{"AServeLosesTheCallsItsInboxHeardCancelledFirst", testAServeLosesTheCallsItsInboxHeardCancelledFirst},
+	{"AServeRemovesTheTakesItsInboxSawUnansweredFirst", testAServeRemovesTheTakesItsInboxSawUnansweredFirst},
+	{"AServeToAnotherJobReplacesTheLastJobsServes", testAServeToAnotherJobReplacesTheLastJobsServes},
+	{"AVerdictReadsAHeldServeAtItsNotesPlace", testAVerdictReadsAHeldServeAtItsNotesPlace},
+	{"ARestartedTakeIsReadMarkedSo", testARestartedTakeIsReadMarkedSo},
+	{"AVerdictLosesAServeItIsToldIsAbsent", testAVerdictLosesAServeItIsToldIsAbsent},
+	{"AHeldTakeOutranksACancel", testAHeldTakeOutranksACancel},
+	{"AVerdictLandsWhateverTheRunsStatusOrEnding", testAVerdictLandsWhateverTheRunsStatusOrEnding},
+	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
+	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
+	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
+	{"AnItemIsFiledOnlyWhileItsJobIsTheRecords", testAnItemIsFiledOnlyWhileItsJobIsTheRecords},
+	{"AJobsItemsAreBoundedApartFromAPersonsNotes", testAJobsItemsAreBoundedApartFromAPersonsNotes},
+	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
+	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
+	{"ASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall", testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall},
+	{"AnIntegerIDAndAQuotedIDOfTheCharsetAreKept", testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept},
+	{"AQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall",
+		testAQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -69,6 +89,12 @@ var noteRawCases = []struct {
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
 	{"ASettleOfATakeThatRecordedNothingFencesItsWrite", testASettleOfATakeThatRecordedNothingFencesItsWrite},
+	{"ACancelLosesOnlyALiveServeOfItsJobOnItsSession", testACancelLosesOnlyALiveServeOfItsJobOnItsSession},
+	{"AnUnansweredServeIsRemovedAndFencesItsWriteInFlight",
+		testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight},
+	{"AVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob",
+		testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob},
+	{"EveryWriteHandsAnItemOnlyToItsJob", testEveryWriteHandsAnItemOnlyToItsJob},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -1108,6 +1134,9 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // call, a filing, a take, a pull, a claim and its release, a park, and a
 // relaunch's reset that carries the round on — which replaces the job's record
 // whole, so the key a later build added to it goes with the job it was about.
+// And at two levels more, seeded beside them: a hook's serve of a note and
+// the call that serve answered, read back after a hook's serve and a settle of
+// one as well.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
 // key at that level is gone after the first write; carry the job's record's
@@ -1129,16 +1158,21 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "served-take", callNo(1), "n-2")); err != nil {
+		t.Fatal(err)
+	}
 
 	// THE NEWER BUILD'S WRITE: one key of its own at every level.
 	seeded := map[string]string{
-		"the notes section": `{"quorum":2}`,
-		"a note":            `"high"`,
-		"a note's read":     `"hook"`,
-		"a bridged call":    `{"span":"s-1"}`,
-		"a dropped call":    `{"span":"s-3"}`,
-		"the log":           `{"kept":"all"}`,
-		"the job's record":  `{"span":"s-2"}`,
+		"the notes section":         `{"quorum":2}`,
+		"a note":                    `"high"`,
+		"a note's read":             `"hook"`,
+		"a hook's serve":            `{"proof":"p-1"}`,
+		"the call a serve answered": `"sse"`,
+		"a bridged call":            `{"span":"s-1"}`,
+		"a dropped call":            `{"span":"s-3"}`,
+		"the log":                   `{"kept":"all"}`,
+		"the job's record":          `{"span":"s-2"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
 		var row map[string]any
@@ -1150,6 +1184,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first := section["notes"].([]any)[0].(map[string]any)
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
+		served := section["notes"].([]any)[1].(map[string]any)["serves"].([]any)[0].(map[string]any)
+		served["proof"] = json.RawMessage(seeded["a hook's serve"])
+		served["call"].(map[string]any)["transport"] = json.RawMessage(seeded["the call a serve answered"])
 		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
@@ -1190,6 +1227,12 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 					Read     *struct {
 						Carrier json.RawMessage `json:"carrier"`
 					} `json:"read"`
+					Serves []struct {
+						Proof json.RawMessage `json:"proof"`
+						Call  *struct {
+							Transport json.RawMessage `json:"transport"`
+						} `json:"call"`
+					} `json:"serves"`
 				} `json:"notes"`
 			} `json:"steer"`
 			Job struct {
@@ -1219,12 +1262,17 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		}
 		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
 		for _, n := range row.Steer.Notes {
-			if n.ID != "n-1" {
-				continue
-			}
-			got["a note"] = string(n.Priority)
-			if n.Read != nil {
-				got["a note's read"] = string(n.Read.Carrier)
+			switch {
+			case n.ID == "n-1":
+				got["a note"] = string(n.Priority)
+				if n.Read != nil {
+					got["a note's read"] = string(n.Read.Carrier)
+				}
+			case n.ID == "n-2" && len(n.Serves) > 0:
+				got["a hook's serve"] = string(n.Serves[0].Proof)
+				if n.Serves[0].Call != nil {
+					got["the call a serve answered"] = string(n.Serves[0].Call.Transport)
+				}
 			}
 		}
 		got["the log"] = string(log.Retention)
@@ -1274,6 +1322,15 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		t.Fatal(err)
 	}
 	check("a pull", true)
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "later-take", callNo(2), "n-3")); err != nil {
+		t.Fatal(err)
+	}
+	check("a hook's serve", true)
+	if settled, err := s.SettleHook(ctx, turn, sandbox.HookSettle{Launch: launch,
+		Unanswered: []string{"later-take"}}); err != nil || len(settled) != 1 {
+		t.Fatalf("the settle of the later serve = %d, %v, want its note", len(settled), err)
+	}
+	check("a hook's settle", true)
 	claimed := mustClaim(t, s, turn)
 	check("the claim", true)
 	mustRelease(t, s, claimed)
@@ -1586,39 +1643,55 @@ func testASettleOfATakeThatRecordedNothingFencesItsWrite(t *testing.T, s sandbox
 
 // noteStagedCases are the note cases whose subject is a write another party
 // lands under one of the store's own decisions, which only the records it is
-// built on can stage ([vanishingRuns]).
+// built on can stage ([overtakingRuns]).
 var noteStagedCases = []struct {
 	name string
-	fn   func(*testing.T, *vanishingRuns, sandbox.PendingStore)
+	fn   func(*testing.T, *overtakingRuns, sandbox.PendingStore)
 }{
 	{"ASettleOfARecordRemovedUnderItAnswersNothing", testASettleOfARecordRemovedUnderItAnswersNothing},
+	{"AVerdictOfARecordRemovedUnderItAnswersNothing", testAVerdictOfARecordRemovedUnderItAnswersNothing},
+	{"AServeOfARecordRemovedUnderItServesNothing", testAServeOfARecordRemovedUnderItServesNothing},
+	{"AServeTheRunsEndingOvertookServesNothing", testAServeTheRunsEndingOvertookServesNothing},
 }
 
-// vanishingRuns is a coordination store's run records that, once armed, remove
-// a run's record between one decision of the store's and its write — the
-// run's ending deleting it under a write it lost to.
-type vanishingRuns struct {
+// overtakingRuns is a coordination store's run records that, once armed, land
+// another party's write on a run's record between one decision of the store's
+// and that decision's own write, which then loses its race to it: the run's
+// ending deleting the record ([overtakingRuns.removed]), or deciding the
+// ending, after which a live run's write takes the record no more.
+type overtakingRuns struct {
 	records
-	armed atomic.Bool
+	under atomic.Pointer[overtake]
 }
 
-// MutateSandboxRun makes the read-decide-write as the records would, the
-// record removed under the first decision once armed.
-func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
+// overtake is a write another party lands on turnID's record.
+type overtake func(ctx context.Context, turnID string) error
+
+// arm lands write under the store's next decision, once.
+func (r *overtakingRuns) arm(write overtake) { r.under.Store(&write) }
+
+// MutateSandboxRun makes the read-decide-write as the records would, the armed
+// write landed under the first decision once armed.
+func (r *overtakingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
 	return r.records.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
 		change, err := decide(read)
-		if r.armed.CompareAndSwap(true, false) {
-			if _, _, removeErr := r.records.MutateSandboxRun(ctx, turnID,
-				func(coord.Record) (coord.SandboxRunChange, error) {
-					return coord.SandboxRunChange{Delete: true}, nil
-				}); removeErr != nil {
-				return coord.SandboxRunChange{}, removeErr
+		if write := r.under.Swap(nil); write != nil {
+			if writeErr := (*write)(ctx, turnID); writeErr != nil {
+				return coord.SandboxRunChange{}, writeErr
 			}
 		}
 		return change, err
 	})
+}
+
+// removed removes turnID's record: the run's ending deleting it.
+func (r *overtakingRuns) removed(ctx context.Context, turnID string) error {
+	_, _, err := r.records.MutateSandboxRun(ctx, turnID, func(coord.Record) (coord.SandboxRunChange, error) {
+		return coord.SandboxRunChange{Delete: true}, nil
+	})
+	return err
 }
 
 // A SETTLE OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A settle that marks
@@ -1631,14 +1704,14 @@ func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 //
 // Mutation: answer what an earlier attempt decided where the last found no
 // record, and the settle answers notes marked by a write that never landed.
-func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanishingRuns, s sandbox.PendingStore) {
+func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-vanish"))
 	mustFile(t, s, "t-vanish", "n-1")
 	if _, err := s.TakeNotes(ctx, "t-vanish", namedTake(launch, "lost", "n-1")); err != nil {
 		t.Fatal(err)
 	}
-	runs.armed.Store(true)
+	runs.arm(runs.removed)
 	settled, err := s.SettleTake(ctx, "t-vanish", sandbox.NoteSettle{Take: "lost", Unanswered: true})
 	if err != nil || len(settled) != 0 {
 		t.Errorf("a settle of a record removed under it = %+v, %v, want nothing", settled, err)

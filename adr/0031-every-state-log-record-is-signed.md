@@ -139,8 +139,8 @@ nothing, which the asking node refuses under no wait, its tool telling the
 assistant that called it that the keyring is what to fix (a person at the
 dashboard is answered in the refusal's code alone, ADR-0060), and as only a
 box's host can read the box, answers nothing, so
-the asker hears a host that did not answer and the host's own next poll
-announces the run again — and a MAC that fails under a key it holds is refused
+the asker hears a host that did not answer and the host's own waiter
+announces the run again on its schedule — and a MAC that fails under a key it holds is refused
 and logged at error, because no holder will ever accept it. The rule has ONE
 implementation, `internal/signedask`, for ADR-0008's reason: every channel
 keeping its own copy of the binding and the dispositions is how one of them

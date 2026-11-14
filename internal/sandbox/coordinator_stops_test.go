@@ -954,6 +954,15 @@ func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, los
 	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
+func (s *refusingStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if s.called("MarkClaimLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
 	if s.called("AttachSandbox") {
 		return errRefusedCall
@@ -1199,6 +1208,20 @@ func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle No
 		return nil, errRefusedCall
 	}
 	return s.inner.SettleTake(ctx, turnID, settle)
+}
+
+func (s *refusingStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if s.called("ServeHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeHook(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if s.called("SettleHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleHook(ctx, turnID, settle)
 }
 
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
