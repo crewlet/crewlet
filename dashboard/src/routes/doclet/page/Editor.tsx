@@ -212,12 +212,7 @@ export function PageEditor({
           edit is for, and on a phone it pushed Save out of the bar. */}
       <PageActions>
         <EditingStatus dirty={dirty} saving={save.busy || publish.busy} />
-        <Button
-          size="small"
-          variant="ghost"
-          onClick={leave}
-          disabled={save.busy || publish.busy}
-        >
+        <Button size="small" variant="ghost" onClick={leave} disabled={save.busy || publish.busy}>
           Cancel
         </Button>
         <WriteButton

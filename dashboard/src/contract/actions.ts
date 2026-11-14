@@ -283,7 +283,10 @@ export const ACTIONS = {
     // AND PUBLISH: `status` moves a draft to `published`, alone from the
     // page's bar or with the body from the editor, and takes a published
     // page back to `draft`. The one way a draft is published.
-    args: ["page", "base_version", "body", "message", "watch", "status"],
+    //
+    // AND A PAGE'S LABELS AND MOVE (`Tidy.tsx`): the whole label set, and
+    // the page it is filed under in its space (`parent`, "" for the top).
+    args: ["page", "base_version", "body", "message", "watch", "status", "labels", "parent"],
     domain: "pages",
     apps: ["doclet"],
     refreshes: ["knowledge"],

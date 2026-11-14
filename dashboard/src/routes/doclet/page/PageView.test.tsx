@@ -13,6 +13,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { PageView } from "./PageView.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
 import { linkPageCommand } from "./LinkPicker.tsx";
+import { movePlaces } from "./Tidy.tsx";
 import { followersOf } from "./Watch.tsx";
 import { Composer } from "../Composer.tsx";
 import { Router } from "~/app/router.tsx";
@@ -543,7 +544,9 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
 test("a draft says it is one and is published by one press, against the version on screen", async () => {
   mount(<PageView id={ID} />, { page: detail({}, { status: "draft" }), page_reads: reads() });
   await settle();
-  const notice = screen.getByText("This page is a draft").closest(".crewlet-callout") as HTMLElement;
+  const notice = screen
+    .getByText("This page is a draft")
+    .closest(".crewlet-callout") as HTMLElement;
   expect(notice.textContent).toMatch(/no search finds it until it is published/);
   fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
   await settle();
@@ -590,24 +593,178 @@ test("More publishes a draft, and takes a published page back to one", async () 
 test("a publish the engine refuses says why, in the notice", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          error: "forbidden",
-          message: "Not allowed.",
-          detail: "Only the page's creator, the lead of its space or an admin publishes it.",
-        }),
-        { status: 403, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
-      ),
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "forbidden",
+            message: "Not allowed.",
+            detail: "Only the page's creator, the lead of its space or an admin publishes it.",
+          }),
+          { status: 403, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
+        ),
     ),
   );
   mount(<PageView id={ID} />, { page: detail({}, { status: "draft" }), page_reads: reads() });
   await settle();
-  const notice = screen.getByText("This page is a draft").closest(".crewlet-callout") as HTMLElement;
+  const notice = screen
+    .getByText("This page is a draft")
+    .closest(".crewlet-callout") as HTMLElement;
   fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
   await settle();
   expect(within(notice).getByText(/Only the page's creator/)).toBeTruthy();
   expect(screen.getByText("This page is a draft")).toBeTruthy();
+});
+
+/** Every request a tidy gesture sends, answered as the engine answers a landed page write. */
+function recordRest(): { method: string; url: string; body: unknown; key: string | null }[] {
+  const sent: { method: string; url: string; body: unknown; key: string | null }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      sent.push({
+        method: (init.method ?? "GET").toUpperCase(),
+        url: String(url),
+        body: typeof init.body === "string" ? JSON.parse(init.body) : undefined,
+        key: ((init.headers ?? {}) as Record<string, string>)["Idempotency-Key"] ?? null,
+      });
+      return new Response(
+        JSON.stringify({
+          id: ID,
+          title: "Provisioner runbook",
+          container: "ENG",
+          outcome: "applied",
+          position: "CREWLET_PAGES_LOG@1:120",
+          op_id: "k",
+        }),
+        { status: 200, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  return sent;
+}
+
+const openMore = async (item: RegExp) => {
+  fireEvent.click(screen.getByRole("button", { name: /^More for/ }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+};
+
+// A PAGE IS RENAMED FROM ITS OWN SCREEN, through the engine's rename route,
+// keyed so a retry after a lost answer is the same rename. More offered no
+// rename, no labels, no move and no trash: the engine served each and the
+// dashboard reached none. Mutation: post the rename unkeyed and the key is
+// missing; send the title it already has and nothing should be sent.
+test("Rename sends the new title to the page's rename route, keyed", async () => {
+  const sent = recordRest();
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  await openMore(/^Rename/);
+  const dialog = screen.getByRole("dialog", { name: "Rename “Provisioner runbook”" });
+  expect(within(dialog).getByRole("button", { name: "Rename" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  fireEvent.change(within(dialog).getByLabelText("Title"), {
+    target: { value: "Provisioning runbook" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+  await settle();
+  const rename = sent.find((s) => s.method === "POST");
+  expect(rename?.url).toContain(`/doclet/pages/${ID}/rename`);
+  expect(rename?.body).toEqual({ title: "Provisioning runbook" });
+  expect(rename?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(screen.queryByRole("dialog", { name: /Rename/ })).toBeNull();
+});
+
+// THE TRASH IS THE PAGE'S DELETE, confirmed first, and keyed.
+test("Move to trash asks first, then deletes the page through its route", async () => {
+  const sent = recordRest();
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  await openMore(/^Move to trash/);
+  const dialog = screen.getByRole("dialog", { name: "Move “Provisioner runbook” to the trash?" });
+  expect(sent.filter((s) => s.method !== "GET")).toEqual([]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+  await settle();
+  const trash = sent.find((s) => s.method === "DELETE");
+  expect(trash?.url).toContain(`/doclet/pages/${ID}`);
+  expect(trash?.key).toBeTruthy();
+});
+
+// A PAGE IN THE TRASH SAYS SO, with the way back. Restore is its route; an
+// admin is offered Delete permanently, which sends the title typed back and a
+// reason, and nothing until both are given. Mutation: offer no notice on a
+// trashed page and there is no way to restore one from the dashboard.
+test("a page in the trash offers Restore, and an admin Delete permanently with the title typed back", async () => {
+  const sent = recordRest();
+  mount(<PageView id={ID} />, { page: detail({}, { status: "trashed" }), page_reads: reads() });
+  await settle();
+  const notice = screen
+    .getByText("This page is in the trash")
+    .closest(".crewlet-callout") as HTMLElement;
+  fireEvent.click(within(notice).getByRole("button", { name: "Restore" }));
+  await settle();
+  expect(sent.find((s) => s.method === "POST")?.url).toContain(`/doclet/pages/${ID}/restore`);
+
+  fireEvent.click(within(notice).getByRole("button", { name: "Delete permanently" }));
+  const dialog = screen.getByRole("dialog", { name: "Delete “Provisioner runbook” permanently?" });
+  const purge = () => within(dialog).getByRole("button", { name: "Delete permanently" });
+  expect(purge().getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /Provisioner runbook|confirm/i }), {
+    target: { value: "Provisioner runbook" },
+  });
+  expect(purge().getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(within(dialog).getByLabelText("Why"), { target: { value: "Duplicate" } });
+  fireEvent.click(purge());
+  await settle();
+  const sentPurge = sent.find((s) => s.url.includes("/purge"));
+  const url = new URL(sentPurge!.url, "http://engine.test");
+  expect(url.pathname).toBe(`/doclet/pages/${ID}/purge`);
+  expect(url.searchParams.get("confirm")).toBe("Provisioner runbook");
+  expect(url.searchParams.get("reason")).toBe("Duplicate");
+  // A PUBLISHED PAGE DRAWS NO TRASH NOTICE.
+  cleanup();
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  expect(screen.queryByText("This page is in the trash")).toBeNull();
+});
+
+// A MOVE OFFERS EVERY PAGE OF THE SPACE BUT THE PAGE AND WHAT IS UNDER IT,
+// which the engine refuses as a parent, and saves the parent with save_page.
+test("Move files the page under another page of its space, never under itself", async () => {
+  const pages = [
+    {
+      id: ID,
+      title: "Provisioner runbook",
+      parent_id: "p-0",
+      container: "ENG",
+      status: "published",
+    },
+    { id: "p-0", title: "Runbooks", container: "ENG", status: "published" },
+    { id: "p-1", title: "Under it", parent_id: ID, container: "ENG", status: "published" },
+    { id: "p-2", title: "Onboarding", container: "ENG", status: "published" },
+  ];
+  expect(movePlaces(pages, ID).map((p) => p.id)).toEqual(["p-0", "p-2"]);
+  mount(<PageView id={ID} />, {
+    page: detail({}, { parent_id: "p-0" }),
+    page_reads: reads(),
+    pages: { pages, limit: 500, total: 4 },
+  });
+  await settle();
+  await openMore(/^Move(?! back| to)/);
+  const dialog = screen.getByRole("dialog", { name: "Move “Provisioner runbook”" });
+  // THE PICKER BY ITS NAME, whatever role its searchable trigger takes.
+  fireEvent.click(dialog.querySelector('[aria-label="The page it goes under"]') as HTMLElement);
+  await settle();
+  const offered = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+  expect(offered.some((o) => o.includes("Under it"))).toBe(false);
+  // A SEARCHABLE PICKER TAKES THE PRESS ON mousedown, as a combobox does.
+  fireEvent.mouseDown(screen.getByRole("option", { name: /Onboarding/ }));
+  await settle();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "save_page", args: { page: ID, base_version: 14, parent: "p-2" } },
+  ]);
 });
 
 // A WATCH IS FILED UNDER A SEAT, and a credential bound to none subscribes
@@ -664,6 +821,10 @@ test("More stars the page, and offers the sub-page, a draft, History and the add
     "Star this pagePinned on Doclet and kept in the sidebar",
     "New sub-page",
     "Move back to draftNo search finds a draft",
+    "Rename",
+    "Labels",
+    "MoveUnder another page of its space",
+    "Move to trash",
     "History",
     "Copy the page's address",
   ]);

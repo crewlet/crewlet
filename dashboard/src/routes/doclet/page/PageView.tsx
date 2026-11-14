@@ -31,6 +31,12 @@
  * screen. Without it a draft stayed one for good, since the editor saved a
  * body and nothing more.
  *
+ * # Tidying it
+ *
+ * More holds Rename, Labels, Move and Move to trash (`Tidy.tsx`), each the
+ * engine's own route or `save_page`; a page in the trash says so above its
+ * body with Restore, and Delete permanently for an admin.
+ *
  * # What a wiki cannot tell you, and this can
  *
  * Its readers are seats and every read is a recorded act, so the page says
@@ -96,6 +102,7 @@ import { PageCommentThread } from "./CommentThread.tsx";
 import { Connections, Revisions } from "./Connections.tsx";
 import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
+import { TrashedNotice, usePageTidy } from "./Tidy.tsx";
 import { WatchControl } from "./Watch.tsx";
 
 /** How often a page reads itself again, and how often who read it. */
@@ -290,10 +297,7 @@ export function PageView({ id }: { id: string }) {
     const result = await setStatus.run(
       { page: page.id, base_version: page.version, status: to },
       {
-        done:
-          to === "published"
-            ? `Published “${page.title}”`
-            : `“${page.title}” is a draft again`,
+        done: to === "published" ? `Published “${page.title}”` : `“${page.title}” is a draft again`,
       },
     );
     if (result?.kind === "refused" && to === "draft") {
@@ -304,6 +308,8 @@ export function PageView({ id }: { id: string }) {
       });
     }
   };
+
+  const tidy = usePageTidy(page);
 
   const path = pagePath(id);
   const starred = starredIn(stars, path);
@@ -361,6 +367,7 @@ export function PageView({ id }: { id: string }) {
                 },
               ]
             : []),
+        ...tidy.entries,
         {
           key: "history",
           label: reading ? "Back to the page" : "History",
@@ -478,6 +485,7 @@ export function PageView({ id }: { id: string }) {
             <article className="knowledge-read-page" aria-label={page.title}>
               <DocumentTitle>{page.title}</DocumentTitle>
               <PageProps detail={data} spaceName={spaceName} who={who} now={now} />
+              {page.status === "trashed" && !editing && <TrashedNotice page={page} />}
               {draft && !editing && !reading && (
                 <Callout
                   variant="neutral"
@@ -548,6 +556,7 @@ export function PageView({ id }: { id: string }) {
           </div>
         )}
       </QueryState>
+      {tidy.dialog}
     </>
   );
 }

@@ -79,6 +79,7 @@ import {
   useSpaces,
   NotInDoclet,
 } from "./parts.tsx";
+import { SpaceTrash } from "./page/Tidy.tsx";
 import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 
@@ -177,6 +178,9 @@ export function Pages({ container }: { container: string }) {
       <>
         <SpaceHead space={space} />
         <SpaceOutline key={space.key} space={space} />
+        {/* WHAT IT HOLDS IN THE TRASH, each linking to the page, which is
+            where it is restored from. */}
+        <SpaceTrash space={space.key} />
       </>
     );
   }

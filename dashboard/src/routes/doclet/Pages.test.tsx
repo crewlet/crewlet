@@ -122,9 +122,12 @@ afterEach(() => {
   reloadForTest();
   location.hash = "#/";
   spacePages = 3;
+  trashed = [];
   written = [{ id: "c-1", page_id: RUNBOOK, kind: "saved", at: "2026-09-24T22:00:00Z" }];
 });
 
+/** What the space holds in the trash, which a case about the trash fills. */
+let trashed: unknown[] = [];
 /** The space's page count, which a case about an empty space sets to 0. */
 let spacePages = 3;
 /** The space's change log, newest first, which a case about an empty space empties. */
@@ -169,6 +172,9 @@ function mount(viewer: unknown = JANE) {
       case "page_activity":
         return Promise.resolve({ changes: written });
       case "pages":
+        if (p.status === "trashed") {
+          return Promise.resolve({ pages: trashed, limit: 500, total: trashed.length });
+        }
         if (p.parent === FOLDER) {
           return Promise.resolve({
             pages: [summary({ id: CHILD, title: "FAIR-2 Money", parent_id: FOLDER })],
@@ -251,10 +257,37 @@ test("an empty space says nothing is written yet, and never names a change log",
   expect(neverWritten({ pages: 0 }, false)).toBe("not read yet");
 });
 
+// A SPACE SAYS WHAT IT HOLDS IN THE TRASH, under its outline, each page
+// linking to itself, where it is restored from; nothing at all where the trash
+// is empty. Nothing in the dashboard listed a trashed page, so nothing could
+// bring one back. Mutation: read the trash without `status: trashed` and the
+// live pages are listed as trashed.
+test("a space lists what it holds in the trash, and nothing where it holds none", async () => {
+  const { asked } = mount();
+  await settle();
+  expect(asked.filter((a) => a.kind === "pages" && a.params.status === "trashed")).toEqual([
+    {
+      kind: "pages",
+      params: { container: "ENG", status: "trashed", skills: false, limit: 500 },
+    },
+  ]);
+  expect(screen.queryByRole("region", { name: /In the trash/ })).toBeNull();
+  cleanup();
+  trashed = [summary({ id: "t-1", title: "Old runbook", status: "trashed" })];
+  mount();
+  await settle();
+  const trash = screen.getByRole("region", { name: "In the trash · 1" });
+  expect(within(trash).getByRole("link", { name: "Old runbook" }).getAttribute("href")).toBe(
+    "#/doclet/pages/t-1",
+  );
+});
+
 test("the outline reads the top level, and a folder's pages only once it opens", async () => {
   const { asked } = mount();
   await settle();
-  const levels = () => asked.filter((a) => a.kind === "pages").map((a) => a.params);
+  // THE OUTLINE'S LEVELS, beside the one read of the space's trash.
+  const levels = () =>
+    asked.filter((a) => a.kind === "pages" && a.params.status !== "trashed").map((a) => a.params);
   expect(levels()).toEqual([
     { status: "published,draft", skills: false, container: "ENG", roots: true, limit: 500 },
   ]);

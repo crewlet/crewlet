@@ -5450,6 +5450,9 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from; on a draft it reads Save draft and keeps it one |
 | Publish | A draft's notice and More, and its editor | `save_page{page, base_version, status: published}`, with the `body` beside it from the editor where it was edited: the save and the status in one write |
 | Move back to draft | A published page's More | `save_page{page, base_version, status: draft}` |
+| Rename | A page's More | `POST /doclet/pages/{id}/rename {title}`, keyed |
+| Labels · Move | A page's More | `save_page{page, base_version, labels}` / `{page, base_version, parent}` |
+| Move to trash · Restore · Delete permanently | A page's More; a trashed page's notice | `DELETE /doclet/pages/{id}` / `POST …/restore` / `POST …/purge?confirm=<title>&reason=…`, each keyed; the purge an administrator's |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
@@ -9049,8 +9052,8 @@ page is one column and the outline is not drawn.
   nothing else, so for a credential the directory binds to no seat the eye is
   drawn disabled with that reason (the engine subscribes it to nothing). More
   holds **Star this page**, **New sub-page**, **Publish** on a draft or
-  **Move back to draft** on a published page, **History** and **Copy the
-  page's address**. The star lives in More beside the page's other actions,
+  **Move back to draft** on a published page, **Rename**, **Labels**,
+  **Move**, **Move to trash**, **History** and **Copy the page's address**. The star lives in More beside the page's other actions,
   and the page tells the frame to draw none of its own (`useOwnStar`), so the
   action is never in two places at once.
 - **The properties**, minimal by rule: Space (with the pages above this one),
@@ -9074,6 +9077,21 @@ page is one column and the outline is not drawn.
   the editor saved a body and nothing else named a status. Who may publish is
   the engine's to decide (`pages.publish`: the page's creator, its space's
   lead, an administrator), and its refusal is said in the notice.
+- **Tidying a page happens on it.** Rename is the page's rename route
+  (`POST /doclet/pages/{id}/rename`, the title being the page's address in its
+  space, while links name it by its id); Labels replaces its whole label set and
+  Move files it under another page of its space or at its top, both
+  `save_page` against the version on screen, the move offering every page of
+  the space but the page and those beneath it, which the engine refuses as a
+  parent; Move to trash asks first and is `DELETE /doclet/pages/{id}`. Each
+  route write is keyed, so a retry after a lost answer is the same write. A
+  page in the trash is still read by its id and says so above its body
+  ("This page is in the trash") with **Restore** (`POST …/restore`) and, for an
+  administrator, **Delete permanently** (`POST …/purge`, the title typed back
+  and a reason, since nothing undoes it). A space lists what it holds in the
+  trash under its outline, each linking to the page. Who may rename, trash and
+  restore (the page's creator, its space's lead, an administrator) is the
+  engine's to decide, and its refusal is drawn in the dialog that pressed.
 - **The body** is the design system's `Document` over the dashboard's
   renderer, with anchors on its headings, and a first heading that repeats the
   title is not drawn twice. A FOLDER says it groups pages and lists what is
