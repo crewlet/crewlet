@@ -5491,7 +5491,7 @@ func (c *Coordinator) detachedRecord(ctx context.Context) (context.Context, cont
 // it hands back cleared, the turn's end owed, the delete — each reading the
 // row whole and sending it whole: across a link at the slowest pace allowed a
 // row at its bound takes four minutes a read and three a send, so an ending's
-// third write outlasted the bound, and an ending each of whose writes would
+// second write outlasted the bound, and an ending each of whose writes would
 // have landed was cut between two of them and kept for the retry.
 func detachedEnding(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
