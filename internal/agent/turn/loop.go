@@ -509,6 +509,14 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 	// the closed rounds, in order, the detector sees the sequence one
 	// uninterrupted run of the loop would have — a closed round is exactly
 	// one the loop observed on its way to closing it.
+	//
+	// A SPAN OF ROUNDS A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
+	// ([ledger.Iteration.Through]), which is all it keeps of them: the
+	// detector compares each round it observes with the one before it, and the
+	// round before whatever follows a span is the span's last. Skipping a span
+	// would compare the round after it with the round before it — rounds
+	// apart, a stall nobody repeated — and miss the one the dropped round and
+	// the next really make.
 	stall := StallDetector{}
 	for _, closed := range in.History {
 		if closed.ArtifactHash != "" {
@@ -731,7 +739,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 		res.Iterations = append(res.Iterations, ledger.Iteration{
 			Iteration: round,
 			Intent:    work.Summary,
-			Calls:     work.Calls,
+			Calls:     closedCalls(work.Calls),
 			Elided:    work.Elided,
 			Absorbed:  work.Absorbed,
 			// Only the reads actually CALLED, not the whole surface's
@@ -819,6 +827,23 @@ func names(calls []ledger.Call) []string {
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, c.Name)
+	}
+	return out
+}
+
+// closedCalls is a round's calls as its closed record keeps them: every call
+// whole but a SUCCESSFUL call's output, which nothing reads once its round has
+// closed — the prior-work ledger shows a failed call's error alone, a delivery
+// check reads names and outcomes, and a seed reads identities — and which a
+// parked turn would otherwise carry on its run's row for every round it closed.
+// A failed call keeps its error, which the next round reads. calls itself is
+// never changed.
+func closedCalls(calls []ledger.Call) []ledger.Call {
+	out := slices.Clone(calls)
+	for i := range out {
+		if !out[i].Failed {
+			out[i].Result = ""
+		}
 	}
 	return out
 }

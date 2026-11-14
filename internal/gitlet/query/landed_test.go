@@ -217,6 +217,7 @@ func TestTheLandingSearchIsBoundedAndSaysSo(t *testing.T) {
 		rewrites = append(rewrites, x.p.Head(x.work))
 	}
 	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
 	tip, at := x.tip("refs/heads/main")
 	s := x.server(0, query.Options{})
 	query.SetLandedProbes(s, 3)
@@ -265,6 +266,7 @@ func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
 		rewrites = append(rewrites, x.p.Head(x.work))
 	}
 	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
 	tip, at := x.tip("refs/heads/main")
 	q := landedQ(repo, kept, "refs/heads/main", tip, at, false)
 	reached := x.pushesMoving(repo, "refs/heads/main", rewrites[3])[0]
@@ -324,6 +326,7 @@ func TestALandingSearchItsAnswerFallingDueOrABusyLaneEndsSaysHowFarItReached(t *
 		rewrites = append(rewrites, x.p.Head(x.work))
 	}
 	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
 	tip, at := x.tip("refs/heads/main")
 	q := landedQ(repo, kept, "refs/heads/main", tip, at, false)
 	reached := x.pushesMoving(repo, "refs/heads/main", rewrites[3])[0]

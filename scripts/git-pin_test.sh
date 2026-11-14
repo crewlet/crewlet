@@ -222,7 +222,8 @@ zero=0000000000000000000000000000000000000000000000000000000000000000
 # ============================================================================================================
 
 # standin <dir> <version> [control-dir]: writes <dir>/git-<version>.tar.xz, a source tree whose `make install`
-# writes a bin/git answering `git version <version>` under DESTDIR and prefix, beside a COPYING; prints its SHA-256.
+# writes a bin/git answering `git version <version>` under DESTDIR and prefix, and a cflags file holding the CFLAGS
+# the recipe handed its make, beside a COPYING; prints its SHA-256.
 # With a control directory, an install that finds <control>/hold there first touches <control>/arrived and waits for
 # <control>/go, so a case can hold a build in the middle of its install for as long as it looks around — a case
 # decides the order builds finish in rather than hoping a sleep does.
@@ -241,6 +242,7 @@ standin() {
 		printf "\techo '#!/bin/sh' >'\$(DESTDIR)\$(prefix)/bin/git'\n"
 		printf "\techo 'echo \"git version %s\"' >>'\$(DESTDIR)\$(prefix)/bin/git'\n" "$version"
 		printf "\tchmod 755 '\$(DESTDIR)\$(prefix)/bin/git'\n"
+		printf "\techo '\$(CFLAGS)' >'\$(DESTDIR)\$(prefix)/cflags'\n"
 	} >"$src/git-$version/Makefile"
 	tar -cf - -C "$src" "git-$version" | xz -c >"$dir/git-$version.tar.xz"
 	rm -rf "$src"
@@ -446,6 +448,21 @@ if [ ${#why[@]} -eq 0 ]; then
 else
 	bad "a prefix build carries git's licence, its source tarball, the recipe and a SOURCE naming them" "${why[@]}"
 fi
+
+# --- the C standard is the recipe's, never the compiler's default ------------------------------------------------
+
+# GCC 15 defaults to C23, which the client floor's git 2.40 does not compile under, so the recipe hands every build
+# -std=gnu17 (git.sh, ONE C STANDARD). Mutation: drop it from git.sh's CFLAGS and this case fails.
+s="$(scripts cstd)"
+sha="$(standin "$TMPROOT/cstd/downloads" 2.40.4)"
+pin "$s" 2.56.0 "$zero" 2.55.0 "$zero" 2.40.4 "$sha"
+run env CREWLET_GIT_CACHE="$TMPROOT/cstd/cache" GIT_PIN_DOWNLOADS="file://$TMPROOT/cstd/downloads" "$s/git.sh" client-floor
+expect "git.sh builds the client floor from its tarball" 0 "$TMPROOT/cstd/cache/2.40.4-$recipe/bin"
+handed="$(cat "$TMPROOT/cstd/cache/2.40.4-$recipe/cflags" 2>/dev/null)"
+case " $handed " in
+*" -std=gnu17 "*) ok "git.sh compiles every git under gnu17, whatever the compiler defaults to" ;;
+*) bad "git.sh compiles every git under gnu17, whatever the compiler defaults to" "the build's make was handed CFLAGS='$handed'" ;;
+esac
 
 # ============================================================================================================
 # scripts/git-pin-check.sh

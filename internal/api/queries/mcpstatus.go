@@ -96,8 +96,10 @@ type MCPStatusAnswer struct {
 	// Nodes are the live nodes in id order, each saying whether it
 	// reports at all — the columns every server's row is drawn against.
 	Nodes []MCPStatusNode `json:"nodes"`
-	// Builtin is the engine's own tools as a seat is offered them, on the
-	// catalogue's shelves in its order ([builtin.Groups]), each tool a
+	// Builtin is the engine's own tools as the company's seats are offered
+	// them, each agent all of them but those its surfaces leave off
+	// ([MCPAgentTools.BuiltinTools]), on the catalogue's shelves in its order
+	// ([builtin.Groups]), each tool a
 	// catalogue row naming who may call it. A shelf this company offers no
 	// tool of is left out: a company on Jira holds no Worklet tool, and an
 	// empty "Work items" would say its agents hold a group they do not.
@@ -194,6 +196,34 @@ type BuiltinGroup struct {
 	Description string `json:"description"`
 	// Tools are the shelf's tools in the catalogue's order. ALWAYS A LIST.
 	Tools []ToolRow `json:"tools"`
+}
+
+// BuiltinOffer is the engine's own tools as ONE registry offers them: the rows
+// every seat's surfaces are built from, and what that registry withholds from
+// each agent seat.
+//
+// ONE VALUE, never two sources, for [Sources.Company]'s reason: read apart, the
+// rows and the withholding could come from two registries either side of a
+// publish, and an agent would be counted against built-ins its withholding was
+// never decided against.
+type BuiltinOffer struct {
+	// Rows are the built-ins as catalogue rows, the discovery pair among them.
+	// Nil on a node with no active revision.
+	Rows []ToolRow
+	// Withheld is the names of the built-ins of the same registry that seat,
+	// an agent seat of the chart o, is offered on no surface of its turns: the
+	// engine's one answer (internal/engine's WithheldBuiltins), which every
+	// turn's surfaces are cut by. Nil withholds nothing.
+	Withheld func(ctx context.Context, o *org.Organization, seat *org.Role) []string
+}
+
+// withheldFrom is what offer withholds from seat, decided over o: nothing where
+// the offer carries no decision.
+func (offer BuiltinOffer) withheldFrom(ctx context.Context, o *org.Organization, seat *org.Role) []string {
+	if offer.Withheld == nil {
+		return nil
+	}
+	return offer.Withheld(ctx, o, seat)
 }
 
 // MCPStatusNode is one live node.
@@ -368,6 +398,10 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		return nil, err
 	}
 	status := s.mcpStatusOf(leases, grants)
+	// THE BUILT-INS READ ONCE, for the shelves and for every agent's count of
+	// them, so both are one registry's ([BuiltinOffer]).
+	builtins := s.builtinOffer()
+	status.Builtin = builtinGroups(builtins.Rows)
 	if MCPReading(ctx) != ReadingAdmin {
 		// NO ALARM ON A MEMBER'S READING: each one quotes a failure or a
 		// wait sentence, which that reading leaves out.
@@ -379,7 +413,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	}
 	// THE ADMIN'S ALONE, as a seat's tool sources are on the org chart: which
 	// servers an agent holds is read off the configuration's grants.
-	status.Agents = s.mcpAgents(ctx, leases, status)
+	status.Agents = s.mcpAgents(ctx, leases, status, builtins)
 	return status, nil
 }
 
@@ -434,7 +468,9 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 
 // mcpStatusOf is `mcp_servers_status` read off the presence leases given and
 // the servers' OAuth grants: the one reading of every server's row, which a
-// server's detail answers its own row from.
+// server's detail answers its own row from. Its built-in shelves are empty:
+// the status question fills them from the offer it reads once
+// ([Sources.mcpServersStatus]), and a server's detail reads no shelf.
 func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPGrant) MCPStatusAnswer {
 
 	type report struct {
@@ -463,7 +499,7 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPG
 		Reading:    ReadingAdmin,
 		Servers:    []MCPServerRow{},
 		Nodes:      make([]MCPStatusNode, 0, len(reports)),
-		Builtin:    s.builtinGroups(),
+		Builtin:    []BuiltinGroup{},
 		Alarms:     []MCPAlarm{},
 		Approvals:  []MCPApproval{},
 		Agents:     []MCPAgentTools{},
@@ -661,35 +697,41 @@ func mcpState(enabled, needsSignIn, anyReported bool, started, failed, waiting i
 	}
 }
 
-// builtinGroups files this node's built-ins on the catalogue's shelves.
+// builtinOffer is this node's built-ins as its runtime offers them, or none
+// where this surface was handed no runtime's.
+func (s Sources) builtinOffer() BuiltinOffer {
+	if s.Builtins == nil {
+		return BuiltinOffer{}
+	}
+	return s.Builtins()
+}
+
+// builtinGroups files rows, this node's built-ins, on the catalogue's shelves.
 //
 // A ROW THE CATALOGUE DOES NOT FILE IS LEFT OFF, because there is no shelf to
 // draw it on; internal/agent/builtin's sweep fails the build on a built-in a
 // seat is offered and the catalogue does not file, so this drops nothing a
 // build that passed its tests can offer.
-func (s Sources) builtinGroups() []BuiltinGroup {
+func builtinGroups(rows []ToolRow) []BuiltinGroup {
 	out := []BuiltinGroup{}
-	if s.Builtins == nil {
-		return out
-	}
 	shelves := map[builtin.Group][]ToolRow{}
-	for _, row := range s.Builtins() {
+	for _, row := range rows {
 		if row.Group.Valid() {
 			shelves[row.Group] = append(shelves[row.Group], row)
 		}
 	}
 	for _, g := range builtin.Groups {
-		rows := shelves[g]
-		if len(rows) == 0 {
+		shelf := shelves[g]
+		if len(shelf) == 0 {
 			continue
 		}
-		slices.SortStableFunc(rows, func(a, b ToolRow) int {
+		slices.SortStableFunc(shelf, func(a, b ToolRow) int {
 			fa, _ := builtin.FilingOf(a.Name)
 			fb, _ := builtin.FilingOf(b.Name)
 			return cmp.Compare(fa.Rank, fb.Rank)
 		})
 		out = append(out, BuiltinGroup{
-			Key: g, Label: g.Label(), Description: g.Description(), Tools: rows,
+			Key: g, Label: g.Label(), Description: g.Description(), Tools: shelf,
 		})
 	}
 	return out

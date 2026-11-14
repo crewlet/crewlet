@@ -228,15 +228,16 @@ type NodeRuntime interface {
 	Tools() []queries.ToolRow
 
 	// Builtins is the engine's own tools as this node's seats are offered
-	// them: the registry's built-ins and the discovery pair the runner
-	// hands every phase that discovers, which no registry holds. The MCP
-	// page's built-in catalogue, nil on a node with no active revision.
+	// them ([queries.BuiltinOffer]): the registry's built-ins and the
+	// discovery pair the runner hands every phase that discovers, which no
+	// registry holds — the MCP page's built-in catalogue, with no rows on a
+	// node with no active revision — and what that same registry withholds
+	// from each agent seat, which the page counts per agent.
 	//
-	// NOT Tools filtered by origin, because that is the registry alone,
-	// and a catalogue of what an agent holds that left out the two tools
-	// every executor reaches its MCP servers through would be short by
-	// exactly the pair a reader of the MCP page asks about.
-	Builtins() []queries.ToolRow
+	// NOT Tools filtered by origin, because that is the registry alone, and a
+	// catalogue of what an agent is offered that left out the discovery pair
+	// would be short by exactly the pair a reader of the MCP page asks about.
+	Builtins() queries.BuiltinOffer
 
 	// Listings is the fleet's listings of its MCP servers' tools as this
 	// node's watched copy holds them, and the schemas they name: what a

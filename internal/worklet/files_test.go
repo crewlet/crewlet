@@ -413,6 +413,30 @@ func TestAListingPagesAndFolders(t *testing.T) {
 	}
 }
 
+// A LISTING ASKED FOR MORE THAN A PAGE IS ANSWERED, NEVER REFUSED: a page past
+// [worklet.MaxFilePage] is held to it, so a caller asking for more files than
+// one answer carries reads the files there are. The listing refused it in an
+// error no surface could tell from this node's own failure, so a seat's
+// list_project_files answered internal_error and the query surface 500.
+//
+// Mutation: refuse a page past the cap in Reader.Files again and this fails.
+func TestAListingAskedPastItsPageIsAnswered(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, p := range []string{"a.md", "b.md", "c.md"} {
+		r.putFile("op-"+p, p, []byte(p))
+	}
+	listing, err := r.reader.Files(t.Context(), worklet.FileQuery{Project: "ENG",
+		Limit: worklet.MaxFilePage + 1, Freshness: stale})
+	if err != nil {
+		t.Fatalf("a listing asked for %d files = %v, want a page", worklet.MaxFilePage+1, err)
+	}
+	if len(listing.Files) != 3 || listing.Next != "" {
+		t.Fatalf("a listing asked past its page answered %d files and next %q, want "+
+			"all three and no next", len(listing.Files), listing.Next)
+	}
+}
+
 // ONE PATH, ONE SPELLING: what a caller means by a leading slash and spaces is
 // repaired, and what it could mean two things by is refused.
 func TestAPathHasOneSpelling(t *testing.T) {
