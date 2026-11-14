@@ -303,3 +303,56 @@ func TestALostJobsUnreadableBoxIsAskedAgainThenLeftBehind(t *testing.T) {
 		t.Errorf("charged %d tokens nobody read", charged)
 	}
 }
+
+// A LOSS CAUSE THIS BUILD DOES NOT KNOW IS A LOSS ALL THE SAME, said in general
+// terms. A build records causes an older one has no word for, as this one
+// records launch_node_store_silent on a row an older build may read when the
+// seat moves to it. Read as a cause it does not know, never Valid, it leaves no
+// box to read, the job's round is carried on, and what the run carrying it on is
+// told of it is the general sentence: nothing refuses the row, and nothing
+// panics. Every cause this build knows is Valid and says what happened in words
+// of its own.
+//
+// Mutation: drop launch_node_store_silent from LossCauses, or its words from
+// Why, and a cause this build records reads as one it does not know.
+func TestALossCauseThisBuildDoesNotKnowIsCarriedOnInGeneralTerms(t *testing.T) {
+	t.Parallel()
+	general := LossCause("").Why()
+	for _, cause := range []LossCause{LossEngineRestarted, LossBoxGone, LossLaunchNodeGone,
+		LossLaunchNodeStoreSilent} {
+		if !cause.Valid() || cause.Why() == general {
+			t.Errorf("cause %q: Valid %v, why %q; want a cause this build knows, said in words of its own",
+				cause, cause.Valid(), cause.Why())
+		}
+	}
+	unknown := LossCause("a_cause_of_a_newer_build")
+	if unknown.Valid() || unknown.Why() != general || unknown.leavesBox() {
+		t.Fatalf("an unknown cause: Valid %v, why %q, leaves its box %v; want it unknown, said in general "+
+			"terms, leaving no box to read", unknown.Valid(), unknown.Why(), unknown.leavesBox())
+	}
+
+	rig := newCoordRig(t)
+	reads := readHere(rig)
+	run := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "the box's account"})
+	if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID,
+		JobLoss{Cause: unknown, At: rig.now}); err != nil || !marked {
+		t.Fatalf("MarkLost = %v, %v", marked, err)
+	}
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	resumed := rig.resumer.calls()
+	if len(resumed) != 1 || resumed[0].Lost == nil || resumed[0].Lost.Cause != unknown ||
+		resumed[0].Lost.Why != general || resumed[0].Lost.BoxKept {
+		t.Fatalf("the turn resumed %d times (%+v); want its round carried on once, said in general terms, "+
+			"in a fresh box", len(resumed), resumed)
+	}
+	if *reads != 0 {
+		t.Fatalf("read the box of a job lost to a cause that leaves none %d times", *reads)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a lost job whose round is carried on", failed)
+	}
+}

@@ -950,6 +950,15 @@ func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, los
 	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
+func (s *refusingStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if s.called("MarkClaimLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
 	if s.called("AttachSandbox") {
 		return errRefusedCall

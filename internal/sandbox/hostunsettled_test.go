@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,21 +41,86 @@ func handedBackUnsettled(t *testing.T, rig *coordRig, step string) {
 	}
 }
 
-// givenUpUnreachable holds t1 to a run its collection gave up on because its
-// host's store alone did not answer: ended, once, as collect_unreachable, saying
-// why, and its record gone.
-func givenUpUnreachable(t *testing.T, rig *coordRig) {
+// lostWithItsHost collects t1 past the bound and holds it to a job its
+// collection recorded LOST with the host its box is on, because that host's
+// store alone did not answer it for the box timeout: nothing handed back for a
+// retry, nothing ended or announced, the loss on the claim's row at the
+// collection's instant as the turn resumes, and the turn resumed once to carry
+// the round on in a fresh box, the round's first loss; and the clock on the host
+// gone with it.
+func lostWithItsHost(t *testing.T, rig *coordRig) {
 	t.Helper()
+	at := rig.now
+	var (
+		mu    sync.Mutex
+		onRow *JobLoss
+	)
+	rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+		mu.Lock()
+		defer mu.Unlock()
+		onRow = rig.getIn(ctx, "t1").Lost
+	}
 	if err := collectAgain(t, rig); err != nil {
-		t.Fatalf("the collection past the box timeout = %v; want it given up", err)
+		t.Fatalf("the collection past the box timeout = %v; want the job lost with its host and its round "+
+			"carried on", err)
 	}
-	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureCollect ||
-		failed[0].Detail != collectUnsettledDetail {
-		t.Fatalf("announced %+v; want one %q saying the host could not read the run's record",
-			failed, types.ExecutorFailureCollect)
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v; want the job lost with its host and its round carried on, never its run "+
+			"ended as unreachable", failed)
 	}
-	rig.finished("t1")
+	mu.Lock()
+	recorded := onRow
+	mu.Unlock()
+	if recorded == nil || recorded.Cause != LossLaunchNodeStoreSilent || recorded.Node != "node-a" ||
+		!recorded.At.Equal(at) {
+		t.Fatalf("as the turn resumed the claim's row recorded %+v; want the job lost with node-a, at %v",
+			recorded, at)
+	}
+	resumed := rig.resumer.calls()
+	if len(resumed) != 1 || resumed[0].Lost == nil || resumed[0].Lost.Cause != LossLaunchNodeStoreSilent ||
+		resumed[0].Lost.BoxKept || resumed[0].Lost.Losses != 1 {
+		t.Fatalf("the turn resumed %d times (%+v); want its round carried on once, in a fresh box, the "+
+			"round's first loss", len(resumed), resumed)
+	}
+	if clocked(rig) {
+		t.Fatal("the clock on the host's store outlived the loss it led to")
+	}
+}
+
+// clocked reports whether the rig's coordinator keeps a clock on the store of
+// t1's box's host.
+func clocked(rig *coordRig) bool {
+	rig.coordinator.mu.Lock()
+	defer rig.coordinator.mu.Unlock()
+	_, kept := rig.coordinator.unsettled["t1"]
+	return kept
+}
+
+// unrecordedLoss is a run store that does not answer the record of a claimed
+// job's loss while silent is set, as a coordination store that did not answer
+// the write does, and answers every other call as the store beneath it does.
+type unrecordedLoss struct {
+	PendingStore
+	mu     sync.Mutex
+	silent bool
+}
+
+func (s *unrecordedLoss) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	s.mu.Lock()
+	silent := s.silent
+	s.mu.Unlock()
+	if silent {
+		return false, errStoreUnavailable("record the run's claimed job as lost", turnID)
+	}
+	return s.PendingStore.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
+func (s *unrecordedLoss) answer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = false
 }
 
 // A COLLECTION WHOSE HOST ALONE HAS A SILENT STORE IS GIVEN UP AS A SILENT HOST
@@ -64,19 +131,29 @@ func givenUpUnreachable(t *testing.T, rig *coordRig) {
 // verdict about the box, so each collection is handed back uncounted and asked
 // again, and once the host's store answers, the box is read and the turn
 // resumed. But only the host can read the box, and a host that cannot for the
-// box timeout is as good as away: past it the collection is given up, a
-// finished job's run ended as unreachable and a lost job's round carried on
-// without its read, as a host absent for the box timeout has its jobs taken for
-// lost. Handed back with no bound, it held the run, and its seat, for as long
-// as the partition lasted. The clock is the host's silence one answer after
-// another: a host that answered in between starts it again, and a host that
-// did not answer at all says nothing of its store and leaves it running. And a
-// step this node's own store did not answer is never given up on it.
+// box timeout is as good as away: past it the job is LOST with that host, as a
+// host absent for the box timeout has its jobs taken for lost. A finished job is
+// recorded lost on the claim its collection holds and its round carried on in a
+// box of its own, and a lost job's round is carried on without its read. Handed
+// back with no bound, it held the run, and its seat, for as long as the
+// partition lasted; and given up as a box that could not be read, it ENDED the
+// run of a job that had finished, collect_unreachable, where the round's calls
+// and its pushed branch were there to carry on from. The clock is the host's
+// silence one answer after another: a host that answered in between starts it
+// again, and a host that did not answer at all says nothing of its store and
+// leaves it running. A step this node's own store did not answer is never
+// given up on it, the record of the loss included, which keeps the clock for
+// the next collection to record it at once; a collection this node itself cut
+// short is handed back uncounted, never judged lost; and at its turn's deadline
+// a job lost with its host is ended as a lost job is, never as unreachable.
 //
 // Mutation: drop the bound (collectGivenUp gives up no store's silence); keep
 // the clock through a host whose store answered; start it again at a host that
 // did not answer; judge a step this node's own store did not answer by the
-// host's clock. Each turns a case red.
+// host's clock; end the run as unreachable past the bound, or hand it back
+// unlost; carry the round on with nothing recorded on the claim; forget the
+// clock before the loss lands; judge a collection this node cut short; or
+// leave a lost run unended at its deadline. Each turns a case red.
 func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *testing.T) {
 	t.Parallel()
 	timeout := DefaultBoxTimeout
@@ -89,7 +166,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		rig.now = rig.now.Add(timeout - time.Second)
 		handedBackUnsettled(t, rig, "within the box timeout")
 		rig.now = rig.now.Add(time.Second)
-		givenUpUnreachable(t, rig)
+		lostWithItsHost(t, rig)
 	})
 
 	t.Run("a host whose store answers within it", func(t *testing.T) {
@@ -139,7 +216,7 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 			t.Fatalf("announced %+v for a host whose store answered a minute ago", failed)
 		}
 		rig.now = rig.now.Add(timeout - time.Minute)
-		givenUpUnreachable(t, rig)
+		lostWithItsHost(t, rig)
 	})
 
 	t.Run("a host that did not answer in between", func(t *testing.T) {
@@ -155,7 +232,69 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		}
 		rig.coordinator.boxes = asks
 		rig.now = rig.now.Add(time.Minute)
-		givenUpUnreachable(t, rig)
+		lostWithItsHost(t, rig)
+	})
+
+	t.Run("a loss this node's own store does not record", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		mine := &unrecordedLoss{PendingStore: rig.coordinator.pending, silent: true}
+		rig.coordinator.pending = mine
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		rig.now = rig.now.Add(timeout)
+		handedBackUnsettled(t, rig, "past the box timeout, its loss this node's store did not record")
+		if got := rig.get("t1"); got.Lost != nil {
+			t.Fatalf("the row records %+v for a loss the store did not take", *got.Lost)
+		}
+		if !clocked(rig) {
+			t.Fatal("the clock on the host's store went with a loss that did not land")
+		}
+		// THE NEXT COLLECTION RECORDS IT AT ONCE, on the clock kept.
+		mine.answer()
+		lostWithItsHost(t, rig)
+	})
+
+	t.Run("a collection this node cuts short past the box timeout", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		rig.now = rig.now.Add(timeout)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rig.coordinator.boxes = &steppedRead{BoxReader: rig.coordinator.boxes, step: cancel}
+		if err := collectAgainIn(ctx, t, rig); err == nil {
+			t.Fatal("a collection this node cut short was not handed back for a retry")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Lost != nil || got.Launch.CollectFailures != 0 {
+			t.Fatalf("the collection cut short left the run %s, lost %+v, with %d failed collections; want it "+
+				"back in running, unlost and uncounted", got.Status, got.Lost, got.Launch.CollectFailures)
+		}
+		if failed, resumed := rig.failures(), rig.resumer.calls(); len(failed) != 0 || len(resumed) != 0 {
+			t.Fatalf("the collection cut short ended the run (%+v) or resumed it (%d)", failed, len(resumed))
+		}
+	})
+
+	t.Run("a job lost with its host at its turn's deadline", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		rig.now = rig.now.Add(timeout)
+		payload, _ := rig.completion("t1")
+		if err := rig.coordinator.completeAtDeadline(t.Context(), payload, rigLease,
+			"the seat's model is at its usage limit"); err != nil {
+			t.Fatalf("the collection at the deadline = %v; want the run ended there", err)
+		}
+		failed := rig.failures()
+		if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureDeadline {
+			t.Fatalf("announced %+v; want the run ended once at its deadline, as a lost job's is, never as "+
+				"unreachable", failed)
+		}
+		if resumed := rig.resumer.calls(); len(resumed) != 0 {
+			t.Fatalf("the turn resumed %d times past its deadline", len(resumed))
+		}
 	})
 
 	t.Run("a lost job's read on a host whose store stays silent", func(t *testing.T) {

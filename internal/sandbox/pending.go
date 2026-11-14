@@ -2911,6 +2911,24 @@ type PendingStore interface {
 	// that is gone. A zero loss.At is the store's clock.
 	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
 
+	// MarkClaimLost records on a job CLAIMED for its collection the verdict
+	// that it was lost with the host its box is on ([PendingRun.Lost]): the
+	// claim's own collection's, which found that host unable to read the
+	// job's row for the box timeout ([LossLaunchNodeStoreSilent]), so that the
+	// claim carries the job's round on and the relaunch that does counts the
+	// loss ([PendingRun.RoundLosses]). Reports whether the row carries a
+	// verdict for the job now, written by this call or by an earlier one,
+	// which stands.
+	//
+	// PINNED TO THE CLAIM the caller holds: the job (launch), the claim
+	// ([StatusResumed]) under fence, which a newer lease outranks, and, for a
+	// box on one node's host, that node (loss.Node). A job still running is
+	// the waiter's to judge ([PendingStore.MarkLost]), and a claim of another
+	// job, given back, outranked, or whose ending is decided is a claim no
+	// collection holds: false with no error, as is a row that is gone. A zero
+	// loss.At is the store's clock.
+	MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss, fence Fence) (bool, error)
+
 	// AttachSandbox records the box and the command a run is using. An
 	// attach naming a command records the job STARTED on the job's record
 	// ([LaunchRecord.Started]) in the same write, and no later write of the

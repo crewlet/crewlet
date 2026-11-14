@@ -71,6 +71,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
 		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"AClaimsCollectionRecordsItsJobLostOnItsClaimAlone", testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone},
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
@@ -859,6 +860,88 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 	}
 }
 
+// A CLAIM'S COLLECTION RECORDS ITS JOB LOST ON ITS CLAIM ALONE. The collection
+// of a job whose box only its node's host can read, from a host that has not
+// been able to read the run's row for the box timeout, records the job lost
+// with that host on the claim it holds, and that claim carries the job's round
+// on: the relaunch that does counts the loss. A job still running is the
+// waiter's to judge, and a verdict on another job, another node's box, or a
+// claim under a lease since outranked is one about a claim no collection
+// holds, which would have a round carried on that nothing found lost. Recorded
+// once, it stands at its first instant and cause.
+func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-claim-lost")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, Node: "node-a", At: at}
+	holder := sandbox.Fence{Owner: "node-b:1", Epoch: 3}
+	if _, err := s.ClaimOwnership(ctx, "t-claim-lost", holder.Owner, holder.Epoch); err != nil {
+		t.Fatalf("own: %v", err)
+	}
+
+	// RUNNING, the job is the waiter's to judge.
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || marked {
+		t.Fatalf("a verdict on a running job: marked=%v err=%v; want refused", marked, err)
+	}
+	mustClaim(t, s, "t-claim-lost")
+	for _, refused := range []struct {
+		name, launch, node string
+		fence              sandbox.Fence
+	}{
+		{"another job", "not-" + launch, "node-a", holder},
+		{"another node", launch, "node-b", holder},
+		{"no job", "", "node-a", holder},
+		{"a lease the claim's outranks", launch, "node-a", sandbox.Fence{Owner: "node-c:1", Epoch: 2}},
+	} {
+		loss := lost
+		loss.Node = refused.node
+		if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", refused.launch, loss, refused.fence); err != nil ||
+			marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
+	}
+
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || !marked {
+		t.Fatalf("the verdict on the claim's own job: marked=%v err=%v", marked, err)
+	}
+	got := mustGet(t, s, "t-claim-lost")
+	if got.Status != sandbox.StatusResumed || got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent || got.Lost.Node != "node-a" {
+		t.Fatalf("the row is %s and records %+v; want the claim kept with the verdict %+v on it",
+			got.Status, got.Lost, lost)
+	}
+	// It STANDS: asked again, the row still carries the first.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, again, holder); err != nil || !marked {
+		t.Errorf("a second verdict on the same claim: marked=%v err=%v; want the verdict standing", marked, err)
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
+	}
+
+	// THE RELAUNCH THAT CARRIES THE ROUND ON counts the loss, and its job is
+	// one nothing has judged.
+	next := run("t-claim-lost")
+	next.LaunchNode = "node-b"
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil || got.RoundLosses != 1 {
+		t.Errorf("the relaunch left the verdict %+v and counts %d losses; want it cleared and counted once",
+			got.Lost, got.RoundLosses)
+	}
+
+	// Nor does a run with no record.
+	if marked, err := s.MarkClaimLost(ctx, "t-none", "l", lost, holder); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
 // A ROUND COUNTS ITS LOST JOBS ACROSS THE RELAUNCHES THAT CARRY IT ON — each
 // one counted by the relaunch that follows it — and a new round starts from
 // none. The count is what stops a run that keeps taking its host down from
@@ -1452,6 +1535,10 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			return ok, err
 		},
 		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
+		"MarkClaimLost": func() (bool, error) {
+			return s.MarkClaimLost(ctx, "t1", launch,
+				sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, At: base}, sandbox.Fence{})
+		},
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {

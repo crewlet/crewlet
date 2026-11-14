@@ -1744,17 +1744,17 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		// completion is the waiter's announcement of that: what it left is
 		// no result, and its round is carried on, resumed here under this
 		// frame's admission.
-		var carry *lostCarry
-		carry, err = c.carryOnLost(ctx, run)
-		if err != nil || carry == nil {
-			return err
-		}
-		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
-		return err
+		return c.carryOn(adm, run, trigger)
 	}
 
 	run, result, collected, err := c.collectClaimed(ctx, run)
-	if !collected {
+	switch {
+	case !collected && run.Lost != nil:
+		// LOST WITH THE HOST ITS BOX IS ON, as this collection found it and
+		// recorded on the claim ([Coordinator.loseWithHost]): its round is
+		// carried on as a job the row held lost is, under the same admission.
+		return c.carryOn(adm, run, trigger)
+	case !collected:
 		return err
 	}
 
@@ -1788,11 +1788,26 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	return err
 }
 
+// carryOn carries the round of a lost job's claim on under adm
+// ([Coordinator.carryOnLost]): the turn resumed with the carry, or the claim as
+// the carry settled it, handed back or parked on the job's question.
+func (c *Coordinator) carryOn(adm admitted, run PendingRun, trigger *events.Event) error {
+	carry, err := c.carryOnLost(adm.ctx, run)
+	if err != nil || carry == nil {
+		return err
+	}
+	_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
+	return err
+}
+
 // collectClaimed reads a claimed run's job back and records it: the job's
 // result, its charge and its launch's own record, carried on the claimed row
 // so that handing the claim back hands the record back with it. collected is
 // false where the collection could not read the box, and err is then
-// [Coordinator.collectFailed]'s answer, which is the caller's to return.
+// [Coordinator.collectFailed]'s answer, which is the caller's to return; or,
+// where only the box's host has kept it unread for the box timeout, the run
+// comes back LOST with that host, the loss recorded on the claim, for the
+// caller to carry its round on ([Coordinator.loseWithHost]).
 //
 // ONE COLLECTION FOR EVERY WAY A CLAIM ENDS, a resume ([Coordinator.completeAdmitted])
 // and an ending at the turn's deadline ([Coordinator.completeAtDeadline])
@@ -1803,7 +1818,17 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// ([Coordinator.collect]): every hand-back from here on is made with it.
 	run, result, ended, err := c.collect(ctx, run)
 	if err != nil {
-		return run, Result{}, false, c.collectFailed(ctx, run, err)
+		// ONE VERDICT ON THE READ'S FAILURE ([collectVerdict]), which the
+		// hand-back acts on as it is: never judged again at a later reading
+		// of the clock. A read only the box's host has kept from it, for the
+		// box timeout, is no box that could not be read: its job is lost with
+		// that host, unless this node itself cut the collection short.
+		verdict := c.collectGivenUp(run, err, c.now())
+		if verdict.lostWithHost() && !errors.Is(ctx.Err(), context.Canceled) {
+			lost, lostErr := c.loseWithHost(ctx, run, err, verdict)
+			return lost, Result{}, false, lostErr
+		}
+		return run, Result{}, false, c.collectFailedAt(ctx, run, err, verdict)
 	}
 	// THE JOB'S CALLS STILL IN FLIGHT, waited for on the run's log before
 	// anything reads what the job did ([Coordinator.drainCalls]): its session
@@ -1974,8 +1999,13 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 // answers the claim, that premise fails: every write of this node's lands, and
 // the collection was asked again for as long as the partition lasted. So such
 // a host is given up after the box timeout, as a silent host is
-// ([hostUnsettled], [Coordinator.collectGivenUp]). A step its delivery's
-// deadline cut is the deadline's, and counted as above ([storeSilent]).
+// ([hostUnsettled], [Coordinator.collectGivenUp]): NOT HERE, by the collection
+// that read the box, which records a finished job lost with that host and
+// carries its round on ([Coordinator.loseWithHost]), and carries a lost job's
+// round on without the read ([Coordinator.carryOnLost]). A store's silence
+// that reaches this hand-back is handed back, whatever the bound, and never
+// ends the run as a box that could not be read. A step its delivery's deadline
+// cut is the deadline's, and counted as above ([storeSilent]).
 //
 // EVERY HAND-BACK HERE THAT THE STORE DOES NOT ANSWER IS KEPT by this node and
 // made again once the store answers, never turned into an ending for its
@@ -2028,13 +2058,14 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		return nil
 	}
 	now := verdict.at
-	if errors.Is(cause, ErrStoreSilent) && !verdict.givenUp {
+	if errors.Is(cause, ErrStoreSilent) {
 		// THE COORDINATION STORE DID NOT ANSWER a step the collection cannot
 		// go on without ([ErrStoreSilent]), which says nothing about the box:
 		// handed back uncounted, and the completion NAK'd for the queue's
 		// backoff, while the poll announces the job again on its next tick.
 		// A host whose store alone has been silent for the box timeout is
-		// given up below instead ([hostUnsettled]).
+		// given up by the collection that read the box, never here: its job
+		// is lost with that host ([collectVerdict.lostWithHost]).
 		log.WarnContext(ctx, "sandbox_collect_unsettled", "turn_id", run.TurnID,
 			"error", cause.Error(),
 			"detail", "the coordination store did not answer a step the collection cannot go on "+
@@ -2057,19 +2088,15 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 	if verdict.givenUp {
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
-			"box_gone", gone, "store_silent", verdict.unsettled,
-			"unsettled_for_s", verdict.unsettledFor.Seconds(), "error", cause.Error())
-		detail := "the executor's launch finished but its box could not be read back, so its " +
-			"result is lost; the work it pushed, if any, is on its branch"
-		if verdict.unsettled {
-			detail = collectUnsettledDetail
-		}
+			"box_gone", gone, "error", cause.Error())
 		c.forgetUnsettled(run.TurnID)
 		// The job is OVER even though collection failed. Free the seat and
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a
 		// reason to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run, types.ExecutorFailureCollect, detail)
+		c.settleFailed(ctx, run, types.ExecutorFailureCollect,
+			"the executor's launch finished but its box could not be read back, so its "+
+				"result is lost; the work it pushed, if any, is on its branch")
 		return nil
 	}
 	log.WarnContext(ctx, "sandbox_collect_retried", "turn_id", run.TurnID,
@@ -4656,14 +4683,6 @@ const (
 		"back, and the executor's claim could not be given back to the coordination store for another " +
 		"attempt, so its result is lost; the work it pushed, if any, is on its branch"
 )
-
-// collectUnsettledDetail is the sentence a collection given up on a host whose
-// coordination store alone did not answer, for the box timeout, reaches an
-// operator's board with ([hostUnsettled]): the box is up, but its host could
-// not read the run's record that licenses reading it.
-const collectUnsettledDetail = "the executor's launch finished but the node whose host its box " +
-	"is on could not read the run's record off the coordination store for the box timeout, so " +
-	"its box could not be read back and its result is lost; the work it pushed, if any, is on its branch"
 
 // resumeBrokenDetail is the sentence a run whose resume broke before its turn
 // began reaches an operator's board with: nothing of the turn ran, and trying

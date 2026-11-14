@@ -113,8 +113,11 @@ func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorF
 	c.forgetRefused(ev.TurnID)
 	var result Result
 	if run.Lost == nil {
+		// A JOB THIS COLLECTION FINDS LOST with the host its box is on
+		// ([Coordinator.loseWithHost]) is ended here as a job the row held
+		// lost is: unread, at its deadline.
 		var collected bool
-		if run, result, collected, err = c.collectClaimed(ctx, run); !collected {
+		if run, result, collected, err = c.collectClaimed(ctx, run); !collected && run.Lost == nil {
 			return err
 		}
 	}

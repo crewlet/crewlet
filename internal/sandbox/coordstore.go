@@ -1745,6 +1745,45 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 	return won || stands, nil
 }
 
+// MarkClaimLost records on a claimed job the verdict that it was lost with the
+// host its box is on, for the claim's own collection. See the contract on
+// [PendingStore].
+//
+// FENCED, unlike [CoordStore.MarkLost]: the verdict is the claim holder's, made
+// under its lease, and licenses that holder's own carrying on of the round; a
+// newer lease owns the run, and its collection, from the moment it takes the
+// seat.
+func (s *CoordStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	stands := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Status != StatusResumed || outranked(*run, fence) ||
+			(loss.Node != "" && run.LaunchNode != loss.Node) {
+			return false
+		}
+		if run.Lost != nil {
+			stands = true
+			return false
+		}
+		at := loss.At
+		if at.IsZero() {
+			at = s.clock()
+		}
+		recorded := loss
+		recorded.At = at.UTC()
+		run.Lost = &recorded
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record run %s's claimed job as lost: %w", turnID, err)
+	}
+	return won || stands, nil
+}
+
 // AttachSandbox records which box a run is using, fenced on the epoch.
 //
 // A REFUSED ATTACH IS AN ERROR, like a refused relaunch ([CoordStore.BeginLaunch]):

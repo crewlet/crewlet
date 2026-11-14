@@ -112,7 +112,8 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // carried on without its read for it ([Coordinator.collectGivenUp]), and a
 // stop's read of it is asked again. Each lasts for as long as a silent host is
 // waited for where the silence is the host's alone, a collection's by the
-// clock on its host ([hostUnsettled]) and a stop's from its decision
+// clock on its host ([hostUnsettled]), past which its job is lost with that host
+// ([LossLaunchNodeStoreSilent]), and a stop's from its decision
 // ([Coordinator.readStopped]), and for as long as the silence lasts where this
 // node's own store shares it. Counted, a store silent for the give-up window
 // settled a run whose box held its result as one whose result was lost, and
@@ -430,7 +431,9 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // answer is, such a collection was asked again for as long as the partition
 // lasted, its seat held behind it, while a host that did not answer at all is
 // taken for gone after the box timeout ([Waiter.goneAfter]). So it is given
-// up after that same bound, measured here ([Coordinator.collectGivenUp]).
+// up after that same bound, measured here ([Coordinator.collectGivenUp]), as
+// that waiter gives a gone node's jobs up: recorded lost with the host, and their
+// rounds carried on ([Coordinator.loseWithHost], [LossLaunchNodeStoreSilent]).
 //
 // IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
 // or the seat's next holder starts it again, which can only make the verdict
