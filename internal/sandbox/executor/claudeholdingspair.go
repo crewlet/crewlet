@@ -119,8 +119,9 @@ func splitBase(id string) (string, bool) {
 	return id[:at], true
 }
 
-// pairMark is what the pairing rule files of one record ([holdingsPairing.see]).
-type pairMark uint8
+// pairMark is what the pairing rule files of one record ([holdingsPairing.see]),
+// and what rule 2 files beside it of a subagent's ([holdingsPairing.flag]).
+type pairMark uint16
 
 const (
 	// pairPlainReply is an assistant record no mark keeps from being a plain
@@ -138,8 +139,16 @@ const (
 	// more than one.
 	pairPoll
 	pairPolls
-	// pairAssistant is an assistant record, plain or not.
+	// pairAssistant is an assistant record, plain or not, and pairUser a user
+	// record.
 	pairAssistant
+	pairUser
+	// pairLegStart is a subagent's own user record that starts a leg of its
+	// work, and pairFinished its own reply that finished one, as rule 2
+	// reads them ([legStart], [finishedReply]); filed by that rule alone, of a
+	// subagent's thread.
+	pairLegStart
+	pairFinished
 )
 
 // holdingsPairing is what the pairing rule files of one thread as it is read,
@@ -180,6 +189,7 @@ func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 			mark |= pairPolls
 		}
 	case recordUser:
+		mark |= pairUser
 		if plainResults(line, m) {
 			mark |= pairPlainResults
 		}
@@ -189,6 +199,14 @@ func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 		}
 	}
 	p.marks[h-1] = mark
+}
+
+// flag adds mark to record h's marks, filed by see already. A record filed
+// past the chain's bound, or none at all, has none.
+func (p *holdingsPairing) flag(h chainHandle, mark pairMark) {
+	if h > 0 && int(h) <= len(p.marks) {
+		p.marks[h-1] |= mark
+	}
 }
 
 // plainReply reports whether line, an assistant record, is a plain record of

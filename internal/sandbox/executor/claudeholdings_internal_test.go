@@ -537,60 +537,6 @@ func TestAResultBeforeTheLastRestartIsNotLive(t *testing.T) {
 	}
 }
 
-// A RESULT READ BEFORE ITS CALL'S USE IS NOT LIVE in a subagent's thread:
-// what a continuation sends pairs a result with the call before it in its own
-// conversation, and the API refuses a result no call precedes, so a result
-// the resume hands its model before its call's use, which no harness writes,
-// is handed to no model with its call: its call is told, where its line comes
-// before its use's, and, since a subagent's thread follows a parent written
-// after its record, where its use's line comes first but the use names it as
-// its parent, its subagent still reported. Nor is a result in another thread
-// than its call's use, though its line comes later. (The main thread's are
-// [TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult]'s.)
-//
-// Mutation: read a result as live wherever its call's use lies, and the result
-// before its use holds its call; compare their lines alone, past a subagent's
-// first step to a parent written after its record, and the use chained after
-// its result holds its call; or compare their lines across threads, and the
-// result after a use in another thread reads as live.
-func TestAResultReadBeforeItsCallsUseIsNotLive(t *testing.T) {
-	t.Parallel()
-	t.Run("its use in a subagent's thread, its result after it in the main thread", func(t *testing.T) {
-		t.Parallel()
-		s := hsForeground(t)
-		s.main = append(s.main, hsAnswerOf(t, ctUUID(3), ctUUID(5), hsSubCall, hsSubOut, hsBlock(t, hsSubOut)))
-		s.thread = []string{s.thread[0], s.thread[1], ctReplace(t, s.thread[3], `"parentUuid":"`+ctUUID(103)+`"`,
-			`"parentUuid":"`+ctUUID(102)+`"`)}
-		got := hsSubagentRead(t, s)
-		if records := got.Calls[hsSubCall]; records.Uses != 1 || records.Results != 1 || records.Live {
-			t.Errorf("its records %+v; want its one use and its one result, not live", records)
-		}
-	})
-	for name, edit := range map[string]func(*testing.T, *hsSession){
-		"in a subagent's thread, its result, then its use": func(_ *testing.T, s *hsSession) {
-			s.thread[1], s.thread[2] = s.thread[2], s.thread[1]
-		},
-		"in a subagent's thread, its use written first and chained after its result": func(t *testing.T,
-			s *hsSession) {
-			s.thread = []string{s.thread[0], hsSide(t, ctAssistant(ctUUID(103), ctUUID(102), hsUse(hsSubCall))),
-				hsSide(t, hsAnswerOf(t, ctUUID(101), ctUUID(103), hsSubCall, hsSubOut, hsBlock(t, hsSubOut))),
-				hsSide(t, hsFinished(t, ctUUID(102), ctUUID(104)))}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			s := hsForeground(t)
-			edit(t, &s)
-			got := hsSubagentRead(t, s)
-			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-			if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
-				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
-					"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
-			}
-		})
-	}
-}
-
 // A RESULT ITS HARNESS REPLACED IS NOT LIVE: where Claude Code hands its model
 // a preview in a result's place, it records the replacement beside the
 // result's own record, which keeps the whole output, and a resume hands its
@@ -762,8 +708,14 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // microcompaction's boundary before the reply, a result marked not meta, two
 // calls of one reply each with its own result, one Poll call alone, and an id
 // of a split one's form where no call carries the id it reads as split from.
+// In a subagent's thread the rule reads each order the subagent's own load
+// hands (newThreadChain(agent)), its subagent reported: another reply inside
+// the use's reply is told, and the result written before its use and handed
+// after it is held, as the control is.
 //
-// Mutation: tell every call, and each held case is told; drop C0, and the
+// Mutation: pair a subagent's call by its records' lines in the file, and the
+// subagent's use inside a reply split by another is held, and the result
+// written before its use told; tell every call, and each held case is told; drop C0, and the
 // id-less uses alone are held; take F for the use's record, not its reply's
 // first, and the use folded back past another reply is held; drop the test of
 // another reply in the stretch, and so is that use; read every user record as
@@ -974,6 +926,56 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 			}
 		})
 	}
+	// IN A SUBAGENT'S THREAD, by the same rule over each order its own load
+	// hands, its subagent reported in each: another reply between the first
+	// record of the use's reply and the use, told; and held, the result
+	// written before its use but handed after it, and the control.
+	for name, tc := range map[string]struct {
+		lines []string
+		held  bool
+	}{
+		"in a subagent's thread, as written": {lines: []string{prompt(0, 1), reply(1, 2, "msg_u", rcCalls(hsSubCall)),
+			hsSubResult(t, 2, 3, 300), reply(3, 4, "msg_f", said)}, held: true},
+		// [1, 2, 3, 4, 5, 6]: another reply between the use's reply's first
+		// record and the use.
+		"in a subagent's thread, another reply inside the use's reply": {lines: []string{prompt(0, 1),
+			reply(1, 2, "msg_u", said), reply(2, 3, "msg_c", said), reply(3, 4, "msg_u", rcCalls(hsSubCall)),
+			hsSubResult(t, 4, 5, 500), reply(5, 6, "msg_f", said)}},
+		// [1, 2, 4, 3]: the result written first and handed after the use.
+		"in a subagent's thread, its result written first and chained after its use": {lines: []string{
+			prompt(0, 1), hsSubResult(t, 3, 2, 300), reply(1, 3, "msg_u", rcCalls(hsSubCall)),
+			reply(2, 4, "msg_f", said)}, held: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			s.thread = hsOwn(t, tc.lines...)
+			got := hsSubagentRead(t, s)
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			if records := got.Calls[hsSubCall]; held != tc.held || under != "" || !got.Subagents[ctAgent].Reported {
+				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it held %t, its subagent "+
+					"reported", held, under, records, got.Subagents[ctAgent], tc.held)
+			}
+		})
+	}
+}
+
+// hsOwn is lines, records as [rcReply] and its kin write them, as ctAgent's
+// own records of its thread ([rcOwn]).
+func hsOwn(t *testing.T, lines ...string) []string {
+	t.Helper()
+	own := make([]string, len(lines))
+	for i, line := range lines {
+		own[i] = rcOwn(t, line)
+	}
+	return own
+}
+
+// hsSubResult is record n, written at ms, the result of ctAgent's call
+// hsSubCall of the text its bridge answered, chained to parent.
+func hsSubResult(t *testing.T, parent, n, ms int) string {
+	t.Helper()
+	return ctReplace(t, rcResults(parent, n, ms, hsSubCall), `"content":"ok"`, `"content":"`+hsSubOut+`"`)
 }
 
 // hsReplyOf is a model's reply of the id reply, chained to parent, whose
@@ -998,66 +1000,6 @@ func hsProgress(parent, uuid string) string {
 		`","timestamp":"` + ctStamp + `",` + ctTail("2.1.322") + `}`
 }
 
-// A RESULT IS LIVE ONLY WHERE THE RESUME HANDS ITS MODEL ITS RECORDS, in a
-// subagent's thread, as Claude Code's resume builds the conversation (2.1.310
-// and 2.1.322): the chain from its last record of its own, and off it, the
-// records of a reply on it, found by the reply's id, and a result whose parent
-// is one. A withdrawn attempt's call there is told, its subagent still
-// reported, and so it is where a record of no agent hangs off the attempt
-// last; and a walk that meets a parent naming no record, or a record it
-// already took, before the thread's root leaves the subagent not whole. (The
-// main thread's are
-// [TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult]'s.)
-//
-// Mutation: walk a subagent's thread from its last record of any agent, and
-// the attempt a record of no agent hangs off is held; or read a subagent's
-// chain that breaks as whole, and its subagent is reported.
-func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
-	t.Parallel()
-	for name, trailing := range map[string]string{
-		"a withdrawn attempt in a subagent's thread": "",
-		// A RECORD OF NO AGENT AFTER IT, hanging off the attempt: the walk
-		// starts from the thread's last record of its own, never from that.
-		"a withdrawn attempt in a subagent's thread, a record of no agent hanging off it last": ctReplace(t,
-			ctAttachment(ctUUID(103), ctUUID(105), ctTokens, ctTokensRendered), `"isSidechain":false`,
-			`"isSidechain":true`),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			s := hsForeground(t)
-			s.thread = []string{s.thread[0],
-				hsSide(t, hsReplyOf(t, ctUUID(101), ctUUID(102), "msg_withdrawn", hsUse(hsSubCall))), s.thread[2],
-				hsSide(t, ctReplace(t, hsFinished(t, ctUUID(101), ctUUID(104)), `"id":"msg_test"`, `"id":"msg_retry"`))}
-			if trailing != "" {
-				s.thread = append(s.thread, trailing)
-			}
-			got := hsSubagentRead(t, s)
-			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-			if records := got.Calls[hsSubCall]; held || under != "" || records.Live ||
-				!got.Subagents[ctAgent].Reported {
-				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
-					"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
-			}
-		})
-	}
-	for name, edit := range map[string]func(*testing.T, *hsSession){
-		"a parent naming no record in a subagent's thread": func(t *testing.T, s *hsSession) {
-			s.thread[3] = hsSide(t, hsFinished(t, ctUUID(199), ctUUID(104)))
-		},
-		"a record its walk already took, in a subagent's thread": func(t *testing.T, s *hsSession) {
-			s.thread[3] = hsSide(t, hsFinished(t, ctUUID(105), ctUUID(104)))
-			s.thread = append(s.thread, hsSide(t, ctAttachment(ctUUID(104), ctUUID(105), ctTokens, ctTokensRendered)))
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			s := hsForeground(t)
-			edit(t, &s)
-			hsReports(t, s, hsNotWhole)
-		})
-	}
-}
-
 // A RECORD A RETRACTION NAMES IS HANDED TO NO MODEL, as Claude Code's resume
 // drops it once it has walked the chain (2.1.310 and 2.1.322): a record whose
 // uuid's first 24 characters are those of a uuid a refused reply's fallback,
@@ -1065,8 +1007,8 @@ func TestAResultIsLiveOnlyWhereTheResumeHandsItsModelItsRecords(t *testing.T) {
 // beside it. So a call is told whose record a fallback names, or whose
 // result's; whose record, a sibling of the chain's reply, a fallback names;
 // whose record a retry names; whose record an entry names by its first 24
-// characters alone, another tail after them; and, in a subagent's thread,
-// whose record its own thread's fallback names, its subagent still reported.
+// characters alone, another tail after them. (A subagent's thread holding
+// any retraction list is not whole: [TestARetractionListInASubagentsThreadLeavesItNotWhole].)
 // An entry no record's uuid can begin with names no record: the call is held
 // beside one naming the call's record in uppercase, or cut short, as with no
 // retraction at all (the chain critique's probes P1a to P1d).
@@ -1123,17 +1065,6 @@ func TestARecordARetractionNamesIsHandedToNoModel(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a call of a subagent's, its record named by its own thread's fallback", func(t *testing.T) {
-		t.Parallel()
-		s := hsForeground(t)
-		s.thread = append(s.thread, hsSide(t, ctFallback(ctUUID(104), ctUUID(105), ctUUID(102))))
-		got := hsSubagentRead(t, s)
-		held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-		if records := got.Calls[hsSubCall]; held || under != "" || records.Live || !got.Subagents[ctAgent].Reported {
-			t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it told in the main list, its "+
-				"result not live, its subagent reported", held, under, records, got.Subagents[ctAgent])
-		}
-	})
 }
 
 // A MAIN THREAD THE RESUME'S MODEL CANNOT PLACE IS NO READING: where the
@@ -1251,55 +1182,26 @@ func TestAMainThreadTheResumeModelCannotPlaceIsUnread(t *testing.T) {
 	})
 }
 
-// A THREAD IS WALKED WITHIN ITS RECORDS' BOUND. A main thread past the bound
-// of the model of Claude Code's resume ([threadChainMaxRecords]: here one
-// whose refusal's fallback names more uuids than it files) is no reading, the
-// model's own cannot tell; and a subagent's thread of one more record than
-// [holdingsMaxRecords] (lowered here, as a test lowers the plaintext's) is not
-// whole, and files no record past it, so what the walk holds stays within the
-// bound. A uuid a record retracts counts toward a subagent's bound as a record
-// does.
+// A MAIN THREAD PAST THE MODEL'S BOUND IS NO READING: past the bound of the
+// model of Claude Code's resume ([threadChainMaxRecords]: here one whose
+// refusal's fallback names more uuids than it files) the model cannot tell
+// what the resume hands, and the reading says so. (A subagent's thread past
+// it is read on: [TestASubagentPastTheChainsBoundIsCountedStill].)
 //
-// Mutation: file a subagent's records past the bound, and the longer
-// subagent's thread is whole; or count no retracted uuid toward it, and the
-// thread that holds one is walked within one fewer.
+// Mutation: read on as though the model placed a thread past its bound, and
+// the reading stands.
 func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 	t.Parallel()
-	ask := hsAsk(hsLogged(hsSubCall, hsSubOut))
-	t.Run("a main thread past the model's bound", func(t *testing.T) {
-		t.Parallel()
-		named := make([]int, threadChainMaxRecords)
-		for i := range named {
-			named[i] = 1000 + i
-		}
-		pair := hsCall(ctUUID(1), 2, hsSubCall, hsBlock(t, hsSubOut))
-		thread := hsThread(append(pair, rcFallback(3, 4, 0, rcQuoted(named...)))...)
-		got, err := hsRead(t, hsArchive(t, thread), ctSession, ask)
-		hsNoReading(t, got, err)
-		if !strings.Contains(err.Error(), string(whyBound)) {
-			t.Errorf("no reading for %v; want it the model's bound", err)
-		}
-	})
-	// retraction names a record no thread here carries.
-	const retraction = "77777777-0000-4000-8000-000000000001"
-	foreground := hsForeground(t).thread
-	retracting := append(slices.Clone(foreground), hsSide(t, ctFallback(ctUUID(104), ctUUID(105), retraction)))
-	for _, tc := range []struct {
-		thread  []string
-		records int
-		whole   bool
-	}{{foreground, 4, true}, {foreground, 3, false}, {retracting, 6, true}, {retracting, 5, false}} {
-		w := newHoldingsWalk(ctSession, ask, hsBounds())
-		w.records = tc.records
-		a := &subagentFacts{}
-		w.agents[ctAgent] = a
-		if err := w.subagentThread(t.Context(), ctAgent, a, strings.NewReader(ctThread(tc.thread...))); err != nil {
-			t.Fatalf("a subagent's thread within %d: %v", tc.records, err)
-		}
-		if whole := a.broken == ""; whole != tc.whole || (!whole && !strings.Contains(a.broken, "cannot walk")) {
-			t.Errorf("a subagent's thread of %d lines within %d is not whole for %q; want it whole %t",
-				len(tc.thread), tc.records, a.broken, tc.whole)
-		}
+	named := make([]int, threadChainMaxRecords)
+	for i := range named {
+		named[i] = 1000 + i
+	}
+	pair := hsCall(ctUUID(1), 2, hsSubCall, hsBlock(t, hsSubOut))
+	thread := hsThread(append(pair, rcFallback(3, 4, 0, rcQuoted(named...)))...)
+	got, err := hsRead(t, hsArchive(t, thread), ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)))
+	hsNoReading(t, got, err)
+	if !strings.Contains(err.Error(), string(whyBound)) {
+		t.Errorf("no reading for %v; want it the model's bound", err)
 	}
 }
 
@@ -2156,16 +2058,20 @@ const (
 // bridge answered, as the log keeps them.
 type hsMeasured map[string][]sandbox.LoggedCall
 
-// A SUBAGENT IS REPORTED ONLY WHERE EVERY LEG WAS ANSWERED AND FINISHED (rule
-// 2), so a call its thread holds is held only then; otherwise it is told under
-// the subagent's heading, the reading saying which condition failed first.
+// A SUBAGENT IS REPORTED ONLY WHERE ITS ONE CONVERSATION ANSWERED AND FINISHED
+// EVERY LEG (rule 2), the conversation the subagent's own load hands
+// ([threadChain], newThreadChain(agent)), so a call its thread holds is held
+// only then; otherwise it is told under the subagent's heading, the reading
+// saying which condition failed first.
 // Measured: P2(g)'s two subagents, one answered by its Agent call's own
 // result and one by its task notification, P2(h)'s with a tree of two calls
 // at once in each thread, P2(c)'s, P2(dc)'s, T5's on both releases and T10's
 // on both, the last on 2.1.322 past the turnCompanion record before its
 // notification, are reported; P2(dc)'s box copy, its subagent's thread cut
-// back before its last reply (condition 5), and P2(d)'s, its Agent call
-// answered by the resume's own result (condition 3), are not. Built, each
+// back before its last reply (condition 5), and P2(d)'s, are not: its Agent
+// call answered by the resume's own result (condition 3), and before that its
+// thread not whole, the call it was cut off in a record of its own that its
+// resumed conversation, chained past it, never hands (the strict rule). Built, each
 // otherwise reportable: a subagent whose metadata is missing, names a call of
 // another tool, or names an id a second Agent call carries; whose thread
 // restarts, holds a record of another agent's or a progress record, which
@@ -2190,7 +2096,17 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // is answered; a subagent a Task call started reads as one an Agent call did;
 // a prompt whose parentUuid is the empty string or absent roots its thread's
 // chain, as Claude Code's walk reads it; and the members' order is the box's
-// to choose.
+// to choose. Built of the load's own records, each of its own id and time:
+// its conversation is reported, and so are two calls at once whose first
+// result its load recovers beside their reply, a leaf it hands, and a reply
+// that finished its leg written before the result it follows, the last of its
+// conversation all the same; and not a reply that finished on a branch its
+// call is not on, written last but stamped before its leaf, nor one its load
+// takes for its leaf, its call off the conversation (the strict rule); not a
+// reply that finished its leg written last but handed before its call, the
+// leg ending on its result along the conversation (condition 5); and not a
+// leg's start off the conversation, under a reply its load recovers
+// (condition 4, over the whole file).
 //
 // Mutation: ignore a restart in a subagent's thread, and the restarted one is
 // reported; drop condition 4, and the second leg's subagent is reported; take
@@ -2206,9 +2122,31 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // agent's, a progress record, an answer handed only beside its call's record
 // handed), and the subagent its case built is reported; or read a prompt's
 // parentUuid that is empty or absent as naming no record, and the subagent
-// whose prompt carries it is not whole.
-func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T) {
+// whose prompt carries it is not whole. Drop the strict rule, and the reply
+// that finished on another branch is reported; apply it to every own leaf,
+// the leaf aside or not, and the two calls at once are not whole; read
+// condition 5 in the file's order, and the reply handed before its call
+// reports its subagent while the one written before its result does not; or
+// count condition 4's leg starts along the conversation alone, and the leg's
+// start off it reports its subagent.
+func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryLeg(t *testing.T) {
 	t.Parallel()
+	// conversation is hsForeground's session whose subagent's thread is what
+	// lines writes, records as rcReply and its kin write them, each of its own
+	// ([hsOwn]), each written at the time it states.
+	conversation := func(lines func(*testing.T) []string) func(*testing.T) hsSession {
+		return func(t *testing.T) hsSession {
+			s := hsForeground(t)
+			s.thread = hsOwn(t, lines(t)...)
+			return s
+		}
+	}
+	said, x := rcSaid("done"), rcCalls(hsSubCall)
+	// asked is the call, its result and the reply that finished its leg.
+	asked := func(t *testing.T) []string {
+		return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
+			rcReply(3, 4, "msg_f", 400, said)}
+	}
 	with := func(base func(*testing.T) hsSession, edit func(*testing.T, *hsSession)) func(*testing.T) hsSession {
 		return func(t *testing.T) hsSession {
 			s := base(t)
@@ -2368,6 +2306,36 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		}), hsNotWhole},
 		"sent a message its own result refused with null": {with(hsForeground, sent("null")), hsUnanswered},
 		"sent a message with no result":                   {with(hsForeground, sent("")), hsUnanswered},
+		"its conversation of its load's own records":      {conversation(asked), ""},
+		// [1, 2, 3, 4, 5, 6]: 4 recovered beside msg_u, before 5.
+		"two calls at once, the first's result recovered beside their reply": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x),
+				rcReply(2, 3, "msg_u", 250, rcCalls("toolu_sub_y")), hsSubResult(t, 2, 4, 300),
+				rcResults(3, 5, 350, "toolu_sub_y"), rcReply(5, 6, "msg_f", 400, said)}
+		}), ""},
+		// [1, 2, 4, 3]: 3 written before 4, its parent.
+		"the reply that finished its leg written before the result it follows": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), rcReply(4, 3, "msg_f", 400, said),
+				hsSubResult(t, 2, 4, 300)}
+		}), ""},
+		// [1, 2, 3, 4]: 5, written last, stamped before 4, the leaf.
+		"a reply that finished on a branch its call is not on": {conversation(func(t *testing.T) []string {
+			return append(asked(t), rcReply(1, 5, "msg_g", 350, said))
+		}), hsNotWhole},
+		// [1, 5]: 5 the leaf, the call off the conversation.
+		"its load's leaf a reply on a branch its call is not on": {conversation(func(t *testing.T) []string {
+			return append(asked(t), rcReply(1, 5, "msg_g", 500, said))
+		}), hsNotWhole},
+		// [1, 2, 5, 3, 4]: 5, of msg_p, recovered beside 2; the leg ends on 4.
+		"the reply that finished its leg written last, handed before its call": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_p", 200, rcSaid("first")),
+				rcReply(2, 3, "msg_u", 300, x), hsSubResult(t, 3, 4, 400), rcReply(2, 5, "msg_p", 250, said)}
+		}), hsUnfinished},
+		// [1, 2, 3, 5, 6]: 5, of msg_f, recovered beside 6; 4, a leg's start, off it.
+		"a leg's start off its conversation, under a reply its load recovers": {conversation(func(t *testing.T) []string {
+			return []string{rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, x), hsSubResult(t, 2, 3, 300),
+				rcPrompt(1, 4, 350), rcReply(4, 5, "msg_f", 400, rcSaid("aside")), rcReply(3, 6, "msg_f", 500, said)}
+		}), hsUnseenLeg},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2396,7 +2364,7 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 		"2.1.310/DCC": {hsMeasured{"a0000000000000001": {done("toolu_d2a", "d2a"), done("toolu_d2b", "d2b")}},
 			hsUnfinished},
 		"2.1.310/DW": {hsMeasured{"a0000000000000001": {done("toolu_d1a", "d1a"), done("toolu_d1b", "d1b")}},
-			hsUnanswered},
+			hsNotWhole},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2437,6 +2405,247 @@ func TestASubagentIsReportedOnlyWhereEveryLegWasAnsweredAndFinished(t *testing.T
 				held, under, got.Subagents["a0000000000000002"])
 		}
 	})
+}
+
+// hsAsked is a subagent's conversation of the load's own records: its
+// prompt, its call of hsSubCall and the call's result, and the reply that
+// finished its leg, each of its own id and time, followed by more.
+func hsAsked(t *testing.T, more ...string) hsSession {
+	t.Helper()
+	s := hsForeground(t)
+	s.thread = append(hsOwn(t, rcPrompt(0, 1, 100), rcReply(1, 2, "msg_u", 200, rcCalls(hsSubCall)),
+		hsSubResult(t, 2, 3, 300), rcReply(3, 4, "msg_f", 400, rcSaid("done"))), hsOwn(t, more...)...)
+	return s
+}
+
+// A REPLY ITS MODEL REFUSED LEAVES ITS SUBAGENT NOT WHOLE (rule 2): where a
+// model refuses a reply, Claude Code moves the request to another model and
+// takes the refused attempt's records back out of the conversation it goes on
+// with, and a subagent's file records no fallback of it, so an attempt that
+// stopped "refusal" lies on what its own load hands though its model went on
+// without it. Its subagent is unreported, its call told under its heading;
+// the same reply stopped "end_turn" leaves it reported.
+//
+// Mutation: read past a reply's refusal, and the refused one's subagent is
+// reported.
+func TestARefusedReplyLeavesItsSubagentNotWhole(t *testing.T) {
+	t.Parallel()
+	for stop, why := range map[string]string{"refusal": hsNotWhole, "end_turn": ""} {
+		t.Run(stop, func(t *testing.T) {
+			t.Parallel()
+			s := hsAsked(t, ctReplace(t, rcReply(4, 5, "msg_r", 500, rcSaid("I cannot help with that.")),
+				`"stop_reason":"end_turn"`, `"stop_reason":"`+stop+`"`), rcReply(5, 6, "msg_g", 600, rcSaid("done")))
+			hsReports(t, s, why)
+		})
+	}
+}
+
+// A RETRACTION LIST IN A SUBAGENT'S THREAD LEAVES IT NOT WHOLE (rule 2): no
+// load of a subagent's thread filters by one ([threadLine.Retracted]), so
+// where its file names records taken back, what its model was handed is not
+// what the file holds. A refused reply's fallback naming the call's record,
+// or naming no record of the thread, a malformed reply's retry naming one,
+// and a list in no shape Claude Code writes each leave the subagent
+// unreported, its call told under its heading; the conversation without one
+// is reported.
+//
+// Mutation: read past a subagent's retraction list, and each subagent whose
+// list names a record of its own, or none, is reported.
+func TestARetractionListInASubagentsThreadLeavesItNotWhole(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		more []string
+		why  string
+	}{
+		"none": {nil, ""},
+		"a refusal's fallback naming its call's record": {[]string{rcFallback(4, 5, 450, rcQuoted(2))}, hsNotWhole},
+		"a refusal's fallback naming no record of its thread": {[]string{rcFallback(4, 5, 450,
+			`"77777777-0000-4000-8000-000000000001"`)}, hsNotWhole},
+		"a malformed reply's retry naming its call's record": {[]string{rcRetry(4, 5, 450, rcQuoted(2))},
+			hsNotWhole},
+		"a list in no shape Claude Code writes": {[]string{rcFallback(4, 5, 450, `1`)}, hsNotWhole},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hsReports(t, hsAsked(t, tc.more...), tc.why)
+		})
+	}
+}
+
+// A LEG FINISHED WITHOUT TEXT IS UNFINISHED (rule 2, condition 5): a subagent
+// answers its caller with the text of its last reply whose text says
+// something, as JavaScript's trim() reads it (2.1.322's pkn through t5t,
+// 2.1.310's Owr through POt), so a leg whose last reply ended its turn with
+// thinking alone, or text of white space or a byte order mark alone, answers
+// with an earlier reply's text, written before its call's result was. Each
+// leaves its subagent unreported; text beside thinking, and a text of U+0085
+// alone, which trim() keeps, finish it.
+//
+// Mutation: take a reply of thinking or blank text alone for finished, and
+// each such leg's subagent is reported.
+func TestALegFinishedWithoutTextIsUnfinished(t *testing.T) {
+	t.Parallel()
+	const thought = `{"type":"thinking","thinking":"done","signature":"c2ln"}`
+	for name, tc := range map[string]struct {
+		content, why string
+	}{
+		"text":                      {rcSaid("done"), ""},
+		"thinking and text":         {`[` + thought + `,{"type":"text","text":"done"}]`, ""},
+		"text of U+0085 alone":      {`[{"type":"text","text":"\u0085"}]`, ""},
+		"thinking alone":            {`[` + thought + `]`, hsUnfinished},
+		"text of white space alone": {`[{"type":"text","text":" \n\t"}]`, hsUnfinished},
+		"text of U+FEFF alone":      {`[{"type":"text","text":"\ufeff"}]`, hsUnfinished},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsAsked(t)
+			s.thread[3] = rcOwn(t, rcReply(3, 4, "msg_f", 400, tc.content))
+			hsReports(t, s, tc.why)
+		})
+	}
+}
+
+// A TORN SUBAGENT THREAD IS NOT WHOLE (rule 2): the box cuts a subagent's torn
+// last piece only where it has find, and the subagent's own load can read a
+// whole value with no break after it as one more record, which the reading
+// never reads. So a thread that ends in a piece with no break leaves its
+// subagent unreported, its call told under its heading, though the piece is a
+// whole record; the same record with its break leaves it reported.
+//
+// Mutation: read past a member's torn end, and the torn thread's subagent is
+// reported.
+func TestATornSubagentThreadIsNotWhole(t *testing.T) {
+	t.Parallel()
+	piece := hsSide(t, ctAttachment(ctUUID(104), ctUUID(105), ctTokens, ctTokensRendered))
+	for name, tc := range map[string]struct {
+		end, why string
+	}{"its last record whole": {"\n", ""}, "its last record torn": {"", hsNotWhole}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			members := hsForeground(t).members()
+			members[1].body += piece + tc.end
+			got, err := hsRead(t, tarOfMembers(t, members), ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)))
+			hsReadWhole(t, got, err)
+			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+			report := got.Subagents[ctAgent]
+			if tc.why == "" && (!held || !report.Reported) {
+				t.Errorf("Holds = %t under %q, the subagent %+v; want it reported and its call held", held, under, report)
+			}
+			if tc.why != "" && (held || under != ctAgent || report.Reported || !strings.Contains(report.Why, tc.why)) {
+				t.Errorf("Holds = %t under %q, the subagent %+v; want it unreported for %q, its call told under it",
+					held, under, report, tc.why)
+			}
+		})
+	}
+}
+
+// A SUBAGENT PAST THE CHAIN'S BOUND IS COUNTED STILL: past the bound of the
+// model of its own load ([threadChainMaxRecords]: here a refusal's fallback
+// naming more uuids than it files) its thread is not whole, and the reading
+// reads on, so a second carrier of its call's id after that record is
+// counted, and tells the call though the subagent's every other condition
+// held.
+//
+// Mutation: stop reading a subagent's thread at the model's bound, and the
+// second carrier is not counted.
+func TestASubagentPastTheChainsBoundIsCountedStill(t *testing.T) {
+	t.Parallel()
+	named := make([]int, threadChainMaxRecords)
+	for i := range named {
+		named[i] = 1000 + i
+	}
+	s := hsAsked(t, rcFallback(4, 5, 450, rcQuoted(named...)), rcReply(5, 6, "msg_again", 500, rcCalls(hsSubCall)))
+	got := hsSubagentRead(t, s)
+	held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
+	records, report := got.Calls[hsSubCall], got.Subagents[ctAgent]
+	if held || records.Uses != 2 || records.Thread != ctAgent || report.Reported ||
+		!strings.Contains(report.Why, hsNotWhole) {
+		t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want both its uses counted in its "+
+			"thread past the bound, and it told under a subagent not whole", held, under, records, report)
+	}
+}
+
+// AN ANSWER CARRYING A HANDBACK ANSWERS NO LEG (rule 2, condition 3). Under a
+// handback contract a subagent delivers its report through a call of its own,
+// SubagentHandback, and its completion answers its caller with the harness's
+// words in place of its report (2.1.322's pkn, 2.1.310's Owr): a call's own
+// answer then carries a `handback` key, and a task notification's result
+// names the tool, in each of the three forms both releases write (the report
+// delivered as a message, not reported yet, none delivered). So an Agent
+// call's completed answer carrying `handback` or `handbackReport`, a
+// background subagent's notification in each form, and a SendMessage's
+// notification carrying one leave the subagent unreported, its call told
+// under its heading; and a leg one of whose notifications carried one is
+// answered by no other, though a later one carries none.
+//
+// Mutation: read past a call's own answer's handback, and its subagent is
+// reported; read past a notification's, and each notified subagent is; or
+// keep only the last notification's, and the one notified twice is.
+func TestAnAnswerCarryingAHandbackAnswersNoLeg(t *testing.T) {
+	t.Parallel()
+	forms := map[string]string{
+		"delivered": `This agent's report was delivered to you as a message from \"` + ctAgent +
+			`\" (its SubagentHandback call). Read it there; it is not repeated here.`,
+		"not reported yet": "This agent has not reported yet: it is waiting on its own background work and " +
+			"will deliver its report through SubagentHandback when that finishes.",
+		"none delivered": "The subagent ended without delivering a report through SubagentHandback, so no " +
+			"report was delivered. Its unsent text is not shown.",
+	}
+	// carrying is a task notification, line, whose result is text.
+	carrying := func(t *testing.T, line, text string) string {
+		t.Helper()
+		return ctReplace(t, line, `<status>completed</status>\n</task-notification>`,
+			`<status>completed</status>\n<result>`+text+`</result>\n</task-notification>`)
+	}
+	answered := func(key string) func(*testing.T) hsSession {
+		return func(t *testing.T) hsSession {
+			s := hsForeground(t)
+			s.main[2] = hsAnswerOf(t, ctUUID(2), ctUUID(3), hsStarted, "the subagent's report",
+				strings.Replace(hsCompleted(ctAgent), `"status":"completed",`, `"status":"completed",`+key+`,`, 1))
+			return s
+		}
+	}
+	cases := map[string]struct {
+		session func(*testing.T) hsSession
+		why     string
+	}{
+		"its call's own answer":                   {hsForeground, ""},
+		"its call's own answer carrying handback": {answered(`"handback":"withheld"`), hsUnanswered},
+		"its call's own answer carrying handbackReport": {answered(`"handbackReport":"the report"`),
+			hsUnanswered},
+		"its notification":             {hsBackground, ""},
+		"a SendMessage's notification": {hsResumed, ""},
+		"its notification carrying none, after one carrying one": {func(t *testing.T) hsSession {
+			s := hsBackground(t)
+			s.main = append(s.main[:3], carrying(t, hsNotified(t, ctUUID(3), ctUUID(5), hsStarted), forms["delivered"]),
+				hsNotified(t, ctUUID(5), ctUUID(4), hsStarted))
+			return s
+		}, hsUnanswered},
+	}
+	for form, text := range forms {
+		cases["its notification carrying one, "+form] = struct {
+			session func(*testing.T) hsSession
+			why     string
+		}{func(t *testing.T) hsSession {
+			s := hsBackground(t)
+			s.main[3] = carrying(t, s.main[3], text)
+			return s
+		}, hsUnanswered}
+		cases["a SendMessage's notification carrying one, "+form] = struct {
+			session func(*testing.T) hsSession
+			why     string
+		}{func(t *testing.T) hsSession {
+			s := hsResumed(t)
+			s.main[5] = carrying(t, s.main[5], text)
+			return s
+		}, hsUnanswered}
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hsReports(t, tc.session(t), tc.why)
+		})
+	}
 }
 
 // A CALL WHOSE RECORDS LIE IN TWO THREADS IS TOLD, in the main list, wherever
