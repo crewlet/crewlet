@@ -1438,7 +1438,7 @@ function StandingLine({ run, index }: { run: ExecutorRow; index: OrgIndex }) {
   const standing = runStanding(run, (h) => index.byHandle.get(h)?.name ?? h);
   if (standing.needs) return null;
   return (
-    <Text as="p" variant="caption" className="inbox-standing">
+    <Text as="p" variant="caption">
       {standing.answers ? `${standing.word}. You can answer it.` : `${standing.word}.`}
     </Text>
   );
