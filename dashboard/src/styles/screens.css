@@ -8766,6 +8766,18 @@ a.live-row:hover {
 .delegated-rules-status:has(> .ceiling-status:empty) {
   display: none;
 }
+/* The kinds a rule decides: a group of checkboxes named by its label, with
+   none of the browser's frame around a fieldset. */
+.delegated-kinds {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.delegated-kinds > legend {
+  padding: 0;
+  margin-bottom: var(--spacing-1);
+}
 .delegated-checks-entry {
   align-items: flex-start;
 }

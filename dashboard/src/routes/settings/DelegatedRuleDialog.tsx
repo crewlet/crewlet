@@ -212,7 +212,11 @@ export function DelegatedRuleDialog({
         )}
         {filled.kind === "ready" && (
           <>
-            <fieldset className="col gap-1" aria-labelledby={kindsId} disabled={write.busy}>
+            <fieldset
+              className="col gap-1 delegated-kinds"
+              aria-labelledby={kindsId}
+              disabled={write.busy}
+            >
               <legend id={kindsId} className="t-label">
                 Decides
               </legend>
