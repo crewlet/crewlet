@@ -2388,7 +2388,13 @@ const (
 	// claims, and a failed phase's call frozen with what its record left out)
 	// added 972 bytes, nearly all script, and took it to 5974.6 KiB
 	// (6,118,027 bytes): 5975 KiB.
-	treeBudget = 5<<20 + 855<<10
+	// A range kept for its reader (the per-reader store and its hook), a
+	// model wizard that names its wait and returns to where it was opened, an
+	// atlas that says why a change is held and links what needs attention,
+	// and a skeleton on the screens that drew nothing while their read was
+	// out added 4,142 bytes, nearly all script, and took it to 5979.1 KiB
+	// (6,122,607 bytes): 5980 KiB.
+	treeBudget = 5<<20 + 860<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
