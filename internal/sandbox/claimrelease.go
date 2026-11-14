@@ -49,12 +49,24 @@ import (
 // claim on the store's row, which holds the seat. Given back before the release
 // instead, as a resume's hand-back once gave it, a release owed for minutes left
 // the seat counted free beside a claim that would come back to it, and a
-// recount meanwhile counted the run again, so the landing counted it twice. And
-// a recount counts a run whose release is out as the claim too, whatever the
-// store's row says by then ([Coordinator.syncSeat]): one that listed the row
-// after the release landed and was written before its answer was taken counted
-// the run where the release put it, and the answer's move counted it there
-// again, an answer's release taking the seat's holding count down twice.
+// recount meanwhile counted the run again, so the landing counted it twice.
+//
+// THE RELEASE IS ONE MORE WRITE IN ITS RUN'S ENTRY (countwrite.go), recorded
+// with the release, before it is sent, from the claim to the status it returns
+// the run to ([claimRelease.write]), and out for as long as the release is out
+// or owed. So a recount counts the run where the moves made so far leave it,
+// the claim, whatever the store's row says by then ([Coordinator.syncSeat]):
+// one that listed the row after the release landed and was written before its
+// answer was taken counted the run where the release put it, and the answer's
+// move counted it there again, an answer's release taking the seat's holding
+// count down twice. And a write recorded behind it on the same run moves after
+// it, in the order the two were recorded: a park's question can land with its
+// answer lost, the park moving nothing and handing its claim back, and a reply
+// then answers that question while the release is owed. Read apart from the
+// run's other writes, the release counted the run as the claim whatever was
+// out behind it, and the record of that reply took the run out of a question
+// set it was never counted in: a seat holding another question read it as
+// closed, and that question's answer ran as an unrelated turn.
 //
 // # No claim of the job is taken on this node while its release is out
 //
@@ -109,6 +121,12 @@ type claimRelease struct {
 	run     PendingRun
 	release Release
 	detail  string
+
+	// write is the release's move in its run's entry (countwrite.go):
+	// recorded with the release, from the claim to the status it returns the
+	// run to, and answered in the step that drops the release from the
+	// releases out, as landed where it did. Under mu.
+	write *countWrite
 }
 
 // releaseFor is the release that gives run's claim back: what the claim
@@ -149,18 +167,18 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 	if !unanswered {
 		if out {
 			delete(c.releases, turnID)
-			if err == nil && released {
-				// THE CLAIM'S COUNT MOVES WITH IT, now and not before, and
-				// once: the run was the claim on the store's row until this
-				// release landed, and a recount counted it as the claim
-				// while the release was out ([Coordinator.syncSeat]), so it
-				// moves to the set the release returned it to in the step
-				// that ends that. A completion's claim goes back to running,
-				// which holds the seat as the claim did; an answer's to
-				// answered, which holds nothing, its owed resume holding the
-				// seat's mail.
-				moved = c.moveRunLocked(cr.run.AgentHandle, StatusResumed, cr.release.To)
-			}
+			// THE CLAIM'S COUNT MOVES WITH IT, now and not before, and
+			// once: the run was the claim on the store's row until this
+			// release landed, and a recount counted it as the claim while
+			// the release was out ([Coordinator.syncSeat]), so it moves to
+			// the set the release returned it to in the step that ends
+			// that, as the release's write in the run's entry is answered
+			// (countwrite.go). A completion's claim goes back to running,
+			// which holds the seat as the claim did; an answer's to
+			// answered, which holds nothing, its owed resume holding the
+			// seat's mail. A release that did not land moves nothing, and
+			// lets go whatever was recorded behind it on the run.
+			moved = c.wroteCountLocked(cr.write, err == nil && released)
 		}
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
@@ -296,9 +314,10 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 		delete(c.releases, turnID)
 		landed = true
 		// ITS COUNT MOVES ONCE, here, as the release's own answer would have
-		// moved it ([Coordinator.unclaimOwing]): back to running, which the
-		// claim that won took it out of again.
-		moved = c.moveRunLocked(cr.run.AgentHandle, StatusResumed, cr.release.To)
+		// moved it ([Coordinator.unclaimOwing]): its write answered as
+		// landed, back to running, which the claim that won took it out of
+		// again (countwrite.go).
+		moved = c.wroteCountLocked(cr.write, true)
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
 		}

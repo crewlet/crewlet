@@ -37,8 +37,9 @@ import "context"
 // [Coordinator.abandon], [ending.counted]), and a recovery's takeover of each
 // run of the seat it acquires, from no set to the one it leaves the run in
 // ([Coordinator.RecoverSeat], answered once the recovery is done with the run).
-// A claim's release keeps a record of its own, which a recount reads the same
-// way (claimrelease.go).
+// A claim's release is one more such write, from the claim to the status it
+// returns the run to, out for as long as the release is out or owed
+// (claimrelease.go).
 //
 // Each double count cost the seat something. Counted out of the question set
 // twice, a seat holding a second question read as having none open, and that
@@ -80,6 +81,22 @@ import "context"
 // ([Coordinator.adjustLocked]) swallowed on a seat with no other question, and
 // the park's move then counted the answered run as a question.
 //
+// # Where each write puts the run
+//
+// A write that lands moves its run to the set its own status names, whatever
+// the writes before it did, and the seat's counts by the difference from where
+// the moves made so far had left it. Not by the sets it was recorded from and
+// to: a write before it on the run whose answer was lost may have landed all
+// the same, and moved by its recorded sets, a later write took the run out of
+// a set it was never counted in. A park's question can land with its answer
+// lost, the park moving nothing and handing its claim back, its release owed,
+// and a reply then answers that question: the record, moved from the question
+// set to the answer while the run was still counted as the claim, took the
+// seat's count of questions down for a question it never counted, and a seat
+// holding another question read it as closed. The status a write is recorded
+// from is where a recount counts a run with no other write out, until a move
+// is made ([Coordinator.writingCount]).
+//
 // THE WRITES OF ONE RUN ARE KEYED BY ITS TURN, whatever job each names: a turn
 // has one row, which the store holds once, and a recount that counted a run's
 // row apart from a write out on another job of it would count the one row twice.
@@ -117,8 +134,8 @@ func countOf(status string) seatRuns {
 // out, a recount counts it where the moves made so far leave it: in from's set
 // for a run with no other write out, until a move is made. A write recorded
 // while another is out on run sets no count of its own: the run stays counted
-// where the earlier write's moves leave it, and this write's move follows that
-// one's.
+// where the earlier write's moves leave it, and this write's move, to its own
+// to's set, follows that one's.
 func (c *Coordinator) writingCount(run PendingRun, from, to string) *countWrite {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -179,12 +196,13 @@ func (c *Coordinator) takingOver(ctx context.Context, handle string, runs []Pend
 
 // takeoverAnswered answers a takeover [Coordinator.takingOver] recorded:
 // status is the one the recovery leaves its run counted in
-// ([Coordinator.recoverRun]), and none for a run it counts in no set, which
-// moves nothing.
+// ([Coordinator.recoverRun]), none for a run it counts in no set. ANSWERED AS
+// LANDED EITHER WAY: the recovery's own reading of the run is its last word on
+// where this node counts it, after any write recorded on the run before it.
 func (c *Coordinator) takeoverAnswered(w *countWrite, status string) {
 	c.mu.Lock()
 	w.to = status
-	moved := c.wroteCountLocked(w, status != "")
+	moved := c.wroteCountLocked(w, true)
 	c.mu.Unlock()
 	moved()
 }
@@ -192,27 +210,29 @@ func (c *Coordinator) takeoverAnswered(w *countWrite, status string) {
 // wroteCountLocked takes the answer to w, landed or not, and makes the moves
 // that answer lets go: w's own, unless a write recorded before it on the same
 // run is still out, and the moves of the writes recorded after it whose answers
-// came first, in the order they were all recorded. A write that did not land,
-// or whose answer the store did not give, moves nothing, and once the run's
-// last write is answered a recount reads the run off the store's listing again.
+// came first, in the order they were all recorded, each landed one putting the
+// run in its own to's set. A write that did not land, or whose answer the store
+// did not give, moves nothing, and once the run's last write is answered a
+// recount reads the run off the store's listing again.
 // Under mu; the caller runs what it returns once it has let go of the lock,
-// which frees the seat and has its inbox hold follow the move, as
-// [Coordinator.moveRunLocked]'s does.
+// which frees the seat and has its inbox hold follow the move.
 func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	w.done, w.landed = true, landed
 	writes := c.writing[w.turn]
-	var move seatRuns
+	before := writes.counted
 	for len(writes.out) > 0 && writes.out[0].done {
 		next := writes.out[0]
 		writes.out = writes.out[1:]
 		if next.landed {
-			from, to := countOf(next.from), countOf(next.to)
-			move.holding += to.holding - from.holding
-			move.awaiting += to.awaiting - from.awaiting
+			// WHERE THE WRITE PUT THE RUN, whatever the writes before it
+			// did: see "Where each write puts the run" above.
+			writes.counted = countOf(next.to)
 		}
 	}
-	writes.counted.holding += move.holding
-	writes.counted.awaiting += move.awaiting
+	move := seatRuns{
+		holding:  writes.counted.holding - before.holding,
+		awaiting: writes.counted.awaiting - before.awaiting,
+	}
 	if len(writes.out) == 0 {
 		delete(c.writing, w.turn)
 	}
@@ -224,15 +244,4 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 		c.seatFreed(w.handle, was, runs)
 		c.reconcileHold(c.life, w.handle)
 	}
-}
-
-// countOfLocked is the part of its seat's counts a recount reads a listed run
-// with no write out as ([Coordinator.countedLocked]): as the claim it still is
-// for a run whose release is out ([Coordinator.releases]), and in the set its
-// status names otherwise. Under mu.
-func (c *Coordinator) countOfLocked(run PendingRun) seatRuns {
-	if c.releasingLocked(run.TurnID, run.LaunchID) {
-		return countOf(StatusResumed)
-	}
-	return countOf(run.Status)
 }

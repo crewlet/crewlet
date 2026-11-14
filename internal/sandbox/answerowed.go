@@ -2423,10 +2423,14 @@ func (c *Coordinator) releaseOwed(handle string) {
 	}
 	// AND THE RELEASES OF ITS CLAIMS THIS NODE WAS GIVING BACK OR OWED: the
 	// successor reaps those claims, and a record of them kept here would
-	// refuse this node every later claim of their jobs.
+	// refuse this node every later claim of their jobs. Each one's write in
+	// its run's entry goes with it, answered as one that did not land: no
+	// answer of it is taken here again (countwrite.go). What that answer
+	// lets go is not run: the seat's counts and its inbox hold go next.
 	for turnID, cr := range c.releases {
 		if cr.run.AgentHandle == handle {
 			delete(c.releases, turnID)
+			_ = c.wroteCountLocked(cr.write, false)
 		}
 	}
 	delete(c.owed, handle)
@@ -2447,7 +2451,13 @@ func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
 		}
 		delete(c.retries, turnID)
 	}
-	delete(c.releases, turnID)
+	if cr := c.releases[turnID]; cr != nil {
+		// ITS WRITE IN THE RUN'S ENTRY GOES WITH IT, answered as one that did
+		// not land: no answer of it is taken here again (countwrite.go). The
+		// seat's inbox hold follows below.
+		delete(c.releases, turnID)
+		_ = c.wroteCountLocked(cr.write, false)
+	}
 	if owed := c.owed[handle]; owed != nil {
 		delete(owed, turnID)
 		if len(owed) == 0 {

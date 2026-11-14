@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -797,4 +798,152 @@ func TestARecoveryCountsEachRunItTakesOverOnce(t *testing.T) {
 			wantSeatCounts(t, rig, "recounted,", "t1's job holding it and t3's question awaiting", 1, 1)
 		})
 	}
+}
+
+// parkLandsUnanswered is a run store whose record of a park's question lands
+// and is then reported unanswered, and which leaves a claim's release
+// unanswered, while it is silent: a park's write that landed with its answer
+// lost, and the release it hands the claim back with owed (R2-1).
+type parkLandsUnanswered struct {
+	PendingStore
+	mu     sync.Mutex
+	silent bool
+}
+
+func (s *parkLandsUnanswered) quiet() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.silent
+}
+
+// answer has the store answer every call again.
+func (s *parkLandsUnanswered) answer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = false
+}
+
+func (s *parkLandsUnanswered) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if err := s.PendingStore.MarkAwaiting(ctx, turnID, q); err != nil {
+		return err
+	}
+	if s.quiet() {
+		return errStoreUnavailable("write the sandbox run", turnID)
+	}
+	return nil
+}
+
+func (s *parkLandsUnanswered) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if s.quiet() {
+		return false, errStoreUnavailable("write the sandbox run", turnID)
+	}
+	return s.PendingStore.ReleaseClaim(ctx, turnID, release)
+}
+
+// A RECORD MADE WHILE A RELEASE IS OWED MOVES ITS RUN AFTER THE RELEASE
+// (countwrite.go). A park's question can land with its answer lost: the park
+// moves no count, hands its claim back, and the store leaves that release
+// unanswered too, so it is owed and the run counts as the claim it still is.
+// A reply then answers the question on the row, and its record lands. The
+// release is one more write in the run's entry, recorded before the record,
+// so the record's move waits for the release's answer, and the run moves from
+// the claim to its answer once the release is found moved on. Read apart, the
+// release counted the run as the claim whatever was out behind it, and the
+// record moved it out of a question set it was never counted in: the seat's
+// other question read as closed, the state in which its answer runs as an
+// unrelated turn.
+//
+// Mutation: keep a claim's release apart from its run's entry, or move each
+// write by the sets it was recorded from and to rather than to where it put
+// the run; t3's question reads as closed.
+func TestARecordMadeWhileAReleaseIsOwedMovesItsRunAfterTheRelease(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	parkElsewhere(t, rig, "t3")
+	rig.launch("t1")
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	store := &parkLandsUnanswered{PendingStore: rig.coordinator.pending, silent: true}
+	rig.coordinator.pending = store
+	rig.ask("t1", whichBranch())
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion("t1")
+	_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	parked := rig.get("t1")
+	if parked.Status != StatusAwaiting || !rig.coordinator.releasing("t1", parked.LaunchID) {
+		t.Fatalf("the premise: t1 is %s, its release out %v; want its question on the row and the claim's "+
+			"release owed", parked.Status, rig.coordinator.releasing("t1", parked.LaunchID))
+	}
+	wantSeatCounts(t, rig, "with the park's release owed,", "t1 as the claim it still is and t3's question", 1, 1)
+
+	reply := chatReply(answerOnTheDM, "use main", replyAt("use main", parked.AskedAt.Add(time.Minute)))
+	_, _ = rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply)
+	if got := rig.get("t1"); got.Status != StatusAnswered {
+		t.Fatalf("the premise: the reply left t1 %s; want it recorded as its answer", got.Status)
+	}
+	wantSeatCounts(t, rig, "with the reply recorded while the release is owed,",
+		"t1 still the claim and t3's question still open", 1, 1)
+	if _, awaits := rig.coordinator.SeatRuns("swe"); !awaits {
+		t.Fatal("t3's question reads as closed: its answer would run as an unrelated turn")
+	}
+
+	store.answer()
+	rig.fireRetries()
+	wantSeatCounts(t, rig, "once the release, made again, found t1 moved on to its answer,",
+		"t3's question alone, t1's answer resumed and its run over", 0, 1)
+}
+
+// A RECOVERY'S TAKEOVER HAS THE LAST WORD ON ITS RUN (countwrite.go). A write
+// a frame of this node's earlier holding records after the seat's release is
+// still out when this node takes the seat back, and the recovery's takeover of
+// the run is recorded behind it. The recovery reaps the run, a tail its last
+// holder left launching, and counts it in no set; the earlier write's answer
+// then comes, landed. Each landed write puts the run where its own status says,
+// in the order they were recorded, so the takeover, answered as landed whatever
+// its status, leaves the run in no set. Answered as a write that did not land,
+// as a takeover counting its run in no set was, the earlier write's move stood,
+// and the seat counted a question for a run that was gone.
+//
+// Mutation: answer a takeover that counts its run in no set as a write that did
+// not land.
+func TestARecoverysTakeoverHasTheLastWordOnItsRun(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launching("t1")
+	rig.coordinator.ReleaseSeat("swe")
+	stale := rig.coordinator.writingCount(rig.get("t1"), StatusResumed, StatusAwaiting)
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 2); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("the premise: t1 found %v (%v); want the recovery to have reaped it", found, err)
+	}
+	answerLanded(rig, stale)
+	wantSeatCounts(t, rig, "once the earlier write's answer was taken,", "nothing, t1 being gone", 0, 0)
+}
+
+// A WRITE THAT LANDS PUTS ITS RUN WHERE ITS OWN STATUS SAYS (countwrite.go),
+// whatever the write before it on the run did. Here a park's question and the
+// record of an answer to it have both landed, the record's answer is taken
+// first and waits for the park's, and the park's answer is then lost, though
+// it landed: the park moves nothing, and the record moves the run from the
+// claim it is still counted as to its answer, which is in neither set. Moved
+// by the sets it was recorded from and to, the record took the run out of a
+// question set the park never counted it into, and the seat's other question
+// read as closed, its answer then run as an unrelated turn.
+//
+// Mutation: move each landed write by the sets it was recorded from and to.
+func TestAWriteThatLandsPutsItsRunWhereItsOwnStatusSays(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	park, record := parkAndRecordOut(t, rig)
+	parkElsewhere(t, rig, "t3")
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	wantSeatCounts(t, rig, "recounted with both of t1's writes out,", "t1 as the claim and t3's question", 1, 1)
+	answerLanded(rig, record)
+	rig.coordinator.mu.Lock()
+	moved := rig.coordinator.wroteCountLocked(park, false)
+	rig.coordinator.mu.Unlock()
+	moved()
+	wantSeatCounts(t, rig, "with the park's answer lost and the record's taken,",
+		"t1's answer in neither set and t3's question still open", 0, 1)
 }

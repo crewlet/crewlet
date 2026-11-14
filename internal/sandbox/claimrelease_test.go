@@ -441,12 +441,16 @@ func (s *claimOnItsWay) ReleaseClaim(ctx context.Context, turnID string, release
 // resume the job a second time. The win is proof the release landed: it is
 // never made again, whether the claim won once the release was owed or while
 // it was still out, and a release owed is not made again while such a claim is
-// still on its way.
+// still on its way. Its move in its run's entry (countwrite.go) is made there
+// too, as the release's own answer would have made it: left out, the entry
+// held the run counted as the claim after the run was over, and the seat took
+// no mail.
 //
 // Mutation: forget the win (keep the release recorded when a claim of its job
 // wins on the run it put back), owe a release such a claim took over while it
-// was out, or make it again while a claim of the job is on its way: each turns
-// a case red.
+// was out, make it again while a claim of the job is on its way, or leave its
+// move in its run's entry out when a claim takes it over: each turns a case
+// red.
 func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -551,6 +555,10 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 			}
 			if rig.coordinator.releasing("t1", run.LaunchID) {
 				t.Error("the release is still owed after a claim of its job won on the run it put back")
+			}
+			if held, waits := rig.coordinator.SeatRuns("swe"); held || waits {
+				t.Errorf("once the run is over the seat is counted held %v, a question open %v; want it free",
+					held, waits)
 			}
 		})
 	}
