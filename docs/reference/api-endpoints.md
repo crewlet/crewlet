@@ -11148,8 +11148,9 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
 }
 ```
 
-`builtin` is the engine's own tools as an agent is offered them, group by group
-in the order the catalogue lists them, each tool a
+`builtin` is the engine's own tools as the company's agents are offered them
+(each agent all of them but those its `builtin_tools` below leaves out), group
+by group in the order the catalogue lists them, each tool a
 [catalogue row](#the-tool-catalogue) whose `gate` says who may call it (the
 words are in
 [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
@@ -11248,9 +11249,15 @@ block for it, the whole listing for each agent a per-agent server reaches, and
 `0` for a server turned off, which is granted to nobody, or one a limit turns
 off for the agent; and `state` is the server's own, its row's.
 `mcp_tools` counts each tool name once, so a name two of the agent's servers
-list counts once; `builtin_tools` is how many of the engine's own tools every
-agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
-above `tool_budget`. A server's tools count while it is down, since they come
+list counts once; `builtin_tools` is how many of the tools in `builtin` the
+agent is offered, which the budget does not count: every one but those the
+engine leaves off its surfaces — a tool whose `gate` is a grant the agent
+does not hold (`health_tools`, `ssh_read`, `ssh_operate` or
+`delegated_decisions`), and below `full_access` the code writes its
+`role.code.access` could never use
+([Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one))
+— so it differs from agent to agent; and `over_budget` is `mcp_tools` above
+`tool_budget`. A server's tools count while it is down, since they come
 back with it. `agents` is `null` while the answering node has not read the
 fleet's listings yet, a moment after it starts, which is not an agent holding
 no tools.

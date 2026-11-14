@@ -74,7 +74,7 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	}
 	return queries.Sources{
 		Coord: backend, Company: companySource(t, cfg),
-		Builtins: func() []queries.ToolRow { return catalogueBuiltins() },
+		Builtins: catalogueOffer,
 	}
 }
 

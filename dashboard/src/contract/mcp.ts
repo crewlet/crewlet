@@ -441,7 +441,7 @@ export interface McpAgentTools {
   servers: McpAgentServer[];
   /** Every tool its servers offer it, a name two servers offer counted once. */
   mcp_tools: number;
-  /** The engine's own tools every agent holds, which the budget does not count. */
+  /** How many of the engine's own tools (`builtin`'s) this agent is offered, which the budget does not count. */
   builtin_tools: number;
   /** `mcp_tools` is past `tool_budget`. */
   over_budget: boolean;
