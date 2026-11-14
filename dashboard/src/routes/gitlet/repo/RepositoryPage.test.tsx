@@ -963,7 +963,8 @@ test("a deleted repository says so and is restored by one request", async () => 
 
   const restore = await screen.findByRole("button", { name: "Restore repository" });
   await waitFor(() => expect(restore.getAttribute("title")).toBeNull());
-  expect(screen.getByText(/web is deleted/)).toBeTruthy();
+  // THE NOTICE ABOVE THE TABS, and not the reason each held write gives.
+  expect(screen.getByText(/is deleted, since/)).toBeTruthy();
   fireEvent.click(restore);
   await waitFor(() => expect(acted).toHaveLength(1));
   expect(acted[0]).toEqual({ tool: "code_restore_repo", args: { repo: "web" } });

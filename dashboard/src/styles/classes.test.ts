@@ -971,9 +971,12 @@ describe("every class the dashboard names", () => {
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
 // panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
 // `chatlet-panes.css`, Chatlet's panes, dialogs and views, `atlas.css`,
-// Company › Atlas's (its map's box, lists, hops and claims), and `diff.css`,
-// the one diff's, which every screen drawing a diff reaches through
-// `components/DiffView.tsx`. Each is appended after the entry's sheets, so
+// Company › Atlas's (its map's box, lists, hops and claims), `gitlet.css`,
+// the Gitlet workspace's (a repository's code, history and settings, a
+// change's conversation and files, the listings), which every module drawing
+// a `code-` class imports — Home's changes waiting on a person and Settings ›
+// Gitlet among them — and `diff.css`, the one diff's, which every screen
+// drawing a diff reaches through `components/DiffView.tsx`. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
 // tie it wins would change other screens from the moment a reader first
 // opened that one.
@@ -1029,6 +1032,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "diff.css": {
     importer: "components/DiffView.tsx",
     owns: /\.diff-view(?:__[a-z]+|--[a-z]+)?(?![\w-])/,
+  },
+  "gitlet.css": {
+    importer: "routes/gitlet/ui.tsx",
+    owns: /\.code-[a-z_-]+\b/,
   },
 };
 

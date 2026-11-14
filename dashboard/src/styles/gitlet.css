@@ -306,9 +306,10 @@
   overflow-wrap: anywhere;
 }
 
-/* THE SLASH IS A MARK, on the faint rung (`styles/rungs.test.ts`). */
+/* THE SLASH IS READ BETWEEN THE NAMES, so it takes the tertiary rung a
+   word does (`styles/rungs.test.ts`). */
 .code-crumbs__slash {
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .code-crumbs__here {
@@ -597,9 +598,10 @@
   overflow-wrap: anywhere;
 }
 
-/* AN EMPTY REPOSITORY: its first file, and the commands that fill it. */
+/* AN EMPTY REPOSITORY: its first file, and the commands that fill it, at a
+   reading measure. */
 .code-setup {
-  max-width: var(--size-content-max);
+  max-width: var(--size-measure);
 }
 
 /* THE ABOUT RAIL beside the code: the description, the counts, then the
