@@ -11832,7 +11832,12 @@ while the screen binds the real chart, table, editor and dialogs, and
   way. The model refuses a change to
   the principles at its recording door, a kept log holding one is unreadable,
   `buildPatch` never names them, and an engine problem about one is listed at
-  document level with **Open Principles**. A node's key is its IDENTITY (a seat's
+  document level with **Open Principles**. What the engine says about no node
+  is two banners over the chart: its refusals in the danger tone, and its
+  warnings (a valid setting with a consequence, which the engine runs) in the
+  warning tone under "The engine runs this company, with *n* warnings to know
+  about", each with a link to where it is set where the builder authors none
+  of it (a model entry's or the sandbox default's cell: **Open Models**). A node's key is its IDENTITY (a seat's
   handle, a unit's key, both carried by every node the engine stores), so the
   base is keyed as it loads and a rename never moves a key; only a node the
   draft created moves, from the key the draft minted to the handle or key it
