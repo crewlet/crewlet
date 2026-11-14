@@ -51,7 +51,7 @@ var LIVE_CALL_DETAIL = {
 		"calls_elided",
 		"elided_calls"
 	],
-	rounds: ["rounds"],
+	rounds: ["rounds", "rounds_elided"],
 	invocations: ["invocations"]
 };
 /**
@@ -357,6 +357,7 @@ var NOTHING_HELD = {
 	calls_elided: 0,
 	elided_calls: null,
 	rounds: null,
+	rounds_elided: 0,
 	invocations: null
 };
 /**
@@ -4041,6 +4042,20 @@ var ACTIONS = {
 		],
 		scope: "person"
 	},
+	remove_work_item: {
+		args: ["item", "subtree"],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	move_work_item: {
+		args: ["item", "project"],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: ["work_search"],
+		scope: "person"
+	},
 	restore_work_item: {
 		args: ["item"],
 		domain: "tracker",
@@ -4178,6 +4193,7 @@ var ACTIONS = {
 	},
 	save_work_view: {
 		args: [
+			"id",
 			"container",
 			"name",
 			"type",

@@ -1425,7 +1425,15 @@ const (
 	// fix destination and the reader's put-off marks (a small store beside
 	// the Home board's). Every list that draws these rows stays lazy. So it
 	// moved to 409 KiB, 2.23 seconds.
-	initialBudget = 409 << 10
+	// The Inbox badge, a task's own menu and a kept range, built together on
+	// kit 0.126.1, took it to 409.8 KiB (419,627 bytes), 811 bytes past it.
+	// Each fit its own budget alone: over the 407.3 KiB they were built on,
+	// the badge added 1,628 bytes, a task's own menu 656 (its rules ride the
+	// one sheet, and it widened the write and work helpers the entry already
+	// reads) and a kept range 257 (the per-reader range store the page header
+	// reads), and main's own change and the kit 35 more. So it moved to 410
+	// KiB, 2.24 seconds.
+	initialBudget = 410 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2428,7 +2436,11 @@ const (
 	// pill row that scrolls with its ring inside the tab), less this tree's
 	// own copy of the pill row's scroll rule, added 2,540 bytes, script and
 	// sheet, and took it to 5981.6 KiB (6,125,147 bytes): 5982 KiB.
-	treeBudget = 5<<20 + 873<<10
+	// Built together on kit 0.126.1, a task's own menu, what waits on a person
+	// in one place and a kept range measure 6008.7 KiB (6,152,941 bytes), 409
+	// bytes over the three and the running phase's card added to the tree
+	// they were built on: 6009 KiB.
+	treeBudget = 5<<20 + 889<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
