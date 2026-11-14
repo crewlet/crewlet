@@ -418,6 +418,25 @@ describe("the figures", () => {
     expect(tile("Completed · today").textContent).toContain("vs yesterday");
   });
 
+  // A SEAT WORKING ON NO TURN THE ENGINE HAS NAMED is said by name, with the
+  // way to its page, and never with a promise that its turn will appear: a
+  // seat whose turn ended without its record reaching the projection never
+  // shows one, and "They appear here once they are" stood for hours.
+  // Mutation: put the promise back, or drop the seat's link, and this fails.
+  test("Live now names a working seat with no turn, and promises nothing", async () => {
+    mount({
+      agents: [{ id: "cto", agent_id: "cto", role: "CTO", handle: "cto", activity: "working" }],
+    });
+    await settle();
+    const card = screen
+      .getByRole("heading", { name: /Live now/ })
+      .closest(".home-card") as HTMLElement;
+    expect(card.textContent).toContain("1 seat working");
+    expect(card.textContent).not.toMatch(/not named yet|once they are/);
+    const link = within(card).getByRole("link", { name: /CTO|Cto/ });
+    expect(link.getAttribute("href")).toBe("#/company/org/seats/cto");
+  });
+
   test("the crew is the engine's word for every seat", async () => {
     mount({
       agents: [
@@ -464,7 +483,14 @@ describe("the decisions", () => {
         decisions: {
           handle: "jane",
           items: [
-            { kind: "run", at: theirs.paused_at, run: theirs, put_to_you: false, may_answer: true, needs_you: false },
+            {
+              kind: "run",
+              at: theirs.paused_at,
+              run: theirs,
+              put_to_you: false,
+              may_answer: true,
+              needs_you: false,
+            },
           ],
           total: 0,
           answerable: 1,
@@ -474,11 +500,15 @@ describe("the decisions", () => {
       },
     });
     await settle();
-    const card = screen.getByRole("heading", { name: /Needs your decision/ }).closest(".home-card") as HTMLElement;
+    const card = screen
+      .getByRole("heading", { name: /Needs your decision/ })
+      .closest(".home-card") as HTMLElement;
     expect(within(card).getByText("Nothing waits on you.")).toBeTruthy();
     const group = within(card).getByRole("region", { name: "Waiting on others, you can answer" });
     expect(group.querySelector(".decision-state")?.textContent).toBe("Waiting on ops");
-    expect(group.querySelector(".decision-text .decision-sub")?.textContent).toContain("you can answer");
+    expect(group.querySelector(".decision-text .decision-sub")?.textContent).toContain(
+      "you can answer",
+    );
     expect(within(group).getByRole("button", { name: /Answer/ })).toBeTruthy();
     expect(card.querySelector(".crewlet-card__title .home-card-count")).toBeNull();
   });
@@ -489,7 +519,9 @@ describe("the decisions", () => {
   test("a sign-in holding no seat is told plainly that nothing is put to it", async () => {
     mount({
       viewer: { ...JANE, login: "token:ops", handle: "", owner: "token:ops", name: "", kind: "" },
-      answers: { decisions: { handle: "token:ops", items: [], total: 0, answerable: 0, capped: false } },
+      answers: {
+        decisions: { handle: "token:ops", items: [], total: 0, answerable: 0, capped: false },
+      },
     });
     await settle();
     expect(screen.getByText("No decision is put to this sign-in: it holds no seat.")).toBeTruthy();
