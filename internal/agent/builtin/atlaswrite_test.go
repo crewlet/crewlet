@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlas/gather"
@@ -18,9 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // atlasLedger is the atlas's log as the write tools reach it, in memory: every
@@ -220,13 +223,23 @@ func atlasWrites(t *testing.T, ledger *atlasLedger) map[string]tools.SeatCallabl
 // atlasWritesAt is [atlasWrites] reading its claims' instant off now.
 func atlasWritesAt(t *testing.T, ledger *atlasLedger, now func() time.Time) map[string]tools.SeatCallable {
 	t.Helper()
+	return atlasWritesOver(t, ledger, now, newGitletHost(), atlasLogOnly(ledger))
+}
+
+// atlasWritesOver is [atlasWritesAt] reading Gitlet from host and the node's
+// record sources from records, for a case in which one of them does not
+// answer.
+func atlasWritesOver(t *testing.T, ledger *atlasLedger, now func() time.Time, host builtin.CodeReader,
+	records func(context.Context) gather.Sources) map[string]tools.SeatCallable {
+
+	t.Helper()
 	chart := organization(t)
-	deps := codeDeps(newGitletHost())
+	deps := codeDeps(host)
 	deps.Actor = builtin.PrincipalActor
 	out := map[string]tools.SeatCallable{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Code: deps, Authorize: builtin.Decide(chartLeads),
-		Atlas: builtin.AtlasDeps{Settings: atlasSettingsWithServer, Records: atlasLogOnly(ledger)},
+		Atlas: builtin.AtlasDeps{Settings: atlasSettingsWithServer, Records: records},
 		AtlasWrite: builtin.AtlasWriteDeps{Log: ledger, Actor: builtin.PrincipalActor,
 			Org: func() *org.Organization { return chart }, Now: now},
 	}) {
@@ -860,5 +873,172 @@ func TestConfirmingAnEntrySomebodyOnlyCorrectedMakesItConfirmed(t *testing.T) {
 	}
 	if e := shown(); e.Word != atlas.WordConfirmed || e.State != atlas.StateConfirmed {
 		t.Errorf("after the confirmation the entry reads %s, %s; want confirmed", e.State, e.Word)
+	}
+}
+
+// errAtlasSourceDown is a source of the atlas that does not answer.
+var errAtlasSourceDown = errors.New("the store did not answer")
+
+// downIntegrations, downUsage and downAccessLog are record sources that do
+// not answer: the first states facts of accounts, the other two state none.
+type (
+	downIntegrations struct{}
+	downUsage        struct{}
+	downAccessLog    struct{}
+	downLog          struct{ *atlasLedger }
+)
+
+func (downIntegrations) LoadIntegrations(context.Context) ([]integration.State, error) {
+	return nil, errAtlasSourceDown
+}
+
+func (downUsage) Spend(context.Context, usage.SpendQuery) ([]usage.SpendRow, error) {
+	return nil, errAtlasSourceDown
+}
+
+func (downUsage) ServerToolCalls(context.Context, usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error) {
+	return nil, errAtlasSourceDown
+}
+
+func (downAccessLog) HostUse(context.Context, time.Time, time.Time, statelog.Freshness) ([]accessdomain.HostUse, error) {
+	return nil, errAtlasSourceDown
+}
+
+func (downLog) Live(context.Context, statelog.Freshness) (atlasdomain.Live, error) {
+	return atlasdomain.Live{}, errAtlasSourceDown
+}
+
+// unreadBy is whether a call was refused as waiting on a source, and the
+// words a person is told.
+func unreadBy(got tools.Result) (bool, string) {
+	return got.Failed && tools.RefusalOf(got) == tools.RefusalUnavailable, got.PersonRefusal.Person()
+}
+
+// A PERSON'S WRITE WAITS ONLY ON THE SOURCES THAT DESCRIBE ITS ENTRIES. With
+// Gitlet unreachable, and with the usage history and the access log not
+// answering, a person still adds a service, corrects it, sets its owner,
+// relates it, retires and restores it, merges and splits it: none of those
+// sources states a fact of a service or of a server a person keyed. Only a
+// change about a Gitlet repository waits on Gitlet, and it says so by name.
+//
+// Mutation: refuse a write while ANY source answered in part (the rule this
+// replaces) and every call of the sweep is refused, one unreachable Gitlet
+// node closing the whole atlas to everybody.
+func TestAnAtlasWriteWaitsOnlyOnTheSourcesThatDescribeItsEntries(t *testing.T) {
+	t.Parallel()
+	ledger := seededAtlasLedger()
+	host := newGitletHost()
+	host.readErr = errAtlasSourceDown
+	w := atlasWritesOver(t, ledger, func() time.Time { return atlasWriteAt }, host,
+		func(context.Context) gather.Sources {
+			return gather.Sources{Log: ledger, Usage: downUsage{}, AccessLog: downAccessLog{}}
+		})
+	// THE READ SAYS WHAT IT COULD NOT READ, so the case is the one it claims.
+	// As the administrator the writes below are made by, who uses Gitlet: to
+	// a reader who does not, Gitlet is unread because it is not theirs.
+	admin := iam.WithPrincipal(context.Background(), atlasAdmin())
+	unread := map[gather.SourceName]string{}
+	for _, c := range searchAtlas(admin, t, w[builtin.AtlasSearchTool], map[string]any{"limit": 500}).Coverage {
+		if !c.Complete {
+			unread[c.Source] = c.Reason
+		}
+	}
+	for _, name := range []gather.SourceName{gather.SourceGitlet, gather.SourceUsage, gather.SourceAccessLog} {
+		if !strings.Contains(unread[name], errAtlasSourceDown.Error()) {
+			t.Fatalf("the read reports %s as %q, want it unread because it did not answer", name, unread[name])
+		}
+	}
+	calls := atlasSweepCalls()
+	for _, name := range builtin.AtlasWriteTools {
+		if name == builtin.AtlasPurgeTool {
+			// DECIDED ON THE WHOLE VIEW, below.
+			continue
+		}
+		got, _ := atlasCall(t, w[name], calls[name], iam.GrantAtlas, iam.GrantAdmin)
+		if got.Failed {
+			t.Errorf("%s %v was refused while sources that say nothing of its entries were down: %s",
+				name, calls[name], got.Output)
+		}
+	}
+	// A REPOSITORY ON GITLET IS GITLET'S TO DESCRIBE, so a change about one
+	// waits, and the person is told which source, never a bare "try again".
+	got, _ := atlasCall(t, w[builtin.AtlasCorrectTool], map[string]any{"atlas_entry": "repository:gitlet/web",
+		"fact": "purpose", "value": "the storefront"}, iam.GrantAtlas, iam.GrantAdmin)
+	if waits, said := unreadBy(got); !waits || !strings.Contains(said, "Gitlet's repositories") {
+		t.Errorf("a change about a Gitlet repository with Gitlet down = %q (%v), told a person %q; "+
+			"want it to wait on Gitlet by name", got.Output, got.Cause, said)
+	}
+	// A VALUE'S PURGE AND AN ID THE VIEW DOES NOT HOLD ARE DECIDED ON EVERY
+	// SOURCE THAT STATES FACTS: the value may be one Gitlet declares, and the
+	// id may name an entry only Gitlet lists.
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.AtlasPurgeTool, calls[builtin.AtlasPurgeTool]},
+		{builtin.AtlasConfirmTool, map[string]any{"atlas_entry": atlas.MustRef(atlas.KindRepository, "gitlet/web").ID().String()}},
+	} {
+		got, _ := atlasCall(t, w[c.tool], c.args, iam.GrantAtlas, iam.GrantAdmin)
+		if waits, said := unreadBy(got); !waits || !strings.Contains(said, "Gitlet's repositories") {
+			t.Errorf("%s %v with Gitlet down = %q (%v), told a person %q; want it to wait on Gitlet by name",
+				c.tool, c.args, got.Output, got.Cause, said)
+		}
+	}
+}
+
+// A SOURCE THAT ONLY JOINS HEALTH AND USE NEVER REFUSES A WRITE, the whole
+// view's included: with the usage history and the access log down and every
+// source that states facts answering, a value is purged.
+//
+// Mutation: count a source with no record family as one that states facts
+// (gather.SourceName.StatesFacts) and the purge waits on the usage history.
+func TestASourceOfHealthAndUseNeverHoldsAnAtlasWrite(t *testing.T) {
+	t.Parallel()
+	ledger := seededAtlasLedger()
+	w := atlasWritesOver(t, ledger, func() time.Time { return atlasWriteAt }, newGitletHost(),
+		func(context.Context) gather.Sources {
+			return gather.Sources{Log: ledger, Usage: downUsage{}, AccessLog: downAccessLog{}}
+		})
+	got, _ := atlasCall(t, w[builtin.AtlasPurgeTool], atlasSweepCalls()[builtin.AtlasPurgeTool],
+		iam.GrantAtlas, iam.GrantAdmin)
+	if got.Failed {
+		t.Errorf("a purge with only the usage history and the access log down was refused: %s", got.Output)
+	}
+}
+
+// AN ACCOUNT IS WHAT THE INTEGRATIONS' STATUS DESCRIBES, so a change about one
+// waits while that status cannot be read, and a service beside it does not.
+// WHAT PEOPLE RECORDED IS EVERY WRITE'S: with the atlas's own log unread,
+// nothing is decided.
+//
+// Mutation: answer false from atlas.Record.Claims for an account and the add
+// lands beside whatever the integrations would have said of it.
+func TestAnAtlasWriteWaitsOnTheSourceThatDescribesItsEntry(t *testing.T) {
+	t.Parallel()
+	ledger := seededAtlasLedger()
+	now := func() time.Time { return atlasWriteAt }
+	w := atlasWritesOver(t, ledger, now, newGitletHost(), func(context.Context) gather.Sources {
+		return gather.Sources{Log: ledger, Integrations: downIntegrations{}}
+	})
+	mustWrite(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "service", "key": "ledger"})
+	got, _ := atlasCall(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": string(atlas.KindAccount), "key": "cloudflare/acme"})
+	if waits, said := unreadBy(got); !waits || !strings.Contains(said, "the integrations' status") {
+		t.Errorf("an account added with the integrations' status down = %q (%v), told a person %q; "+
+			"want it to wait on that status by name", got.Output, got.Cause, said)
+	}
+	if strings.Contains(got.PersonRefusal.Person(), "atlas_") {
+		t.Errorf("a person was told %q, which names a tool", got.PersonRefusal.Person())
+	}
+	before := len(ledger.recorded())
+	w = atlasWritesOver(t, ledger, now, newGitletHost(), func(context.Context) gather.Sources {
+		return gather.Sources{Log: downLog{ledger}}
+	})
+	got, _ = atlasCall(t, w[builtin.AtlasAddEntryTool], map[string]any{"kind": "service", "key": "payments"})
+	if waits, said := unreadBy(got); !waits || !strings.Contains(said, "what people recorded") {
+		t.Errorf("an add with the atlas's log unread = %q (%v), told a person %q; want it to wait on the log",
+			got.Output, got.Cause, said)
+	}
+	if len(ledger.recorded()) != before {
+		t.Errorf("a refused write recorded %d claims", len(ledger.recorded())-before)
 	}
 }

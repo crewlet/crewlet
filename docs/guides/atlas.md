@@ -289,6 +289,13 @@ On an entry's sheet and page, under its header:
 What the company's settings, Gitlet or the engine's own records declare is
 changed where it is declared: the engine refuses it here and says where.
 
+A change waits only on the sources that describe its entry. While a source
+cannot be read (the coverage line says which), you still add and correct what
+that source does not describe: with Gitlet unreachable, a service, a server or
+a vendor account is changed as usual, and only a change to a Gitlet repository
+waits. When a change does wait, the message under the form names the source
+that could not be read.
+
 ## Review
 
 **Review** (from the band, `#/company/atlas/review`) lists what waits for a

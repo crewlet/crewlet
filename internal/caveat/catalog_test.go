@@ -65,6 +65,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"AtlasEntryExists":           caveat.AtlasEntryExists(false),
 	"AtlasEntryExists (retired)": caveat.AtlasEntryExists(true),
 	"AtlasChangedMeanwhile":      caveat.AtlasChangedMeanwhile(),
+	"AtlasSourceUnread":          caveat.AtlasSourceUnread("Gitlet's repositories"),
 	"ValueInWrongForm":           caveat.ValueInWrongForm(),
 	"TitleTooLong":               caveat.TitleTooLong(),
 	"DescriptionTooLong":         caveat.DescriptionTooLong(),

@@ -6933,6 +6933,12 @@ owner) and the `outcome` and `position` every write carries, or `unchanged`
 where what it asked for already held and nothing was recorded. Over MCP each
 also takes back the `op_id` its answer carried, as the tracker's writes do.
 
+A write is refused `unavailable` (`503`, with a `Retry-After`) only while a
+source that could state a fact of an entry it touches did not answer in full,
+and the `detail` names that source in a person's words; a source that
+describes none of its entries, or that only reports health and use, never
+holds it ([how a write is decided](../concepts/atlas.md)).
+
 | Tool | Arguments |
 |---|---|
 | `atlas_add_entry` | `kind`, `key` in its kind's grammar, and optionally what is known of it: a `name`, a one-line `purpose`, the vendor account it belongs to (`belongs_to`, an entry), its owner (`seat` or `unit`) and the Doclet page that documents it (`doclet_page`, the page's id). Each is a record of its own after the entry's, and the same call made again finishes one that stopped part of the way. An entry the atlas holds already is refused `exists` (a retired one is brought back with `atlas_restore`); a tool server, a model, a server keyed `ssh/` and a Gitlet repository, which the settings or Gitlet name, are refused `conflict` |
