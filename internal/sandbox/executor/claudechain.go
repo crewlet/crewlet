@@ -2328,8 +2328,9 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 	var kept []chainHandle
 	if c.kept.boundary == last {
 		var resolved bool
-		if kept, resolved = c.keptRecords(w); !resolved {
-			return false, nil
+		var err error
+		if kept, resolved, err = c.keptRecords(ctx, w); err != nil || !resolved {
+			return false, err
 		}
 	}
 	// w.a holds the kept records.
@@ -2394,9 +2395,14 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 	}
 	// An anchor among the kept records, or below one of them by parent as the
 	// relink left each, hangs the chain under itself: the walk up from the
-	// anchor meets a kept record.
+	// anchor meets a kept record. The walk stops at a record it met, a loop
+	// above the anchor, and counts its steps against ctx, so a walk that
+	// failed to stop would still end where End's caller gives it up.
 	w.b.clear()
 	for at := anchor; at != noChainRecord && !w.b.has(int(at)); at = c.recs[at-1].parent {
+		if err := w.tick(ctx); err != nil {
+			return false, err
+		}
 		if w.a.has(int(at)) {
 			c.cannotTell(whyRelinkShape)
 			return false, nil
@@ -2411,35 +2417,40 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 // where it carries no list, its segment's, walked from its tail up by parent
 // to its head (2.1.322's aWo, 2.1.310's _po); and false where nothing happens:
 // a listed uuid naming no record of the thread, or a walk that meets a root, a
-// parent naming no record or a record it walked.
-func (c *threadChain) keptRecords(w *chainWork) ([]chainHandle, bool) {
+// parent naming no record or a record it walked. The walk counts its steps
+// against ctx, so one that failed to stop at a loop would still end where
+// End's caller gives it up.
+func (c *threadChain) keptRecords(ctx context.Context, w *chainWork) ([]chainHandle, bool, error) {
 	k := c.kept
 	if !k.segment {
 		if k.nowhere {
-			return nil, false
+			return nil, false, nil
 		}
 		kept := make([]chainHandle, 0, len(k.list))
 		for _, u := range k.list {
 			h := c.index[u]
 			if h == noChainRecord {
-				return nil, false
+				return nil, false, nil
 			}
 			kept = append(kept, h)
 		}
-		return kept, true
+		return kept, true, nil
 	}
 	head := c.handleOf(k.head)
 	var kept []chainHandle
 	w.b.clear()
 	for at := c.handleOf(k.tail); at != noChainRecord && !w.b.has(int(at)); at = c.recs[at-1].parent {
+		if err := w.tick(ctx); err != nil {
+			return nil, false, err
+		}
 		w.b.set(int(at))
 		kept = append(kept, at)
 		if at == head {
 			slices.Reverse(kept)
-			return kept, true
+			return kept, true, nil
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // indexRecords indexes the records the relink left by parent, as it left

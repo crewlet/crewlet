@@ -262,7 +262,19 @@ func rcHanding(why chainWhy, lines []int, more ...map[int]rcAnswer) map[int]rcAn
 // check reads tc's thread and holds it to what tc expects.
 func (tc rcCase) check(t *testing.T, name string) {
 	t.Helper()
-	read := rcChain(t, "", tc.lines...)
+	tc.hold(t, name, rcChain(t, "", tc.lines...))
+}
+
+// checkLooping is check of a thread holding a loop a walk must stop at
+// ([rcLooping]).
+func (tc rcCase) checkLooping(t *testing.T, name string) {
+	t.Helper()
+	tc.hold(t, name, rcLooping(t, "", tc.lines...))
+}
+
+// hold holds read, tc's thread read, to what tc expects.
+func (tc rcCase) hold(t *testing.T, name string, read rcRead) {
+	t.Helper()
 	read.expect(t, name, tc.want, rcOrder{tc.order, allVariants})
 	read.expectLeaf(t, name, tc.leaf)
 }
@@ -295,6 +307,26 @@ type rcRead struct {
 // any case reads as whyLineGap fails it: the reader here drops no line.
 func rcChain(t *testing.T, agent string, lines ...string) rcRead {
 	t.Helper()
+	return rcChainEnding(t.Context(), t, agent, lines...)
+}
+
+// rcLoopLooks is the most looks at its context End takes of a thread holding
+// a loop a walk must stop at: 16 looks are 65,536 of End's steps
+// ([chainCheckEvery]), many times what a case's few records take, and few
+// enough that a walk which does not stop at the loop gives up at once.
+const rcLoopLooks = 16
+
+// rcLooping is rcChain for a thread holding a loop a walk must stop at: its
+// End gives up after rcLoopLooks looks at its context, so a walk that does not
+// stop fails the case (End answers context.Canceled) rather than hang the run.
+func rcLooping(t *testing.T, agent string, lines ...string) rcRead {
+	t.Helper()
+	return rcChainEnding(&rcCancelledAfter{Context: t.Context(), n: rcLoopLooks}, t, agent, lines...)
+}
+
+// rcChainEnding is rcChain, its End given ctx.
+func rcChainEnding(ctx context.Context, t *testing.T, agent string, lines ...string) rcRead {
+	t.Helper()
 	text := ctThread(lines...)
 	got := rcRead{c: newThreadChain(agent), handles: map[int]chainHandle{}}
 	r := newThreadReader(strings.NewReader(text), threadPlainMax)
@@ -315,7 +347,7 @@ func rcChain(t *testing.T, agent string, lines ...string) rcRead {
 		}
 		break
 	}
-	if err := got.c.End(t.Context()); err != nil {
+	if err := got.c.End(ctx); err != nil {
 		t.Fatalf("End answers %v", err)
 	}
 	if why, _ := got.c.Unknown(); why == whyLineGap {
@@ -2056,15 +2088,20 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 // call's reply: the thread is cannot tell (whyResultByCall), the critic's F1a
 // to F1f. Where the anchor is the summary, under it an attachment as T9media
 // writes it or not, or the boundary keeps records the thread does not hold,
-// the call and its result stay together.
+// the call and its result stay together. Where the anchor's own ancestry loops
+// short of the kept records, the relink holds: the walk up from the anchor
+// stops at the loop, and the kept records hang under it, off the walk from
+// the leaf.
 //
 // Mutation: hang none of the anchor's other children, and the kept records lie
 // on no walk; chain none of the kept records, and the walk stops at the head
 // the trim left; delete the boundary too, and the relink chains the summary
 // under itself; hang no user record whose parent was deleted, and the walk
 // takes its fallback there; hang an attachment too, and it brings the kept
-// records onto the walk; or delete nothing, and what lies before the boundary
-// reads as off the conversation.
+// records onto the walk; delete nothing, and what lies before the boundary
+// reads as off the conversation; or walk up from the anchor past a record it
+// met, and that walk never ends where the anchor's ancestry loops: End, which
+// counts the walk's steps, gives up on the thread.
 func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	t.Parallel()
 	turn := []string{rcReply(4, 5, "msg_a", 3000, rcSaid("a")), rcPrompt(5, 6, 4000)}
@@ -2130,6 +2167,14 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 	} {
 		tc.check(t, name)
 	}
+	// The anchor (5) hangs off an attachment (6) whose parent (7) names it in
+	// turn.
+	rcCase{[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+		rcBoundary(3, 2000, rcKeeping(5, 1, 2)), rcSummary(3, 4, 2100), rcAttach(6, 5, 2200, rcNote),
+		rcAttach(7, 6, 2300, rcNote), rcAttach(6, 7, 2400, rcNote), rcPrompt(4, 8, 3000),
+		rcReply(8, 9, "msg_b", 4000, rcSaid("b"))},
+		rcHanding(whyChain, []int{3, 4, 8, 9}, rcAll(no(whyOffConversation), 1, 2, 5, 6, 7)), []int{3, 4, 8, 9},
+		9}.checkLooping(t, "an anchor whose ancestry loops short of the kept records")
 
 	for name, lines := range map[string][]string{
 		"F1a: the anchor makes the call, kept by a list and a segment": rcCompacted(rcKeeping(5, 1, 2), call...),
@@ -2156,9 +2201,9 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 // boundary, then walks the rest by its single path, a list of none read before
 // a segment beside it; and where a uuid its list names no record of the
 // thread, a canonical uuid or not, where its segment's walk up from its tail
-// breaks before its head, or where no boundary names what it kept, nothing
-// happens at all, and what lies before the boundary is off the conversation
-// rather than deleted.
+// breaks before its head or meets a loop there, or where no boundary names
+// what it kept, nothing happens at all, and what lies before the boundary is
+// off the conversation rather than deleted.
 //
 // Mutation: relink by an earlier boundary's list, and the thread reads as one
 // whose anchor the last boundary's deletion takes, cannot tell; delete nothing
@@ -2168,7 +2213,9 @@ func TestARelinkHandsTheKeptRecordsUnderItsAnchor(t *testing.T) {
 // delete where a listed record is absent, and the records before the boundary
 // read as deleted; read a list of a uuid that is no canonical uuid by its
 // canonical ones alone, or a segment whose walk breaks as what it walked, and
-// the resume relinks.
+// the resume relinks; or walk a segment past a record it met, and that walk
+// never ends where a loop stands between its tail and its head: End, which
+// counts the walk's steps, gives up on the thread.
 func TestARelinkThatDoesNotResolveDeletesOnlyWhatItsBoundaryCuts(t *testing.T) {
 	t.Parallel()
 	turn := rcReply(4, 5, "msg_a", 3000, rcSaid("a"))
@@ -2202,6 +2249,12 @@ func TestARelinkThatDoesNotResolveDeletesOnlyWhatItsBoundaryCuts(t *testing.T) {
 	} {
 		tc.check(t, name)
 	}
+	// The segment's tail (2) and the record over it (1) name each other, so the
+	// walk up from the tail meets the tail again before the head (3).
+	rcCase{[]string{rcPrompt(2, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcPrompt(0, 3, 1500),
+		rcBoundary(4, 2000, rcSegment(5, 3, 2)), rcSummary(4, 5, 2100), rcReply(5, 6, "msg_b", 3000, rcSaid("b"))},
+		rcHanding(whyChain, []int{4, 5, 6}, rcAll(no(whyOffConversation), 1, 2, 3)), []int{4, 5, 6},
+		6}.checkLooping(t, "a segment whose walk meets a loop before its head")
 }
 
 // A RELINK THE MODEL CANNOT FOLLOW IS CANNOT TELL, the whole thread: one whose
