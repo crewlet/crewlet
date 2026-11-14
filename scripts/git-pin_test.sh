@@ -253,15 +253,116 @@ recipe="$(digest "$SCRIPT_DIR/git.sh" | cut -c1-12)"
 
 # --- what the recipe refuses before it does anything ----------------------------------------------------------
 
+# Each refusal the recipe's header lists is exit 2, said on stderr, with nothing downloaded and nothing made where it
+# ran: the downloads it would read hold the tarball each case's pin names, so a recipe that went on would download
+# (and the log would say so), and it runs from an empty directory of the case's own, where a recipe that went on with
+# a relative path would make it. Mutation, for each: drop the refusal -> the recipe goes on to download, or stops
+# later without naming what it was asked (red); a case whose recipe does the latter says how.
+refused() { # <case> <name> <stderr-has> <cmd>...: runs the command expecting a refusal before any download
+	local case_name="$1" name="$2" has="$3" cwd="$TMPROOT/$1/cwd"
+	shift 3
+	: >"$TMPROOT/curl.log"
+	mkdir -p "$cwd"
+	run within "$cwd" env CREWLET_GIT_CACHE="$TMPROOT/$case_name/cache" \
+		GIT_PIN_DOWNLOADS="file://$TMPROOT/refusals" "$@"
+	expect "$name" 2 "" "$has"
+	if [ -s "$TMPROOT/curl.log" ] || [ -n "$(ls -A "$cwd")" ]; then
+		bad "$name, downloading and making nothing" "downloads: $(cat "$TMPROOT/curl.log")" \
+			"made where it ran: $(ls -A "$cwd")"
+	else
+		ok "$name, downloading and making nothing"
+	fi
+}
+served="$(standin "$TMPROOT/refusals" 2.56.0)"
+
+# Mutation: drop the usage refusal -> the recipe stops at a variable it never set, naming no usage (red).
 s="$(scripts unknown)"
-pin "$s" 2.56.0 "$zero" 2.55.0 "$zero" 2.40.4 "$zero"
-run "$s/git.sh" nodes
-expect "git.sh refuses a pin it does not know, with its usage" 2 "" "usage: scripts/git.sh node|node-floor|client-floor"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused unknown "git.sh refuses a pin it does not know, with its usage" \
+	"usage: scripts/git.sh node|node-floor|client-floor" "$s/git.sh" nodes
+
+# The pin is read beside the recipe and nowhere else. Mutation: drop the recipe's check for its pin -> it still
+# answers 2, its grep and sed failing over a file that is not there, but names no pin (red).
+s="$(scripts nopin)"
+refused nopin "git.sh refuses to run without its pin beside it, naming the file" "$s/git-pin.env is missing" \
+	"$s/git.sh" node
+
+# Mutation: let pinned read a name set twice -> it reads both values, the version check passes the line that is a
+# release, and the recipe goes on to download (red).
+s="$(scripts twice)"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+echo "GIT_NODE_VERSION=2.57.0" >>"$s/git-pin.env"
+refused twice "git.sh refuses a pin file setting a name twice, naming it" "sets GIT_NODE_VERSION 2 times" \
+	"$s/git.sh" node
+
+s="$(scripts version)"
+pin "$s" 2.56 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused version "git.sh refuses a version of two numbers, naming the variable" \
+	"GIT_NODE_VERSION in $s/git-pin.env is \"2.56\"" "$s/git.sh" node
 
 s="$(scripts short-sha)"
-pin "$s" 2.56.0 "${zero:1}" 2.55.0 "$zero" 2.40.4 "$zero"
-run "$s/git.sh" node
-expect "git.sh refuses a pin whose SHA-256 is 63 digits, naming the variable" 2 "" "GIT_NODE_SHA256"
+pin "$s" 2.56.0 "${served:1}" 2.55.0 "$zero" 2.40.4 "$zero"
+refused short-sha "git.sh refuses a pin whose SHA-256 is 63 digits, naming the variable" "GIT_NODE_SHA256" \
+	"$s/git.sh" node
+
+# A path the recipe is handed — the build cache, GIT_PIN_PREFIX, DESTDIR — is refused when it is not absolute, never
+# read against the directory the recipe was run from: the cache's bin/ is printed for the suite to put first on PATH,
+# where a relative entry would be read against each package's own directory; a prefix is where the git it builds
+# finds its own programs, wherever that git runs; and make runs in the source tree, which the recipe deletes. The
+# cache is held as CREWLET_GIT_CACHE sets it and as XDG_CACHE_HOME gives it.
+s="$(scripts relative)"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused relative "git.sh refuses a build cache that is not an absolute path, naming the variables" \
+	"the build cache relative/cache is not an absolute path (CREWLET_GIT_CACHE, XDG_CACHE_HOME, HOME)" \
+	env CREWLET_GIT_CACHE=relative/cache "$s/git.sh" node
+refused relative-xdg "git.sh refuses a default build cache that is not an absolute path, naming the variables" \
+	"the build cache relative/crewlet/git is not an absolute path (CREWLET_GIT_CACHE, XDG_CACHE_HOME, HOME)" \
+	env -u CREWLET_GIT_CACHE XDG_CACHE_HOME=relative "$s/git.sh" node
+refused relative-prefix "git.sh refuses a GIT_PIN_PREFIX that is not an absolute path, naming it" \
+	"GIT_PIN_PREFIX=relative/prefix is not an absolute path" env GIT_PIN_PREFIX=relative/prefix "$s/git.sh" node
+refused relative-destdir "git.sh refuses a DESTDIR that is not an absolute path, naming it" \
+	"DESTDIR=relative/stage is not an absolute path" \
+	env GIT_PIN_PREFIX="$TMPROOT/relative-destdir/prefix" DESTDIR=relative/stage "$s/git.sh" node
+
+# A target the recipe cannot build for is refused before any build is looked for: an architecture it names no
+# compiler for, and another machine's without GIT_PIN_PREFIX, whose git could never run from the cache. Mutation:
+# drop the first refusal -> the recipe stops at the variables it never set, naming no architecture (red); drop the
+# second -> it asks for that machine's compiler, or builds with it (red).
+case "$(uname -m)" in
+x86_64 | amd64) other_arch=arm64 ;;
+*) other_arch=amd64 ;;
+esac
+s="$(scripts target)"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused target "git.sh refuses a GIT_PIN_TARGET_ARCH that is neither amd64 nor arm64, naming it" \
+	"GIT_PIN_TARGET_ARCH=riscv64 is neither amd64 nor arm64" env GIT_PIN_TARGET_ARCH=riscv64 "$s/git.sh" node
+refused target-other "git.sh refuses another machine's GIT_PIN_TARGET_ARCH without GIT_PIN_PREFIX" \
+	"it is never built into the cache: set GIT_PIN_PREFIX" env GIT_PIN_TARGET_ARCH="$other_arch" "$s/git.sh" node
+
+# The SHA-256 tool and the tools a build runs are asked for before anything is downloaded, each case on a PATH holding
+# everything the recipe runs up to its download but the tools it leaves out. Mutation: drop the SHA-256 tool's check
+# -> the recipe stops at its own SHA-256, naming no tool (red); drop make from the build's -> it downloads (red).
+lacking() { # <dir> <tool>...: makes <dir> a PATH of what the recipe runs up to its download but those tools; prints it
+	local dir="$1" tool found
+	shift
+	mkdir -p "$dir"
+	for tool in dirname grep sed cut sha256sum shasum mktemp mkdir chmod rm make tar xz; do
+		case " $* " in *" $tool "*) continue ;; esac
+		if found="$(command -v "$tool")"; then ln -s "$found" "$dir/$tool"; fi
+	done
+	for tool in curl cc curl-config; do
+		ln -s "$TMPROOT/tools/$tool" "$dir/$tool"
+	done
+	echo "$dir"
+}
+s="$(scripts nosha)"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused nosha "git.sh refuses to build without a SHA-256 tool, naming both" "needs sha256sum, or shasum" \
+	env PATH="$(lacking "$TMPROOT/nosha/bin" sha256sum shasum)" "$s/git.sh" node
+s="$(scripts nomake)"
+pin "$s" 2.56.0 "$served" 2.55.0 "$zero" 2.40.4 "$zero"
+refused nomake "git.sh refuses to build without make, naming it" "building git 2.56.0 needs: make" \
+	env PATH="$(lacking "$TMPROOT/nomake/bin" make)" "$s/git.sh" node
 
 # --- a build is reused only when it is whole ------------------------------------------------------------------
 
@@ -305,6 +406,28 @@ expect "git.sh rebuilds a build without .complete, and refuses a tarball that is
 expect "git.sh names both digests when the tarball is not the pin's" 1 "" "pins $zero"
 # Mutation: drop the stall bound from the recipe's download -> red.
 bounded "every download the recipe makes ends when it stalls"
+
+# A name that is a directory rather than a link, holding no intact build — as plant leaves one, and as nothing but a
+# person's hand would — is built over: the build made in its place is published, and the name made a link to it. It
+# is never linked into, which `ln -sn` does to a directory, answering 0 and leaving the name on the build without
+# .complete. Mutation: drop the publish loop's case of a directory at the name -> the name is still that directory
+# (red).
+s="$(scripts indirectory)"
+sha="$(standin "$TMPROOT/indirectory/downloads" 2.56.0)"
+pin "$s" 2.56.0 "$sha" 2.55.0 "$zero" 2.40.4 "$zero"
+build="$(plant "$TMPROOT/indirectory/cache" 2.56.0)"
+run env CREWLET_GIT_CACHE="$TMPROOT/indirectory/cache" GIT_PIN_DOWNLOADS="file://$TMPROOT/indirectory/downloads" \
+	"$s/git.sh" node
+expect "git.sh builds over a directory at the name that holds no intact build" 0 "$build/bin"
+why=()
+[ -L "$build" ] || why+=("the name is still a directory, not a link to the build made in its place")
+[ -f "$build/.complete" ] || why+=("the name holds no .complete")
+if [ ${#why[@]} -eq 0 ]; then
+	ok "a directory at the name holding no intact build is replaced by a link to the build made in its place"
+else
+	bad "a directory at the name holding no intact build is replaced by a link to the build made in its place" \
+		"${why[@]}" "$(ls -la "$build/")"
+fi
 
 # --- a hash that gives no SHA-256 is a refusal, never a digest -------------------------------------------------
 

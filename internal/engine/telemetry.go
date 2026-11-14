@@ -597,6 +597,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	// only a segment that FINISHED the turn may conclude. Both records carry
 	// the same answer, read once.
 	item, basis := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
+	// THE TURN'S CALLS AS ITS RECORD LISTS THEM: every phase's, held to the
+	// one share a record has of its message (internal/agent/runner's
+	// recordbytes.go), with what neither list keeps said by tool.
+	calls := spend.Calls()
 
 	summary := types.AgentTurnCompleted{
 		Agent:    t.agentID,
@@ -613,7 +617,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		InputTokens:    spend.InputTokens,
 		OutputTokens:   spend.OutputTokens,
 		TotalTokens:    spend.Total(),
-		ToolExecutions: spend.ToolExecutions,
+		ToolExecutions: calls.Rows,
+		CallsElided:    calls.Elided,
+		ElidedCalls:    calls.ByTool,
 		TurnID:         t.runID,
 		WorkKey:        t.workKey,
 		ExecuteModel:   spend.ExecuteModel,
@@ -722,7 +728,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ToolSequence:    spend.ExecuteTools,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
-		Acted:           actedOutside(spend.ToolExecutions, deliverySurface(e.ToolsFor(t.handle))),
+		Acted:           actedOutside(calls, deliverySurface(e.ToolsFor(t.handle))),
 		PickupAnswer:    res.PickupAnswer,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
@@ -750,12 +756,19 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	e.publishReflectionDue(ctx, completed, t)
 }
 
-// actedOutside reports whether a successful call among execs could reach
-// somebody outside the engine on the seat's surface ([turn.Deliverable]).
-func actedOutside(execs []types.ToolExecution, s turn.Surface) bool {
-	for _, ex := range execs {
+// actedOutside reports whether a successful call of the turn's could reach
+// somebody outside the engine on the seat's surface ([turn.Deliverable]):
+// one its record lists, or one it counts by tool without listing — a call that
+// succeeded acted whether or not the record had room to list it.
+func actedOutside(calls runner.RecordCalls, s turn.Surface) bool {
+	for _, ex := range calls.Rows {
 		name, _ := ex["name"].(string)
 		if ok, _ := ex["success"].(bool); ok && turn.Deliverable(name, s) {
+			return true
+		}
+	}
+	for _, e := range calls.ByTool {
+		if e.Calls > e.Failed && e.Name != "" && turn.Deliverable(e.Name, s) {
 			return true
 		}
 	}

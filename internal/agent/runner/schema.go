@@ -1,5 +1,10 @@
 package runner
 
+import (
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/kept"
+)
+
 // The JSON Schemas the two structured-output tools publish.
 //
 // Hand-written rather than reflected off the payload structs, deliberately.
@@ -19,8 +24,6 @@ package runner
 // The struct tags and these schemas must agree; the tests assert a submission
 // shaped by the schema decodes into the struct.
 
-import "github.com/crewlet/crewlet/internal/agent/phase"
-
 var workSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
@@ -30,9 +33,14 @@ var workSchema = map[string]any{
 			"description": "delivered: the work is done, and where delivering it " +
 				"meant calling a tool, you called it. " +
 				"blocked: you cannot proceed — say what stopped you in `evidence`. " +
-				"no_action: nobody was asking you to do anything, so the turn " +
-				"ends silently. Declining something you were asked, mentioned in " +
-				"or assigned is a reply, not no_action: report it as delivered.",
+				"no_action: nobody was asking you to do anything, and you changed " +
+				"nothing outside the engine (a read changes nothing, though a call " +
+				"the engine cannot tell from a write counts as a change, and a " +
+				"refused no_action names it), so the turn ends silently. Declining " +
+				"something you were asked, mentioned in or assigned is a reply, not " +
+				"no_action: report it as delivered, as you report anything you " +
+				"changed outside the engine — asking a colleague, reacting to a " +
+				"message, publishing an artifact.",
 		},
 		"summary": map[string]any{
 			"type": "string",
@@ -94,18 +102,19 @@ var reviewSchema = map[string]any{
 			"description": "Required on self_iterate: an actionable correction for " +
 				"the next round — what was wrong, which tool, who to reach. Never " +
 				"a naked problem: include what was tried, the options, and your " +
-				"recommendation.",
+				"recommendation. At most " + kept.Size(reviewProseBytes) + ".",
 		},
 		"completed_work": map[string]any{
 			"type": "string",
 			"description": "On self_iterate, one sentence on what ALREADY landed " +
 				"this turn — posts, comments, status changes — so the next round " +
-				"adds to it instead of firing it a second time.",
+				"adds to it instead of firing it a second time. At most " +
+				kept.Size(reviewProseBytes) + ".",
 		},
 		"final_artifact": map[string]any{
 			"type": "string",
 			"description": "On done, the final text to return. Empty reuses " +
-				"the executor's own output.",
+				"the executor's own output. At most " + kept.Size(finalArtifactBytes) + ".",
 		},
 	},
 	"required": []any{"decision"},

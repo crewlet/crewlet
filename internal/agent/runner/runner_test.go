@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // deliverySurface is a plain one-write-tool surface, which the citation check
@@ -310,6 +312,256 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 			t.Errorf("a refusal naming the surface does not open with %q: %v",
 				NotDeliveredOn("work"), refused)
 		}
+	}
+}
+
+// A REFUSAL CLAIMS A WRITE ELSEWHERE ONLY WHERE THE ENGINE KNOWS OF ONE. A
+// turn waiting on the tracker that only searched through an MCP tool that no
+// hint marks as a read or as a write, which the delivery check counts as a
+// delivery to that server, is not told "a call that reached somewhere else":
+// it is told what it called and that none of it reached the person waiting.
+//
+// Mutation: key the elsewhere case on turn.Delivered again, and the search is
+// told it reached somewhere else.
+func TestACitationRefusalDoesNotCallAPresumedWriteOne(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue:      []string{"comment_on_work_item", "jira_search_issues"},
+		Deliveries:     map[string]string{"comment_on_work_item": "work", "jira_search_issues": "jira"},
+		PresumedWrites: []string{"jira_search_issues"},
+	}
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	refused := mustErr(t, decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "jira_search_issues"}} },
+		func() turn.Surface { return s }), claim)
+	if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(refused.Error(), `called "jira_search_issues"`) ||
+		strings.Contains(refused.Error(), "somewhere else") {
+		t.Errorf("refusal = %v, want the search named and no write elsewhere claimed", refused)
+	}
+}
+
+// A FAILED POST ELSEWHERE IS NO WRITE ELSEWHERE AT SUBMISSION EITHER. A turn
+// waiting on the tracker whose one call was a chat post that failed reached
+// nobody, so its refusal says no call in this turn has reached anybody, never
+// that a call reached somewhere else.
+//
+// Mutation: count a failed call in turn.KnownDelivered, and the failed post is
+// told it reached somewhere else.
+func TestACitationRefusalDoesNotCallAFailedPostAWriteElsewhere(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue: []string{"comment_on_work_item", "mattermost_post_message"},
+		Deliveries: map[string]string{"comment_on_work_item": "work",
+			"mattermost_post_message": "mattermost"},
+	}
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	refused := mustErr(t, decodeWork(turn.ToolReply("work"),
+		func() []ledger.Call { return []ledger.Call{{Name: "mattermost_post_message", Failed: true}} },
+		func() turn.Surface { return s }), claim)
+	if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(refused.Error(), "no call in this turn has reached anybody") ||
+		strings.Contains(refused.Error(), "somewhere else") {
+		t.Errorf("refusal = %v, want it to say no call reached anybody and claim no write elsewhere",
+			refused)
+	}
+}
+
+// A REFUSAL THAT FINDS NO DELIVERY SAYS WHAT THE TURN DID CALL. A turn that
+// asked a colleague or reacted, and then claimed the work delivered, was told
+// "no call in this turn has reached anybody", or that no tool acting outside
+// the engine had been called — false against its own successful call, and a
+// refusal a model can see is false is one it argues with. It is told what it
+// called and that none of it reached the person waiting, still opening with
+// the clause a scripted model recognises; a turn that only read is told what
+// it was told before.
+//
+// Mutation: drop either acted case, and the colleague ask is told it reached
+// nobody or called nothing.
+func TestANothingDeliveredRefusalSaysWhatTheTurnCalled(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{
+		Catalogue:      []string{"get_work_item", "comment_on_work_item", "ask"},
+		Deliveries:     map[string]string{"comment_on_work_item": "work"},
+		KnownReads:     []string{"get_work_item"},
+		KnownOpenWorld: []string{"comment_on_work_item", "ask"},
+	}
+	surface := func() turn.Surface { return s }
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["comment_on_work_item"]}`
+	record := func(name string) func() []ledger.Call {
+		return func() []ledger.Call { return []ledger.Call{{Name: name}} }
+	}
+
+	asked := mustErr(t, decodeWork(turn.ToolReply("work"), record("ask"), surface), claim)
+	if !strings.HasPrefix(asked.Error(), NotDeliveredOn("work")) ||
+		!strings.Contains(asked.Error(), `called "ask"`) ||
+		strings.Contains(asked.Error(), "no call in this turn has reached anybody") {
+		t.Errorf("on `work`: refusal = %v; want it to open with %q and name the ask", asked,
+			NotDeliveredOn("work"))
+	}
+	unnamed := mustErr(t, decodeWork(turn.ToolReply(""), record("ask"), surface), claim)
+	if !strings.HasPrefix(unnamed.Error(), "nothing has been delivered yet") ||
+		!strings.Contains(unnamed.Error(), `called "ask"`) ||
+		strings.Contains(unnamed.Error(), "no tool that acts outside the engine") {
+		t.Errorf("on no surface: refusal = %v; want it to name the ask", unnamed)
+	}
+
+	for reply, want := range map[string]string{
+		"work": "no call in this turn has reached anybody",
+		"":     "no tool that acts outside the engine has been called",
+	} {
+		read := mustErr(t, decodeWork(turn.ToolReply(reply), record("get_work_item"), surface), claim)
+		if !strings.Contains(read.Error(), want) {
+			t.Errorf("on %q: refusal = %v; want a turn that only read told %q", reply, read, want)
+		}
+	}
+}
+
+// A NO_ACTION IS REFUSED AT SUBMISSION ONCE THE TURN ACTED. A turn nobody
+// asked for that asked a colleague, or posted, and then said nobody was asking
+// would leave what it did unreported; the run is told so while it can still
+// say what it did, naming the calls, as one bounced call rather than a round
+// relaunched by the engine's check. A read of the world, a failed call and no
+// call at all leave no_action open. A closed round's act counts as much as
+// this round's. And no_action alone is refused: the refusal tells the run to
+// report what the turn did as delivered or as blocked, so after any act both
+// stay open to it.
+//
+// LIVE ONLY: decodeWork, which the replay of a made submission decodes with,
+// accepts the same claim, since a no_action the run made before it acted is
+// collected as made and corrected by turn.Check. And on a turn somebody is
+// waiting on, the decline rule speaks first.
+//
+// Mutation: drop the check, and every refusal is accepted; move it into
+// decodeWork, and the replay refuses what the run had made; refuse any outcome
+// but delivered after an act, and the blocked turn that asked is refused.
+func TestANoActionIsRefusedAtSubmissionOnceTheTurnActed(t *testing.T) {
+	t.Parallel()
+	s := deliverySurface()
+	s.Catalogue = append(s.Catalogue, "ask", "search")
+	s.KnownOpenWorld = []string{"ask", "search"}
+	s.KnownReads = append(s.KnownReads, "search")
+	surface := func() turn.Surface { return s }
+	quiet := `{"outcome":"no_action","summary":"nothing for me here"}`
+	reported := `{"outcome":"delivered","summary":"asked the lead whether it is theirs"}`
+	stuck := `{"outcome":"blocked","summary":"asked the lead","evidence":"the lead has not answered"}`
+	making := func(reply turn.Reply, calls []ledger.Call) func(map[string]any) (workPayload, error) {
+		return makingWork(reply, func() []ledger.Call { return calls }, surface)
+	}
+
+	for name, tc := range map[string]struct {
+		calls []ledger.Call
+		named string
+	}{
+		"after an ask": {calls: []ledger.Call{{Name: "ask"}}, named: "ask"},
+		"after a post": {calls: []ledger.Call{{Name: "slack_post"}}, named: "slack_post"},
+		"after a closed round posted": {
+			calls: turn.Record([]ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "slack_post"}}}}, nil),
+			named: "slack_post",
+		},
+	} {
+		err := mustErr(t, making(turn.NoReply(), tc.calls), quiet)
+		if !strings.Contains(err.Error(), "no_action is not available") ||
+			!strings.Contains(err.Error(), `called "`+tc.named+`"`) {
+			t.Errorf("%s: refusal = %v, want no_action refused naming %q", name, err, tc.named)
+		}
+		for _, told := range []string{reported, stuck} {
+			if _, refused := making(turn.NoReply(), tc.calls)(args(t, told)); refused != nil {
+				t.Errorf("%s: %s was refused: %v", name, told, refused)
+			}
+		}
+	}
+	for name, calls := range map[string][]ledger.Call{
+		"after a read of the world": {{Name: "search"}},
+		"after a failed post":       {{Name: "slack_post", Failed: true}},
+		"after nothing":             nil,
+	} {
+		if _, err := making(turn.NoReply(), calls)(args(t, quiet)); err != nil {
+			t.Errorf("%s: no_action was refused: %v", name, err)
+		}
+	}
+
+	asked := []ledger.Call{{Name: "ask"}}
+	replay := decodeWork(turn.NoReply(), func() []ledger.Call { return asked }, surface)
+	if _, err := replay(args(t, quiet)); err != nil {
+		t.Errorf("the replay's decoder refused a no_action the run had made: %v", err)
+	}
+	if err := mustErr(t, making(turn.ToolReply(""), asked), quiet); !strings.Contains(err.Error(), "even to decline") {
+		t.Errorf("on an awaited turn: refusal = %v, want the decline rule's", err)
+	}
+}
+
+// A NO_ACTION REFUSED FOR A CALL THE ENGINE ONLY PRESUMES WROTE SAYS SO. A
+// turn nobody asked for that only searched through an MCP tool that no hint
+// marks as a read or as a write has its no_action refused, since the delivery
+// check counts that call whatever it did; told it "has already acted outside
+// the engine", a model reads the refusal as false against its own search, and
+// the outcome field it submitted under promised that a read changes nothing.
+// So the refusal names the call as one the engine cannot tell from a write. A
+// write its server marks as one is still refused as an act.
+//
+// Mutation: refuse by turn.ActedWith again, and the search is told it acted.
+func TestANoActionAfterAnUnmarkedSearchIsRefusedSayingWhy(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for name, ann := range map[string]tools.Annotations{
+		"jira_search_issues": {},
+		"jira_add_comment":   {ReadOnly: mcp.No, OpenWorld: mcp.Yes},
+	} {
+		if err := reg.RegisterWith(stubTool(name), tools.Origin("jira"), ann); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := describe(tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"jira_search_issues", "jira_add_comment"}))
+	quiet := `{"outcome":"no_action","summary":"nothing for me here"}`
+	refusal := func(call string) string {
+		calls := []ledger.Call{{Name: call}}
+		return mustErr(t, makingWork(turn.NoReply(), func() []ledger.Call { return calls },
+			func() turn.Surface { return s }), quiet).Error()
+	}
+
+	searched := refusal("jira_search_issues")
+	if !strings.HasPrefix(searched, "no_action is not available: ") ||
+		!strings.Contains(searched, `called "jira_search_issues", which its server does not `+
+			`mark read-only, so the engine cannot tell it from a write`) ||
+		strings.Contains(searched, "already acted") {
+		t.Errorf("refusal = %q, want the search named as a call the engine cannot tell from a write",
+			searched)
+	}
+	if commented := refusal("jira_add_comment"); !strings.Contains(commented,
+		`already acted outside the engine — it called "jira_add_comment"`) {
+		t.Errorf("refusal = %q, want the comment its server marks a write refused as an act", commented)
+	}
+}
+
+// A REFUSED NO_ACTION SAYS THE WHOLE ACCOUNT, BOUNDED AS THE CHECK'S IS: what
+// turn.ActedAccount says, each of its two lists five tools by name and then
+// how many more, since the refusal points the run at calls its own transcript
+// holds.
+//
+// Mutation: list either kind with words.And in turn.ActedAccount, and the
+// refusal names all seven of that kind.
+func TestANoActionRefusalNamesFiveOfEachKindAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	s := turn.Surface{Deliveries: map[string]string{}}
+	var calls []ledger.Call
+	for _, n := range []string{"7", "3", "1", "6", "2", "5", "4"} {
+		act, presumed := "t"+n, "p"+n
+		s.Catalogue = append(s.Catalogue, act, presumed)
+		s.KnownOpenWorld = append(s.KnownOpenWorld, act)
+		s.Deliveries[presumed] = "vendor"
+		s.PresumedWrites = append(s.PresumedWrites, presumed)
+		calls = append(calls, ledger.Call{Name: presumed}, ledger.Call{Name: act})
+	}
+	refused := mustErr(t, makingWork(turn.NoReply(), func() []ledger.Call { return calls },
+		func() turn.Surface { return s }), `{"outcome":"no_action","summary":"nothing for me here"}`)
+	want := `no_action is not available: this turn already acted outside the engine — it ` +
+		`called "t1", "t2", "t3", "t4", "t5" and 2 more — and it called "p1", "p2", "p3", ` +
+		`"p4", "p5" and 2 more, which their servers do not mark read-only, so the engine ` +
+		`cannot tell them from writes. Report what this turn did`
+	if !strings.HasPrefix(refused.Error(), want) {
+		t.Errorf("refusal = %q\nwant it to open %q", refused, want)
 	}
 }
 

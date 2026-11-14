@@ -580,6 +580,14 @@ export interface LiveCall {
   total_tokens: number;
   tool_executions?: ToolExecution[] | null;
   /**
+   * How many of the phase's calls `tool_executions` does not list, and those
+   * calls by tool: what a failed phase's record left out of the list its call
+   * is frozen with, which a record holds to its share of one message. Zero and
+   * empty on a running phase's call.
+   */
+  calls_elided?: number;
+  elided_calls?: ElidedCall[] | null;
+  /**
    * Per-round model turns — `{round, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
    * interleave into one ledger. Absent on a phase this engine recorded
@@ -599,6 +607,12 @@ export interface LiveCall {
   rounds_used: number;
   /** Each round's own timing and tokens, as the loop recorded it. */
   rounds?: PhaseRound[] | null;
+  /**
+   * How many of the phase's rounds `rounds`, and the lists beside it, do not
+   * carry: past the most rounds a frame or a record lists, the first half and
+   * the newest half are kept.
+   */
+  rounds_elided?: number;
   /**
    * The phase's harness runs that have ENDED, in order. The run in flight is not
    * on it until it ends: its rounds are the ones past every entry's
@@ -628,6 +642,9 @@ export interface LiveCall {
    * harness may run a response's calls at once. Absent between calls.
    */
   running_calls?: RunningCall[] | null;
+  /** How many more calls were in flight than `running_calls` lists, which a
+   *  frame holds to its share; each is on `tool_executions` once it settles. */
+  running_calls_elided?: number;
   /**
    * Every person's note the phase has read so far, with the round whose
    * provider call first saw it. What the note said and who sent it are on the

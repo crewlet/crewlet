@@ -248,7 +248,10 @@ const NOTHING_HELD: Record<string, unknown> = {
   response: "",
   round_narration: null,
   tool_executions: null,
+  calls_elided: 0,
+  elided_calls: null,
   rounds: null,
+  rounds_elided: 0,
   invocations: null,
 };
 
