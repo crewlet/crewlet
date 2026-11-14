@@ -11,6 +11,15 @@
  * reads as an invitation only to a reader who may set one; anybody else is
  * told plainly there is none.
  *
+ * # Its lifecycle and its record
+ *
+ * Whether the room is archived is a fact of its own, with Archive or Reopen
+ * beside it for every reader of a named room, held with the engine's sentence
+ * for anybody but its creator, its team's lead or an admin. How long it keeps
+ * messages is an administrator's to change, and so is deleting everything
+ * before a day: both are drawn for an admin alone, as the third set of writes
+ * the design keeps to admin (`RoomAdmin.tsx`).
+ *
  * NOTHING HERE DECIDES WHO MAY CHANGE WHAT. Each control is held by the
  * room's own rule for its tool (`scope.tsx`'s `rules`, the engine's rule
  * mirrored), so Edit is offered where the engine would take the change and
@@ -59,7 +68,15 @@ import {
 } from "@crewlethq/ui";
 import { PersonRow } from "@crewlethq/ui";
 import { IconTile } from "@crewlethq/ui";
-import { LogOutGlyph, NetworkGlyph, SearchGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import {
+  LogOutGlyph,
+  NetworkGlyph,
+  PackageGlyph,
+  RotateCcwGlyph,
+  SearchGlyph,
+  TrashGlyph,
+  UserPlusGlyph,
+} from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { QueryState } from "~/components/common.tsx";
@@ -78,6 +95,8 @@ import { useChatPeople, type ChatPerson } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { knownKind, roomKindLabel, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
+import { useRoomGestures } from "./RoomAdmin.tsx";
+import { keptFor } from "./roomLifecycle.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { SharedList } from "./Shared.tsx";
 import { reportFor, type StartReport } from "./start.ts";
@@ -191,21 +210,13 @@ function DetailsBody({
 
 /* About ------------------------------------------------------------------ */
 
-/** How long a room keeps what is said, in words. */
-export function keptFor(days: number | null | undefined): string {
-  // ABSENT IS THE COMPANY'S ANSWER and zero is for ever: the room's own field
-  // is nullable precisely so the two are not one value.
-  if (days === 0) return "For ever";
-  if (typeof days === "number") return `${days.toLocaleString()} days`;
-  return "As long as the company default";
-}
-
 function About({ answer }: { answer: ChatChannelDetail }) {
   const nav = useChatNav();
   const scope = useRoomScope();
   const people = useChatPeople();
   const channel = answer.channel;
   const direct = isDirect(channel.kind);
+  const gestures = useRoomGestures(channel);
   const edit = (field: "topic" | "description") =>
     scope.rules.settings === ""
       ? () => nav.openDialog({ kind: field, room: channel.id })
@@ -246,9 +257,58 @@ function About({ answer }: { answer: ChatChannelDetail }) {
             ? `${people.nameOf(channel.created_by)} on ${fmtDate(channel.created_at)}`
             : `On ${fmtDate(channel.created_at)}`}
         </AboutRow>
-        <AboutRow label="Messages are kept">{keptFor(channel.retention_days)}</AboutRow>
+        <AboutRow
+          label="Messages are kept"
+          onEdit={
+            gestures.admin
+              ? () => nav.openDialog({ kind: "retention", room: channel.id })
+              : undefined
+          }
+          editHeld={gestures.destroy}
+        >
+          {keptFor(channel.retention_days)}
+        </AboutRow>
+        {gestures.archivable && (
+          <AboutRow label="Archived">
+            {channel.archived_at
+              ? `Since ${fmtDate(channel.archived_at)}. It can be read and searched, and takes no new messages.`
+              : "No. It takes new messages."}
+          </AboutRow>
+        )}
         <LeaveRow answer={answer} />
       </div>
+      {(gestures.archivable || gestures.admin) && (
+        <div className="chat-about__actions">
+          {gestures.archivable && (
+            <Button
+              variant="secondary"
+              size="small"
+              leadingIcon={
+                channel.archived_at ? <RotateCcwGlyph size="sm" /> : <PackageGlyph size="sm" />
+              }
+              disabledReason={gestures.archive || undefined}
+              title={gestures.archive || undefined}
+              onClick={() =>
+                nav.openDialog({ kind: "archive", room: channel.id, archive: !channel.archived_at })
+              }
+            >
+              {channel.archived_at ? "Reopen room" : "Archive room"}
+            </Button>
+          )}
+          {gestures.admin && (
+            <Button
+              variant="ghost"
+              size="small"
+              leadingIcon={<TrashGlyph size="sm" />}
+              disabledReason={gestures.destroy || undefined}
+              title={gestures.destroy || undefined}
+              onClick={() => nav.openDialog({ kind: "prune", room: channel.id })}
+            >
+              Delete older messages
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -317,6 +377,7 @@ function AboutRow({
   note,
   empty,
   onEdit,
+  editHeld = "",
   children,
 }: {
   label: string;
@@ -324,6 +385,8 @@ function AboutRow({
   /** What the value is called when there is none yet ("topic"). */
   empty?: string;
   onEdit?: (() => void) | undefined;
+  /** Why Edit is held right now, or "": drawn disabled with it. */
+  editHeld?: string;
   children: ReactNode;
 }) {
   const blank = empty !== undefined && !children;
@@ -336,6 +399,8 @@ function AboutRow({
             variant="ghost"
             size="small"
             onClick={onEdit}
+            disabledReason={editHeld || undefined}
+            title={editHeld || undefined}
             aria-label={`Edit ${label.toLowerCase()}`}
           >
             Edit

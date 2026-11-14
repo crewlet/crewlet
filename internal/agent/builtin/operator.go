@@ -72,6 +72,10 @@ type OperatorDeps struct {
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
 	Readers ReadersDeps
 
+	// ScheduleRuns is what a person runs one schedule now through, off its
+	// cron. The zero value omits the tool.
+	ScheduleRuns ScheduleRunDeps
+
 	// Health is the health tools' — the SAME [HealthTools] list a seat's
 	// registry takes, its code half's Actor the request's principal. The
 	// zero value omits both.
@@ -221,6 +225,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 			deps.Pauses.Pauses != nil},
 		{&resumeSeat{deps: deps.Pauses, authorize: deps.Authorize},
 			deps.Pauses.Pauses != nil},
+		// NOR THIS: when a seat's scheduled work runs is a person's to
+		// decide, and a seat that could run a schedule would be starting
+		// its colleagues' turns, or its own, outside the times they set.
+		{&runSchedule{deps: deps.ScheduleRuns, authorize: deps.Authorize},
+			deps.ScheduleRuns.serves()},
 		// NOR THIS: a note to a running turn is a person redirecting the
 		// work, and a seat that could steer a colleague's turn would be
 		// directing it past the person who asked for the work.

@@ -8,24 +8,33 @@ import { expect, test } from "vitest";
 import { panelOf, spelledTheOldWay, withPanel } from "./panels.ts";
 
 const q = (s: string) => new URLSearchParams(s);
+const NONE = { data: false, files: false };
+const DATA = { data: true, files: false };
 
 test("panel= names the open panel; anything else names none", () => {
-  expect(panelOf(q("panel=history"), false)).toBe("history");
-  expect(panelOf(q("panel=nonsense"), false)).toBeNull();
-  expect(panelOf(q(""), false)).toBeNull();
+  expect(panelOf(q("panel=history"), NONE)).toBe("history");
+  expect(panelOf(q("panel=nonsense"), NONE)).toBeNull();
+  expect(panelOf(q(""), NONE)).toBeNull();
 });
 
 test("Data is a panel only where the artifact keeps data", () => {
-  expect(panelOf(q("panel=data"), false)).toBeNull();
-  expect(panelOf(q("panel=data"), true)).toBe("data");
+  expect(panelOf(q("panel=data"), NONE)).toBeNull();
+  expect(panelOf(q("panel=data"), DATA)).toBe("data");
+});
+
+// Mutation: drop the Files check in `panelOf` and a link to a doc's Files
+// opens a panel whose store its page can never show.
+test("Files is a panel only where the artifact runs a page of its own", () => {
+  expect(panelOf(q("panel=files"), NONE)).toBeNull();
+  expect(panelOf(q("panel=files"), { data: false, files: true })).toBe("files");
 });
 
 test("an old tab or the people rail opens the panel it became, and View opens none", () => {
-  expect(panelOf(q("tab=history"), false)).toBe("history");
-  expect(panelOf(q("tab=settings"), false)).toBe("settings");
-  expect(panelOf(q("tab=data"), true)).toBe("data");
-  expect(panelOf(q("tab=view"), false)).toBeNull();
-  expect(panelOf(q("rail=people"), false)).toBe("people");
+  expect(panelOf(q("tab=history"), NONE)).toBe("history");
+  expect(panelOf(q("tab=settings"), NONE)).toBe("settings");
+  expect(panelOf(q("tab=data"), DATA)).toBe("data");
+  expect(panelOf(q("tab=view"), NONE)).toBeNull();
+  expect(panelOf(q("rail=people"), NONE)).toBe("people");
   expect(spelledTheOldWay(q("tab=view&version=2"))).toBe(true);
   expect(spelledTheOldWay(q("panel=history"))).toBe(false);
 });

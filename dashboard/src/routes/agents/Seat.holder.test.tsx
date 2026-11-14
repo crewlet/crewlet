@@ -69,8 +69,13 @@ function json(status: number, payload: unknown): Response {
 /**
  * `/iam/seats` answering: Ana's seat held, Lee's invited, Sam's nobody's — or
  * `failing`, when a case wants the read refused. Every request recorded.
+ *
+ * A PERSON CREATED ON SAM'S SEAT HOLDS IT FROM THE NEXT READ ON, as the
+ * engine's listing says the moment the write lands: a listing that kept the
+ * seat open after the create could not see what that move does to the page.
  */
 function engine(failing?: Response) {
+  let samHeld = false;
   const sent: { method: string; path: string; key: string | null; body: unknown }[] = [];
   const spy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://engine.test");
@@ -87,6 +92,7 @@ function engine(failing?: Response) {
       );
     }
     if (method === "POST" && url.pathname === "/iam/people") {
+      samHeld = true;
       return Promise.resolve(
         json(201, {
           id: "p-sam",
@@ -105,10 +111,18 @@ function engine(failing?: Response) {
     if (url.pathname === "/iam/seats") {
       if (failing) return Promise.resolve(failing.clone());
       const unheld = { handle: "sam", name: "Sam Support" };
+      const sam = samHeld
+        ? {
+            ...unheld,
+            holder: { person: "p-sam", kind: "person", login: "sam.ito", stage: "active" },
+          }
+        : unheld;
       return Promise.resolve(
         json(200, {
           seats: url.searchParams.get("unheld")
-            ? [unheld]
+            ? samHeld
+              ? []
+              : [unheld]
             : [
                 {
                   handle: "ana",
@@ -124,7 +138,7 @@ function engine(failing?: Response) {
                     expires_at: "2026-10-14T09:00:00Z",
                   },
                 },
-                unheld,
+                sam,
               ],
         }),
       );
@@ -154,7 +168,7 @@ async function mount(handle: string, grants: string[], as = "ana") {
     grants,
     handle: as,
     owner: as,
-    acts: ["create_work_item", "update_work_item"],
+    acts: ["create_work_item", "update_work_item", "open_dm"],
   };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "viewer" ? Promise.resolve(viewer) : Promise.resolve(ANSWERS[what] ?? {});
@@ -245,8 +259,24 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
     email: "sam.ito@example.com",
     grants: ["worklet", "doclet", "artifacts", "chatlet", "gitlet"],
   });
-  expect(within(dialog).getByText("https://x/dashboard#/reset/c-first.s")).toBeTruthy();
-  expect(within(dialog).getByText("sam.ito")).toBeTruthy();
+  // THE SEAT IS HELD NOW, and the page has moved with it: the open seat's
+  // empty state is gone and the notice above the tabs names the holder. THE
+  // DIALOG IS STILL OPEN OVER THAT, with the link the engine shows only once:
+  // drawn by the empty state the write ended, it closed before anybody read
+  // the link. Mutation: keep the dialog in the holding component's own state
+  // and no dialog is left here.
+  await afterMicrotasks();
+  expect(sent.filter((s) => s.path === "/iam/seats").length).toBeGreaterThan(1);
+  expect(screen.queryByText("This seat is open")).toBeNull();
+  expect(document.querySelector(".prof-notices .crewlet-callout")?.textContent).toMatch(
+    /^Held by sam\.ito/,
+  );
+  const shown = screen.getByRole("dialog", { name: "Add someone as Sam Support" });
+  expect(within(shown).getByText("https://x/dashboard#/reset/c-first.s")).toBeTruthy();
+  expect(within(shown).getByText("sam.ito")).toBeTruthy();
+  // IT CLOSES WHEN THE PERSON SAYS SO, and not before.
+  fireEvent.click(within(shown).getByRole("button", { name: "Done" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 // AN INVITED SEAT IS NOT VACANT: it names the invitation that holds it and

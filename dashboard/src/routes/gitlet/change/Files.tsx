@@ -69,6 +69,7 @@ import type {
 } from "~/protocol/index.ts";
 import { PatchPager } from "../PatchPager.tsx";
 import { ReplyComposer, Thread } from "./Conversation.tsx";
+import { FindingAnswer } from "./FindingAnswer.tsx";
 import {
   changePartParams,
   partMovedBy,
@@ -603,6 +604,7 @@ function FindingNote({
           <div className="prose md">{renderMarkdown(c.body)}</div>
         </div>
       ))}
+      <FindingAnswer change={change} finding={finding} />
       <ReplyComposer change={change} target={{ finding: finding.id }} />
     </article>
   );

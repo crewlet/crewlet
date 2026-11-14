@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -137,6 +138,50 @@ func backendSwitches(b builtWith, c *config.Company) []backendSwitch {
 			Field: "code.backend", Half: "Gitlet",
 			Running: string(b.code), Activated: string(code), Holds: b.runsCode(),
 		})
+	}
+	return out
+}
+
+// service is the switch's field as the org projection's `services` names it:
+// tracker, knowledge, chat or code: the field without its `.backend`.
+func (s backendSwitch) service() string {
+	return strings.TrimSuffix(s.Field, ".backend")
+}
+
+// AwaitingRestart is which of Crewlet's own services c turns ON that this
+// node's native runtime was built without, each as the org projection's
+// `services` names it (tracker, knowledge, chat, code), in that order; empty
+// on a node that serves everything c asks for, and on one running no runtime
+// yet, whose first apply builds it from the company it meets.
+//
+// THE HALF OF [backendSwitches] SOMEBODY IS REFUSED BY. A service the revision
+// turned off goes on being served until the restart, and no reader meets a
+// refusal for it; one it turned on has nothing to answer with here, so every
+// question about it is refused on this node until the process restarts. The
+// log line said that to whoever reads the node's log, and nothing said it to
+// the person looking at a workspace whose every screen was refused: the API
+// names these on the org projection and answers their questions
+// `native_backend_needs_restart`.
+//
+// OF c, NEVER OF THE CURRENT EPOCH READ AGAIN: a caller describing one
+// company asks about that company, so the services it reports and the ones it
+// says wait for a restart cannot straddle a publish.
+func (e *Engine) AwaitingRestart(c *config.Company) []string {
+	built, runs := e.runtimeBuilt()
+	if !runs || c == nil {
+		return nil
+	}
+	return awaitingRestart(built, c)
+}
+
+// awaitingRestart is [Engine.AwaitingRestart] over a runtime built with b.
+// PURE, so the rule is tested without an engine.
+func awaitingRestart(b builtWith, c *config.Company) []string {
+	var out []string
+	for _, s := range backendSwitches(b, c) {
+		if !s.Holds {
+			out = append(out, s.service())
+		}
 	}
 	return out
 }

@@ -88,6 +88,9 @@ test("every destination is linked to by something in the builder", () => {
     .map((f) => f.text)
     .join("\n");
   const table = builder.find((f) => f.path === "dialogParts.tsx")?.text ?? "";
+  // A PROBLEM'S LINK IS A USE TOO: `linkFor` names the screen a problem the
+  // builder cannot fix is fixed on, and both banners draw it from there.
+  const placing = builder.find((f) => f.path === "model/problems.ts")?.text ?? "";
   // Named at a `ScreenLink`, at a `ReadOnlyFact`'s link, or through
   // `screenPath` where the caller builds the href itself.
   const used = (name: string) =>
@@ -95,7 +98,8 @@ test("every destination is linked to by something in the builder", () => {
     new RegExp(`(?:to=|to:\\s*|screenPath\\()\\s*"${name}"`).test(
       // dialogParts links to Integrations and Schedules from its own parts.
       table.slice(table.indexOf("export function ScreenLink")),
-    );
+    ) ||
+    new RegExp(`return "${name}";`).test(placing.slice(placing.indexOf("function linkFor")));
   expect(
     names.filter((name) => !used(name)),
     "these are declared and nothing links to them — delete the entry, or find the caller that lost its link",

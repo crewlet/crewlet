@@ -13,14 +13,16 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
+import { ADA, ADA_SESSION, actEngine, applied, type Pressed } from "~/test/chat.tsx";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { DetailsPane, keptFor, withFollowing } from "./Details.tsx";
+import { DetailsPane, withFollowing } from "./Details.tsx";
 import { ChatDialogHost } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import { useChatNav, type DetailsTab } from "./nav.tsx";
 import { levelOf } from "./notify.tsx";
+import { ARCHIVE_HELD, keptFor } from "./roomLifecycle.ts";
 
 const ROOM = "room-1";
 
@@ -273,5 +275,128 @@ describe("Notifications", () => {
   test.each(WRITE_READERS)("the levels are drawn for $who, held with why", async (reader) => {
     open("notifications", { viewer: reader.viewer });
     await heldWith(await screen.findByRole("radio", { name: /every message/i }), reader.reason);
+  });
+});
+
+// A ROOM'S LIFECYCLE AND RECORD (`RoomAdmin.tsx`): Archive is drawn for every
+// reader of a named room and held, in the engine's own words, for anybody but
+// its creator, its team's lead or an admin; how long it keeps messages and
+// deleting older ones are an administrator's alone, each asked in the page
+// and sent with its confirmation repeated. Mutation: let a member archive and
+// the held case fails; send a retention without `?confirm=` and the
+// retention case does; draw the destructions for everybody and the reader
+// case does.
+describe("its lifecycle and record", () => {
+  /** An administrator: the Chatlet app and Admin. */
+  const ADMIN = { ...ADA, grants: ["chatlet", "admin"] };
+
+  /** The engine's REST answers for the room's own routes, recorded. */
+  function restEngine() {
+    const sent: { method: string; url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        const headers = { ...ENGINE_HEADERS, "Content-Type": "application/json" };
+        if (String(url).endsWith("/auth/session")) {
+          return new Response(JSON.stringify(ADA_SESSION), { status: 200, headers });
+        }
+        sent.push({
+          method: init.method ?? "GET",
+          url: String(url),
+          body: init.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response(JSON.stringify({ channel_id: ROOM, outcome: "applied" }), {
+          status: 200,
+          headers,
+        });
+      }),
+    );
+    return sent;
+  }
+
+  test("its creator archives it, asked once, through update_channel", async () => {
+    open("about");
+    expect(await screen.findByText("No. It takes new messages.")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Archive room" }));
+    const dialog = await screen.findByRole("alertdialog", { name: /archive #launch/i });
+    expect(within(dialog).getByText(/takes no new messages from anybody/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(presses).toHaveLength(1));
+    expect(presses[0]).toMatchObject({
+      tool: "update_channel",
+      args: { channel: ROOM, archived: true },
+    });
+  });
+
+  test("an archived room says since when, and offers Reopen", async () => {
+    open("about", { room: detail({ archived_at: "2026-11-02T10:00:00Z" }) });
+    expect(await screen.findByText(/^Since .*takes no new messages\.$/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Reopen room" }));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Reopen" }),
+    );
+    await waitFor(() => expect(presses).toHaveLength(1));
+    expect(presses[0]).toMatchObject({ args: { channel: ROOM, archived: false } });
+  });
+
+  test("anybody but its creator, its team's lead or an admin is held, with why", async () => {
+    open("about", { room: detail({ created_by: "bo" }) });
+    await heldWith(await screen.findByRole("button", { name: "Archive room" }), ARCHIVE_HELD);
+  });
+
+  test("a reader who is not an admin is offered no destruction", async () => {
+    open("about");
+    await screen.findByText("Messages are kept");
+    expect(screen.queryByRole("button", { name: /edit messages are kept/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete older messages" })).toBeNull();
+  });
+
+  test("an admin sets how long it keeps messages, confirmed as the engine checks it", async () => {
+    open("about", { viewer: ADMIN, room: detail({ created_by: "bo" }) });
+    const sent = restEngine();
+    // AN ADMIN ARCHIVES ANY ROOM.
+    await waitFor(async () =>
+      expect(
+        (await screen.findByRole("button", { name: "Archive room" })).getAttribute("aria-disabled"),
+      ).not.toBe("true"),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /edit messages are kept/i }));
+    const dialog = await screen.findByRole("dialog", { name: /how long #launch keeps/i });
+    fireEvent.click(within(dialog).getByText("A number of days"));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Days" }), {
+      target: { value: "90" },
+    });
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    // NOT BEFORE THE DELETION IT MAY CAUSE IS CONFIRMED.
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /delete/i }), {
+      target: { value: "delete" },
+    });
+    fireEvent.click(save);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.method).toBe("PUT");
+    expect(sent[0]!.url).toContain(`/chatlet/channels/${ROOM}/retention?confirm=90`);
+    expect(sent[0]!.body).toEqual({ retention_days: 90 });
+  });
+
+  test("an admin deletes older messages once the room's name is typed back", async () => {
+    open("about", { viewer: ADMIN });
+    const sent = restEngine();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete older messages" }));
+    const dialog = await screen.findByRole("alertdialog", { name: /delete older messages/i });
+    fireEvent.change(within(dialog).getByLabelText("Delete messages before"), {
+      target: { value: "2026-11-01" },
+    });
+    const press = within(dialog).getByRole("button", { name: "Delete" });
+    expect((press as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /launch/ }), {
+      target: { value: "launch" },
+    });
+    fireEvent.click(press);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const url = new URL(sent[0]!.url, "http://engine");
+    expect(url.pathname).toBe(`/chatlet/channels/${ROOM}/prune`);
+    expect(url.searchParams.get("confirm")).toBe(url.searchParams.get("cutoff"));
+    expect(Number.isNaN(Date.parse(url.searchParams.get("cutoff") ?? ""))).toBe(false);
   });
 });

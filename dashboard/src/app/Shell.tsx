@@ -968,6 +968,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                 </div>
               ) : (
                 <PageHeader
+                  connecting={degraded?.firstDial ? degraded : null}
                   crumbs={crumbs}
                   row={row}
                   counts={counts}
@@ -979,7 +980,8 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                   runs={runs}
                   grants={held}
                 >
-                  <StateBar degraded={degraded} coverage={coverage} />
+                  {/* THE FIRST DIAL IS THE BAR'S, said above as a chip. */}
+                  <StateBar degraded={degraded?.firstDial ? null : degraded} coverage={coverage} />
                 </PageHeader>
               )
             }

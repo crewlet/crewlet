@@ -100,8 +100,9 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 		f.hook = func(call fakeCall) error {
 			if call.Page == 1 && call.Since.IsZero() {
 				once.Do(func() {
+					//fixedwait:measure the hook's own deadline: its firing only ends the wait, and the counts after it decide
 					for deadline := time.Now().Add(hangDetector); cache.Waiting(c, repo) < 10 && time.Now().Before(deadline); {
-						time.Sleep(time.Millisecond)
+						time.Sleep(time.Millisecond) //fixedwait:liveness
 					}
 				})
 			}
@@ -535,7 +536,7 @@ func TestAFailedRebuildAnswersOnlyItsOwnCallers(t *testing.T) {
 				defer a.s.Release()
 			}
 			ch <- a
-		case <-time.After(hangDetector):
+		case <-time.After(hangDetector): //fixedwait:liveness
 			t.Fatalf("a caller has had no answer in %v", hangDetector)
 		}
 	}

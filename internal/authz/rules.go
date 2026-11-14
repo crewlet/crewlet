@@ -325,6 +325,13 @@ const (
 	ActionWorkMove    Action = "move_work_item"
 	ActionPageTrash   Action = "pages.trash"
 	ActionPageRestore Action = "pages.restore"
+	// A PAGE PUBLISHED, OR TAKEN BACK TO A DRAFT, is the same kind of move:
+	// a draft is listed marked as one and no search returns it, so the
+	// status decides whether the company reads the page at all. DOTTED,
+	// because no tool is named for it: save_page asks it when a `status`
+	// names another one than the page has, as it asks the rename for a
+	// `title`.
+	ActionPagePublish Action = "pages.publish"
 	// REMOVING A FILE TAKES IT OUT OF ITS PROJECT, and is decided as
 	// removing an item is: by the project's lead, because a colleague may
 	// add a report to a project and may not take somebody else's away.
@@ -379,6 +386,10 @@ const (
 	ActionSeatResume     Action = "resume_seat"
 	ActionTurnSteer      Action = "steer_turn"
 	ActionExecutorAnswer Action = "answer_executor"
+	// ActionScheduleRun is the tool `run_schedule`: a person running one
+	// schedule now, off its cron. It wakes the schedule's runner seats, so
+	// it is decided on each of them, as a pause of one is.
+	ActionScheduleRun Action = "run_schedule"
 
 	// ActionKnowledgeAnswer is a person's question answered from what the
 	// company has written down, by a model, at the company's expense. A
@@ -1554,13 +1565,16 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	ActionPageComment: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
-	// A PAGE'S CREATOR TIDIES IT — renames, trashes, restores — beside its
+	// A PAGE'S CREATOR TIDIES IT (renames, trashes, restores, publishes or
+	// takes back to a draft) beside its
 	// container's lead and admin. See [ClassTidy].
 	ActionPageRename: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionPageTrash: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionPageRestore: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPagePublish: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// A REMARK IS ITS AUTHOR'S, as a work item's is; the store refuses
 	// anybody but the author an edit, and takes a moderator's removal.
@@ -1727,6 +1741,12 @@ var rules = map[Action]rule{
 	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionTurnSteer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// WHEN A SEAT'S SCHEDULED WORK RUNS IS ITS LEAD'S TOO: running a
+	// schedule now starts a turn on every seat it wakes, which is the
+	// decision a pause is the other half of. The tool asks this row about
+	// each of those seats.
+	ActionScheduleRun: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or the run's seat's
 	// lead's: the tool asks this row about the REQUESTER's seat when the

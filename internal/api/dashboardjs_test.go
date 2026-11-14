@@ -1433,7 +1433,18 @@ const (
 	// reads) and a kept range 257 (the per-reader range store the page header
 	// reads), and main's own change and the kit 35 more. So it moved to 410
 	// KiB, 2.24 seconds.
-	initialBudget = 410 << 10
+	// Kit 0.126.3 (a menu's header beside its items in the menu's panel, the
+	// scroller a palette's results and a modal's body take a Tab stop by, a
+	// card counting its titles) with the frame's own first-dial chip in the
+	// page bar and the sidebar's landing rule took it to 408.7 KiB: 409 KiB,
+	// 2.23 seconds.
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, took it to 411.4 KiB (421,258 bytes),
+	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
+	// and the frame's first-dial chip and landing rule, as they measured
+	// alone. So it moved to 412 KiB, 2.25 seconds.
+	initialBudget = 412 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2450,7 +2461,36 @@ const (
 	// bytes): 5977 KiB.
 	// The release train merged with that poll, on kit 0.126.2, measures
 	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
-	treeBudget = 5<<20 + 891<<10
+	// A page tidied from its own screen (Rename, Labels, Move, the trash with
+	// Restore and Delete permanently, a space's trash list), a draft's
+	// Publish on the page, in More and in the editor, an empty space's header,
+	// a disconnect the settings hold said as theirs, and the seat gestures'
+	// dialog held by the screen added 12,312 bytes, nearly all script, and
+	// took it to 5987.1 KiB (6,130,755 bytes): 5988 KiB.
+	// The settings that change the company document from the screens that
+	// show it (a limit's editor, the delegated-decision rules' switch, sheet
+	// and removal, a revision's Revert with its diff, Reload, and the whole
+	// document's editor with its check, problems and import), an artifact's
+	// Files panel, Move to's New folder and the new HTML page's question on
+	// leaving took it to 6016.0 KiB; a schedule's create, edit, pause,
+	// delete and run controls with the clock its times are drawn on added
+	// 20.1 KiB more, nearly all script, and took it to 6036.1 KiB
+	// (6,180,959 bytes, 62,516 over the last): 6037 KiB.
+	// A person's Gitlet writes (a new repository, its branches and their
+	// rules, a file edited, added or deleted, a commit reverted or picked, a
+	// change rebased, taken out of the queue or reverted, a finding
+	// answered, a repository deleted and restored), a room's archive and an
+	// administrator's retention, prune and erase, and the notice for a
+	// service the node starts on its restart added 46,844 bytes, nearly all
+	// script, and took it to 6020.8 KiB (6,165,287 bytes): 6021 KiB.
+	// Kit 0.126.3, its grid's named action column, a menu's panel and the
+	// palette's and modal's scrollers, added 5,634 bytes and took it to
+	// 6026.3 KiB (6,170,921 bytes): 6027 KiB.
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
+	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
+	treeBudget = 5<<20 + 1013<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

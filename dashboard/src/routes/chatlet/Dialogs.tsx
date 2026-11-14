@@ -2,7 +2,8 @@
  * Chatlet's dialogs: a gesture in progress, finished or abandoned, never a
  * place (`nav.tsx`'s `ChatDialog`). New room, adding people and agents to a
  * room, a room's topic or description, starting it from a template, deleting
- * a message, and the keyboard shortcuts.
+ * a message, and the keyboard shortcuts; archiving a room and an
+ * administrator's destructions of what it said are `RoomAdmin.tsx`'s.
  *
  * # Every write is the engine's to judge, and its answer is said honestly
  *
@@ -77,6 +78,7 @@ import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ROOM_TEMPLATES, templateNamed, type RoomTemplate } from "./templates.ts";
+import { ArchiveDialog, EraseDialog, PruneDialog, RetentionDialog } from "./RoomAdmin.tsx";
 
 /** What a dialog says while the engine has not answered. */
 const WAITING = "Waiting for the engine to answer.";
@@ -106,6 +108,16 @@ export function ChatDialogHost({
       return <RoomTextDialog field={dialog.kind} room={dialog.room} onClose={onClose} />;
     case "template":
       return <TemplateDialog room={dialog.room} onClose={onClose} />;
+    case "archive":
+      return <ArchiveDialog room={dialog.room} archive={dialog.archive} onClose={onClose} />;
+    case "retention":
+      return <RetentionDialog room={dialog.room} onClose={onClose} />;
+    case "prune":
+      return <PruneDialog room={dialog.room} onClose={onClose} />;
+    case "erase":
+      return (
+        <EraseDialog channelID={dialog.channelID} message={dialog.message} onClose={onClose} />
+      );
   }
 }
 

@@ -1123,7 +1123,10 @@ func reconcileRow(state integration.State) map[string]any {
 		"outcome":       string(state.Outcome),
 		"attempts":      state.Attempts,
 		"last_error":    state.LastError,
-		"findings":      reconcileFindings(state.Findings),
+		// WHAT A FAILED DISCONNECT WAS HELD BY (`vendor` or `settings`), ""
+		// where none failed, so a screen names the real cause.
+		"teardown_held_by": string(state.TeardownHeldBy),
+		"findings":         reconcileFindings(state.Findings),
 	}
 	// Rendered as instants, so an absent one is absent rather than the
 	// zero time, which prints as 1970 and reads as a real answer.

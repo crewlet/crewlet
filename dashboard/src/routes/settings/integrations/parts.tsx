@@ -401,6 +401,7 @@ export function useDisconnect(model: Model | null) {
       name={dropping.name}
       kinds={dropping.kinds}
       stuck={dropping.stuck || undefined}
+      stuckOn={dropping.stuckOn || undefined}
       apps={dropping.apps}
       appPath={dropping.appPath}
       avatarOf={model.avatarOf}

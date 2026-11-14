@@ -28,6 +28,7 @@ import * as seatControls from "~/components/seatControls.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ActionTool } from "~/protocol/act.ts";
+import type { OrgServices } from "~/contract/services.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -163,6 +164,24 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a page's eye, a save_page carrying only the person's own watch",
     suite: "routes/doclet/page/PageView.test.tsx",
   },
+  "routes/doclet/page/PageView.tsx": {
+    why:
+      "a draft's Publish and a published page's Move back to draft, a save_page carrying " +
+      "only the status, from the draft's notice and from More",
+    suite: "routes/doclet/page/PageView.test.tsx",
+  },
+  "routes/doclet/page/Tidy.tsx": {
+    why:
+      "a page's Labels and Move (save_page with its labels or its parent), beside the " +
+      "rename, trash, restore and purge its own routes take",
+    suite: "routes/doclet/page/PageView.test.tsx",
+  },
+  "routes/agents/ScheduleControls.tsx": {
+    why:
+      "a schedule's Run now (run_schedule), on its page and its peek, held with the " +
+      "schedule's own reason where it is paused or nobody can run it",
+    suite: "routes/agents/Schedules.test.tsx",
+  },
   "routes/artifacts/new/fileTask.ts": {
     why:
       "a create page's ask an agent: one create_work_item filed to the chosen seat, " +
@@ -201,6 +220,44 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "(code_update_repo) and Purge unreachable history (code_purge_unreachable) — " +
       "each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/NewRepo.tsx": {
+    why: "the repositories' New repository, one code_create_repo, and the dialog it opens",
+    suite: "routes/gitlet/Repositories.test.tsx",
+  },
+  "routes/gitlet/repo/RepoLife.tsx": {
+    why:
+      "a repository's Delete repository (code_delete_repo, held until its name is " +
+      "typed) and a deleted repository's Restore (code_restore_repo)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/Protect.tsx": {
+    why: "a repository's branch rules: Protect a branch, and a rule's Edit and Remove (code_protect_branch)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/BranchWrites.tsx": {
+    why: "Branches' New branch and a row's Delete (code_create_branch, code_delete_branch)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/FileWrites.tsx": {
+    why:
+      "a branch's files: Edit, New file, Delete file, and an empty repository's Add a " +
+      "file, each one code_commit_files",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/commit/CommitWrites.tsx": {
+    why: "a commit's Revert and Cherry-pick (code_revert, code_cherry_pick) and their dialogs",
+    suite: "routes/gitlet/commit/CommitPage.test.tsx",
+  },
+  "routes/gitlet/change/ChangeWrites.tsx": {
+    why:
+      "a change's Rebase, Take out of the queue and a merged change's Revert " +
+      "(code_rebase_change, code_dequeue_change, code_revert_change)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/FindingAnswer.tsx": {
+    why: "a standing finding's Answer finding (code_resolve_finding)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
   "routes/gitlet/commit/ComparePage.tsx": {
     why:
@@ -257,8 +314,14 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/chatlet/RoomActions.tsx": {
     why:
       "the room's More menu on the top bar: Leave (leave_channel), each held with its " +
-      "sentence beside Add people, the description, the topic and the star",
+      "sentence beside Add people, the description, the topic, the star and Archive room",
     suite: "routes/chatlet/TopBar.test.tsx",
+  },
+  "routes/chatlet/RoomAdmin.tsx": {
+    why:
+      "a room's Archive and Reopen (update_channel archived), asked in a dialog and held " +
+      "with the engine's sentence for anybody but its creator, its team's lead or an admin",
+    suite: "routes/chatlet/Details.test.tsx",
   },
   "routes/chatlet/outbox.ts": {
     why:
@@ -325,6 +388,8 @@ interface Fixture {
    * whom the engine refuses on this seat however many changes it makes for them.
    */
   seatRule?: true;
+  /** What the company runs, where the control's change turns on it; every service otherwise. */
+  services?: OrgServices;
 }
 
 /** A running agent seat the reader leads, as a screen hands it to a seat's controls. */
@@ -405,7 +470,15 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     name: /^View$/,
     tool: "save_work_view",
   },
-  MessageSeatButton: { props: { handle: "swe" }, name: /^Message$/, tool: "create_work_item" },
+  // THE ASK, on a company whose chat is a vendor's: where the company runs
+  // Chatlet, Message is a direct conversation for a reader who holds it
+  // (`open_dm`), which `routes/agents/AskTask.test.tsx` holds.
+  MessageSeatButton: {
+    props: { handle: "swe" },
+    name: /^Message$/,
+    tool: "create_work_item",
+    services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "gitlet" },
+  },
   AssignToSeatButton: {
     props: { handle: "swe", name: "SWE" },
     name: /^Assign task$/,
@@ -686,13 +759,14 @@ describe.each(
     })),
   ),
 )("$control", ({ Control, fixture }) => {
-  const { props, name, tool, handed, fill, notServed, seatRule } = fixture;
+  const { props, name, tool, handed, fill, notServed, seatRule, services } = fixture;
 
   test.each(READERS)("is drawn for $who, enabled only where it can act", (reader) => {
     const viewer = reader.viewer(tool);
     // THE SEAT'S RULE ADMITS AN ADMIN OR A LEAD, and none of these readers leads the seat.
     const reason = reader.reason === null && seatRule && !viewer.admin ? notServed! : reader.reason;
     vi.mocked(useViewer).mockReturnValue(viewer);
+    if (services) vi.mocked(useOrg).mockReturnValue({ name: "Acme", services } as never);
     // THE FRAME'S ROUTER AND LIVE REGION, as every screen has them: a remedy
     // opens the seat panel, and a selection bar says its count aloud.
     render(

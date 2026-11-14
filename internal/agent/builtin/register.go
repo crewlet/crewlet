@@ -854,6 +854,13 @@ func annotationsFor(name string) tools.Annotations {
 		// the engine reads a vendor outside itself.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}
+	case RunScheduleTool:
+		// A WRITE SOMEBODY ELSE ACTS ON: the run starts a turn on each seat
+		// the schedule wakes, whose moves reach the company, so OpenWorld is
+		// Yes. It replaces nothing, and NOT idempotent as a tool: a second
+		// call is a second run, unless it is the same request sent again.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
 		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
 		// executor it has out with its box, and neither is run again —

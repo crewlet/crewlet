@@ -59,11 +59,13 @@ import {
   SegmentedMeter,
   Skeleton,
   Tag,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import { ListOrderedGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
+import { DequeueButton } from "./change/ChangeWrites.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { changePath, changeRef, isRepoName, refName, shortOID } from "~/lib/code.ts";
 import {
@@ -311,6 +313,22 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
                 shrink: true,
                 align: "right",
                 cell: (p) => <Elapsed place={p} rows={checksFor(p)} />,
+              },
+              {
+                key: "actions",
+                header: <VisuallyHidden>Actions</VisuallyHidden>,
+                action: true,
+                shrink: true,
+                // A ROW OF THE QUEUE IS IN IT: the press is held only by who
+                // the reader is, and the engine says who may.
+                cell: (p) => (
+                  <DequeueButton
+                    changeRef={changeRef(p.row.repo, p.row.number)}
+                    target={refName(band.target).name}
+                    queued
+                    label="Take out"
+                  />
+                ),
               },
             ]}
           />

@@ -20,6 +20,17 @@
  * now: the services' pages are the overview everybody holds. Gitlet has no
  * page there to offer — it is turned on in the company document, which
  * the notice names instead.
+ *
+ * # A service this node is waiting to start
+ *
+ * A node starts Crewlet's own services as it boots, so a company that turns
+ * one on while the node is running has it only after the node restarts, and
+ * until then every read of it there is refused (`lib/services.ts`'s
+ * [awaitsRestart]). That is not "not in use here": the notice says the
+ * company uses it, that this node starts it when it restarts, and who does
+ * that, with the nodes' page for a reader who may open it. It said only "Not
+ * available on this node" on every screen of the workspace, under a sidebar
+ * row that looked like any other.
  */
 
 import { ButtonLink, EmptyState } from "@crewlethq/ui";
@@ -29,7 +40,13 @@ import {
   MessageSquareGlyph,
   SquareKanbanGlyph,
 } from "@crewlethq/icons/glyphs";
-import { chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
+import {
+  awaitsRestart,
+  chatVendorName,
+  SERVICE_NAMES,
+  useBackends,
+  type OrgServices,
+} from "~/lib/services.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
 import { closedBy, sectionOf, workspaceOf, workspaceRow, type Service } from "./nav.ts";
 import { href } from "./router.tsx";
@@ -128,6 +145,16 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
   const line = LINES[service];
   const canOpen = held !== null && closedBy(INTEGRATIONS_PATH, held.grants) === null;
   const Glyph = GLYPHS[service];
+  if (awaitsRestart(backends, service)) {
+    return (
+      <EmptyState
+        icon={<Glyph size={32} />}
+        title={restartTitle(service)}
+        description={restartText(service)}
+        action={<RestartStep grants={held?.grants ?? null} />}
+      />
+    );
+  }
   return (
     <EmptyState
       icon={<Glyph size={32} />}
@@ -144,6 +171,37 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
       }
     />
   );
+}
+
+/** The heading where the company runs the service and this node has not started it. */
+export function restartTitle(service: Service): string {
+  return `${SERVICE_NAMES[service]} starts when this node restarts`;
+}
+
+/** The sentence under it: why it is not here yet, and what brings it. */
+export function restartText(service: Service): string {
+  const name = SERVICE_NAMES[service];
+  return `This company turned ${name} on while this node was running, and a node starts ${name} as it boots. Restart the engine on each node, one at a time, and ${name} opens here.`;
+}
+
+/** Where the engine's nodes are listed, for whoever restarts one. */
+const NODES_PATH = ["settings", "nodes"] as const;
+
+/**
+ * The step a reader takes where the node is waiting to start a service: a
+ * reader who may open the nodes' page is sent there to see which node this
+ * is and what each is running; anybody else is told who can restart it.
+ */
+function RestartStep({ grants }: { grants: readonly string[] | null }) {
+  if (grants === null) return null;
+  if (closedBy(NODES_PATH, grants) === null) {
+    return (
+      <ButtonLink variant="secondary" href={href([...NODES_PATH])}>
+        See the engine’s nodes
+      </ButtonLink>
+    );
+  }
+  return <p className="t-caption">Ask whoever runs the engine to restart it.</p>;
 }
 
 /** Where Gitlet is turned on: the company document, on Configuration. */

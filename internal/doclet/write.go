@@ -257,9 +257,14 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			return Written{}, err
 		}
 	}
-	if save.Status != nil && !save.Status.Valid() {
-		return Written{}, invalid("status", "%q is not one of %s",
-			*save.Status, words.Or(Statuses()))
+	// PUBLISHED OR DRAFT, the two a save moves a page between. The trash is
+	// a state a page is MOVED into by [Store.Trash], which stamps when: a
+	// save that set the status alone would leave a trashed page with no
+	// instant for the reaper's thirty days to count from.
+	if save.Status != nil && *save.Status != StatusPublished && *save.Status != StatusDraft {
+		return Written{}, invalid("status", "a save moves a page between %s and %s, and was "+
+			"asked for %q. A page goes to the trash by a trash, never by a save",
+			StatusPublished, StatusDraft, *save.Status)
 	}
 
 	at := s.now()
@@ -295,6 +300,14 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 					return statelog.Decision{}, fmt.Errorf(
 						"%w: this edit is against version %d and the page is at %d",
 						ErrStaleVersion, save.BaseVersion, head.Version)
+				}
+				if save.Status != nil && head.Status == StatusTrashed {
+					// A TRASHED PAGE COMES BACK BY A RESTORE, which clears
+					// when it was trashed. A save that published it would
+					// leave that instant on a page every reader finds
+					// again, and the reaper would purge it on schedule.
+					return statelog.Decision{}, invalid("status", "the page is in the "+
+						"trash. Restore it first, then set its status")
 				}
 				if save.ParentID != nil && *save.ParentID != head.ParentID {
 					// A MOVE IS JUDGED IN THE SNAPSHOT IT IS DECIDED IN,
