@@ -13,7 +13,7 @@ import (
 )
 
 // A parked state is held to a share of its run's row, and what gives way past
-// it is the closed rounds' payloads.
+// it is the closed rounds: their payloads first, and past those whole rounds.
 //
 // # Why a share, and why these give way
 //
@@ -28,26 +28,29 @@ import (
 // brief of the turn tells and its renderer holds to 24,000 bytes as this state
 // encodes them, escapes included (internal/agent/prompts' EndingsMaxBytes).
 //
+// A closed round's SUCCESSFUL calls' outputs are not on it to give up: nothing
+// reads them again — the prior-work ledger shows a failed call's error alone, a
+// delivery check reads names and outcomes, and a seed reads identities — so the
+// turn closes a round without them (internal/agent/turn), rather than carrying
+// them on every park until a park past its share drops them.
+//
 // So past its share a state gives up, in this order, what no later segment of
 // the turn needs whole, and never what it does:
 //
-//  1. A closed round's SUCCESSFUL calls' outputs. Nothing reads them again: the
-//     prior-work ledger shows a failed call's error alone, a delivery check
-//     reads names and outcomes, and a seed reads identities.
-//  2. The closed rounds' ARGUMENTS, held to a tier of bytes per call — values
+//  1. The closed rounds' ARGUMENTS, held to a tier of bytes per call — values
 //     left out largest first, the leaves before their containers
 //     (internal/kept's Args), so a call keeps the identifiers that say what it
 //     was about and its digest says what it asked for whole — and their
 //     FAILED calls' errors held to the same tier, as their opening.
-//  3. The rounds' PRODUCED TEXT, held to its opening: the prior-work ledger
+//  2. The rounds' PRODUCED TEXT, held to its opening: the prior-work ledger
 //     fits a round's text to a few thousand characters anyway
 //     (ledger.RenderedArtifactLimit), and the opening it is fitted from is
 //     what is kept.
-//  4. The rounds' INTENTS — what each set out to do, its submission's summary,
+//  3. The rounds' INTENTS — what each set out to do, its submission's summary,
 //     which the prior-work ledger prints whole as its "Set out to:" — held to
 //     their opening: prose, which gives way before anything a resumed call
 //     log counts by, and after the text it summarises.
-//  5. The DIGESTS in a closed round's tallies — the calls its run's record
+//  4. The DIGESTS in a closed round's tallies — the calls its run's record
 //     dropped ([ledger.Iteration.Elided]) and the ones its calls' own work made
 //     ([ledger.Iteration.Absorbed]) — each tool's calls folded into one count of
 //     calls to it whose arguments are not known: an over-count of that tool for
@@ -55,70 +58,74 @@ import (
 //     check reads, which is names and outcomes. A round's tallies are bounded on
 //     its run's row, but a turn's rounds are not, so many long ones can carry
 //     more of them than the state has room for.
-//  6. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
+//  5. The closed rounds' CALLS THEMSELVES, each folded into its round's tally of
 //     the calls its record does not list ([ledger.Iteration.Elided]) — by
 //     identity first, its tool, its digest and its outcome, an outcome nobody
 //     knows counted apart from a failure ([ledger.Elided.Unfinished]), so a
 //     resumed call log still seeds it exactly, and past that by tool, as the
-//     tallies were —
-//     and with them the names of the round's tools that are reads
-//     ([ledger.Iteration.Reads]), which only a listed call is drawn with.
+//     tallies were — and with them the names of the round's tools that are
+//     reads ([ledger.Iteration.Reads]), which only a listed call is drawn with.
 //     What a call keeps however far it is condensed — a name, an identity and
 //     an outcome — is all a tally holds of it too, and a delivery check reads
 //     a tally's calls as the calls they were ([ledger.Called]); what is lost is
 //     the prior-work ledger's line for each, which says how many calls of each
 //     tool the round made instead ([ledger.FormatElided]).
-//  7. The rounds' REVIEW PROSE — what their reviewer said landed and what it
+//  6. The rounds' REVIEW PROSE — what their reviewer said landed and what it
 //     sent back to correct — held to its opening, as the produced text is.
+//  7. WHOLE ROUNDS FROM THE MIDDLE: the first round, which says what the turn
+//     set out to do, and as many of the newest as fit are kept, and the rounds
+//     between them folded into one entry standing for them, a span
+//     ([ledger.Iteration.Through]), as few as fit (found by halving). A span
+//     keeps what every reader of a closed round reads of them: their calls in
+//     its two tallies by tool — every call, failure and unknown outcome counted
+//     under its tool's name, never a name folded away, since a delivery check
+//     reads names and a reply a dropped round posted is still the turn's — and
+//     the artifact hash of the last of them, which the turn's stall guard is
+//     seeded by. What the rounds set out to do, produced and were told is gone,
+//     and the prior-work ledger says so rather than drawing rounds that said
+//     nothing. A turn's rounds have no ceiling, and every round still weighs
+//     the openings of its prose once the tiers above have cut it, so a turn of
+//     enough rounds is past any share until rounds go.
+//  8. EVERY ROUND, into one span: the least a park keeps of the closed rounds,
+//     one count of calls per tool — the census of the tools the turn called,
+//     which no surface makes larger than a small part of the share.
 //
-// Every call keeps its tool, its identity — or, past the last fold, the count
-// of calls to its tool it is one of — and its outcome, and every round the
-// opening of its intent and of its review and the tools and outcomes of the
-// calls its record no longer lists — which is everything a resumed segment
-// derives an operation id or judges a delivery from.
+// Every call keeps its tool and its outcome however far it is condensed, its
+// identity until the last fold of its tool, and every round still kept whole
+// the opening of its intent and of its review — which is everything a resumed
+// segment derives an operation id or judges a delivery from.
 //
-// PAST THAT THE STATE IS REFUSED ([ErrTooLarge], as a [*TooLargeError] saying
-// which of two things is past the share). The turn's own context — what it was
-// asked, its trigger's words, its turn-start blocks and its conversation's
-// endings — which no resume can do without and no condensing touches; or its
-// closed rounds, condensed as far as they go, of which a turn whose
-// `max_iterations` has no ceiling can carry more than any share holds. Either
-// way a park that big would be refused by the broker on its write and every
-// write of the row after it.
+// PAST THAT THE STATE IS REFUSED ([ErrTooLarge], as a [*TooLargeError]): the
+// turn's own context — what it was asked, its trigger's words, its turn-start
+// blocks and its conversation's endings — which no resume can do without and
+// no condensing touches, beside the one count per tool its closed rounds came
+// down to. A park that big would be refused by the broker on its write and
+// every write of the row after it; a turn's closed rounds alone never are,
+// however many it ran.
 
 // ErrTooLarge is a parked state past its budget even with its closed rounds
 // condensed ([EncodeWithin]).
 var ErrTooLarge = errors.New("execstate: the parked state is past its share of the run's row")
 
-// TooLargeError is [ErrTooLarge] for one state: what it weighs condensed as far
-// as it goes, the budget it was held to, and what the turn's own context
-// weighs — the state with no closed round at all — which says what is past the
-// share.
+// TooLargeError is [ErrTooLarge] for one state: what it weighs with every closed
+// round folded into one span, the least a park keeps of them; the budget it was
+// held to; and what the turn's own context weighs — the state with no closed
+// round at all — which is what is past the share.
 type TooLargeError struct {
 	Bytes, Budget, Context int
 }
 
 func (e *TooLargeError) Error() string {
-	what := "its closed rounds, condensed as far as they go, take it past its share"
-	if e.OwnContext() {
-		what = "the turn's own context is past its share by itself"
-	}
-	return fmt.Sprintf("%s: %d bytes with every closed round condensed, and its share is %d; the turn's own "+
-		"context weighs %d — %s", ErrTooLarge, e.Bytes, e.Budget, e.Context, what)
+	return fmt.Sprintf("%s: %d bytes with every closed round folded into one count of calls per tool, and its "+
+		"share is %d; the turn's own context weighs %d of them, which no condensing touches", ErrTooLarge, e.Bytes,
+		e.Budget, e.Context)
 }
 
 // Unwrap is [ErrTooLarge], which every caller tests for.
 func (e *TooLargeError) Unwrap() error { return ErrTooLarge }
 
-// OwnContext reports whether the turn's own context alone is past the share —
-// what it was asked, its trigger's words, its turn-start blocks — which no
-// condensing of its closed rounds could ever make fit.
-func (e *TooLargeError) OwnContext() bool { return e.Context > e.Budget }
-
 // Condensed is what [EncodeWithin] gave up to fit a state into its budget.
 type Condensed struct {
-	// Results is how many successful calls' outputs were dropped.
-	Results int
 	// LeftOut is how many calls' arguments, or failed calls' errors, were
 	// kept in part.
 	LeftOut int
@@ -132,11 +139,15 @@ type Condensed struct {
 	Calls int
 	// Reviews is how many rounds' review prose was cut to its opening.
 	Reviews int
+	// Rounds is how many closed rounds the state kept whole were folded into
+	// a span ([ledger.Iteration.Through]); a span an earlier park made, folded
+	// into a new one, is not counted again.
+	Rounds int
 }
 
 // Any reports whether anything was given up.
 func (c Condensed) Any() bool {
-	return c.Results+c.LeftOut+c.Texts+c.Intents+c.Identities+c.Calls+c.Reviews > 0
+	return c.LeftOut+c.Texts+c.Intents+c.Identities+c.Calls+c.Reviews+c.Rounds > 0
 }
 
 // turnRecord is the record a condensed payload says it is not kept on.
@@ -190,18 +201,6 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 	var c Condensed
 	parked := s.Iterations
 	s.Iterations = cloneRounds(parked)
-	for i := range s.Iterations {
-		for j := range s.Iterations[i].Calls {
-			call := &s.Iterations[i].Calls[j]
-			if !call.Failed && call.Result != "" {
-				call.Result = ""
-				c.Results++
-			}
-		}
-	}
-	if blob, err = Encode(s); err != nil || len(blob) <= budget {
-		return blob, c, err
-	}
 	for _, tier := range callTiers {
 		c.LeftOut = condenseCalls(s.Iterations, parked, tier)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
@@ -253,6 +252,43 @@ func EncodeWithin(s State, budget int) (json.RawMessage, Condensed, error) {
 	for _, tier := range reviewTiers {
 		c.Reviews = cutProse(s.Iterations, parked, tier, roundCompletedWork, roundReviewNotes)
 		if blob, err = Encode(s); err != nil || len(blob) <= budget {
+			return blob, c, err
+		}
+	}
+	// WHOLE ROUNDS FROM THE MIDDLE, as few as fit: the first round and the
+	// newest one are always kept, and the fold that fits is found by halving
+	// the count of middle rounds folded, rather than by encoding the state once
+	// per round of a turn that may have run hundreds. Folding one more round
+	// takes its entry out and adds no more to the span than that entry's own
+	// tallies held — the digits of a count aside — so the halving lands on the
+	// least fold that fits, or within a round of it.
+	condensed := s.Iterations
+	if n := len(condensed); n >= 3 {
+		var fit json.RawMessage
+		folded := 0
+		for lo, hi := 1, n-2; lo <= hi; {
+			k := (lo + hi) / 2
+			s.Iterations = spanned(condensed, 1, 1+k)
+			if blob, err = Encode(s); err != nil {
+				return nil, c, err
+			}
+			if len(blob) <= budget {
+				fit, folded, hi = blob, k, k-1
+			} else {
+				lo = k + 1
+			}
+		}
+		if fit != nil {
+			c.Rounds = keptWhole(condensed[1 : 1+folded])
+			return fit, c, nil
+		}
+	}
+	// AND PAST THAT EVERY ROUND, into one span: the census of the tools the
+	// turn called, which is the least a park keeps of its closed rounds.
+	if len(condensed) > 0 {
+		s.Iterations = spanned(condensed, 0, len(condensed))
+		if blob, err = Encode(s); err != nil || len(blob) <= budget {
+			c.Rounds = keptWhole(condensed)
 			return blob, c, err
 		}
 	}
@@ -430,4 +466,50 @@ func cloneRounds(rounds []ledger.Iteration) []ledger.Iteration {
 		out[i].Absorbed = slices.Clone(out[i].Absorbed)
 	}
 	return out
+}
+
+// spanned is rounds with rounds[from:to] folded into one span standing for them
+// ([span]), the rounds on either side as they are.
+func spanned(rounds []ledger.Iteration, from, to int) []ledger.Iteration {
+	out := make([]ledger.Iteration, 0, len(rounds)-(to-from)+1)
+	out = append(out, rounds[:from]...)
+	out = append(out, span(rounds[from:to]))
+	return append(out, rounds[to:]...)
+}
+
+// span is rounds folded into one entry standing for them
+// ([ledger.Iteration.Through]): their two tallies merged by tool — every call,
+// failure and unknown outcome counted under its tool's name, never a name
+// folded away — and the artifact hash of the last of them, the round before
+// whatever follows the span. Nothing of their prose.
+//
+// THE TALLIES ARE EVERY CALL THE ROUNDS MADE: a round reaches a span with its
+// calls already in its tally, which the fifth tier folds every round's into
+// (see the file comment), and a span an earlier park made lists none.
+//
+// A span an earlier park made folds like any round: the new span starts at its
+// first round and runs through the last round the last entry stands for.
+func span(rounds []ledger.Iteration) ledger.Iteration {
+	last := rounds[len(rounds)-1]
+	out := ledger.Iteration{Iteration: rounds[0].Iteration, Through: max(last.Through, last.Iteration),
+		ArtifactHash: last.ArtifactHash}
+	for _, round := range rounds {
+		out.Elided = append(out.Elided, round.Elided...)
+		out.Absorbed = append(out.Absorbed, round.Absorbed...)
+	}
+	out.Elided, _ = byTool(out.Elided)
+	out.Absorbed, _ = byTool(out.Absorbed)
+	return out
+}
+
+// keptWhole is how many of rounds are rounds rather than spans an earlier park
+// made: what [Condensed.Rounds] counts of a fold.
+func keptWhole(rounds []ledger.Iteration) int {
+	n := 0
+	for _, round := range rounds {
+		if round.Through == 0 {
+			n++
+		}
+	}
+	return n
 }

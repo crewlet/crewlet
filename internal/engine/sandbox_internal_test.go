@@ -980,10 +980,11 @@ func TestAResumedRunCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
 }
 
 // A PARK PAST ITS SHARE OF THE RUN'S ROW IS REFUSED BY NAME, before the store is
-// asked. What gives way in a parked state is its closed rounds' payloads
-// (execstate.EncodeWithin), and what is left past [sandbox.ExecuteStateBytes]
-// is the turn's own context — here an ask of three MiB, a trigger's own words —
-// which no resume can do without and no row can carry. So the run is ended as
+// asked. What gives way in a parked state is its closed rounds
+// (execstate.EncodeWithin), down to one count of calls per tool for the lot,
+// and what is left past [sandbox.ExecuteStateBytes] is the turn's own context —
+// here an ask of three MiB, a trigger's own words — which no resume can do
+// without and no row can carry. So the run is ended as
 // a suspension nothing recorded, and the park answers that nothing can resume
 // it, with no error: nothing was sent that may have landed.
 //
