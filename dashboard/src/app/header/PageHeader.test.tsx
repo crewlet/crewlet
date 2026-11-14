@@ -28,11 +28,54 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
+import { StateBar, degradationOf } from "../frame/StateBar.tsx";
 
 /** A company running every service built into Crewlet. */
 const EVERY = { tracker: true, knowledge: true, chat: true, code: true } as const;
 
 afterEach(cleanup);
+
+// THE FIRST DIAL IS SAID IN THE BAR'S OWN ROW: a strip floated under the bar
+// lay over the first lines of the screen. Mutation: leave the chip out of
+// the bar and this goes red.
+test("the bar says the first dial in its own row, over nothing", () => {
+  location.hash = "#/home";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const first = degradationOf({
+    authRejected: false,
+    connected: false,
+    everConnected: false,
+    configured: undefined,
+    onSignIn: () => {},
+    onConfig: () => {},
+  });
+  const { container } = render(
+    <Router>
+      <ClientContext.Provider value={{ store, socket }}>
+        <AppShell
+          topbar={
+            <PageHeader
+              runs={EVERY}
+              grants={null}
+              crumbs={[]}
+              row={undefined}
+              counts={{}}
+              title="Home"
+              workspace="home"
+              connecting={first}
+            >
+              <StateBar degraded={null} />
+            </PageHeader>
+          }
+        />
+      </ClientContext.Provider>
+    </Router>,
+  );
+  const bar = container.querySelector<HTMLElement>(".page-bar")!;
+  expect(within(bar).getByRole("status", { name: "Connecting to the engine." })).toBeDefined();
+  expect(container.querySelector(".state-bar")).toBeNull();
+});
 
 // A STAR IS A SHORTCUT TO A PAGE, so it is offered on a page and nowhere else.
 describe("the star", () => {

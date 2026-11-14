@@ -20,7 +20,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout } from "@crewlethq/ui";
+import { Button, Callout, Spinner } from "@crewlethq/ui";
 import {
   KeyGlyph,
   RotateCwGlyph,
@@ -48,10 +48,12 @@ export interface Degradation {
   message: string;
   action?: { label: string; onClick: () => void };
   /**
-   * Drawn over the page's top edge rather than in the flow: the first dial,
-   * which nothing is behind yet and which ends by itself within a moment.
+   * The first dial, which nothing is behind yet and which ends by itself
+   * within a moment: said in the page bar ([FirstDialChip]) wherever the
+   * frame draws one, never as a strip over the page or a line that pushes
+   * it down.
    */
-  floats?: boolean;
+  firstDial?: boolean;
 }
 
 /**
@@ -109,7 +111,7 @@ export function degradationOf({
         variant: "neutral",
         icon: <RotateCwGlyph size="md" />,
         message: "Connecting to the engine.",
-        floats: true,
+        firstDial: true,
       };
     }
     return {
@@ -186,12 +188,17 @@ export function StateBar({
 }
 
 /**
- * The degradation's banner. THE FIRST DIAL FLOATS over the page's top edge
- * (`.state-bar__float`): in the flow it pushed every page down on a cold load
- * and pulled it back up when the engine answered.
+ * The degradation's banner.
+ *
+ * The first dial is the page bar's ([FirstDialChip]) wherever the frame draws
+ * one, and the frame hands this bar no first dial there. Where a screen draws
+ * its own head (an open artifact) there is no bar yet while the first dial is
+ * out, since that head is drawn from what the engine answers, so it stands
+ * here in the flow under the empty head, over a screen that is still its
+ * skeleton.
  */
 function DegradedNotice({ degraded }: { degraded: Degradation }) {
-  const notice = (
+  return (
     <Callout
       variant={degraded.variant}
       icon={degraded.icon}
@@ -207,5 +214,26 @@ function DegradedNotice({ degraded }: { degraded: Degradation }) {
       {degraded.message}
     </Callout>
   );
-  return degraded.floats ? <div className="state-bar__float">{notice}</div> : notice;
+}
+
+/**
+ * The first dial, said in the page bar beside the frame's controls.
+ *
+ * IT USED TO FLOAT over the page's top edge (in the flow it pushed every page
+ * down on a cold load and pulled it back up when the engine answered), and a
+ * strip floated under the page bar lies over the first lines of the screen:
+ * it struck through Home's greeting. The bar's row is room the frame already
+ * holds, so a chip there covers nothing and moves nothing. A status region,
+ * so a screen reader hears it once; its words fold away on a phone's bar,
+ * where the ring and the name say it.
+ */
+export function FirstDialChip({ degraded }: { degraded: Degradation }) {
+  return (
+    <span className="first-dial" role="status" aria-label={degraded.message}>
+      <Spinner size="xs" aria-hidden="true" />
+      <span className="page-wide-words" aria-hidden="true">
+        {degraded.message}
+      </span>
+    </span>
+  );
 }
