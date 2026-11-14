@@ -113,8 +113,11 @@ import (
 // goroutines ([Coordinator.Readmit]): such a claim can pass the refusal before
 // the release is recorded and reach the store after it has landed. It wins
 // only then, so ITS WIN IS PROOF THE RELEASE LANDED, whatever the release's own
-// answer said: the release is settled there and never made again, and a
-// release owed is not made again while a claim of its job is still on its way
+// answer said: the release is settled there and never made again, nor owed
+// where the win falls between the step that found the release out with its
+// answer lost and the one that keeps it ([Coordinator.oweRelease], which asks
+// again), and a release owed is not made again while a claim of its job is
+// still on its way
 // ([Coordinator.claiming]), which decides first, and which counts each claim
 // off on every way out of it, a panic included ([Coordinator.claimDoneLocked]):
 // a count left up held the owed release back for good.
@@ -262,14 +265,23 @@ func (c *Coordinator) dropRelease(cr *claimRelease) {
 // retry ([Coordinator.retryOwed]) on the hand-back's spacing, with the seat's
 // mail held behind it; if the seat moves first, its next holder's recovery
 // pass reaps the claim. See the top of this file.
+//
+// ONLY WHILE IT IS STILL OUT, asked in the one step that records the release
+// on its series, owes the seat's run and arms the series. [Coordinator.unclaimOwing]
+// found it out in a step of its own, and a claim of its job on its way when it
+// went out can win between the two, taking it over and finding no owed series
+// to settle ([Coordinator.claimCompletion]); and a seat's release drops it with
+// the seat ([Coordinator.releaseOwed]). Recorded then all the same, as it was in
+// a step after the one that asked, the release was owed though no longer out:
+// the seat's mail held behind it until its retry, a hand-back's spacing later,
+// found it gone, and the node said it kept a claim that had been given back.
 func (c *Coordinator) oweRelease(ctx context.Context, cr *claimRelease, cause error) {
 	run := cr.run
-	log.WarnContext(ctx, "sandbox_claim_revert_owed",
-		"turn_id", run.TurnID, "launch_id", run.LaunchID, "revert_to", cr.release.To, "error", cause.Error(),
-		"detail", "the coordination store did not answer the claim's hand-back; this node keeps the claim, "+
-			"gives it back once the store answers and never ends the run for the store's silence, and the "+
-			"seat's mail waits behind it")
 	c.mu.Lock()
+	if c.releases[run.TurnID] != cr {
+		c.mu.Unlock()
+		return
+	}
 	r := c.retries[run.TurnID]
 	if r == nil {
 		r = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID, first: c.now(),
@@ -277,9 +289,15 @@ func (c *Coordinator) oweRelease(ctx context.Context, cr *claimRelease, cause er
 		c.retries[run.TurnID] = r
 	}
 	r.release = cr
+	c.oweLocked(run.AgentHandle, run.TurnID)
+	c.scheduleOwedLocked(run.TurnID, answerRetryCeiling)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+	c.reconcileHold(ctx, run.AgentHandle)
+	log.WarnContext(ctx, "sandbox_claim_revert_owed",
+		"turn_id", run.TurnID, "launch_id", run.LaunchID, "revert_to", cr.release.To, "error", cause.Error(),
+		"detail", "the coordination store did not answer the claim's hand-back; this node keeps the claim, "+
+			"gives it back once the store answers and never ends the run for the store's silence, and the "+
+			"seat's mail waits behind it")
 }
 
 // releasing reports whether this node is giving back, or owes, the release of

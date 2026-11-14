@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -571,6 +572,139 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 			if held, waits := rig.coordinator.SeatRuns("swe"); held || waits {
 				t.Errorf("once the run is over the seat is counted held %v, a question open %v; want it free",
 					held, waits)
+			}
+		})
+	}
+}
+
+// A RELEASE A CLAIM TOOK OVER BEFORE IT WAS OWED IS NOT OWED. A release whose
+// answer the store lost is found still out, and so owed, in the step that takes
+// that answer, and was recorded as owed in a second step after it: a claim of
+// the job on its way when the release went out could win between the two,
+// taking the release over as it won and finding no owed series to settle, and
+// the release was then owed all the same. The seat's mail stayed held behind a
+// release no longer out until its retry, a hand-back's spacing later, found it
+// gone, and the node logged sandbox_claim_revert_owed for a hand-back that had
+// landed. The claim wins here where the node logs that line, which it did
+// between the two steps.
+//
+// Mutation: record the owed release in a step of its own after the one that
+// found it out; the series stays, and the seat's mail with it, after the run
+// is over. ([TestOnlyAReleaseStillOutIsOwed] holds the step's own question.)
+//
+// Not parallel: it hooks the process's logger ([onLogLine]).
+func TestAReleaseAClaimTookOverBeforeItWasOwedIsNotOwed(t *testing.T) {
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	store := newClaimOnItsWay(rig)
+	rig.coordinator.pending = store
+	run := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "the box's account"})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(store.goOn) }) }
+	defer letGo()
+
+	// THE CLAIM ON ITS WAY sets off during the first collection's read and
+	// stops before the store; the store then goes silent for that
+	// collection's drain and its release, which lands with its answer lost.
+	var reads atomic.Int32
+	theirs := make(chan error, 1)
+	rig.runner.CollectFunc = func(ctx context.Context) error {
+		if reads.Add(1) != 1 {
+			return nil
+		}
+		store.hold()
+		go func() { theirs <- collectAgainIn(context.WithoutCancel(ctx), t, rig) }()
+		<-store.held
+		store.silence("WatchLog", "ReleaseClaim")
+		return nil
+	}
+	// IT WINS ON THE RUN THE RELEASE PUT BACK once the node has found the
+	// release out and before it is recorded as owed, and the node has taken
+	// its answer, the release no longer out, before the line is written.
+	onLogLine(t, slog.LevelWarn, "sandbox_claim_revert_owed", func() {
+		store.answer()
+		letGo()
+		eventually(t, func() bool { return !rig.coordinator.releasing("t1", run.LaunchID) },
+			"the claim on its way never took the release over")
+	})
+
+	if err := collectAgain(t, rig); !errors.Is(err, ErrStoreSilent) {
+		t.Fatalf("the collection the store went silent in = %v", err)
+	}
+	if err := <-theirs; err != nil {
+		t.Fatalf("the claim on its way = %v; want it collected and the turn resumed", err)
+	}
+	if resumed := rig.resumer.calls(); len(resumed) != 1 {
+		t.Fatalf("the premise: resumed %d times; want the claim on its way resumed once", len(resumed))
+	}
+	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("the premise: t1 found %v (%v); want its run over", found, err)
+	}
+	if waiting := rig.retries.delays(); len(waiting) != 0 {
+		t.Errorf("retries waiting %v once the run is over; want none: the release a claim took over is owed",
+			waiting)
+	}
+	rig.coordinator.mu.Lock()
+	series, owed := rig.coordinator.retries["t1"], len(rig.coordinator.owed["swe"])
+	rig.coordinator.mu.Unlock()
+	if series != nil || owed != 0 {
+		t.Errorf("t1's series %v and %d owed on the seat once the run is over; want neither", series != nil, owed)
+	}
+	if holds.holding("swe") {
+		t.Error("the seat's mail is held once the run is over, behind a release no longer out")
+	}
+}
+
+// ONLY A RELEASE STILL OUT IS OWED, asked in the step that keeps it
+// ([Coordinator.oweRelease]): one a claim of its job took over, or the seat's
+// release dropped, after the step that found it out with its answer lost has
+// landed or goes with the seat, and kept all the same it held the seat's mail
+// behind it until a retry found it gone.
+//
+// Mutation: keep the release without asking whether it is still out.
+func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// gone takes the recorded release out of the releases out, as the
+		// case names.
+		gone func(rig *coordRig, cr *claimRelease)
+		out  bool
+	}{
+		{name: "still out", gone: func(*coordRig, *claimRelease) {}, out: true},
+		{name: "taken over by a claim that won",
+			gone: func(rig *coordRig, cr *claimRelease) {
+				rig.coordinator.mu.Lock()
+				defer rig.coordinator.mu.Unlock()
+				delete(rig.coordinator.releases, cr.run.TurnID)
+				_ = rig.coordinator.wroteCountLocked(cr.write, true)
+			}},
+		{name: "dropped with the seat",
+			gone: func(rig *coordRig, _ *claimRelease) { rig.coordinator.releaseOwed("swe") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			holds := rig.withHold()
+			run := rig.launch("t1")
+			run.Status = StatusResumed
+			rig.coordinator.mu.Lock()
+			cr, _ := rig.coordinator.handingBackLocked(run, "", failure{}, nil)
+			rig.coordinator.mu.Unlock()
+			tc.gone(rig, cr)
+
+			rig.coordinator.oweRelease(t.Context(), cr, errStoreUnavailable("write the sandbox run", "t1"))
+			rig.coordinator.mu.Lock()
+			series := rig.coordinator.retries["t1"]
+			kept := series != nil && series.release == cr
+			_, owed := rig.coordinator.owed["swe"]["t1"]
+			rig.coordinator.mu.Unlock()
+			waiting := len(rig.retries.delays()) > 0
+			if kept != tc.out || owed != tc.out || waiting != tc.out || holds.holding("swe") != tc.out {
+				t.Fatalf("kept %v, owed %v, a retry waiting %v, the seat's mail held %v; want each %v",
+					kept, owed, waiting, holds.holding("swe"), tc.out)
 			}
 		})
 	}

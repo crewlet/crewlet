@@ -2363,14 +2363,21 @@ func (c *Coordinator) queueOwed(ctx context.Context, run PendingRun) {
 // the seat's inbox hold if it is the first thing holding it.
 func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
+	c.oweLocked(handle, turnID)
+	c.mu.Unlock()
+	c.reconcileHold(ctx, handle)
+}
+
+// oweLocked is [Coordinator.owe]'s record, for a caller holding c.mu, which
+// brings the seat's inbox hold into line ([Coordinator.reconcileHold]) once it
+// has let go of the lock.
+func (c *Coordinator) oweLocked(handle, turnID string) {
 	owed := c.owed[handle]
 	if owed == nil {
 		owed = map[string]struct{}{}
 		c.owed[handle] = owed
 	}
 	owed[turnID] = struct{}{}
-	c.mu.Unlock()
-	c.reconcileHold(ctx, handle)
 }
 
 // settleOwed forgets an owed answer — resumed, declined or moved on — and
