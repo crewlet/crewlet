@@ -978,7 +978,7 @@ func TestAnAtlasWriteWaitsOnlyOnTheSourcesThatDescribeItsEntries(t *testing.T) {
 		{builtin.AtlasPurgeTool, calls[builtin.AtlasPurgeTool]},
 		{builtin.AtlasConfirmTool, map[string]any{"atlas_entry": atlas.MustRef(atlas.KindRepository, "gitlet/web").ID().String()}},
 	} {
-		got, _ := atlasCall(t, w[c.tool], c.args, iam.GrantAtlas, iam.GrantAdmin)
+		got, _ = atlasCall(t, w[c.tool], c.args, iam.GrantAtlas, iam.GrantAdmin)
 		if waits, said := unreadBy(got); !waits || !strings.Contains(said, "Gitlet's repositories") {
 			t.Errorf("%s %v with Gitlet down = %q (%v), told a person %q; want it to wait on Gitlet by name",
 				c.tool, c.args, got.Output, got.Cause, said)

@@ -330,9 +330,9 @@ func (s *Service) Disconnect(ctx context.Context, req DisconnectRequest) (Discon
 	if kind == "" {
 		return Disconnected{}, &PatchError{Err: errEmptyPatch}
 	}
-	patch, err := json.Marshal(map[string]any{"integrations": map[string]any{kind: nil}})
-	if err != nil {
-		return Disconnected{}, fmt.Errorf("configapi: encode the disconnect of %s: %w", kind, err)
+	patch, encodeErr := json.Marshal(map[string]any{"integrations": map[string]any{kind: nil}})
+	if encodeErr != nil {
+		return Disconnected{}, fmt.Errorf("configapi: encode the disconnect of %s: %w", kind, encodeErr)
 	}
 	var off []string
 	access := entityKinds[EntityRoles]

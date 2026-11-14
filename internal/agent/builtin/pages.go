@@ -650,11 +650,11 @@ func statusArg(args map[string]any) (status doclet.Status, named, ok bool) {
 		return "", false, true
 	}
 	text, isText := argval.String(raw)
-	switch status := doclet.Status(strings.TrimSpace(text)); {
-	case isText && status == "":
+	switch asked := doclet.Status(strings.TrimSpace(text)); {
+	case isText && asked == "":
 		return "", false, true
-	case isText && (status == doclet.StatusPublished || status == doclet.StatusDraft):
-		return status, true, true
+	case isText && (asked == doclet.StatusPublished || asked == doclet.StatusDraft):
+		return asked, true, true
 	}
 	return "", false, false
 }
