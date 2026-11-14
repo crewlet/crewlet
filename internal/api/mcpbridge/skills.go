@@ -115,8 +115,8 @@ func (o *binding) skillMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		var load skillLoad
 		if len(call.Params.Arguments) > 0 {
 			// UNREADABLE IS NOTHING TO RECORD: the hook's input is the
-			// runner's own shape, and an answer other than empty text would
-			// cost the run its bridge.
+			// runner's own shape, and an answer with an error would cost
+			// the run its bridge (measured, see steer.go).
 			if err := json.Unmarshal(call.Params.Arguments, &load); err != nil {
 				load = skillLoad{}
 			}
