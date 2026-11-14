@@ -141,12 +141,15 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // working ([Coordinator.readBox]), at most the end's wait and the kill past it,
 // and that is counted at the host's share as the take is — and for a
 // collection, the record that the cap ended a job it saw working, one more
-// change of the row ([Coordinator.markEndedAtDeadline]). The host's share of
-// such a read's budget is then the end's 145 seconds, the take's 240 and its
-// reservation's room, its two graces, the crossings of the changes, and 45 —
-// the poll's bound at the share — for the read's own steps, so a take after an
-// end at its bound is handed its whole budget all the same
-// ([Coordinator.takeContext]).
+// change of the row, made on its own context before the end's wait begins,
+// within a teardown's grace and the row's crossing
+// ([Coordinator.markEndedAtDeadline]), so it is counted at both, as every
+// other change is at its reason and its crossing. The host's share of such a
+// read's budget is then the end's 145 seconds and that record's grace, the
+// take's 240 and its reservation's room, its two graces, the crossings of the
+// changes, and 45 — the poll's bound at the share — for the read's own steps,
+// so a take after an end at its bound and its record at theirs is handed its
+// whole budget all the same ([Coordinator.takeContext]).
 //
 // EVERY COLLECTION OF A TURN WITH A CAP holds the end, whether or not the cap
 // has passed on the asker's clock: the host decides whether to end the job on
@@ -158,7 +161,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // What that costs is the wait for a host that has truly stopped — about
 // seventy-eight minutes for a collection of a turn with no cap before the
 // asker hands the claim back, where it was one, about eighty-one for a stop's
-// or a loss's read, and about ninety-eight for a collection of a turn with a
+// or a loss's read, and about ninety-nine for a collection of a turn with a
 // cap — which a host that is only slow, ending a job at its bound, packing a
 // session at its bound or changing a run's row at its bound across a link at
 // the slowest pace allowed, must not be taken for. Ordinary reads answer in
@@ -168,10 +171,12 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // completion again from its own next poll. Only a node that asks ANOTHER
 // node's host waits on it: a box this node hosts it reads itself.
 func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace +
-		time.Duration(read.changes(run))*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
+	}
+	if read.recordsTheCap(run) {
+		held += discardGrace + coord.MaxValueCrossing
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
 }
@@ -185,16 +190,13 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 // same, since the host's rooms are the read's whatever it asks.
 const boxReadChanges = 4
 
-// changes is how many changes of run's row a host's read of its box makes
-// before it answers, each counted at the slowest node's crossing in
-// [BoxReadBudget]: [boxReadChanges], and one more for a collection of a turn
-// with a cap, the record that the cap ended a job it saw working
-// ([Coordinator.markEndedAtDeadline]).
-func (r BoxRead) changes(run PendingRun) int {
-	if r == BoxReadCollect && r.mayEnd(run) {
-		return boxReadChanges + 1
-	}
-	return boxReadChanges
+// recordsTheCap reports whether a host's read of run's box may make, beside
+// [boxReadChanges], the record that the turn's cap ended a job it saw working
+// ([Coordinator.markEndedAtDeadline]), a fifth change of the row counted in
+// [BoxReadBudget] at its reason and the slowest node's crossing: a collection
+// of a turn with a cap, which may end its job ([BoxRead.mayEnd]).
+func (r BoxRead) recordsTheCap(run PendingRun) bool {
+	return r == BoxReadCollect && r.mayEnd(run)
 }
 
 // mayEnd reports whether the read may end run's job before it takes its

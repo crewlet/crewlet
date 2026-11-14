@@ -495,17 +495,22 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 // end at its bound is given its whole budget all the same; and a collection of
 // a turn with no cap, which ends nothing, waits for the take alone. A
 // collection's host also records that the cap ended a job it saw working, one
-// more change of the run's row, so a collection of a capped turn waits that
-// change's crossing at the slowest node's pace on top.
+// more change of the run's row, made on its own context within a teardown's
+// grace and the row's crossing before the end's wait begins, so a collection
+// of a capped turn waits that grace and that change's crossing at the slowest
+// node's pace on top.
 //
 // THE TAKE'S BUDGET IS READ IN A BUBBLE, where the clock stands still between
 // the read's deadline, the take's and the reading of what is left: the budget
-// is held exactly, never to the second a loaded runner may lose between them.
+// is held exactly, never to the second a loaded runner may lose between them —
+// on a host whose store is as slow to reach as any node's may be, so the
+// take's own room and its records' are the most they can be.
 //
 // Mutation: one budget for every read, and the take after an end at its bound
 // is cut short of its own; read the budget off the read alone, and a capped
 // collection's take after the end its host makes is cut short too; count no
-// change for the end's record, and a capped collection waits as a stop does.
+// change for the end's record, or count it without its grace, and a capped
+// collection's take after that record at its bound is cut short.
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
@@ -518,7 +523,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	// is no whole number of nanoseconds, which a constant conversion refuses.
 	endBudget := JobEndBudget
 	end := time.Duration(float64(endBudget) / BoxReadAnswerShare)
-	endRecorded := time.Duration(float64(endBudget+coord.MaxValueCrossing) / BoxReadAnswerShare)
+	endRecorded := time.Duration(float64(endBudget+discardGrace+coord.MaxValueCrossing) / BoxReadAnswerShare)
 	// A CAP STILL AHEAD on the asker's clock, and one already passed: the
 	// host reads the deadline against its own.
 	ahead := PendingRun{TurnID: "t1", Deadline: time.Now().Add(time.Hour).UTC()}
@@ -542,12 +547,19 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 		}
 	}
 
-	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND and the read's own
-	// poll beside it, still hands its take the take's whole budget.
+	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND, the record that the
+	// cap ended it at its grace and the slowest crossing, and the read's own
+	// poll beside them, still hands its take the take's whole budget — on a
+	// host whose store takes that crossing, so each of the take's rooms is
+	// the most it can be.
 	inBubble(t, func(t *testing.T) {
-		rig := newCoordRig(t)
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
+				given: map[string][]handed{}}
+		})
 		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
-		spent := JobEndBudget + time.Duration(float64(pollBound)*BoxReadAnswerShare)
+		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing +
+			time.Duration(float64(pollBound)*BoxReadAnswerShare)
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 		defer cancel()
 		take, cancelTake, _ := rig.coordinator.takeContext(ctx)
