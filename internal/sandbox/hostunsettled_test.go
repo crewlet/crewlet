@@ -123,6 +123,22 @@ func (s *unrecordedLoss) answer() {
 	s.silent = false
 }
 
+// movedOnBeforeLoss is a run store on which the claim a collection holds moves
+// on just as the collection records its job lost: moveOn runs first, as a
+// newer lease fencing the run, or its ending decided, would land between the
+// claim and the record.
+type movedOnBeforeLoss struct {
+	PendingStore
+	moveOn func(ctx context.Context)
+}
+
+func (s *movedOnBeforeLoss) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	s.moveOn(ctx)
+	return s.PendingStore.MarkClaimLost(ctx, turnID, launch, loss, fence)
+}
+
 // A COLLECTION WHOSE HOST ALONE HAS A SILENT STORE IS GIVEN UP AS A SILENT HOST
 // IS. The box is up, and so is its host; only the host's read of the run's row,
 // which licenses reading the box, goes unanswered, while this node's own store
@@ -144,16 +160,20 @@ func (s *unrecordedLoss) answer() {
 // leaves it running. A step this node's own store did not answer is never
 // given up on it, the record of the loss included, which keeps the clock for
 // the next collection to record it at once; a collection this node itself cut
-// short is handed back uncounted, never judged lost; and at its turn's deadline
-// a job lost with its host is ended as a lost job is, never as unreachable.
+// short is handed back uncounted, never judged lost; a claim the record finds
+// moved on (a newer lease took the run, or its ending was decided) is left to
+// whoever moved it, nothing recorded or carried on from it; and at its turn's
+// deadline a job lost with its host is ended as a lost job is, never as
+// unreachable.
 //
 // Mutation: drop the bound (collectGivenUp gives up no store's silence); keep
 // the clock through a host whose store answered; start it again at a host that
 // did not answer; judge a step this node's own store did not answer by the
 // host's clock; end the run as unreachable past the bound, or hand it back
 // unlost; carry the round on with nothing recorded on the claim; forget the
-// clock before the loss lands; judge a collection this node cut short; or
-// leave a lost run unended at its deadline. Each turns a case red.
+// clock before the loss lands; judge a collection this node cut short; carry a
+// round on from a claim the record found moved on; or leave a lost run unended
+// at its deadline. Each turns a case red.
 func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *testing.T) {
 	t.Parallel()
 	timeout := DefaultBoxTimeout
@@ -254,6 +274,54 @@ func TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs(t *tes
 		mine.answer()
 		lostWithItsHost(t, rig)
 	})
+
+	// A CLAIM THE LOSS'S RECORD FINDS MOVED ON is no longer this node's to
+	// carry anything on from: the store refuses the verdict, and the run is
+	// left to the newer lease that took it, or to the ending decided on it.
+	for _, moved := range []struct {
+		name   string
+		moveOn func(ctx context.Context, t *testing.T, rig *coordRig)
+	}{
+		{"a claim a newer lease took as its loss is recorded",
+			func(ctx context.Context, t *testing.T, rig *coordRig) {
+				won, err := rig.pending.ClaimOwnership(ctx, "t1", "node-c:1", rigLease.Epoch+1)
+				if err != nil || !won {
+					t.Errorf("the newer lease's fence = %v, %v", won, err)
+				}
+			}},
+		{"a claim whose ending was decided as its loss is recorded",
+			func(ctx context.Context, t *testing.T, rig *coordRig) {
+				launch := rig.getIn(ctx, "t1").LaunchID
+				if _, ok, err := rig.pending.DecideEnding(ctx, "t1", Decision{
+					License: License{WhileIn: []string{StatusResumed}, Launch: launch},
+					Reason:  types.ExecutorFailureSeatRemoved, Detail: "the seat left the company",
+				}); err != nil || !ok {
+					t.Errorf("the ending's decision = %v, %v", ok, err)
+				}
+			}},
+	} {
+		t.Run(moved.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			unsettledHost(t, rig)
+			handedBackUnsettled(t, rig, "the host's store did not answer")
+			rig.now = rig.now.Add(timeout)
+			rig.coordinator.pending = &movedOnBeforeLoss{PendingStore: rig.coordinator.pending,
+				moveOn: func(ctx context.Context) { moved.moveOn(ctx, t, rig) }}
+			if err := collectAgain(t, rig); err != nil {
+				t.Fatalf("the collection whose claim moved on = %v; want it left to whatever moved it", err)
+			}
+			if resumed := rig.resumer.calls(); len(resumed) != 0 {
+				t.Fatalf("the turn resumed %d times from a claim this node no longer holds", len(resumed))
+			}
+			if failed := rig.failures(); len(failed) != 0 {
+				t.Fatalf("announced %+v about a run whose claim moved on", failed)
+			}
+			if got := rig.get("t1"); got.Lost != nil {
+				t.Fatalf("the row records %+v on a claim that had moved on", *got.Lost)
+			}
+		})
+	}
 
 	t.Run("a collection this node cuts short past the box timeout", func(t *testing.T) {
 		t.Parallel()
