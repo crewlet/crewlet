@@ -548,7 +548,8 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"change holding an ask, a few hundred bytes each; the reference company's changes are each " +
 		"reviewed by the reviewer they ask before they merge, so none ends with an ask waiting",
 	gitlet.OpChangeLanded: "a change whose target came to hold its head outside a merge record — a " +
-		"person's own push of it — landed by its repository's home Gitlet node: once a change at most, " +
+		"push of it onto its target, a person's or a seat's — landed by its repository's home Gitlet " +
+		"node: once a change at most, " +
 		"in place of the merge record such a change never takes, and smaller than it (no pack and no " +
 		"principal); the reference company's changes are merged",
 	gitlet.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
