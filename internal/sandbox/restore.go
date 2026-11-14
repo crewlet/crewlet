@@ -128,6 +128,11 @@ import (
 // keeps, and its run named the turn's own as a session it may read
 // ([namedThoughRefused], [ContinuedSession.KeptTurn]).
 //
+// SO A READER IS TOLD NEITHER AS DECIDED: while a capture is still being kept,
+// or its record awaits the log's answer, which the relaunch asks again
+// ([captureAwaitsAnswer]), what the relaunch continues cannot be said, and a
+// reader is told that rather than a no ([ReadContinuityOf]).
+//
 // # Never a session that ran out of context
 //
 // Another launch of it fails the same way, so its collection records it on the run's
@@ -575,7 +580,9 @@ type ReadContinuity struct {
 // UNDECIDED WHERE THE LAUNCH WOULD NOT DECIDE NOW EITHER, never a no: the job a
 // relaunch would follow still working, or being collected — whose session is
 // taken by the read that collects it, and kept off that read; the capture of
-// that job still being kept, which a relaunch waits for ([relaunchCaptureWait]);
+// that job still being kept, which a relaunch waits for ([relaunchCaptureWait]),
+// or its record sent and never answered, which a relaunch asks the log for
+// again ([captureAwaitsAnswer]);
 // what the launch would be launched on not to be said now
 // ([RelaunchTarget.Undecided]); a relaunch that only the resume of the job's
 // collection decides, as it reads how the job ended, until its turn begins and
@@ -585,7 +592,8 @@ type ReadContinuity struct {
 // carries its round on; and an ended row whose conversation's head the read did
 // not name beside it. Once the turn has said, the row is decided on what it
 // said, its review included. now is the reader's clock, against which a begun
-// capture is in flight ([captureInFlight]).
+// capture is in flight ([captureInFlight]) and an unanswered one's object
+// within the window a record may name it in ([pastRecordWithin]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
 // launch gets runs a harness release that takes the session up, and whether
@@ -692,6 +700,14 @@ func endingContinuity(row executorkeep.TurnRow, run *PendingRun, later laterLaun
 // neither over nor ending: whether a relaunch of the turn would continue its
 // session — later naming the turn's base, where a relaunch would continue that
 // instead, as its conversation names its turns.
+//
+// UNDECIDED WHILE THE CAPTURE OF THE JOB IT FOLLOWS AWAITS ITS RECORD'S ANSWER
+// ([captureAwaitsAnswer]), as while that capture is still being kept: the
+// relaunch asks the log for that record again before it decides, and
+// continues the capture where it landed ([Coordinator.ContinuedCapture]), so
+// "not continued, its record was never answered" would be a no the relaunch
+// itself may not give. Not in a company that keeps no session, whose relaunch
+// asks nothing of a kept capture ([RelaunchTarget.NoKept]).
 func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
 	later laterLaunch, now time.Time) ReadContinuity {
 
@@ -705,6 +721,11 @@ func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target Relaunc
 			"capture %d) is still being kept", run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
 	case target.Undecided:
 		return ReadContinuity{Why: target.Why}
+	case target.NoKept == "" && captureAwaitsAnswer(run, now):
+		return ReadContinuity{Why: fmt.Sprintf("the record of the capture of the job a relaunch would "+
+			"follow (launch %d, capture %d) was sent and never answered, and a relaunch asks the executor "+
+			"log for it again before it decides, continuing that capture where it landed",
+			run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
 	}
 	kept := ContinuityOf(row, &run, run.LaunchSeq, target.restorer())
 	if target.NoKept != "" {
@@ -817,7 +838,8 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 // RereadsRow reports whether a reader that read row below the level a relaunch
 // reads it (executordomain.RelaunchRead) must read it again there before deciding its
 // continuity: only where the decision reaches the row — the turn live and not
-// ending, its job neither working nor its capture still being kept — and the
+// ending, its job neither working nor its capture still being kept nor
+// awaiting its record's answer ([captureAwaitsAnswer]) — and the
 // row names another capture than the one run's record keeps, or the record
 // keeps none: whether a relaunch of a turn that has kept nothing continues the
 // session its first launch was handed is decided on the row's hold as the
@@ -831,7 +853,8 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 // (statelog's linearizable read), one after another, for an answer the row it
 // held already gave.
 func RereadsRow(row executorkeep.TurnRow, run *PendingRun, now time.Time) bool {
-	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) {
+	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) ||
+		captureAwaitsAnswer(*run, now) {
 		return false
 	}
 	kept := run.Kept
@@ -865,6 +888,21 @@ func jobWorking(run PendingRun) bool {
 		return !run.Launch.Collected
 	}
 	return false
+}
+
+// captureAwaitsAnswer reports whether run's newest capture is one of the job a
+// relaunch would follow whose record was sent and never answered, which an ask
+// may still land: its object not past objstore.RecordWithin
+// ([pastRecordWithin]), past which the ask refuses it unasked. A relaunch asks
+// that record again under its own operation before it decides what it
+// continues ([Coordinator.settleUnresolved]) and continues the capture where
+// it landed ([Coordinator.ContinuedCapture]), so until then no reader can say
+// what that relaunch continues. An earlier job's capture is no such question:
+// a relaunch continues only the newest of the job it follows ([followedCapture]).
+func captureAwaitsAnswer(run PendingRun, now time.Time) bool {
+	c := run.Capture
+	return c != nil && c.State == CaptureUnresolved && c.LaunchSeq == run.LaunchSeq &&
+		!pastRecordWithin(c.Object, now)
 }
 
 // boxCarry is whether a relaunch carrying a run's round on in the box its job

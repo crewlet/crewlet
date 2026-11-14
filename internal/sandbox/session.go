@@ -2812,8 +2812,7 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run PendingRun,
 	last SessionCapture) SessionCapture {
 
-	key, err := objstore.ParseKey(last.Object)
-	if err == nil && c.now().Sub(key.Minted()) > objstore.RecordWithin {
+	if pastRecordWithin(last.Object, c.now()) {
 		last.State, last.Reason = CaptureRefused, fmt.Sprintf("its record was never answered within the "+
 			"%s an object may be named in", objstore.RecordWithin)
 	} else {
@@ -2822,6 +2821,16 @@ func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run Pendi
 	}
 	c.stampSettled(ctx, by, run.TurnID, last)
 	return last
+}
+
+// pastRecordWithin reports whether a capture's object, named by object, is
+// past objstore.RecordWithin as of now: no record may name it any more, so an
+// ask of its record is refused unasked ([Coordinator.settleCapture]), and no
+// reader waits on its answer ([captureAwaitsAnswer]). An object whose key does
+// not parse is not: its record is asked as any other's is.
+func pastRecordWithin(object string, now time.Time) bool {
+	key, err := objstore.ParseKey(object)
+	return err == nil && now.Sub(key.Minted()) > objstore.RecordWithin
 }
 
 // settleUnresolved asks run's newest capture again where its record was sent

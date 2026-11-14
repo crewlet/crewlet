@@ -1099,8 +1099,13 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // and only that, in a company that keeps no session. A lost job's box continues
 // nothing. And it is undecided, never a no, wherever a relaunch would not decide
 // now either: a job still working, or a claim whose read has not taken the job's
-// final capture and whose turn has not begun, a capture still being kept, a
-// target that cannot be said, a round lost a second time, and a collected job's
+// final capture and whose turn has not begun, a capture still being kept, one
+// whose record awaits the log's answer, which the relaunch asks again and
+// continues where it landed — but for an earlier job's, which no relaunch
+// continues, one whose object is past the window a record may name it in,
+// which the ask refuses unasked, and in a company that keeps no session,
+// whose relaunch asks nothing — a target that cannot be said, a round lost a
+// second time, and a collected job's
 // resume, which carries its round on in its box only where its sign-in was
 // replaced while it ran — each until the resumed turn says, as it begins, what
 // it does with the round: from then on, its review included, the row is decided
@@ -1114,8 +1119,10 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // it ran — read any undecided state as a no, read a claim whose read took the
 // final capture, or whose turn has said what it does, as one still collecting,
 // leave a turn that said it undecided, let a box of another harness or cell
-// count as the parked one, or tell a refused capture the row names by the
-// run's record alone, and a case goes red.
+// count as the parked one, tell a refused capture the row names by the
+// run's record alone, decide a capture whose record awaits its answer, or
+// wait on one past its window, an earlier job's, or one in a company that
+// keeps no session, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1136,6 +1143,13 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	moved.Node = "node-b"
 	final := kept
 	final.Final = true
+	// unanswered is the job's capture after its kept one, its object minted at
+	// minted, its record sent and never answered.
+	unanswered := func(minted time.Time) *SessionCapture {
+		c := kept
+		c.CaptureSeq, c.State, c.Object, c.At = 2, CaptureUnresolved, objstore.KeyAt(minted).String(), minted
+		return &c
+	}
 	for name, tc := range map[string]struct {
 		run      func(*PendingRun)
 		target   RelaunchTarget
@@ -1223,6 +1237,25 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			begun.CaptureSeq, begun.State, begun.At = 2, CaptureBegun, now.Add(-time.Second)
 			r.Capture = &begun
 		}},
+		"a capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
+		"a lost job's capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
+			run: func(r *PendingRun) {
+				r.Status, r.Launch.Collected, r.Lost = StatusRunning, true, &JobLoss{Cause: LossBoxGone}
+				r.Capture = unanswered(now.Add(-time.Minute))
+			}},
+		"a capture whose record went unanswered past the window a record may name it in": {target: target,
+			decided: true, in: ContinuesInParkedBox, whyHolds: "its record was never answered",
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-objstore.RecordWithin - time.Minute)) }},
+		"an earlier job's capture whose record awaits its answer": {target: target, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "has left no capture", run: func(r *PendingRun) {
+				r.LaunchSeq, r.Capture = 3, unanswered(now.Add(-time.Minute))
+			}},
+		"a capture whose record awaits its answer, in a company that keeps no session": {decided: true,
+			in: ContinuesInParkedBox, whyHolds: "keeps no executor session",
+			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a",
+				Restorer: fakeRestorer{}, NoKept: NoKeptSession},
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
 		"a target that cannot be said": {whyHolds: "sitting out",
 			target: RelaunchTarget{Undecided: true, Why: "every member is sitting out its plan"}},
 		"no member at all": {decided: true, whyHolds: "no runner member",
@@ -1265,8 +1298,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // ANSWER: where the decision reaches the row's capture and the row names
 // another than the one its run's record keeps — a copy of the log behind the
 // record — never where it names the kept one, which decides as the relaunch's
-// read would, nor where the job still works, its capture is still being kept,
-// or its turn has ended, which decide without the row's capture.
+// read would, nor where the job still works, its capture is still being kept
+// or awaits its record's answer, or its turn has ended, which decide without
+// the row's capture. A capture unanswered past the window a record may name it
+// in awaits nothing, and its row is read again.
 //
 // Mutation: read every live row again, or none, and a case goes red.
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
@@ -1283,6 +1318,14 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	ended.Ended = true
 	working := run()
 	working.Status, working.LaunchSeq = StatusRunning, 3
+	// unanswered is a run whose newest capture's record was sent and never
+	// answered, its object minted at minted.
+	unanswered := func(minted time.Time) *PendingRun {
+		r := run()
+		r.Capture = &SessionCapture{LaunchSeq: 2, CaptureSeq: 3, State: CaptureUnresolved,
+			Object: objstore.KeyAt(minted).String(), At: minted, Through: new(0)}
+		return r
+	}
 	for name, tc := range map[string]struct {
 		row   executorkeep.TurnRow
 		run   *PendingRun
@@ -1293,6 +1336,10 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 		"a row whose job is still working": {row: naming(1), run: working},
 		"an ended turn's row":              {row: ended, run: run()},
 		"a row whose run is over":          {row: naming(1)},
+		"a row whose newest capture awaits its record's answer": {row: naming(3),
+			run: unanswered(now.Add(-time.Minute))},
+		"a row whose newest capture went unanswered past its window": {row: naming(3),
+			run: unanswered(now.Add(-objstore.RecordWithin - time.Minute)), again: true},
 	} {
 		if got := RereadsRow(tc.row, tc.run, now); got != tc.again {
 			t.Errorf("%s: read again %v, want %v", name, got, tc.again)

@@ -4406,8 +4406,9 @@ up and the seat's budget can carry it, or, a relaunch alone, only in the box
 its run parked in, while that box is held, with the engine's reason no other
 box would; where it would not, the engine's own reason; or, where the engine
 could not decide (a record it could not read, a job still working, a capture
-still being kept, the node holding the seat not answering what a launch is
-launched on, a turn whose end is not on the log yet), that this cannot be said
+still being kept or whose record awaits the log's answer, the node holding the
+seat not answering what a launch is launched on, a turn whose end is not on the
+log yet), that this cannot be said
 now and why: an unknown is never drawn as a no. Under
 it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
