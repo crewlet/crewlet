@@ -47,7 +47,17 @@ import (
 //     under a credential's own key taken out whole. A line that is not JSON —
 //     the last one of a job packed while it wrote — is scrubbed and redacted
 //     as text, the values in the forms a JSON string escapes them in among
-//     those it takes out.
+//     those it takes out. A RECORD KEEPS ITS LINE AND ITS KEYS: the transcript
+//     keeps every line, and each record every key in the order written, so
+//     Claude Code, which reads a session file past 5 MiB by where each line's
+//     keys sit, still finds every record where it did; what a record can lose
+//     is a loaded tool definition named outside what the provider takes, cut
+//     out of its line as written ([withoutBrokenDefinitions]). Every key and
+//     string is written again ([jsonRewrite.writeString]) as the text Go
+//     decodes it to, changed only where it held a secret: so an escape can
+//     come out spelled otherwise than its harness wrote it, and a lone
+//     surrogate's escape or a byte that is no UTF-8, each of which Go decodes
+//     to U+FFFD, comes out as U+FFFD.
 //   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
 //     string as it streams, the same way, a token at a time. A `.json` file
 //     the rewrite cannot read as one JSON value — a task file its harness was
@@ -241,9 +251,11 @@ func memberName(s scrubber, name string) string {
 	return redact.Secrets(s.apply(name))
 }
 
-// jsonEscaped is how a JSON string a harness writes holds s, without its
-// quotes: escaped as JSON.stringify escapes, which leaves `<`, `>` and `&` as
-// they are (plainjson).
+// jsonEscaped is s as plainjson writes it in a JSON string, without its
+// quotes: the form a JSON string a harness writes holds it in, escaped as
+// JSON.stringify escapes with `<`, `>` and `&` left as they are, for every s
+// but one holding U+2028 or U+2029, which plainjson writes as escapes and
+// JSON.stringify as they are.
 func jsonEscaped(s string) string {
 	out, err := plainjson.Marshal(s, "")
 	if err != nil {
@@ -752,47 +764,173 @@ func providerToolName(name string) bool {
 
 // withoutBrokenDefinitions is a rewritten transcript line less every loaded
 // tool definition ([loadedToolsRecord]) whose name the rewrite left outside
-// what [providerToolName] takes: a marker stands where part of the name was, and resent
-// under that name the definition has every request of the restored session
-// refused. Left out, the session loads the tool again by search when it needs
-// it. Every other line, and a record the rewrite changed no name of, is
-// returned as it is.
+// what [providerToolName] takes: a marker stands where part of the name was,
+// and resent under that name the definition has every request of the restored
+// session refused. Left out, the session loads the tool again by search when
+// it needs it. A line that holds no marker is returned as it is, since the
+// rewrite renamed nothing in it, a definition its writer named outside the
+// pattern included; one that holds a marker loses every definition named
+// outside the pattern, whoever named it so. A line that is not one JSON object
+// [threadDecoding] reads is returned as it is too. The record is read as
+// Claude Code's JSON.parse reads it, its attachment, the attachment's type and
+// its list each the last value written under its key.
+//
+// CUT OUT OF THE LINE AS WRITTEN, each definition with the comma that joined
+// it to its list, every other byte of the line left where it was: never the
+// record decoded and written again, which wrote its keys sorted, the
+// attachment (a subagent's agentId before it) first and its list inside it.
+// Claude Code reads a session file past 5 MiB by the bytes of its lines, and
+// finds a record by where its keys sit, in two readings (read in 2.1.310 and
+// 2.1.322):
+//
+//   - 2.1.310, reading such a file as it does by default, takes a record for
+//     a subagent's only where `"isSidechain":true` sits in its line's first
+//     256 bytes, and walks the thread back from the last record it takes for
+//     the main thread's. A subagent's record written sorted, its list before
+//     that key, was that record: the walk began there, and records the
+//     subagent wrote after it were left out of the thread a relaunch resumed.
+//     2.1.322 looks for the key past those bytes as well.
+//   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
+//     file can set whatever a launch unsets), both prune such a file, taking a
+//     line for a record only where it begins `{"parentUuid":` and walking the
+//     main thread back from its last record through such lines alone. A
+//     record's line that begins otherwise ends that walk, and where the
+//     records the walk reached held half the file or less, every record above
+//     that line was pruned from the session a relaunch resumed.
 func withoutBrokenDefinitions(line string) string {
 	if !strings.Contains(line, loadedToolsRecord) || !strings.Contains(line, redact.Marker) {
 		return line
 	}
-	var record, attachment map[string]json.RawMessage
-	var entries []json.RawMessage
-	if json.Unmarshal([]byte(line), &record) != nil ||
-		json.Unmarshal(record["attachment"], &attachment) != nil ||
-		looseString(attachment["type"]) != loadedToolsRecord ||
-		json.Unmarshal(attachment["entries"], &entries) != nil {
+	raw := []byte(line)
+	attachment, ok := lastValue(raw, lineSpan{end: len(raw)}, "attachment")
+	if !ok {
 		return line
 	}
-	kept := slices.DeleteFunc(slices.Clone(entries), func(entry json.RawMessage) bool {
-		var definition struct {
-			Name string `json:"name"`
+	kind, ok := lastValue(raw, attachment, "type")
+	if !ok || looseString(raw[kind.start:kind.end]) != loadedToolsRecord {
+		return line
+	}
+	entries, ok := lastValue(raw, attachment, "entries")
+	if !ok {
+		return line
+	}
+	if kept, cut := withoutDefinitions(raw, entries); cut {
+		return kept
+	}
+	return line
+}
+
+// lineSpan is where one JSON value sits in a transcript line:
+// line[start:end], its own bytes and no blank around them.
+type lineSpan struct{ start, end int }
+
+// lastValue is where in line the value under the LAST key named key of the
+// object at object sits, as JSON.parse reads a key written twice, and whether
+// the object holds such a key: it holds none where it is no object
+// [threadDecoding] reads, or is followed by more than blanks. Read in the one
+// walk of an object ([eachKey]), which hands each value with where it sits.
+func lastValue(line []byte, object lineSpan, key string) (lineSpan, bool) {
+	var (
+		found lineSpan
+		ok    bool
+	)
+	if eachKey(line[object.start:object.end], func(name []byte, value json.RawMessage, at int) error {
+		if string(name) == key {
+			start := object.start + at
+			found, ok = lineSpan{start: start, end: start + len(value)}, true
 		}
-		return json.Unmarshal(entry, &definition) != nil || !providerToolName(definition.Name)
+		return nil
+	}) != nil {
+		return lineSpan{}, false
+	}
+	return found, ok
+}
+
+// withoutDefinitions is line less every definition of the list at list that
+// [brokenDefinition] refuses, each cut out with the comma that joined it to
+// the list (the one before it, or the one after it where every definition
+// before it goes as well), every other byte kept where it was, and whether
+// any went: none goes where none is refused, or where the list is none
+// [threadDecoding] reads.
+//
+// ONE DEFINITION AT A TIME, in the one walk of a list ([eachElement], which
+// says what a list a box can write a million elements long costs read whole):
+// the line is copied once the first definition is cut, and nothing is
+// collected of the list.
+func withoutDefinitions(line []byte, list lineSpan) (string, bool) {
+	var (
+		// cut is the line as it is kept, written from the first definition
+		// cut on: every byte before it is kept.
+		cut     strings.Builder
+		cutting bool
+		// kept says a definition before this one is kept, and end is where
+		// in line the one just before this one ends.
+		kept bool
+		end  int
+	)
+	err := eachElement(line[list.start:list.end], func(definition json.RawMessage, at int) error {
+		start := list.start + at
+		next := start + len(definition)
+		// ITS STRETCH OF THE LIST, kept or cut with it: from the end of the
+		// definition before it, the comma between them included, where one
+		// before it is kept; else from its own first byte, so that the comma
+		// after a definition cut before it goes with that one.
+		from := start
+		if kept {
+			from = end
+		}
+		if brokenDefinition(definition) {
+			if !cutting {
+				cutting = true
+				cut.Grow(len(line))
+				cut.Write(line[:from])
+			}
+		} else {
+			if cutting {
+				cut.Write(line[from:next])
+			}
+			kept = true
+		}
+		end = next
+		return nil
 	})
-	if len(kept) == len(entries) {
-		return line
+	if err != nil || !cutting {
+		return "", false
 	}
-	if kept == nil {
-		kept = []json.RawMessage{}
+	cut.Write(line[end:])
+	return cut.String(), true
+}
+
+// brokenDefinition reports whether a loaded tool definition is one no request
+// may carry: not an object, or named by nothing [providerToolName] takes. The
+// name is the one Claude Code sends the definition under, read as Claude
+// Code's JSON.parse reads it: the value of the key `name` exactly, the last
+// written where it is written twice, whatever a `name` before it holds; a
+// value that is no string names nothing. Read in the one walk of an object
+// ([eachKey]).
+//
+// NOT A DECODE OF THE DEFINITION into a name. encoding/json's fills a field
+// from a key that differs from its name only in case, the last such key
+// winning: a definition holding a renamed `name` and then a sound `NAME` was
+// read as sound and kept, and sent under the renamed name (2.1.310 and 2.1.322
+// key every definition they send again by its `name`), which had every
+// request of the restored session refused. And a decode into a string fails
+// at the first `name` that is none, whichever `name` JSON.parse reads: a
+// definition holding a number and then a sound `name` was cut, though Claude
+// Code sends it under the sound one.
+func brokenDefinition(definition []byte) bool {
+	// name is the last `name`'s value, a copy of its own: what the walk hands
+	// over is valid only while it does.
+	var name []byte
+	if eachKey(definition, func(key []byte, value json.RawMessage, _ int) error {
+		if string(key) == "name" {
+			name = append(name[:0], value...)
+		}
+		return nil
+	}) != nil {
+		return true
 	}
-	var err error
-	if attachment["entries"], err = plainjson.Marshal(kept, ""); err != nil {
-		return line
-	}
-	if record["attachment"], err = plainjson.Marshal(attachment, ""); err != nil {
-		return line
-	}
-	rewritten, err := plainjson.Marshal(record, "")
-	if err != nil {
-		return line
-	}
-	return string(rewritten)
+	return !providerToolName(looseString(name))
 }
 
 // rewriteDocument streams one JSON value from src to dst a token at a time,
@@ -1020,8 +1158,10 @@ func (j *jsonRewrite) credential() bool {
 	return f != nil && f.object && credentialKey(f.key)
 }
 
-// writeString writes s as a JSON string, escaped as JSON.stringify escapes
-// (plainjson).
+// writeString writes s as a JSON string, escaped as plainjson escapes: as
+// JSON.stringify does, but for U+2028 and U+2029, which it writes as escapes
+// where JSON.stringify writes them as they are. JSON.parse reads either back
+// as the same text.
 func (j *jsonRewrite) writeString(s string) error {
 	out, err := plainjson.Marshal(s, "")
 	if err != nil {

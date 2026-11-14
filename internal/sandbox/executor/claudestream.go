@@ -195,7 +195,7 @@ func eachClaudeBlock(content json.RawMessage, each func(claudeBlock) error) erro
 		stopped error
 	)
 	// The walk's own error is no reader's: the blocks before it were read.
-	_ = eachElement(content, func(element json.RawMessage) error {
+	_ = eachElement(content, func(element json.RawMessage, _ int) error {
 		wire = claudeBlockWire{}
 		if wireObject(element) && wireDecode(element, &wire) != nil {
 			wire = claudeBlockWire{}
@@ -558,7 +558,7 @@ func toolAnswer(list json.RawMessage, said func(kind, text, mime string) (string
 			Mime json.RawMessage `json:"mime"`
 		}
 	)
-	if eachElement(list, func(element json.RawMessage) error {
+	if eachElement(list, func(element json.RawMessage, _ int) error {
 		// A part that is no object is the zero part, which says nothing, as
 		// the whole decode left it.
 		part.Type, part.Text, part.Mime = nil, nil, nil
