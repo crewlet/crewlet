@@ -2444,6 +2444,10 @@ const (
 	// failed REST read asked again by the shared one) added 318 bytes, all
 	// script, and took it to 6009.0 KiB (6,153,259 bytes), 43 bytes past it:
 	// 6010 KiB.
+	// A model's test polled while it runs on its node's own time (the
+	// `llm_check` question, and what a test that found nothing says) added
+	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
+	// bytes): 5977 KiB.
 	treeBudget = 5<<20 + 890<<10
 )
 

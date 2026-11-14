@@ -326,7 +326,7 @@ export function Review({
         // alone left a form that looked stopped for as long as the engine took.
         <Waiting key={saving}>
           {saving === "credential"
-            ? `Storing the ${secretNoun} and re-activating the company with it. The engine tests it first unless it passed here a moment ago.`
+            ? `Storing the ${secretNoun} and re-activating the company with it. The engine tests it first, with one harness run.`
             : `${editing ? "Saving" : "Creating"} the model as one revision.`}
         </Waiting>
       ) : check.kind === "checking" ? (

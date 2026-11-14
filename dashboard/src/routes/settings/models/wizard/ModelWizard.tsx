@@ -47,16 +47,11 @@ import { getConfig } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { CheckLine } from "~/protocol/models.ts";
-import {
-  checkModel,
-  storeCredential,
-  testCredential,
-  writeDocument,
-  type ModelAnswer,
-} from "../api.ts";
+import { storeCredential, testCredential, writeDocument, type ModelAnswer } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { failureWords, type SignInFacts } from "../flows/TestDialog.tsx";
 import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
+import { useCheckModel } from "../useCheckModel.ts";
 import { CATEGORY_WORDS } from "../words.ts";
 import {
   METHODS,
@@ -268,6 +263,7 @@ export function ModelWizard({
 }) {
   const toast = useToast();
   const nav = useNavigator();
+  const checkModel = useCheckModel();
   // THE CONTROL THAT OPENED THE WIZARD is read while its page is still on screen.
   const [opener] = useState(openerNow);
   const [original] = useState(() => (editing ? draftOf(editing) : null));

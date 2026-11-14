@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/llmapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
@@ -646,5 +647,14 @@ func TestTheGitStopRetryIsTheDrainRetry(t *testing.T) {
 	if host.StoppingRetryAfter != api.DrainRetryAfter {
 		t.Errorf("Gitlet answers Retry-After %v while it stops, a draining node %v: a git client and a balancer "+
 			"would be told two waits for one stop", host.StoppingRetryAfter, api.DrainRetryAfter)
+	}
+}
+
+// A CHECK ASKED OF A STOPPING NODE WAITS AS A DRAIN'S REFUSAL DOES: llmapi
+// imports no api, so it states the wait itself, and this holds the two equal.
+func TestAStoppedModelCheckRetryIsTheDrainRetry(t *testing.T) {
+	if llmapi.StoppingRetryAfter != api.DrainRetryAfter {
+		t.Errorf("a model check asked of a stopping node answers Retry-After %v, a draining node %v: a page "+
+			"and a balancer would be told two waits for one stop", llmapi.StoppingRetryAfter, api.DrainRetryAfter)
 	}
 }

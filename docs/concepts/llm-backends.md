@@ -4028,10 +4028,7 @@ account a login names and the vendor's own sentence.
 the new value once: the engine hands it to the model's own harness, in a home of
 its own, for one one-turn call and nothing else (the shell and web probes read the
 entry, which a credential does not change), and seals it only if the vendor signed it in (a
-`429` counts: it proves the credential authenticated). The dashboard tests a
-value first and saves it after, and the save does not run the harness a second
-time: a test that passed on the node within the last ten minutes answers for a
-write of the same value to the same model by the same person. A refused value is never
+`429` counts: it proves the credential authenticated). A refused value is never
 stored, so the model goes on signing in with the credential it had. Once
 sealed, the revision that reads it is re-activated in the same request, so every
 node reads it at the epoch the answer names
@@ -4048,7 +4045,14 @@ again at once, and one still limited parks again with the vendor's fresh word.
 
 **Test** runs `crewlet llm doctor`'s checks on the answering node, line by line,
 with or without the real completions; a test of an existing model is a real call
-on its sign-in and is remembered as any call is.
+on its sign-in and is remembered as any call is. With its real completions a
+test takes up to three minutes, longer than a proxy in front of the API should
+hold a request open, so it runs on that node's own time: the request is answered
+with the test running, and the page reads how it ended from whichever node its
+next request reaches, through the test's record in the coordination store. One
+test of a model runs at a time across the fleet; a person who asks while one
+runs is shown that one. A test whose node stops before it ends says so, and the
+person tests again.
 
 **Host logins are read, never made.** A model that signs in with a harness login
 shows that login's state on each node (`signed_in`, `signed_out` or `unknown`,

@@ -169,6 +169,15 @@ export const SEAT_JOB_FIELDS = {
 } as const;
 
 /**
+ * Where a model's test is (`queries.ModelCheckState`): running on the node that
+ * took it, ended with what it found or why it found nothing, or lost with a
+ * node that stopped. The page asks again while it is running and stops on the
+ * others. Held against `queries.ModelCheckStates` by
+ * `internal/api/queries.TestTheModelsScreenNamesEveryCheckState`.
+ */
+export type ModelCheckState = "running" | "ended" | "lost";
+
+/**
  * Where a model's executors run (`config.Placement`). Held against
  * `config.Placements` by the entry gate.
  */
@@ -176,13 +185,13 @@ export type RunnerCellName = "direct" | "container" | "e2b";
 
 /**
  * The longest the engine lets each model route work before it answers, in
- * seconds: a test runs the harness for real (up to three runs), a credential's test
- * one isolated run, a retry one probe. The dashboard waits a little past each
- * rather than abandoning a request the engine is still answering. Held against
- * `llmapi.CheckBudget` and `CredentialBudget`, and the engine's own bound on a
- * retry's probe, `engine.ModelRetryProbeBudget`, by
+ * seconds: a credential's test one isolated run, a retry one probe. The
+ * dashboard waits a little past each rather than abandoning a request the
+ * engine is still answering. A model's test is no such route: it runs on its
+ * node's own time and is polled ({@link ModelCheckState}). Held against
+ * `llmapi.CredentialBudget` and the engine's own bound on a retry's probe,
+ * `engine.ModelRetryProbeBudget`, by
  * `internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks`.
  */
-export const MODEL_CHECK_BUDGET_SECONDS = 180;
 export const MODEL_CREDENTIAL_BUDGET_SECONDS = 120;
 export const MODEL_RETRY_BUDGET_SECONDS = 60;
