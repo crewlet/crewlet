@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // stampSpy is a run's store that keeps every capture stamped on a row, so a case
@@ -491,7 +493,10 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 // not the cap has passed yet. Each such ask waits the take's budget and the
 // end's, counted at the host's share as the take is, so a host's take after an
 // end at its bound is given its whole budget all the same; and a collection of
-// a turn with no cap, which ends nothing, waits what it waited.
+// a turn with no cap, which ends nothing, waits for the take alone. A
+// collection's host also records that the cap ended a job it saw working, one
+// more change of the run's row, so a collection of a capped turn waits that
+// change's crossing at the slowest node's pace on top.
 //
 // THE TAKE'S BUDGET IS READ IN A BUBBLE, where the clock stands still between
 // the read's deadline, the take's and the reading of what is left: the budget
@@ -499,17 +504,21 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 //
 // Mutation: one budget for every read, and the take after an end at its bound
 // is cut short of its own; read the budget off the read alone, and a capped
-// collection's take after the end its host makes is cut short too.
+// collection's take after the end its host makes is cut short too; count no
+// change for the end's record, and a capped collection waits as a stop does.
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
-	if got := BoxReadBudget(uncapped, BoxReadCollect); got != 460*time.Second {
-		t.Errorf("a collection's read of a turn with no cap waits %v, want the 460s it waited", got)
+	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	if got, want := BoxReadBudget(uncapped, BoxReadCollect),
+		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
+		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
 	}
 	// A VARIABLE, so the quotient is no constant: the end's budget at the share
 	// is no whole number of nanoseconds, which a constant conversion refuses.
 	endBudget := JobEndBudget
 	end := time.Duration(float64(endBudget) / BoxReadAnswerShare)
+	endRecorded := time.Duration(float64(endBudget+coord.MaxValueCrossing) / BoxReadAnswerShare)
 	// A CAP STILL AHEAD on the asker's clock, and one already passed: the
 	// host reads the deadline against its own.
 	ahead := PendingRun{TurnID: "t1", Deadline: time.Now().Add(time.Hour).UTC()}
@@ -517,18 +526,19 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	for name, ask := range map[string]struct {
 		run  PendingRun
 		read BoxRead
+		want time.Duration
 	}{
-		"a stop's":                            {uncapped, BoxReadStop},
-		"a loss's":                            {uncapped, BoxReadLoss},
-		"a collection's, its cap still ahead": {ahead, BoxReadCollect},
-		"a collection's, its cap passed":      {passed, BoxReadCollect},
-		"a stop's, its turn capped":           {ahead, BoxReadStop},
-		"a loss's, its turn's cap passed":     {passed, BoxReadLoss},
+		"a stop's":                            {uncapped, BoxReadStop, end},
+		"a loss's":                            {uncapped, BoxReadLoss, end},
+		"a collection's, its cap still ahead": {ahead, BoxReadCollect, endRecorded},
+		"a collection's, its cap passed":      {passed, BoxReadCollect, endRecorded},
+		"a stop's, its turn capped":           {ahead, BoxReadStop, end},
+		"a loss's, its turn's cap passed":     {passed, BoxReadLoss, end},
 	} {
 		over := BoxReadBudget(ask.run, ask.read) - BoxReadBudget(uncapped, BoxReadCollect)
-		if diff := over - end; diff < -time.Nanosecond || diff > time.Nanosecond {
-			t.Errorf("%s read waits %v beyond an uncapped collection's, want the end's %v at the host's share",
-				name, over, end)
+		if diff := over - ask.want; diff < -time.Nanosecond || diff > time.Nanosecond {
+			t.Errorf("%s read waits %v beyond an uncapped collection's, want %v at the host's share",
+				name, over, ask.want)
 		}
 	}
 
@@ -545,8 +555,10 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 		deadline, _ := take.Deadline()
 		// Less the nanosecond the share's float rounding takes off the read's
 		// own deadline, as above.
-		if left := time.Until(deadline); left < SessionTakeBudget-time.Nanosecond {
-			t.Fatalf("a take after an end at its bound is given %v, want its whole %v", left, SessionTakeBudget)
+		whole := SessionTakeBudget + rig.coordinator.reserveRoom()
+		if left := time.Until(deadline); left < whole-time.Nanosecond {
+			t.Fatalf("a take after an end at its bound is given %v, want its whole %v and its "+
+				"reservation's room", left, whole)
 		}
 	})
 }

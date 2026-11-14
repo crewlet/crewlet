@@ -545,3 +545,72 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 		})
 	}
 }
+
+// A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING:
+// the host, on its own connection, and the asker, at the slowest node's.
+//
+// A read of a job's box reserves the capture's place once the session is
+// packed, stamps what came of the take and records how the job's harness ended
+// after it, and records the box's pause before it answers — each a change of
+// the run's row, read whole and written whole, which a row at its bound takes
+// minutes to make across a link at the slowest pace allowed. Held to flat
+// rooms — the reservation to what the pack left of the take's four minutes,
+// the take's records to a grace of thirty seconds — each was cut while its
+// bytes were still crossing (crewlet/crewlet#1151). So on a host whose store
+// takes a crossing, the take's context keeps the reservation one record's
+// reason and that crossing beside the pack's budget, and the read leaves the
+// take's two records and the pause's record a crossing each beside their
+// graces; and the asker, which cannot know the host's connection, waits the
+// slowest node's crossing for each change, coord.MaxValueCrossing. Here the
+// host's read is given exactly its share of that budget, and the room it then
+// keeps for each is held. Exact, in a bubble.
+//
+// Mutation: drop the crossing from the reservation's room, from the take's
+// records' room or from the pause's, or count fewer changes at the slowest
+// crossing in the asker's budget, and its check goes red.
+func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
+	t.Parallel()
+	const crossing = 7 * time.Minute
+	run := PendingRun{TurnID: "t1"}
+	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + 4*coord.MaxValueCrossing
+	if got, want := BoxReadBudget(run, BoxReadCollect),
+		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
+		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
+			"share, the take, its reservation's reason, two graces and four changes of the row at the "+
+			"slowest node's crossing, %v", got, want)
+	}
+	inBubble(t, func(t *testing.T) {
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: crossing,
+				given: map[string][]handed{}}
+		})
+		// THE HOST'S SHARE OF WHAT THE ASKER WAITS: the take is given its own
+		// budget and its reservation's room beside it, whole.
+		share := time.Duration(float64(BoxReadBudget(run, BoxReadCollect)) * BoxReadAnswerShare)
+		read, cancel := context.WithDeadline(t.Context(), time.Now().Add(share))
+		defer cancel()
+		take, cancelTake, _ := rig.coordinator.takeContext(read)
+		defer cancelTake()
+		deadline, _ := take.Deadline()
+		if got, want := time.Until(deadline), SessionTakeBudget+sessionRecordBudget+crossing; got != want {
+			t.Errorf("a take on a host whose store takes %v to cross is given %v, want its own budget, "+
+				"its reservation's reason and that crossing beside it, %v", crossing, got, want)
+		}
+		// A READ TOO SHORT FOR ALL OF IT: the take ends where its records
+		// keep their room, and the records where the pause and its record
+		// keep theirs.
+		short, cancelShort := context.WithDeadline(t.Context(), time.Now().Add(SessionTakeBudget))
+		defer cancelShort()
+		take, cancelTake, by := rig.coordinator.takeContext(short)
+		defer cancelTake()
+		deadline, _ = take.Deadline()
+		end, _ := short.Deadline()
+		if got, want := by.Sub(deadline), discardGrace+2*crossing; got != want {
+			t.Errorf("a take's records are left %v after it, want a grace and a crossing for each of "+
+				"its two changes of the row, %v", got, want)
+		}
+		if got, want := end.Sub(by), discardGrace+crossing; got != want {
+			t.Errorf("a read's pause and its record are left %v, want a grace and a crossing, %v", got, want)
+		}
+	})
+}

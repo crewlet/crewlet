@@ -29,8 +29,9 @@ const rowCrossingRate = 160 << 10
 // still, and never past it.
 const rowCrossingRoom = 8 << 10
 
-// rowCrossingCapture is the capture the keep's case stamps what came of: the
-// place its take reserved on the row, begun.
+// rowCrossingCapture is the capture the keep's case stamps what came of — the
+// place its take reserved on the row, begun — and the place the take's case
+// reserves.
 var rowCrossingCapture = SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1",
 	State: CaptureBegun, At: time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)}
 
@@ -62,8 +63,10 @@ type rowCrossingCase struct {
 // five, or 200 KiB a second at thirty. Cut while its bytes were still
 // crossing, the write read as a store that did not answer: the carry went
 // unrecorded, the stamp was asked again sending the whole row from its first
-// byte until its budget ended, and the end was refused (crewlet/crewlet#1076).
-// And the read every change begins with was asked again at two seconds and at
+// byte until its budget ended, and the end was refused (crewlet/crewlet#1076);
+// and a take's reservation of its place, made once its pack had run to its
+// bound, was left no time at all, so no capture was made
+// (crewlet/crewlet#1151). And the read every change begins with was asked again at two seconds and at
 // four while its reply was still on its way, each re-ask another whole reply
 // on the link, and never for longer than thirty seconds, which a reply of
 // eight mebibytes cannot cross on a link slower than about 280 KiB a second
@@ -113,6 +116,39 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 					return false, "no capture"
 				}
 				return run.Capture.samePlace(rowCrossingCapture) && run.Capture.State == CaptureRefused,
+					"the capture " + string(run.Capture.State)
+			},
+		},
+		{
+			// THE TAKE'S RESERVATION OF ITS PLACE, made once its pack has run
+			// to its bound ([Coordinator.takeCapture]): what the take's time
+			// leaves it then is the room the take's context keeps beside the
+			// pack's budget ([Coordinator.takeContext]) — once nothing at all,
+			// so a reservation of a row of megabytes across a slow link was
+			// cut while its bytes were still crossing, and no capture was made
+			// (crewlet/crewlet#1151).
+			name: "a take's reservation of its place",
+			row: PendingRun{TurnID: "t-reserve", AgentHandle: "swe", Status: StatusRunning,
+				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch},
+			write: func(ctx context.Context, c *Coordinator, run PendingRun) string {
+				take, cancel, _ := c.takeContext(ctx)
+				defer cancel()
+				deadline, _ := take.Deadline()
+				took, err := c.reserveCapture(take, deadline.Add(-SessionTakeBudget), run.TurnID,
+					rowCrossingCapture)
+				switch {
+				case err != nil:
+					return err.Error()
+				case !took:
+					return "the place was not taken"
+				}
+				return ""
+			},
+			landed: func(run PendingRun) (bool, string) {
+				if run.Capture == nil {
+					return false, "no capture"
+				}
+				return run.Capture.samePlace(rowCrossingCapture) && run.Capture.State == CaptureBegun,
 					"the capture " + string(run.Capture.State)
 			},
 		},

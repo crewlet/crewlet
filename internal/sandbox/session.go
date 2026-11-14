@@ -1492,10 +1492,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	} else {
 		stamp.placeAtNewest(savePlaces{run: current})
 	}
-	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
-	// reservation answered after the take's deadline reserves a place for a
-	// take that can no longer spool, and leaves the outcome stamp none of the
-	// room it is kept before by ([Coordinator.takeContext]).
+	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
+	// keeps for the reservation beside the pack's budget
+	// ([Coordinator.reserveRoom]) — never past it: a reservation answered
+	// after the take's deadline reserves a place for a take that can no
+	// longer spool, and leaves the outcome stamp none of the room it is kept
+	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	if standing {
 		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at)
@@ -1808,19 +1810,31 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 }
 
 // takeContext is the context a take runs under, and the instant by which its
-// own records must be made: its own budget ([SessionTakeBudget]), and never
-// past where the read it is part of must stop to leave those records their
-// room — the stamp of what came of it ([Coordinator.settleContext]), the
-// digest it leaves in the box ([stampContext]) — and after them its pause and
-// its answer theirs ([discardGrace] each). So nothing a take does, cut short or
-// not, costs the box its pause, which is what holds a collected box asleep, and
-// bounded by the pause reaper, until whatever its turn does next.
+// own records must be made: its own budget ([SessionTakeBudget]) for its pack
+// and its scrub, and beside it the room its reservation of the capture's place
+// is given ([Coordinator.reserveRoom]) — never past where the read it is part
+// of must stop to leave its records their room ([Coordinator.takeRecordsRoom]):
+// the stamp of what came of it ([Coordinator.settleContext]), the digest it
+// leaves in the box ([stampContext]) and how its job's harness ended
+// ([Coordinator.markHarnessEnd]) — and after them the pause and its record and
+// the answer theirs ([Coordinator.pauseRoom]). So nothing a take does, cut short
+// or not, costs the box its pause, which is what holds a collected box asleep,
+// and bounded by the pause reaper, until whatever its turn does next.
 // by is zero where the read has no deadline.
+//
+// THE RESERVATION'S ROOM BESIDE THE TAKE'S OWN BUDGET, never inside it: the
+// place is reserved once the session is packed ([Coordinator.takeCapture]),
+// writing the run's row whole, and a pack at its bound — its own wait
+// ([SessionPackWait]) — left a reservation inside the take's budget nothing
+// but the scrub's minutes, which the spool after it needs, and across a slow
+// link a row of megabytes takes minutes to read and write: the reservation
+// was cut while its bytes were still crossing, and no capture was made
+// (crewlet/crewlet#1151).
 func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
-	deadline := time.Now().Add(SessionTakeBudget)
-	by := recordsBy(ctx)
+	deadline := time.Now().Add(SessionTakeBudget + c.reserveRoom())
+	by := c.recordsBy(ctx)
 	if !by.IsZero() {
-		if last := by.Add(-discardGrace); last.Before(deadline) {
+		if last := by.Add(-c.takeRecordsRoom()); last.Before(deadline) {
 			deadline = last
 		}
 	}
@@ -1828,16 +1842,42 @@ func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context
 	return take, cancel, by
 }
 
+// reserveRoom is the room a take gives its reservation of the capture's place
+// beside its own budget ([Coordinator.takeContext]): one record's reason
+// ([sessionRecordBudget]), within which the reservation is asked again while
+// the store does not answer ([Coordinator.askStamp]), and the time a change of
+// the run's row at its bound takes to cross this node's connection to the
+// store ([RowBudget]) — none in the store's own process.
+func (c *Coordinator) reserveRoom() time.Duration { return RowBudget(c.pending, c.recordBudget) }
+
+// takeRecordsRoom is the room a read leaves the records it makes after its
+// take, before its pause ([Coordinator.recordsBy]): a teardown's grace
+// ([discardGrace]) for those records and the digest a take leaves in the box,
+// and the crossing of each of the two changes of the run's row among them —
+// the stamp of what came of the take and how its job's harness ended — at this
+// node's connection to the store ([PendingStore.RowCrossing]): none in the
+// store's own process.
+func (c *Coordinator) takeRecordsRoom() time.Duration {
+	return discardGrace + 2*c.pending.RowCrossing()
+}
+
+// pauseRoom is the room a read leaves its box's pause, the pause's record on
+// the run's row ([PendingStore.MarkBoxPaused]) and its answer: a teardown's
+// grace ([discardGrace]) and the crossing of that one change of the row at
+// this node's connection to the store — none in the store's own process.
+func (c *Coordinator) pauseRoom() time.Duration { return discardGrace + c.pending.RowCrossing() }
+
 // recordsBy is the instant by which a read's records made after its take must
 // be made — the take's own ([Coordinator.takeContext]) and how its job's
-// harness ended ([Coordinator.markHarnessEnd]) — so its pause and its answer
-// keep their room ([discardGrace]); zero where the read has no deadline.
-func recordsBy(ctx context.Context) time.Time {
+// harness ended ([Coordinator.markHarnessEnd]) — so its pause, the pause's
+// record and its answer keep their room ([Coordinator.pauseRoom]); zero where
+// the read has no deadline.
+func (c *Coordinator) recordsBy(ctx context.Context) time.Time {
 	d, ok := ctx.Deadline()
 	if !ok {
 		return time.Time{}
 	}
-	return d.Add(-discardGrace)
+	return d.Add(-c.pauseRoom())
 }
 
 // stampContext is the context the one record a take makes only once is made
