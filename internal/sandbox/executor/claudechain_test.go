@@ -360,12 +360,16 @@ func (r rcRead) expect(t *testing.T, name string, want map[int]rcAnswer, orders 
 }
 
 // expectCannotTell holds the whole thread to why: every record cannot tell
-// for it, no order handed, and no leaf.
+// for it, no order handed, no leaf, and no answer a copy of another size
+// could rely on.
 func (r rcRead) expectCannotTell(t *testing.T, name string, why chainWhy) {
 	t.Helper()
 	if got, unknown := r.c.Unknown(); !unknown || got != why {
 		t.Errorf("%s: the thread is cannot tell %t (%s), want %s", name, unknown, got, why)
 		return
+	}
+	if r.c.AnySize() {
+		t.Errorf("%s: a thread the model cannot place is path-free", name)
 	}
 	for line, h := range r.handles {
 		if handed, got := r.c.Handed(h), r.c.Why(h); handed != handedUnknown || got != why {
@@ -1125,14 +1129,6 @@ func TestAThreadTheModelCannotPlaceIsCannotTell(t *testing.T) {
 			2: yes(whyChain)}, rcOrder{[]int{1, 2}, allVariants})
 }
 
-// rcPadded is a thread of one prompt whose line, its break included, takes
-// size bytes.
-func rcPadded(t *testing.T, size int) string {
-	t.Helper()
-	line := rcPrompt(0, 1, 0)
-	return ctReplace(t, line, `"content":"a prompt"`, `"content":"a prompt`+strings.Repeat("x", size-len(line)-1)+`"`)
-}
-
 // rcLongChain is a thread whose walk is records long: a prompt, a reply of
 // msg_a off the walk, a chain of prompts, and a reply of msg_a last, whose
 // recovery of the other spreads the walk. Its records carry no time but its
@@ -1167,26 +1163,18 @@ func rcHungChain(records int) []string {
 	return append(lines, rcReply(3, 4+records, "msg_z", 2000, rcSaid("z")))
 }
 
-// A THREAD PAST FIVE MEBIBYTES, OR SPREADING A WALK PAST A CALL'S ARGUMENTS,
-// IS CANNOT TELL in this commit: the load reads a thread past 5,242,880 bytes
-// with a large-file reader, so one of 5,242,881 is whyLargeFile and one of
-// 5,242,880 is read as its small path reads it; and a walk of more than
-// threadChainMaxSpread records whose recovery spreads it is whySpread, one of
-// that many records not, as are more records than that hung under one walked
-// record, which the recovery spreads too, and that many not.
+// A RECOVERY SPREADING A LIST PAST A CALL'S ARGUMENTS IS CANNOT TELL: a walk
+// of more than threadChainMaxSpread records whose recovery spreads it is
+// whySpread, one of that many records not, as are more records than that
+// hung under one walked record, which the recovery spreads too, and that many
+// not.
 //
-// Mutation: read a thread at the bound as past it, and the thread of
-// 5,242,880 bytes is cannot tell; drop the check, and the one past it reads;
-// drop the walk's spread check, and the long walk reads; or take its bound
-// for past it, and the walk of threadChainMaxSpread records is cannot tell.
-// Drop the hung records' spread check, and the long hung chain reads.
-func TestAThreadPastTheLoadsSmallPathIsCannotTell(t *testing.T) {
+// Mutation: drop the walk's spread check, and the long walk reads; or take
+// its bound for past it, and the walk of threadChainMaxSpread records is
+// cannot tell. Drop the hung records' spread check, and the long hung chain
+// reads.
+func TestARecoverySpreadingPastACallsArgumentsIsCannotTell(t *testing.T) {
 	t.Parallel()
-	at := rcChain(t, "", rcPadded(t, claudeResumeLargeFile))
-	at.expect(t, "a thread of 5,242,880 bytes", map[int]rcAnswer{1: yes(whyChain)}, rcOrder{[]int{1}, allVariants})
-	rcChain(t, "", rcPadded(t, claudeResumeLargeFile+1)).expectCannotTell(t, "a thread of 5,242,881 bytes",
-		whyLargeFile)
-
 	rcChain(t, "", rcLongChain(threadChainMaxSpread+1)...).expectCannotTell(t, "a walk past a call's arguments",
 		whySpread)
 	if why, unknown := rcChain(t, "", rcLongChain(threadChainMaxSpread)...).c.Unknown(); unknown {
@@ -1197,6 +1185,279 @@ func TestAThreadPastTheLoadsSmallPathIsCannotTell(t *testing.T) {
 		"records hung under a walked record past a call's arguments", whySpread)
 	if why, unknown := rcChain(t, "", rcHungChain(threadChainMaxSpread)...).c.Unknown(); unknown {
 		t.Errorf("as many records hung under a walked record as a call takes are cannot tell (%s)", why)
+	}
+}
+
+// rcSized is lines as one thread padded to size bytes, their breaks among
+// them: the record on line pad holds mark once, and takes that many x's more
+// right after it, inside the string mark opens, which no large-file reader
+// reads.
+func rcSized(t *testing.T, size, pad int, mark string, lines ...string) []string {
+	t.Helper()
+	more := size - len(ctThread(lines...))
+	if more < 0 {
+		t.Fatalf("a thread of %d bytes is padded to %d", len(ctThread(lines...)), size)
+	}
+	padded := slices.Clone(lines)
+	padded[pad-1] = ctReplace(t, padded[pad-1], mark, mark+strings.Repeat("x", more))
+	return padded
+}
+
+// rcBytesAt holds line to the bytes of a sidechain's mark lying within its
+// first 256 bytes, or past them: the window 2.1.310's dispatch reads.
+func rcBytesAt(t *testing.T, line string, within bool) string {
+	t.Helper()
+	at := strings.Index(line, string(slotSidechain))
+	if at < 0 || (at+len(slotSidechain) <= 256) != within {
+		t.Fatalf("the line holds a sidechain's bytes at %d; want them within its first 256 %t", at, within)
+	}
+	return line
+}
+
+// A THREAD PAST FIVE MEBIBYTES IS READ AS BOTH ITS LARGE-FILE READERS READ IT:
+// the load hands a thread of more than 5,242,880 bytes what the dispatch, or
+// with CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP the prune, chooses of its lines by
+// their bytes, so the chain answers for one past the bound only where it is
+// path-free, every reader of either release handing the load what the small
+// path does: then it answers as the same thread under the bound, and AnySize
+// holds of both. T4's shape is, its parallel results recovered; so is a thread
+// whose record before the last holds a sidechain's bytes, which move no
+// reader's start; one whose line of no record carries `"parentUuid":` only
+// below its depth one; one whose readers key a record by its own uuid among
+// others, the one at depth one of two before their times, whether it is the
+// first of them or the last, or the last of those before their times where
+// none is at depth one; one whose abandoned prompt hangs off an attachment,
+// which hands it on alone; and one whose reply hangs off a walked result, X_e
+// reading it as part of the reply above that result. Every other thread past
+// the bound is whyLargeFile, and under it answers as its small path does with
+// AnySize false: one whose reply of an id hangs off another branch, whose
+// abandoned prompt hangs off a result off the walk, whose result is written
+// before the walked call it answers, or whose result hangs off a prompt an
+// attachment hands on alone, none of which the dispatch from the last record
+// alone reaches; one holding a compaction's boundary; a line the layer
+// refuses; a line of no record that carries `"parentUuid":` at its depth one,
+// past a string holding a brace and an escaped quote; a record whose line does
+// not begin `{"parentUuid":`, its keys in another order, or another key's
+// value where the parent's would be; a last record holding a sidechain's bytes
+// in its first 256 bytes, or past them, where the prune alone reads them; a
+// parent written with an escape, or written twice, null first; a uuid the
+// readers key otherwise than the decode; a branch only the walk from the
+// checkpoint reaches, which the prune never makes; a parent naming no record
+// on the walk, which ends the prune's walk short of the record the small
+// path's fallback walks on to; and a reply only the prune's group reads as
+// part of its parent's, under a result written before its own call. A thread
+// of exactly 5,242,880 bytes is read as its small path reads it. A subagent's
+// thread, cannot tell whole in this commit, is whyLargeFile past the bound
+// where a record of it does not say it is a sidechain's right after its
+// parent, where it holds a boundary, a line whose JSON fails that a reader
+// takes for its start, or a line of no record that carries `"parentUuid":` at
+// its depth one, and whySubagentMode where every record says so and no such
+// line is there, and at the bound.
+//
+// Mutation: take the bound itself for past it, and the thread of 5,242,880
+// bytes is cannot tell; drop the dispatch's coverage, and the threads it never
+// reaches read; reach a record off the walk under a walked parent written
+// after it, and the early result reads; walk from the checkpoint too, and the
+// branch only that walk reaches reads; read the prune's group for the
+// dispatch's, and the reply only it reads reads; pass no group down, or read a
+// reply's group off its parent, and the reply under the walked result costs
+// the thread; hand nothing off a UF parent, and the prompt under the
+// attachment costs it, or hand that prompt's children on, and the result under
+// it reads; drop any one byte condition (the boundary, the refused line, the
+// key of a line of no record, the line's head, the parent as written, the uuid
+// the readers key by, the last record's sidechain bytes, a subagent's mark),
+// and the thread holding it reads; read the key of a line of no record
+// anywhere, or only as the prefix, or with no string or escape read, and the
+// nested key costs the thread, or the depth-one one does not; read the
+// sidechain's bytes off every record, or off the first 256 bytes alone, and
+// the record before the last costs the thread, or the far bytes do not; key a
+// record by the first of its uuids before their times, or by the last of them
+// where one is at depth one, or by the first of them where none is, and the
+// record's own uuid is missed; read a walk that meets a parent naming no
+// record as handing the load every line, as the dispatch alone does, and the
+// record above it reads; or read a refused line, or a line of no record
+// carrying the key, as binding a main thread alone, and the subagent's thread
+// holding one reads.
+func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testing.T) {
+	t.Parallel()
+	past := claudeResumeLargeFile + 1
+	t4 := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_t4", 1000, rcSaid("reading")),
+		rcReply(2, 3, "msg_t4", 1100, rcCalls("x1")), rcReply(3, 4, "msg_t4", 1200, rcCalls("x2")),
+		rcResults(3, 5, 1300, "x1"), rcResults(4, 6, 1400, "x2")}
+	t4Answers := rcHanding(whyChain, []int{1, 2, 3, 4, 6}, map[int]rcAnswer{5: yes(whyRecoveredResult)})
+	// own is t4 whose line 6 holds nested, an object of uuids, before its
+	// own uuid, which after follows in place of `","timestamp":"`; stamped is
+	// record n's uuid before a time.
+	own := func(nested, after string) []string {
+		lines := slices.Clone(t4)
+		lines[5] = ctReplace(t, ctReplace(t, lines[5], `"isSidechain":false,`, `"isSidechain":false,`+
+			`"toolUseResult":`+nested+`,`), `","timestamp":"`+rcAt(1400), after+rcAt(1400))
+		return lines
+	}
+	stamped := func(n int) string { return `{"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(1399) + `"}` }
+	// sized is a thread a case reads under the bound and past it, padded at
+	// mark on line pad, and what it expects of it under the bound.
+	type sized struct {
+		lines []string
+		pad   int
+		mark  string
+		want  map[int]rcAnswer
+		order []int
+		leaf  int
+	}
+	shaped := func(lines []string) sized {
+		return sized{lines, 5, `"content":"ok`, t4Answers, []int{1, 2, 3, 4, 5, 6}, 6}
+	}
+	for name, tc := range map[string]sized{
+		"T4's shape": shaped(t4),
+		"a sidechain's bytes in a record before the last": shaped(append([]string{t4[0], t4[1], ctReplace(t,
+			t4[2], `"input":{}`, `"input":{"isSidechain":true}`)}, t4[3:]...)),
+		"a parentUuid key below the depth one of a line of no record": shaped(append(slices.Clone(t4),
+			`{"type":"api-request-blob","sessionId":"`+ctSession+`","message":{"parentUuid":"`+rcUUID(1)+
+				`","role":"user"}}`)),
+		"the record's own uuid at depth one of two before their times": shaped(own(stamped(77),
+			`","timestamp":"`)),
+		"the record's own uuid the last of those before their times, none at depth one": shaped(own(
+			`{"a":`+stamped(77)+`,"b":`+stamped(6)+`}`, `","entrypoint":"cli","timestamp":"`)),
+		"the record's own uuid at depth one before another before its time": shaped(append(slices.Clone(t4[:5]),
+			ctReplace(t, t4[5], `"version":"2.1.322"}`, `"version":"2.1.322","toolUseResult":`+stamped(77)+`}`))),
+		"an abandoned prompt hanging off an attachment": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"), rcAttach(3, 4, 1150, rcNote),
+			rcPrompt(4, 5, 1200), rcReply(4, 6, "msg_b", 1300, rcSaid("done"))}, 5, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 2, 3, 4, 6}, map[int]rcAnswer{5: no(whyOffConversation)}),
+			[]int{1, 2, 3, 4, 6}, 6},
+		"a reply of the id its walked result's call was made under": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"),
+			rcReply(3, 4, "msg_a", 1200, rcSaid("more")), rcReply(3, 5, "msg_b", 1300, rcSaid("done"))}, 4,
+			`"text":"more`, rcHanding(whyChain, []int{1, 2, 3, 5}, map[int]rcAnswer{4: yes(whyRecoveredReply)}),
+			[]int{1, 2, 3, 4, 5}, 5},
+	} {
+		for _, size := range []int{0, past} {
+			lines := tc.lines
+			if size > 0 {
+				lines = rcSized(t, size, tc.pad, tc.mark, tc.lines...)
+			}
+			read := rcChain(t, "", lines...)
+			at := fmt.Sprintf("%s, %d bytes", name, read.c.bytes)
+			read.expect(t, at, tc.want, rcOrder{tc.order, allVariants})
+			read.expectLeaf(t, at, tc.leaf)
+			if !read.c.AnySize() {
+				t.Errorf("%s is not path-free", at)
+			}
+		}
+	}
+
+	branch := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("first")),
+		rcReply(1, 3, "msg_a", 1100, rcCalls("x1")), rcResults(3, 4, 1200, "x1"),
+		rcReply(4, 5, "msg_b", 1300, rcSaid("done"))}
+	branchAnswers := rcHanding(whyChain, []int{1, 3, 4, 5}, map[int]rcAnswer{2: yes(whyRecoveredReply)})
+	plain := rcHanding(whyChain, []int{1, 2})
+	for name, tc := range map[string]sized{
+		"a reply of an id on another branch": {branch, 2, `"text":"first`, branchAnswers, []int{1, 3, 2, 4, 5}, 5},
+		"an abandoned prompt under a result off the walk": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1", "x2")), rcResults(2, 3, 1100, "x1"),
+			rcResults(2, 4, 1200, "x2"), rcPrompt(3, 5, 1300), rcReply(4, 6, "msg_b", 1400, rcSaid("done"))}, 5,
+			`"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 4, 6}, map[int]rcAnswer{
+				3: yes(whyRecoveredResult), 5: no(whyOffConversation)}), []int{1, 2, 3, 4, 6}, 6},
+		"a compaction's boundary": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+			rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
+			rcPrompt(3, 4, 3000)}, 4, `"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 3, 4}),
+			[]int{1, 2, 3, 4}, 4},
+		"a line the layer refuses": {[]string{rcPrompt(0, 1, 0), "[1,2]", rcReply(1, 3, "msg_a", 1000,
+			rcSaid("done"))}, 1, `"content":"a prompt`, rcHanding(whyChain, []int{1, 3}), []int{1, 3}, 3},
+		"a parentUuid key at the depth one of a line of no record": {[]string{rcPrompt(0, 1, 0),
+			`{"type":"queue-operation","operation":"enqueue","content":"\"{","parentUuid":null,"sessionId":"` +
+				ctSession + `"}`, rcReply(1, 3, "msg_a", 1000, rcSaid("done"))}, 1, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 3}), []int{1, 3}, 3},
+		"a record whose line does not begin {\"parentUuid\":": {[]string{rcPrompt(0, 1, 0), ctReplace(t,
+			rcReply(1, 2, "msg_a", 1000, rcSaid("done")), `{"parentUuid":"`+rcUUID(1)+`","isSidechain":false,`,
+			`{"isSidechain":false,"parentUuid":"`+rcUUID(1)+`",`)}, 1, `"content":"a prompt`, plain,
+			[]int{1, 2}, 2},
+		"a sidechain's bytes in the last record's first 256 bytes": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcBytesAt(t, ctReplace(t, rcPrompt(2, 3, 2000),
+				`"isSidechain":false,`, `"isSidechain":false,"toolUseResult":{"isSidechain":true},`), true)}, 3,
+			`"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 3}), []int{1, 2, 3}, 3},
+		"a sidechain's bytes in the last record past its first 256 bytes": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("a")), rcBytesAt(t, ctReplace(t, rcPrompt(2, 3, 2000),
+				`"content":"a prompt"},`, `"content":"a prompt`+strings.Repeat("x", 256)+
+					`"},"toolUseResult":{"isSidechain":true},`), false)}, 3, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 2, 3}), []int{1, 2, 3}, 3},
+		"a parent written with an escape": {[]string{rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a",
+			1000, rcSaid("done")), `"parentUuid":"0`, `"parentUuid":"\u0030`)}, 1, `"content":"a prompt`, plain,
+			[]int{1, 2}, 2},
+		"a record whose line begins with another key, its value where the parent's would be": {[]string{
+			rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")), `{"parentUuid":"`,
+				`{"entrypoint":"`+rcUUID(1)+`","parentUuid":"`)}, 1, `"content":"a prompt`, plain, []int{1, 2}, 2},
+		"a result under a prompt handed off an attachment alone": {[]string{rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), rcResults(2, 3, 1100, "x1"), rcAttach(3, 4, 1150, rcNote),
+			rcPrompt(4, 5, 1200), rcResults(5, 6, 1250, "x9"), rcReply(4, 7, "msg_b", 1300, rcSaid("done"))}, 6,
+			`"content":"ok`, rcHanding(whyChain, []int{1, 2, 3, 4, 7}, map[int]rcAnswer{5: no(whyOffConversation),
+				6: no(whyOffConversation)}), []int{1, 2, 3, 4, 7}, 7},
+		"a parent written twice, null first": {[]string{rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a",
+			1000, rcSaid("done")), `{"parentUuid":"`, `{"parentUuid":null,"parentUuid":"`)}, 1, `"content":"a prompt`,
+			plain, []int{1, 2}, 2},
+		"a result written before the walked call it answers": {[]string{rcPrompt(0, 1, 0),
+			rcResults(3, 2, 1500, "x1"), rcReply(1, 3, "msg_a", 1000, rcCalls("x1")), rcPrompt(3, 4, 2000)}, 2,
+			`"content":"ok`, rcHanding(whyChain, []int{1, 3, 4}, map[int]rcAnswer{2: yes(whyRecoveredResult)}),
+			[]int{1, 3, 2, 4}, 4},
+		"a uuid the readers key otherwise": {[]string{ctReplace(t, ctReplace(t, rcPrompt(0, 1, 0),
+			`"isSidechain":false,`, `"isSidechain":false,"toolUseResult":{"uuid":"`+rcUUID(77)+`"},`),
+			`","timestamp":"`, `","entrypoint":"cli","timestamp":"`), rcReply(1, 2, "msg_a", 1000, rcSaid("done"))},
+			1, `"content":"a prompt`, plain, []int{1, 2}, 2},
+		"a branch only the checkpoint's walk reaches": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000,
+			rcSaid("first")), rcPrompt(1, 3, 2000), rcCheckpoint(2)}, 2, `"text":"first`, rcHanding(whyChain,
+			[]int{1, 2}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2}, 2},
+		"a parent naming no record on the walk": {[]string{rcPrompt(0, 1, 0), rcReply(rcNowhere, 2, "msg_a", 1000,
+			rcSaid("done"))}, 1, `"content":"a prompt`, rcHanding(whyChain, []int{1, 2}), []int{1, 2}, 2},
+		"a reply only the prune's group reads as its parent's": {[]string{rcPrompt(0, 1, 0),
+			rcResults(3, 2, 1100, "x1"), rcReply(1, 3, "msg_a", 1000, rcCalls("x1")),
+			rcReply(2, 4, "msg_a", 1200, rcSaid("more")), rcPrompt(2, 5, 1300)}, 4, `"text":"more`,
+			rcHanding(whyChain, []int{1, 2, 3, 5}, map[int]rcAnswer{4: yes(whyRecoveredReply)}),
+			[]int{1, 3, 2, 4, 5}, 5},
+	} {
+		small := rcChain(t, "", tc.lines...)
+		small.expect(t, name, tc.want, rcOrder{tc.order, allVariants})
+		small.expectLeaf(t, name, tc.leaf)
+		if small.c.AnySize() {
+			t.Errorf("%s is path-free", name)
+		}
+		rcChain(t, "", rcSized(t, past, tc.pad, tc.mark, tc.lines...)...).expectCannotTell(t, name+", past the bound",
+			whyLargeFile)
+	}
+	at := rcChain(t, "", rcSized(t, claudeResumeLargeFile, 2, `"text":"first`, branch...)...)
+	at.expect(t, "a reply of an id on another branch, of 5,242,880 bytes", branchAnswers,
+		rcOrder{[]int{1, 3, 2, 4, 5}, allVariants})
+
+	// side is line as a subagent's record, which says it is a sidechain's
+	// right after its parent.
+	side := func(line string) string {
+		return ctReplace(t, line, `"isSidechain":false,`, `"isSidechain":true,"agentId":"`+ctAgent+`",`)
+	}
+	agent := []string{side(rcPrompt(0, 1, 0)), side(rcReply(1, 2, "msg_a", 1000, rcSaid("done")))}
+	for name, tc := range map[string]struct {
+		lines []string
+		why   chainWhy
+	}{
+		"a subagent's thread whose every record says it is a sidechain's at its head": {agent, whySubagentMode},
+		"a subagent's thread of a record that says so after another key": {[]string{agent[0], ctReplace(t,
+			agent[1], `"isSidechain":true,"agentId":"`+ctAgent+`",`, `"agentId":"`+ctAgent+`","isSidechain":true,`)},
+			whyLargeFile},
+		"a subagent's thread holding a compaction's boundary": {append(slices.Clone(agent), side(rcSystem(2, 3, 2000,
+			subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`))), whyLargeFile},
+		"a subagent's thread holding a line whose JSON fails, which a reader takes for its start": {append(
+			slices.Clone(agent), `{"parentUuid":null,"uuid":"`+rcUUID(9)+`","timestamp":"`+rcAt(3000)+`" x}`),
+			whyLargeFile},
+		"a subagent's thread holding a line of no record that carries parentUuid at its depth one": {append(
+			slices.Clone(agent), `{"type":"queue-operation","operation":"enqueue","parentUuid":null,"uuid":"`+
+				rcUUID(9)+`","timestamp":"`+rcAt(3000)+`","sessionId":"`+ctSession+`"}`), whyLargeFile},
+	} {
+		rcChain(t, ctAgent, tc.lines...).expectCannotTell(t, name, whySubagentMode)
+		rcChain(t, ctAgent, rcSized(t, past, 1, `"content":"a prompt`, tc.lines...)...).expectCannotTell(t,
+			name+", past the bound", tc.why)
+		if tc.why == whyLargeFile {
+			rcChain(t, ctAgent, rcSized(t, claudeResumeLargeFile, 1, `"content":"a prompt`, tc.lines...)...).
+				expectCannotTell(t, name+", of 5,242,880 bytes", whySubagentMode)
+		}
 	}
 }
 
@@ -1863,9 +2124,9 @@ func TestAChainAnswersWhatItsRecordsCarry(t *testing.T) {
 // A CHAIN REFUSES A LINE OUT OF TURN AS CANNOT TELL, never a panic, since its
 // reader runs inside a node's collection: a line skipped or repeated, by See
 // or by Unread, is whyLineGap. A question asked before End is cannot tell
-// (whyUndecided), and a handle the chain never gave out names no record. A
-// reader's own misuse, the same every run, still panics: See, Unread or End
-// after End.
+// (whyUndecided), the thread no path-free one, and a handle the chain never
+// gave out names no record. A reader's own misuse, the same every run, still
+// panics: See, Unread or End after End.
 //
 // Mutation: drop the turn check, and a thread with a line missing reads as
 // modelled.
@@ -1907,6 +2168,9 @@ func TestAChainRefusesALineOutOfTurn(t *testing.T) {
 	})
 	if _, ok := early.Leaf(); ok {
 		t.Error("a leaf is known before End")
+	}
+	if early.AnySize() {
+		t.Error("a thread is path-free before End")
 	}
 	if err := early.End(t.Context()); err != nil {
 		t.Fatal(err)
@@ -1950,11 +2214,14 @@ func (c *rcCancelledAfter) Err() error {
 
 // AN END ITS CALLER ABANDONED LEAVES NO MODEL: End with a context cancelled
 // before it, of a thread the model places or of one it cannot, or as it works
-// between its steps, returns the context's error, and every record asked of
-// after it is cannot tell (whyUndecided).
+// between its steps, returns the context's error, every record asked of after
+// it is cannot tell (whyUndecided), and the thread is no path-free one, though
+// End judged it path-free before it stopped.
 //
 // Mutation: ignore the context, or look at it only before a thread the model
-// places, or only once, and End decides a model its caller gave up on.
+// places, or only once, and End decides a model its caller gave up on; or
+// answer AnySize off what End judged before it stopped, and the abandoned
+// thread is path-free.
 func TestAnEndItsCallerAbandonedLeavesNoModel(t *testing.T) {
 	t.Parallel()
 	cancelled, cancel := context.WithCancel(t.Context())
@@ -1996,6 +2263,9 @@ func TestAnEndItsCallerAbandonedLeavesNoModel(t *testing.T) {
 		})
 		if _, ok := c.Leaf(); ok {
 			t.Errorf("%s: an abandoned End knows a leaf", name)
+		}
+		if c.AnySize() {
+			t.Errorf("%s: an abandoned End reads the thread as path-free", name)
 		}
 	}
 }

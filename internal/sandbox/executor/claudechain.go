@@ -202,10 +202,9 @@ const (
 	// whySpread is a list the resume passes into one call's arguments whole
 	// longer than [threadChainMaxSpread].
 	whySpread chainWhy = "spread"
-	// whyLargeFile is a thread past 5,242,880 bytes, which the load reads
-	// with one of its large-file readers. Every such thread, until a later
-	// commit of this change models those readers (`feat(executor): model what
-	// Claude Code loads of a thread past 5 MiB`).
+	// whyLargeFile is a thread past 5,242,880 bytes that is not path-free
+	// ([threadChain], THE LARGE FILE): one of the load's large-file readers
+	// may hand the load other lines of it than its small path does.
 	whyLargeFile chainWhy = "large_file"
 	// whyResultByCall is a result 2.1.322's and 2.1.310's flag
 	// tengu_foamy_spring may hang elsewhere than under its parent.
@@ -299,9 +298,29 @@ const (
 
 // claudeResumeLargeFile is the most bytes of a thread Claude Code's load
 // reads with its small path; a thread past it goes to a large-file reader
-// (2.1.322's Jne @284268664 in oee @293824518, 2.1.310's Use @238504623 in
-// Cne @247199785, each `size > bound`).
+// (2.1.322's Jne @284268664 in oee @293824518, `if(Ae>Jne)` @293827191;
+// 2.1.310's Use @238504623 in Cne @247199785, `if(K>Use)` @247202183).
 const claudeResumeLargeFile = 5 << 20
+
+// The bytes Claude Code's large-file readers read a line by ([threadChain],
+// THE LARGE FILE), as 2.1.322's ike and F1t and 2.1.310's HMt and FPt hold
+// them.
+var (
+	// slotPrefix is how a line begins that every reader takes for a SLOT, a
+	// record it reads by its bytes, and slotParentKey the key the dispatch
+	// takes one by wherever its line carries it at its object's depth one.
+	slotPrefix    = []byte(`{"parentUuid":`)
+	slotParentKey = []byte(`"parentUuid":`)
+	// slotUUIDKey is what a slot's uuid follows, and slotTimeAfter what
+	// follows the uuid a reader keys the slot by first.
+	slotUUIDKey   = []byte(`"uuid":"`)
+	slotTimeAfter = []byte(`","timestamp":"`)
+	// slotSidechain is what makes a slot a sidechain's to each reader, and
+	// slotSidechainHead how a subagent's record says so right after its
+	// parent.
+	slotSidechain     = []byte(`"isSidechain":true`)
+	slotSidechainHead = []byte(`,"isSidechain":true`)
+)
 
 // claudeFallbackMS is the most milliseconds before a record whose parent the
 // walk cannot follow at which the walk takes another record in its place
@@ -448,7 +467,122 @@ const chainPrefixBytes = 10
 // carries the key at all, null among it, turns off the newest-row rule below
 // (`leafUuid!==void 0`).
 //
-// THE RELINK, End's first step (2.1.322's iWo @293743389 with aWo
+// THE LARGE FILE, which End judges first (2.1.322's oee @293824518, 2.1.310's
+// Cne @247199785). The load reads a thread of more than 5,242,880 bytes
+// ([claudeResumeLargeFile]) with a large-file reader, which chooses by their
+// bytes the lines it hands the load, where its small path hands it every line
+// in turn. Which reader turns on CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP
+// (@293824834, @247199946), which a settings file can set whatever the
+// launcher unsets, so the chain models both. A subagent's own load reads its
+// file with the same loader (Rye @293845538, FBe @247216758).
+//
+// Unset, the DISPATCH (2.1.322's ike @293792132 through TWo @293804963, or,
+// where the resume asks for the side file resume-head.jsonl, which only the
+// hosted environment reads (czt @293805243), through pzt @293806041 by way of
+// RWo @293807189, the same dispatch; 2.1.310's HMt @247175414 through Fpo
+// @247185752) takes for a SLOT every line that begins `{"parentUuid":`, or
+// carries that key at its object's depth one outside every string (2.1.322's
+// N1t @293787634, 2.1.310's Ipo @247171334), and holds a `"uuid":"` (kl
+// @293794950, Eo @247177994). It keys a slot by the 36 bytes after its first
+// `"uuid":"` they follow with `","timestamp":"`, of several such the first at
+// depth one, else the last of them, and where none is, the first `"uuid":"`
+// (pa @293793061 with dzt @293787942, vs @247176207 with $Mt @247171638);
+// reads its parent as the 36 bytes after the key's opening quote, none where
+// `null` follows the key, and any other value as one neither a string nor
+// null; and reads it as a sidechain's where its bytes say
+// `"isSidechain":true`: 2.1.322 the first `"isSidechain":` within the first
+// 256 bytes of a line that begins `{"parentUuid":`, else the one at its depth
+// one (@293795256); 2.1.310 those bytes anywhere within its first 256
+// (@247178300). It starts from the last slot that is no sidechain's
+// (@293799473, @247182021; 2.1.322 passing over, and walking as well, one
+// whose parent is null that is no object or a file's snapshot), and walks up
+// by parent from there and from the checkpoint (@293799773, @247182158). A
+// walk that meets a parent naming no slot, one neither a string nor null, or
+// a slot it met itself hands the load every line. Else the dispatch hands it,
+// in the file's order, every line that is no slot, every walked slot, and
+// each slot whose parent it handed before it as one that hands its children
+// on (@293801822 with @293796186, @247183770 with @247179135): where X_e
+// reads the slot as part of its parent's group, the slot hands its own
+// children on in turn, a reply's group its own id and any other slot's its
+// parent's, where that parent was handed so before it (tzt @293749089, OMt
+// @247134040); where the parent is UF, the slot is handed and hands none on
+// (nzt @293749143, IMt @247134094); and a user or assistant slot whose
+// message is no object it never hands so (ozt @293749187, DMt @247134138), as
+// the load's admission drops one.
+//
+// Set, the PRUNE (2.1.322's F1t @293788207, called @293830949; 2.1.310's FPt
+// @247171899, called @247203013) reads the whole file and takes for a slot
+// only a line that begins `{"parentUuid":` and holds a `"uuid":"`, keyed
+// alike, its parent the 36 bytes after the key's opening quote and none for
+// any other value. It starts from the last slot whose line holds
+// `"isSidechain":true` nowhere (@293788960, @247172642; 2.1.322 passing over
+// one whose parent is no string that is no object or a file's snapshot), and
+// walks up from it alone, to a root, a parent naming no slot or a slot it met.
+// It keeps the whole file where that walk holds more than half its bytes
+// (@293789349, @247172956), and else every line that is no slot, every walked
+// slot, and each slot whose parent it walked, or kept before it as one that
+// keeps its children (@293790130, @247173737): one such too where X_e reads
+// the slot as part of its group, for a reply the id of the nearest reply up
+// by parent from its parent, and one kept alone where the parent is UF; a
+// slot whose line is no object, or a user or assistant one whose message is
+// none, never.
+//
+// So the chain judges, of every thread whatever its size, whether it is
+// PATH-FREE ([threadChain.AnySize]): whether every one of those readers, of
+// either release, hands the load what its small path does. It judges on the
+// decode and on bytes held to it, conservatively, so only fewer threads are
+// path-free than the readers allow. A thread is path-free where:
+//
+//   - no record is a compaction's boundary, at which the dispatch forgets the
+//     slots before it and indexes those after it otherwise, and from which
+//     the side file starts;
+//   - no line is one the layer refuses ([threadChain.Unread]), which a reader
+//     may take for a slot by its bytes;
+//   - no line of no record carries `"parentUuid":` at its depth one, so no
+//     such line is a slot;
+//   - every record's line begins `{"parentUuid":`, then null or the quoted
+//     lowercase canonical uuid of the parent its decode names, and the 36
+//     bytes every reader keys it by are its own uuid's;
+//   - in the main thread, the last record's line holds no
+//     `"isSidechain":true`, so every reader starts from it (each reads those
+//     bytes to choose its start alone, back from the last slot), and the
+//     DISPATCH FROM IT ALONE reaches every record: the walk up from it, which a
+//     parent naming no record ends too, then, in the file's order, each record
+//     whose parent it reached before it as one that hands its children on, as
+//     the dispatch hands them. Every reader hands at least that: the
+//     checkpoint's walk, a parent naming no slot and the half rule hand more,
+//     the prune keeps a slot under a walked parent written after it too, and
+//     the prune's group, the nearest reply's up by parent, is the dispatch's
+//     wherever the dispatch's is a reply's id, since both read up the same
+//     parents, the dispatch's through parents met before their children alone;
+//   - in a subagent's thread, every record's line says it is a sidechain's
+//     right after its parent (`{"parentUuid":`, its parent, then
+//     `,"isSidechain":true`), so no reader has a slot to start from, and
+//     every one hands the load every line.
+//
+// Where all of those hold, every reader hands the load the lines its small
+// path does, in the same order, but for the attribution snapshots, of which
+// the dispatch applies the last alone, and the artifact reaction ledgers it
+// reads apart (tye @293557899), no line of which this model reads; and where
+// the small path has the load's processEntry make every string of every line
+// well-formed (tIe @282906774, in Szt @293813830), the dispatch has it do so
+// only on a line that writes a surrogate's escape (`\ud` or `\uD`), which
+// changes no value this model reads. A thread past 5,242,880 bytes that is not
+// path-free is whyLargeFile; one that is answers as its small path does. Its
+// size is the bytes of the lines See and Unread were handed, each with its
+// break: the file's, where the caller holds to THE BYTES ARE THE RESUME'S. A
+// torn last piece is no line, which the chain neither counts nor reads, and
+// which the box cuts from a main thread before its resume
+// ([claudeSessionGate]): a file that keeps one is not the file the chain was
+// handed. MEASURED by the design's ports of the four readers: of the 432 main
+// threads the probes kept, the 410 that hold no boundary are reached whole by
+// the dispatch from their last record alone under both groups, the 13 past the
+// bound among them, and no record line of them holds `"isSidechain":true`;
+// every record line of them and of the 89 subagent threads begins
+// `{"parentUuid":`, and each of the subagent threads' 1,353 says it is a
+// sidechain's right after its parent.
+//
+// THE RELINK, End's first step after that (2.1.322's iWo @293743389 with aWo
 // @293744710, 2.1.310's ypo @247128053 with _po @247129357, the same code),
 // where a compaction's boundary names what it kept ([threadPreserved.Named]),
 // read off the newest such boundary; where none does, nothing happens. Where
@@ -595,10 +729,10 @@ const chainPrefixBytes = 10
 // filter: an attachment its rules take is handedUnknown until a later commit
 // of this change models the drop (whyAttachmentDrop).
 //
-// WHAT THIS COMMIT LEAVES TO LATER ONES, each the whole thread cannot tell
-// until its own commit models it: a thread past 5,242,880 bytes, which the
-// load reads with one of its large-file readers (whyLargeFile); and every
-// subagent's thread (whySubagentMode).
+// WHAT THIS COMMIT LEAVES TO A LATER ONE: every subagent's thread is cannot
+// tell whole (whySubagentMode) until its own commit models a subagent's own
+// load, and one past 5,242,880 bytes that is not path-free is whyLargeFile
+// first.
 //
 // THE BOUNDS: [threadChainMaxRecords] records, retraction prefixes and uuids
 // the newest boundary that names what it kept lists, and
@@ -629,6 +763,12 @@ type threadChain struct {
 	// bytes is how many bytes of the member the lines handed so far take,
 	// their breaks included.
 	bytes int64
+	// smallOnly is whether a line was met that a large-file reader may read
+	// otherwise than the small path (THE LARGE FILE), and lastMarked whether
+	// the last record filed holds a sidechain's bytes, which in the main
+	// thread move where every reader starts; anySize is what End decided of
+	// the thread: path-free.
+	smallOnly, lastMarked, anySize bool
 	// why is the thread's own cannot tell, the first shape met; "" while the
 	// thread is modelled.
 	why chainWhy
@@ -871,23 +1011,8 @@ func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	case recordUser, recordAssistant:
 		m, mErr = line.Message()
 	case recordAttachment, recordSystem:
-	case recordProgress:
-		c.cannotTell(whyProgress)
-		return noChainRecord, m, mErr
-	case recordLastPrompt:
-		if !c.past {
-			c.checkpointOf(line)
-		}
-		return noChainRecord, m, mErr
-	case recordForkContextRef:
-		if c.agent != "" {
-			c.cannotTell(whyForkContext)
-		}
-		return noChainRecord, m, mErr
-	case recordContentReplacement:
-		c.replacementsOf(line)
-		return noChainRecord, m, mErr
 	default:
+		c.another(line)
 		return noChainRecord, m, mErr
 	}
 	if c.past {
@@ -896,12 +1021,39 @@ func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	return c.file(line, m, mErr), m, mErr
 }
 
+// another files line, a line the load keeps no record of in its map: what a
+// progress record, a checkpoint, a fork's reference and a content
+// replacement say, and whether a large-file reader may take the line for a
+// slot all the same (THE LARGE FILE).
+func (c *threadChain) another(line threadLine) {
+	if slotKeyed(line.Raw) {
+		c.smallOnly = true
+	}
+	switch line.Head.Type {
+	case recordProgress:
+		c.cannotTell(whyProgress)
+	case recordLastPrompt:
+		if !c.past {
+			c.checkpointOf(line)
+		}
+	case recordForkContextRef:
+		if c.agent != "" {
+			c.cannotTell(whyForkContext)
+		}
+	case recordContentReplacement:
+		c.replacementsOf(line)
+	}
+}
+
 // Unread files a whole line [threadReader.Next] answered as no record: its N
 // is held as See holds line.N, and its Size counted with the lines' bytes. A
 // line that yields the load no value is skipped; any other is whyLine
-// ([threadChain], THE LINES THAT ARE NO RECORD). Unread panics after End.
+// ([threadChain], THE LINES THAT ARE NO RECORD). Either way the thread is not
+// path-free, since a large-file reader may take the line for a slot by its
+// bytes (THE LARGE FILE). Unread panics after End.
 func (c *threadChain) Unread(fault *threadLineError) {
 	c.filing("Unread")
+	c.smallOnly = true
 	if fault == nil {
 		c.cannotTell(whyLine)
 		return
@@ -1093,6 +1245,7 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	if src, ok := line.SourceToolAssistantUUID(); ok && r.kind&kindResult != 0 {
 		c.sources[h] = src
 	}
+	c.slotFacts(line, id, written, r.kind)
 	c.recs = append(c.recs, r)
 	c.written = append(c.written, written)
 	// A ROW is every record but a sidechain's, a fork's briefing and a file's
@@ -1111,6 +1264,160 @@ func (c *threadChain) row(h chainHandle, r chainRecord) {
 		c.newest, c.newestMS = h, r.ms
 	}
 }
+
+// slotFacts files what the large-file readers make of line by its bytes, the
+// record of the map whose own uuid is id, whose parent is written as its
+// decode reads it and whose kind is kind ([threadChain], THE LARGE FILE): a
+// reader may read it otherwise than its decode where it is a compaction's
+// boundary, where it does not begin `{"parentUuid":` and then the parent its
+// decode names, written null or as the quoted canonical uuid alone
+// ([slotHead]), where the readers key it by another uuid than its own
+// ([keyedBy]), and, in a subagent's thread, where it does not say it is a
+// sidechain's right after its parent. In the main thread it files too
+// whether the record holds a sidechain's bytes anywhere, which move every
+// reader's start where it is the last record.
+func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten, kind chainKind) {
+	raw := line.Raw
+	end := slotHead(raw, line.Head.Parent, written.named)
+	switch {
+	case end < 0, kind&kindBoundary != 0, !keyedBy(raw, id):
+		c.smallOnly = true
+	case c.agent != "" && !bytes.HasPrefix(raw[end:], slotSidechainHead):
+		c.smallOnly = true
+	}
+	if c.agent == "" {
+		c.lastMarked = bytes.Contains(raw, slotSidechain)
+	}
+}
+
+// slotHead is where, in raw, a record's line, the parent every large-file
+// reader reads off it ends, where that is the parent its decode reads: raw
+// begins `{"parentUuid":` and then parent, the value as written, which is null
+// or, named, a lowercase canonical uuid quoted with no escape. Those two alone
+// read alike to every reader, which reads a parent as the 36 bytes after the
+// key's opening quote or as null (2.1.322's kl in ike @293794950, 2.1.310's
+// Eo in HMt @247177994, and F1t's and FPt's keying). -1 for any other line.
+func slotHead(raw, parent []byte, named bool) int {
+	if !bytes.Equal(parent, jsonNull) && (!named || len(parent) != 36+2) {
+		return -1
+	}
+	if !bytes.HasPrefix(raw, slotPrefix) || !bytes.HasPrefix(raw[len(slotPrefix):], parent) {
+		return -1
+	}
+	return len(slotPrefix) + len(parent)
+}
+
+// keyedBy reports whether the uuid every large-file reader keys raw, a
+// record's line, by is id, the record's own: the 36 bytes after the first
+// `"uuid":"` they follow with `","timestamp":"`, of several such the first at
+// the line's object depth one ([depthOneOf]), else the last of them, and where
+// none is, after the first `"uuid":"` (2.1.322's pa in ike @293793061, keyed
+// alike in F1t @293788207; 2.1.310's vs in HMt @247176207, alike in FPt
+// @247171899). A reader reads those bytes as latin1 and compares them as
+// written, so only the same bytes are the same uuid.
+func keyedBy(raw []byte, id string) bool {
+	first, good := -1, -1
+	var more []int
+	for from := 0; ; {
+		i := bytes.Index(raw[from:], slotUUIDKey)
+		if i < 0 {
+			break
+		}
+		i += from
+		if first < 0 {
+			first = i
+		}
+		if after := i + len(slotUUIDKey) + 36; after+len(slotTimeAfter) <= len(raw) &&
+			bytes.Equal(raw[after:after+len(slotTimeAfter)], slotTimeAfter) {
+			if good < 0 {
+				good = i
+			} else {
+				more = append(more, i)
+			}
+		}
+		from = i + len(slotUUIDKey)
+	}
+	at := first
+	switch {
+	case more != nil:
+		at = depthOneOf(raw, append([]int{good}, more...))
+	case good >= 0:
+		at = good
+	}
+	if at < 0 || at+len(slotUUIDKey)+36 > len(raw) {
+		return false
+	}
+	at += len(slotUUIDKey)
+	return string(raw[at:at+36]) == id
+}
+
+// slotKeyed reports whether raw, a line the load keeps no record of, is one a
+// large-file dispatch may take for a slot all the same: it carries
+// `"parentUuid":` at its object's depth one, outside every string (2.1.322's
+// N1t @293787634, 2.1.310's Ipo @247171334), as a line that begins
+// `{"parentUuid":`, the prune's slot, does too.
+func slotKeyed(raw []byte) bool {
+	if !bytes.Contains(raw, slotParentKey) {
+		return false
+	}
+	var s jsonDepth
+	for i, b := range raw {
+		if s.one() && b == '"' && bytes.HasPrefix(raw[i:], slotParentKey) {
+			return true
+		}
+		s.step(b)
+	}
+	return false
+}
+
+// depthOneOf is the first of at, offsets into raw in their order, that lies
+// at the line's object depth one outside every string, else the last of them
+// (2.1.322's dzt @293787942, 2.1.310's $Mt @247171638).
+func depthOneOf(raw []byte, at []int) int {
+	var s jsonDepth
+	for i, k := 0, 0; k < len(at); i++ {
+		if i == at[k] {
+			if s.one() {
+				return at[k]
+			}
+			k++
+		}
+		s.step(raw[i])
+	}
+	return at[len(at)-1]
+}
+
+// jsonDepth is the scan both large-file readers make of a line's bytes where
+// they look for a key at its object's depth one: how many objects deep it
+// stands outside every string, a string ending at its next quote that no
+// backslash escapes (2.1.322's N1t and dzt, 2.1.310's Ipo and $Mt).
+type jsonDepth struct {
+	depth            int
+	inString, escape bool
+}
+
+// step reads b, the line's next byte.
+func (s *jsonDepth) step(b byte) {
+	switch {
+	case s.escape:
+		s.escape = false
+	case s.inString:
+		if b == '\\' {
+			s.escape = true
+		} else if b == '"' {
+			s.inString = false
+		}
+	case b == '"':
+		s.inString = true
+	case b == '{':
+		s.depth++
+	case b == '}':
+		s.depth--
+	}
+}
+
+// one reports whether the scan stands at depth one, outside every string.
+func (s *jsonDepth) one() bool { return s.depth == 1 && !s.inString }
 
 // replyOf files a reply's id and whether its harness wrote it.
 func (c *threadChain) replyOf(line threadLine, r *chainRecord) {
@@ -1462,6 +1769,21 @@ func (c *threadChain) Leaf() (chainHandle, bool) {
 	return c.leaf, true
 }
 
+// AnySize reports whether the thread is PATH-FREE ([threadChain], THE LARGE
+// FILE): every large-file reader of both releases hands the load what its
+// small path does, so what the chain answers of it holds whichever side of
+// 5,242,880 bytes a copy of these bytes lies on, and holds for a copy that
+// differs from them only inside string values, since what a string holds is
+// no key and no object to any of those readers' tests; never for a copy whose
+// keys were written in another order. A reader that reads another copy than
+// the one the resume reads (the box's own, where a relaunch restores the
+// take's archive over it) relies on the answers only where this is true.
+// False before End decided, after an End its context cut short, and where
+// the thread is cannot tell.
+func (c *threadChain) AnySize() bool {
+	return c.state == chainDecided && c.why == "" && c.anySize
+}
+
 // record is h's filed record, where the chain holds it.
 func (c *threadChain) record(h chainHandle) (chainRecord, bool) {
 	if h <= 0 || int(h) > len(c.recs) {
@@ -1669,6 +1991,67 @@ func (c *threadChain) work() *chainWork {
 	return w
 }
 
+// covered reports whether the dispatch from the last record alone reaches
+// every record of a main thread ([threadChain], THE LARGE FILE; 2.1.322's ike
+// @293792132 and 2.1.310's HMt @247175414, with no checkpoint's walk): the
+// walk up from it by parent, which a root, a parent naming no record and a
+// record it met end, as the prune's walk ends; then, in the file's order, each
+// record whose parent it reached before it as one that hands its children on,
+// where X_e reads the record as part of that parent's group (a reply's own id,
+// else its parent's where its parent came before it), when it hands its own on
+// in turn, or where the parent is UF, when it hands none on. Read off each
+// record's parent as written: no relink moves one, since a thread holding a
+// boundary is no path-free one. A user or assistant record whose message is no
+// object, which neither reader hands off its walk (2.1.322's ozt @293749187,
+// 2.1.310's DMt @247134138), is in no thread the chain models (whyAdmission).
+//
+// THE DISPATCH'S GROUP ALONE IS READ, not the prune's beside it: the prune's
+// is the reply of the nearest reply up by parent, which is the dispatch's
+// wherever the dispatch's is a reply's at all, since the dispatch reads up the
+// same parents, through parents met before their children alone; so a record
+// X_e reads as part of the dispatch's group, it reads as part of the prune's.
+func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
+	n := len(c.recs)
+	// w.a holds the walk.
+	w.a.clear()
+	for at := chainHandle(n); at != noChainRecord && !w.a.has(int(at)); at = c.recs[at-1].parent {
+		if err := w.tick(ctx); err != nil {
+			return false, err
+		}
+		w.a.set(int(at))
+	}
+	// w.b holds the records reached that hand their children on, by now only
+	// those before the record at hand, and groups each one's group.
+	w.b.clear()
+	groups := make([]chainReplyID, n+1)
+	for i, r := range c.recs {
+		if err := w.tick(ctx); err != nil {
+			return false, err
+		}
+		h, p := chainHandle(i+1), r.parent
+		var from chainReplyID
+		if p != noChainRecord && w.b.has(int(p)) {
+			from = groups[p]
+		}
+		switch {
+		case w.a.has(int(h)):
+		case p == noChainRecord || !w.b.has(int(p)):
+			return false, nil
+		case c.partOf(h, from):
+		case c.uf(p):
+			continue
+		default:
+			return false, nil
+		}
+		w.b.set(int(h))
+		groups[h] = from
+		if r.kind&kindAssistant != 0 {
+			groups[h] = r.reply
+		}
+	}
+	return true, nil
+}
+
 // handleOf is the record u names, where it names one.
 func (c *threadChain) handleOf(u chainWritten) chainHandle {
 	if !u.named {
@@ -1868,23 +2251,42 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	switch {
-	case c.why != "":
-	case c.agent != "":
+	if c.why == "" && c.agent != "" {
+		// A subagent's thread is path-free where its lines are: no reader has
+		// a slot to start from (THE LARGE FILE).
+		if c.bytes > claudeResumeLargeFile && c.smallOnly {
+			c.cannotTell(whyLargeFile)
+		}
 		c.cannotTell(whySubagentMode)
-	case c.bytes > claudeResumeLargeFile:
-		c.cannotTell(whyLargeFile)
 	}
 	if c.why != "" {
 		return nil
 	}
+	// THE LARGE FILE: path-free where no line binds the thread to the small
+	// path, every reader starts from the last record, and the dispatch from
+	// it alone reaches every record.
+	free := !c.smallOnly && !c.lastMarked
+	var w *chainWork
+	if len(c.recs) > 0 {
+		w = c.work()
+		if free {
+			var err error
+			if free, err = c.covered(ctx, w); err != nil {
+				return err
+			}
+		}
+	}
+	if c.bytes > claudeResumeLargeFile && !free {
+		c.cannotTell(whyLargeFile)
+		return nil
+	}
+	c.anySize = free
 	if len(c.recs) == 0 {
 		// No record: the resume finds no conversation, and hands nothing
 		// under every variant (2.1.322's Yya, `if(s.size===0)return null`).
 		c.orders = []chainOrder{{variants: allVariants}}
 		return nil
 	}
-	w := c.work()
 	relinked, err := c.relink(ctx, w)
 	if err != nil || c.why != "" {
 		return err
