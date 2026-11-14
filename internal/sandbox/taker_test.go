@@ -292,7 +292,7 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 // waits for its captures to settle, since its tombstone refuses a record that
 // lands after it; a capture whose process stopped before it stamped what came
 // of it never settles by itself, and was waited for as long as a capture can
-// take — about thirty and a half minutes, the seat's mail held behind it — and then
+// take — about thirty-four and a half minutes, the seat's mail held behind it — and then
 // named begun and never finished. Its taker's lease has lapsed, so the end's
 // wait settles it from the turn's row at its first pass, and records the end
 // naming it refused because its taker stopped.

@@ -914,6 +914,14 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		if err != nil {
 			return nil, err
 		}
+		if bucket.into == &store.runs {
+			// A RUN'S RECORD AND ITS PARTS are budgeted to what one key
+			// holds (internal/sandbox's RowBytes), so every read of one is
+			// given the arrival of a reply that large ([holdingLarge]) —
+			// before the handle is kept anywhere, the marker sweep's list
+			// of ageless buckets included.
+			got = holdingLarge(got)
+		}
 		*bucket.into = got
 		switch bucket.into {
 		case &store.claims:

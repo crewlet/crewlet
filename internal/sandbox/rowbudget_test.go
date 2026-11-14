@@ -433,11 +433,11 @@ func (s *unansweredStamps) StampCapture(ctx context.Context, turnID string, stam
 //
 // A coordinator's stop lets the keeps under way end for a teardown's grace,
 // cuts the rest, and waits for each to stamp what came of it before it gives
-// its taker lease back. A stamp writes the run's row whole, and is given the
-// row's crossing beside its reason, which across a link at the slowest pace
-// allowed is nine minutes: a stop that waited that out held a node without
-// `data` for ten minutes, past the grace its orchestrator gives it, which then
-// killed it before it closed its store. So once the coordinator stops, a
+// its taker lease back. A stamp reads and writes the run's row whole, and is
+// given the row's crossing beside its reason, which across a link at the
+// slowest pace allowed is thirteen minutes: a stop that waited that out held a
+// node without `data` for fourteen minutes, past the grace its orchestrator
+// gives it, which then killed it before it closed its store. So once the coordinator stops, a
 // stamp is held to its reason alone: a stop cut at a keep whose stamp the
 // store never answers returns once the keeps' grace and the stamp's reason
 // have passed. The stamp it leaves begun is settled by a peer once the taker

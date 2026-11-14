@@ -1553,24 +1553,25 @@ type SandboxRuns interface {
 	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 
-	// ValueCrossing is how long a write of a run's value at what one key
-	// holds ([MaxValueBytes]) takes to cross this store's connection, for
-	// every time the store may send it: [MaxValueCrossing] where the
-	// connection crosses a link — a node without `data`, every node of an
-	// external cluster — and NONE in the store's own process, where a write
-	// crosses nothing.
+	// ValueCrossing is how long a change of a run's value at what one key
+	// holds ([MaxValueBytes]) takes to cross this store's connection — the
+	// read its decision is taken on, and the write, for every time the store
+	// may send it: [MaxValueCrossing] where the connection crosses a link — a
+	// node without `data`, every node of an external cluster — and NONE in
+	// the store's own process, where nothing crosses.
 	//
-	// WHAT A CALLER'S OWN BUDGET ADDS TO ITS REASON. Every write of a run's
-	// record or of a part beside it sends the value whole, and the store
-	// gives a write whose caller set no deadline the crossing of what it
-	// carries; a caller's own deadline it keeps as it is. So a caller that
-	// bounds a write for a reason of its own — a store's slow moment, an
-	// election outlasted — bounds it by that reason and this, never by the
-	// reason alone, which cut a value of megabytes while its bytes were still
+	// WHAT A CALLER'S OWN BUDGET ADDS TO ITS REASON. Every change of a run's
+	// record or of a part beside it reads the value whole and writes it whole,
+	// and the store gives a read the time its reply takes to arrive, and a
+	// write whose caller set no deadline the crossing of what it carries; a
+	// caller's own deadline it keeps as it is. So a caller that bounds a
+	// change for a reason of its own — a store's slow moment, an election
+	// outlasted — bounds it by that reason and this, never by the reason
+	// alone, which cut a value of megabytes while its bytes were still
 	// crossing and read it as a store that did not answer
-	// (crewlet/crewlet#1076). Sized at the bound rather than at the value
-	// being written, which the caller cannot know: the store decides what it
-	// writes after the caller's deadline is set.
+	// (crewlet/crewlet#1076, crewlet/crewlet#1149). Sized at the bound rather
+	// than at the value being changed, which the caller cannot know: the
+	// store decides what it writes after the caller's deadline is set.
 	ValueCrossing() time.Duration
 }
 

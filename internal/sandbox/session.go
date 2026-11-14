@@ -130,7 +130,7 @@ import (
 // A take dies with its process, leaving its place stamped begun and its spool
 // on that process's disk, so read by its age alone ([captureInFlight]) such a
 // capture held the turn's end for as long as a capture can take
-// ([SessionCaptureBudget], about thirty and a half minutes), and a relaunch that
+// ([SessionCaptureBudget], about thirty-four and a half minutes), and a relaunch that
 // followed it started a session of its own beside a record the log may well
 // have taken.
 //
@@ -252,9 +252,9 @@ import (
 // decides its endings and records their ends on its own frame. So the row
 // outlives the frame that decided its ending by the settling of the turn's
 // captures — bounded by a capture's own budget ([SessionCaptureBudget], about
-// thirty and a half minutes at the bounds), and where a read stands by for one
-// that does not land, by that read's takeover and keep ([endCaptureWait], about
-// sixty-six and a half), and for a capture whose taker is gone by
+// thirty-four and a half minutes at the bounds), and where a read stands by for
+// one that does not land, by that read's takeover and keep ([endCaptureWait],
+// about seventy-eight and a half), and for a capture whose taker is gone by
 // its lease's TTL and one read of the log (above) — and the end's write, and
 // the seat's mail waits on it as on every ending kept for its retry. A turn
 // with no capture still ends: its row names no object, and holds the account.
@@ -921,12 +921,12 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // Past it, a wait reads the read as gone; one whose taker lease has lapsed is
 // withdrawn sooner ([Coordinator.standDownGone]).
 //
-// AT TODAY'S BOUNDS thirty minutes and thirty seconds for the capture, two
-// seconds for the read, and nine and a half minutes for the stamp: forty
-// minutes and two seconds and a fraction. Counted without the stamp's
-// crossing, a standby across a slow link whose stamp of its place was still
-// crossing would be read as gone, now that the stamp is no longer cut at its
-// thirty seconds (crewlet/crewlet#1076).
+// AT TODAY'S BOUNDS thirty-four minutes and thirty seconds for the capture,
+// two seconds for the read, and thirteen and a half minutes for the stamp:
+// forty-eight minutes and two seconds and a fraction. Counted without the
+// stamp's crossing, a standby across a slow link whose stamp of its place was
+// still crossing would be read as gone, now that the stamp is no longer cut
+// at its thirty seconds (crewlet/crewlet#1076).
 var standbyBudget = SessionCaptureBudget + captureWaitTick + captureStampBudget
 
 // endCaptureWait is the most a turn's end waits for its captures to settle
@@ -938,10 +938,10 @@ var standbyBudget = SessionCaptureBudget + captureWaitTick + captureStampBudget
 // session there ([SessionKeepBudget]) and that keep's stamp of what came of it
 // ([captureStampBudget]). The end waits from no earlier than the capture it
 // waits on began, so this is the whole of it: at today's bounds a capture's
-// budget is thirty minutes and thirty seconds (four for the take, seventeen
-// for the keep and nine and a half for its stamp, a row at its bound across
-// the slowest node's link), and this sixty-six minutes and thirty-two
-// seconds and a fraction.
+// budget is thirty-four minutes and thirty seconds (four for the take,
+// seventeen for the keep and thirteen and a half for its stamp, a change of a
+// row at its bound across the slowest node's link), and this seventy-eight
+// minutes and thirty-two seconds and a fraction.
 //
 // AN END THAT WAITED A CAPTURE'S BUDGET ALONE gave up on a standby's session
 // still uploading — the read holding the place refused at the end of its
@@ -1051,17 +1051,18 @@ var SessionKeepBudget = objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionR
 // standby took its place over and uploaded the session again, and a turn's end
 // named it begun and never finished.
 //
-// AT TODAY'S BOUNDS thirty minutes and thirty seconds and a fraction: four for
-// the take, seventeen for the keep and nine and a half for the stamp.
+// AT TODAY'S BOUNDS thirty-four minutes and thirty seconds and a fraction: four
+// for the take, seventeen for the keep and thirteen and a half for the stamp.
 var SessionCaptureBudget = SessionTakeBudget + SessionKeepBudget + captureStampBudget
 
 // captureStampBudget is the most a capture's stamp of what came of it takes,
 // as a node reads its age: every attempt at it, within one record's budget
-// ([sessionRecordBudget]) and the time the run's row takes to cross to the
-// store ([Coordinator.askStamp], [RowBudget]) — counted at the slowest node's
-// link (coord.MaxValueCrossing), since the stamp is made by whichever node
-// keeps the capture or takes its place, and its age is read by any. Nine and a
-// half minutes and a fraction at today's bounds.
+// ([sessionRecordBudget]) and the time a change of the run's row takes to
+// cross to the store, its read and its write ([Coordinator.askStamp],
+// [RowBudget]) — counted at the slowest node's link (coord.MaxValueCrossing),
+// since the stamp is made by whichever node keeps the capture or takes its
+// place, and its age is read by any. Thirteen and a half minutes and a
+// fraction at today's bounds.
 var captureStampBudget = sessionRecordBudget + coord.MaxValueCrossing
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under

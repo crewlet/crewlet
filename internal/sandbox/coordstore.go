@@ -83,9 +83,9 @@ func NewCoordStore(runs coord.SandboxRuns) *CoordStore {
 
 var _ PendingStore = (*CoordStore)(nil)
 
-// RowCrossing is how long a write of a run's value at its bound takes to
-// cross this node's connection to the coordination store, every send the
-// store gives it — see [PendingStore.RowCrossing].
+// RowCrossing is how long a change of a run's value at its bound takes to
+// cross this node's connection to the coordination store, its read and every
+// send of its write — see [PendingStore.RowCrossing].
 func (s *CoordStore) RowCrossing() time.Duration { return s.runs.ValueCrossing() }
 
 // WithClock pins the clock, for a suite that asserts about ages.

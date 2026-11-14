@@ -192,7 +192,7 @@ const steerPublishBudget = 5 * time.Second
 // is given its ten seconds and the time the run's row takes to cross to the
 // store ([steerSettleAttempt]), so the line comes at thirty seconds on a
 // member, and across a link at the slowest pace allowed when the first attempt
-// fails, up to about nine minutes and ten seconds in.
+// fails, up to about thirteen minutes and ten seconds in.
 const steerSettlePatience = 30 * time.Second
 
 // steerSettleAttempt is the reason one attempt at a settle is bounded by,

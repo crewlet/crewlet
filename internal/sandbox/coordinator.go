@@ -4046,10 +4046,11 @@ func (c *Coordinator) markResumeBegun(ctx context.Context, run PendingRun, carry
 // write waits out no better. It is on the resume's path, before its turn runs,
 // so a store's slow moment holds the turn back by no more than that beyond the
 // row's bytes: none in the store's own process, and across a link at the
-// slowest pace allowed the nine minutes a row at its bound takes to cross,
-// which a store that answers ends as soon as the row is in. Held to the five
-// alone, a row of megabytes across a slow link was cut while its bytes were
-// still crossing, and the carry went unrecorded (crewlet/crewlet#1076).
+// slowest pace allowed the thirteen minutes a change of a row at its bound
+// takes to cross — its read's reply and its write — which a store that
+// answers ends as soon as the row is in. Held to the five alone, a row of
+// megabytes across a slow link was cut while its bytes were still crossing,
+// and the carry went unrecorded (crewlet/crewlet#1076).
 const resumeCarryRecordBudget = 5 * time.Second
 
 // claimedAnswer reports whether a claimed run carries a RECORDED answer its
@@ -5487,11 +5488,11 @@ func (c *Coordinator) detachedRecord(ctx context.Context) (context.Context, cont
 //
 // ONE BOUND FOR THE WHOLE ENDING gave a row its crossing once, and an ending
 // writes the row several times — its decision, an answer let go of, the copies
-// it hands back cleared, the turn's end owed, the delete — each sending the
-// row whole: across a link at the slowest pace allowed a row at its bound
-// takes three minutes a send, so an ending's fourth write outlasted the
-// bound, and an ending each of whose writes would have landed was cut between
-// two of them and kept for the retry.
+// it hands back cleared, the turn's end owed, the delete — each reading the
+// row whole and sending it whole: across a link at the slowest pace allowed a
+// row at its bound takes four minutes a read and three a send, so an ending's
+// third write outlasted the bound, and an ending each of whose writes would
+// have landed was cut between two of them and kept for the retry.
 func detachedEnding(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
