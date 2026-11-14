@@ -884,10 +884,18 @@ type AgentPhaseCompleted struct {
 	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// Steers is every person's note this phase read, with the round that
 	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
-	Steers       []PhaseSteer `json:"steers,omitempty"`
-	InputTokens  int          `json:"input_tokens"`
-	OutputTokens int          `json:"output_tokens"`
-	TotalTokens  int          `json:"total_tokens"`
+	Steers []PhaseSteer `json:"steers,omitempty"`
+	// RoundsElided is how many of the phase's rounds the lists above do not
+	// carry: a phase past the most rounds a record lists keeps its first half
+	// and its newest half (internal/agent/runner's recordbytes.go), each kept
+	// round with its provider call, prose, harness runs, the notes read in it
+	// and the calls made in it, and the calls of the rounds it leaves out are
+	// counted in CallsElided by tool. Absent on a record that lists every
+	// round.
+	RoundsElided int `json:"rounds_elided,omitempty"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
 	// provider's prompt cache served and stored, summed over Rounds. A
 	// BREAKDOWN of InputTokens, never an addition to it: TotalTokens is
@@ -980,6 +988,13 @@ type AgentPhaseCompleted struct {
 	// when it ended: a tool it activated over the bridge is here, and not in
 	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
+	// ToolsAvailableElided is how many more names the list held than
+	// ToolsAvailable carries, and ToolCatalogueElided the same of
+	// ToolCatalogue: each list is held to its share of this one message, its
+	// names in order while they fit (internal/agent/runner's recordbytes.go).
+	// Absent on a record that carries every name.
+	ToolsAvailableElided int `json:"tools_available_elided,omitempty"`
+	ToolCatalogueElided  int `json:"tool_catalogue_elided,omitempty"`
 	// ToolCatalogue is the rest of what the executor could reach, by
 	// discovery and with no schema: the tools of its universe it did not
 	// hold by the phase's end — an MCP server's tools, by name, which its
@@ -1012,13 +1027,15 @@ type AgentPhaseCompleted struct {
 	// Zero on a record that lists them all.
 	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
 	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
-	// CallsElided is how many calls a collected executor's run made over its
-	// bridge that its run's record did not keep — a long run's dropped
-	// middle — and ElidedCalls those calls by tool, with how many of each
-	// failed. ToolExecutions lists only the calls the record kept, and this
-	// record outlives the run's: once the run's row is gone, what it dropped
-	// is said here or nowhere. Counted in its round's tool_calls. Absent on
-	// every other phase, and on a run whose record kept every call.
+	// CallsElided is how many of the phase's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, with how many of each
+	// failed: a list past its share of this one message keeps its first and
+	// newest calls (internal/agent/runner's recordbytes.go), and a collected
+	// executor's run made calls over its bridge that its run's own record
+	// did not keep, a long run's dropped middle, counted here with them.
+	// This record outlives the run's: once the run's row is gone, what it
+	// dropped is said here or nowhere. On a collected run's record, counted
+	// in its round's tool_calls. Absent on a record that lists every call.
 	CallsElided int           `json:"calls_elided,omitempty"`
 	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// PushedRefs are the refs the collected run moved on Gitlet, as its
@@ -1066,11 +1083,11 @@ type AgentPhaseCompleted struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
-// ElidedCalls is one tool's calls a collected executor's record did not keep
-// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed.
-// Name is empty for calls whose tool the record did not keep either — a long
-// run whose dropped middle outgrew what its record keeps of it, or a record an
-// older engine kept, which counted its drops and named none.
+// ElidedCalls is one tool's calls a record did not list
+// ([AgentPhaseCompleted.ElidedCalls]): how many, and how many of them failed. Name is empty for calls whose tool the
+// record did not keep either — a long run whose dropped middle outgrew what
+// its record keeps of it, or tools past the most a record names, which are a
+// model calling names no tool has.
 //
 // BY TOOL, never by what each call asked for: the record is a person's
 // account of the run, and the identities the engine keeps of each call are its
