@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -828,17 +829,89 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 }
 
 // uncarried is why no launch on member can carry f, "" where one can: one
-// request of a Claude Code member's model, under the window its run is pinned
-// to ([launchFloor.carriedBy]), and room, the most room a window of the seat's
-// budget can leave the launch as it turns over ([launchFloor.fits]), none to
-// judge where nothing is capped.
+// request of a Claude Code member's model, under the window Claude Code holds it
+// to on the member's platform ([floorWindow], [launchFloor.carriedBy]), and
+// room, the most room a window of the seat's budget can leave the launch as it
+// turns over ([launchFloor.fits]), none to judge where nothing is capped.
 func uncarried(member *harness.Provider, room windowRoom, f launchFloor) string {
 	if member != nil && member.Harness() == executor.ClaudeCodeName {
-		if why := f.carriedBy(sandbox.ClaudeCodeWindow(member.ModelArgument())); why != "" {
+		if why := f.carriedBy(floorWindow(member)); why != "" {
 			return why
 		}
 	}
 	return f.fits(room)
+}
+
+// floorWindow is the window one request of a Claude Code member's model can
+// carry: the pin, held to the least window Claude Code holds the model to on the
+// member's own platform where that is less ([sandbox.ExecutorWindow.Standard],
+// [claudePlatform]). So a session kept under a larger window and continued on a
+// member Claude Code holds to 200,000 tokens (claude-opus-4-6 and
+// claude-sonnet-4-6 by default, an alias that names an older model on the
+// member's platform, the account's default model) is judged under 200,000, which
+// one request of that model can carry, and not under the 1,000,000 its pin
+// names. AN ENTRY OPTS IN WITH `[1m]` where its account is served the long window
+// of one of those models, and is then judged under it.
+func floorWindow(member *harness.Provider) sandbox.ExecutorWindow {
+	w := sandbox.ClaudeCodeWindowOn(member.ModelArgument(), claudePlatform(member))
+	if w.Standard > 0 && w.Standard < w.Tokens {
+		w.Tokens = w.Standard
+	}
+	return w
+}
+
+// claudePlatform is the platform a Claude Code member reaches its model by, read
+// exactly off its entry, for the launch floor: Anthropic's own API for an entry
+// signed in with a login, a key or the host's own environment ([claudeRoute]);
+// for one signed in by its own env, the platform its env switches the harness
+// to, in the order Claude Code itself picks one (2.1.322: Bedrock, Foundry, the
+// platforms this build does not name, Vertex, and else Anthropic's API, which a
+// base URL and token of the entry's own reach as that API is reached), a switch
+// on where its value is one Claude Code reads as true (`1`, `true`, `yes` or
+// `on`, in any case). A platform this build cannot name, a gateway the
+// harness's host signs into, or a switch whose value is neither true nor false,
+// is [sandbox.ClaudeRouteElsewhere], the least window off Anthropic's API.
+//
+// EXACT HERE, where the telling's route is coarse ([claudeRoute]): a window read
+// smaller than the member's own costs the telling words, but costs the floor a
+// session, which starts fresh. The run environment the launch composes later (a
+// seat's own env, an image's) is not read: a platform switched there is the
+// floor's stated residual.
+func claudePlatform(member *harness.Provider) sandbox.ClaudeRoute {
+	mode := member.AuthMode()
+	if route := claudeRoute(mode); route == sandbox.ClaudeRouteAnthropic || mode != harness.AuthEnv {
+		return route
+	}
+	env := member.SandboxEnv()
+	unsure := false
+	on := func(name string) bool {
+		switch strings.ToLower(strings.TrimSpace(env[name])) {
+		case "1", "true", "yes", "on":
+			return true
+		case "", "0", "false", "no", "off":
+			return false
+		}
+		unsure = true
+		return false
+	}
+	gateway, bedrock, foundry := on("CLAUDE_CODE_USE_GATEWAY"), on("CLAUDE_CODE_USE_BEDROCK"),
+		on("CLAUDE_CODE_USE_FOUNDRY")
+	unnamed := on("CLAUDE_CODE_USE_ANTHROPIC_AWS") || on("CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD") ||
+		on("CLAUDE_CODE_USE_MANTLE")
+	vertex := on("CLAUDE_CODE_USE_VERTEX")
+	switch {
+	case gateway || unsure:
+		return sandbox.ClaudeRouteElsewhere
+	case bedrock:
+		return sandbox.ClaudeRouteBedrock
+	case foundry:
+		return sandbox.ClaudeRouteFoundry
+	case unnamed:
+		return sandbox.ClaudeRouteElsewhere
+	case vertex:
+		return sandbox.ClaudeRouteVertex
+	}
+	return sandbox.ClaudeRouteAnthropic
 }
 
 // turnCharged is what t's turn has charged in each window of w, by period, read

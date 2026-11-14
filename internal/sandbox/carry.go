@@ -267,6 +267,14 @@ type TakenSession struct {
 	// none this build reads, and where Body was not read whole. Nil from a
 	// taker that measures nothing.
 	Context func() int64
+
+	// Count is what Claude Code counts the session at before its next
+	// request, as the archive's own main thread bounds it read whole
+	// ([ResumedCount]), once Body has been read to its end: a bound, or a mark
+	// saying why there is none ([CountUnread] where Body was not read whole).
+	// Nil from a taker that counts nothing, as one of another harness is, and
+	// a nil count from it is none.
+	Count func() *ResumedCount
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/runner`
-- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/engine.TestARefusedContinuedLaunchIsHeldOnItsOwnFloor`, `internal/engine.TestASessionNoWindowCanCarryIsNotContinued`, `internal/engine.TestAContinuedLaunchIsHeldToItsSessionsFloor`, `internal/engine.TestASessionNoWindowCanCarryStartsFresh`, `internal/sandbox/executor.TestAContinuedClaudeSessionRunsUnderTheEnginesWindow`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`, `internal/engine.TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor`, `internal/engine.TestAConversationNoWindowCanCarryStartsFresh`, `internal/engine.TestEveryFreshFallbackIsToldTheFrozenEndings`, `internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard`, `internal/engine.TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns`, `internal/engine.TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder`, `internal/engine.TestEachSessionALaunchMayContinueIsHeldToItsOwnFloor`, `internal/engine.TestAFreshLaunchIsHeldToItsBrief`, `internal/engine.TestAnUnmeasuredContinuationIsHeldToItsBrief`, `internal/engine.TestALaunchIsHeldToTheLargestFloorOfItsBriefs`, `internal/engine.TestAFreshFloorPastTheRoomIsHeldAtTheStaticFloorOrTheRoomBelowIt`, `internal/engine.TestAFloorTurnedOffHoldsNoLaunchWhoseContextIsUnknown`, `internal/engine.TestATurnsOwnSpendNeverHoldsItsLaunchForEver`, `internal/engine.TestAMeterKnowsWhatItsTurnSpentInEachWindow`, `internal/engine.TestAHeldLaunchSaysItIsHeld`, `internal/engine.TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost`, `internal/engine.TestAResumedSegmentsLauncherKnowsTheWindowItsRelaunchWasRefusedIn`, `internal/sandbox.TestARelaunchRefusedBelowItsFloorLeavesItsWindowForTheNext`, `internal/engine.TestAnInBoxContinuationIsHeldToItsCopysMeasure`, `internal/engine.TestAResumeReadsWhatTheJobsCopyCarried`, `internal/agent/runner.TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure`
+- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/engine.TestARefusedContinuedLaunchIsHeldOnItsOwnFloor`, `internal/engine.TestASessionNoWindowCanCarryIsNotContinued`, `internal/engine.TestAContinuedLaunchIsHeldToItsSessionsFloor`, `internal/engine.TestASessionNoWindowCanCarryStartsFresh`, `internal/sandbox/executor.TestAContinuedClaudeSessionRunsUnderTheEnginesWindow`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`, `internal/engine.TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor`, `internal/engine.TestAConversationNoWindowCanCarryStartsFresh`, `internal/engine.TestEveryFreshFallbackIsToldTheFrozenEndings`, `internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard`, `internal/engine.TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns`, `internal/engine.TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder`, `internal/engine.TestEachSessionALaunchMayContinueIsHeldToItsOwnFloor`, `internal/engine.TestAFreshLaunchIsHeldToItsBrief`, `internal/engine.TestAnUnmeasuredContinuationIsHeldToItsBrief`, `internal/engine.TestALaunchIsHeldToTheLargestFloorOfItsBriefs`, `internal/engine.TestAFreshFloorPastTheRoomIsHeldAtTheStaticFloorOrTheRoomBelowIt`, `internal/engine.TestAFloorTurnedOffHoldsNoLaunchWhoseContextIsUnknown`, `internal/engine.TestATurnsOwnSpendNeverHoldsItsLaunchForEver`, `internal/engine.TestAMeterKnowsWhatItsTurnSpentInEachWindow`, `internal/engine.TestAHeldLaunchSaysItIsHeld`, `internal/engine.TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost`, `internal/engine.TestAResumedSegmentsLauncherKnowsTheWindowItsRelaunchWasRefusedIn`, `internal/sandbox.TestARelaunchRefusedBelowItsFloorLeavesItsWindowForTheNext`, `internal/engine.TestAnInBoxContinuationIsHeldToItsCopysMeasure`, `internal/engine.TestAResumeReadsWhatTheJobsCopyCarried`, `internal/agent/runner.TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure`, `internal/engine.TestTheFloorJudgesAMemberUnderTheWindowClaudeCodeHoldsItTo`
 - **Measured:** a run's first request alone is the CLI's harness prompt and tool definitions, about 15k input tokens for Claude Code, before the bridged tool array and the seat's system prompt, which sets the launch floor's fixed part at 25000 tokens; a launch's brief is counted beside it, an estimate of a token for every four bytes, since its length is the launch's alone
 - **Cost-when-tried:** the executor ran on the engine host as a text phase, its CLI's own shell and editor denied, and code work went through a `run_sandbox` tool that started a second coding agent in a box: two agents and two prompts for one task, a brief the first wrote for the second, the first's whole conversation serialized onto the run's row and re-entered with the second's findings spliced in as a tool reply, and three round caps between them (`max_tool_rounds`, `execute_max_tool_rounds_ceiling` and the box's `max_turns`)
 - **Tag-status:** unreleased
@@ -64,9 +64,10 @@ past that room: at the static floor where that fits in the room, and at the
 room otherwise. The launch decides that, once the brief exists; no
 session is refused for its size alone, since a seat with no capped window
 protects no budget by refusing it. What bounds a continued run's every request
-is its harness's own compaction: Claude Code's at the window of the run's model,
-which every run is pinned to (`sandbox.ClaudeCodeWindow`), and OpenCode's near
-its model's own window, which the engine cannot set without knowing that window.
+is its harness's own compaction: Claude Code's at the window Claude Code holds
+the run's model to, at most the pin (`sandbox.ClaudeCodeWindow`), and OpenCode's
+near its model's own window, which the engine cannot set without knowing that
+window.
 
 **A model's limit reads the same on this road**
 ([ADR-0064](0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
@@ -151,8 +152,8 @@ whether a session could be carried at all: where the larger one could not, both
 were dropped and the run started fresh, though the copy's longer brief is sent
 only where the box cannot restore the kept session, whose own floor fitted.
 Each session is now held to its own floor (`agentLauncher.continuedFloor`): one
-whose floor no capped window, or no request under the window of the model the
-launch picked, can carry is dropped alone, the launch still offers the other,
+whose floor no capped window, or no request under the window Claude Code holds
+the model the launch picked to, can carry is dropped alone, the launch still offers the other,
 and it is held to the larger floor of the sessions it still offers, and of the
 fresh brief it may fall back to (the amendment below). Only where neither is
 left does its run start a session of its own, on that fresh brief. The job
@@ -249,3 +250,28 @@ more window.
 `0` still turns the floor off for a launch whose context is not known, whatever
 its brief; a launch continuing a session whose context a capture measured is
 held to that context with its brief, as before.
+
+## Amendment: a member is judged under the window Claude Code holds its model to
+
+The floor judged a continued Claude Code session under the window the engine pins
+a run of the picked member's model to, 1,000,000 tokens for claude-opus-4-6 and
+claude-sonnet-4-6, while Claude Code itself holds those models to 200,000 unless
+the account is served more or the model argument opts in with `[1m]`, holds an
+alias to the model it names on the member's platform, and holds no model to the
+account's default, which may be one of those. A session kept under a larger
+window then passed the floor on such a member though one request of its model
+could not carry it: the case the floor exists for. The floor now judges the
+picked member under the smaller of the pin and the window Claude Code holds its
+model to on the member's own platform (`floorWindow`), read exactly off its
+entry (`claudePlatform`: Anthropic's own API for a login, a key or the host's
+environment, and for an entry signed in by its env, the platform its env
+switches the harness to, in the order Claude Code picks one, a switch read as
+true where Claude Code reads it so, and a platform this build cannot name read
+as the least). An entry served the long window of one of those models opts in
+with `[1m]`; a session past 180,000 tokens on such a member that does not starts
+fresh. The run environment the launch composes later (a seat's own env, an
+image's) is not read, a platform switched there being a residual. That this
+keeps one request sendable and the budget whole, and never the session
+uncompacted, is said beside it: Claude Code compacts lower, and a continuation
+it may compact is told so (ADR-0073's amendment on a continuation its harness
+may compact).

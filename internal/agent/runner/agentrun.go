@@ -386,6 +386,24 @@ type SessionBasis struct {
 	// ([Continuation.ContextTokens]). Zero where no capture measured any.
 	ContextTokens int64
 
+	// Count is what Claude Code counts the kept capture's session at before
+	// its next request, as the take read its archive's main thread whole
+	// (sandbox.SessionCapture.ResumedCount): what the kept path's first
+	// request is judged by ([firstRequest], [keptCount]). Nil where the
+	// capture counted nothing, which reads as a session that may compact.
+	Count *sandbox.ResumedCount
+
+	// Window is what the seat's executor chain may hold a Claude Code run to:
+	// the least standard window over its Claude Code members, on each one's
+	// route (sandbox.ClaudeCodeWindowOn), since the launch picks its member
+	// only as it launches; Known only where every one is known. What every
+	// path's first request is judged under ([firstRequest]), lowered where
+	// the copy's run reported a smaller window. Set on every basis the
+	// launcher answers, whether or not it names a session; zero, not Known,
+	// for a launcher that cannot say, which reads as a session that may
+	// compact.
+	Window sandbox.ExecutorWindow
+
 	// Base is the session the conversation's last turn left, which the launch
 	// continues where it names no kept capture of the turn's own: on a
 	// turn's first launch, the head its dispatch read, and on a relaunch of a
@@ -417,10 +435,12 @@ func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
 func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base != nil }
 
 // MayLackBrief reports whether the kept session the basis names may lack the
-// brief its job was handed: a capture its harness was cut off in
-// ([SessionBasis.Interrupted]), which is not known to hold that brief. THE ONE
-// PREDICATE of the kept path, read by every telling that depends on it: the
-// calls it may already show, the notes and the leads ([Runner.keptSession]).
+// brief its job was handed by the capture's own word: a capture its harness was
+// cut off in ([SessionBasis.Interrupted]), which is not known to hold that
+// brief. THE RECORD'S HALF of what the kept path's telling may count held:
+// every telling of the path reads the one value decided from it, a restart in
+// the capture's job and whether its harness may compact it beside it
+// ([sessionHolds]), since that verdict needs the brief this is asked before.
 func (b SessionBasis) MayLackBrief() bool { return b.Interrupted }
 
 // BaseBasis is the session a conversation's last turn left, as a launch that
@@ -545,8 +565,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// ITS LEAD IS THE REVIEW, which the run keeps beside its record as the
 		// review of the round it closed, for a later brief to a session that
 		// may lack this one to tell again.
-		briefs.kept = r.keptSession(ctx, basis, collected, round, nil, history, built, fresh, "").
-			led(r.sendBackLead(notes).Text, reviewLead(history))
+		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
+		// its harness may hand the session to its model as a summary, the
+		// telling of a session that may be one is handed ([firstRequest]).
+		briefs.kept, briefs.keptHolds = r.keptTellings(ctx, basis, collected, round, nil, history, built, fresh,
+			"").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -762,15 +785,21 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// the message that woke the turn is ([Asked.Continuation]), and every call
 	// the briefs below tell is defused under it.
 	fence := r.cfg.Turn.Context.FenceBoundary()
-	var kept *keptBrief
+	// EACH PATH'S TELLINGS ITS VERDICT MAY HAND (firstrequest.go): the held one,
+	// and the one told as a session its harness may hand its model as a
+	// summary, each only where the verdict before any brief does not rule it
+	// out, both built here so every rewrite either makes is spent before the
+	// budget's last ask; which one is handed is judged once the lead exists.
+	var kept keptTellings
 	if carry.keeps() {
-		kept = r.keptSession(ctx, basis, round, state.Round, leadsHeld(carry), history, built, fresh,
+		kept = r.keptTellings(ctx, basis, round, state.Round, leadsHeld(carry), history, built, fresh,
 			carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
 	// that carries the round on in the job's box rather than from its kept
-	// capture, built here for the same reason ([Runner.inPlaceAfter]).
-	inPlaceAfter, inPlaceOmitted, inPlaceTold := r.inPlaceAfter(ctx, carry, round, state.Round, history, built)
+	// capture, built here for the same reason ([Runner.inPlaceAfter]), with
+	// the notes it tells after them ([Runner.inPlaceNotes]).
+	inPlace := r.inPlaceTellings(ctx, carry, basis, round, state.Round, history, built, fresh)
 	// AND THE TURN'S ANSWERS BEFORE THE ONE CARRYING THE ROUND ON NOW, for a
 	// run that starts a session of its own ([Runner.turnsAnswers]): it holds
 	// none of the briefs before it, so told only the newest carry's lead, an
@@ -841,15 +870,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// so the relaunched run's first call meets the guard of the session it
 	// runs in, never the asking one's.
 	r.armSession(built, nil, nil)
-	continued := carry.continuation(fence)
-	for _, part := range inPlaceAfter {
-		continued += "\n\n" + part
-	}
-	// THEN THE NOTES: what the copy may lack of those the turn has read, and
-	// the ones this brief is the first to read ([Runner.inPlaceNotes]).
-	if notes := r.inPlaceNotes(carry, fresh); len(notes) > 0 {
-		continued += "\n\n" + strings.Join(notes, "\n\n")
-	}
+	// THE COPY'S TELLING, judged on its lead: what follows the lead, then the
+	// notes, what the copy may lack of those the turn has read and the ones
+	// this brief is the first to read ([Runner.inPlaceNotes]).
+	lead := carry.continuation(fence)
+	picked, inPlaceHolds := inPlace.led(ctx, r, lead)
+	continued := picked.led(lead)
 	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
 	// its work on before, what became of the run before it (what it asked and
 	// was told, or how it was cut off) and every call of the round so far: it
@@ -863,13 +889,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// above, led by what carries it on: what cut the run off, or the answer
 	// to its question and what the call the person approved returned, now
 	// that it is made.
-	inPlace := carry.session()
-	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls,
-		endedOwnRun: r.cfg.Resume.HarnessEnd.EndedOwnRun(), owed: r.cfg.Resume.Owed}
+	inPlaceSession := carry.session()
+	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls, inPlaceHolds: inPlaceHolds,
+		owed: r.cfg.Resume.Owed}
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept = kept.led(carry.continuation(fence), own)
+			briefs.kept, briefs.keptHolds = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -885,13 +911,13 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		// probe read is still kept and still the only record of what the
 		// round's jobs did in their boxes: its run is told it may read it,
 		// and nothing else the probe answered reaches the launch.
-		basis, inPlace = SessionBasis{KeptTurn: basis.KeptTurn}, ""
+		basis, inPlaceSession = SessionBasis{KeptTurn: basis.KeptTurn}, ""
 	}
 	// AND THE RESEED NAMES THE KEPT SESSION IT DOES NOT CONTINUE, as a fresh
 	// launch's brief does.
 	reseed = r.namingKeptSession(reseed, basis, built)
 	briefs.fresh = reseed
-	if inPlace != "" {
+	if inPlaceSession != "" {
 		briefs.inPlace = continued
 	}
 	decided := &launchDecided{}
@@ -901,7 +927,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Notes:  fresh,
 		Retold: r.retold(),
 		Continue: &Continuation{
-			SessionID: inPlace, Brief: continued,
+			SessionID: inPlaceSession, Brief: continued,
 			SignInReplaced: isRotated(carry),
 			RequestRefused: isRefused(carry),
 			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
@@ -920,8 +946,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
 			// leads of its job's brief it told again, and those it was to and
 			// could not read.
-			Told: sandbox.BriefTold{Omitted: inPlaceOmitted, Own: own, Told: inPlaceTold.refs,
-				ToldUnread: inPlaceTold.unread},
+			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
+				ToldUnread: picked.told.unread},
 			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
 		},
 		Session:    briefs.kept,

@@ -137,6 +137,19 @@ import (
 // counted under the ledger's rule for them, as every fresh brief's prior work
 // counts them.
 //
+// AND A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY IS TOLD AS A CUT-OFF
+// ONE (firstrequest.go). Claude Code compacts a session before a request, a
+// resumed run's first among them, where its own count of it with the brief
+// reaches its threshold, and a session whose job restarted it after its brief
+// holds nothing before that restart but what it left: what any telling above
+// counts as held can then be gone. So each path decides one value, after its
+// tellings and its lead exist ([sessionHolds]), which every telling of the path
+// and its guard read: where it may be a summary, every call of the round from its
+// start, every lead its record keeps and every note the turn has read are told,
+// as messages it may already show, under words that never say it was cut off
+// where its record does not ([prompts.MayCompactSession]), and its guard arms no
+// skill.
+//
 // THE RUN'S GUARD IS THE SESSION'S IT RUNS IN ([Runner.sessionDecided]): the
 // skills the launch state of the job it follows held and that job's own loads —
 // those the log took through the point its capture was saved at, by the same
@@ -208,6 +221,11 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // among them tells is in no list of the round's calls, as the lead's own is
 // not.
 //
+// AS HOLDS SAYS ([sessionHolds]): the record's cut-off word, a restart in the
+// capture's job, and whether its harness may compact it at its first request,
+// which tells every call of the round from its start, every lead the record
+// keeps and every note, never the cursor.
+//
 // BUILT BEFORE ITS LEAD, so before the relaunch asks the seat's budget for the
 // last time: telling the calls after the save rewrites a payload past its
 // budget with the seat's auxiliary model, charged to the same counters, and
@@ -219,35 +237,48 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // the check, the brief costs nothing the check did not count.
 func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roundCalls, current int,
 	leadHeld []string, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
-	branch string) *keptBrief {
+	branch string, holds sessionHolds) *keptBrief {
 
 	if !basis.Continues() {
 		return nil
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
 	var after []string
-	if basis.Interrupted {
+	switch {
+	case holds.cutOff:
 		after = append(after, prompts.InterruptedSession)
+	case holds.summarized():
+		// A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY, told why in
+		// words of its own, which never say it was cut off.
+		after = append(after, prompts.MayCompactSession)
 	}
 	// AND THE LEADS ITS JOB'S BRIEF TOLD, where the session may lack that
-	// brief, which a later brief to this one's session tells in turn.
+	// brief, which a later brief to this one's session tells in turn; EVERY
+	// LEAD THE RECORD KEEPS where it may be a summary, which can have dropped
+	// every lead the session held.
 	var again toldAgain
-	if basis.MayLackBrief() {
-		again = r.leadsAgain(ctx, history, current, b)
+	if holds.lacks() {
+		again = r.leadsAgain(ctx, history, current, b, holds.summarized())
 		if again.section != "" {
 			after = append(after, again.section)
 		}
 	}
 	// OF A SESSION CUT OFF, AS CALLS IT MAY ALREADY SHOW: its save point is the
 	// newest its launch is known to hold rather than where it ends
-	// (internal/sandbox's savepoint.go), so the calls after it may be in it.
-	// AND NEVER THE CALL A PERSON APPROVED THAT A LEAD OF ITS BRIEF TELLS
-	// (leadHeld, and every held lead told again). AND THE READS ITS JOB'S BRIEF
-	// COUNTED WITHOUT LISTING THEM (basis.Owed), which the session holds only
-	// as that count.
-	called, omitted := r.calledAfter(ctx, round, &basis.Through, basis.Owed, withHeld(leadHeld, again),
-		surface, b)
-	called.Interrupted = basis.MayLackBrief()
+	// (internal/sandbox's savepoint.go), so the calls after it may be in it;
+	// and of one that may be a summary, EVERY CALL OF THE ROUND FROM ITS START,
+	// a summary holding the calls at or below its save point in its own words
+	// alone. AND NEVER THE CALL A PERSON APPROVED THAT A LEAD OF ITS BRIEF
+	// TELLS (leadHeld, and every held lead told again). AND THE READS ITS JOB'S
+	// BRIEF COUNTED WITHOUT LISTING THEM (basis.Owed), which the session holds
+	// only as that count, but where it tells the round from its start.
+	//
+	// THE ONE PLACE THIS PATH'S CALLS ARE TOLD AS THOSE OF A SESSION THAT MAY
+	// LACK THEM, by one expression ([sessionHolds.keptCalls]), which a reading
+	// of what the session holds swaps for its own answer.
+	from, owed, mayShow := holds.keptCalls(basis)
+	called, omitted := r.calledAfter(ctx, round, from, owed, withHeld(leadHeld, again), surface, b)
+	called.Interrupted = mayShow
 	after = append(after, prompts.CalledAfter(called))
 	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
 	// a note the run's bridge served a harness among either told as one it may
@@ -261,7 +292,7 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// MARKED UNANSWERED, every note past that, as notes it may already show
 	// ([Runner.notesHeldBy]): the session lacks that note, and holds the
 	// answered ones after it.
-	if basis.MayLackBrief() {
+	if holds.lacks() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
 	} else {
 		held, unsure := r.notesHeldBy(basis.NoteCursor)
@@ -324,6 +355,12 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // lead alone, which says to finish the task as it asks, and a run that read its
 // transcript's submission as done ended without its own.
 //
+// AS HOLDS SAYS ([sessionHolds]): a copy whose record says it may be cut off,
+// whose job restarted it after its brief, or whose harness may compact it at its
+// first request is told as above, under the record's cut-off words where it says
+// so and the words of a session that may be a summary where it does not
+// ([prompts.MayCompactSession]), every lead its record keeps where it may be one.
+//
 // Nil where nothing is left to tell — and where carry continues no copy in
 // that box at all: a lost job's, never continued in place; a round lost a
 // second time, which continues nothing; and one whose box is gone
@@ -354,7 +391,8 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // ([Runner.calledAfter]), which the launch records on the job it opens, for
 // the next brief to that copy to tell.
 func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCalls, current int,
-	history []ledger.Iteration, surface *tools.Surface) (after []string, omitted []int, told toldAgain) {
+	history []ledger.Iteration, surface *tools.Surface, holds sessionHolds) (after []string, omitted []int,
+	told toldAgain) {
 
 	if carry.session() == "" || !carry.boxKept() || !carry.keeps() {
 		return nil, nil, toldAgain{}
@@ -362,18 +400,24 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	b := r.cfg.Turn.Context.FenceBoundary()
 	end, leadHeld := r.cfg.Resume.HarnessEnd, leadsHeld(carry)
 	var called prompts.AfterSave
-	if !r.copyMayLackBrief() {
+	if !holds.lacks() {
 		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, leadHeld, surface, b)
 		if calls := prompts.CalledAfter(called); calls != "" {
 			after = []string{calls}
 		}
 		return after, omitted, toldAgain{}
 	}
-	after = []string{prompts.MayBeInterruptedCopy}
-	if end == sandbox.HarnessEndCutOff {
-		after[0] = prompts.InterruptedCopy
+	switch {
+	case holds.cutOff && end == sandbox.HarnessEndCutOff:
+		after = []string{prompts.InterruptedCopy}
+	case holds.cutOff:
+		after = []string{prompts.MayBeInterruptedCopy}
+	default:
+		// A COPY WHOSE HARNESS ENDED ITS OWN RUN, which its harness may hand
+		// its model as a summary: told why in words of its own.
+		after = []string{prompts.MayCompactSession}
 	}
-	again := r.leadsAgain(ctx, history, current, b)
+	again := r.leadsAgain(ctx, history, current, b, holds.summarized())
 	if again.section != "" {
 		after = append(after, again.section)
 	}
@@ -407,12 +451,13 @@ func leadsHeld(carry carried) []string {
 // served among them told as notes it may already show ([Runner.toldNotes]).
 //
 // THE NOTES FRESH HOLDS ALONE where carry continues no copy in that box, as
-// [Runner.inPlaceAfter] tells nothing there.
-func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note) []string {
+// [Runner.inPlaceAfter] tells nothing there; and every note the turn has read
+// wherever holds says the copy may lack them ([sessionHolds.lacks]).
+func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHolds) []string {
 	switch {
 	case carry.session() == "" || !carry.boxKept() || !carry.keeps():
 		return renderedNotes(fresh)
-	case r.copyMayLackBrief():
+	case holds.lacks():
 		return r.toldNotes(r.readsSince(0), true, fresh)
 	}
 	if first := r.firstUnanswered(); first > 0 {
@@ -1081,20 +1126,22 @@ type launchBriefs struct {
 	state   execstate.State
 	bridged []BridgedCall
 
-	// endedOwnRun says that job's harness ended its own run
-	// ([Resume.HarnessEnd]), so its own copy of its session in its box holds
-	// every load it made; false arms none of them where that copy is
-	// continued. owed is the reads that copy holds only as its job's brief's
-	// count ([Resume.Owed]), read as [heldAt] reads them.
-	endedOwnRun bool
-	owed        []int
+	// inPlaceHolds and keptHolds are what each path's telling counts its
+	// session as holding ([sessionHolds]), the one value its guard reads too:
+	// a copy that may lack its job's brief holds none of the job's own loads,
+	// and one its harness may hand its model as a summary none at all. owed
+	// is the reads the copy in the box holds only as its job's brief's count
+	// ([Resume.Owed]), read as [heldAt] reads them.
+	inPlaceHolds, keptHolds sessionHolds
+	owed                    []int
 }
 
 // sessionDecided is what a launch tells the runner once it has decided how its
 // run takes up a session ([AgentRunRequest.Decided]), before the run starts.
 //
 // IT ARMS THE RUN'S GUARD with the skills that session holds, and nothing else
-// ([Runner.armSession]): the launch state of the job the relaunch follows and
+// ([Runner.armSession]), NOTHING AT ALL where the path's value says it may be a
+// summary ([sessionHolds.summarized]): the launch state of the job the relaunch follows and
 // that job's own loads — through the point the turn's kept capture of it was
 // saved at, where the launch restores that, and all of them where the job's own
 // copy in its box is continued and its harness ended its own run, none where it
@@ -1132,20 +1179,28 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 		case d.Continues && d.Base && b.kept != nil:
 			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
-			loaded, calls = b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom, &b.kept.Basis.Through,
-				b.kept.Basis.Owed)
+			// NONE WHERE THE SESSION MAY BE A SUMMARY: a summary holds a skill's
+			// body in its own words alone, and a skill loaded again before a call
+			// it covers is the safe direction.
+			if !b.keptHolds.summarized() {
+				loaded, calls = b.state.LoadedSkills, ownCalls(b.bridged, b.state.BridgeFrom,
+					&b.kept.Basis.Through, b.kept.Basis.Owed)
+			}
 			handed = prompts.Prompt{Text: b.kept.Brief}
 			if d.NewBox {
 				handed = prompts.Prompt{Text: b.kept.Replaced}
 			}
 		case d.Continues && !d.Kept && b.inPlace != "":
 			// THE JOB'S OWN COPY IN ITS BOX holds the skills its launch armed,
-			// and its own loads only where its harness ended its own run: one
-			// cut off may never have written a load it made, which is told as
-			// a call it may lack, and is loaded again before a call it covers.
-			loaded = b.state.LoadedSkills
-			if b.endedOwnRun {
-				calls = ownCalls(b.bridged, b.state.BridgeFrom, nil, b.owed)
+			// and its own loads only where it is known to hold its job's brief:
+			// one cut off may never have written a load it made, which is told
+			// as a call it may lack, and is loaded again before a call it
+			// covers. And none at all where it may be a summary.
+			if !b.inPlaceHolds.summarized() {
+				loaded = b.state.LoadedSkills
+				if !b.inPlaceHolds.lacksBrief() {
+					calls = ownCalls(b.bridged, b.state.BridgeFrom, nil, b.owed)
+				}
 			}
 			handed = prompts.Prompt{Text: b.inPlace}
 		default:

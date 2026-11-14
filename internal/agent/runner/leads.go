@@ -53,11 +53,12 @@ import (
 // every engine word defused, as the lead it was.
 
 // copyMayLackBrief reports whether the copy of the session the job's own box
-// holds may lack the brief its job was handed: where the job's harness is not
-// known to have ended its own run ([Resume.HarnessEnd]), cut off or never said.
-// THE ONE PREDICATE of the in-place path, read by every telling that depends
-// on it: the calls the copy may lack ([Runner.inPlaceAfter]), the notes
-// ([Runner.inPlaceNotes]) and the leads ([Runner.leadsAgain]).
+// holds may lack the brief its job was handed by its record's word: where the
+// job's harness is not known to have ended its own run ([Resume.HarnessEnd]),
+// cut off or never said. THE RECORD'S HALF of what the in-place path's telling
+// may count held: every telling of the path reads the one value decided from
+// it, a restart in the job and whether its harness may compact the copy beside
+// it ([sessionHolds]), since that verdict needs the brief this is asked before.
 func (r *Runner) copyMayLackBrief() bool {
 	return r.cfg.Resume == nil || !r.cfg.Resume.HarnessEnd.EndedOwnRun()
 }
@@ -82,14 +83,17 @@ type toldAgain struct {
 // again of the leads that brief told ([toldAgain]): each told lead, oldest first,
 // in words of its own ([Runner.leadAgain]) under the relaunching segment's token
 // b, to a run working in round current, and how many earlier leads are not kept
-// ([Resume.LeadsCut]).
+// ([Resume.LeadsCut]). EVERY LEAD THE RECORD KEEPS, told or not, where all says
+// the session may be a summary ([sessionHolds.summarized]): a compaction can
+// drop every lead the session held from earlier briefs, and the record cannot
+// say which those were.
 //
 // BUILT BEFORE THE BRIEF'S LEAD, beside the calls: telling the turn's task again
 // renders the prior-work ledger of the rounds its brief rendered, which can
 // spend the seat's auxiliary model, charged before the relaunch's last ask of
 // the seat's budget.
 func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, current int,
-	b provenance.Boundary) toldAgain {
+	b provenance.Boundary, all bool) toldAgain {
 	if r.cfg.Resume == nil {
 		return toldAgain{}
 	}
@@ -101,7 +105,7 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 		rendered []string
 	)
 	for _, told := range r.cfg.Resume.Leads {
-		if !told.Told {
+		if !told.Told && !all {
 			continue
 		}
 		lead := told.Lead

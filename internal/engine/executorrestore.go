@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // A SESSION, CONTINUED BY A TURN'S NEXT LAUNCH, as the engine wires it
@@ -125,6 +126,10 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 // session ([SessionBasis.Harness], [agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
+	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis
+	// whatever branch answered it: the in-place path is judged too, where no
+	// kept session is continued.
+	basis.Window = l.continuationWindow()
 	if !basis.Continues() && !basis.ContinuesBase() && !l.conversation.leftNone() {
 		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
 			"turn_id", l.turn.RunID, "detail", basis.Why,
@@ -180,10 +185,74 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 		KeptTurn: continued.KeptTurn,
+		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
+		// read its archive whole: what the kept path's first request is judged
+		// by.
+		Count: captured.ResumedCount,
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
 	}
+}
+
+// continuationWindow is what the seat's executor chain may hold a continued
+// Claude Code run to ([runner.SessionBasis.Window]): the least standard window
+// over every Claude Code member, each on its entry's route ([claudeRoute]),
+// since the launch picks its member only as it launches; Known only where
+// every one is known. Not Known where the node has no sandbox runtime, the
+// chain cannot be read, or it holds no Claude Code member: a continuation is
+// then told as one that may compact, never held whole on a window nobody
+// read.
+func (l *agentLauncher) continuationWindow() sandbox.ExecutorWindow {
+	rt := l.engine.sandbox.Load()
+	manager := l.company.catalogue
+	if rt == nil || rt.coordinator == nil || manager == nil {
+		return sandbox.ExecutorWindow{}
+	}
+	members, err := executorRunners(l.company, l.seat, manager)
+	if err != nil {
+		return sandbox.ExecutorWindow{}
+	}
+	var (
+		least sandbox.ExecutorWindow
+		seen  bool
+	)
+	for _, m := range members {
+		agent, ok := m.Provider.(*harness.Provider)
+		if !ok || agent.Harness() != executor.ClaudeCodeName {
+			continue
+		}
+		w := sandbox.ClaudeCodeWindowOn(agent.ModelArgument(), claudeRoute(agent.AuthMode()))
+		switch {
+		case !seen:
+			least, seen = w, true
+		case !w.Known:
+			least.Known = false
+		case w.Standard < least.Standard:
+			least.Standard = w.Standard
+		}
+	}
+	if !seen {
+		return sandbox.ExecutorWindow{}
+	}
+	return least
+}
+
+// claudeRoute is the route a Claude Code member reaches its model by, as far as
+// the telling reads it ([sandbox.ClaudeRoute]): Anthropic's own API for an entry
+// signed in with a login, a key or the host's own environment, each of which
+// hands the harness first-party credentials alone (config refuses a sign-in
+// switch in such an entry's env); and a route this build cannot name for an
+// entry signed in by its own env, and for a mode this build does not know,
+// which is held to the least window off Anthropic's API, the side that tells
+// more. The launch floor reads the entry's platform exactly ([claudePlatform]),
+// since there a smaller window costs a session rather than words.
+func claudeRoute(mode harness.AuthMode) sandbox.ClaudeRoute {
+	switch mode {
+	case harness.AuthSubscription, harness.AuthAPIKey, harness.AuthInheritEnv:
+		return sandbox.ClaudeRouteAnthropic
+	}
+	return sandbox.ClaudeRouteElsewhere
 }
 
 // chainRestores is whether some member of seat's executor chain that a launch

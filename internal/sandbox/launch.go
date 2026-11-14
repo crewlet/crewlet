@@ -1058,6 +1058,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// session's lineage, for the read that collects the job to keep
 		// where the job makes no request of its own ([LaunchRecord.Context]).
 		Context: continued.measure,
+		// AND WHERE THAT SESSION RESTARTS LAST, as the launch knew it, for a
+		// later relaunch to know whether the job restarted it after its brief.
+		Restart: continued.restart,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

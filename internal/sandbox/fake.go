@@ -609,6 +609,12 @@ type FakeRunner struct {
 	Player func(ctx context.Context, req RunRequest) Result
 	plays  map[string]*fakePlay
 
+	// MainThread, when set, is what a collection's read of a job's main
+	// thread answers ([FakeRunner.ReadMainThread]); unset, it answers no
+	// reading, which a Claude Code collection takes for a thread not read.
+	// Set it before the first collection.
+	MainThread func(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the harness
 	// this fake stands in for takes a person's notes between its own steps,
 	// as a real runner's harness taught to does. Set it before the first
@@ -1098,6 +1104,10 @@ type FakeSession struct {
 	// last request ([TakenSession.Context]), zero for none.
 	ContextTokens int64
 
+	// Count is what the take counts the session at ([TakenSession.Count]),
+	// nil for a take that counts nothing.
+	Count *ResumedCount
+
 	// Taking, where set, runs as a take reads the box — after the capture
 	// read the run's log to place the session, and before the archive is
 	// handed over — so a case can land a call between the two, as a call
@@ -1138,10 +1148,15 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Taking != nil {
 		session.Taking()
 	}
+	var count func() *ResumedCount
+	if session.Count != nil {
+		count = func() *ResumedCount { counted := *session.Count; return &counted }
+	}
 	return TakenSession{
 		Archive: session.Archive,
 		Body:    io.NopCloser(bytes.NewReader(session.Body)),
 		Context: func() int64 { return session.ContextTokens },
+		Count:   count,
 		Keep: func(context.Context) error {
 			if session.KeepErr != nil {
 				return session.KeepErr
@@ -1226,4 +1241,18 @@ func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.started)
+}
+
+var _ mainThreadReader = (*FakeRunner)(nil)
+
+// ReadMainThread answers a collection's read of a job's main thread with what
+// [FakeRunner.MainThread] says, and no reading where it is unset.
+func (f *FakeRunner) ReadMainThread(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading {
+	f.mu.Lock()
+	read := f.MainThread
+	f.mu.Unlock()
+	if read == nil {
+		return MainThreadReading{}
+	}
+	return read(ctx, box, ask)
 }

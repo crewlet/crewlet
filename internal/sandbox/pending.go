@@ -3678,9 +3678,13 @@ type PendingStore interface {
 	// own measure; an earlier request of the session it took up is the measure
 	// the record carried where its figure is the same, and else the
 	// session's; none keeps what the record carried, unless the job's box
-	// said it started a session of its own, which drops it. FALSE IS
-	// NOT AN ERROR: the record holds another job, says so already, is being
-	// ended, or is gone. NO FENCE, as MarkEndedAtDeadline takes none: the
+	// said it started a session of its own, which drops it. THE COUNT AS
+	// READ ([LaunchRecord.counted]): the read's wherever it made one, a mark
+	// among them, so a later read that could not bound the copy replaces an
+	// earlier bound; the record's own where it made none; a mark past its
+	// bound written as [CountUnread]; never carried to the next launch's job.
+	// FALSE IS NOT AN ERROR: the record holds another job, says so already,
+	// is being ended, or is gone. NO FENCE, as MarkEndedAtDeadline takes none: the
 	// job's box's host makes it as it reads the box, and how the job's harness
 	// ended is a fact about the job, never an ownership decision. An end that
 	// is not [HarnessEnd.Valid] is an error.
@@ -4238,6 +4242,13 @@ type BoxRef struct {
 	// ([LaunchRecord.Context]), for the collection to keep where the job makes
 	// no request of its own. Nil for a session of the run's own.
 	Context *SessionMeasure
+
+	// Restart is the newest place the session the launch handed the job's run
+	// restarts at, as the launch knew it ([continuedLaunch.restart]): written
+	// onto the job's record by the same attach ([LaunchRecord.BasisRestart]),
+	// for a later relaunch to know whether the job restarted the session
+	// after its brief. Nil where it is not known.
+	Restart *string
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4269,6 +4280,13 @@ type PriorBox struct {
 	// job that makes no request of its own is measured by its copy's lineage
 	// ([continuedLaunch.measure]). Nil where the record held none.
 	Context *SessionMeasure
+	// Restart is the newest place that copy restarts at, as the read that
+	// collected the job that used the box found it ([LaunchRecord.ResumedCount]):
+	// the basis a job that continues the copy in the box records
+	// ([LaunchRecord.BasisRestart]). Nil where that read did not see the
+	// thread whole or not by the rules of its release, or the record held no
+	// count.
+	Restart *string
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
@@ -4678,6 +4696,32 @@ type LaunchRecord struct {
 	// ONLY A SOURCE OF [MeasureRequest] NAMING THIS JOB IS A FRESH MEASURE of
 	// the job; every other is carried, and says from where ([MeasureSource]).
 	Context *SessionMeasure `json:"session_context,omitempty"`
+
+	// ResumedCount is what Claude Code counts the copy of the session the
+	// job's box holds at before its next request (resumed.go), as the read
+	// that collected the job found it in one read of the job's main thread
+	// (mainthread.go), written with HarnessEnd in that read's one write
+	// ([PendingStore.MarkHarnessEnd]): what a relaunch that continues the copy
+	// in the job's box judges its first request by (internal/agent/runner's
+	// firstRequest), and, where a kept capture of the job is continued, what
+	// the capture's own count is held beside. NEVER CARRIED: the next launch's
+	// record starts with none. Nil where nothing read the copy: a job of
+	// another harness, one an older build collected, a write that did not
+	// land, each read as a copy that may compact.
+	ResumedCount *ResumedCount `json:"resumed_count,omitempty"`
+
+	// BasisRestart is the newest place the session the launch handed its run
+	// restarts at ([ResumedCount.Restart]), as the launch knew it when it
+	// opened the job: of the copy the job before left in the box, that job's
+	// record's count; of a kept capture, the capture's own; of a session of
+	// the run's own, a thread that restarts nowhere, "". NIL WHERE IT IS NOT
+	// KNOWN, which is not "": a basis whose count did not read its thread
+	// whole or not by the rules of its release, the session the
+	// conversation's last turn left, which no count describes, and a record
+	// an older build wrote. A job whose own copy's newest restart, as a whole
+	// read of it finds it, is not this one restarted after its brief, or may
+	// have ([RestartedSince]).
+	BasisRestart *string `json:"basis_restart,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the

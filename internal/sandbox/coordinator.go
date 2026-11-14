@@ -1039,6 +1039,10 @@ type Coordinator struct {
 	endPoll time.Duration
 	now     func() time.Time
 
+	// mainThreadWait bounds the read of a job's main thread at its collection
+	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own.
+	mainThreadWait time.Duration
+
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
 	// [Coordinator.Stop] lets the ones under way finish for
@@ -1231,6 +1235,10 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		relaunchWait: relaunchCaptureWait,
 		endWait:      JobEndWait,
 		endPoll:      jobEndPoll,
+
+		// THE ONE WAIT every reading of a job's main thread shares.
+		mainThreadWait: MainThreadReadWait,
+
 		spoolDir:     opts.SpoolDir,
 		sessionRetry: sessionRetryBase,
 		recordBudget: sessionRecordBudget,
@@ -1869,6 +1877,10 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// ([LaunchRecord.Context]), for the same resume: a round carried on in the
 	// job's box is held to that copy's measure.
 	run.Launch.Context = run.Launch.measured(result.LastRequest, run.LaunchID)
+	// AND WHAT CLAUDE CODE COUNTS ITS COPY AT, by the rule the record follows
+	// ([LaunchRecord.counted]), for the same resume: a round carried on in the
+	// job's box is told what that copy may have compacted away.
+	run.Launch.ResumedCount = run.Launch.counted(result.ResumedCount)
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
@@ -2270,6 +2282,13 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// session was taken, kept and then retired by the same collection.
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	at.refused = requestRefused(asCollected(run, result, ended))
+	// THE JOB'S MAIN THREAD, read once on the box's host before the take, by
+	// every reading the collection asks of it (mainthread.go): what Claude Code
+	// counts the session at before its next request, for a Claude Code job.
+	// Kept on the result, with the least window its run reported, and written
+	// with how the harness ended, after the take, in the one write that records
+	// the job's end.
+	result.ResumedCount = c.readMainThread(ctx, run, box, runner, read, at, result).Count
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(spooled)
@@ -2286,8 +2305,10 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 		return result, ended, nil
 	}
 	// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, as the run's own account
-	// measured it, in the same write: no read of the box of its own.
-	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest})
+	// measured it, and what Claude Code counts the copy at, as the read of its
+	// main thread above found it, in the same write.
+	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest,
+		Count: result.ResumedCount})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {

@@ -112,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,033,390
-//	to spare, measured .............. measuredSpare             562,518
+//	every other field, measured ..... measuredOtherFields     2,034,666
+//	to spare, measured .............. measuredSpare             561,242
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -133,10 +133,13 @@ import (
 // reads its briefs left out among it ([LaunchRecord.BriefOmitted], at most
 // [MaxBridgeCalls] places each) and which of the turn's leads its brief told,
 // by their numbers in the run's leads part ([LaunchRecord.LeadMarks], at most
-// [MaxKeptLeads]), and what the session its box holds carried at its newest
-// request the engine measured ([LaunchRecord.Context]); the owed end and the
-// captures, each with the reads its session holds only as a count
-// ([SessionCapture.Omitted]); and what the job may do on Gitlet: the holds of
+// [MaxKeptLeads]), what the session its box holds carried at its newest
+// request the engine measured ([LaunchRecord.Context]), what Claude Code counts
+// that copy at and the restart its launch's session held
+// ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]); the owed end and
+// the captures, each with the reads its session holds only as a count
+// ([SessionCapture.Omitted]) and its count ([SessionCapture.ResumedCount]); and
+// what the job may do on Gitlet: the holds of
 // its turn ([MaxCodeHolds]), its repositories ([MaxRunRepos], each held to its
 // grammar, its cone and its change's title, [MaxChangeTitleBytes], among
 // them), its floors and whom its pushes and its change are made for
@@ -296,8 +299,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_033_390
-	measuredSpare       = 562_518
+	measuredOtherFields = 2_034_666
+	measuredSpare       = 561_242
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

@@ -2,14 +2,18 @@ package executor
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // WHAT A SESSION'S LAST REQUEST CARRIED, read off its archive as a take streams
@@ -37,34 +41,67 @@ import (
 // later launch continues and not the box's copy, and in a goroutine of its own
 // beside the take, which every byte reaches and which never holds the take up:
 // what it cannot read it says nothing about (zero), and it drains the rest.
+//
+// AND WHAT CLAUDE CODE COUNTS THE SESSION AT before its next request
+// ([sandbox.TakenSession.Count], resumed.go), off the same read: a Claude Code
+// archive's main thread is walked ONCE, through the line layer ([walkThread]),
+// by two readings, the floor's figure ([contextReading]) and the count
+// ([resumedReading]). So the meter DECIDES something now (whether a relaunch
+// that continues the capture is told it as a cut-off one), and reads its
+// archive's members by the layer's rules: a member named absolutely or with a
+// `..` element, or a main thread held twice, leaves the count unread, since the
+// member it would read need not be the file a resumed session holds; a saved
+// compaction under either of its names marks it ([claudePrecompact]); and a
+// thread written by a release older than the count's floor is no count of a
+// session ([claudeCountFloor]).
+//
+// THE FLOOR'S FIGURE KEEPS ITS RULE ([contextReading]): the last main-thread
+// assistant line's input side, read off each whole line's bytes by
+// encoding/json as every capture's figure has been, the one decode of the walk
+// outside the layer's options, so the figure every reader of a stamp reads
+// ([sandbox.SessionCapture.ContextTokens]) does not move with this change. Two
+// differences, both of lines no resume reads: a last piece with no break is no
+// line (the box cuts it away before a resume), and a line the layer refuses
+// counts nothing, as encoding/json counted nothing of it.
+//
+// ITS PACE: the walk is fed by the pipe the take writes into, so a meter slower
+// than the scrub would hold the take up inside its wait. The walk is one JSON
+// scan of a line and a few byte searches, beside the scrub's rewrite, gzip and
+// checksum of the same bytes (BenchmarkTheMeterAtItsBounds measures both).
 
 // contextMeter reads an archive written to it and keeps the whole input of the
-// last request its transcript records.
+// last request its transcript records and what Claude Code counts it at.
 type contextMeter struct {
 	pw     *io.PipeWriter
 	done   chan struct{}
 	tokens int64
+	counts *sandbox.ResumedCount
 }
 
-// newContextMeter starts a meter for an archive of layout holding session.
-func newContextMeter(layout archiveLayout, session string) *contextMeter {
+// newContextMeter starts a meter for an archive of layout holding session,
+// written by release (the box's word on its harness's release,
+// [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
+// cut short ends the walk, whose count is then unread.
+func newContextMeter(ctx context.Context, layout archiveLayout, session, release string) *contextMeter {
 	pr, pw := io.Pipe()
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
 		defer close(m.done)
 		var (
-			n   int64
-			err error
+			n     int64
+			count *sandbox.ResumedCount
+			err   error
 		)
 		switch layout {
 		case archiveTar:
-			n, err = lastTranscriptInput(pr, session)
+			n, count, err = meterArchive(ctx, pr, session, release)
 		case archiveDocument:
 			n, err = lastExportInput(pr)
 		}
 		if err == nil {
 			m.tokens = n
 		}
+		m.counts = count
 		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
 		// a meter that stopped reading; the pipe ends when the take finishes.
 		_, _ = io.Copy(io.Discard, pr)
@@ -88,50 +125,116 @@ func (m *contextMeter) context() int64 {
 	return m.tokens
 }
 
-// lastTranscriptInput is the input of the last request a Claude Code archive's
-// transcript of session records, zero where it records none.
-func lastTranscriptInput(r io.Reader, session string) (int64, error) {
+// count is what the meter counted the session at, once the archive has ended:
+// nil for an archive of another harness's layout.
+func (m *contextMeter) count() *sandbox.ResumedCount {
+	<-m.done
+	return m.counts
+}
+
+// meterArchive is the input of the last request a Claude Code archive's main
+// thread of session records, zero where it records none, and what Claude Code
+// counts the session at, read off ONE walk of that thread ([walkThread]) by
+// both readings. The count is marked where the archive's members say so (the
+// file comment) and unread where the archive does not read to its end; err is
+// the archive's own, where its gzip or tar framing failed.
+func meterArchive(ctx context.Context, r io.Reader, session, release string) (int64, *sandbox.ResumedCount,
+	error) {
+
+	var (
+		callers countMarks
+		count   resumedReading
+		figure  contextReading
+		walked  bool
+	)
+	if release == "" || !releaseAtLeast(release, claudeCountFloor) {
+		callers = callers.with(sandbox.CountRelease)
+	}
+	unread := func(err error) (int64, *sandbox.ResumedCount, error) {
+		return 0, count.count(callers.with(sandbox.CountUnread)), err
+	}
 	zr, err := gzip.NewReader(r)
 	if err != nil {
-		return 0, err
+		return unread(err)
 	}
-	transcript := "projects/" + claudeProjectDir + "/" + session + ".jsonl"
 	tr := tar.NewReader(zr)
-	var last int64
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return last, nil
+			break
 		}
 		if err != nil {
-			return 0, err
+			return unread(err)
 		}
-		if h.Typeflag != tar.TypeReg || path.Clean(h.Name) != transcript {
+		// A MEMBER NAMED ABSOLUTELY OR WITH A `..` ELEMENT, wherever it
+		// falls: the file it restores over need not be the one this reads
+		// ([claudeMemberOf]).
+		if path.IsAbs(h.Name) || slices.Contains(strings.Split(h.Name, "/"), "..") {
+			callers = callers.with(sandbox.CountUnread)
+		}
+		member, ok := claudeMemberOf(session, path.Clean(h.Name))
+		switch {
+		case !ok:
+			continue
+		case member.Kind == memberPrecompact:
+			// ITS PRESENCE IS THE FACT, nothing of it read: a file of no bytes
+			// is one the harness cannot read, so it holds none.
+			if h.Typeflag != tar.TypeReg || h.Size > 0 {
+				callers = callers.with(sandbox.CountPrecompact)
+			}
+			continue
+		case member.Kind != memberMainThread || h.Typeflag != tar.TypeReg:
+			continue
+		case walked:
+			// A MAIN THREAD HELD TWICE: which copy a restore leaves is the
+			// archive's order, so the count reads neither, and the floor's
+			// figure reads the later as it always has.
+			callers = callers.with(sandbox.CountUnread)
+			figure = contextReading{}
+			walkThread(ctx, tr, threadPlainMax, &figure)
 			continue
 		}
-		if last, err = lastUsage(tr); err != nil {
-			return 0, err
-		}
+		walked = true
+		walkThread(ctx, tr, threadPlainMax, &figure, &count)
+	}
+	if !walked {
+		callers = callers.with(sandbox.CountUnread)
+	}
+	return figure.context(), count.count(callers), nil
+}
+
+// contextReading is the floor's figure as a reading of the walk
+// ([threadReading]): the input side of the last main-thread assistant line, by
+// the rule every capture's figure has been read by ([assistantInput]), applied
+// to each whole line's bytes and to nothing else. A line the layer refuses
+// counts nothing, as that rule counted nothing of one; a walk that ended on an
+// error leaves no figure, as a read that failed always has.
+type contextReading struct {
+	last   int64
+	failed bool
+}
+
+var _ threadReading = (*contextReading)(nil)
+
+// line reads one whole line's figure, where it has one.
+func (c *contextReading) line(l threadLine) {
+	if n := assistantInput(l.Raw); n > 0 {
+		c.last = n
 	}
 }
 
-// lastUsage is the input of the last main-thread assistant message a
-// transcript's lines record.
-func lastUsage(r io.Reader) (int64, error) {
-	lines := bufio.NewReaderSize(r, 64<<10)
-	var last int64
-	for {
-		line, err := readLine(lines, scrubPieceMaxBytes)
-		if n := assistantInput(line); n > 0 {
-			last = n
-		}
-		if errors.Is(err, io.EOF) {
-			return last, nil
-		}
-		if err != nil {
-			return 0, err
-		}
+// refused counts nothing.
+func (c *contextReading) refused(*threadLineError) {}
+
+// end keeps the figure where the walk read the thread to its end.
+func (c *contextReading) end(_ bool, err error) { c.failed = err != nil }
+
+// context is the figure, zero where none was read whole.
+func (c *contextReading) context() int64 {
+	if c.failed {
+		return 0
 	}
+	return c.last
 }
 
 // assistantInput is the whole input one transcript line's assistant message

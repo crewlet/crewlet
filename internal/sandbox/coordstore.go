@@ -290,6 +290,10 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			// record measured it, read in the same compare-and-swap that
 			// replaces that record ([PriorBox.Context]).
 			Context: existing.Launch.Context,
+			// AND WHERE IT RESTARTS LAST, as that record's count read it, for
+			// a job continuing the copy to record as its basis
+			// ([PriorBox.Restart]).
+			Restart: restartOf(existing.Launch.ResumedCount),
 		}
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
@@ -1844,6 +1848,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// its copy's lineage, for the read that collects the job to keep
 			// where the job makes no request of its own ([LaunchRecord.Context]).
 			run.Launch.Context = box.Context
+			// AND WHERE THAT SESSION RESTARTS LAST, for a later relaunch to know
+			// whether the job restarted it after its brief
+			// ([LaunchRecord.BasisRestart]).
+			run.Launch.BasisRestart = box.Restart
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
@@ -2791,8 +2799,9 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 // carried, as a read that collected the job found them. See the contract on
 // [PendingStore].
 //
-// A WRITE WHERE EITHER CHANGES: an end already recorded beside a measure the
-// read brings is a measure to record, which a test of the end alone would drop.
+// A WRITE WHERE ANY CHANGES: an end already recorded beside a measure or a count
+// the read brings is a measure or a count to record, which a test of the end
+// alone would drop.
 func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
 	if !read.End.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no way a job's harness ends; it is one of %s",
@@ -2806,10 +2815,12 @@ func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, 
 			return false
 		}
 		next, measure := run.Launch.HarnessEnd.after(read.End), run.Launch.measured(read.Request, launch)
-		if next == run.Launch.HarnessEnd && measure.same(run.Launch.Context) {
+		count := run.Launch.counted(read.Count)
+		if next == run.Launch.HarnessEnd && measure.same(run.Launch.Context) &&
+			count.same(run.Launch.ResumedCount) {
 			return false
 		}
-		run.Launch.HarnessEnd, run.Launch.Context = next, measure
+		run.Launch.HarnessEnd, run.Launch.Context, run.Launch.ResumedCount = next, measure, count
 		return true
 	})
 	return marked, err

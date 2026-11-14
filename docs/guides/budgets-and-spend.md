@@ -131,7 +131,9 @@ works under (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, with the variables that would
 switch compaction off or move the point it compacts at unset, and from 2.1.310
 the same window and those two overrides held over a repository's own settings)
 and compacts at
-that window less its own headroom of about 33 000 tokens, so a continued run of
+the smaller of that window and the one it holds the model to (200 000 for Opus
+4.6 and Sonnet 4.6 unless the account is served more or the model opts in with
+`[1m]`) less its own headroom of about 33 000 tokens, so a continued run of
 *n* requests on a 1 000 000-token model is charged up to about *n* × 967 000
 input tokens before its output, and
 on a 200 000-token model up to about *n* × 167 000. A smaller fixed window
@@ -139,15 +141,18 @@ would charge less per request and starve the run: its first request already
 carries the harness's prompt, its tools and the brief, and a window too small
 for those and the files a run reads compacts over and over until the harness
 stops it ([What a continued launch costs](../concepts/code-sandbox.md#what-a-continued-launch-costs)).
-OpenCode compacts near its model's own window
-— once the conversation reaches the window less 15% of it, at least 16 000
-tokens, on 2.2, and less 10% on 2.0 — which the engine does not move, since
-OpenCode's setting is a share or a count of a window the engine does not know:
+OpenCode compacts once its own count of the conversation (its last settled
+reply's input, cache, output and reasoning, and an estimate of everything after
+it) reaches its model's limit (its input limit where the model sets one; on 2.2
+the smaller of its input and context limits) less 15% of it on 2.1 and 2.2, or
+10% on 2.0, at least 16 000 tokens, or less a configured `compaction.buffer`,
+which the engine does not move, since OpenCode's setting is a share or a count
+of a window the engine does not know:
 a continued OpenCode run of *n* requests on a 200 000-token model is charged up
 to about *n* × 170 000. So is a Claude Code run whose repository's own settings
 switch its compaction off, up to its model's window. A session is continued
 wherever the seat's budget can carry it, by the floor above, and on a member
-whose model's window can carry it.
+whose model's window, as Claude Code holds that model, can carry it.
 
 **A schedule pays for its session on every fire.** A schedule is a
 conversation of each seat that runs it, so each of its fires continues the

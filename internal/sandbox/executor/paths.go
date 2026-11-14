@@ -57,10 +57,13 @@
 // reader reads held to its type in that reader's accessor; and a hook's
 // firing handed out by [threadLine.Hook] alone, a call's id by
 // [threadMessage.Calls] alone, since a PostToolUse hook's firing carries the id
-// of the call it followed. The take's context meter (measure.go) decides
-// nothing of what a session recorded and reads the main thread outside the
-// layer: one figure for the launch floor, best effort, which counts nothing
-// from a line it cannot read.
+// of the call it followed. The take's context meter (measure.go) reads the main
+// thread through the layer too, in one walk of its whole lines
+// ([walkThread]): it decides what a continuation of the capture is told, by
+// what Claude Code counts the session at ([resumedReading]). Its one decode
+// outside the layer's options is the launch floor's figure, the last request's
+// input read off each whole line by the rule every capture's figure has been
+// read by ([contextReading]), so that figure does not move.
 //
 // # A run's harness session, carried between boxes
 //

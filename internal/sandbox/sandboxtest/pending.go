@@ -85,6 +85,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
 		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
+		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
+		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -683,6 +685,110 @@ func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.Pendi
 			}
 		})
 	}
+}
+
+// A JOB'S COUNT IS ITS OWN READS', AND NEVER CARRIED. The read that collects a job
+// records what Claude Code counts the copy its box holds at beside how its harness
+// ended: the read's count wherever it made one, a mark among them, so a later
+// read that could not bound the copy replaces an earlier bound; the record's own
+// where a read made none; a mark longer than a record carries written as
+// unread; and a restart longer than a uuid's written as none read and the count
+// as unread whatever its mark, as the read of a thread whose newest restart's
+// uuid does not read writes it, so a record never keeps a mark that leaves the
+// identity known beside no identity. Every write of the job's record after it
+// keeps it, and the next launch's record starts with none: a count is the read
+// of this job's copy, never a lineage's.
+//
+// Mutation: carry the count through the relaunch's reset, write a mark or a
+// restart past its bound whole, keep a marked count's mark beside the restart
+// its bound drops, or keep an earlier bound over a later mark, and a check goes
+// red.
+func testAJobsCountIsItsOwnReadsAndNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-count-own"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	bound := &sandbox.ResumedCount{Tokens: 42_000, Window: 200_000, Restart: new("u-1")}
+	long := strings.Repeat("u", sandbox.RestartIDMaxBytes+1)
+	mark := func(read *sandbox.ResumedCount) {
+		t.Helper()
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+			Count: read}); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+	}
+	check := func(step string, want *sandbox.ResumedCount) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.ResumedCount; !sameCount(got, want) {
+			t.Errorf("after %s the job's record holds the count %+v, want %+v", step, got, want)
+		}
+	}
+	mark(bound)
+	check("the read that collected the job", bound)
+	mark(nil)
+	check("a read that made no count", bound)
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountMedia, Restart: new(long)})
+	check("a marked read naming a restart past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(bound)
+	mark(&sandbox.ResumedCount{Tokens: 42_000, Restart: new(long)})
+	check("a read naming a restart past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	check("a later read that could not bound the copy", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountMark(strings.Repeat("m", 33))})
+	check("a read naming a mark past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(bound)
+	mustRelease(t, s, claimed)
+	check("the release of its claim", bound)
+	if err := s.SetStatus(t.Context(), turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write", bound)
+	park(t, s, turn)
+	check("a park", bound)
+	mustBeginLaunch(t, s, run(turn))
+	check("the next launch's begin", nil)
+}
+
+// A COUNT LANDS WHERE THE END IS ALREADY RECORDED. The read that collects a job
+// records its harness's end, its newest request's measure and its count in one
+// write, which lands where any changes: a collection made again, whose end the
+// first read recorded already, brings a count the first had none of. The same
+// read again changes nothing.
+//
+// Mutation: write only where the end or the measure changes, and the count is
+// never recorded.
+func testACountLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-count-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("")}
+	read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Count: count}
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+		t.Fatalf("a read bringing a count beside the end recorded = %v, %v, want it written", ok, err)
+	}
+	if got := mustGet(t, s, turn).Launch.ResumedCount; !sameCount(got, count) {
+		t.Errorf("the job's record holds the count %+v, want %+v", got, count)
+	}
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+	}
+}
+
+// sameCount reports whether a and b say the same of a session's count, a nil one
+// none at all.
+func sameCount(a, b *sandbox.ResumedCount) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == b
+	case (a.Restart == nil) != (b.Restart == nil):
+		return false
+	case a.Restart != nil && *a.Restart != *b.Restart:
+		return false
+	}
+	return a.Tokens == b.Tokens && a.Mark == b.Mark && a.Window == b.Window
 }
 
 // sameMeasure reports whether a and b say the same of a session's measure: its

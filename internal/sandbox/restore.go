@@ -1367,6 +1367,16 @@ type continuedLaunch struct {
 	// request of its own is measured by the copy it took up, and never by a
 	// copy of another lineage.
 	measure *SessionMeasure
+	// restart is the newest place the session restarts at, as the launch
+	// knows it: the job before's collection's read of its own copy, where the
+	// launch continues that copy in place; the kept capture's own read of its
+	// archive; a session of the run's own, which restarts nowhere ("");
+	// nil where it is not known, the session the conversation's last turn
+	// left among it, which no count describes. Written on the job's record
+	// with its command ([BoxRef.Restart]): what a later relaunch compares the
+	// job's own copy with, to know whether the job restarted it after its
+	// brief ([RestartedSince]).
+	restart *string
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
@@ -1412,7 +1422,9 @@ func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
 // does not (a turn's first launch, a send-back), whose request names no
 // continuation to read it off.
 func freshLaunch(req LaunchRequest) continuedLaunch {
-	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, release: func() {}}
+	// A SESSION OF THE RUN'S OWN restarts nowhere yet: its basis is known, and
+	// is none.
+	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {}}
 	if req.Continue != nil {
 		launch.told = req.Continue.Fresh
 	}
@@ -1459,7 +1471,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			// holds it, read by the reset that opened this job in the write
 			// that replaced that record ([PriorBox.Context]).
 			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context, release: func() {}}
+				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context,
+				restart: opened.Prior.Restart, release: func() {}}
 		}
 		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
@@ -1505,12 +1518,15 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// MEASURED AS THE CAPTURE MEASURED ITS ARCHIVE, the capture's job named as
 	// the archive's, never as that job's request.
 	measure := carriedMeasure(kept.ContextTokens, MeasureCapture, kept.Launch)
+	// AND WHERE THE ARCHIVE RESTARTS LAST, as the capture's own read of it
+	// found it.
+	restart := restartOf(kept.ResumedCount)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
 	if reused && !kept.Interrupted {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			kept: true, measure: measure, release: func() {}}, ""
+			kept: true, measure: measure, restart: restart, release: func() {}}, ""
 	}
 	archive := ArchiveOf(row)
 	check, err := restorer.CheckCarry(ctx, box, archive)
@@ -1537,7 +1553,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// the run — which replaces the box's copy where its harness was cut off.
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		kept: true, carried: carried, measure: measure,
+		kept: true, carried: carried, measure: measure, restart: restart,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()

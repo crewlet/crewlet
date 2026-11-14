@@ -25,13 +25,15 @@ import (
 // wrong answer, not a gap on a page. Every such reader (the one that confirms
 // a hook's note reached the model, the one that tells a relaunch which of its
 // calls a kept session holds, and the one that bounds what a continued
-// session's harness counts before its first request) reads a Claude Code
-// thread through this one layer, so the rules it is read by are held once.
-// The take's context meter
-// (measure.go) is no such reader and reads the main thread outside the layer:
-// it decides nothing of what the session recorded, only reads one figure, the
-// last request's input, for the launch floor, a best-effort figure that counts
-// nothing from a line it cannot read. The rules:
+// session's harness counts before its first request, at a take's context
+// meter and in the read that collects a job, [resumedReading]) reads a Claude
+// Code thread through this one layer, so the rules it is read by are held
+// once, each in one walk of a thread's whole lines that every reading of it
+// shares ([walkThread]). The walk's one decode outside this layer's options is
+// the launch floor's figure at the meter ([contextReading]), the last
+// request's input read off each whole line by the rule every capture's figure
+// has been read by, which decides nothing of what the session recorded and so
+// does not move with the layer. The rules:
 //
 //   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
 //     [claudeSubagentMeta], [claudePrecompact], and [claudeMemberOf] the other
@@ -910,16 +912,16 @@ func (l threadLine) OriginKind() (string, error) {
 // of another type would cost each of them every line that carries it, which
 // is every chained line of every thread.
 //
-// ITS READER is the resumed count, which bounds what a continued session's
-// harness counts before its first request, to judge whether it may compact
-// there. It reads the uuid on a main compact_boundary record alone, and
-// compares the newest such boundary's with the one the launch's basis
-// recorded, to know whether the job appended a compaction of its own: never
-// by counting boundaries, since the harness's trim after a compaction drops
-// every boundary before the last ([claudeLocalGCFloor]), so a thread that
-// compacted again can hold no more of them than it did. A uuid that is
-// absent, empty or longer than 36 bytes, and this accessor's error, are no
-// reading to it.
+// ITS READER is the resumed count ([resumedReading]), which bounds what a
+// continued session's harness counts before its first request. It reads the
+// uuid of every line the restart rule flags ([threadRestarts.See]), and keeps
+// the newest's, which a later relaunch compares with the one the job's launch
+// handed it, to know whether the job restarted the session after its brief:
+// never by counting restarts, since the harness's trim after a compaction drops
+// every record before the last one ([claudeLocalGCFloor]), so a thread that
+// restarted again can hold no more of them than it did. A uuid that is absent,
+// empty or longer than 36 bytes, and this accessor's error, are no reading to
+// it.
 //
 // Read off the line's one decode, its raw `uuid`, never a second read of the
 // line.

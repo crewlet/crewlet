@@ -322,6 +322,11 @@ type claudeEvents struct {
 	last        int64
 	usage, main bool
 	cleared     contextRead
+
+	// window is the least context window above zero the run's results
+	// reported holding any model to ([claudeEvents.reportedWindow]), 0 where
+	// none reported one.
+	window int64
 }
 
 // measure reads one assistant line's request for the measure of the session
@@ -410,6 +415,9 @@ func (d *claudeEvents) state(models map[string]claudeModelUsage) {
 	d.stated = true
 	for _, name := range slices.Sorted(maps.Keys(models)) {
 		m := models[name]
+		if m.ContextWindow > 0 && (d.window == 0 || m.ContextWindow < d.window) {
+			d.window = m.ContextWindow
+		}
 		d.own.input += m.InputTokens
 		d.own.cacheRead += m.CacheReadInputTokens
 		d.own.cacheWrite += m.CacheCreationInputTokens
@@ -521,6 +529,14 @@ func (d *claudeEvents) Line(line []byte) {
 		}
 	}
 }
+
+// reportedWindow is the least context window the run's process reported
+// holding any model to, over every result's per-run figures (2.1.310 and
+// later), its subagents' models among them, 0 where none reported one
+// ([sandbox.Result.ReportedWindow]). THE LEAST, so a subagent on a model of a
+// smaller window lowers it: a continuation told more than it needs, never
+// less. A result whose figures are unread reports nothing.
+func (d *claudeEvents) reportedWindow() int64 { return d.window }
 
 // Skipped counts a line past the stream's bound into the transcript, and clears
 // the newest request's figure: the line may be a later request's, which carried

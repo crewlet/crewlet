@@ -220,3 +220,27 @@ func TestALostTurnsEndingNamesNoBoxItMayStillHave(t *testing.T) {
 		t.Errorf("the lost turn's ending blames a box or host it may still have:\n%s", block)
 	}
 }
+
+// A SESSION THAT MAY COMPACT IS TOLD WHY, AND NEVER THAT IT WAS CUT OFF. A
+// continuation Claude Code may hand its model as a summary, at its first request
+// or as its job worked, is told everything again: the section before that says
+// why (a summary of everything before its last reply), that the session may
+// still show all of it, and that each is one message, call or note. It says
+// nothing of a cut-off run, since the session may be whole.
+//
+// Mutation: tell it the cut-off copy's words, or drop the clause that it may
+// still show them, and a check goes red.
+func TestAMayCompactSessionIsToldWhyAndNeverThatItWasCutOff(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{"## The session above may reach you as a summary", "compacted",
+		"a summary of it", "may still show some or all of them", "each is ONE message, call or note"} {
+		if !strings.Contains(MayCompactSession, want) {
+			t.Errorf("the section of a session that may compact does not say %q:\n%s", want, MayCompactSession)
+		}
+	}
+	for _, unsaid := range []string{"cut off", "did not finish cleanly", "stopped, killed", "saved"} {
+		if strings.Contains(MayCompactSession, unsaid) {
+			t.Errorf("the section of a session that may compact says %q:\n%s", unsaid, MayCompactSession)
+		}
+	}
+}

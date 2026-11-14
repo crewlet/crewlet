@@ -73,6 +73,12 @@ import (
 // continues the copy in place, the record of the job whose copy it is; one that
 // continues a kept capture, that capture's own measure; one that continues the
 // session the conversation's last turn left, the base's; a fresh one, none.
+//
+// AND WHAT CLAUDE CODE COUNTS THAT COPY AT before its next request
+// ([LaunchRecord.ResumedCount], resumed.go), as the same read found it in one
+// read of the job's main thread (mainthread.go), in the same write: never
+// carried, the read of this job's copy at its collection or nothing, so the
+// next launch's record starts with none.
 
 // HarnessEnd is how a job's harness ended, as the read that collected the job
 // found it ([LaunchRecord.HarnessEnd]).
@@ -223,14 +229,32 @@ func (m *SessionMeasure) says(o *SessionMeasure) bool {
 }
 
 // EndRead is what the read that collected a job found of its end: how its
-// harness ended, and what its newest request carried
-// ([PendingStore.MarkHarnessEnd]).
+// harness ended, what its newest request carried, and what Claude Code counts
+// the copy at ([PendingStore.MarkHarnessEnd]).
 type EndRead struct {
 	// End is how the job's harness ended ([LaunchRecord.HarnessEnd]).
 	End HarnessEnd
 	// Request is what the newest request of the session the job's box ran
 	// carried, as its run's own account measured it ([Result.LastRequest]).
 	Request RequestMeasure
+	// Count is what Claude Code counts the copy the job's box holds at before
+	// its next request, as the read of the job's main thread found it
+	// ([Result.ResumedCount]); nil where the read asked none.
+	Count *ResumedCount
+}
+
+// counted is the count l, a job's record, holds once a read of the job found
+// read: the read's wherever it made one, a mark among them, so a later read of
+// the job that could not bound the copy replaces an earlier bound, which tells
+// more and never less; and l's own where the read made none (a read that asked
+// nothing, or a host of an older build). Held to what a record carries
+// ([ResumedCount.bounded]): a mark past its bound, or a restart past a uuid's
+// whatever the mark, is [CountUnread].
+func (l LaunchRecord) counted(read *ResumedCount) *ResumedCount {
+	if read == nil {
+		return l.ResumedCount
+	}
+	return read.bounded()
 }
 
 // measured is the measure l, the record of job launch, holds once a read of the
@@ -278,10 +302,10 @@ func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasu
 	return m
 }
 
-// markHarnessEnd records on run's job's record how its harness ended and what
-// its newest request carried, as the read that collects the job found them
-// ([PendingStore.MarkHarnessEnd]), in ONE WRITE: the measure adds no write of
-// its own, and no read of the box.
+// markHarnessEnd records on run's job's record how its harness ended, what its
+// newest request carried and what Claude Code counts the copy at, as the read
+// that collects the job found them ([PendingStore.MarkHarnessEnd]), in ONE
+// WRITE: neither the measure nor the count adds a write of its own.
 //
 // UNDER A CONTEXT OF ITS OWN ([stampContext]), as the take's own records are:
 // the record is owed to a relaunch that may come days later, on another node —
@@ -305,8 +329,9 @@ func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, read E
 		log.WarnContext(ctx, "sandbox_harness_end_unrecorded", "turn_id", run.TurnID,
 			"launch_id", run.LaunchID, "harness_end", string(read.End),
 			"request_tokens", read.Request.Tokens, "error", err.Error(),
-			"detail", "the run's record does not say how its job's harness ended, nor what the session's "+
-				"newest request carried: the coordination store refused the write, or did not answer it "+
+			"detail", "the run's record does not say how its job's harness ended, what the session's "+
+				"newest request carried, nor what Claude Code counts it at: the coordination store refused "+
+				"the write, or did not answer it "+
 				"within the room the read leaves its records. A relaunch that reads the record later, such as "+
 				"a person's answer, reads the job as one whose harness may have been cut off, and tells the "+
 				"session in its box every call of the round and every note the turn has read, some of which it "+

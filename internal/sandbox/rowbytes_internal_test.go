@@ -580,7 +580,8 @@ func worstRow(t *testing.T) PendingRun {
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
-		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt}
+		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
+		ResumedCount: worstCount()}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -716,6 +717,12 @@ func worstRow(t *testing.T) PendingRun {
 		// nineteen digits, a source as long as an end's word, and the job it
 		// names a launch id as the begin mints one ([LaunchRecord.Context]).
 		Context: &SessionMeasure{Tokens: math.MaxInt64, Source: MeasureSource(plain(32)), Launch: uuid.NewString()},
+		// WHAT CLAUDE CODE COUNTS THE COPY AT, at its widest ([worstCount]),
+		// and the restart its launch's session held, a uuid's thirty-six
+		// bytes ([LaunchRecord.BasisRestart]) in the bytes that escape the
+		// most: the box's thread writes it, and nothing holds it to a uuid's
+		// shape.
+		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
@@ -1461,4 +1468,15 @@ func TestAnAnswerIsMeasuredAsTheRowWillHoldIt(t *testing.T) {
 				name, err)
 		}
 	}
+}
+
+// worstCount is a count of a session at its widest, as a record carries one
+// ([ResumedCount]): a figure and a window of nineteen digits each, a mark at its
+// bound ([maxCountMarkBytes]), which the engine's own reading words, and a
+// restart at a uuid's thirty-six bytes ([RestartIDMaxBytes]) in the bytes that
+// escape the most, since the box's thread writes it as it likes and the layer
+// hands it on as written; a record refuses or rewrites either past its bound.
+func worstCount() *ResumedCount {
+	return &ResumedCount{Tokens: math.MaxInt64, Mark: CountMark(strings.Repeat("a", maxCountMarkBytes)),
+		Window: math.MaxInt64, Restart: new(strings.Repeat("<", RestartIDMaxBytes))}
 }

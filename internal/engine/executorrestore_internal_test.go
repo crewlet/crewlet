@@ -79,7 +79,24 @@ type keptLaunch struct {
 
 func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLaunch {
 	t.Helper()
+	return newKeptLaunchCounted(t, contextTokens, ceiling, spent, nil)
+}
+
+// newKeptLaunchCounted is [newKeptLaunch] whose kept capture's take counted its
+// session at count ([sandbox.SessionCapture.ResumedCount]), none for nil.
+func newKeptLaunchCounted(t *testing.T, contextTokens int64, ceiling, spent int,
+	count *sandbox.ResumedCount) keptLaunch {
+	t.Helper()
 	c, seat := executorCompany(t)
+	return newKeptLaunchOn(t, c, seat, contextTokens, ceiling, spent, count, true)
+}
+
+// newKeptLaunchOn is [newKeptLaunchCounted] on c's seat, whose kept capture was
+// taken as its harness was cut off where interrupted says so, and else as it
+// had ended its own run.
+func newKeptLaunchOn(t *testing.T, c *Company, seat *org.Role, contextTokens int64, ceiling, spent int,
+	count *sandbox.ResumedCount, interrupted bool) keptLaunch {
+	t.Helper()
 	if ceiling > 0 {
 		seat.TokenBudget = org.TokenCeilings{period.Day: ceiling}
 	}
@@ -103,11 +120,11 @@ func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLa
 	}
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: 1, Launch: row.LaunchID,
-		State: sandbox.CaptureLanded, Final: true, Interrupted: true,
+		State: sandbox.CaptureLanded, Final: true, Interrupted: interrupted,
 		Through: new(2), Omitted: []int{1}, NoteCursor: 4, ContextTokens: contextTokens,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
 		ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
-		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/4f2a/home"}
+		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/4f2a/home", ResumedCount: count}
 	if _, err := pending.StampCapture(ctx, "t1", kept); err != nil {
 		t.Fatalf("StampCapture: %v", err)
 	}
@@ -196,7 +213,9 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
 		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
-		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1"}
+		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1",
+		// THE WINDOW OF A CHAIN WHOSE ONE MEMBER'S MODEL THIS BUILD DOES NOT KNOW.
+		Window: sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
 	}

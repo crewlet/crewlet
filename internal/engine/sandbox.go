@@ -1818,6 +1818,12 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// in that box is held to it with its brief, beside the job's newest
 		// capture's measure ([runner.Resume.ContextTokens]).
 		ContextTokens: in.Run.Launch.Context.ContextTokens(),
+		// AND WHAT CLAUDE CODE COUNTS THAT COPY AT, as the read that collected
+		// the job found it, and the restart the job's launch handed it, which
+		// the copy's own and a capture of the job are compared with: a
+		// relaunch judges whether the session reaches its first request whole
+		// by them ([runner.Resume.Count], [runner.Resume.BasisRestart]).
+		Count: in.Run.Launch.ResumedCount, BasisRestart: in.Run.Launch.RestartBasis(),
 		// AND THE TURN'S LEADS AS THE RESUME READ THEM BESIDE ITS ROW, opened,
 		// those its job's brief told marked: a relaunch continuing that job's
 		// session where it may lack the brief tells them again

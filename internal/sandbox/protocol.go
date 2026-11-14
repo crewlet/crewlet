@@ -735,6 +735,27 @@ type Result struct {
 	// the copy's lineage.
 	LastRequest RequestMeasure
 
+	// ReportedWindow is the least context window the run's harness reported
+	// holding a model to, over every model the process used (Claude Code's
+	// result lines, `contextWindow` of each model they name), 0 where it
+	// reported none: a run that printed no result, a release that writes no
+	// per-run figures, another harness. It only ever lowers the window a
+	// continuation of the copy is judged under ([ExecutorWindow.SendsWhole]),
+	// so a figure a box forged adds telling and removes none. Set by a
+	// runner's collection, beside its result.
+	ReportedWindow int64
+
+	// ResumedCount is what Claude Code counts the copy of the session the
+	// job's box holds at before its next request, as the read that collected
+	// this result found it in one read of the job's main thread
+	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; nil where the
+	// read asked nothing (a stop's, a loss's, another harness's job), and from
+	// a host of an older build, which reads as a copy that may compact.
+	ResumedCount *ResumedCount
+
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
 	// where the harness reported none. It is what the launch's own record counts

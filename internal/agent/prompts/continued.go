@@ -141,6 +141,24 @@ const MayBeInterruptedCopy = "## The session above may have been cut off" +
 	" not have run — and may not show the last of what it did. Check what such a call was meant to" +
 	" do before doing it again."
 
+// MayCompactSession tells a run continuing a session its harness may hand it as a
+// summary (internal/agent/runner's firstRequest) why what carried the work on,
+// its calls and its notes are told again below: Claude Code compacts a session
+// near its window's size before a request, its resumed run's first among them,
+// which leaves the model a summary of everything before its last reply, and a
+// session may have compacted, or started over, as its job worked, after its
+// brief. NEVER "CUT OFF": the session may be whole and may still show all of
+// it, so each told again is said to be one message, call or note, not two.
+// Where the job's record also says it was cut off, the cut-off words are told
+// in its place ([InterruptedCopy], [MayBeInterruptedCopy],
+// [InterruptedSession]), which say so and more.
+const MayCompactSession = "## The session above may reach you as a summary" +
+	"\nIts harness may have compacted it as this work went on, or may compact it before going on: a" +
+	" session near its window's size is compacted, which replaces everything before its last reply" +
+	" with a summary of it. So what carried this work on, every call of this round and every note" +
+	" sent while it worked are told again below. The session above may still show some or all of" +
+	" them, in full or in its summary: each is ONE message, call or note, made or sent once, not two."
+
 // calledAfterHeader introduces the calls a session's run made through the seat's
 // tools after the point the session was saved at.
 const calledAfterHeader = "## Calls made after the session above was saved" +

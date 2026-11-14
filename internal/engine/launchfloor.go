@@ -418,8 +418,8 @@ func (f launchFloor) carriedBy(w sandbox.ExecutorWindow) string {
 		return ""
 	}
 	return fmt.Sprintf("a launch that continues the session sends %d tokens first (its last request "+
-		"carried %d, and its brief about %d), more than one request under the %d-token window of the "+
-		"model the launch runs can carry", f.context+int64(f.brief), f.context, f.brief, w.Tokens)
+		"carried %d, and its brief about %d), more than one request under the %d-token window Claude "+
+		"Code holds the launch's model to can carry", f.context+int64(f.brief), f.context, f.brief, w.Tokens)
 }
 
 // floorRefusal is a launch refused below its floor: a budget refusal

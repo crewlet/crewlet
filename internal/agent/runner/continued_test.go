@@ -986,6 +986,10 @@ type guarded struct {
 	decides   func(runner.AgentRunRequest) runner.SessionDecision
 	says      *bool
 	carry     func(*runner.Resume)
+	// prep sets on the resume what the job's record says beside its round,
+	// whether or not the relaunch carries the round on: what its collection
+	// counted its copy at, and the restart its launch handed it.
+	prep func(*runner.Resume)
 	// during is what the run does once its launch has decided and before the
 	// launch returns ([playLauncher.during]).
 	during func(runner.AgentRunRequest)
@@ -1037,6 +1041,9 @@ func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunReques
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
 	resume := &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued}
+	if g.prep != nil {
+		g.prep(resume)
+	}
 	if g.carry != nil {
 		g.carry(resume)
 	}

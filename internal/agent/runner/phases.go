@@ -398,6 +398,23 @@ type Resume struct {
 	// record holds none.
 	ContextTokens int64
 
+	// Count is what Claude Code counts the copy the box of the job State
+	// parked holds at before its next request, as the read that collected the
+	// job found it (sandbox.LaunchRecord.ResumedCount): what a relaunch that
+	// carries the round on in that box judges its first request by, and, where
+	// it continues a kept capture of the job taken whole in the same box, the
+	// count the capture's own is held beside ([keptCount]). Nil where nothing
+	// read the copy, which reads as a copy that may compact.
+	Count *sandbox.ResumedCount
+
+	// BasisRestart is the newest restart of the session the job State parked
+	// took up, as its launch knew it (sandbox.LaunchRecord.RestartBasis): ""
+	// for a session that restarted nowhere, nil where it is not known. What
+	// the job's copy, as its collection read it, and a capture of the job, as
+	// its take read it, are compared with, to know whether the job restarted
+	// its session after its brief (sandbox.RestartedSince).
+	BasisRestart *string
+
 	// Leads is the turn's leads as the run keeps them beside its record,
 	// opened, oldest first ([ResumeLead], sandbox.PendingStore.Leads): what
 	// carried each session of the work on. Those the brief the job's run read
