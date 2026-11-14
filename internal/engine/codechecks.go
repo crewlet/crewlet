@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"time"
@@ -119,10 +120,12 @@ func (e *Engine) checkCompany() (checkrun.Company, bool) {
 // credential (checkrun.Tokens), the runner importing nothing of the host.
 type checkTokens struct{ tokens *host.CheckTokens }
 
-// Mint is the attempt's token for the repository named repo.
-func (t checkTokens) Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) string {
+// Mint is the attempt's token for the repository named repo, or an error
+// naming why none is minted: this node mints none, or the attempt is none a
+// box is given (host.CheckTokens.Mint).
+func (t checkTokens) Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) (string, error) {
 	if t.tokens == nil {
-		return ""
+		return "", errors.New("engine: this node mints no check's box credential")
 	}
 	return t.tokens.Mint(host.CheckRunRef{Attempt: attempt, Repo: repo}, timeout)
 }

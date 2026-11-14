@@ -215,7 +215,10 @@ func TestASessionBearerDoesNotValidateAtTheOtlpReceiver(t *testing.T) {
 	}
 
 	// And the other direction: the receiver's token in the cookie slot.
-	token := receiver.Mint("trace-1", time.Hour)
+	token, err := receiver.Mint("trace-1", time.Hour)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
 	if got := rig.signer.Validate(t.Context(), rig.dir, token); got.Row !=
 		session.RowMalformed {
 		t.Errorf("a per-run token presented as a cookie landed on %q, want %q",

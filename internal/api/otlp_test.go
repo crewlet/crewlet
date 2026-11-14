@@ -40,7 +40,10 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 // which is the only way a caller ever gets one.
 func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) string {
 	t.Helper()
-	endpoint := receiver.RunEnv(traceID, "span", "turn-1", "engineer", false, time.Hour)
+	endpoint, err := receiver.RunEnv(traceID, "span", "turn-1", "engineer", false, time.Hour)
+	if err != nil {
+		t.Fatalf("RunEnv: %v", err)
+	}
 	token := strings.TrimPrefix(
 		endpoint["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://engine.internal/otlp/")
 	if token == "" {
@@ -93,6 +96,11 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 	receiver := otlpReceiver(t, "")
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 	good := tokenFor(t, receiver, "trace-abc")
+	attackers, err := otelTokensFor(t, sandbox.OtelTokenOptions{
+		Material: runtoken.OneKey("k", "attacker-key")}).Mint("trace-abc", time.Hour)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
 
 	for _, tc := range []struct{ name, token string }{
 		{"no token at all", "not-a-token"},
@@ -101,8 +109,7 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 		// A token minted with somebody else's key. This is the case that
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
-		{"another key's token", otelTokensFor(t, sandbox.OtelTokenOptions{
-			Material: runtoken.OneKey("k", "attacker-key")}).Mint("trace-abc", time.Hour)},
+		{"another key's token", attackers},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
 		if res.StatusCode != http.StatusUnauthorized {

@@ -265,7 +265,9 @@ func TestADeepRunEndsWithItsContext(t *testing.T) {
 			go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 			return ctx, cancel
 		}, assistant.DeepEndStopped},
-		"timed out": {func(ctx context.Context) (context.Context, context.CancelFunc) {
+		// Each name joins the run's id, which rides the bridge token's subject:
+		// a space in it is refused as no id the engine mints would be.
+		"timed-out": {func(ctx context.Context) (context.Context, context.CancelFunc) {
 			return context.WithTimeout(ctx, 50*time.Millisecond)
 		}, assistant.DeepEndTimeout},
 	} {

@@ -2,6 +2,8 @@ package host
 
 import (
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -80,19 +82,31 @@ func NewCheckTokens(m runtoken.Material, now func() time.Time) (*CheckTokens, er
 //
 // A ref no attempt has — a key gitlet.CheckKey.Validate refuses, a name no
 // repository takes — or a timeout no check runs for (none, or past
-// gitlet.CheckTimeoutCeiling) is the caller's bug, and is answered "", which no
-// Gitlet node admits and the runner ends the attempt over — in a test binary as
+// gitlet.CheckTimeoutCeiling) is the caller's bug, and is refused with an
+// error naming it ([ErrNoCheckRun]), which the runner ends the attempt over;
+// so is a subject runtoken refuses (runtoken.ErrSubject). In a test binary as
 // in production, for [BoxTokens.Mint]'s reason.
-func (t *CheckTokens) Mint(ref CheckRunRef, timeout time.Duration) string {
+func (t *CheckTokens) Mint(ref CheckRunRef, timeout time.Duration) (string, error) {
 	if !validCheckRef(ref) || timeout <= 0 || timeout > gitlet.CheckTimeoutCeiling {
-		return ""
+		return "", fmt.Errorf("%w: check %q of repository %q, timeout %s", ErrNoCheckRun, ref.Attempt.Name,
+			ref.Repo, timeout)
 	}
 	subject := strings.Join([]string{checkSubjectTag, ref.Attempt.RepoID, ref.Attempt.OID,
 		strconv.Itoa(ref.Attempt.Attempt), checkSubjectEncoding.EncodeToString([]byte(ref.Attempt.Target)),
 		checkSubjectEncoding.EncodeToString([]byte(ref.Attempt.Name)),
 		checkSubjectEncoding.EncodeToString([]byte(ref.Repo))}, checkSubjectSep)
-	return t.signer.Mint(subject, timeout+gitlet.CheckBoxGrace)
+	token, err := t.signer.Mint(subject, timeout+gitlet.CheckBoxGrace)
+	if err != nil {
+		return "", fmt.Errorf("gitlet: the box credential of check %q of repository %q: %w", ref.Attempt.Name,
+			ref.Repo, err)
+	}
+	return token, nil
 }
+
+// ErrNoCheckRun reports a ref or a timeout [CheckTokens.Mint] refuses: a key
+// gitlet.CheckKey.Validate refuses, a name no repository takes, or a timeout
+// no check runs for (none, or past gitlet.CheckTimeoutCeiling).
+var ErrNoCheckRun = errors.New("gitlet: no check's attempt runs as this, so no box credential names it")
 
 // Verify answers the attempt a token names, false for one forged, expired,
 // malformed, signed under a key this node's ring does not hold — or a RUN's

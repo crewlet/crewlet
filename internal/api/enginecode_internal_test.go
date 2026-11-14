@@ -61,12 +61,12 @@ func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 		name, user, token string
 		signed            bool
 	}{
-		{"a run's token this fleet signed", host.BoxUser, boxes.Mint(run), true},
-		{"a check's token this fleet signed", gitlet.CheckUser, checks.Mint(check, time.Minute), true},
-		{"a run's token another fleet signed", host.BoxUser, otherBoxes.Mint(run), false},
-		{"a check's token another fleet signed", gitlet.CheckUser, otherChecks.Mint(check, time.Minute), false},
-		{"this fleet's run token as a check's", gitlet.CheckUser, boxes.Mint(run), false},
-		{"this fleet's check token as a run's", host.BoxUser, checks.Mint(check, time.Minute), false},
+		{"a run's token this fleet signed", host.BoxUser, mintedBox(t, boxes, run), true},
+		{"a check's token this fleet signed", gitlet.CheckUser, mintedCheck(t, checks, check, time.Minute), true},
+		{"a run's token another fleet signed", host.BoxUser, mintedBox(t, otherBoxes, run), false},
+		{"a check's token another fleet signed", gitlet.CheckUser, mintedCheck(t, otherChecks, check, time.Minute), false},
+		{"this fleet's run token as a check's", gitlet.CheckUser, mintedBox(t, boxes, run), false},
+		{"this fleet's check token as a run's", host.BoxUser, mintedCheck(t, checks, check, time.Minute), false},
 	}
 	routes := []struct {
 		name string
@@ -123,6 +123,27 @@ func tokensOver(t *testing.T, keyring runtoken.Material) (*host.BoxTokens, *host
 		t.Fatal(err)
 	}
 	return boxes, checks
+}
+
+// mintedBox is boxes' credential for run, failing t where none is minted.
+func mintedBox(t *testing.T, boxes *host.BoxTokens, run host.BoxRunRef) string {
+	t.Helper()
+	token, err := boxes.Mint(run)
+	if err != nil {
+		t.Fatalf("minting launch %s's credential: %v", run.LaunchID, err)
+	}
+	return token
+}
+
+// mintedCheck is checks' credential for ref, valid for timeout, failing t
+// where none is minted.
+func mintedCheck(t *testing.T, checks *host.CheckTokens, ref host.CheckRunRef, timeout time.Duration) string {
+	t.Helper()
+	token, err := checks.Mint(ref, timeout)
+	if err != nil {
+		t.Fatalf("minting check %s's credential: %v", ref.Attempt.Name, err)
+	}
+	return token
 }
 
 // answerOf is what a client of a git route is shown: its status and the three

@@ -39,7 +39,7 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 		if queued {
 			queueCheck(t, f, key)
 		}
-		return tokens.Mint(host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName}, 10*time.Minute)
+		return mintedCheck(t, tokens, host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName}, 10*time.Minute)
 	}
 	first, second, unknown := attempt("unit", 1, true), attempt("lint", 1, true), attempt("unit", 2, false)
 	missing := randomOID()
@@ -108,8 +108,8 @@ func TestACheckHasOneBurstOnANode(t *testing.T) {
 	key := gitlet.CheckKey{RepoID: c.Rows().Repo.ID, OID: missing, Target: "refs/heads/main", Name: "unit",
 		Attempt: 1}
 	queueCheck(t, f, key)
-	token := gitlettest.NewCheckTokens(t).Mint(host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName},
-		10*time.Minute)
+	token := mintedCheck(t, gitlettest.NewCheckTokens(t), host.CheckRunRef{Attempt: key,
+		Repo: gitlettest.RepoName}, 10*time.Minute)
 	for i := range gitlet.ResyncBurst {
 		before := rec.linearizable()
 		resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, gitlet.CheckUser, token, v2,

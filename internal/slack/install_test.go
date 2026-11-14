@@ -141,6 +141,26 @@ func TestAnInstallLinkCompletesOnce(t *testing.T) {
 	}
 }
 
+// A LINK WHOSE STATE IS REFUSED RECORDS NOTHING: an app id its state could
+// not carry, which runtoken refuses to mint, is refused before the link's
+// nonce is recorded, so the refusal leaves no claim behind for its fifteen
+// minutes.
+//
+// Mutation: record the nonce before the state is minted, and the registry
+// holds it.
+func TestARefusedInstallLinkRecordsNothing(t *testing.T) {
+	t.Parallel()
+	r := newInstallRig(t)
+	if _, err := r.installs.Link(t.Context(), "swe", "A0 SWE"); !errors.Is(err, runtoken.ErrSubject) {
+		t.Fatalf("a link for an app id holding a space answered %v, want runtoken.ErrSubject", err)
+	}
+	r.claims.mu.Lock()
+	defer r.claims.mu.Unlock()
+	if len(r.claims.held) != 0 {
+		t.Errorf("the refused link recorded %v", r.claims.held)
+	}
+}
+
 // EVERY BAD STATE IS ONE ANSWER: edited, lapsed, minted for another purpose,
 // or signed by this keyring and never handed out by this fleet.
 func TestABadStateIsRefusedBeforeSlackIsAsked(t *testing.T) {
@@ -156,10 +176,14 @@ func TestABadStateIsRefusedBeforeSlackIsAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	unissuedState, _ := url.Parse(unissued)
+	purposed, err := other.Mint("swe~A0SWE~nonce", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for name, bad := range map[string]string{
 		"edited":           edited,
-		"another purpose":  other.Mint("swe~A0SWE~nonce", time.Hour),
+		"another purpose":  purposed,
 		"never handed out": unissuedState.Query().Get("state"),
 		"garbage":          "not-a-state.at.all",
 	} {

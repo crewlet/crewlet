@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,9 @@ type oauthVendor struct {
 	// presented is the Authorization each request to the server's own
 	// address carried, which it refuses whatever it is.
 	presented []string
+	// authorizeAt is the authorization endpoint its metadata names in place
+	// of its own, or "".
+	authorizeAt string
 }
 
 func newOAuthVendor(t *testing.T) *oauthVendor {
@@ -71,7 +75,10 @@ func newOAuthVendor(t *testing.T) *oauthVendor {
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		base := "http://" + r.Host
-		writeJSONBody(w, map[string]any{"issuer": base, "authorization_endpoint": base + "/authorize",
+		v.mu.Lock()
+		authorize := cmp.Or(v.authorizeAt, base+"/authorize")
+		v.mu.Unlock()
+		writeJSONBody(w, map[string]any{"issuer": base, "authorization_endpoint": authorize,
 			"token_endpoint": base + "/token", "registration_endpoint": base + "/register",
 			"revocation_endpoint": base + "/revoke", "client_id_metadata_document_supported": true,
 			"code_challenge_methods_supported":               []string{"S256"},
@@ -564,6 +571,34 @@ mcp_servers:
 	if _, missing := resolveServer(&own.Config.MCPServers[0], "", "vendor", nil, ownNode.resolver(),
 		nil); missing == nil || !strings.Contains(missing.Error(), "VENDOR_CLIENT_SECRET_UNSET") {
 		t.Errorf("a server whose client secret is unset is not held back: %v", missing)
+	}
+}
+
+// A SIGN-IN REFUSED BEFORE ANYBODY IS SENT ANYWHERE LEAVES THE SERVER'S AS
+// IT WAS: a vendor whose metadata now names an authorization endpoint the
+// engine sends nobody to, plain http on another origin, is refused, and the
+// sign-in already pending is still there to finish.
+//
+// Mutation: store the sign-in before its authorize URL is made, and the
+// pending one is replaced by one nobody can finish.
+func TestARefusedSignInLeavesThePendingOne(t *testing.T) {
+	t.Parallel()
+	v := newOAuthVendor(t)
+	a, _ := oauthNodes(t, v, "dcr")
+	pending, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.mu.Lock()
+	v.authorizeAt = "http://elsewhere.example.com/authorize"
+	v.mu.Unlock()
+	var refused *MCPSignInRefusal
+	if _, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane); !errors.As(err, &refused) ||
+		!strings.Contains(refused.Reason, "not an https address") {
+		t.Fatalf("a sign-in at a plain http endpoint elsewhere answered %v", err)
+	}
+	if got, err := a.MCPSignIn(t.Context(), pending.SignIn.ID); err != nil || got.Status != coord.MCPSignInPending {
+		t.Errorf("the pending sign-in after a refused one: %+v, %v", got, err)
 	}
 }
 

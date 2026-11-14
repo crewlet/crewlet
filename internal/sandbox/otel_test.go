@@ -33,6 +33,38 @@ func otelTokens(t *testing.T, opts sandbox.OtelTokenOptions) *sandbox.OtelTokens
 	return tokens
 }
 
+// minted is tokens' token for traceID, valid for ttl, failing t where none is
+// minted.
+func minted(t *testing.T, tokens *sandbox.OtelTokens, traceID string, ttl time.Duration) string {
+	t.Helper()
+	token, err := tokens.Mint(traceID, ttl)
+	if err != nil {
+		t.Fatalf("Mint(%q): %v", traceID, err)
+	}
+	return token
+}
+
+// runEnv is the environment receiver hands a run
+// ([sandbox.OtelReceiver.RunEnv]), failing t where it refuses one.
+func runEnv(t *testing.T, receiver *sandbox.OtelReceiver, traceID, spanID string, onHost bool) map[string]string {
+	t.Helper()
+	env, err := receiver.RunEnv(traceID, spanID, "turn-1", "engineer", onHost, time.Hour)
+	if err != nil {
+		t.Fatalf("RunEnv(%q): %v", traceID, err)
+	}
+	return env
+}
+
+// runEnvFor is [sandbox.RunEnvFor], failing t where it refuses.
+func runEnvFor(t *testing.T, m *sandbox.Manager, req sandbox.LaunchRequest, box sandbox.Sandbox) map[string]string {
+	t.Helper()
+	env, err := sandbox.RunEnvFor(m, req, box)
+	if err != nil {
+		t.Fatalf("RunEnvFor: %v", err)
+	}
+	return env
+}
+
 // A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER.
 //
 // This is the property the whole design turns on. Minting and verifying
@@ -56,7 +88,7 @@ func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 	minter := otelTokens(t, opts(material))
 	verifier := otelTokens(t, opts(material))
 
-	token := minter.Mint("trace-abc", time.Hour)
+	token := minted(t, minter, "trace-abc", time.Hour)
 	if got := verifier.Validate(token); got != "trace-abc" {
 		t.Fatalf("a token minted elsewhere validated to %q", got)
 	}
@@ -112,7 +144,7 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 		Material: runtoken.OneKey("k", "a-shared-signing-key"),
 		Now:      func() time.Time { return clock },
 	})
-	good := tokens.Mint("trace-abc", 10*time.Minute)
+	good := minted(t, tokens, "trace-abc", 10*time.Minute)
 	if tokens.Validate(good) != "trace-abc" {
 		t.Fatal("a fresh token did not validate")
 	}
@@ -143,8 +175,8 @@ func TestOtelTokensAreRefusedEveryWayTheyCanBeWrong(t *testing.T) {
 func TestOtelTokensAreScopedToTheirRun(t *testing.T) {
 	t.Parallel()
 	tokens := otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")})
-	first := tokens.Mint("trace-one", time.Hour)
-	second := tokens.Mint("trace-two", time.Hour)
+	first := minted(t, tokens, "trace-one", time.Hour)
+	second := minted(t, tokens, "trace-two", time.Hour)
 	if first == second {
 		t.Fatal("two runs got the same token")
 	}
@@ -293,7 +325,7 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer", false, time.Hour)
+	env := runEnv(t, receiver, "trace-abc", "span-def", false)
 	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	if !strings.HasPrefix(endpoint, "https://engine.internal/otlp/") {
 		t.Fatalf("the box exports to %q, which is not the engine", endpoint)
@@ -341,8 +373,45 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env := receiver.RunEnv("", "span", "turn-1", "engineer", false, time.Hour); len(env) != 0 {
+	if env := runEnv(t, receiver, "", "span", false); len(env) != 0 {
 		t.Fatalf("a trace-less run got %v", env)
+	}
+}
+
+// A TRACE NO TOKEN CAN CARRY REDACTED GETS NO ENDPOINT, AND ITS JOB NO START: a
+// trace id holding a dot would be minted into a token internal/redact does
+// not know by its shape, which a box printing its environment would have
+// persisted as printed. The refusal reaches the run's environment and the
+// job's, by name, rather than an endpoint every surface publishes.
+//
+// Mutation: drop the error on its way out of the receiver, and the run is
+// handed an environment with no endpoint, as though no address reached it.
+func TestATraceNoTokenCanCarryGetsNoEndpoint(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "https://engine.internal",
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env, err := receiver.RunEnv("trace.abc", "span-def", "turn-1", "engineer", false, time.Hour); !errors.Is(err,
+		runtoken.ErrSubject) || env != nil {
+		t.Errorf("a trace id holding a dot was handed %v (%v), want runtoken.ErrSubject", env, err)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Telemetry: receiver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env, err := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
+		Turn: sandbox.TurnRef{TraceID: "trace.abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
+		Spec: sandbox.Spec{Harness: "claude-code", TimeoutSec: 900},
+	}, sandbox.NewFakeSandbox("d")); !errors.Is(err, runtoken.ErrSubject) || env != nil {
+		t.Errorf("a job whose trace id holds a dot was handed %v (%v), want runtoken.ErrSubject", env, err)
 	}
 }
 
@@ -504,8 +573,7 @@ func TestABoxOnTheHostExportsToItsNodeWhereTheNodeForwards(t *testing.T) {
 				onHost bool
 				want   string
 			}{{true, tc.onHost}, {false, tc.offHost}} {
-				endpoint := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer",
-					side.onHost, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+				endpoint := runEnv(t, receiver, "trace-abc", "span-def", side.onHost)["OTEL_EXPORTER_OTLP_ENDPOINT"]
 				switch {
 				case side.want == "" && endpoint != "":
 					t.Errorf("a box on the host: %t was handed %q, want no endpoint", side.onHost, endpoint)
@@ -562,7 +630,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			env := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
+			env := runEnvFor(t, manager, sandbox.LaunchRequest{
 				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
 				Spec: sandbox.Spec{Placement: tc.cell, Harness: "claude-code", TimeoutSec: 900},
 			}, tc.box)
@@ -604,7 +672,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
+	env := runEnvFor(t, manager, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{
 			TraceID: "trace-abc", SpanID: "span-def",
 			TurnID: "turn-1", AgentHandle: "engineer",
@@ -668,17 +736,17 @@ func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	}
 	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
 
-	got := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	got := runEnvFor(t, manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	if !strings.HasPrefix(got, "http://host.docker.internal:8000/otlp/") {
 		t.Errorf("a container box's endpoint = %q, want the receiver by the engine host's alias", got)
 	}
-	direct := sandbox.RunEnvFor(manager, req, sandbox.NewFakeSandbox("d"))["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	direct := runEnvFor(t, manager, req, sandbox.NewFakeSandbox("d"))["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	if !strings.HasPrefix(direct, "http://127.0.0.1:8000/otlp/") {
 		t.Errorf("a box on the host's network was handed %q, want the receiver as written", direct)
 	}
 
 	req.Spec.Env = map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}
-	if own := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]; own != "http://127.0.0.1:4318" {
+	if own := runEnvFor(t, manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]; own != "http://127.0.0.1:4318" {
 		t.Errorf("the operator's own endpoint was rewritten to %q", own)
 	}
 }

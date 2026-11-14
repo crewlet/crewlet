@@ -182,8 +182,14 @@ func (i *Installs) Link(ctx context.Context, handle, appID string) (string, erro
 	if err != nil {
 		return "", err
 	}
+	state, err := i.signer.Mint(strings.Join([]string{handle, appID, nonce}, stateSep), InstallTTL)
+	if err != nil {
+		return "", fmt.Errorf("slack: the install link's state for seat %s and app %s: %w", handle, appID, err)
+	}
 	// RECORDED WHEN MINTED, so a state the signer would accept but this
-	// fleet never handed out is still refused at the landing.
+	// fleet never handed out is still refused at the landing. And after the
+	// state is minted, so a subject the signer refuses records no nonce: a
+	// state not recorded is one never handed out.
 	first, err := i.opts.Claims.Claim(ctx, issuedKey(nonce), InstallTTL, i.opts.Now())
 	if err != nil {
 		return "", registryDown("this engine could not record the install link", err)
@@ -191,7 +197,6 @@ func (i *Installs) Link(ctx context.Context, handle, appID string) (string, erro
 	if !first {
 		return "", errors.New("slack: a fresh install nonce was already recorded")
 	}
-	state := i.signer.Mint(strings.Join([]string{handle, appID, nonce}, stateSep), InstallTTL)
 	return InstallLink(SeatApp{Handle: handle, ClientID: clientID}, base, state), nil
 }
 

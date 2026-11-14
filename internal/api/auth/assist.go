@@ -379,7 +379,11 @@ func (d *Delegations) Derive(ctx context.Context, req AssistRequest) (exec.Grant
 	if err != nil {
 		return nil, err
 	}
-	token := iam.AssistBearerPrefix + d.signer.Mint(subject, expires.Sub(now))
+	minted, err := d.signer.Mint(subject, expires.Sub(now))
+	if err != nil {
+		return nil, fmt.Errorf("auth: an assistant grant's token: %w", err)
+	}
+	token := iam.AssistBearerPrefix + minted
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
