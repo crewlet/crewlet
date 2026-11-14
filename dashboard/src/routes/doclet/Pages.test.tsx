@@ -20,7 +20,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { Pages } from "./Pages.tsx";
+import { Pages, neverWritten } from "./Pages.tsx";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -121,7 +121,16 @@ afterEach(() => {
   localStorage.clear();
   reloadForTest();
   location.hash = "#/";
+  spacePages = 3;
+  written = [{ id: "c-1", page_id: RUNBOOK, kind: "saved", at: "2026-09-24T22:00:00Z" }];
 });
+
+/** The space's page count, which a case about an empty space sets to 0. */
+let spacePages = 3;
+/** The space's change log, newest first, which a case about an empty space empties. */
+let written: unknown[] = [
+  { id: "c-1", page_id: RUNBOOK, kind: "saved", at: "2026-09-24T22:00:00Z" },
+];
 
 function mount(viewer: unknown = JANE) {
   const store = new Store();
@@ -151,16 +160,14 @@ function mount(viewer: unknown = JANE) {
             {
               key: "ENG",
               name: "Engineering",
-              pages: 3,
+              pages: spacePages,
               purpose: "How the platform runs",
               created_at: "2026-09-01T00:00:00Z",
             },
           ],
         });
       case "page_activity":
-        return Promise.resolve({
-          changes: [{ id: "c-1", page_id: RUNBOOK, kind: "saved", at: "2026-09-24T22:00:00Z" }],
-        });
+        return Promise.resolve({ changes: written });
       case "pages":
         if (p.parent === FOLDER) {
           return Promise.resolve({
@@ -225,6 +232,23 @@ test("the head names the space, what it is for, and when somebody last wrote in 
     kinds: "created,saved,renamed",
     limit: 1,
   });
+});
+
+// AN EMPTY SPACE HAS NOTHING WRITTEN, and says so: its header read "Last
+// written: before this node's change log", the words for pages older than the
+// history the node keeps, on every space somebody had just made. A space that
+// holds pages the history does not reach is that second case, in a reader's
+// words. Mutation: answer the second sentence for both and the first goes red.
+test("an empty space says nothing is written yet, and never names a change log", async () => {
+  spacePages = 0;
+  written = [];
+  mount();
+  await settle();
+  const facts = screen.getByRole("list", { name: "About Engineering" });
+  expect(facts.textContent).toContain("Last written nothing yet");
+  expect(facts.textContent).not.toMatch(/change log/);
+  expect(neverWritten({ pages: 4 }, true)).toBe("before the history this node keeps");
+  expect(neverWritten({ pages: 0 }, false)).toBe("not read yet");
 });
 
 test("the outline reads the top level, and a folder's pages only once it opens", async () => {

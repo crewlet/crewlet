@@ -210,6 +210,20 @@ function filedBy(owners: SpaceOwners): ReactNode {
 }
 
 /**
+ * What "Last written" says where the space's change log holds no change.
+ *
+ * AN EMPTY SPACE HAS NOTHING WRITTEN, which is what it says: it read "before
+ * this node's change log", the words for a space whose pages were written
+ * before the history this node keeps, and that was every new space's header.
+ * A space that holds pages and no change in that history is the second case,
+ * said in a reader's words. Before the log has answered, neither is known.
+ */
+export function neverWritten(space: Pick<PageContainer, "pages">, read: boolean): string {
+  if (!read) return "not read yet";
+  return space.pages === 0 ? "nothing yet" : "before the history this node keeps";
+}
+
+/**
  * The space's name and key, what it is for, and its facts: how many pages,
  * when somebody last wrote in it, who files into it, where its work goes, and
  * when it was made.
@@ -245,7 +259,7 @@ function SpaceHead({ space }: { space: PageContainer }) {
               <b>{relTime(last, now)}</b>
             </time>
           ) : (
-            <b>{written.data ? "before this node's change log" : "not read yet"}</b>
+            <b>{neverWritten(space, written.data !== undefined && written.data !== null)}</b>
           )}
         </li>
         <li>{filedBy(owners)}</li>
