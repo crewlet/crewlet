@@ -51,7 +51,8 @@ var callFamily = map[string]class{
 	"running_calls": status,
 
 	"trigger": body, "prompt": body, "prompt_messages": body, "response": body,
-	"tool_executions": body, "round_narration": body, "partial_round": body,
+	"tool_executions": body, "calls_elided": body, "elided_calls": body, "round_narration": body,
+	"partial_round": body,
 
 	"work_item": tracker,
 }

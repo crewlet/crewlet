@@ -81,7 +81,7 @@ var CallDetail = map[string][]string{
 	"prompt":      {"prompt", "prompt_messages"},
 	"response":    {"response"},
 	"narration":   {"round_narration"},
-	"executions":  {"tool_executions"},
+	"executions":  {"tool_executions", "calls_elided", "elided_calls"},
 	"rounds":      {"rounds"},
 	"invocations": {"invocations"},
 }
@@ -110,10 +110,11 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 	return CallVersions{
 		Prompt: moved(was.Prompt, prev.Prompt == next.Prompt &&
 			sameList(prev.PromptMessages, next.PromptMessages)),
-		Response:   moved(was.Response, prev.Response == next.Response),
-		Narration:  moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
-		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions)),
-		Rounds:     moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
+		Response:  moved(was.Response, prev.Response == next.Response),
+		Narration: moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
+		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions) &&
+			prev.CallsElided == next.CallsElided && sameList(prev.ElidedCalls, next.ElidedCalls)),
+		Rounds: moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
 		Invocations: moved(was.Invocations,
 			sameList(prev.Invocations, next.Invocations)),
 	}
@@ -157,7 +158,7 @@ func (c *LiveCall) Without(held CallVersions) any {
 		out.RoundNarration = &c.RoundNarration
 	}
 	if c.Versions.Executions != held.Executions {
-		out.ToolExecutions = &c.ToolExecutions
+		out.ToolExecutions, out.CallsElided, out.ElidedCalls = &c.ToolExecutions, &c.CallsElided, &c.ElidedCalls
 	}
 	if c.Versions.Rounds != held.Rounds {
 		out.Rounds = &c.Rounds
@@ -180,6 +181,8 @@ type leanCall struct {
 	PromptMessages *[]any  `json:"prompt_messages,omitempty"`
 	Response       *string `json:"response,omitempty"`
 	ToolExecutions *[]any  `json:"tool_executions,omitempty"`
+	CallsElided    *int    `json:"calls_elided,omitempty"`
+	ElidedCalls    *[]any  `json:"elided_calls,omitempty"`
 	RoundNarration *[]any  `json:"round_narration,omitempty"`
 	Rounds         *[]any  `json:"rounds,omitempty"`
 	Invocations    *[]any  `json:"invocations,omitempty"`

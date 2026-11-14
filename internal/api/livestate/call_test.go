@@ -382,6 +382,35 @@ func TestAFrozenFailedCallKeepsNoRoundInFlight(t *testing.T) {
 	}
 }
 
+// A FROZEN CALL SAYS WHAT ITS RECORD'S LIST LEFT OUT. A failed phase's call is
+// frozen with its record's tool list, which a record past its share of one
+// message keeps its first and newest calls of, counting the rest by tool:
+// frozen with the list alone, the row would draw the kept calls as all the
+// phase made.
+//
+// Mutation: freeze the list without its count and tally, and the row says
+// nothing was left out.
+func TestAFrozenFailedCallSaysWhatItsRecordsListLeftOut(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
+		"failed": true, "error": "boom",
+		"tool_executions": []any{map[string]any{"name": "read_file", "success": true}},
+		"calls_elided":    float64(300),
+		"elided_calls":    []any{map[string]any{"name": "read_file", "calls": float64(300), "failed": float64(2)}},
+	}), at("2026-06-14T12:00:05+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("the frozen call disappeared")
+	}
+	if call.CallsElided != 300 || len(call.ElidedCalls) != 1 || len(call.ToolExecutions) != 1 {
+		t.Errorf("the frozen call lists %d calls and says %d were left out (%v), want the record's list with "+
+			"its count and tally", len(call.ToolExecutions), call.CallsElided, call.ElidedCalls)
+	}
+}
+
 func TestAProgressRoundForAnotherCallLosesToANewerOne(t *testing.T) {
 	t.Parallel()
 	// Not the same call, and the one held is newer: a delivery that

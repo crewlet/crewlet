@@ -161,6 +161,18 @@ type LiveCall struct {
 	TotalTokens  int `json:"total_tokens"`
 
 	ToolExecutions []any `json:"tool_executions"`
+	// CallsElided is how many of the phase's calls ToolExecutions does not
+	// list, and ElidedCalls those calls by tool, as the phase's record says
+	// them (types.AgentPhaseCompleted): a record holds its calls to its share
+	// of one message, and a failed phase's call is frozen with the record's
+	// list, so it says what that list left out. Versioned with
+	// ToolExecutions, which they describe.
+	//
+	// ON THE WIRE WHEN ZERO, as ToolExecutions is when empty: a tab takes a
+	// version's fields only from a push that carries every one of them, so
+	// a count left out would read as a push that missed the list's change.
+	CallsElided int   `json:"calls_elided"`
+	ElidedCalls []any `json:"elided_calls"`
 	// RoundNarration is what the model said in each round, so the live view
 	// can put a round's thinking beside the calls it asked for instead of
 	// re-splitting the joined Response and getting it wrong.

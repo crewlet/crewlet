@@ -197,6 +197,7 @@ func withhold(dup *LiveCall, rounds, runs *[]any) withheldCall {
 	dup.Trigger = nil
 	dup.Prompt, dup.PromptMessages, dup.Response = "", nil, ""
 	dup.ToolExecutions, dup.RoundNarration, dup.PartialRound = nil, nil, nil
+	dup.CallsElided, dup.ElidedCalls = 0, nil
 	if dup.RunningCalls != nil {
 		calls := make([]any, 0, len(dup.RunningCalls))
 		for _, entry := range dup.RunningCalls {
@@ -271,6 +272,8 @@ type withheldCall struct {
 	PromptMessages *struct{} `json:"prompt_messages,omitempty"`
 	Response       *struct{} `json:"response,omitempty"`
 	ToolExecutions *struct{} `json:"tool_executions,omitempty"`
+	CallsElided    *struct{} `json:"calls_elided,omitempty"`
+	ElidedCalls    *struct{} `json:"elided_calls,omitempty"`
 	RoundNarration *struct{} `json:"round_narration,omitempty"`
 	PartialRound   *struct{} `json:"partial_round,omitempty"`
 	// Rounds and Invocations are carried as the input carried them — see
