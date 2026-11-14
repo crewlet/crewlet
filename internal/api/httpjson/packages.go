@@ -39,7 +39,7 @@ var goPackages = map[string]bool{
 	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
 	"jira": true, "jsapi": true, "jsapitest": true, "jsinflight": true, "jsoncarry": true, "jsonform": true,
 	"jsprovision": true, "jwks": true, "kept": true, "keyset": true,
-	"knowledge": true, "kv": true,
+	"knowledge": true, "kv": true, "kvtest": true,
 	"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
 	"livestate": true, "llm": true, "llmtest": true, "logging": true, "maintenance": true,
 	"lint": true, "linktest": true, "manifest": true, "mcprelay": true, "mediatype": true,

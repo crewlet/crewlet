@@ -132,7 +132,8 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 	}
 	// A hold is the seat's, not the request's: one taken or lifted on a
 	// context a drain is cancelling would do nothing at all.
-	ctx = context.WithoutCancel(ctx)
+	ctx, release := detach(ctx)
+	defer release()
 	for {
 		c.mu.Lock()
 		if c.holdBusy[handle] {

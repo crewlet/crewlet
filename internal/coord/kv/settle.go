@@ -122,9 +122,18 @@ type settledBucket struct {
 	// request term — a write whose caller set no deadline waits.
 	js jetstream.JetStream
 
-	// pace is the slowest the connection may carry a mebibyte of a write:
-	// the object store's floor across a link, none in process ([Reach]).
+	// pace is the slowest the connection may carry a mebibyte of a write,
+	// or of a read's reply: the object store's floor across a link, none in
+	// process ([Reach]).
 	pace time.Duration
+
+	// carries is how large a value of the bucket may be where its values are
+	// budgeted to what one key holds ([holdingLarge]), so that every read of
+	// one is given the time a leader's reply that large takes to cross the
+	// connection ([newLeaderReader]); none for every other bucket, whose
+	// values are a few kibibytes and whose replies are in far inside the
+	// read term.
+	carries int
 }
 
 // Reach is how a node's connection reaches the coordination buckets' streams,
@@ -159,6 +168,53 @@ func (r Reach) pace() time.Duration {
 		return objstore.MiBPace
 	}
 	return 0
+}
+
+// valueCrossing is how long a CHANGE of a run's value at what one key holds
+// ([coord.MaxValueBytes]) takes to cross a connection that reaches the buckets
+// as r: the leader's read its decision is taken on, whose reply carries the
+// value back ([Reach.readCrossing]), and the write, for every send the client
+// may make of it — what the store's own rule gives such a write beyond the
+// request term ([settledBucket.budget]), one [sendCrossing] of the value and
+// the longest key a run's write is sent under ([longestRunKey]) for each of
+// [jsapi.WriteSends] sends, at r's pace. None in process. coord.MaxValueCrossing
+// is this across a link, and a test holds it to what the bucket's own read and
+// budget give such a change.
+//
+// THE READ TOO, because every change of a run's value is a read-decide-write
+// ([FleetStore.MutateSandboxRun]), and the read's reply crosses the link the
+// write does, a third larger than the value: counted without it, a caller's
+// budget gave the write its sends and left the read nothing, which a value at
+// its bound spends four minutes of at the slowest pace allowed.
+//
+// THE STORE'S RULES, NEVER A COPY OF THEM: counted apart, the figure dropped
+// the key the budget counts, and a change to either — a send more, a byte of
+// header — would have parted them with nothing to say so.
+func (r Reach) valueCrossing() time.Duration {
+	return r.readCrossing() + jsapi.WriteSends*sendCrossing(longestRunKey, coord.MaxValueBytes, r.pace())
+}
+
+// readCrossing is how long a stream leader's reply to a read of a value at
+// what one key holds takes to cross a connection that reaches the buckets as
+// r: the value and the most header a write leaves on it ([kvHeaderBytes]),
+// base64-encoded in the reply (internal/jsapi's Crossing), at r's pace — none
+// in process. Exactly what a read of such a value is given beyond the read term
+// ([newLeaderReader]): its crossing, and none of the reply's handling in the
+// engine's own processes, which is CPU that the read term covers on any node
+// not running under the race detector (internal/jsapi's Leader.Deciding).
+func (r Reach) readCrossing() time.Duration {
+	return jsapi.Crossing(coord.MaxValueBytes+kvHeaderBytes, r.pace())
+}
+
+// sendCrossing is how long ONE send of a write of a key of keyBytes and a
+// value of valueBytes takes to cross a connection carrying a mebibyte in as
+// long as pace: both, beside the most header a write of the client's carries
+// ([kvHeaderBytes]), behind the request's protocol line, which [jsapi.Sending]
+// counts — none at no pace. The one rule of a write's crossing here: a
+// settled write's budget gives it for each send ([settledBucket.budget]), and
+// a run's value is counted at it ([Reach.valueCrossing]).
+func sendCrossing(keyBytes, valueBytes int, pace time.Duration) time.Duration {
+	return jsapi.Sending(keyBytes+valueBytes+kvHeaderBytes, pace)
 }
 
 // checkReach refuses a configuration that does not say how its connection
@@ -197,6 +253,38 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 	return settledBucket{KeyValue: kv, js: js, pace: reach.pace()}
 }
 
+// holdingLarge is kv, a bucket this node has opened ([settled]), as one whose
+// values are budgeted to what one key holds ([coord.MaxValueBytes]): a
+// sandbox run's record and the parts beside it (internal/sandbox's RowBytes).
+// Every leader read of its keys — a key's own, a listing's certifying read, a
+// create's read of what holds the key — is given the time the leader's reply
+// of a value that large takes to cross this node's connection
+// ([newLeaderReader]): across a link, at the slowest pace a link is allowed;
+// on a member's own connection, which crosses nothing, none, so it is read at
+// the read term as a bucket of small values is.
+//
+// THE CROSSING ALONE, never the reply's handling: every read of a run's value
+// is one a caller waits on within a budget of its own — a change's
+// read-decide-write, a waiter's verdict, a read of the run before a write to
+// it — and a request a member dropped across an election is asked again two
+// seconds later, inside the shortest such budget, five seconds in the store's
+// own process, where the handling of a reply at the bound would ask it again
+// only once that budget had ended (internal/jsapi's Leader.Deciding).
+//
+// ONLY SUCH A BUCKET, since a reply of a few kibibytes crosses any link inside
+// the read term. A bucket's values are sized by its writers, so the bound is
+// declared where the bucket is opened ([OpenFleet]), as its reach is.
+func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
+	b, ok := kv.(settledBucket)
+	if !ok {
+		// Every bucket is settled where it is opened; one that is not is
+		// a wiring mistake no read should paper over.
+		panic(fmt.Sprintf("coord/kv: holdingLarge is handed %T, not a bucket settled where it was opened", kv))
+	}
+	b.carries = coord.MaxValueBytes
+	return b
+}
+
 // budget is the budget of a write of key and value — none for a removal —
 // made by calls of the client's, each of which may send its message as many
 // as internal/jsapi's WriteSends times inside the ONE context it is handed: a
@@ -217,7 +305,7 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 // TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient holds the
 // package to it.
 func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
-	return jsapi.Budget(b.js, jsapi.Sending(len(key)+len(value)+kvHeaderBytes, b.pace))
+	return jsapi.Budget(b.js, sendCrossing(len(key), len(value), b.pace))
 }
 
 // carriedBack refuses value for key past what one key holds

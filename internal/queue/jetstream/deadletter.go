@@ -344,9 +344,9 @@ func (q *Queue) DeadLetterFrame(ctx context.Context, subject string, seq uint64)
 		return nil, false, fmt.Errorf("jetstream: dead letter %d is on %s, not %s; nothing was read",
 			seq, at.subject, subject)
 	case q.leaderCarries(at.bytes):
-		// ITS LEADER'S REPLY CROSSES THE LINK, inside the ceiling, so the
-		// leader answers, given the time that reply takes to cross
-		// ([jsapi.Leader.Carrying]).
+		// ITS LEADER'S REPLY CROSSES THE LINK, held to no more than the
+		// leaf's server carries, so the leader answers, given the time
+		// that reply takes to arrive ([jsapi.Leader.Carrying]).
 		return letters.frame(ctx, q, letters.carrying(q, at.bytes), subject, seq)
 	}
 	msg, held, err := letters.copies.message(ctx, seq, at)
@@ -357,8 +357,8 @@ func (q *Queue) DeadLetterFrame(ctx context.Context, subject string, seq uint64)
 }
 
 // carrying is the stream leader's read of an entry of entryBytes on q's
-// connection: presumed lost only once its reply has had time to cross the
-// connection at its pace ([jsapi.Leader.Carrying], [link.pace]).
+// connection: presumed lost only once its reply has had time to arrive across
+// the connection at its pace ([jsapi.Leader.Carrying], [link.pace]).
 func (s letterStream) carrying(q *Queue, entryBytes int) *jsapi.Leader {
 	return s.leader.Carrying(entryBytes, q.link.pace)
 }
@@ -453,10 +453,10 @@ func (q *Queue) DropDeadLetter(ctx context.Context, subject string, seq uint64) 
 // copies.
 type letterStream struct {
 	stream string
-	// leader reads the stream's leader: given the largest entry's reply's
-	// crossing where the connection crosses a link the leader's read is kept
-	// across, and none where it reads through copies, whose read gives each
-	// entry its own ([letterStream.carrying]).
+	// leader reads the stream's leader: given the arrival of the largest
+	// entry's reply wherever the leader's read reaches every entry, and none
+	// where it reads through copies, whose read gives each entry its own
+	// ([letterStream.carrying]).
 	leader *jsapi.Leader
 	// keep is the stream's own age bound, zero for a stream kept by none.
 	keep time.Duration
@@ -490,18 +490,25 @@ func (q *Queue) deadLetters(ctx context.Context, subject string) (letterStream, 
 		return letterStream{}, fmt.Errorf("jetstream: read the dead letters on %s: %w", subject, err)
 	}
 	letters := letterStream{stream: stream, leader: leader, keep: spec.maxAge}
-	switch {
-	case !q.leaderCarries(int(q.nc.MaxPayload())):
+	if !q.leaderCarries(int(q.nc.MaxPayload())) {
 		// ACROSS A LEAF'S LINK: an entry is found from its headers, and
 		// read by its own size ([Queue.DeadLetterFrame]).
 		letters.copies = q.copiesOf(stream, leader)
-	case q.link.pace > 0:
-		// ACROSS A LINK NO LEAF STANDS ON — a dial to a broker somebody
-		// else runs — the leader's read, given the time an entry as large
-		// as the transport carries takes to cross at the connection's
-		// pace: nothing there holds its reply to the transport.
-		letters.leader = leader.Carrying(int(q.nc.MaxPayload()), q.link.pace)
+		return letters, nil
 	}
+	// EVERY OTHER CONNECTION reads every entry from the leader, given the
+	// arrival of a reply as large as the transport carries
+	// ([jsapi.Leader.Carrying]): its handling in the engine's own processes
+	// on a member's own connection, which crosses nothing, and its crossing at
+	// the connection's pace besides across a link no leaf stands on — a dial
+	// to a broker somebody else runs, where nothing holds the reply to the
+	// transport. On a member's own connection the reply was given the bare
+	// read term, and under load an entry at the ceiling — its reply eleven
+	// megabytes, built by the leader and decoded here, in this process — was
+	// asked again at two seconds and at four while the leader was still
+	// building the first, every re-ask another whole reply, and ran out its
+	// bound with none of them answered (crewlet/crewlet#1153).
+	letters.leader = leader.Carrying(int(q.nc.MaxPayload()), q.link.pace)
 	return letters, nil
 }
 

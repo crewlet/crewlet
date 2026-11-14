@@ -350,19 +350,22 @@ func readWholeFromTheLeader(t *testing.T, q *Queue) {
 // The leader's read is one request, where a read through a consumer is the
 // stream's info, a consumer or more the metadata leader makes and deletes and
 // a pull — so a frame is read through a consumer only where the leader's
-// reply could not cross the leaf's link: past the transport, or past the
-// ceiling at the link's pace. Here a queue across a leaf's link at the floor
-// reads a small entry, one of two mebibytes — whose reply fits the transport
-// and takes over a minute to cross at the floor, past the thirty seconds a
-// leader's read is asked for — and one at the keep's ceiling, the leader's
-// message reads held by the case: the small one's read reaches the leader and
-// is answered there, and neither of the others reaches a leader's read at
-// all. The queue is [leafLinkedQueue]'s, so the case can hold the leader's
-// reads.
+// reply could not cross the leaf's link: past the transport, which the leaf's
+// server closes its whole link on. A reply the leaf's server carries is the
+// leader's however long it takes to cross, since the read is given its reply's
+// arrival beyond the read term and the lookup ceiling. Here a queue across a
+// leaf's link at the floor reads a small entry and one of two mebibytes —
+// whose reply fits the transport and takes over a minute to cross at the
+// floor, past the thirty seconds a leader's read was asked for before it was
+// given its reply's arrival — and one at the keep's ceiling, the leader's
+// message reads held by the case: the first two reads reach the leader's read
+// and are answered there, and the ceiling's reaches no leader's read at all.
+// The queue is [leafLinkedQueue]'s, so the case can hold the leader's reads.
 //
 // Mutation: read every frame across a leaf's link from a copy, and the small
 // entry's read never reaches the leader; from the leader, and the ceiling's
-// does; or route by the transport alone, and the two mebibytes' does.
+// does; or route by how long a reply takes to cross at the floor, and the two
+// mebibytes' never reaches it.
 func TestAFrameAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoesNot(t *testing.T) {
 	t.Parallel()
 	ns, q := leafLinkedQueue(t, probeDomain())
@@ -386,37 +389,49 @@ func TestAFrameAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoes
 		t.Fatal(err)
 	}
 
-	held := jsapitest.Hold(t, ns, jsapitest.MsgGet(stream), nats.Token(leaderReadsToken))
 	type answer struct {
 		frame []byte
 		held  bool
 		err   error
 	}
-	done := make(chan answer, 1)
-	go func() {
-		frame, ok, err := q.DeadLetterFrame(ctx, subject, kept[0].Seq)
-		done <- answer{frame, ok, err}
-	}()
-	// LIVENESS: the small entry's read reaches the leader's read once its
-	// copy has said what the sequence holds; this ends a wait for one that
-	// never does.
-	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	read, err := held.Next(wait)
-	if err != nil {
-		t.Fatalf("the small entry's frame never reached the leader's read: %v", err)
-	}
-	held.Release()
-	if err := read.Answer(); err != nil {
-		t.Fatalf("answer the held read: %v", err)
-	}
-	if got := <-done; got.err != nil || !got.held || !bytes.Equal(got.frame, small) {
-		t.Fatalf("the small entry's frame = %q, %t, %v, want %q", got.frame, got.held, got.err, small)
+	for i, body := range [][]byte{small, middle} {
+		entry := kept[i].Seq
+		held := jsapitest.Hold(t, ns, jsapitest.MsgGet(stream), nats.Token(leaderReadsToken))
+		done := make(chan answer, 1)
+		go func() {
+			frame, ok, err := q.DeadLetterFrame(ctx, subject, entry)
+			done <- answer{frame, ok, err}
+		}()
+		// LIVENESS: the entry's read reaches the leader's read once its copy
+		// has said what the sequence holds; this ends a wait for one that
+		// never does.
+		wait, cancel := context.WithTimeout(ctx, 30*time.Second)
+		read, err := held.Next(wait)
+		cancel()
+		if err != nil {
+			t.Fatalf("the frame of %d bytes never reached the leader's read: %v", len(body), err)
+		}
+		held.Release()
+		if err := read.Answer(); err != nil {
+			t.Fatalf("answer the held read: %v", err)
+		}
+		if got := <-done; got.err != nil || !got.held || !bytes.Equal(got.frame, body) {
+			t.Fatalf("the frame of %d bytes = %d bytes, %t, %v, want its body", len(body), len(got.frame),
+				got.held, got.err)
+		}
 	}
 
 	again := jsapitest.Hold(t, ns, jsapitest.MsgGet(stream), nats.Token(leaderReadsToken))
-	for i, body := range [][]byte{middle, large} {
-		entry := kept[i+1].Seq
+	for i, body := range [][]byte{small, middle, large} {
+		if i < 2 {
+			// THE TWO THE LEADER ANSWERED, dropped: a drop asks the leader
+			// only through the copies across a leaf's link.
+			if err := q.DropDeadLetter(ctx, subject, kept[i].Seq); err != nil {
+				t.Fatalf("DropDeadLetter: %v", err)
+			}
+			continue
+		}
+		entry := kept[i].Seq
 		frame, ok, err := q.DeadLetterFrame(ctx, subject, entry)
 		if err != nil || !ok || !bytes.Equal(frame, body) {
 			t.Fatalf("the frame of %d bytes = %d bytes, %t, %v, want its body", len(body),
@@ -427,8 +442,8 @@ func TestAFrameAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoes
 		}
 	}
 	if n, err := again.Fence(ctx, q.nc); err != nil || n != 0 {
-		t.Errorf("reading and dropping the two large entries across a leaf's link asked the "+
-			"leader for them %d times (%v), want none", n, err)
+		t.Errorf("reading the entry at the ceiling and dropping all three across a leaf's link "+
+			"asked the leader %d times (%v), want none", n, err)
 	}
 }
 
@@ -737,10 +752,10 @@ func TestAPayloadReadNeverAnswersAMessageGoneOnItsByteBoundsWordAlone(t *testing
 // LEADER'S READ, AND ONE WHOSE REPLY DOES NOT CROSSES RAW.
 //
 // The state log's twin of the frame's case above: on a log whose records may
-// be as large as the transport, a record whose own reply crosses the leaf's
-// link inside the ceiling is read with the leader's one request, at a term of
-// its own reply's crossing (TestAConnectionsReadsAndWritesArePacedByOneDecision
-// holds the term), and one whose reply does not is read raw. Here a small
+// be as large as the transport, a record whose own reply the leaf's server
+// carries is read with the leader's one request, at a term of its own reply's
+// arrival (TestAConnectionsReadsAndWritesArePacedByOneDecision holds the
+// term), and one whose reply does not is read raw. Here a small
 // record's read reaches the leader's read the case holds, and is answered
 // there; a record at the transport's ceiling reaches no leader's read at all.
 //

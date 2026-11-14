@@ -140,31 +140,46 @@ func requesterOf(js jetstream.JetStream) requester {
 	return js.Conn()
 }
 
-// ask puts one request on subject — presumed lost after term and asked again
-// with every earlier request still outstanding, held where its caller set no
-// deadline to bound, the client's own DefaultTimeout, and never past the
-// lookup ceiling ([jsprovision.ReadBoundedWith]) — and answers the first
-// reply.
+// ask puts one request on subject whose reply takes arrival to reach its
+// reader whole once the leader takes it ([Arrival]) — presumed lost after the
+// read term and that arrival, and asked again with every earlier request
+// still outstanding, held where its caller set no deadline to bound (the
+// client's own DefaultTimeout, and the arrival a carrying reader adds to it),
+// and never past the lookup ceiling and that arrival
+// ([jsprovision.Timing.Arriving], [jsprovision.ReadBoundedWith]) — and answers
+// the first reply.
 func ask(ctx context.Context, conn requester, subject string, req []byte,
-	term, bound time.Duration) (*nats.Msg, error) {
+	arrival, bound time.Duration) (*nats.Msg, error) {
 
-	reply, _, err := askTimed(ctx, conn, subject, req, term, bound)
+	reply, _, err := askWith(ctx, conn, subject, req, jsprovision.Clustered(false).Timing().Arriving(arrival),
+		bound)
 	return reply, err
 }
 
-// askTimed is [ask], and how long the request whose reply it answers took to
-// be answered: that request's own round trip, never the time the requests
-// before it were asked for — a page whose first request a member dropped and
-// whose second was answered at once is a page the leader answers at once.
+// askTimed is a request asked as [ask] asks one whose answer arrives at once,
+// with term as its term in place of the read term, and how long the request
+// whose reply it answers took to be answered: that request's own round trip,
+// never the time the requests before it were asked for — a page whose first
+// request a member dropped and whose second was answered at once is a page
+// the leader answers at once.
 func askTimed(ctx context.Context, conn requester, subject string, req []byte,
 	term, bound time.Duration) (*nats.Msg, time.Duration, error) {
+
+	timing := jsprovision.Clustered(false).Timing()
+	timing.ReadTerm = term
+	return askWith(ctx, conn, subject, req, timing, bound)
+}
+
+// askWith asks one request on subject at timing's term and ceiling, held
+// where its caller set no deadline to bound ([jsprovision.ReadBoundedWith]),
+// answering the first reply and that request's own round trip.
+func askWith(ctx context.Context, conn requester, subject string, req []byte,
+	timing jsprovision.Timing, bound time.Duration) (*nats.Msg, time.Duration, error) {
 
 	type answer struct {
 		reply *nats.Msg
 		took  time.Duration
 	}
-	timing := jsprovision.Clustered(false).Timing()
-	timing.ReadTerm = term
 	a, err := jsprovision.ReadBoundedWith(ctx, timing, bound, func(ctx context.Context) (answer, error) {
 		start := time.Now()
 		reply, err := conn.RequestWithContext(ctx, subject, req)
