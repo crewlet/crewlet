@@ -59,6 +59,7 @@ import type {
   PageChange,
   PageContainer,
   PageStatus,
+  PageSummary,
   QueryRefusal,
   SearchMode,
 } from "~/protocol/index.ts";
@@ -451,4 +452,21 @@ export function NotInDoclet({
       }
     />
   );
+}
+
+/** The pages of a space as places to file under, each with the path above it. */
+export function placesIn(pages: readonly PageSummary[]): { page: PageSummary; path: string }[] {
+  const byID = new Map(pages.map((p) => [p.id, p]));
+  const pathOf = (page: PageSummary): string => {
+    const steps: string[] = [];
+    const seen = new Set<string>();
+    let at = page.parent_id ? byID.get(page.parent_id) : undefined;
+    while (at && !seen.has(at.id)) {
+      seen.add(at.id);
+      steps.unshift(at.title);
+      at = at.parent_id ? byID.get(at.parent_id) : undefined;
+    }
+    return steps.join(" / ");
+  };
+  return pages.map((page) => ({ page, path: pathOf(page) }));
 }

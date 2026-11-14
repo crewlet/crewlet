@@ -79,6 +79,7 @@ import {
   useSpaces,
   NotInDoclet,
 } from "./parts.tsx";
+import { SpaceTrash } from "./page/Tidy.tsx";
 import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 
@@ -177,6 +178,9 @@ export function Pages({ container }: { container: string }) {
       <>
         <SpaceHead space={space} />
         <SpaceOutline key={space.key} space={space} />
+        {/* WHAT IT HOLDS IN THE TRASH, each linking to the page, which is
+            where it is restored from. */}
+        <SpaceTrash space={space.key} />
       </>
     );
   }
@@ -207,6 +211,20 @@ function filedBy(owners: SpaceOwners): ReactNode {
       Filed by <b>{owners.units.map((u) => u.name).join(", ")}</b>
     </>
   );
+}
+
+/**
+ * What "Last written" says where the space's change log holds no change.
+ *
+ * AN EMPTY SPACE HAS NOTHING WRITTEN, which is what it says: it read "before
+ * this node's change log", the words for a space whose pages were written
+ * before the history this node keeps, and that was every new space's header.
+ * A space that holds pages and no change in that history is the second case,
+ * said in a reader's words. Before the log has answered, neither is known.
+ */
+export function neverWritten(space: Pick<PageContainer, "pages">, read: boolean): string {
+  if (!read) return "not read yet";
+  return space.pages === 0 ? "nothing yet" : "before the history this node keeps";
 }
 
 /**
@@ -245,7 +263,7 @@ function SpaceHead({ space }: { space: PageContainer }) {
               <b>{relTime(last, now)}</b>
             </time>
           ) : (
-            <b>{written.data ? "before this node's change log" : "not read yet"}</b>
+            <b>{neverWritten(space, written.data !== undefined && written.data !== null)}</b>
           )}
         </li>
         <li>{filedBy(owners)}</li>

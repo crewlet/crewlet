@@ -102,6 +102,14 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
+	// AwaitingRestart is which of Crewlet's own services the company it is
+	// handed turns on that this node serves only once restarted, by the org
+	// projection's keys for them (`engine.Engine.AwaitingRestart`); nil names
+	// none. Asked of the company the projection is being built from rather
+	// than read beside it, for Company's reason: two reads can straddle a
+	// publish.
+	AwaitingRestart func(*config.Company) []string
+
 	// Delegated is the access log's verdicts, which `delegated_decisions`
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads

@@ -400,8 +400,10 @@ test.each([
   expect(message.getAttribute("title")).toBe(reason);
 });
 
-test("Message is pressable for a reader who can file", async () => {
-  await mount(OPERATOR);
+// THE COMPANY RUNS CHATLET until the engine says otherwise, and an admin holds
+// it, so Message is the conversation and pressable where the engine opens one.
+test("Message is pressable for a reader who can write to the seat", async () => {
+  await mount({ ...OPERATOR, acts: ["create_work_item", "open_dm"] });
   const message = screen.getByRole("button", { name: /Message/ });
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
 });
@@ -442,11 +444,11 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
-// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Direct
-// message in its "More", as on the seat page. A third button beside Message
-// pushed Assign task onto a row of its own. Mutation: draw the door as a
-// button in the footer.
-test("the footer holds Message and Assign task, and Direct message in its More", async () => {
+// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Ask as a task in
+// its "More" where Message is the conversation, as on the seat page. A third
+// button beside Message pushed Assign task onto a row of its own. Mutation:
+// draw the ask as a button in the footer.
+test("the footer holds Message and Assign task, and Ask as a task in its More", async () => {
   const ada = {
     login: "ada.lovelace",
     grants: ["worklet", "chatlet"],
@@ -455,12 +457,15 @@ test("the footer holds Message and Assign task, and Direct message in its More",
     acts: ["create_work_item", "update_work_item", "open_dm"],
   };
   await mount(ada, {
-    projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
+    projection: {
+      ...org(),
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+    } as OrgProjection,
   });
   const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
-  expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
+  expect(within(foot).queryByRole("button", { name: /Ask as a task/ })).toBeNull();
   fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
-  expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
+  expect(screen.getByRole("menuitem", { name: /Ask as a task/ })).toBeDefined();
 });
 
 // ONE WAY TO THE PROFILE, the rail's own Open, at every width: the footer's

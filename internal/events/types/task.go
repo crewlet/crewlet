@@ -102,6 +102,11 @@ type TaskAssigned struct {
 	// seat is told it is catching up once rather than handed the same duty
 	// once per missed tick.
 	Missed []MissedFire `json:"missed,omitempty"`
+	// RequestedBy is the person who asked for this run now, off the
+	// schedule's cron, and empty for a fire the cron made. The seat is told
+	// ([TaskAssigned.Brief]): a run that comes round outside its cadence
+	// otherwise reads as an anomaly to report.
+	RequestedBy string `json:"requested_by,omitempty"`
 }
 
 // WorkPickup hands an idle agent seat its next ready work item (ADR-0112). A
@@ -288,6 +293,10 @@ func (e TaskAssigned) Brief() string {
 		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
 	}
 	b.WriteString(e.Description)
+	if e.RequestedBy != "" {
+		b.WriteString("\n\n" + e.RequestedBy + " asked for this run now, outside the schedule's own " +
+			"times. Do the work as of now; its next scheduled run is unchanged.")
+	}
 	if line := e.missedLine(); line != "" {
 		b.WriteString("\n\n" + line)
 	}

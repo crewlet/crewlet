@@ -55,6 +55,13 @@ type State struct {
 	// third-party app failing to look at it.
 	LastError string `json:"last_error,omitempty"`
 
+	// TeardownHeldBy is what the last failed teardown pass was held by,
+	// empty where none failed: the third-party app's half, or the company's
+	// own settings refusing the revision that removes the integration
+	// ([ErrBlockNotRemoved]). Stored beside LastError so a reader says which
+	// without parsing the fault's text.
+	TeardownHeldBy TeardownHold `json:"teardown_held_by,omitempty"`
+
 	// LastAttemptAt and SettledAt are different questions and both are
 	// asked. A row that keeps running and never settling reads nothing
 	// like one nobody has looked at, and a single timestamp cannot tell
@@ -461,6 +468,7 @@ func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 
 	state.Findings = nil
 	state.LastError = ""
+	state.TeardownHeldBy = ""
 	state.Report = Report{
 		Phase: PhaseDisconnecting, Actor: ActorEngine,
 		Detail: "the engine is removing what this integration holds",
@@ -492,17 +500,44 @@ func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next Sta
 
 	if err == nil {
 		state.LastError = ""
+		state.TeardownHeldBy = ""
 		state.SettledAt = now
 		state.Attempts = 0
 		return state, true
 	}
 
-	state.Report = Report{
-		Phase: PhaseDisconnecting, Actor: ActorEngine,
-		Detail: "the last teardown pass could not finish",
+	// WHAT HELD IT IS SAID, in the report's sentence and as a value: a
+	// revision the company's settings refused is nothing the third-party app
+	// did, and a screen that blamed the vendor for it sent people to look
+	// where nothing was wrong.
+	state.TeardownHeldBy = TeardownHeldByVendor
+	detail := "the last teardown pass could not finish"
+	if errors.Is(err, ErrBlockNotRemoved) {
+		state.TeardownHeldBy = TeardownHeldBySettings
+		detail = "what this integration holds was removed, and the company's settings " +
+			"refused the change that removes the integration itself"
 	}
+	state.Report = Report{Phase: PhaseDisconnecting, Actor: ActorEngine, Detail: detail}
 	state.Outcome = state.Report.Outcome()
 	state.Attempts++
 	state.LastError = truncateError(err.Error())
 	return state, false
+}
+
+// TeardownHold is what a failed teardown pass was held by.
+type TeardownHold string
+
+// What holds a teardown.
+const (
+	// TeardownHeldByVendor is the third-party app's half: a call it refused
+	// or did not answer.
+	TeardownHeldByVendor TeardownHold = "vendor"
+	// TeardownHeldBySettings is the company's settings refusing the revision
+	// that removes the integration ([ErrBlockNotRemoved]).
+	TeardownHeldBySettings TeardownHold = "settings"
+)
+
+// Valid reports whether h is a member of the closed set.
+func (h TeardownHold) Valid() bool {
+	return h == TeardownHeldByVendor || h == TeardownHeldBySettings
 }

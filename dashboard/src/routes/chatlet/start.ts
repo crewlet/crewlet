@@ -46,7 +46,15 @@ export const SHORTEN = "Nothing is cut to fit. Shorten it.";
 
 /** Which gesture answered, because the retry advice differs for each. */
 export type StartKind =
-  "channel" | "direct" | "join" | "leave" | "topic" | "members" | "following" | "delete";
+  | "channel"
+  | "direct"
+  | "join"
+  | "leave"
+  | "topic"
+  | "members"
+  | "following"
+  | "delete"
+  | "archive";
 
 /**
  * How a report is drawn.
@@ -124,6 +132,7 @@ function retryAdvice(kind: StartKind): string {
     case "members":
     case "following":
     case "delete":
+    case "archive":
       // A PATCH THAT AGREES WITH WHAT IS THERE publishes nothing, an add names
       // a set, a membership the room already holds publishes nothing, and a
       // second delete of a tombstone changes nothing.
@@ -150,6 +159,8 @@ function what(kind: StartKind): string {
       return "the change was saved";
     case "delete":
       return "the message was deleted";
+    case "archive":
+      return "the room was changed";
   }
 }
 

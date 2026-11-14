@@ -16,7 +16,11 @@
  *    replacement of it, and [putEntity] stores one — each with the same
  *    validation of the whole document behind it;
  *  - [dryRunCreate] and [createEntity] ADD an MCP server or a provider: the
- *    same PUT at the new entity's own address, create-only.
+ *    same PUT at the new entity's own address, create-only;
+ *  - [getConfigText], [dryRunDocument] and [saveDocument] read, check and
+ *    replace the WHOLE document as the YAML a person edits;
+ *  - [reloadConfig] re-publishes the active document unchanged and
+ *    [revertRevision] re-activates an earlier one, each as a new revision.
  *
  * EVERY WRITE STATES THE REVISION IT EDITED (`If-Match`), so a colleague's
  * save in between is a `conflict` to re-read rather than an overwrite. And
@@ -373,6 +377,157 @@ export async function createEntity(
       rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         headers: CREATE_ONLY,
         body: { ...entity, _summary: summary },
+        signal,
+      }),
+    ),
+  );
+}
+
+/**
+ * `POST /config/reload`: re-publish the active document unchanged, as a new
+ * revision every node applies again, re-reading the secret store as it does.
+ *
+ * NO `If-Match`: it changes nothing, so there is no edit to lose a race with,
+ * and the engine reads none. The summary travels in `X-Summary`, the one
+ * channel a route with no body has.
+ */
+export async function reloadConfig(
+  summary: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("POST", "/config/reload", { headers: summaryHeader(summary), signal }),
+    ),
+  );
+}
+
+/**
+ * `POST /config/revisions/{id}/revert`: store a new revision carrying the
+ * document revision `id` holds, and activate it. The history stays
+ * append-only, so the revert is itself a revision with its own summary.
+ */
+export async function revertRevision(
+  id: string,
+  summary: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("POST", `/config/revisions/${pathSegment(id)}/revert`, {
+        headers: summaryHeader(summary),
+        signal,
+      }),
+    ),
+  );
+}
+
+/**
+ * A summary as the `X-Summary` header carries it: one line, since a header
+ * holds no line break (the transport sends its text as UTF-8 bytes,
+ * `rest.headerBytes`). Empty sends no header, and the engine names the
+ * revision itself where the route lets it.
+ */
+function summaryHeader(summary: string): Record<string, string> {
+  const line = summary.replace(/[\s\x00-\x1f\x7f]+/g, " ").trim();
+  return line === "" ? {} : { "X-Summary": line };
+}
+
+/** The active document as the text a person edits, or why there is none. */
+export type ConfigTextRead =
+  | {
+      readonly kind: "text";
+      /** The document as YAML, credentials masked, as `GET /config?format=yaml` writes it. */
+      readonly text: string;
+      /** The entity tag, verbatim, to hand back as `If-Match`. */
+      readonly etag: string;
+    }
+  | { readonly kind: "none" }
+  | ConfigRefusal;
+
+/**
+ * Read the active company document as YAML with the tag naming its revision:
+ * the pair [dryRunDocument] and [saveDocument] take back.
+ */
+export async function getConfigText(signal: AbortSignal): Promise<ConfigTextRead> {
+  const answer = await answerOf(
+    rest.request("GET", "/config", { query: { format: "yaml" }, read: "text", signal }),
+  );
+  if (answer.status === 200 && typeof answer.body === "string" && answer.etag) {
+    return { kind: "text", text: answer.body, etag: answer.etag };
+  }
+  if (answer.status === 404) return { kind: "none" };
+  if (answer.status >= 200 && answer.status < 300) {
+    // [getConfig]'s reading: a success no write can be conditional on.
+    return {
+      kind: "problems",
+      problems: [
+        {
+          path: "",
+          segments: null,
+          kind: "invalid",
+          message: "The engine answered the configuration without naming its revision.",
+        },
+      ],
+      derived: null,
+      code: "",
+      hint: "",
+    };
+  }
+  return classifyConfigRefusal(answer);
+}
+
+/**
+ * The entity tag naming revision `id`, as `GET /config` writes it: the
+ * condition a whole document replacing a revision nobody can read is sent
+ * under, since that revision answers no read to take the tag from.
+ */
+export function revisionTag(id: string): string {
+  return `"${id}"`;
+}
+
+/** The media type a whole document is sent as: the text a person edited. */
+const YAML = "application/yaml";
+
+/**
+ * Validate a whole document as the replacement of the revision `etag` names.
+ * Stores nothing, and carries no summary for the reason [dryRunPatch] gives.
+ */
+export async function dryRunDocument(
+  text: string,
+  etag: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("PUT", "/config", {
+        query: { dry_run: "true" },
+        contentType: YAML,
+        headers: { "If-Match": etag },
+        body: text,
+        signal,
+      }),
+    ),
+  );
+}
+
+/**
+ * Replace the revision `etag` names with a whole document. The engine restores
+ * the credential masks the read showed against that revision, validates the
+ * document whole and stores it under `summary`.
+ */
+export async function saveDocument(
+  text: string,
+  etag: string,
+  summary: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("PUT", "/config", {
+        contentType: YAML,
+        headers: { "If-Match": etag, ...summaryHeader(summary) },
+        body: text,
         signal,
       }),
     ),

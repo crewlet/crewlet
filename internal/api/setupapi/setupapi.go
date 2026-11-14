@@ -2455,14 +2455,18 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
 	// THE BASE IS THE HEADER, the one write here whose base is: a disconnect
 	// that loses its race lost a precondition its request stated, which is
 	// refused 412 ([configapi.RacedError.Status]), where every other write
 	// here states its base as the body's `if_match` and loses as 409.
+	//
+	// THE BLOCK AND THE AGENTS ON THROUGH IT, in one revision
+	// ([configapi.Service.Disconnect]): the block alone left every agent
+	// turned on at an integration the company no longer had, which the
+	// document refuses, so forcing answered 400 while any agent was on.
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
-	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
-		Patch:   patch,
+	applied, err := s.config.Disconnect(r.Context(), configapi.DisconnectRequest{
+		Kind:    string(kind),
 		Summary: "disconnect " + string(kind),
 		By:      attributionOf(r),
 		Expect:  ifMatch,
@@ -2484,11 +2488,18 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// with no block behind it and nothing to remove it again.
 	s.forgetUnderGuard(r.Context(), kind)
 	log.InfoContext(r.Context(), "setup_disconnected",
-		"kind", kind, "revision", applied.RevisionID,
+		"kind", kind, "revision", applied.RevisionID, "seats_off", applied.SeatsOff,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	seatsOff := applied.SeatsOff
+	if seatsOff == nil {
+		seatsOff = []string{}
+	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key": kind, "removed": true,
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
+		// THE AGENTS THIS REVISION TURNED OFF THERE, by handle: each keeps
+		// what it was given, so connecting again and turning it on restores it.
+		"seats_off": seatsOff,
 		// NAMED, not deleted. An operator who wants them gone runs
 		// `crewlet secrets unset`, having read this list.
 		"orphaned_secrets": orphaned,

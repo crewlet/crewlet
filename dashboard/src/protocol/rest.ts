@@ -570,6 +570,24 @@ async function request(
   }
 }
 
+/**
+ * A header value as `fetch` has to be handed text: its UTF-8 bytes, one
+ * character per byte.
+ *
+ * A HEADER VALUE IS BYTES. `fetch` takes it as a string of byte-sized
+ * characters, refusing a character past U+00FF and sending U+0080 to U+00FF
+ * as one byte each, while the engine reads what arrives as UTF-8 text (a Go
+ * string). The header a person writes is a revision's summary (`X-Summary`,
+ * the one channel a reload and a revert have): "Zurück" arrived with a byte
+ * for its "ü" that no UTF-8 reader reads back, and an emoji threw before the
+ * request was made. ASCII, which every other header is, is its own bytes and
+ * passes unchanged.
+ */
+export function headerBytes(value: string): string {
+  if (/^[\x00-\x7f]*$/.test(value)) return value;
+  return Array.from(new TextEncoder().encode(value), (b) => String.fromCharCode(b)).join("");
+}
+
 /** One attempt, counted in flight for [whenRequestsSettle]. */
 async function counted(
   method: string,
@@ -630,7 +648,7 @@ async function attempt(
     credentials: "same-origin",
     headers: {
       ...(contentType ? { "Content-Type": contentType } : {}),
-      ...headers,
+      ...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, headerBytes(v)])),
       // READ AT EACH ATTEMPT, a step-up's replay included, and LAST, so no
       // caller's header can name somebody else in its place.
       ...(forReader ? readerHeaders() : {}),

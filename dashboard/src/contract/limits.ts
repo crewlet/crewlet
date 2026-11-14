@@ -34,6 +34,13 @@ interface LimitRow {
    * own copy of which zeros switch a limit off.
    */
   default_off: boolean;
+  /**
+   * `key` is a setting of the company document, so a write of it changes
+   * `value`. False for a cap the engine holds as a constant (the schedule
+   * timeout, which each schedule sets for itself): a screen offers a change
+   * exactly where this is true.
+   */
+  settable: boolean;
 }
 
 /**

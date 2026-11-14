@@ -5,6 +5,10 @@
  * (`code_refs`), in name order a page at a time — the rows, read at the tab's
  * floor, never git's — each opening its files.
  *
+ * The tab makes a branch (New branch), and each row deletes its own or opens
+ * a protection rule on it (`BranchWrites.tsx`, `Protect.tsx`), every one held
+ * with its reason. A branch a rule names already leads to that rule instead.
+ *
  * THE HISTORY is git's (`code_log`): the commits that changed the path, or any
  * path, newest first from the revision, a page at a time, each with the push
  * that introduced it where the answering Gitlet node's index holds it — who
@@ -16,7 +20,7 @@
  */
 
 import { useMemo } from "react";
-import { Button, Skeleton, TableDateCell, Tag, Text } from "@crewlethq/ui";
+import { Button, Skeleton, TableDateCell, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -35,6 +39,8 @@ import type {
   CodeRepoDetail,
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
+import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
+import { ProtectButton } from "./Protect.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
@@ -51,8 +57,17 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
     (a: CodeRefsAnswer) => a.next ?? "",
   );
   const rows = paged.items;
+  // THE REFS A RULE NAMES EXACTLY, a branch's own rule; a glob's is drawn in
+  // Settings beside the refs it matches.
+  const protectedRefs = useMemo(
+    () => new Set((repo.protections ?? []).map((p) => p.pattern)),
+    [repo.protections],
+  );
   return (
     <>
+      <PageToolbar>
+        <NewBranchButton repo={repo} />
+      </PageToolbar>
       {paged.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label={`Loading the branches of ${repo.name}`} />
       )}
@@ -93,6 +108,7 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
                   {refName(r.ref).name === repo.default_branch && (
                     <Tag appearance="outline">default</Tag>
                   )}
+                  {protectedRefs.has(r.ref) && <Tag appearance="outline">protected</Tag>}
                 </span>
               ),
             },
@@ -135,6 +151,29 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
                     Compare →
                   </a>
                 ) : null,
+            },
+            {
+              key: "actions",
+              header: <VisuallyHidden>Actions</VisuallyHidden>,
+              action: true,
+              shrink: true,
+              // A RULE ON THIS BRANCH ALONE, and its delete at the head this
+              // row shows. A branch a rule names already is edited where its
+              // rule is drawn whole, gate and all (Settings): a new-rule form
+              // opened here would start from the engine's defaults rather
+              // than from what the rule holds.
+              cell: (r) => (
+                <span className="row gap-1 nowrap">
+                  {protectedRefs.has(r.ref) ? (
+                    <a className="t-link" href={repoHref(repo.name, { tab: "settings" })}>
+                      Protection →
+                    </a>
+                  ) : (
+                    <ProtectButton repo={repo} pattern={r.ref} label="Protect" />
+                  )}
+                  <DeleteBranchButton repo={repo} row={r} />
+                </span>
+              ),
             },
           ]}
         />

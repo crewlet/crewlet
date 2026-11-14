@@ -143,6 +143,8 @@ const LITERAL_BOUND: Record<string, string> = {
     "a pick list inside the composer's Modal, which is portaled outside the page",
   "screens.css .seat-control-seats":
     "the seats a control of many applies to, inside its confirmation Modal, which is portaled outside the page",
+  "screens.css .config-revert-diff":
+    "a revert's diff inside its confirmation Modal, which is portaled outside the page",
   "integrations.css .int-manifest-text":
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":

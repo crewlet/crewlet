@@ -80,6 +80,9 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 		builtin.AtlasRefreshTool: "asks the collect duty to read one source, named by its " +
 			"`integration`: the ask is a record in the coordination store, and a source " +
 			"is no object of a native domain",
+		builtin.RunScheduleTool: "runs one schedule now, named by its `scope_type`, " +
+			"`scope` and `name`: the run is a fire in the scheduler's claim, and a schedule " +
+			"is a line of the company document, no object of a native domain",
 		builtin.AtlasAddEntryTool: "adds an entry, named by the `kind` and `key` that make " +
 			"its id: there is no entry to name until it lands, and the answer names its id",
 		builtin.CodeImportRepoTool: "makes a new repository filled from another " +
@@ -158,6 +161,9 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 		AtlasWrite: builtin.AtlasWriteDeps{Log: newAtlasLedger(), Actor: builtin.PrincipalActor,
 			Org: func() *org.Organization { return company }},
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
+		// AND A SCHEDULE RUN NOW, which names a schedule, no native object.
+		ScheduleRuns: builtin.ScheduleRunDeps{Runner: stillRunner{}, Actor: builtin.PrincipalActor,
+			Org: func() *org.Organization { return company }},
 	}) {
 		props, _ := tool.Parameters()["properties"].(map[string]any)
 		out[tool.Name()] = props

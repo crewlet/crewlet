@@ -39,7 +39,7 @@ import { originOf } from "./router.tsx";
 import {
   SIDEBAR_GROUPS,
   listsLanding,
-  ownedBy,
+  groupLanding,
   workspaceRow,
   type Section,
   type WorkspaceRow,
@@ -615,6 +615,5 @@ function root(row: WorkspaceRow, link: boolean): Crumb {
  */
 function rootLabel(row: WorkspaceRow): string {
   const group = SIDEBAR_GROUPS.find((g) => g.place === row.place && g.label !== "");
-  const owns = ownedBy(row);
-  return group && owns.length === 1 && owns[0] === row.place ? group.label : row.label;
+  return group && groupLanding(row) ? group.label : row.label;
 }

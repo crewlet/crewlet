@@ -14,7 +14,9 @@
  * Only `roles`, `units` and the company's name map onto nodes, because those
  * are what the builder draws. Everything else stays at document level:
  * the principles (`mission`, `vision`, `policies`) with a link to Company ›
- * Principles, the one place they are written, `integrations.*` with a link
+ * Principles, the one place they are written, a model entry or the sandbox
+ * default (`providers.llm.*`, `providers.sandbox.*`) with a link to Settings ›
+ * Models, where an entry's cell is chosen, `integrations.*` with a link
  * to Company › Integrations (the Datadog
  * fallback and GitLab access levels are edited from seats, but a problem at
  * the company's integration block is fixed there), and any schedule problem,
@@ -40,7 +42,7 @@ import {
 } from "./document.ts";
 
 /** Where a problem sends the operator when the builder cannot fix it. */
-export type ProblemLink = "integrations" | "schedules" | "principles";
+export type ProblemLink = "integrations" | "schedules" | "principles" | "models";
 
 /** One problem or warning, placed. */
 export interface PlacedProblem {
@@ -159,6 +161,11 @@ function linkFor(
   if (node !== null && node !== COMPANY_KEY) return field[0] === "schedules" ? "schedules" : null;
   if (segments[0] === "scheduling") return "schedules";
   if (segments[0] === "integrations") return "integrations";
+  // WHERE A MODEL ENTRY RUNS, and the default its entries take, are chosen
+  // on Settings › Models (each entry's "Where executors run"), which the
+  // builder does not author.
+  if (segments[0] === "providers" && (segments[1] === "llm" || segments[1] === "sandbox"))
+    return "models";
   const head = segments[0];
   if (typeof head === "string" && (PRINCIPLES_FIELDS as readonly string[]).includes(head))
     return "principles";

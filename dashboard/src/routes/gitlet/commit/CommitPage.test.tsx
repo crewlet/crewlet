@@ -590,3 +590,57 @@ test.each([
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(acted).toHaveLength(0);
 });
+
+// A COMMIT IS REVERTED ON A BRANCH CHOSEN, at the head that branch's listing
+// showed: one code_revert, the commit whole, nothing on the first press.
+// Mutation: drop expected_head, send the short id, or send before the dialog's
+// press, and this fails.
+test("a commit is reverted on the branch chosen, at the head its listing showed", async () => {
+  const { acted } = stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_revert", "code_cherry_pick"],
+  });
+
+  const group = await screen.findByRole("group", { name: "Commit actions" });
+  const revert = within(group).getByRole("button", { name: "Revert" });
+  await waitFor(() => expect(revert.getAttribute("title")).toBeNull());
+  fireEvent.click(revert);
+  const dialog = await screen.findByRole("dialog", { name: /Revert 0123456/ });
+  expect(acted).toHaveLength(0);
+  const send = within(dialog).getByRole("button", { name: "Revert on main" });
+  await waitFor(() => expect(send.getAttribute("title")).toBeNull());
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_revert",
+    args: { repo: "web", branch: "main", expected_head: MAIN, commit: SHA },
+  });
+});
+
+// A CHERRY-PICK ONTO ANOTHER BRANCH names that branch's own head. Mutation:
+// keep the default branch's head after the choice, and this fails.
+test("a commit is picked onto another branch at that branch's head", async () => {
+  const { acted } = stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_revert", "code_cherry_pick"],
+  });
+
+  const group = await screen.findByRole("group", { name: "Commit actions" });
+  const pick = within(group).getByRole("button", { name: "Cherry-pick" });
+  await waitFor(() => expect(pick.getAttribute("title")).toBeNull());
+  fireEvent.click(pick);
+  const dialog = await screen.findByRole("dialog", { name: /Cherry-pick 0123456/ });
+  await within(dialog).findByRole("button", { name: "Pick onto main" });
+  // A SEARCHABLE SELECT IS OPENED BY ITS BUTTON; its search field is the combobox.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Onto the branch" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "retry" }));
+  const send = within(dialog).getByRole("button", { name: "Pick onto retry" });
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_cherry_pick",
+    args: { repo: "web", branch: "retry", expected_head: SHA, commit: SHA },
+  });
+});

@@ -213,6 +213,11 @@ type Halves struct {
 	// through, or the zero value on a node with no coordination store.
 	AtlasRefresh builtin.AtlasRefreshDeps
 
+	// ScheduleRuns is the half a person runs one schedule now through, or
+	// the zero value on a node that wakes no seats. Who asks and the chart
+	// the schedule is named in are set per call.
+	ScheduleRuns builtin.ScheduleRunDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -427,6 +432,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	atlasWrite.Actor, atlasWrite.Org = workActor, s.org
 	atlasRefresh := halves.AtlasRefresh
 	atlasRefresh.Actor = workActor
+	scheduleRuns := halves.ScheduleRuns
+	scheduleRuns.Actor, scheduleRuns.Org = workActor, s.org
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
@@ -434,7 +441,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
 		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite,
-		AtlasRefresh: atlasRefresh, Org: s.org,
+		AtlasRefresh: atlasRefresh, ScheduleRuns: scheduleRuns, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

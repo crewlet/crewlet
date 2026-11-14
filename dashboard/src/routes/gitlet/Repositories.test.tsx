@@ -16,6 +16,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { UNBOUND } from "~/lib/repoWrites.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
@@ -367,4 +368,72 @@ test.each([
   await waitFor(() => expect(button.getAttribute("title")).toBe(reason));
   fireEvent.click(button);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// NEW REPOSITORY IS ONE code_create_repo: the project's name and the unit
+// that owns it, and nothing the person left at the engine's default.
+// Mutation: send the press before a unit is chosen, send an empty
+// description or branch, or name the owner by its name rather than its key,
+// and this fails.
+test("New repository creates a project a unit owns, sending only what the person said", async () => {
+  const acted: { tool: string; args: Record<string, unknown> }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
+      if (url.pathname.startsWith("/operator/act/")) {
+        acted.push({
+          tool: url.pathname.split("/operator/act/")[1] ?? "",
+          args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
+        });
+        return json({ outcome: "applied" });
+      }
+      if (url.pathname === "/query/code_repos") return json({ position: POSITION, level: "stale" });
+      return json({}, 404);
+    }),
+  );
+  const { store } = mount(<Repositories />, "#/gitlet/repos", {
+    ...ADMIN_VIEWER,
+    acts: ["code_create_repo"],
+  });
+  act(() => store.setConnected(true));
+
+  const button = await screen.findByRole("button", { name: "New repository" });
+  await waitFor(() => expect(button.getAttribute("title")).toBeNull());
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("dialog", { name: "New repository" });
+  const create = within(dialog).getByRole("button", { name: "Create repository" });
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "web" } });
+  fireEvent.click(create);
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Owning unit" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Engineering" }));
+  fireEvent.click(create);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_repo",
+    args: { name: "web", owner: { kind: "unit", ref: "engineering" } },
+  });
+  // AN APPLIED CREATE LEADS TO ITS PAGE.
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web"));
+});
+
+// A CREDENTIAL BOUND TO NOBODY CREATES NOTHING in Gitlet, which names the
+// person behind every write: the button is drawn and held with that reason.
+test("New repository is held for a credential bound to nobody", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_repos" ? json({ position: POSITION, level: "stale" }) : null,
+  );
+  const { store } = mount(<Repositories />, "#/gitlet/repos", {
+    ...ADMIN_VIEWER,
+    handle: "",
+    owner: "",
+    kind: "",
+    login: "ci:deploy",
+    acts: ["code_create_repo"],
+  });
+  act(() => store.setConnected(true));
+  const button = await screen.findByRole("button", { name: "New repository" });
+  await waitFor(() => expect(button.getAttribute("title")).toBe(UNBOUND));
 });

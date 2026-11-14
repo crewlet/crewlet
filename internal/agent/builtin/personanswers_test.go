@@ -165,6 +165,7 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		map[string]any{"handle": "agent-cto", "reason": "looping"})
 	out[builtin.ResumeSeatTool], _ = pauses.call(t, builtin.ResumeSeatTool,
 		map[string]any{"handle": "agent-cto"})
+	out[builtin.RunScheduleTool], _ = newScheduleRig(t, "").run(t, boundTo("jane"), "unit", "quality", "standup")
 	_, refresh := refreshRig(t)
 	out[builtin.AtlasRefreshTool], _ = callRefresh(refreshAs(boundTo("ada", iam.GrantAtlas)), t, refresh, "cloudflare")
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
