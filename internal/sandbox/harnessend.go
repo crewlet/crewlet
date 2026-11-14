@@ -2,10 +2,12 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 )
 
-// HOW A JOB'S HARNESS ENDED, ON THE JOB'S OWN RECORD.
+// HOW A JOB'S HARNESS ENDED, AND WHAT ITS NEWEST REQUEST CARRIED, ON THE JOB'S
+// OWN RECORD.
 //
 // A relaunch that carries a round on IN THE JOB'S OWN BOX — a person's answer to
 // a run that parked, or a sign-in replaced while it ran, where the relaunch
@@ -51,6 +53,26 @@ import (
 // nothing: no relaunch carries that run's round on. A lost job whose round IS
 // carried on is read by a collection ([Coordinator.carryOnLost]), which records
 // it as any collection does.
+//
+// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, on the same record in the same
+// write ([LaunchRecord.Context]). A relaunch that continues the copy a job's box
+// holds sends that session's whole context again before it reads a word of its
+// brief, so its floor is that context with the brief (internal/engine's
+// continuedFloor). A capture's stamp measures its archive as it is taken
+// ([SessionCapture.ContextTokens]), but a company that keeps no session takes
+// none, and a job's newest capture can be missing or unmeasured: such a copy
+// was held to the floor with its brief beside it whatever it carried, bounded
+// only by its harness's own compaction. So the read that collects a job takes,
+// off the run's own account of its requests ([Result.LastRequest]: Claude Code's
+// event stream, OpenCode's session message list as the job ends), what the
+// newest request of the copy's harness carried, its uncached input, cache reads
+// and cache writes, and records it beside the harness's end, with NO READ OF THE
+// BOX OF ITS OWN. A job that made no request of its own carries the figure along
+// its copy's lineage, and says where it came from ([MeasureSource]), so no
+// reader takes a carried figure for a fresh measure of the job: a relaunch that
+// continues the copy in place, the record of the job whose copy it is; one that
+// continues a kept capture, that capture's own measure; one that continues the
+// session the conversation's last turn left, the base's; a fresh one, none.
 
 // HarnessEnd is how a job's harness ended, as the read that collected the job
 // found it ([LaunchRecord.HarnessEnd]).
@@ -107,8 +129,159 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 	return HarnessEndOwnRun
 }
 
-// markHarnessEnd records on run's job's record how its harness ended, as the
-// read that collects the job found it ([PendingStore.MarkHarnessEnd]).
+// RequestMeasure is what the newest request of the session a job's box ran
+// carried, as the run's own account measured it ([Result.LastRequest]): its
+// uncached input, its cache reads and its cache writes, the input a launch that
+// continues the session sends again; and whether the job's own run made it,
+// rather than an earlier job of the session it took up (an OpenCode session's
+// newest request that measured a prompt can be one). Tokens 0 measured none.
+type RequestMeasure struct {
+	Tokens int64
+	Own    bool
+}
+
+// MeasureSource is where a job's record's measure of the session its box holds
+// came from ([SessionMeasure.Source]).
+type MeasureSource string
+
+const (
+	// MeasureRequest is a request of the job [SessionMeasure.Launch] names,
+	// read as that job ended: a fresh measure of that job's copy.
+	MeasureRequest MeasureSource = "request"
+	// MeasureCapture is a capture's measure of its archive, taken as it was
+	// spooled ([SessionCapture.ContextTokens]); Launch names the capture's job,
+	// whose archive it is, never as that job's request.
+	MeasureCapture MeasureSource = "capture"
+	// MeasureBase is the session the conversation's last turn left, as the
+	// turn's frozen base records it ([BaseSession.ContextTokens]).
+	MeasureBase MeasureSource = "base"
+	// MeasureSession is an earlier request of the session the job took up,
+	// read as the job ended, whose job is not known.
+	MeasureSession MeasureSource = "session"
+)
+
+// MeasureSources are the four.
+var MeasureSources = []MeasureSource{MeasureRequest, MeasureCapture, MeasureBase, MeasureSession}
+
+// Valid reports whether this build knows s. A record a later build wrote may
+// name a source this build does not know, which is read as the value it is: its
+// figure still holds the copy to a floor, and no reader takes it for a fresh
+// measure of the job, which only [MeasureRequest] is.
+func (s MeasureSource) Valid() bool { return slices.Contains(MeasureSources, s) }
+
+// SessionMeasure is what the session a job's box ran carried at its newest
+// request the engine measured, and where that figure came from
+// ([LaunchRecord.Context]). Only a Source of [MeasureRequest] whose Launch names
+// the record's own job is a fresh measure of the job; every other is carried
+// along the copy's lineage and says from where.
+type SessionMeasure struct {
+	// Tokens is the figure: the request's uncached input, cache reads and
+	// cache writes.
+	Tokens int64 `json:"tokens"`
+	// Source is where it came from.
+	Source MeasureSource `json:"source"`
+	// Launch is the job whose request measured it, for [MeasureRequest], or
+	// whose capture's archive, for [MeasureCapture]; "" for the others.
+	Launch string `json:"launch,omitempty"`
+	// Extra is every key of the measure this build does not know, kept
+	// verbatim and written back (wirekeys.go): a later build's word on where
+	// a figure came from survives this build's writes of the job's record.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ContextTokens is the figure m holds, 0 where there is none: a record with no
+// measure, and a figure that is no count of a session's context.
+func (m *SessionMeasure) ContextTokens() int64 {
+	if m == nil {
+		return 0
+	}
+	return max(m.Tokens, 0)
+}
+
+// same reports whether m and o say the same of a session's measure, a nil one
+// none at all.
+func (m *SessionMeasure) same(o *SessionMeasure) bool {
+	switch {
+	case m == nil || o == nil:
+		return m == o
+	case !m.says(o) || len(m.Extra) != len(o.Extra):
+		return false
+	}
+	for key, value := range m.Extra {
+		if string(o.Extra[key]) != string(value) {
+			return false
+		}
+	}
+	return true
+}
+
+// says reports whether m holds o's figure, where it came from and whose it is,
+// whatever keys a later build added beside them ([SessionMeasure.Extra]); a
+// nil one says nothing.
+func (m *SessionMeasure) says(o *SessionMeasure) bool {
+	return m != nil && o != nil && m.Tokens == o.Tokens && m.Source == o.Source && m.Launch == o.Launch
+}
+
+// EndRead is what the read that collected a job found of its end: how its
+// harness ended, and what its newest request carried
+// ([PendingStore.MarkHarnessEnd]).
+type EndRead struct {
+	// End is how the job's harness ended ([LaunchRecord.HarnessEnd]).
+	End HarnessEnd
+	// Request is what the newest request of the session the job's box ran
+	// carried, as its run's own account measured it ([Result.LastRequest]).
+	Request RequestMeasure
+}
+
+// measured is the measure l, the record of job launch, holds once a read of the
+// job found read, the newest request its run's account measured:
+//
+//   - one the job's own run made: that figure, a request of the job's own;
+//   - one an earlier job of the session made (OpenCode's newest request that
+//     measured a prompt, its step not among the run's own): the measure l
+//     carried where its figure is the read's and the job's box did not say it
+//     started a session of its own, which says whose it is, and else that
+//     figure, as the session's, whose job is not known;
+//   - none, where the job's box did not say it started a session of its own
+//     (it continued the one it was handed, never said which, or said it in a
+//     word this build does not know): the measure l carried, which is the
+//     copy's lineage's, an over-estimate where the box started afresh after
+//     all, the safe direction for a floor;
+//   - none, where the box said it started a session of its own: none, since
+//     what l carried is another session's.
+//
+// A figure that is no count of a session's context is none.
+//
+// AND THE RECORD'S OWN MEASURE WHERE IT SAYS THAT ALREADY, its Extra with it:
+// a collection made again (a claim handed back after a resume that failed) of
+// a job a later build collected first finds the measure that build wrote, with
+// its word on where the figure came from, and a measure built afresh would
+// drop that word in a write that changes nothing this build knows.
+func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasure {
+	var m *SessionMeasure
+	switch {
+	case read.Tokens > 0 && read.Own:
+		m = &SessionMeasure{Tokens: read.Tokens, Source: MeasureRequest, Launch: launch}
+	case read.Tokens > 0 && l.SessionStart != SessionStartFresh && l.Context != nil &&
+		l.Context.Tokens == read.Tokens:
+		return l.Context
+	case read.Tokens > 0:
+		m = &SessionMeasure{Tokens: read.Tokens, Source: MeasureSession}
+	case l.SessionStart == SessionStartFresh:
+		return nil
+	default:
+		return l.Context
+	}
+	if l.Context.says(m) {
+		return l.Context
+	}
+	return m
+}
+
+// markHarnessEnd records on run's job's record how its harness ended and what
+// its newest request carried, as the read that collects the job found them
+// ([PendingStore.MarkHarnessEnd]), in ONE WRITE: the measure adds no write of
+// its own, and no read of the box.
 //
 // UNDER A CONTEXT OF ITS OWN ([stampContext]), as the take's own records are:
 // the record is owed to a relaunch that may come days later, on another node —
@@ -121,21 +294,24 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 // that reads the record later carries its round on in its box telling the
 // session there what such a copy may lack, which it may already hold, and that
 // longer brief counts toward the launch's floor, beside the copy's context
-// where a capture measured it and beside the static floor where none did
-// (internal/engine's continuedFloor). The claim this read collects
-// for is told what the read found whether or not the record landed
+// where its record carries a measure of it and beside the static floor where
+// it carries none (internal/engine's continuedFloor). The claim this read
+// collects for is told what the read found whether or not the record landed
 // ([Coordinator.collectClaimed]).
-func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, end HarnessEnd) {
+func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, read EndRead) {
 	markCtx, cancel := stampContext(ctx, recordsBy(ctx))
 	defer cancel()
-	if _, err := c.pending.MarkHarnessEnd(markCtx, run.TurnID, run.LaunchID, end); err != nil {
+	if _, err := c.pending.MarkHarnessEnd(markCtx, run.TurnID, run.LaunchID, read); err != nil {
 		log.WarnContext(ctx, "sandbox_harness_end_unrecorded", "turn_id", run.TurnID,
-			"launch_id", run.LaunchID, "harness_end", string(end), "error", err.Error(),
-			"detail", "the run's record does not say how its job's harness ended: the coordination store "+
-				"refused the write, or did not answer it within the room the read leaves its records. A "+
-				"relaunch that reads the record later, such as a person's answer, reads the job as one whose "+
-				"harness may have been cut off, and tells the session in its box every call of the round and "+
-				"every note the turn has read, some of which it may hold; a replaced sign-in carried on from "+
-				"this read's own collection reads what this read found")
+			"launch_id", run.LaunchID, "harness_end", string(read.End),
+			"request_tokens", read.Request.Tokens, "error", err.Error(),
+			"detail", "the run's record does not say how its job's harness ended, nor what the session's "+
+				"newest request carried: the coordination store refused the write, or did not answer it "+
+				"within the room the read leaves its records. A relaunch that reads the record later, such as "+
+				"a person's answer, reads the job as one whose harness may have been cut off, and tells the "+
+				"session in its box every call of the round and every note the turn has read, some of which it "+
+				"may hold, its floor held to the measure the job's record carried along its copy's lineage, or "+
+				"to none; a replaced sign-in carried on from this read's own collection reads what this read "+
+				"found")
 	}
 }

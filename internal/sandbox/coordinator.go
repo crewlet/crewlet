@@ -1865,6 +1865,10 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// this claim — a round a replaced sign-in carries on in the job's box —
 	// reads it here.
 	run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(result.HarnessEnd)
+	// AND WHAT ITS NEWEST REQUEST CARRIED, by the rule the record follows
+	// ([LaunchRecord.Context]), for the same resume: a round carried on in the
+	// job's box is held to that copy's measure.
+	run.Launch.Context = run.Launch.measured(result.LastRequest, run.LaunchID)
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
@@ -2281,7 +2285,9 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	if read != BoxReadCollect {
 		return result, ended, nil
 	}
-	c.markHarnessEnd(ctx, run, result.HarnessEnd)
+	// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, as the run's own account
+	// measured it, in the same write: no read of the box of its own.
+	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {

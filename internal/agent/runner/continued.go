@@ -346,9 +346,9 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // auxiliary model, charged to the same counters, which the relaunch asks the
 // seat's budget for once every brief's rewrites are spent. A launch that
 // continues the copy sends all of it, so the floor its launch is held to grows
-// with it: beside the copy's context where a capture measured it, and beside
-// the static floor where none did, as in every copy of a company that keeps no
-// session (internal/engine's continuedFloor).
+// with it: beside the copy's context where its job's newest capture or its
+// job's record measured it ([Continuation.ContextTokens]), and beside the
+// static floor where neither did (internal/engine's continuedFloor).
 //
 // omitted is the reads of the round the brief counts without listing them
 // ([Runner.calledAfter]), which the launch records on the job it opens, for

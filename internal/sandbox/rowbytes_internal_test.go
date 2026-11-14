@@ -712,6 +712,10 @@ func worstRow(t *testing.T) PendingRun {
 		// the three periods a day spells the widest pair, written as itself.
 		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
 		EndedAtDeadline:   true, HarnessEnd: HarnessEnd(plain(32)),
+		// WHAT THE COPY IN ITS BOX CARRIED, at its widest: a figure of
+		// nineteen digits, a source as long as an end's word, and the job it
+		// names a launch id as the begin mints one ([LaunchRecord.Context]).
+		Context: &SessionMeasure{Tokens: math.MaxInt64, Source: MeasureSource(plain(32)), Launch: uuid.NewString()},
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,

@@ -99,9 +99,11 @@ room, since its box starts a session of its own on that brief wherever it
 cannot take the session up. That holds
 for a run continued in its own box as much as for one restored into another,
 and for the session a conversation's last turn left, whose context is what that
-turn's capture recorded; a session no capture measured (keeping switched off)
-has no known context, and its launch needs the floor with the brief that
-continues it beside it. A relaunch below its figure is held, or for an answer
+turn's capture recorded. A run continued in its own box is held to the larger
+of its job's newest capture's measure and what the job's collection found the
+copy's newest request carried, which a company that keeps no session has
+alone; a session neither measured has no known context, and its launch needs
+the floor with the brief that continues it beside it. A relaunch below its figure is held, or for an answer
 turned back, exactly as above, for one turnover at most. A turn's
 first launch below its figure **parks the seat's mail on that figure**, never on
 the floor alone: a window with room for a fresh run and not for the session

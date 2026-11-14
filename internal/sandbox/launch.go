@@ -1054,6 +1054,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Leads: BriefLeads{Run: opened.LeadsRun, Job: opened.LaunchID, Counted: opened.LeadsAppended,
 			Own: ownLeads, Told: slices.Clone(continued.told.Told),
 			ToldUnread: slices.Clone(continued.told.ToldUnread)},
+		// AND WHAT THE SESSION IT HANDED ITS RUN CARRIED, along that
+		// session's lineage, for the read that collects the job to keep
+		// where the job makes no request of its own ([LaunchRecord.Context]).
+		Context: continued.measure,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

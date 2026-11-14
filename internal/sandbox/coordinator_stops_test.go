@@ -1225,11 +1225,11 @@ func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch 
 	return s.inner.MarkEndedAtDeadline(ctx, turnID, launch)
 }
 
-func (s *refusingStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error) {
+func (s *refusingStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
 	if s.called("MarkHarnessEnd") {
 		return false, errRefusedCall
 	}
-	return s.inner.MarkHarnessEnd(ctx, turnID, launch, end)
+	return s.inner.MarkHarnessEnd(ctx, turnID, launch, read)
 }
 
 func (s *refusingStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,

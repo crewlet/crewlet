@@ -286,6 +286,10 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			Harness: existing.Harness, Status: existing.Status,
 			LaunchNode: existing.LaunchNode, Since: existing.BoxSince,
 			Handed: handed.of(existing.LaunchID),
+			// AND WHAT THE COPY IN THE BOX CARRIED, as the replaced job's
+			// record measured it, read in the same compare-and-swap that
+			// replaces that record ([PriorBox.Context]).
+			Context: existing.Launch.Context,
 		}
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
@@ -1836,6 +1840,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// one's place, for which of the two its box said it ran
 			// ([PendingRun.SessionRan]).
 			run.Launch.FreshSessionID = box.FreshSessionID
+			// AND WHAT THE SESSION THE LAUNCH HANDED ITS RUN CARRIED, along
+			// its copy's lineage, for the read that collects the job to keep
+			// where the job makes no request of its own ([LaunchRecord.Context]).
+			run.Launch.Context = box.Context
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
@@ -2779,22 +2787,29 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 	return marked, err
 }
 
-// MarkHarnessEnd records how a job's harness ended, as a read that collected
-// the job found it. See the contract on [PendingStore].
-func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error) {
-	if !end.Valid() {
+// MarkHarnessEnd records how a job's harness ended and what its newest request
+// carried, as a read that collected the job found them. See the contract on
+// [PendingStore].
+//
+// A WRITE WHERE EITHER CHANGES: an end already recorded beside a measure the
+// read brings is a measure to record, which a test of the end alone would drop.
+func (s *CoordStore) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
+	if !read.End.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no way a job's harness ends; it is one of %s",
-			end, words.Or(HarnessEnds))
+			read.End, words.Or(HarnessEnds))
 	}
 	if launch == "" {
 		return false, nil
 	}
 	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		next := run.Launch.HarnessEnd.after(end)
-		if run.LaunchID != launch || next == run.Launch.HarnessEnd {
+		if run.LaunchID != launch {
 			return false
 		}
-		run.Launch.HarnessEnd = next
+		next, measure := run.Launch.HarnessEnd.after(read.End), run.Launch.measured(read.Request, launch)
+		if next == run.Launch.HarnessEnd && measure.same(run.Launch.Context) {
+			return false
+		}
+		run.Launch.HarnessEnd, run.Launch.Context = next, measure
 		return true
 	})
 	return marked, err

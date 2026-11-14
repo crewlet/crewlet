@@ -44,6 +44,41 @@ const openCodeUsageEvent = "crewlet.usage"
 // prints, for [openCodeUsageEvent]'s reason.
 const openCodeUsageBefore = "crewlet.usage_before"
 
+// openCodeContextEvent is the type of the lines a run's script adds to the
+// event stream once its session is exported, each a page of the session's own
+// message list as its server answered it, or a marker that a page was past what
+// the pages may put into the stream ([openCodeContext]). A type OpenCode never
+// prints, for [openCodeUsageEvent]'s reason.
+const openCodeContextEvent = "crewlet.context"
+
+// openCodeContextPages is the most pages of one assistant message each a run's
+// script asks for the measure of its session's newest request
+// ([openCodeContext]). A page past the first is asked only where the one before
+// held a failed message, since a job that ended by itself left its last request
+// settled, after which OpenCode's loop ends on a step's error at most once, and
+// a job that made no request of its own pages back into the session it took up,
+// whose run may have been ended on request, leaving up to two interrupted steps:
+// the real exports hold the step that measured a prompt fourth newest, behind
+// two interrupted steps and one its provider refused
+// (testdata/opencode/{2.0.32,2.2.5}/export.json). SIX holds that worst case and
+// two failures more, while a job that ended cleanly asks one page and one whose
+// last step its provider refused two. Past it, the job's record keeps the measure
+// carried along its copy's lineage.
+const openCodeContextPages = 6
+
+// openCodeContextBytes is the most the pages a run's script asks for the
+// measure may put into its event stream in all ([openCodeContext]): what the
+// read that collects the job carries back for them, within the poll's share of
+// its budget ([sandbox.BoxReadBudget]), the stream's other lines beside them.
+//
+// ONE MEBIBYTE. OpenCode cuts a tool's text output at 50 KiB, so a step's
+// message holds about twenty such within it, while a step that read an image
+// carries it as a data URI of up to about 27 MiB, which no page the collection
+// reads should carry. Past it, a marker says the page's size and no page
+// follows: no figure, never a page cut short. Each line stays far under the
+// stream's line bound ([maxLineBytes]).
+const openCodeContextBytes = 1 << 20
+
 // openCodeListenWait bounds how long the run waits for its private server to
 // say where it listens. Measured on OpenCode 2.0.32 it does so in about a
 // second, most of it the runtime starting; sixty is room for a box whose disk
@@ -198,6 +233,13 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // drops the final step's counts, while the session the run worked in holds
 // the whole total, so the script prints it as one last line of its own type
 // ([openCodeUsageEvent]) once the run has ended.
+//
+// AND WHAT THE SESSION'S NEWEST REQUEST CARRIED, asked of the session's own
+// message list a page at a time once its session is exported, never on an end
+// request, each page printed as a line of its own type
+// ([openCodeContextEvent], [openCodeContext]): the measure of the copy the box
+// holds, which a relaunch that continues it is held to, and which no pack's
+// export can give, since a company that keeps no session makes no pack.
 //
 // AND, FOR A RUN WIRED TO ITS NOTES, NO STEER LEFT PENDING: once the run has
 // ended, every note the plugin admitted and OpenCode never delivered is
@@ -541,6 +583,9 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`if [ "$endedas" != before ] || [ "$k" = yes ]; then`)
 	b.WriteString(openCodeCapture(paths))
 	line(`fi`)
+	// WHAT THE SESSION'S NEWEST REQUEST CARRIED, asked of its server once it is
+	// exported, and never on an end request: see [openCodeContext].
+	b.WriteString(openCodeContext(paths))
 	line(`unsync`)
 	line(`[ -z "$imported" ] || keep %s --server "$url"`, next)
 	line(`stop; trap - EXIT TERM INT HUP`)
@@ -746,6 +791,71 @@ func openCodePack(paths Paths, staged, dest, server string) string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)
 	line(`fi`)
+	return b.String()
+}
+
+// openCodeContext is the part of a run's script that measures the session the
+// run worked in (sid) as its job ends, for a relaunch that continues the copy
+// the box holds (internal/sandbox's LaunchRecord.Context): it asks the run's own
+// server, once the session is exported, for the session's newest assistant
+// messages, ONE A PAGE, newest first (`session.message.list`, `type=assistant`,
+// `limit=1`), the next page by the cursor the page before answered, and prints
+// each page as it came as one line of the event stream ([openCodeContextEvent]),
+// for the read that collects the job to decode ([openCodeEvents.contextLine]).
+//
+// WHY A PAGE AT A TIME. The list's bytes are bounded in count alone: a message
+// carries its content whole, an image a tool read among it as a data URI, so
+// one page of every message could be anything up to the session's size. Each
+// page is written to a file, and printed only where it fits in what is left of
+// [openCodeContextBytes]; a page past it is said by its size alone, and ends the
+// asking. Through a file, never a variable or an argument, for the same reason;
+// and with its line breaks taken out, which JSON's strings never hold raw, so a
+// page is one line.
+//
+// AND IT STOPS AT A PAGE WITH NO FAILED MESSAGE, or after
+// [openCodeContextPages]: the newest settled message that measured a prompt is
+// the figure ([measuredPrompt]), so a page whose message failed is passed for the
+// next, and one whose message did not fail either is the figure or a reason to
+// stop with none. The ENGINE decides from the pages, never the script, and the
+// script's test is coarse in the safe direction both ways: a page holding no
+// error object that is no figure ends the reading with none, and one holding a
+// nested error object (a tool's) costs one more page, read past by the engine,
+// which takes the first figure. No page is ever left out between two printed,
+// so no older figure is taken for a newer request.
+//
+// THE CURSOR IS READ AS TEXT, as the steers' ids are ([openCodeLeftoverSteers]),
+// since a box may have no JSON parser: the answer is `{"data": [...], "cursor":
+// {"previous": ..., "next": ...}}`, so its `next` is the last key of the whole
+// answer, read anchored at its end (base64url, which holds no quote), and a
+// `next` key inside a message's content is never it. An answer that ends
+// otherwise yields no cursor, and the asking stops: no figure, never a wrong one.
+// Measured on OpenCode 2.0.32 and 2.2.7 (testdata/opencode/<version>/context):
+// the answer is one line, ends with its cursor's `next`, and names a step by the
+// id the run's stream names it by (`part.messageID`).
+//
+// NEVER ON AN END REQUEST: a stop's, a loss's and a turn's cap end the round the
+// job ran, which no relaunch continues in place, and the pages would spend the
+// end's wait the export needs (internal/sandbox's JobEndWait). A request that
+// comes while the pages are asked stops the asking at the next page.
+func openCodeContext(paths Paths) string {
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line(`ctxfile=%s ctxcur= ctxn=0 ctxleft=%d`, sandbox.ShellQuote(paths.WorkDir()+"/opencode-context"),
+		openCodeContextBytes)
+	line(`while [ -z "$endasked" ] && [ "$ctxn" -lt %d ]; do`, openCodeContextPages)
+	line(`  ctxn=$((ctxn + 1))`)
+	line(`  opencode api --server "$url" session.message.list --param sessionID="$sid" --param type=assistant --param limit=1 ${ctxcur:+--param cursor="$ctxcur"} < /dev/null > "$ctxfile" 2> /dev/null || break`)
+	line(`  ctxsize=$(wc -c < "$ctxfile") || break; ctxsize=$((ctxsize))`)
+	line(`  [ "$ctxsize" -gt 0 ] || break`)
+	line(`  if [ "$ctxsize" -gt "$ctxleft" ]; then printf '{"type":"%s","skipped":%%s}\n' "$ctxsize"; break; fi`,
+		openCodeContextEvent)
+	line(`  ctxleft=$((ctxleft - ctxsize))`)
+	line(`  printf '{"type":"%s","page":'; tr -d '\n' < "$ctxfile"; printf '}\n'`, openCodeContextEvent)
+	line(`  grep -q '"error"[[:space:]]*:[[:space:]]*{' "$ctxfile" || break`)
+	line(`  ctxcur=$(tr -d '\n' < "$ctxfile" | sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)"[[:space:]]*}[[:space:]]*}[[:space:]]*$/\1/p')`)
+	line(`  [ -n "$ctxcur" ] || break`)
+	line(`done`)
+	line(`rm -f "$ctxfile"`)
 	return b.String()
 }
 
@@ -1589,12 +1699,28 @@ type openCodeEvents struct {
 	// the answer nor the plain output a Result would need: a live reading
 	// holds it for as long as somebody watches.
 	following bool
+
+	// named is every message the run's events name (`part.messageID`), so the
+	// measure of the session's newest request says whether the run made it
+	// ([openCodeEvents.contextLine]): kept only while no live reading follows the
+	// stream, which never asks it and holds the decoder as long as somebody
+	// watches.
+	named map[string]bool
+
+	// measured is the measure of the session's newest request as the pages
+	// of its message list read it, and why there is none where there is none;
+	// read whether the reading is over, a figure found or a reason to stop
+	// met; and pages how many pages it has read ([openCodeEvents.contextLine]).
+	measured contextRead
+	read     bool
+	pages    int
 }
 
 // Entries implements [Decoder].
 func (d *openCodeEvents) Entries() []string {
 	d.following = true
 	d.answers = nil
+	d.named = nil
 	d.plain.Reset()
 	return d.transcript.take()
 }
@@ -1618,6 +1744,12 @@ func (d *openCodeEvents) Line(line []byte) {
 		d.plain.Reset()
 		d.plainDropped = 0
 	}
+	if id := ev.Part.MessageID; id != "" && !d.following {
+		if d.named == nil {
+			d.named = map[string]bool{}
+		}
+		d.named[id] = true
+	}
 	switch ev.Type {
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
@@ -1640,7 +1772,119 @@ func (d *openCodeEvents) Line(line []byte) {
 		if ev.Report != nil {
 			d.usageBefore = ev.Report
 		}
+	case openCodeContextEvent:
+		d.contextLine(line)
 	}
+}
+
+// contextLine reads one of the lines a run's script adds of its session's message
+// list ([openCodeContext]), in order: the first message of the pages that
+// measured a prompt is the figure ([measuredPrompt]), the run's own where its
+// events named it, and the reading is over; a marker of a page past the
+// pages' budget, and a line or a page that does not decode, end it with none,
+// since the page it stands for may hold the figure and a later page's would
+// then be an older request's. A live reading reads none of it.
+//
+// A PAGE A MESSAGE AT A TIME ([eachElement]), each decoded by its keys exactly
+// as written ([threadDecoding]) into the few values the measure reads
+// ([openCodeMeasuredWire]), and never its content.
+func (d *openCodeEvents) contextLine(line []byte) {
+	if d.following || d.read {
+		return
+	}
+	var w struct {
+		Page    json.RawMessage `json:"page"`
+		Skipped json.RawMessage `json:"skipped"`
+	}
+	if err := wireDecode(line, &w); err != nil {
+		d.endContext(contextRead{why: "a line of the session's message list the run's script printed does " +
+			"not decode: " + err.Error(), failed: true})
+		return
+	}
+	if w.Skipped != nil {
+		d.endContext(contextRead{why: fmt.Sprintf("a page of the session's message list of %s was past the %s "+
+			"the pages may put into the run's stream, so it and every older one went unread",
+			humanSize(looseInt(w.Skipped)), humanSize(openCodeContextBytes))})
+		return
+	}
+	d.pages++
+	n, own, found, err := d.page(w.Page)
+	switch {
+	case err != nil:
+		d.endContext(contextRead{why: fmt.Sprintf("page %d of the session's message list does not decode: %v",
+			d.pages, err), failed: true})
+	case found:
+		d.endContext(contextRead{measure: sandbox.RequestMeasure{Tokens: n, Own: own}})
+	}
+}
+
+// errFigureFound stops the walk of a page at its first message that measured a
+// prompt ([openCodeEvents.page]).
+var errFigureFound = errors.New("the page's figure is found")
+
+// page is the first message of one page of the session's message list, raw,
+// that measured a prompt: its figure, whether the run's events named it, and
+// whether one did; an error where the page, or a message of it before that one,
+// does not decode.
+func (d *openCodeEvents) page(raw json.RawMessage) (int64, bool, bool, error) {
+	if !wireObject(raw) {
+		return 0, false, false, fmt.Errorf("the page is %s, not an object", wireKind(raw))
+	}
+	var page struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := wireDecode(raw, &page); err != nil {
+		return 0, false, false, err
+	}
+	var (
+		figure int64
+		own    bool
+	)
+	err := eachElement(page.Data, func(element json.RawMessage, _ int) error {
+		if !wireObject(element) {
+			return fmt.Errorf("a message is %s, not an object", wireKind(element))
+		}
+		var w openCodeMeasuredWire
+		if err := wireDecode(element, &w); err != nil {
+			return err
+		}
+		m, id, err := w.message()
+		if err != nil {
+			return err
+		}
+		if n, measured := measuredPrompt(m); measured {
+			figure, own = n, d.named[id]
+			return errFigureFound
+		}
+		return nil
+	})
+	if errors.Is(err, errFigureFound) {
+		return figure, own, true, nil
+	}
+	if err != nil {
+		return 0, false, false, fmt.Errorf("data: %w", err)
+	}
+	return 0, false, false, nil
+}
+
+// endContext ends the reading of the session's message list with read.
+func (d *openCodeEvents) endContext(read contextRead) { d.measured, d.read = read, true }
+
+// request is the measure of the session's newest request as the pages its run's
+// script printed read it, and why there is none where there is none
+// ([contextReader]).
+func (d *openCodeEvents) request() contextRead {
+	switch {
+	case d.read:
+		return d.measured
+	case d.pages == 0:
+		return contextRead{why: "the run's stream holds no page of the session's message list: its job was " +
+			"ended on request, its script could not ask its server, or the session holds no assistant message"}
+	}
+	return contextRead{why: fmt.Sprintf("none of the %d page(s) of the session's message list the run's "+
+		"script asked holds a settled assistant message that measured a prompt: it asks one message a page, "+
+		"newest first, at most %d pages, and no page past one whose message did not fail", d.pages,
+		openCodeContextPages)}
 }
 
 // answer adds one text event's chunk to the answer: after the latest message's
@@ -1668,8 +1912,16 @@ func (d *openCodeEvents) keepPlain(line []byte) {
 	d.plain.WriteByte('\n')
 }
 
+// Skipped counts a line past the stream's bound, and ends the reading of the
+// session's message list where it has found no figure: the line may be a page
+// of it, which may hold the figure, and a later page's would then be an older
+// request's ([openCodeEvents.contextLine]).
 func (d *openCodeEvents) Skipped(n int64, bound int) {
 	d.sawLine = true
+	if !d.read {
+		d.endContext(contextRead{why: fmt.Sprintf("a line of %s, past the %s a line of the stream is read "+
+			"within, came before any page that measured a prompt", humanSize(n), humanSize(int64(bound)))})
+	}
 	if !d.sawEvent {
 		d.plainDropped += n
 		return

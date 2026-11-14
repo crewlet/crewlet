@@ -335,6 +335,27 @@ type runSpender interface {
 	runSpend() (runSpend, bool)
 }
 
+// contextReader is a decoder that reads off its run's stream what the newest
+// request of the session the run worked in carried, for the measure of the copy
+// the job's box holds as the job ends ([sandbox.Result.LastRequest]): Claude
+// Code's off the main thread's assistant lines ([claudeEvents.measure]),
+// OpenCode's off the pages of the session's messages its script asks its server
+// for once the run has ended ([openCodeContext]).
+type contextReader interface {
+	// request is that measure, or why the stream gave none.
+	request() contextRead
+}
+
+// contextRead is what a [contextReader] read: the measure, its Tokens above
+// zero where the stream gave one; else why it gave none, and whether that is a
+// reading that failed (a stream of a shape this build does not read, which the
+// collection says at warning) rather than a run that left nothing to read.
+type contextRead struct {
+	measure sandbox.RequestMeasure
+	why     string
+	failed  bool
+}
+
 // runSpend is what one run spent, as its harness stated it: the prompt not served
 // from the cache, the cache's reads and writes, the reply, and the price.
 type runSpend struct {
@@ -1154,9 +1175,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	var refused []string
 
 	var (
-		result sandbox.Result
-		last   streamLast
-		spent  *runSpend
+		result  sandbox.Result
+		last    streamLast
+		spent   *runSpend
+		request contextRead
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout)
@@ -1166,7 +1188,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if refusal != "" {
 			refused = append(refused, refusal)
 		}
-		result, last, spent = streamed.result, streamed.last, streamed.spent
+		result, last, spent, request = streamed.result, streamed.last, streamed.spent, streamed.request
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
@@ -1210,6 +1232,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			}
 			result = parsed
 		}
+	}
+	// WHAT THE SESSION'S NEWEST REQUEST CARRIED, off the stream, set once the
+	// result is whichever of the stream's and the result file's it is: a
+	// figure set inside the block above would be dropped with the stream's
+	// result wherever the result file replaces it, as Claude Code's does.
+	if out.Events {
+		result.LastRequest = r.lastRequest(ctx, request)
 	}
 
 	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
@@ -1394,6 +1423,30 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	return result, nil
 }
 
+// lastRequest is the measure read, which the collection carries back
+// ([sandbox.Result.LastRequest]), saying why where there is none
+// (`harness_context_unmeasured`): at warning where the reading failed against
+// a stream of a shape this build does not read, since then every job of the
+// release goes unmeasured; else at info. A relaunch that continues the copy
+// the job's box holds is then held to the figure carried along the copy's
+// lineage, or to none (internal/sandbox's measure.go).
+func (r *Runner) lastRequest(ctx context.Context, read contextRead) sandbox.RequestMeasure {
+	if read.measure.Tokens > 0 {
+		return read.measure
+	}
+	why := read.why
+	if why == "" {
+		why = "the harness's event stream gives no measure of the session's newest request"
+	}
+	logAt := log.InfoContext
+	if read.failed {
+		logAt = log.WarnContext
+	}
+	logAt(ctx, "harness_context_unmeasured", "harness", r.harness.Name(), "detail", why,
+		"outcome", "the job's record keeps the measure carried along its copy's lineage, or none")
+	return sandbox.RequestMeasure{}
+}
+
 // endedSentence is what a run's failure opens with where its job was ended on
 // request ([sandbox.Result.JobEnd]), its harness's exit status code where the
 // box recorded one.
@@ -1540,7 +1593,8 @@ func unreadNote(unread int64, none bool) string {
 func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (decodedStream, string, error) {
 	stream, err := box.OpenFile(ctx, path)
 	if refusal := notRegularPiece(err, path, "the event stream"); refusal != "" {
-		return decodedStream{}, refusal, nil
+		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
+			refusal, nil
 	}
 	if err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: opening the event stream: %w", err)
@@ -1556,16 +1610,21 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 			out.spent = &spent
 		}
 	}
+	if reader, ok := dec.Decoder.(contextReader); ok {
+		out.request = reader.request()
+	}
 	return out, "", nil
 }
 
 // decodedStream is what a run's event stream said: the result as its decoder
-// read it, the stream's last line, and the run's own spend where the stream
-// stated it ([runSpender]), nil where it stated none.
+// read it, the stream's last line, the run's own spend where the stream stated
+// it ([runSpender]), nil where it stated none, and what the session's newest
+// request carried where the stream read one ([contextReader]).
 type decodedStream struct {
-	result sandbox.Result
-	last   streamLast
-	spent  *runSpend
+	result  sandbox.Result
+	last    streamLast
+	spent   *runSpend
+	request contextRead
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

@@ -921,6 +921,52 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	}
 }
 
+// AN IN-PLACE CONTINUATION IS HELD TO THE LARGER OF ITS COPY'S AND ITS CAPTURE'S
+// MEASURE. A person's answer carries the asking run on in the session its box
+// holds, whose whole context it sends before the answer. Two figures say what
+// that context is: the job's newest capture's measure of its archive, and the
+// job's record's of the copy itself, which the read that collected the job took
+// off its run's own account of its requests ([runner.Resume.ContextTokens]),
+// and which a company that keeps no session has alone. The copy is the capture
+// or grew past it, so the launch is held to the larger of the two.
+//
+// Mutation: hand the launch the capture's measure alone, and a copy that grew
+// past its capture, or one no capture measured, is held to less than it sends.
+func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ capture, copied, want int64 }{
+		"the copy grew past its capture": {capture: 150000, copied: 180000, want: 180000},
+		"the capture measured more":      {capture: 150000, copied: 90000, want: 150000},
+		"no capture measured the copy":   {copied: 120000, want: 120000},
+		"neither measured it":            {},
+		"no record measured the copy":    {capture: 150000, want: 150000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+			before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+			parked, _ := launched.Suspended()
+			parked.State.ActiveTools = req.Surface.Active()
+			relauncher := &probingLauncher{basis: runner.SessionBasis{
+				Why: "the newest capture of the job was not kept: refused", ContextTokens: tc.capture}}
+			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
+				again.Continue.ContextTokens != tc.want {
+				t.Fatalf("the relaunch continues in place %+v, want the asking run's own session carrying the %d "+
+					"tokens it sends first", again.Continue, tc.want)
+			}
+		})
+	}
+}
+
 // guarded is a seat whose surface carries one required skill covering
 // slack_post, relaunching its executor in round 2 of its turn — with what its
 // launcher says the relaunch continues, the job before's parked state and

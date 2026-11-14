@@ -1599,20 +1599,23 @@ const (
 // ONE TYPE FOR EVERY READER OF AN EXPORT: a session's transcript reads who
 // wrote a message, when and what it says ([transcriptBuilder.openCodeMessage]),
 // and the context a session carries what its steps' requests measured and
-// whether each failed ([exportMessageInput]), both off this one, so no two
-// readers of the one document disagree about what a message is, its kind or
-// its failure. OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no
-// message of this document: every message of a 2.x export read in that shape
-// had no role and no parts, and a transcript showed nothing.
+// whether each failed ([measuredPrompt]), off an export and off a page of the
+// session's own message list alike, all off this one, so no two readers of the
+// one document disagree about what a message is, its kind or its failure.
+// OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no message of this
+// document: every message of a 2.x export read in that shape had no role and
+// no parts, and a transcript showed nothing.
 type openCodeMessage struct {
 	// Type is the message's kind.
 	Type openCodeKind `json:"type"`
 
 	// Time is when OpenCode recorded the message, in milliseconds since the
 	// epoch: when a person's message arrived, a step began, a compaction
-	// started.
+	// started; and, on a step, when it settled, zero while it is in flight,
+	// which only the measure of its request reads ([measuredPrompt]).
 	Time struct {
-		Created int64 `json:"created"`
+		Created   int64 `json:"created"`
+		Completed int64 `json:"completed"`
 	} `json:"time"`
 
 	// Text is a person's words on a user message — and OpenCode's own on its
@@ -1632,8 +1635,7 @@ type openCodeMessage struct {
 
 	// Tokens is what an assistant step's request measured, and Error, raw,
 	// the failure the step ended on: absent, or null, where it ended without
-	// one. The context a session carries is read off both
-	// ([exportMessageInput]).
+	// one. The context a session carries is read off both ([measuredPrompt]).
 	Tokens *openCodeTokens `json:"tokens"`
 	Error  json.RawMessage `json:"error"`
 }
@@ -1874,9 +1876,9 @@ type openCodeMessageWire struct {
 // message is the message w holds, DECODED LOOSELY, as the export's whole
 // decode read one: a key of another kind than its field's reads as that
 // field's zero value, a time that is no object as none, and the rest of the
-// message as written. Its tokens and its error are left as none: a person's
-// transcript reads neither, and the context a session carries reads both off
-// the export itself ([exportMessageInput]).
+// message as written. Its tokens, its error and when a step settled are left
+// as none: a person's transcript reads none of them, and the context a session
+// carries reads them off the export itself ([exportMessageInput]).
 func (w openCodeMessageWire) message() openCodeMessage {
 	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
 		Status: looseString(w.Status), Summary: looseString(w.Summary)}

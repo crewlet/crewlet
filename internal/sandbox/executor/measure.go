@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path"
 )
@@ -25,10 +26,12 @@ import (
 //     input the session's last request carried: its uncached input, its cache
 //     reads and its cache writes;
 //   - OpenCode's export keeps every settled assistant message with its
-//     tokens, and the last one that measured a prompt — no error, a prompt
-//     of more than nothing — is the input OpenCode's own compaction reads the
-//     session's context by (core/src/session/compaction.ts, hasMeasuredPrompt,
-//     at 2.0.32): its input, cache reads and cache writes.
+//     tokens, and the newest that measured a prompt is the input the
+//     session's last request carried, its input, cache reads and cache
+//     writes, by ONE RULE for every reader of an OpenCode session's measure
+//     ([measuredPrompt]): this one, and the read that measures the copy a
+//     job's box holds as the job ends, off its session's own message list
+//     ([openCodeContext]).
 //
 // READ OFF THE ARCHIVE AS IT IS KEPT, the scrub's output, so it is the session a
 // later launch continues and not the box's copy, and in a goroutine of its own
@@ -184,11 +187,11 @@ func lastExportInput(r io.Reader) (int64, error) {
 			return 0, err
 		}
 		for dec.More() {
-			n, msgErr := exportMessageInput(dec)
+			n, measured, msgErr := exportMessageInput(dec)
 			if msgErr != nil {
 				return 0, msgErr
 			}
-			if n > 0 {
+			if measured {
 				last = n
 			}
 		}
@@ -200,45 +203,130 @@ func lastExportInput(r io.Reader) (int64, error) {
 }
 
 // exportMessageInput reads one message of an export and answers the input its
-// request measured where it is an assistant message that measured one without
-// an error, zero otherwise.
+// request measured, and whether it measured one by [measuredPrompt]'s rule.
 //
 // THE MESSAGE IS THE ONE EVERY READER OF AN EXPORT TAKES ([openCodeMessage]),
 // so this and a session's transcript never disagree about what a message is,
-// its kind or its failure. Only its type, its tokens and its error are decoded
-// into it; every other field is passed over a token at a time, so a message's
-// content is never held whole.
-func exportMessageInput(dec *json.Decoder) (int64, error) {
+// its kind or its failure. A KEY AT A TIME, the export streamed: each of the
+// small values the measure reads, its type, its time, its tokens and its error,
+// is taken raw by its exact name and decoded on its own, by its keys exactly as
+// written ([openCodeMeasuredWire]), and every other field is passed over a
+// token at a time, so a message's content is never held whole. Decoded by
+// encoding/json into the message's fields, the tokens were read with a key that
+// differs from one they declare only in case taken for that one, the last of
+// the two written winning.
+func exportMessageInput(dec *json.Decoder) (int64, bool, error) {
 	if err := expectDelim(dec, '{'); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	var m openCodeMessage
+	var w openCodeMeasuredWire
 	for dec.More() {
 		key, err := dec.Token()
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		switch key {
 		case "type":
-			err = dec.Decode(&m.Type)
+			err = dec.Decode(&w.Type)
+		case "time":
+			err = dec.Decode(&w.Time)
 		case "tokens":
-			err = dec.Decode(&m.Tokens)
+			err = dec.Decode(&w.Tokens)
 		case "error":
-			err = dec.Decode(&m.Error)
+			err = dec.Decode(&w.Error)
 		default:
 			err = skipValue(dec)
 		}
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := expectDelim(dec, '}'); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	if m.Type != openCodeAssistant || !absent(m.Error) || m.Tokens == nil {
-		return 0, nil
+	m, _, err := w.message()
+	if err != nil {
+		return 0, false, err
 	}
-	return max(m.Tokens.Input, 0) + max(m.Tokens.Cache.Read, 0) + max(m.Tokens.Cache.Write, 0), nil
+	n, measured := measuredPrompt(m)
+	return n, measured, nil
+}
+
+// openCodeMeasuredWire is the part of one message of an OpenCode session the
+// measure of its request reads, each key by its exact name and raw: its id, its
+// kind, its time, its tokens and its error, as an export's message and a page of
+// the session's message list each carry them. Every other key, its content
+// above all, is passed over unread.
+type openCodeMeasuredWire struct {
+	ID     json.RawMessage `json:"id"`
+	Type   json.RawMessage `json:"type"`
+	Time   json.RawMessage `json:"time"`
+	Tokens json.RawMessage `json:"tokens"`
+	Error  json.RawMessage `json:"error"`
+}
+
+// message is the message w holds, as far as [measuredPrompt] reads one, each
+// value decoded on its own BY ITS KEYS EXACTLY AS WRITTEN ([wireDecode]):
+// its kind a string, its time's `completed` a whole number, its tokens'
+// counts whole numbers, null as absent; and its id. AN ERROR, never a message
+// read as one that measured nothing, where any of them is of another type: a
+// reader that passed over a message it could not read would take an earlier
+// message's figure for a request that may have carried more.
+//
+// ONLY WHAT THE MEASURE READS IS HELD TO ITS TYPE: of the time, its
+// `completed` alone ([openCodeSettled]), and of the tokens, the prompt's
+// counts alone ([openCodeTokens]). A value the measure never reads, a step's
+// `created` or its reply's count, is no reason to lose a figure its counts
+// and its completion state.
+func (w openCodeMeasuredWire) message() (openCodeMessage, string, error) {
+	var (
+		m       openCodeMessage
+		id      string
+		settled openCodeSettled
+	)
+	for _, v := range [...]struct {
+		key string
+		raw json.RawMessage
+		to  any
+	}{
+		{"id", w.ID, &id},
+		{"type", w.Type, &m.Type},
+		{"time", w.Time, &settled},
+		{"tokens", w.Tokens, &m.Tokens},
+	} {
+		if v.raw == nil {
+			continue
+		}
+		if err := wireDecode(v.raw, v.to); err != nil {
+			return openCodeMessage{}, "", fmt.Errorf("a message's %s: %w", v.key, err)
+		}
+	}
+	m.Time.Completed = settled.Completed
+	m.Error = w.Error
+	return m, id, nil
+}
+
+// openCodeSettled is the part of a message's time the measure reads: when its
+// step settled, zero while it is in flight ([measuredPrompt]).
+type openCodeSettled struct {
+	Completed int64 `json:"completed"`
+}
+
+// measuredPrompt is the input one message of an OpenCode session says its
+// step's request carried, and whether it measured one: THE ONE RULE for every
+// reader of an OpenCode session's measure, an export's ([lastExportInput]) and
+// the session's own message list's as a job ends ([openCodeContext]). A message
+// measured a prompt where it is an assistant's step, settled (its time's
+// `completed` set: an export holds settled messages alone, and the list hands
+// the step in flight too), ended on no error (its `error` absent or null), and
+// carries tokens whose prompt, its input, cache reads and cache writes, is
+// above zero. A count below zero is read as none.
+func measuredPrompt(m openCodeMessage) (int64, bool) {
+	if m.Type != openCodeAssistant || m.Time.Completed <= 0 || !absent(m.Error) || m.Tokens == nil {
+		return 0, false
+	}
+	n := max(m.Tokens.Input, 0) + max(m.Tokens.Cache.Read, 0) + max(m.Tokens.Cache.Write, 0)
+	return n, n > 0
 }
 
 // skipValue passes over the next value whole, a token at a time.

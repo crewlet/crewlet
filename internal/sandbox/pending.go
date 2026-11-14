@@ -3664,20 +3664,27 @@ type PendingStore interface {
 	// fact about the job, never an ownership decision.
 	MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error)
 
-	// MarkHarnessEnd records how the harness of the job named ended, as a
-	// read that collected the job found it ([LaunchRecord.HarnessEnd]),
+	// MarkHarnessEnd records how the harness of the job named ended, and what
+	// the newest request of the session its box ran carried, as a read that
+	// collected the job found them ([LaunchRecord.HarnessEnd],
+	// [LaunchRecord.Context]), in ONE WRITE, which lands where either changes,
 	// reporting whether this call changed the record. CUT OFF ONCE, CUT OFF
 	// FOR THE JOB ([HarnessEnd.after]): an end the job's harness was cut off
 	// in is recorded over one that says it ended its own run, never the
 	// reverse, nothing is recorded over a word this build does not know,
 	// which a later build may have written for an end of its own, and the
-	// next launch's job starts with nothing said. FALSE IS
+	// next launch's job starts with nothing said. THE MEASURE BY ITS LINEAGE
+	// ([LaunchRecord.measured]): a request the job's run made is the job's
+	// own measure; an earlier request of the session it took up is the measure
+	// the record carried where its figure is the same, and else the
+	// session's; none keeps what the record carried, unless the job's box
+	// said it started a session of its own, which drops it. FALSE IS
 	// NOT AN ERROR: the record holds another job, says so already, is being
 	// ended, or is gone. NO FENCE, as MarkEndedAtDeadline takes none: the
 	// job's box's host makes it as it reads the box, and how the job's harness
 	// ended is a fact about the job, never an ownership decision. An end that
 	// is not [HarnessEnd.Valid] is an error.
-	MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error)
+	MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error)
 
 	// MarkResumeBegun records on a claimed run what the turn resuming from the
 	// job named does with the job's round, as that turn begins
@@ -4223,6 +4230,14 @@ type BoxRef struct {
 	// run's leads part by the attach that names the job's command, before its
 	// write of the row, and marked on the job's record in that write.
 	Leads BriefLeads
+
+	// Context is what the session the launch handed the job's run carried at
+	// its newest request the engine measured, carried along the copy's lineage
+	// and saying where it came from ([continuedLaunch.measure]): written onto
+	// the job's record by the attach that names the job's command, as Brief is
+	// ([LaunchRecord.Context]), for the collection to keep where the job makes
+	// no request of its own. Nil for a session of the run's own.
+	Context *SessionMeasure
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -4247,6 +4262,13 @@ type PriorBox struct {
 	// forward, since the box still holds those values and the session it
 	// resumes their lines ([Coordinator.sealHanded]).
 	Handed string
+	// Context is what the session the job that used the box left in it carried
+	// at its newest request the engine measured, as that job's record held it
+	// ([LaunchRecord.Context]): a job that continues that copy in the box
+	// carries it forward on its own record, saying where it came from, so a
+	// job that makes no request of its own is measured by its copy's lineage
+	// ([continuedLaunch.measure]). Nil where the record held none.
+	Context *SessionMeasure
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
@@ -4639,6 +4661,23 @@ type LaunchRecord struct {
 	// is: the answer that carries the round on may come days later, on another
 	// node, and the next launch replaces the record whole after it has read it.
 	HarnessEnd HarnessEnd `json:"harness_end,omitempty"`
+
+	// Context is what the session the job's box holds carried at its newest
+	// request the engine measured (harnessend.go): written by the attach that
+	// names the job's command as the measure of the session the launch handed
+	// its run, carried along that copy's lineage ([BoxRef.Context]), and by the
+	// read that collected the job, in its one write with HarnessEnd
+	// ([PendingStore.MarkHarnessEnd]), as what the job's newest request carried
+	// where its run's account measured one. What a relaunch that continues the
+	// copy in the job's box holds its floor to (internal/engine's
+	// continuedFloor, beside the job's newest capture's measure), through the
+	// resume ([PriorBox.Context] for the launch that opens on it). Nil where
+	// nothing measured the copy: a fresh session no request of which was
+	// measured, a record an older build wrote, a write that did not land.
+	//
+	// ONLY A SOURCE OF [MeasureRequest] NAMING THIS JOB IS A FRESH MEASURE of
+	// the job; every other is carried, and says from where ([MeasureSource]).
+	Context *SessionMeasure `json:"session_context,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the harness and the

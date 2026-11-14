@@ -1,0 +1,1 @@
+{"type":"error","timestamp":1794632163575,"sessionID":"ses_0123456789abcdef0123456789abcdef","error":{"type":"provider.invalid-request","message":"the stub refuses this request","status":400,"response":{"body":"{\"error\":{\"message\":\"the stub refuses this request\",\"type\":\"invalid_request_error\"}}"}}}

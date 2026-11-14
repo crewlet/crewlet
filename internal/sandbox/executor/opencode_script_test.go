@@ -69,6 +69,15 @@ import (
 //     whether the server was serving, and answers as 2.0.32 does — which
 //     ends a run working in that session, where FAKE_RUN_UNTIL names
 //     `interrupted`;
+//   - `api session.message.list` records its parameters in `listed`, a line
+//     a call, and answers the page `pages/<cursor>` holds in the case's
+//     directory, `pages/first` where it is handed no cursor, and nothing
+//     where the case wrote no such page; and, where FAKE_LIST_UNTIL is set,
+//     it holds its answer until the case's directory holds the file that
+//     names, the file `listing` saying it was asked: a page under way that a
+//     case can time an end request into;
+//   - any other `api` operation fails with "Operation not found", as
+//     OpenCode answers an operation its API does not have;
 //   - `auth import` keeps what it was given as its database, and `auth export`
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
@@ -76,7 +85,8 @@ import (
 //   - `run` holds the session it names, as `run --session` creates one it
 //     does not hold; keeps its stdin and the password it presented, puts
 //     FAKE_REFRESH in the database where that is set — a login refreshed
-//     mid-run — and
+//     mid-run — prints a text event, naming the step FAKE_RUN_MESSAGE where
+//     that is set, and
 //     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
 //     the file FAKE_RUN_UNTIL names, before it exits — with FAKE_RUN_TERM_EXIT
 //     where a SIGTERM ends it first, as a client given one exits with a status
@@ -170,6 +180,12 @@ api)
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} $served" >> "$d/interrupted"
     echo '{"interrupted":true}' ;;
+  session.message.list)
+    shift; echo "$*" >> "$d/listed"
+    if [ -n "${FAKE_LIST_UNTIL:-}" ]; then : > "$d/listing"; while [ ! -e "$d/$FAKE_LIST_UNTIL" ]; do sleep 0.05; done; fi
+    cur=; for a; do case "$a" in cursor=*) cur=${a#cursor=};; esac; done
+    [ ! -e "$d/pages/${cur:-first}" ] || cat "$d/pages/${cur:-first}" ;;
+  *) echo "Error: Operation not found: $1" >&2; exit 1 ;;
   esac ;;
 session)
   case "$2" in
@@ -206,7 +222,9 @@ run)
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
   [ -z "${FAKE_RUN_TERM_EXIT:-}" ] || trap 'exit "$FAKE_RUN_TERM_EXIT"' TERM
   : > "$d/refreshed"
-  echo '{"type":"text","part":{"text":"done"}}'
+  if [ -n "${FAKE_RUN_MESSAGE:-}" ]; then
+    echo '{"type":"text","part":{"messageID":"'"$FAKE_RUN_MESSAGE"'","text":"done"}}'
+  else echo '{"type":"text","part":{"text":"done"}}'; fi
   [ -z "${FAKE_RUN_SLEEP:-}" ] || [ -n "${FAKE_RUN_UNTIL:-}" ] || exec sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_SLEEP:-}" ] || sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_UNTIL:-}" ] || while [ ! -e "$d/$FAKE_RUN_UNTIL" ]; do sleep 0.05; done
@@ -261,6 +279,9 @@ type scriptOpts struct {
 	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
 	// started on, and whether the other was still in the box.
 	values, freshValues string
+	// pages is what the fake's server answers `session.message.list` with, by
+	// the cursor it is handed, "first" for none.
+	pages map[string]string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -364,6 +385,14 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	}
 	if o.freshBrief != "" {
 		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for cursor, page := range o.pages {
+		if err := os.MkdirAll(filepath.Join(dir, "pages"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pages", cursor), []byte(page), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

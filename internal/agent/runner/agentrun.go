@@ -242,8 +242,9 @@ type Continuation struct {
 	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
 	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
 	// launch that continues the copy counts all of it: beside the copy's
-	// context where a capture measured it, and beside the static floor where
-	// none did (internal/engine's continuedFloor).
+	// context where its job's newest capture or its job's record measured it
+	// ([Continuation.ContextTokens]), and beside the static floor where neither
+	// did (internal/engine's continuedFloor).
 	SessionID string
 	Brief     string
 
@@ -257,11 +258,14 @@ type Continuation struct {
 	// that job is not carried on again for it.
 	RequestRefused bool
 
-	// ContextTokens is what the last request of that session carried, as
-	// its newest capture measured it ([SessionBasis.ContextTokens]): what
-	// the relaunch sends again before Brief where it continues the session
-	// in its box, which its floor is made of. Zero where no capture measured
-	// it, which holds the launch to the static floor with Brief beside it.
+	// ContextTokens is what the last request of that session carried: the
+	// larger of its newest capture's measure ([SessionBasis.ContextTokens])
+	// and the job's record's, which the read that collected the job took off
+	// its run's own account of its requests, or carried along the copy's
+	// lineage where the job made none ([Resume.ContextTokens]). What the
+	// relaunch sends again before Brief where it continues the session in its
+	// box, which its floor is made of. Zero where neither measured it, which
+	// holds the launch to the static floor with Brief beside it.
 	ContextTokens int64
 
 	// BriefRead is how many calls the round's log had taken at the read
@@ -377,8 +381,9 @@ type SessionBasis struct {
 	// relaunch follows carried, as that job's newest capture measured it —
 	// kept or not, so set where the relaunch continues no kept capture too:
 	// what a launch that continues that session sends first, in a box it is
-	// restored into or the job's own, which the launch's floor is made of.
-	// Zero where no capture measured any.
+	// restored into or the job's own, which the launch's floor is made of, in
+	// the job's own box beside what the job's record measured
+	// ([Continuation.ContextTokens]). Zero where no capture measured any.
 	ContextTokens int64
 
 	// Base is the session the conversation's last turn left, which the launch
@@ -900,9 +905,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			SignInReplaced: isRotated(carry),
 			RequestRefused: isRefused(carry),
 			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
-			// it whether the turn kept it or not: the floor of a launch
-			// that continues it in its box.
-			ContextTokens: basis.ContextTokens,
+			// it whether the turn kept it or not, or as the read that
+			// collected its job found its newest request carried, the larger
+			// of the two: the floor of a launch that continues it in its box.
+			ContextTokens: max(basis.ContextTokens, r.cfg.Resume.ContextTokens),
 			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
 			// opening marks late what the log took after it: the job before's
 			// calls that landed while this relaunch was readied, the call a

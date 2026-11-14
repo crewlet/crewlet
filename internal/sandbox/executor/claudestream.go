@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -21,6 +22,12 @@ import (
 // usage and cost — the object `--output-format json` printed alone). A
 // subagent's messages ride the same stream with their `parent_tool_use_id`
 // set, and are activity like any other.
+//
+// AND WHAT THE SESSION'S NEWEST REQUEST CARRIED, read off the same lines as the
+// job ends ([claudeEvents.measure]): the main thread's newest request's input
+// side, which a relaunch that continues the copy the job's box holds sends again
+// before its brief, and which that relaunch's floor is held to
+// ([sandbox.Result.LastRequest]).
 //
 // THE TRANSCRIPT IS OPENCODE'S SHAPE: what the agent said, one line per tool
 // call naming the tool and the first line of what it ran, and a failed call's
@@ -61,6 +68,11 @@ type claudeEventWire struct {
 	Content json.RawMessage `json:"content"`
 	// Message is an assistant or a user line's message ([claudeMessageWire]).
 	Message json.RawMessage `json:"message"`
+	// ParentToolUseID is the call of the main thread's whose subagent wrote
+	// the line, raw and AS WRITTEN: the literal null on a line of the main
+	// thread's own, a call's id on a subagent's, and nil where the key is
+	// absent, which is no main thread's ([claudeEvents.measure]).
+	ParentToolUseID json.RawMessage `json:"parent_tool_use_id"`
 }
 
 // claudeMessageWire is one line's message as its decode leaves it, each key
@@ -299,6 +311,77 @@ type claudeEvents struct {
 	// object ([claudeEvents.runSpend]).
 	own            runSpend
 	stated, unread bool
+
+	// last is the input side of the newest request of the main thread the
+	// stream reported, 0 where none since the stream began or since a line
+	// that cleared it ([claudeEvents.measure]); usage whether any assistant
+	// line carried a usage at all, and main whether any was read as the main
+	// thread's; and cleared what the collection says where a line cleared
+	// the newest figure ([claudeEvents.request]), its why empty where none
+	// did.
+	last        int64
+	usage, main bool
+	cleared     contextRead
+}
+
+// measure reads one assistant line's request for the measure of the session
+// its box holds as the job ends ([sandbox.Result.LastRequest]): where the line
+// is the main thread's (parent, its `parent_tool_use_id`, present and null) and
+// its usage reads by the layer's one rule ([readUsage]), the request's input
+// side, its uncached input, cache reads and cache writes, as measure.go adds
+// a capture's up, is the newest figure where it is above zero; a message's
+// lines repeat its input side, so the newest line of the newest message is the
+// newest request's.
+//
+// NO EARLIER FIGURE IS EVER TAKEN FOR A LATER REQUEST: a main-thread line whose
+// usage does not read clears the figure, as a line past the stream's bound does
+// ([claudeEvents.Skipped]) and one that does not decode ([claudeEvents.lost]),
+// since the request it reported may be the newest and carried anything. A line
+// with no usage says nothing of its request, and changes nothing.
+//
+// A KEY THAT IS ABSENT IS NO MAIN THREAD: every line of a stream measured
+// carries the key (2.1.310), null on the main thread and a call's id on a
+// subagent's, so a line that carries none is of a shape this build does not
+// read, and its usage is no figure. A release that drops the key leaves every
+// job unmeasured, which the collection says at warning ([claudeEvents.request]),
+// and a relaunch then holds the copy to the figure carried along its lineage,
+// never to a subagent's.
+func (d *claudeEvents) measure(parent, usage json.RawMessage) {
+	if usage == nil {
+		return
+	}
+	d.usage = true
+	if !bytes.Equal(parent, jsonNull) {
+		return
+	}
+	d.main = true
+	var u threadUsage
+	if err := readUsage(usage, &u); err != nil {
+		d.last = 0
+		d.cleared = contextRead{why: "the newest main-thread request's usage does not read: " + err.Error(),
+			failed: true}
+		return
+	}
+	if n := u.Input + u.CacheRead + u.CacheWrite; n > 0 {
+		d.last, d.cleared = n, contextRead{}
+	}
+}
+
+// request is what the newest main-thread request of the session the run worked
+// in carried, as the stream reported it, and why there is no figure where there
+// is none ([contextReader]). OWN ALWAYS: a run's stream reports its own
+// process's requests, never an earlier job's.
+func (d *claudeEvents) request() contextRead {
+	switch {
+	case d.last > 0:
+		return contextRead{measure: sandbox.RequestMeasure{Tokens: d.last, Own: true}}
+	case d.cleared.why != "":
+		return d.cleared
+	case d.usage && !d.main:
+		return contextRead{why: "the stream's assistant lines carry a usage, and none says it is the main " +
+			"thread's (parent_tool_use_id present and null): a release this build does not read", failed: true}
+	}
+	return contextRead{why: "the stream reports no main-thread request with a usage: the run made none"}
 }
 
 // runSpend is the run's own spend, summed over every result its stream
@@ -366,8 +449,12 @@ func (d *claudeEvents) Line(line []byte) {
 	}
 	var ev claudeEventWire
 	if wireDecode(line, &ev) != nil {
-		// A partial object: the stream read mid-write. The next read has it
-		// whole.
+		// A partial object: the stream read mid-write, which the next read has
+		// whole, or its last line cut short where its harness was killed
+		// writing it, which no read ever has whole. Either may be a later
+		// request's line.
+		d.lost(fmt.Sprintf("a line of %s that does not decode, cut short where its harness was killed "+
+			"writing it,", humanSize(int64(len(line)))))
 		return
 	}
 	switch looseString(ev.Type) {
@@ -378,6 +465,7 @@ func (d *claudeEvents) Line(line []byte) {
 	case "assistant":
 		message := claudeMessageOf(ev.Message)
 		d.count(looseString(message.ID), looseUsage(message.Usage))
+		d.measure(ev.ParentToolUseID, message.Usage)
 		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
 			switch block.Type {
 			case "text":
@@ -434,7 +522,28 @@ func (d *claudeEvents) Line(line []byte) {
 	}
 }
 
-func (d *claudeEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+// Skipped counts a line past the stream's bound into the transcript, and clears
+// the newest request's figure: the line may be a later request's, which carried
+// anything ([claudeEvents.lost]).
+func (d *claudeEvents) Skipped(n int64, bound int) {
+	d.transcript.skip(n, bound)
+	d.lost(fmt.Sprintf("a line of %s, past the %s a line of the stream is read within,", humanSize(n),
+		humanSize(int64(bound))))
+}
+
+// lost clears the newest request's figure for a line the stream holds and the
+// decoder could not read, which line says: past the stream's bound, or not
+// decoding. It may be a later request's, which carried anything, so the figure
+// before it is no measure of the newest request ([claudeEvents.measure]), and
+// the collection says why there is none at info, since such a line is the
+// run's own circumstance, never a release this build does not read. Nothing
+// where no figure stands, which keeps why there is none as it was.
+func (d *claudeEvents) lost(line string) {
+	if d.last > 0 {
+		d.last = 0
+		d.cleared = contextRead{why: line + " followed the newest main-thread request's figure"}
+	}
+}
 
 // Entries implements [Decoder]. Nothing else here grows with the stream: the
 // pending calls are forgotten as their results arrive.

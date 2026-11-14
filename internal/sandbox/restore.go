@@ -1357,9 +1357,29 @@ type continuedLaunch struct {
 	// kept says the session is the turn's kept capture rather than the job
 	// before's own copy in its box ([LaunchDecision.Kept]).
 	kept bool
+	// measure is what the session carried at its newest request the engine
+	// measured, along its lineage, saying where it came from: the job
+	// before's record of its own copy, where the launch continues that copy
+	// in place; the kept capture's own measure of its archive, its job named
+	// as the archive's; the frozen base's, for the session the conversation's
+	// last turn left; and none for a session of the run's own. Written on the
+	// job's record with its command ([BoxRef.Context]), so a job that makes no
+	// request of its own is measured by the copy it took up, and never by a
+	// copy of another lineage.
+	measure *SessionMeasure
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
+}
+
+// carriedMeasure is a figure a launch carries along its session's lineage from
+// source, of launch's job where source names one: none where it is no count of
+// a session's context, as a capture that measured nothing records 0.
+func carriedMeasure(tokens int64, source MeasureSource, launch string) *SessionMeasure {
+	if tokens <= 0 {
+		return nil
+	}
+	return &SessionMeasure{Tokens: tokens, Source: source, Launch: launch}
 }
 
 // decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
@@ -1435,8 +1455,11 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	}
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		if !opened.sessionExhausted(continued.SessionID) {
+			// THE COPY THE BOX HOLDS, measured as the job before's record
+			// holds it, read by the reset that opened this job in the write
+			// that replaced that record ([PriorBox.Context]).
 			return continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
-				kind: BriefContinued, told: continued.Told, release: func() {}}
+				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context, release: func() {}}
 		}
 		c.notContinued(ctx, req, executorkeep.ExhaustedWhy(continued.SessionID, req.Turn.TurnID))
 	}
@@ -1479,12 +1502,15 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if brief == "" {
 		return continuedLaunch{}, "the launch was given no brief that continues the session in this box"
 	}
+	// MEASURED AS THE CAPTURE MEASURED ITS ARCHIVE, the capture's job named as
+	// the archive's, never as that job's request.
+	measure := carriedMeasure(kept.ContextTokens, MeasureCapture, kept.Launch)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
 	if reused && !kept.Interrupted {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			kept: true, release: func() {}}, ""
+			kept: true, measure: measure, release: func() {}}, ""
 	}
 	archive := ArchiveOf(row)
 	check, err := restorer.CheckCarry(ctx, box, archive)
@@ -1511,7 +1537,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// the run — which replaces the box's copy where its harness was cut off.
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		kept: true, carried: carried,
+		kept: true, carried: carried, measure: measure,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()
@@ -1607,6 +1633,7 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: base.Interrupted}
 	return continuedLaunch{brief: want.Replaced, fresh: req.Brief, session: base.SessionID,
 		kind: BriefContinuedConversation, kept: true, carried: carried,
+		measure: carriedMeasure(base.ContextTokens, MeasureBase, ""),
 		release: func() {
 			_ = body.Close()
 			fetched.remove()

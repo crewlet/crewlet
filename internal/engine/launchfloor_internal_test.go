@@ -349,16 +349,17 @@ func TestAFreshLaunchIsHeldToItsBrief(t *testing.T) {
 	}
 }
 
-// AN UNMEASURED CONTINUATION IS HELD TO ITS BRIEF. A session no capture measured
-// (every copy in a company that keeps no session) has no known context, and a
-// launch continuing it in its box sends its brief beside the harness's own
-// prompt as surely as a fresh run does: its floor is the static floor with that
-// brief beside it, the launch refused below it, and it is judged by the capped
-// windows as a measured session's floor is: past the smallest ceiling the
-// session is not continued, the launch starting its run on its fresh brief, and
-// the line saying what that floor is made of, never a last request of nothing.
-// Held to the static floor alone, a cut-off copy told every call of its round
-// was continued in a window that could not carry its first request.
+// AN UNMEASURED CONTINUATION IS HELD TO ITS BRIEF. A session nothing measured (a
+// copy in its box that neither its job's newest capture nor its job's record
+// measured) has no known context, and a launch continuing it in its box sends
+// its brief beside the harness's own prompt as surely as a fresh run does: its
+// floor is the static floor with that brief beside it, the launch refused below
+// it, and it is judged by the capped windows as a measured session's floor is:
+// past the smallest ceiling the session is not continued, the launch starting
+// its run on its fresh brief, and the line saying what that floor is made of,
+// never a last request of nothing. Held to the static floor alone, a cut-off
+// copy told every call of its round was continued in a window that could not
+// carry its first request.
 //
 // Mutation: count no brief beside the static floor where no context is known,
 // hold a session's floor as the fresh brief's is, or say an unmeasured
@@ -405,10 +406,10 @@ func TestAnUnmeasuredContinuationIsHeldToItsBrief(t *testing.T) {
 		t.Parallel()
 		why := launchFloor{static: static}.continuing(0, brief).fits(
 			budgetBasis{seat: coord.Caps{period.Day: 30000}}.room(nil))
-		if !strings.Contains(why, "no capture measured its context") || strings.Contains(why, "last request") ||
+		if !strings.Contains(why, "nothing measured its context") || strings.Contains(why, "last request") ||
 			!strings.Contains(why, fmt.Sprintf("about %d", brief)) {
 			t.Errorf("an unmeasured session past the smallest ceiling is not continued because %q, want it "+
-				"to say no capture measured its context and what its brief is", why)
+				"to say nothing measured its context and what its brief is", why)
 		}
 	})
 }
@@ -1068,7 +1069,7 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 // Mutation: leave the wait unbounded, ignore the job's record, read the window
 // as turned over in the window it names, drop a session the window leaves room
 // for, exactly its floor included, or keep one it does not, drop every session
-// on a read that fails, keep the copy no capture measured, say a waited floor
+// on a read that fails, keep the copy nothing measured, say a waited floor
 // is held past the room or is the floor refused, leave the window out of a
 // dropped session's line, name the window of a round's refusal, or name none
 // for a launch's in either window, and a case goes red.
@@ -1156,7 +1157,7 @@ func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 				floor: left},
 			"a measured session its window is still short of is dropped": {record: before,
 				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(28_500)}, floor: static},
-			"a copy no capture measured, its window still short of it, is dropped": {record: before,
+			"a copy nothing measured, its window still short of it, is dropped": {record: before,
 				req: runner.AgentRunRequest{Brief: "the fresh brief",
 					Continue: &runner.Continuation{SessionID: "s-1", Brief: band}}, floor: static},
 			"in the day it was refused in, a session is held to as before": {record: today,

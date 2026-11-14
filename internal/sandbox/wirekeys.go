@@ -27,19 +27,20 @@ import (
 // [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
 // [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
 // record, which grows a fact about the job with nearly every piece that touches
-// launching, and which every write but a relaunch's hands back. A section that
-// does not is extended the other way, with a key of its own at the top of the
-// record (as [PendingRun.Stop] is, beside [RecordedEnding]). And the log kept
-// beside the record, [BridgeLog], is a value of its own with an Extra of its
-// own at its top, under the same rule. So is the handed part kept beside it
-// ([handedSet]), and the set it seals ([HandedSecrets]): the attach of each job
-// writes its own whole, but every token the completion poll renews in the
-// job's box is a read of the part, an open of the set, a change and a write
-// back of both ([CoordStore.AddHanded], [Coordinator.addHanded]), on whichever
-// node polls the box, every few minutes of a long run. And the leads kept
-// beside the record ([leadsPart]), with each [KeptLead] it keeps: every take of
-// a job's leads rewrites the part whole, so each carries an Extra of its own,
-// under the same rule.
+// launching, and which every write but a relaunch's hands back; and the measure
+// inside it, [SessionMeasure], whose word on where a figure came from a later
+// build may add to. A section that does not is extended the other way, with a
+// key of its own at the top of the record (as [PendingRun.Stop] is, beside
+// [RecordedEnding]). And the log kept beside the record, [BridgeLog], is a
+// value of its own with an Extra of its own at its top, under the same rule.
+// So is the handed part kept beside it ([handedSet]), and the set it seals
+// ([HandedSecrets]): the attach of each job writes its own whole, but every
+// token the completion poll renews in the job's box is a read of the part, an
+// open of the set, a change and a write back of both ([CoordStore.AddHanded],
+// [Coordinator.addHanded]), on whichever node polls the box, every few minutes
+// of a long run. And the leads kept beside the record ([leadsPart]), with each
+// [KeptLead] it keeps: every take of a job's leads rewrites the part whole, so
+// each carries an Extra of its own, under the same rule.
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept
@@ -312,5 +313,24 @@ func (l *LaunchRecord) UnmarshalJSON(raw []byte) error {
 	}
 	*l = LaunchRecord(p)
 	l.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the measure with the keys a later build added to it.
+func (m SessionMeasure) MarshalJSON() ([]byte, error) {
+	type plain SessionMeasure
+	return marshalCarrying(plain(m), wireKeys(reflect.TypeFor[SessionMeasure]()), m.Extra)
+}
+
+// UnmarshalJSON reads the measure and keeps the keys this build does not know.
+func (m *SessionMeasure) UnmarshalJSON(raw []byte) error {
+	type plain SessionMeasure
+	p := plain(*m)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[SessionMeasure]()))
+	if err != nil {
+		return err
+	}
+	*m = SessionMeasure(p)
+	m.Extra = extra
 	return nil
 }

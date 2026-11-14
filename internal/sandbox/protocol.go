@@ -723,6 +723,18 @@ type Result struct {
 	// which is never read as an own run.
 	HarnessEnd HarnessEnd
 
+	// LastRequest is what the newest request of the session the job's box ran
+	// carried, as the run's own account measured it once the job was over
+	// (internal/sandbox/executor: Claude Code's event stream, OpenCode's
+	// session message list asked as the job ends): recorded on the job's record
+	// with HarnessEnd, in that read's one write ([LaunchRecord.Context]), for a
+	// relaunch that continues the copy the box holds, whose floor is that
+	// context with its brief. Set by a runner's collection, beside its result;
+	// zero where it measured none, and from a host of an older build, whose
+	// collection reads none, which leaves the record the measure carried along
+	// the copy's lineage.
+	LastRequest RequestMeasure
+
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
 	// where the harness reported none. It is what the launch's own record counts

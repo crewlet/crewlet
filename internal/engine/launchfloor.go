@@ -19,12 +19,13 @@ import (
 // (turn_engine.executor_min_budget_tokens) is that request's fixed part: the
 // harness's own prompt, its tools and the seat's system prompt. Its brief is
 // BESIDE it, never inside it, so a launch whose context is not known (a fresh
-// run, or a session no capture measured) is held to the static floor with its
-// brief beside it. A launch that may CONTINUE a session whose context is known
-// sends that whole context before it reads a word of its brief, so its floor is
-// the larger of the static floor and that context with the brief beside it:
-// the context's last request already counted the harness's own prompt, so
-// those two are compared, never added.
+// run, or a session nothing measured: no capture of it, nor, for the job
+// before's own copy in its box, that job's record) is held to the static floor
+// with its brief beside it. A launch that may CONTINUE a session whose context
+// is known sends that whole context before it reads a word of its brief, so
+// its floor is the larger of the static floor and that context with the brief
+// beside it: the context's last request already counted the harness's own
+// prompt, so those two are compared, never added.
 //
 // EVERY BRIEF THE LAUNCH MAY HAND ITS RUN HOLDS IT TO ITS OWN FLOOR, and the
 // launch is held to the largest of them ([agentLauncher.continuedFloor]): the
@@ -130,9 +131,11 @@ type launchFloor struct {
 	static int
 
 	// context is the whole input of the last request of the session the
-	// launch continues, cache included, zero where it continues none or no
-	// capture measured it; and brief the estimate of the brief it is handed,
-	// zero for a floor that names none (the static floor alone).
+	// launch continues, cache included, zero where it continues none or
+	// nothing measured it (for the job before's own copy in its box, neither
+	// that job's newest capture nor its record); and brief the estimate of the
+	// brief it is handed, zero for a floor that names none (the static floor
+	// alone).
 	context int64
 	brief   int
 
@@ -223,8 +226,8 @@ func staticFloor(c *Company) launchFloor {
 }
 
 // continuing is f for a launch that continues a session whose last request
-// carried context tokens (zero where no capture measured it), handed a brief
-// of about brief tokens.
+// carried context tokens (zero where nothing measured it), handed a brief of
+// about brief tokens.
 func (f launchFloor) continuing(context int64, brief int) launchFloor {
 	f.context, f.brief = max(context, 0), max(brief, 0)
 	return f
@@ -347,7 +350,7 @@ func (f launchFloor) atLeast(g launchFloor) launchFloor {
 // fits is why no window can ever leave room for f, "" where one can: a floor
 // past r, the most room the seat's and the company's capped windows can leave
 // the launch, is one no window turning over ever meets, its launch's own turn
-// spending its way into each before the launch reads it. A session no capture
+// spending its way into each before the launch reads it. A session nothing
 // measured is judged at the static floor with its brief beside it, which is
 // what its launch needs. A floor of nothing fits anywhere, a window its own
 // turn filled included.
@@ -378,11 +381,12 @@ func (f launchFloor) stillShort(left int, w sandbox.BudgetWindow) string {
 }
 
 // madeOf is what a session's floor f is made of, in a line's words: its last
-// request's context and its brief, or, where no capture measured that context,
-// the static floor and its brief.
+// request's context and its brief, or, where nothing measured that context
+// (no capture of it, nor, for the job before's own copy in its box, that job's
+// record), the static floor and its brief.
 func (f launchFloor) madeOf() string {
 	if f.context <= 0 {
-		return fmt.Sprintf("no capture measured its context, so turn_engine.executor_min_budget_tokens, %d, "+
+		return fmt.Sprintf("nothing measured its context, so turn_engine.executor_min_budget_tokens, %d, "+
 			"and its brief, about %d", f.static, f.brief)
 	}
 	return fmt.Sprintf("its last request carried %d, and its brief about %d", f.context, f.brief)

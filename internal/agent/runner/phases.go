@@ -387,6 +387,17 @@ type Resume struct {
 	// tell.
 	Owed []int
 
+	// ContextTokens is what the session the box of the job State parked holds
+	// carried at its newest request the engine measured, as the job's record
+	// keeps it (sandbox.LaunchRecord.Context): the request the read that
+	// collected the job found its run made last, or the figure carried along
+	// the copy's lineage where the job made none. A relaunch that carries the
+	// round on in the job's box sends that copy's whole context again before
+	// its brief, so its floor is held to the larger of this and the job's
+	// newest capture's measure ([Continuation.ContextTokens]). Zero where the
+	// record holds none.
+	ContextTokens int64
+
 	// Leads is the turn's leads as the run keeps them beside its record,
 	// opened, oldest first ([ResumeLead], sandbox.PendingStore.Leads): what
 	// carried each session of the work on. Those the brief the job's run read

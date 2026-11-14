@@ -499,8 +499,8 @@ func TestAResumesLeadsReachItsRelaunchsBrief(t *testing.T) {
 	}
 	// ITS HARNESS CUT OFF, which stands whatever the collection later reads:
 	// the copy in its box may lack its brief.
-	if marked, err := pending.MarkHarnessEnd(ctx, turnID, first.LaunchID, sandbox.HarnessEndCutOff); err != nil ||
-		!marked {
+	if marked, err := pending.MarkHarnessEnd(ctx, turnID, first.LaunchID,
+		sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil || !marked {
 		t.Fatalf("MarkHarnessEnd = %v, %v", marked, err)
 	}
 	// THE RESUME A PERSON'S ANSWER DRIVES, on the row its claim took, its leads

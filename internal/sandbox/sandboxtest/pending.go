@@ -83,6 +83,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
+		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -479,7 +481,7 @@ func testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands(t *testing.T, s sa
 	mustClaim(t, s, "t-ended")
 	mark := func(job string, end sandbox.HarnessEnd) bool {
 		t.Helper()
-		ok, err := s.MarkHarnessEnd(ctx, "t-ended", job, end)
+		ok, err := s.MarkHarnessEnd(ctx, "t-ended", job, sandbox.EndRead{End: end})
 		if err != nil {
 			t.Fatalf("MarkHarnessEnd(%s, %q): %v", job, end, err)
 		}
@@ -504,14 +506,15 @@ func testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands(t *testing.T, s sa
 	if mark(launch, sandbox.HarnessEndOwnRun) || recorded() != sandbox.HarnessEndCutOff {
 		t.Errorf("an own run was recorded over a cut-off end: the record says %q", recorded())
 	}
-	if _, err := s.MarkHarnessEnd(ctx, "t-ended", launch, "saved"); err == nil {
+	if _, err := s.MarkHarnessEnd(ctx, "t-ended", launch, sandbox.EndRead{End: "saved"}); err == nil {
 		t.Error("an end this build does not know was taken")
 	}
 	mustBeginLaunch(t, s, run("t-ended"))
 	if got := recorded(); got != "" {
 		t.Errorf("the next job's record says %q, want nothing said", got)
 	}
-	if ok, err := s.MarkHarnessEnd(ctx, "t-none", "job-1", sandbox.HarnessEndCutOff); err != nil || ok {
+	if ok, err := s.MarkHarnessEnd(ctx, "t-none", "job-1", sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		ok {
 		t.Errorf("an end of a run with no record = %v, %v", ok, err)
 	}
 }
@@ -530,7 +533,8 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	ctx := t.Context()
 	const turn = "t-ended-writes"
 	launch := mustLaunched(t, s, run(turn))
-	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.HarnessEndCutOff); err != nil || !ok {
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
 		t.Fatalf("MarkHarnessEnd = %v, %v", ok, err)
 	}
 	check := func(step string) {
@@ -563,6 +567,160 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A JOB'S MEASURE IS ITS OWN, OR CARRIED ALONG ITS COPY. The read that collects a
+// job records what the newest request of the session its box ran carried, beside
+// how its harness ended, by the copy's lineage: a request the job's own run
+// made is the job's own measure, of that job; an earlier request of the session
+// it took up is the measure the record carried where its figure is the same and
+// the box did not say it started a session of its own, and else the session's,
+// whose job is not known; none keeps what the record
+// carried, the measure of the session its launch handed its run, unless its box
+// said it started a session of its own, whose figure the carried one never was.
+// And every write of the job's record after it writes it back as it read it,
+// under its own key, until the next launch's record, which starts with none.
+//
+// Mutation: invert any of the four, record a carried figure as the job's own
+// request, or rebuild the job's record in a write that is not a relaunch's, and
+// a check goes red.
+func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	carried := &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureCapture, Launch: "job-earlier"}
+	// launched opens turn's job, its attach naming its command and the measure
+	// its launch carried, and claims it, as its collection is made on a claim.
+	launched := func(turn string) (string, sandbox.PendingRun) {
+		t.Helper()
+		launch := mustLaunched(t, s, run(turn))
+		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-" + turn, CommandID: "cmd-" + turn,
+			Brief: sandbox.BriefContinued, Context: carried}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names the job's command: %v", err)
+		}
+		if got := mustGet(t, s, turn).Launch.Context; !sameMeasure(got, carried) {
+			t.Fatalf("the attach recorded the measure %+v, want the one its launch carried, %+v", got, carried)
+		}
+		return launch, mustClaim(t, s, turn)
+	}
+	for name, tc := range map[string]struct {
+		turn    string
+		started sandbox.SessionStart
+		read    sandbox.RequestMeasure
+		want    func(launch string) *sandbox.SessionMeasure
+	}{
+		"a request the job's own run made": {turn: "t-measure-own",
+			read: sandbox.RequestMeasure{Tokens: 4320, Own: true},
+			want: func(launch string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 4320, Source: sandbox.MeasureRequest, Launch: launch}
+			},
+		},
+		"an earlier request of the session, the figure carried": {turn: "t-measure-carried",
+			read: sandbox.RequestMeasure{Tokens: 61000},
+			want: func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"an earlier request of the session its box started, the carried figure by chance": {
+			turn: "t-measure-fresh-earlier", started: sandbox.SessionStartFresh,
+			read: sandbox.RequestMeasure{Tokens: 61000},
+			want: func(string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureSession}
+			},
+		},
+		"an earlier request of the session, another figure": {turn: "t-measure-session",
+			read: sandbox.RequestMeasure{Tokens: 70000},
+			want: func(string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 70000, Source: sandbox.MeasureSession}
+			},
+		},
+		"no request, the box having said nothing": {turn: "t-measure-unsaid",
+			want: func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"no request, the box having taken the session up": {turn: "t-measure-continued",
+			started: sandbox.SessionStartContinued,
+			want:    func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"no request, the box having started a session of its own": {turn: "t-measure-fresh",
+			started: sandbox.SessionStartFresh,
+			want:    func(string) *sandbox.SessionMeasure { return nil },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			turn := tc.turn
+			launch, claimed := launched(turn)
+			if tc.started != "" {
+				if ok, err := s.MarkSessionStart(ctx, turn, launch, tc.started); err != nil || !ok {
+					t.Fatalf("MarkSessionStart = %v, %v", ok, err)
+				}
+			}
+			if _, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+				Request: tc.read}); err != nil {
+				t.Fatalf("MarkHarnessEnd: %v", err)
+			}
+			want := tc.want(launch)
+			check := func(step string) {
+				t.Helper()
+				got := mustGet(t, s, turn).Launch.Context
+				if !sameMeasure(got, want) {
+					t.Errorf("after %s the job's record holds the measure %+v, want %+v", step, got, want)
+				}
+			}
+			check("the read that collected the job")
+			mustRelease(t, s, claimed)
+			check("the release of its claim")
+			if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+				t.Fatal(err)
+			}
+			check("a status write")
+			if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+				Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+				t.Fatal(err)
+			}
+			check("a bridged call")
+			park(t, s, turn)
+			check("a park")
+			mustBeginLaunch(t, s, run(turn))
+			if got := mustGet(t, s, turn).Launch.Context; got != nil {
+				t.Errorf("the next launch's job reads the measure %+v, the job before's, want none", got)
+			}
+		})
+	}
+}
+
+// sameMeasure reports whether a and b say the same of a session's measure: its
+// figure, where it came from and whose it is, a nil one none at all.
+func sameMeasure(a, b *sandbox.SessionMeasure) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Tokens == b.Tokens && a.Source == b.Source && a.Launch == b.Launch
+}
+
+// A MEASURE LANDS WHERE THE END IS ALREADY RECORDED. The read that collects a job
+// records its harness's end and its newest request's measure in one write, which
+// lands where either changes: a collection made again, whose end the first read
+// recorded already, brings a measure the first had none of, and a test of the end
+// alone would drop it. The same end and measure again change nothing.
+//
+// Mutation: write only where the end changes, and the measure is never recorded.
+func testAMeasureLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-measure-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Request: sandbox.RequestMeasure{Tokens: 4320, Own: true}}
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, read); err != nil || !ok {
+		t.Fatalf("a read bringing a measure beside the end recorded = %v, %v, want it written", ok, err)
+	}
+	if got := mustGet(t, s, turn).Launch; got.HarnessEnd != sandbox.HarnessEndCutOff ||
+		!sameMeasure(got.Context, &sandbox.SessionMeasure{Tokens: 4320, Source: sandbox.MeasureRequest, Launch: launch}) {
+		t.Errorf("the job's record says %q and holds the measure %+v, want the cut-off end and the job's own "+
+			"request", got.HarnessEnd, got.Context)
+	}
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, read); err != nil || ok {
+		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
 	}
 }
 

@@ -1812,6 +1812,12 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// its box holds them only as that count, so a relaunch carrying the
 		// round on in that box tells them ([runner.Resume.Owed]).
 		Owed: in.Run.Launch.OmittedCalls(),
+		// AND WHAT THE COPY IN ITS BOX CARRIED, off the job's own record as the
+		// read that collected it measured its newest request, or as the record
+		// carried it along the copy's lineage: a relaunch carrying the round on
+		// in that box is held to it with its brief, beside the job's newest
+		// capture's measure ([runner.Resume.ContextTokens]).
+		ContextTokens: in.Run.Launch.Context.ContextTokens(),
 		// AND THE TURN'S LEADS AS THE RESUME READ THEM BESIDE ITS ROW, opened,
 		// those its job's brief told marked: a relaunch continuing that job's
 		// session where it may lack the brief tells them again

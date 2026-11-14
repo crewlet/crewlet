@@ -846,9 +846,12 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 		// its own request's, which measured the conversation it summarised
 		// and not the context the session carries on with.
 		messages := `[{"id":"msg_1","type":"user","text":"x"},` +
-			`{"id":"msg_2","type":"assistant","tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1000,"write":50}}},` +
-			`{"id":"msg_3","type":"assistant","error":null,"tokens":{"input":20,"output":9,"cache":{"read":2000,"write":80}}},` +
-			`{"id":"msg_4","type":"assistant","error":{"name":"APIError"},"tokens":{"input":999999,"cache":{"read":0,"write":0}}},` +
+			`{"id":"msg_2","type":"assistant","time":{"created":1,"completed":2},` +
+			`"tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1000,"write":50}}},` +
+			`{"id":"msg_3","type":"assistant","time":{"created":3,"completed":4},"error":null,` +
+			`"tokens":{"input":20,"output":9,"cache":{"read":2000,"write":80}}},` +
+			`{"id":"msg_4","type":"assistant","time":{"created":5,"completed":6},"error":{"name":"APIError"},` +
+			`"tokens":{"input":999999,"cache":{"read":0,"write":0}}},` +
 			`{"id":"msg_5","type":"user","text":"a later message"},` +
 			`{"id":"msg_6","type":"compaction","status":"completed","reason":"manual","summary":"## Objective",` +
 			`"tokens":{"input":777777,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}]`
