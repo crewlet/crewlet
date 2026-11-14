@@ -258,9 +258,10 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		OutputTokens:   num(payload, "output_tokens"),
 		TotalTokens:    num(payload, "total_tokens"),
 		ToolExecutions: list(payload, "tool_executions"),
-		// A running phase's frame lists every call it has made so far, and
-		// says of none that it left one out.
-		ElidedCalls:    []any{},
+		// WITH WHAT THE FRAME'S LIST LEFT OUT, which a frame past its share
+		// counts rather than lists.
+		CallsElided:    num(payload, "calls_elided"),
+		ElidedCalls:    append([]any{}, list(payload, "elided_calls")...),
 		RoundNarration: list(payload, "round_narration"),
 		PartialRound:   mapping(payload, "partial_round"),
 		RoundNum:       roundNum,
@@ -271,12 +272,14 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		// previous one would leave a finished tool call on screen as
 		// running.
 		Rounds:         list(payload, "rounds"),
+		RoundsElided:   num(payload, "rounds_elided"),
 		Invocations:    list(payload, "invocations"),
 		MaxRounds:      num(payload, "max_rounds"),
 		RoundCeiling:   num(payload, "round_ceiling"),
 		RoundStartedAt: str(payload, "round_started_at"),
 		RunStartedAt:   str(payload, "run_started_at"),
 		RunningCalls:   runningCalls(payload),
+		RunningElided:  num(payload, "running_calls_elided"),
 		// NOT carried, for Rounds' reason: every frame states the phase's
 		// whole list.
 		Steers:           list(payload, "steers"),

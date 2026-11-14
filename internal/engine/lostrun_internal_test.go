@@ -76,3 +76,57 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 			row.Status, err)
 	}
 }
+
+// A ROUND LOST PAST ITS LIMIT ENDS ITS TURN AT ONCE. A round whose jobs keep
+// being lost with their hosts is a run that takes its host down, so the resume
+// that would carry it on once more refuses (runner.ErrRoundLost) — and that
+// refusal is permanent: every retry of the resume carries the same losses and
+// is refused the same way. So the run is settled, its turn ended on that
+// resume, whatever its jobs' calls showed. These jobs made no call at all, which
+// is the case that used to be handed back: refused again on every announcement
+// of its completion, and given up only once its resume had failed for half an
+// hour, the seat held behind it throughout.
+//
+// Mutation: drop turn.ErrPermanent from the refusal (internal/agent/runner's
+// lost.go), and the resume after the third loss is handed back rather than
+// settled, leaving the run on the record.
+func TestARoundLostPastItsLimitEndsItsTurnAtOnce(t *testing.T) {
+	t.Parallel()
+	e, _ := spendingEngine(t)
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	res, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-lost-limit", RunID: "run-lost-limit", WorkSince: time.Now().UTC(),
+	})
+	if err != nil || !res.Suspended {
+		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
+	}
+	pending := e.sandbox.Load().pending
+	runner := rig.runners[rig.row(t, "run-lost-limit").Harness]
+	for loss := 1; loss <= sandbox.MaxRoundLosses+1; loss++ {
+		// THE ENGINE'S RESTART TOOK THE ROUND'S NEWEST JOB, and its host's
+		// waiter said so, as it says of each one.
+		row := rig.row(t, "run-lost-limit")
+		runner.Lose(sandbox.Result{Text: "half way through the fix", InputTokens: 300, OutputTokens: 30})
+		if marked, err := pending.MarkLost(t.Context(), "run-lost-limit", row.LaunchID,
+			sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: row.LaunchNode}); err != nil || !marked {
+			t.Fatalf("loss %d: MarkLost = %v, %v", loss, marked, err)
+		}
+		completion := types.ExecutorFinished{
+			Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
+			TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
+			SandboxID: row.SandboxID, Harness: row.Harness,
+		}
+		ev := events.New(completion, events.TraceContext{TraceID: row.TraceID, ParentSpanID: row.SpanID})
+		if err := e.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev); err != nil {
+			t.Fatalf("loss %d: claiming the lost job: %v", loss, err)
+		}
+	}
+	if row, found, err := pending.Get(t.Context(), "run-lost-limit"); err != nil || found {
+		t.Fatalf("the run is still on the record after its round was lost past its limit (%s, "+
+			"ending %+v, %v); want it settled, its turn ended", row.Status, row.Ending, err)
+	}
+	if n := len(runner.Started()); n != sandbox.MaxRoundLosses+1 {
+		t.Errorf("%d jobs were started, want the first and one carrying the round on after each of "+
+			"the %d losses a round is carried on after", n, sandbox.MaxRoundLosses)
+	}
+}

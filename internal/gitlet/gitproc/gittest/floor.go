@@ -2,17 +2,17 @@ package gittest
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
+	"github.com/crewlet/crewlet/internal/prereqtest"
 )
 
-// The variables the floors' arm reads. Every make target sets all three, from
-// scripts/git.sh (the Makefile's GIT_ENV); nothing the engine runs reads them.
+// The variables the floors' arm reads. Every make target that runs the suite
+// sets both from scripts/git.sh (the Makefile's GIT_ENV); nothing the engine
+// runs reads them.
 const (
 	// nodeFloorEnv names the node floor's build: the newest patch of
 	// gitproc.NodeMinVersion's series (`scripts/git.sh node-floor`).
@@ -20,9 +20,6 @@ const (
 	// clientFloorEnv names the client floor's build: the newest patch of
 	// gitproc.ClientMinVersion's series (`scripts/git.sh client-floor`).
 	clientFloorEnv = "CREWLET_TEST_GIT_CLIENT_FLOOR"
-	// requireFloorEnv, 1, makes a floor's git that is not named a failure
-	// rather than a skip.
-	requireFloorEnv = "CREWLET_REQUIRE_GIT_FLOOR"
 )
 
 // onPath is the git on PATH and the version it says it is.
@@ -128,45 +125,28 @@ func NodeFloor(t testing.TB) string {
 // runs every person's git on.
 //
 // Named, the variable must be an absolute path to an executable file whose
-// `git version` is of the floor's series and at or above the floor, or t
-// FAILS naming the variable. UNSET, t fails when CREWLET_REQUIRE_GIT_FLOOR is
-// 1 — every make target sets it beside the two floors — and is otherwise
-// SKIPPED naming `make git`: the one environment skip of the suite's gits, so
-// a bare `go test` of one package still runs everything else, and one
-// internal/skipgate never judges, since every target it runs under requires
-// the floors.
+// `git version` is of the floor's series and at or above the floor, or t FAILS
+// naming the variable. UNSET, it is a missing prerequisite by
+// internal/prereqtest's one rule: t fails under the make targets that run the
+// suite, which require every prerequisite (CREWLET_REQUIRE_PREREQUISITES=1) as
+// they name the two floors, and is otherwise SKIPPED naming `make git` — the
+// one environment skip of the suite's gits, so a bare `go test` of one package
+// still runs everything else, and one internal/skipgate never judges, since
+// every target it runs under fails it instead.
 func ClientFloor(t testing.TB) string {
 	t.Helper()
 	return floorGit(t, gitproc.FloorClient, clientFloorEnv, "client-floor")
 }
 
 // floorGit is the git env names for floor, held to it; pin is the name
-// scripts/git.sh builds it under.
+// scripts/git.sh builds it under. Whether it is named at all is
+// prereqtest.Named's to judge, by the suite's one rule for a prerequisite;
+// whether it can stand for the floor is this package's.
 func floorGit(t testing.TB, floor gitproc.Floor, env, pin string) string {
 	t.Helper()
-	required, err := floorRequired()
-	if err != nil {
-		t.Fatal(err)
-	}
-	git := os.Getenv(env)
-	if git == "" {
-		if required {
-			t.Fatalf("%s is unset, and %s=1 requires the %s floor's git: the make targets set it to "+
-				"`$(scripts/git.sh %s)/git` (the Makefile's GIT_ENV)", env, requireFloorEnv, floor, pin)
-		}
-		t.Skipf("%s is unset: this arm runs the %s floor's own git, which every make target names "+
-			"(`make git` builds it, and `scripts/git.sh %s` prints its bin)", env, floor, pin)
-	}
-	if !filepath.IsAbs(git) {
-		t.Fatalf("%s=%q is not an absolute path to a git", env, git)
-	}
-	info, err := os.Stat(git)
-	if err != nil {
-		t.Fatalf("%s=%s: %v", env, git, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("%s=%s is not an executable file", env, git)
-	}
+	git := prereqtest.Named(t, env, fmt.Sprintf("the %s floor's own git, which this arm runs", floor),
+		fmt.Sprintf("`make git` builds it, `scripts/git.sh %s` prints its bin, and the make targets that run "+
+			"the suite name `$(scripts/git.sh %s)/git` here (the Makefile's GIT_ENV)", pin, pin))
 	v, err := floorVersion(git)
 	if err != nil {
 		t.Fatalf("%s=%s: %v", env, git, err)
@@ -175,19 +155,6 @@ func floorGit(t testing.TB, floor gitproc.Floor, env, pin string) string {
 		t.Fatalf("%s=%s cannot stand for the %s floor: %s", env, git, floor, problem)
 	}
 	return git
-}
-
-// floorRequired reads CREWLET_REQUIRE_GIT_FLOOR: unset is false, 1 true, and
-// anything else a mistake named rather than read as either.
-func floorRequired() (bool, error) {
-	switch v := os.Getenv(requireFloorEnv); v {
-	case "":
-		return false, nil
-	case "1":
-		return true, nil
-	default:
-		return false, fmt.Errorf("%s=%q: set it to 1 (the floors' gits are required) or leave it unset", requireFloorEnv, v)
-	}
 }
 
 // floorVersions is each named git's version, read once per test binary.

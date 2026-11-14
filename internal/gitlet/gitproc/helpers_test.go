@@ -58,8 +58,8 @@ func fakePool(t testing.TB, body string, o gitproc.Options) *gitproc.Pool {
 
 // realPool is a pool over the real git, held to the node floor before the
 // pool refuses it ([gittest.RequireNode]): the node pin under every make
-// target. A test whose SUBJECT is what git does in a pool runs on both of the
-// node's gits instead ([onNodeGits]).
+// target that runs it. A test whose SUBJECT is what git does in a pool runs
+// on both of the node's gits instead ([onNodeGits]).
 func realPool(t testing.TB, o gitproc.Options) *gitproc.Pool {
 	t.Helper()
 	return poolOn(t, gittest.RequireNode(t), o)
@@ -74,17 +74,19 @@ func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
 
 // onNodeGits runs body once on each of the two gits that bound what a pool
 // may run, each a parallel subtest of its own: the NODE PIN — the PATH's git,
-// which every make target makes the newest release (gittest.RequireNode),
-// what the image builds — and the NODE FLOOR's own build, the newest patch of
-// gitproc.NodeMinVersion's series (gittest.NodeFloor), the oldest git
-// gitproc.New admits. Every claim about what a real git says or does in a
-// pool — the format table, what a request can reach, what the pool's
-// environment keeps from git — is a claim about every git a Gitlet node may
-// run, and measured on the pin alone it was a claim about one of them: the
-// floor's own expectations were wrong in three arms of the format table, and
-// nothing ran them (ADR-0087, "each floor is a measured claim"). Under every
-// make target the floor's build is required (CREWLET_REQUIRE_GIT_FLOOR=1);
-// a bare `go test` without it skips the floor's arm alone.
+// which every make target that runs this package makes the newest release
+// (gittest.RequireNode), what the image builds — and the NODE FLOOR's own
+// build, the newest patch of gitproc.NodeMinVersion's series
+// (gittest.NodeFloor), the oldest git gitproc.New admits. Every claim about
+// what a real git says or does in a pool — the format table, what a request
+// can reach, what the pool's environment keeps from git — is a claim about
+// every git a Gitlet node may run, and measured on the pin alone it was a
+// claim about one of them: the floor's own expectations were wrong in three
+// arms of the format table, and nothing ran them (ADR-0087, "each floor is a
+// measured claim"). Under every make target that runs this package the
+// floor's build is required, as every prerequisite of the suite is
+// (CREWLET_REQUIRE_PREREQUISITES=1, internal/prereqtest's one rule); a bare
+// `go test` without it skips the floor's arm alone.
 func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {
 	t.Helper()
 	for _, g := range []struct {

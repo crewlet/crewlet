@@ -112,6 +112,7 @@ function record() {
     roundStartedAt: "",
     runStartedAt: "",
     runningCalls: [],
+    runningElided: 0,
     steers: [],
     node: "",
     clockStart: "",

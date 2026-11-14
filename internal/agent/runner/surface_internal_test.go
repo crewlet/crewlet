@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -171,12 +172,14 @@ func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) (Launched, 
 // THE OPEN-WORLD HALF OF THE PREDICATE REACHES THE TURN, or it is dead code.
 //
 // [turn.Acted] decides whether a broken turn's trigger is given up rather than
-// redelivered, and its two halves come from different places: MCP-backing off
-// `MCPTools`, and a first-party tool that leaves the process off
-// `KnownOpenWorld`. Only `a2a_ask` carries that annotation among the builtins, so
-// if `describe` stops filling the field the engine silently loses the ability
-// to tell "this turn woke a colleague" from "this turn did nothing" — and
-// every such failure goes back to replaying its ask twenty-five times.
+// redelivered, and its two halves come from different places: a delivery off
+// `Deliveries`, and a tool whose own annotations say it leaves the process off
+// `KnownOpenWorld` — a colleague ask, a reaction, a published artifact, none of
+// them a delivery — less the reads of the world off `KnownReads`. If `describe`
+// stops filling either set, the engine silently loses the ability to tell "this
+// turn woke a colleague" from "this turn did nothing", and every such failure
+// goes back to replaying its ask twenty-five times; or it reads a turn that
+// only searched as one that wrote, and gives up a trigger worth retrying.
 func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -188,17 +191,30 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 		tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
 		t.Fatal(err)
 	}
+	// A READ OF THE WORLD: open-world, and positively read-only — in BOTH
+	// sets, which is what Acted reads the exclusion from.
+	if err := reg.RegisterWith(stubTool("search"), tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: mcp.Yes, OpenWorld: mcp.Yes}); err != nil {
+		t.Fatal(err)
+	}
 	// The shape that matters most: a tool nobody classified. It must appear
 	// in NEITHER list, so it proves nothing in either direction.
 	if err := reg.RegisterWith(stubTool("submit_work"), tools.OriginBuiltin,
 		tools.Annotations{}); err != nil {
 		t.Fatal(err)
 	}
-	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"ask", "recall", "submit_work"})
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"ask", "recall", "search", "submit_work"})
 
 	got := describe(surface)
 	if !slices.Contains(got.KnownOpenWorld, "ask") {
 		t.Errorf("KnownOpenWorld = %v, want the open-world builtin in it", got.KnownOpenWorld)
+	}
+	if !slices.Contains(got.KnownOpenWorld, "search") || !slices.Contains(got.KnownReads, "search") {
+		t.Errorf("KnownOpenWorld = %v, KnownReads = %v; want the read of the world in both",
+			got.KnownOpenWorld, got.KnownReads)
+	}
+	if turn.Acted([]ledger.Call{{Name: "search"}}, got) || !turn.Acted([]ledger.Call{{Name: "ask"}}, got) {
+		t.Error("the surface handed to the turn does not tell a read of the world from a colleague ask")
 	}
 	if slices.Contains(got.KnownOpenWorld, "recall") {
 		t.Error("a positively read-only tool was reported as leaving the process")
@@ -209,6 +225,47 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 	}
 	if !slices.Contains(got.KnownReads, "recall") {
 		t.Errorf("KnownReads = %v, want the read in it", got.KnownReads)
+	}
+}
+
+// A CALL THE ENGINE ONLY PRESUMES WROTE REACHES THE TURN AS ONE. An MCP tool
+// that no hint marks as a read or as a write delivers by the fence's
+// fail-closed default, and so counts as an act; the turn must also know which
+// calls it counts by that default alone, or a turn nobody asked for that only
+// searched through one is told it "already acted outside the engine". A tool
+// its server marks a write is an act, and one it marks a read is neither.
+//
+// Mutation: stop filling PresumedWrites in describe, and the search is told it
+// acted.
+func TestTheSurfaceHandedToTheTurnSaysWhichWritesItPresumes(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for name, ann := range map[string]tools.Annotations{
+		"jira_search_issues": {},
+		"jira_add_comment":   {ReadOnly: mcp.No, OpenWorld: mcp.Yes},
+		"jira_get_issue":     {ReadOnly: mcp.Yes},
+	} {
+		if err := reg.RegisterWith(stubTool(name), tools.Origin("jira"), ann); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := describe(tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"jira_search_issues", "jira_add_comment", "jira_get_issue"}))
+
+	if !slices.Equal(got.PresumedWrites, []string{"jira_search_issues"}) {
+		t.Errorf("PresumedWrites = %v, want only the tool its server leaves unmarked", got.PresumedWrites)
+	}
+	searched := turn.ActedAccount([]ledger.Call{{Name: "jira_search_issues"}}, got)
+	if !strings.Contains(searched, "does not mark read-only") || strings.Contains(searched, "already acted") {
+		t.Errorf("account = %q, want the search named as a call the engine cannot tell from a write",
+			searched)
+	}
+	commented := turn.ActedAccount([]ledger.Call{{Name: "jira_add_comment"}}, got)
+	if !strings.Contains(commented, "already acted outside the engine") {
+		t.Errorf("account = %q, want the comment its server marks a write named as an act", commented)
+	}
+	if read := turn.ActedAccount([]ledger.Call{{Name: "jira_get_issue"}}, got); read != "" {
+		t.Errorf("account = %q, want nothing for a read its server marks as one", read)
 	}
 }
 

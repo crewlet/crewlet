@@ -5718,8 +5718,8 @@ counter has since left behind as the current ones.
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
 tool_executions, calls_elided, elided_calls, round_narration, partial_round,
-round_num, rounds_used, rounds, invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
-running_calls, steers,
+round_num, rounds_used, rounds, rounds_elided, invocations, max_rounds, round_ceiling, round_started_at,
+run_started_at, running_calls, running_calls_elided, steers,
 cache_read_tokens, cache_write_tokens, work_item, node, in_progress, versions }`
 while an LLM call is under
 way. The fields are these:
@@ -5788,7 +5788,11 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   and says what it left out past it
   ([what an agent record keeps](../concepts/event-system.md#what-an-agent-record-keeps)):
   a failed phase's call is frozen with that record's list, and carries its
-  `calls_elided` and `elided_calls`, zero and empty on a running call.
+  `calls_elided` and `elided_calls`. A running phase's frame is held to live
+  shares instead, since it is republished five times a second: past them it
+  keeps the newest calls (`calls_elided`, `elided_calls`), its first and newest
+  rounds (`rounds_elided`, versioned with `rounds`) and the calls in flight that
+  fit (`running_calls_elided`, carried as `running_calls` is).
 - **Out to a tab**, an `agents` push carries a call's HEAVY fields — `prompt`
   and `prompt_messages`, `response`, `round_narration`, `tool_executions` with
   its `calls_elided` and `elided_calls`, and `rounds` — only when their version (`versions`) moved since the last push for

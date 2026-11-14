@@ -1199,6 +1199,13 @@ type AgentTurnProgress struct {
 	// Steers is every person's note the phase has read so far — see
 	// [PhaseSteer].
 	Steers []PhaseSteer `json:"steers,omitempty"`
+	// RoundsElided is how many of the phase's rounds so far the frame's lists
+	// do not carry: past the most rounds a record lists, the frame keeps the
+	// first half and the newest half, each kept round with its provider
+	// call, prose, harness runs, notes and calls, and counts the calls of the
+	// rest in CallsElided (internal/agent/runner's recordbytes.go). Absent on
+	// a frame that carries every round.
+	RoundsElided int `json:"rounds_elided,omitempty"`
 	// MaxRounds is the cap the phase is running under NOW, which an
 	// extension raises mid-phase, and RoundCeiling the most it can be
 	// raised to. What "round 3 of 8" is rendered from, off the loop's own
@@ -1222,6 +1229,12 @@ type AgentTurnProgress struct {
 	// — see [RunningCall]. A LIST because a harness may run a
 	// response's calls at once. Absent whenever no call is running.
 	RunningCalls []RunningCall `json:"running_calls,omitempty"`
+	// RunningElided is how many more calls were in flight than RunningCalls
+	// lists: the frame holds its calls in flight to their share, each one's
+	// arguments to theirs, in the order they began. A call not listed as
+	// running is on ToolExecutions once it settles. Absent on a frame that
+	// lists every call in flight.
+	RunningElided int `json:"running_calls_elided,omitempty"`
 	// Invocations are the phase's harness runs that have ENDED so far — see
 	// [PhaseInvocation]. The run in flight is not on it until it ends, so
 	// the rounds past every entry's LastRound are that run's.
@@ -1237,6 +1250,14 @@ type AgentTurnProgress struct {
 	// has been published — which is why the sentinel is -1 rather than 0.
 	RoundNum       int             `json:"round_num"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
+	// CallsElided is how many of the phase's calls so far ToolExecutions does
+	// not list, and ElidedCalls those calls by tool: a frame is republished
+	// whole five times a second, so past its share the list keeps the newest
+	// calls that fit, a reader watching what arrives, and the phase's record
+	// keeps the first and the newest once it completes. Absent on a frame
+	// that lists every call.
+	CallsElided int           `json:"calls_elided,omitempty"`
+	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
 	// RoundNarration is what the model said in each round so far. Free on
 	// this event in storage terms — nothing persists it — and it is what
 	// lets the live view append a round rather than redraw one blob.

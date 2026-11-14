@@ -51,7 +51,7 @@ var LIVE_CALL_DETAIL = {
 		"calls_elided",
 		"elided_calls"
 	],
-	rounds: ["rounds"],
+	rounds: ["rounds", "rounds_elided"],
 	invocations: ["invocations"]
 };
 /**
@@ -357,6 +357,7 @@ var NOTHING_HELD = {
 	calls_elided: 0,
 	elided_calls: null,
 	rounds: null,
+	rounds_elided: 0,
 	invocations: null
 };
 /**

@@ -437,12 +437,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// The submission tool is on the surface because it is how the executor
 	// says what it did. The harness calls it over the bridge, and the value it
-	// captures here is read only when the resume happens in THIS process —
-	// otherwise the resume rebuilds it from the run's durable bridged-call
-	// log.
+	// captures here is NEVER READ: every collection, in this process or
+	// another, replays submit_work from the run's durable bridged-call log
+	// into a fresh decoder ([Runner.resumeAgentRun]). What this tool decides
+	// is only what the run is told, and whether the log records the call as
+	// failed, which the replay skips.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))))
 
@@ -588,7 +590,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // knows which box it has.
 //
 // A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
-// its phase is closed here as failed, saying why, and the turn ends with it.
+// its phase is closed here as failed, saying why, and the turn ends with it —
+// the refusal is permanent ([turn.ErrPermanent]), so neither path a turn
+// arrives by runs it again.
 //
 // THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the job's as it left
 // it — the tools its launch had active and what its bridged calls did to it
@@ -623,7 +627,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// included, or a delivery made before the question, or before the loss,
 	// would be refused here and accepted there.
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call {
 				carried := append(slices.Clone(logged), ledger.Called(elided)...)
 				return turn.Record(history, append(carried, calls(surface)...))
@@ -647,6 +651,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if refused := carry.refusal(); refused != nil {
 		// THE ROUND ENDS HERE, and its phase with it: it was opened when the
 		// round first launched, and nothing else will close it now.
+		//
+		// AND THE TURN ENDS BY THE REFUSAL ITSELF ([turn.ErrPermanent]), which
+		// [turn.Abandon] reads before anything the attempt did, so how the
+		// round's calls are counted decides nothing here. They are an EARLIER
+		// ATTEMPT's all the same, as on every other way out of a carried round,
+		// since the jobs before made them.
 		refusedErr := fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round,
@@ -656,9 +666,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			Failed: true, Err: refusedErr,
 		})
 		// AND ITS CALLS WHOSE OUTCOME IS UNKNOWN, after its calls, as the
-		// record of every round lists them ([Resume.Unfinished]).
-		return turn.Work{Calls: append(slices.Clone(logged), bridgedLedger(round.unfinished)...),
-			Elided: elided, Absorbed: absorbed}, describe(surface), refusedErr
+		// record of every round lists them ([Resume.Unfinished]): all of
+		// them an earlier attempt's ([turn.Work.Inherited]).
+		calls := append(slices.Clone(logged), bridgedLedger(round.unfinished)...)
+		return turn.Work{Calls: calls, Inherited: len(calls), Elided: elided, Absorbed: absorbed},
+			describe(surface), refusedErr
 	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
@@ -935,9 +947,11 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 //
 // It launches nothing and parks nothing: the run is going already, and its
 // collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
-// NEVER READ, exactly as the launch's is not when the run is collected in
-// another process: the collection replays submit_work from the run's durable
-// log ([Runner.resumeAgentRun]).
+// NEVER READ, exactly as the launch's is not: every collection, in this
+// process or another, replays submit_work from the run's durable log into a
+// fresh decoder ([Runner.resumeAgentRun]). What its tool decides is only what
+// the run is told, and whether the log records the call as failed, which the
+// replay skips.
 //
 // AND THE CALLS ITS LOG HOLDS IN FLIGHT (unfinished, [Resume.Unfinished]), which
 // its call log counts by their identity: a call of the run still running on
@@ -953,7 +967,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
-		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(decodeWork(r.cfg.Reply,
+		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call {
 				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
 			},
@@ -1136,8 +1150,11 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	unfinished := inAdmissionOrder(r.cfg.Resume.Unfinished)
 
 	// THE REPLAY'S DECODER IS NOT HELD TO WHAT THE LOG KEEPS WHOLE
-	// ([keptWhole]): the submission is already made, and one a build before
-	// that bound recorded whole is replayed as it stands.
+	// ([keptWhole]), NOR DOES IT REFUSE A NO_ACTION AFTER AN ACT
+	// ([makingWork]): the submission is already made. One a build before
+	// that bound recorded whole is replayed as it stands, and a no_action
+	// the run made before it acted is collected as the run's own account,
+	// which [turn.Check] corrects from the same record.
 	var surface *tools.Surface
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
 		typedPickup(r.cfg.Reply, r.pickupAnswer, decodeWork(r.cfg.Reply,

@@ -1557,10 +1557,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is not redelivered into a conversation a retry must not
 			// re-enter.
 			//
-			// A resumed turn is the one most likely to qualify. Its run
-			// already acted through the bridge — posted, wrote, delegated
-			// — and a replay of the resume would judge, and send back,
-			// work whose effects are already out in the world.
+			// A RESUMED TURN QUALIFIES BY WHAT ITS OWN ATTEMPT DID, as any
+			// turn does: what its run did over the bridge before this
+			// segment collected it is an earlier attempt's
+			// ([turn.Work.Inherited]), and a retry collects the same run
+			// rather than make any of it again. It qualifies too when it
+			// panicked, and when it was refused for a reason every retry
+			// would meet again ([turn.ErrPermanent]: its round lost with
+			// its host past its limit) — a refusal only a resume meets,
+			// so it reaches [turn.Abandon] through this call alone.
 			//
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
