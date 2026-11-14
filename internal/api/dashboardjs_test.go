@@ -2448,7 +2448,9 @@ const (
 	// `llm_check` question, and what a test that found nothing says) added
 	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
 	// bytes): 5977 KiB.
-	treeBudget = 5<<20 + 890<<10
+	// The release train merged with that poll, on kit 0.126.2, measures
+	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
+	treeBudget = 5<<20 + 891<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
