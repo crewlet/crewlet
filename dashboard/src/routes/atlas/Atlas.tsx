@@ -234,7 +234,15 @@ function MapPart({
     () => (searching && found.data ? new Set(found.data.nodes.map((node) => node.id)) : null),
     [searching, found.data],
   );
-  const fitKey = useMemo(() => JSON.stringify(drawn), [drawn]);
+  // THE MAP FITS AGAIN WHEN THE ANSWER IT DRAWS IS FOR OTHER FILTERS, so its
+  // key is what the answer on screen was read with. A changed filter keeps the
+  // last answer on screen until the new one lands (`useQuery`), and keyed on
+  // the question the fit landed on the map that answer was about to replace.
+  // A poll of the same filters keeps the key, and with it the reader's view.
+  const asked = JSON.stringify(drawn);
+  const [shown, setShown] = useState({ answer: map.data, fitKey: asked });
+  if (shown.answer !== map.data) setShown({ answer: map.data, fitKey: asked });
+  const fitKey = shown.answer === map.data ? shown.fitKey : asked;
 
   if (map.loading && !map.data) {
     return (
