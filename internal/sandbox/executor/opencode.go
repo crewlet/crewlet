@@ -268,8 +268,9 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 //
 // THE USAGE, from the session rather than the stream: `run --format json`
 // drops the final step's counts, while the session the run worked in holds
-// the whole total, so the script prints it as one last line of its own type
-// ([openCodeUsageEvent]) once the run has ended.
+// the whole total, so the script prints it as a line of its own type
+// ([openCodeUsageEvent]) once the run has ended, before the session's export
+// and the pages below.
 //
 // AND WHAT THE SESSION'S NEWEST REQUEST CARRIED, asked of the session's own
 // message list a page at a time once its session is exported, never on an end
@@ -473,9 +474,11 @@ func (OpenCode) Continues(box, writer string) (bool, string) {
 // argument per answer about how long it may grow: the export, `mcp.list` (every
 // server the image's and the repository's configuration declare too, a failed
 // one with its error), the inbox listing, `session.get`, the words an import or
-// a delete answers, `--version`. Each answer goes to the run's answer file
-// ([openCodeAnswerFile]), is read back with cat or grep, and is removed; a
-// pack's goes to its own staging directory ([OpenCode.Pack], [openCodePack]).
+// a delete answers, `--version`, the session's message list. Each answer goes
+// to the run's answer file ([openCodeAnswerFile]), is read back with cat or
+// grep, and is removed; the message list's pages go to a file of their own,
+// printed into the stream a page at a time ([openCodeContext]), and a pack's
+// answers to its own staging directory ([OpenCode.Pack], [openCodePack]).
 // TestNoOpenCodeAnswerIsReadThroughAPipe holds every script rendered to it.
 //
 // THE LOGIN'S EXPORTS ARE SERIALISED, because three of them can write the
@@ -701,13 +704,15 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	return b.String()
 }
 
-// openCodeAnswerFile is the file a run's script has OpenCode write each answer
-// the script reads into, and reads it back from, quoted for the script: one
-// answer at a time, each removed once it is read ([openCodeScript]). One file
-// serves them all because the script makes one OpenCode call at a time, and
-// nothing it starts beside itself writes here: the login exporter exports into
-// a file of its own, and the run's client prints its stream to the job's
-// stdout.
+// openCodeAnswerFile is the file a run's script has OpenCode write the answers
+// the script reads into, and reads them back from, quoted for the script: one
+// answer at a time, each removed once it is read ([openCodeScript]), all but
+// the session's export, which goes to the pack's staging directory
+// ([openCodePack]), and the message list's pages, which go to a file of their
+// own ([openCodeContext]). One file serves the rest because the script makes
+// one OpenCode call at a time, and nothing it starts beside itself writes here:
+// the login exporter exports into a file of its own, and the run's client
+// prints its stream to the job's stdout.
 //
 // A BOUNDED CALL TO THE RUN'S OWN SERVER writes its answer here too, never into
 // a command substitution, which would run the call in a subshell an end request

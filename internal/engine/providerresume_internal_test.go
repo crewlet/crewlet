@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -785,14 +787,14 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 // budget park's alarm fired into a seat a peer ran, and either one's hold,
 // taken after the detach that drops holds, kept the inbox shut on this node.
 // And a budget park on a launch's refusal below its floor takes with it the
-// window it recorded for the seat's next launch here, which would otherwise
-// hold that launch, the seat back on this node in a later window, to the static
-// floor though it never waited.
+// window it recorded for that delivery here: the record is the park's, and a
+// node that holds no park of the seat keeps nothing of it, the seat's next
+// holder recording its own.
 //
 // Mutation: drop the seat's re-check from providerPark, or from budgetPark,
 // and that park, its probe or alarm, and its hold stay on a seat this node no
-// longer holds; keep the window the budget park recorded, and the seat's next
-// launch here takes it.
+// longer holds; keep the window the budget park recorded, and it outlives the
+// park on a seat this node no longer holds.
 func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 	t.Parallel()
 	// drained is a rig's engine once its drain has handed every seat back,
@@ -851,17 +853,18 @@ func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 			t.Fatalf("PostCharge: %v", err)
 		}
 		// A LAUNCH'S REFUSAL BELOW ITS FLOOR, whose park records the window it
-		// waits on for the seat's next launch.
+		// waits on for the delivery whose launch it was.
 		refused := &floorRefusal{floor: staticFloor(e.Company()), left: 0}
-		if _, parked, err := e.budgetPark(t.Context(), "swe", refused); err != nil || !parked {
+		delivery := []*events.Event{{ID: uuid.New(), Type: "task_assigned"}}
+		if _, parked, err := e.budgetPark(t.Context(), "swe", delivery, refused); err != nil || !parked {
 			t.Fatalf("budgetPark = %v, %v", parked, err)
 		}
 		if parking := e.budgetParks.parking(seatIn(t, e, "swe")); parking != nil {
 			t.Fatal("the park outlived its seat on this node")
 		}
-		if w := e.floorWaits.take(seatIn(t, e, "swe")); w.Valid() {
-			t.Fatalf("the park left the window %+v for the seat's next launch on a node that no longer holds it",
-				w)
+		if waited := e.floorWaits.waited(seatIn(t, e, "swe"), deliveryOf(delivery)); len(waited) != 0 {
+			t.Fatalf("the park left the window %+v for the delivery's next launch on a node that no longer "+
+				"holds its seat", waited[0])
 		}
 		if live := alarms.live(); len(live) != 0 {
 			t.Fatalf("%d reset alarms armed for a seat this node no longer holds, want none", len(live))

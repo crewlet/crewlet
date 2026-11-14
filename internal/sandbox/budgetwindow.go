@@ -12,11 +12,13 @@ import "github.com/crewlet/crewlet/internal/period"
 // order, so a reader on any node, after a restart or a move, tells a window that
 // has turned over from the one it is in by comparing two strings.
 //
-// What it names here is the window an executor launch was refused below its
-// floor in, the one its budget hold waits on to turn over ([Refusal.Window]):
-// the engine holds that launch's next try, in a later window, to no more than
-// the floor a launch with no brief needs, so a launch refused below its brief's
-// floor, or a session's, waits for one turnover at most (internal/engine's
+// What it names is the window an executor launch was refused below its floor
+// in, the one its budget hold waits on to turn over ([Refusal.Window]), or its
+// seat's park (internal/engine's floorWaits): the engine holds the next try of
+// that launch's own work, the same turn's relaunch or the same delivery's
+// launch and no other, in a later window, to no more than the floor a launch
+// with no brief needs, so a launch refused below its brief's floor, or a
+// session's, waits for one turnover at most (internal/engine's
 // launchfloor.go). The zero BudgetWindow names none: never refused, or refused
 // on a record a build without the field wrote, which costs that launch at most
 // one more window.

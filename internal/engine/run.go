@@ -365,9 +365,10 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
-	// floorWaits is every seat whose launch this node parked below its
-	// floor, with the window the park waited on, for the seat's next launch
-	// to take. See budgetpark.go.
+	// floorWaits is every delivery whose launch this node parked its seat
+	// for below its floor, by the seat and the ids of the delivery's events,
+	// with the window the park waited on, for that delivery's next launch to
+	// read. See budgetpark.go.
 	floorWaits floorWaits
 
 	// providerParks is every seat inbox this node holds because every model
@@ -2832,6 +2833,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.DeadLettered == nil {
 		d.DeadLettered = e.reportDeadLetter
 	}
+	if d.Gone == nil {
+		d.Gone = e.budgetDeliveryGone
+	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
 		// registries above: the dispatcher is built once and an apply can
@@ -3950,8 +3954,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
-	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil, nil)
+	// still holds to the executor's record (steer.go). WITH THE EVENTS THE
+	// TURN WAS DISPATCHED FOR, under which a park of the seat recorded the
+	// window an earlier try of this delivery's launch was refused below its
+	// floor in, so this launch, and no other delivery's, is held after that
+	// window ([floorWaits]).
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told,
+		deliveryOf(req.Events), nil, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

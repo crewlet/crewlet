@@ -15,11 +15,14 @@ import (
 // again, said rather than left out, even where none is left to tell, and never
 // as messages the engine no longer keeps: a read of them that failed counts
 // every one, though the store may keep them still. Nothing at all is no
-// section.
+// section. AND NEVER WHY THE SESSION MAY NOT SHOW THEM, which the section before
+// it says in the words the session's record bears out: said here that its run
+// may have been cut off, a session whose harness ended its own run, told it may
+// be a summary, was told what nothing says.
 //
 // Mutation: drop the count, say one message as several, leave the cut out, say
-// it as no longer kept, or leave a cut with nothing to tell unsaid, and a case
-// goes red.
+// it as no longer kept, leave a cut with nothing to tell unsaid, or say the run
+// may have been cut off, and a case goes red.
 func TestLeadsToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	answer := "### An answer to a question this work asked\nA run of this work asked: which branch?"
@@ -47,6 +50,9 @@ func TestLeadsToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 			never: []string{"below"}},
 	} {
 		got := LeadsToldAgain(tc.leads, tc.cut)
+		if strings.Contains(got, "cut off") {
+			t.Errorf("%s: the section says why the session may not show them, that it was cut off:\n%s", name, got)
+		}
 		for _, want := range tc.says {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: the section does not say %q:\n%s", name, want, got)
@@ -67,44 +73,59 @@ func TestLeadsToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 // A TURN TOLD AGAIN KEEPS ITS BOUNDARY AND NOT ITS BOX. The lead of a run that
 // continued the session its conversation's last turn left, told again to a
 // later session of the work that may lack it, says where this turn began (the
-// turn it began after, when that turn ended, that it went on past the session
-// or was lost, in a schedule's words for a fire), what that boundary makes
-// stale, and that the session's files from before it were the earlier box's;
-// and, of a session cut off when it was kept, that it may hold a call with no
-// result from before the turn began. NEVER that the run is in a new box, on a
-// fresh checkout, to check a repository out again, or where the earlier box's
-// paths were: those are true of the box that lead's run started in, and stale
-// or false of the box a later job continues the session in.
+// turn it began after, when that turn ended, that it was lost, in a schedule's
+// words for a fire) and what that boundary makes stale; and, of a session that
+// began as the one the earlier turns left, that its files from before the turn
+// were the earlier box's, that it ends where it was kept while that turn still
+// worked or may not hold the last of a lost one, and that, cut off when it was
+// kept, it may hold a call with no result from before the turn began. NEVER
+// that the run is in a new box, on a fresh checkout, to check a repository out
+// again, or where the earlier box's paths were: those are true of the box that
+// lead's run started in, and stale or false of the box a later job continues
+// the session in.
+//
+// NOR THAT THE SESSION ABOVE BEGAN THERE: a session that may be a summary is
+// told every task the run keeps, another lineage's among them, which began with
+// a fresh brief. So every word of the session the earlier turns left comes
+// after the line that says it is of a session that began as that one.
 //
 // Mutation: tell the lead again as BuildNextTurn renders it, keep its new-box
-// section, or lose the boundary of a turn that went on or was lost, and a case
-// goes red.
+// section, lose the boundary of a turn that went on or was lost, say that the
+// session above began as the earlier turns left it, or say a word of that
+// session before the line that makes it conditional, and a case goes red.
 func TestATurnToldAgainKeepsItsBoundaryAndNotItsBox(t *testing.T) {
 	t.Parallel()
 	ended := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
 	newBox := []string{"new box", "FRESH checkout", "code_checkout", "/boxes/4f2a", "$HOME", "pwd",
-		"begins here", "Everything above"}
+		"begins here", "Everything above", "The session above began", "the session above may not hold"}
+	const where = "Where the session above began as the one your earlier turns left, in full or in a summary:"
 	for name, tc := range map[string]struct {
-		m    NextTurn
-		says []string
+		m             NextTurn
+		says, ofThere []string
 	}{
 		"a turn that ended": {m: NextTurn{BaseTurn: "t-1", EndedAt: ended, Home: "/boxes/4f2a",
 			Checkout: "code_checkout"},
-			says: []string{"### A new turn of this conversation began here", "through turn `t-1`",
-				"which ended at 2026-11-03T09:00:00Z", "This turn began after that",
+			says: []string{"### A new turn of this conversation began here", "This turn began after your earlier " +
+				"turns of this conversation, through turn `t-1`, which ended at 2026-11-03T09:00:00Z, and the task " +
+				"below is this turn's.",
 				"**What was read before this turn began may be stale:**",
-				"**Tools activated and skills loaded before this turn began were set up anew for it:**",
-				"is what the box of the turn it came from held."}},
+				"**Tools activated and skills loaded before this turn began were set up anew for it:**"},
+			ofThere: []string{"is what the box of the turn it came from held."}},
 		"a turn that went on past its session": {m: NextTurn{BaseTurn: "t-1", WentOn: true, Lost: true,
 			CapturedAt: ended},
-			says: []string{"up to a session kept while turn `t-1` still worked", "at 2026-11-03T09:00:00Z",
-				"and that turn was lost", "How turn `t-1` ended"}},
+			says: []string{"through turn `t-1`, which was lost, and the task", "How turn `t-1` ended"},
+			ofThere: []string{"**It was kept while turn `t-1` still worked, at 2026-11-03T09:00:00Z:** what that " +
+				"turn did after it is not in it."}},
 		"a lost turn": {m: NextTurn{BaseTurn: "t-1", Lost: true, EndedAt: ended},
-			says: []string{"which was lost and ended at 2026-11-03T09:00:00Z", "may not hold the last of"}},
+			says:    []string{"which was lost and ended at 2026-11-03T09:00:00Z"},
+			ofThere: []string{"**It may not hold the last of what turn `t-1` did,** which was lost."}},
 		"a schedule's fire": {m: NextTurn{BaseTurn: "f-9", Fire: true},
-			says: []string{"### A new fire of this schedule began here", "This fire began after that"}},
+			says: []string{"### A new fire of this schedule began here", "This fire began after your earlier " +
+				"fires of this schedule, through fire `f-9`"},
+			ofThere: []string{"Where the session above began as the one your earlier fires left"}},
 		"a session cut off when it was kept": {m: NextTurn{BaseTurn: "t-1", Interrupted: true},
-			says: []string{"was cut off when it was kept", "before this turn began it may hold a call with no result"}},
+			ofThere: []string{"**It was cut off when it was kept,** so before this turn began it may hold a call " +
+				"with no result"}},
 	} {
 		got := NextTurnAgain(tc.m)
 		for _, want := range tc.says {
@@ -112,11 +133,60 @@ func TestATurnToldAgainKeepsItsBoundaryAndNotItsBox(t *testing.T) {
 				t.Errorf("%s: the turn told again does not say %q:\n%s", name, want, got)
 			}
 		}
-		for _, never := range newBox {
-			if strings.Contains(got, never) {
-				t.Errorf("%s: the turn told again says %q, a claim of a box it may not be in:\n%s", name, never, got)
+		at := strings.Index(got, where)
+		if tc.m.Fire {
+			at = strings.Index(got, "Where the session above began as")
+		}
+		for _, want := range tc.ofThere {
+			if said := strings.Index(got, want); said < 0 || at < 0 || said < at {
+				t.Errorf("%s: the turn told again does not say %q of a session that began as the earlier "+
+					"turns left it alone:\n%s", name, want, got)
 			}
 		}
+		for _, never := range newBox {
+			if strings.Contains(got, never) {
+				t.Errorf("%s: the turn told again says %q, a claim of a box, or a session, it may not be in:\n%s",
+					name, never, got)
+			}
+		}
+	}
+}
+
+// A SEND-BACK TOLD AGAIN SAYS NOTHING OF THE SESSION ABOVE. A review's send-back,
+// told again as a lead to a later session of the work, may reach a session that
+// is not the one it was sent to: one that began with a fresh brief, or the
+// session the conversation's last turn left. So it says that the turn's work was
+// reviewed and sent back, and the rules a turn's earlier calls are read by,
+// said of every call the turn's earlier rounds made whether or not the session
+// above shows it: never that this is the same session, nor that those rounds
+// are in it. The send-back itself, to the session that did the round, says
+// both, which is true of it.
+//
+// Mutation: tell a send-back again in its own words, or lose the rules or the
+// review, and a check goes red.
+func TestASendBackToldAgainSaysNothingOfTheSessionAbove(t *testing.T) {
+	t.Parallel()
+	sent := BuildContinuedRound(ContinuedRound{Task: "post the summary", Review: "add a label"})
+	again := BuildContinuedRound(ContinuedRound{Task: "post the summary", Review: "add a label", Again: true})
+	for _, says := range []string{"the same session", "in this session above"} {
+		if !strings.Contains(sent.Text, says) {
+			t.Errorf("the send-back to the session that did the round does not say %q:\n%s", says, sent.Text)
+		}
+		if strings.Contains(again.Text, says) {
+			t.Errorf("the send-back told again says %q, true only of the session it was sent to:\n%s", says,
+				again.Text)
+		}
+	}
+	for _, says := range []string{"## Your work was reviewed and sent back\nA review of this turn's work sent it " +
+		"back.", "Every call your earlier rounds of this turn made that succeeded ALREADY RAN, whether or not the " +
+		"session above shows it:", "**Everything else** changed something outside the engine: do NOT issue it " +
+		"again", "post the summary", "add a label"} {
+		if !strings.Contains(again.Text, says) {
+			t.Errorf("the send-back told again does not say %q:\n%s", says, again.Text)
+		}
+	}
+	if !again.Valid() {
+		t.Errorf("the send-back told again's outline does not tile it: %+v", again.Sections)
 	}
 }
 

@@ -106,13 +106,16 @@ import (
 // `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
 //
 // FAKE_PIPE_CUT=<n> is an OpenCode that cuts what it writes into a PIPE: the
-// answers that can run long (`session export`, `api mcp.list` and `api
-// session.inbox.list`) stop after their first n bytes where its stdout is a
-// pipe, with success, and are printed whole into anything else, as 2.0.32 and
-// 2.1.4 stop a large answer written into a pipe after a 64 KiB multiple and
-// exit 0, and write it whole into a regular file (measured on both, a
-// session's export through gzip and through cat). A pipe is told by `[ -p
-// /dev/stdout ]`, which dash, bash and busybox ash all answer alike.
+// answers that can run long (`session export`, `api mcp.list`, `api
+// session.inbox.list` and `api session.message.list`'s pages) stop after their
+// first n bytes where its stdout is a pipe, with success, and are printed whole
+// into anything else, as 2.0.32 and 2.1.4 stop a large answer written into a
+// pipe after a 64 KiB multiple and exit 0, and write it whole into a regular
+// file (measured on both, a session's export through gzip and through cat). A
+// pipe is told by `[ -p /dev/stdout ]`, which dash, bash and busybox ash all
+// answer alike. A page is printed as its case wrote it, byte for byte
+// (`answerfile`), rather than as a line (`answer`), since the pages' budget
+// cases measure what the pages put into the stream to the byte.
 //
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
@@ -150,6 +153,9 @@ held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
 serving() { : > "$d/serve-settled"; exec sleep 60; }
 answer() {
   if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then printf '%s\n' "$1" | head -c "$FAKE_PIPE_CUT"; else printf '%s\n' "$1"; fi
+}
+answerfile() {
+  if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then head -c "$FAKE_PIPE_CUT" < "$1"; else cat "$1"; fi
 }
 case "$1" in
 --version)
@@ -213,7 +219,7 @@ api)
     shift; echo "$*" >> "$d/listed"
     if [ -n "${FAKE_LIST_UNTIL:-}" ]; then : > "$d/listing"; while [ ! -e "$d/$FAKE_LIST_UNTIL" ]; do sleep 0.05; done; fi
     cur=; for a; do case "$a" in cursor=*) cur=${a#cursor=};; esac; done
-    [ ! -e "$d/pages/${cur:-first}" ] || cat "$d/pages/${cur:-first}" ;;
+    [ ! -e "$d/pages/${cur:-first}" ] || answerfile "$d/pages/${cur:-first}" ;;
   *) echo "Error: Operation not found: $1" >&2; exit 1 ;;
   esac ;;
 session)
@@ -1491,8 +1497,9 @@ func TestTheRunWaitsForTheServersAddressAndItsPassword(t *testing.T) {
 }
 
 // THE RUN'S EXIT IS THE RUN'S, and its usage follows it: the session's report,
-// asked of the run's own session, as the stream's last line — which the
-// decoder reads as the run's tokens and price.
+// asked of the run's own session once the run has ended, as a line of its own
+// type, which the decoder reads as the run's tokens and price. Not the stream's
+// last line: the session's message list's pages are printed after it.
 func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
