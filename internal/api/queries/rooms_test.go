@@ -176,6 +176,7 @@ func everySeam(t *testing.T) queries.Sources {
 		// models_test.go's, empty: this sweep is about which names exist.
 		Models:        fakeModels{},
 		DeviceSignIns: fakeDevices{},
+		ModelChecks:   fakeModelChecks{},
 		Catalogue:     fakeCatalogue{},
 	}
 }

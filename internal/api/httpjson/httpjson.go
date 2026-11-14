@@ -1279,6 +1279,11 @@ const (
 	// CodeSignInInProgress is a device sign-in started while another for the
 	// same model is running, which the answer carries. 409.
 	CodeSignInInProgress Code = "sign_in_in_progress"
+	// CodeCheckInProgress is a check of a model asked while another check of
+	// it runs that is not the one asked for — of a draft, or with the other
+	// smoke setting — which the answer carries. 409; one asking what the
+	// running check asks is handed it instead.
+	CodeCheckInProgress Code = "check_in_progress"
 	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has
 	// none, or whose sign-in reads no login. 422.
 	CodeNoDeviceSignIn Code = "no_device_sign_in"
@@ -1826,6 +1831,8 @@ var codes = map[Code]string{
 		"test it instead.",
 	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
 		"cancel that one first.",
+	CodeCheckInProgress: "A check of this model is already running. Wait for it to end, " +
+		"then check again.",
 	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
 	CodeDeviceSignInUnavailable: "The harness didn't print a sign-in code in time. Try again.",
 	CodeNoHostLogin:             "This model signs in without a harness login, so there is none to check.",

@@ -2876,8 +2876,9 @@ each. Every answer that depends on the node names it (`node`).
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
 | `GET` | `/llm/models?harness=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
+| `GET` | `/llm/providers/{key}/check` | `admin` | One model's latest check, running or ended, from any node, while its record answers (query `llm_check`) |
 | `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own harness, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
-| `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
+| `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, run on this node's own time and read back at `GET` on the same path |
 | `POST` | `/llm/providers/{key}/retry` | `models.retry` | Probe a sitting-out model once, or clear its sit-out on every node |
 | `POST` | `/llm/providers/{key}/host-login/check` | `models.check` | Read a harness login's status on this node now |
 | `POST` | `/llm/providers/{key}/device-sign-in` | `secrets.write` | Start a Codex device-code sign-in |
@@ -3092,12 +3093,42 @@ counted). A re-activation that raced another write answers `200` with
 `{"smoke": true}` checks the active entry, `{"smoke": true, "entity": {...}}`
 a draft, which resolves its `${VAR}`s through the store as an apply would. The
 body carries **no credential value**: a typed credential is tested by the
-credential route's dry run. The answer is `{"at", "node", "ok", "failure",
-"lines": [{"check", "ok", "detail", "kind", "remedy"}]}`, one line per check
-(`binary`, `version`, `sign-in`, `usage`, `smoke`, `shell`, `web`, `executor`),
-within 180 s. A check of an existing entry is a real call on its sign-in, so its
-outcome is remembered as any call's is. `404`, `422 validation_error` for a
-draft.
+credential route's dry run. A check of an existing entry is a real call on its
+sign-in, so its outcome is remembered as any call's is.
+
+**The check runs on the answering node's own time.** With its smoke calls it
+makes up to four harness runs within 180 s, longer than the two minutes of
+silence a proxy in front of the API is asked to allow
+([Deployment](../guides/deployment.md)), so the node starts it, waits up to two
+seconds, and answers `202 Accepted` with the check running and `Location:
+/llm/providers/{key}/check` — or `200` where it ended within those two seconds,
+as a check without `smoke` does. Either answer, and `GET` on the same path from
+any node, is the check:
+
+```json
+{"id": "…", "entry": "sonnet", "node": "node-1", "state": "running",
+ "draft": false, "smoke": true, "started_at": "…", "deadline": "…",
+ "ended_at": null, "by": "jane.doe",
+ "check": {"at", "node", "ok", "failure", "lines": [{"check", "ok", "detail", "kind", "remedy"}]},
+ "failure": "…"}
+```
+
+`state` is `running`, `ended` or `lost`. An ended check carries `check`, one
+line per check (`binary`, `version`, `sign-in`, `usage`, `smoke`, `shell`, `web`,
+`executor`), each line's `detail` and `remedy` cut, longest first, where the
+answer would pass 64 KiB; or `failure`, why it found nothing — the node running
+it stopped, or the model was removed while it ran. A check still running past
+its `deadline` is `lost`, its `failure` naming the node, which stopped before it
+could record the end. `GET /llm/providers/{key}/check` answers the latest check
+for ten minutes after it ended, or after its deadline, then `404`; the apply that
+removes the model removes it at once.
+
+**One check of a model at a time, across the fleet.** Asked while one runs, with
+the same `smoke` and no draft, the route answers the running check (`202`)
+rather than starting another. Any other ask while one runs — a draft, or the
+other `smoke` — is `409 check_in_progress` with the `running` check. A check
+asked of a node that has begun to stop is `503 unavailable` with the drain's
+`Retry-After`. `404`, `422 validation_error` for a draft.
 
 #### `POST /llm/providers/{key}/retry`
 
