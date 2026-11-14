@@ -85,6 +85,12 @@ func Probe(httpClient *http.Client) setup.Probe {
 			}
 		}
 		details = append(details, setup.Expiry(in.status.ExpiresOn, time.Now().UTC())...)
+		// A SUGGESTION, NEVER A REFUSAL (ADR-0145): the token works with or
+		// without what the atlas could read more with, so it is said as a
+		// fact beside a verdict it does not change.
+		if said := seeMoreValue(in.atlasUnheld); said != "" {
+			details = append(details, setup.Fact{Label: seeMoreLabel, Value: said})
+		}
 		return setup.Works(summary, details...), nil
 	}
 }

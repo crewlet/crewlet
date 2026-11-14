@@ -1,1 +1,0 @@
-import{Ti as e}from"./chunk-NN44J7BP-DfB83JSc.js";import{t}from"./react-C1iE8mnY.js";var n=t(),r=({as:t=`span`,variant:r=`muted`,className:i,children:a,...o})=>{let s=e(`crewlet-eyebrow`,`crewlet-eyebrow--${r}`,i);return(0,n.jsx)(t,{...o,className:s,children:a})};export{r as t};

@@ -56,6 +56,10 @@ type Result struct {
 	// OwnUnheld are the groups the provisioner needs for itself and lacks.
 	OwnUnheld []string
 
+	// AtlasUnheld are the optional groups the atlas would read more with
+	// that the token does not hold: a suggestion, never a gap.
+	AtlasUnheld []string
+
 	// Gaps are the levels the account's catalogue or the token cannot grant.
 	Gaps []seataccess.LevelGap
 
@@ -119,9 +123,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	return &Result{
 		Status: in.status, Zones: len(in.zones), MissingZones: in.cat.missingZones,
 		OwnUnheld: ownUnheld(in.unheld), Gaps: levelGaps(in.unresolved, in.unheld, opts.Client.TokensURL()),
-		InUse:     opts.InUse,
-		Orphaned:  orphanedTokens(tokens, opts.Managed, opts.Company, in.status.ID),
-		TokensURL: opts.Client.TokensURL(), now: now,
+		AtlasUnheld: slices.Clone(in.atlasUnheld),
+		InUse:       opts.InUse,
+		Orphaned:    orphanedTokens(tokens, opts.Managed, opts.Company, in.status.ID),
+		TokensURL:   opts.Client.TokensURL(), now: now,
 		Inspection: &Inspection{account: opts.Client.AccountID(), in: in},
 	}, nil
 }
@@ -168,6 +173,9 @@ func reconcileError(err error) error {
 const (
 	subjectToken = "integrations.cloudflare.provisioning.api_token"
 	subjectZones = "integrations.cloudflare.provisioning.zones"
+	// subjectAtlas is the suggestion of the atlas's optional permissions,
+	// which no field clears: the token at Cloudflare does.
+	subjectAtlas = "cloudflare atlas permissions"
 )
 
 // Findings is what the pass saw, in the shared vocabulary. Each agent's own
@@ -212,6 +220,16 @@ func (r *Result) Findings() []integration.Finding {
 			Remedy: "Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token " +
 				"it has no record of",
 			ActionURL: r.TokensURL, Subjects: names,
+		})
+	}
+	if said := seeMore(r.AtlasUnheld); said != "" {
+		// AN ADVISORY ON A READY INTEGRATION, never a short grant: nothing
+		// Crewlet does for the agents waits on these (ADR-0145).
+		out = append(out, integration.Finding{
+			Kind: integration.FindingCoveragePartial, Subject: subjectAtlas,
+			Title: seeMoreLabel, Detail: strings.TrimSuffix(said, "."),
+			Remedy:    "Edit the provisioner token at Cloudflare to add " + them(len(r.AtlasUnheld)) + " over the account, or leave it as it is",
+			ActionURL: r.TokensURL, Subjects: dashboardList(r.AtlasUnheld),
 		})
 	}
 	if len(r.OwnUnheld) > 0 {

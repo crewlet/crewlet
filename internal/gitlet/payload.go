@@ -980,9 +980,11 @@ type PushEntry struct {
 	// nil for a push made for nobody, the seat's own work, and on every entry
 	// no seat pushed. The apply keeps it on the push's row
 	// (code_pushes.working_for) and on each revision the entry's moves add
-	// (code_revisions.working_for), which the engine's later records read
-	// back from crewlet#798's piece 4c-ii on; the entry's routings carry it
-	// beside the pusher ([ChangeRouting.WorkingFor]).
+	// (code_revisions.working_for), which the engine's later records about
+	// the push read it back from — a revision's facts and a failed check of
+	// its head ([revisionPusher]), and the home's landing of a change the
+	// push merged ([landingPusher]); the entry's routings carry it beside the
+	// pusher ([ChangeRouting.WorkingFor]).
 	//
 	// VERSION 2 ([versionedFields]): an entry carrying it stamps its record
 	// there.

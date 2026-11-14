@@ -348,7 +348,12 @@ send the same change.
 
 **Sources** (from the band, `#/company/atlas/sources`) lists each integration
 the atlas reads for the company: Cloudflare, Datadog, GitHub, GitLab and the
-company's servers, once each is connected. Each is read whole on a timer (every hour
+company's servers among them, once each is connected. DigitalOcean and Expo
+are read only once you give the atlas a read-only identity of its own there,
+which is optional
+([DigitalOcean](../integrations/digitalocean.md#let-the-atlas-read-the-team),
+[Expo](../integrations/expo.md#let-the-atlas-read-the-account)); until then
+their cards say Not read yet, and nothing else is affected. Each is read whole on a timer (every hour
 unless [`atlas.refresh_interval_seconds`](../getting-started/configuration.md)
 says otherwise), and its card says how the last read went:
 

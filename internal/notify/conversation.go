@@ -100,12 +100,15 @@ import (
 // for them. One seat's writes for two requesters are two partitions and two
 // turns, since a turn works for one writer and for one whom: coalesced, the
 // second requester's write would be worked inside the first's turn, held to the
-// first's apps. ONE DELIBERATE EXCEPTION: ADR-0120's seen-through mark keys on
-// the thread ([KeyOfAll]), never on this partition, so a completed turn
-// absorbs a later wake at or below its mark that obliges the seat to nothing,
-// whatever that wake's writer or whom. Absorption only drops, so nothing
-// widens; but two requesters are two turns only for wakes that oblige the
-// seat (ADR-0109).
+// first's apps. The engine's record about an agent's earlier act made for
+// somebody carries that act's carrier too ([FirstPartyWriter]), keyed after
+// the engine's own (`system for seat:ada`), so the engine's wakes for two
+// requesters are two turns as well. ONE DELIBERATE EXCEPTION: ADR-0120's
+// seen-through mark keys on the thread ([KeyOfAll]), never on this partition,
+// so a completed turn absorbs a later wake at or below its mark that obliges
+// the seat to nothing, whatever that wake's writer or whom. Absorption only
+// drops, so nothing widens; but two requesters are two turns only for wakes
+// that oblige the seat (ADR-0109).
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -296,15 +299,16 @@ const WriterSeparator = " by "
 // writerOf is who wrote ev, as the partition function splits on it: a
 // first-party notice's writer by the kind its record names (a seat by its
 // handle, with whom an agent wrote for, a credential acting as no seat by its
-// login, the engine as itself), and anything else by the actor every parser
-// stamps ([ActorField]), else its sender. Empty for an event that is no
-// external notification.
+// login, the engine as itself, with whom its record about an agent's earlier
+// act was made for), and anything else by the actor every parser stamps
+// ([ActorField]), else its sender. Empty for an event that is no external
+// notification.
 //
 // THE SAME IDENTITY THE TURN IS THEN WORKED FOR: the requester a turn's reads
 // are decided for is composed from these fields (the engine's turnRequesters,
-// writerSubject, and whom an agent's write was made for, read before them), so
-// a partition never holds two principals the turn would have to work for at
-// once.
+// writerSubject, and whom an agent's write, or the engine's record about an
+// agent's earlier act, was made for, read before them), so a partition never
+// holds two principals the turn would have to work for at once.
 func writerOf(ev *events.Event) string {
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
 	if !ok || n == nil {
@@ -321,7 +325,7 @@ func writerOf(ev *events.Event) string {
 				return "login:" + url.PathEscape(login)
 			}
 		case iam.ActorSystem:
-			return "system"
+			return "system" + forOf(w)
 		}
 	}
 	if actor := strings.TrimSpace(n.Metadata[ActorField]); actor != "" {
@@ -333,18 +337,23 @@ func writerOf(ev *events.Event) string {
 	return ""
 }
 
-// ForSeparator joins an agent writer to whom it wrote for in [KeyOf]'s
-// writer: `seat:lead for seat:ada`. Every part is escaped (url.PathEscape), so
-// none holds a space and the separator is never part of one.
+// ForSeparator joins a writer to whom it wrote for in [KeyOf]'s writer: an
+// agent writer (`seat:lead for seat:ada`), and the engine as the writer of
+// its record about an agent's earlier act made for somebody
+// (`system for seat:ada`). Every part is escaped (url.PathEscape), so none
+// holds a space and the separator is never part of one.
 const ForSeparator = " for "
 
 // forOf is whom an agent's write was made for, as the partition splits on it
-// ([types.NotificationWriter.WorkingFor]): empty for every writer that is no
-// agent, and otherwise [WorkingForKey] of its carrier, so every constituent of
+// ([types.NotificationWriter.WorkingFor]), and whom the engine's record about
+// an agent's earlier act carries ([FirstPartyWriter]): empty for every other
+// writer, and otherwise [WorkingForKey] of its carrier, so every constituent of
 // one partition carries the same carrier and the turn's requester, read off the
-// first of them, is every one's.
+// first of them, is every one's. The engine's wakes for two requesters are two
+// turns as an agent's are: keyed as one, the second requester's would be worked
+// inside the first's turn, held to the first's apps.
 func forOf(w *types.NotificationWriter) string {
-	if w.Kind != iam.ActorAgent {
+	if w.Kind != iam.ActorAgent && w.Kind != iam.ActorSystem {
 		return ""
 	}
 	return WorkingForKey(w.WorkingFor)

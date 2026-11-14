@@ -17,17 +17,21 @@ import (
 )
 
 // Estate is the code log and the git reads as the home's work reaches them —
-// the router's code seam satisfies it (estate.CodeSeam): the due listings
-// (Read), a revision's facts and a commit's checks file (GitRead, asked of the
-// repository's Gitlet nodes, its home first), a record of a revision's facts, of
-// a change's mergeability or of its readiness on the change (Converse, asked
-// of the repository's committing data node's change writer), a landing
-// (Change, asked of its committer), a record of its checks (Checks, asked of
-// the same node's checks writer) and a protected target's green or broken
-// record (Queue, asked of its committer). Each raises this node's floors past what
-// it landed, so the next listing reads it wherever it is answered.
+// the router's code seam satisfies it (estate.CodeSeam): the change and check
+// work's due listings (Read), the merge queue's own, read whole or refused
+// (QueueDue, since the queue carries every entry it reads into the record it
+// asks next), a revision's facts and a commit's checks file (GitRead, asked of
+// the repository's Gitlet nodes, its home first), a record of a revision's
+// facts, of a change's mergeability or of its readiness on the change
+// (Converse, asked of the repository's committing data node's change writer),
+// a landing (Change, asked of its committer), a record of its checks (Checks,
+// asked of the same node's checks writer) and a protected target's green or
+// broken record and the queue's records (Queue, asked of its committer). Each
+// write raises this node's floors past what it landed, so the next listing
+// reads it wherever it is answered.
 type Estate interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
+	QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error)
 	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	Converse(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult, error)
 	Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error)

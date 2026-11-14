@@ -150,7 +150,8 @@
 //
 // # What a turn of the merge queue does
 //
-// One repository's queue work, a target a page (`queue_due`), each target's
+// One repository's queue work, a target a page (the due-queue read,
+// internal/estate's code.queue_due, read whole or refused), each target's
 // next step decided from ONE snapshot of its tip, its gate, its live entries
 // and its live train: a train BUILT where none stands on the target's tip —
 // candidates of [BatchOf] entries, up to the gate's depth, as one chain this
@@ -160,8 +161,10 @@
 // entries' commits and its culprit ejected. Nothing of a train lives in the
 // worker: a home that takes a repository over resumes its queue from the
 // rows. Each landed entry that asked it has its work item closed as its
-// enqueuer, through [Tasks] — the engine's tracker, which this package does
-// not import. queue.go has the rules of each step.
+// enqueuer, for whom its enqueue was made as the entry's row keeps it
+// ([TaskClose.WorkingFor]), through [Tasks] — the engine's tracker, which this
+// package does not import, and which decides the close within that
+// requester's apps. queue.go has the rules of each step.
 //
 // # Merge previews, beside the loop
 //

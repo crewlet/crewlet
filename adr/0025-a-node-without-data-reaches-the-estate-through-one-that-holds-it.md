@@ -185,7 +185,8 @@ files a publish carries into the next version, a view's prior a save hands
 back, a container's views a tool hands a model to save one of again, the
 catalogue, a project's field declarations or a datastore's schema a tool hands
 a model to send back whole, a list's query its read asks, a repository
-snapshot's page cursor the next page asks by. Such a read is
+snapshot's page cursor the next page asks by, the queue work whose entries a
+repository's home lands, ejects and settles as it read them. Such a read is
 declared (`op.answeredWhole`) and its answer crosses under the same rule: the
 serving node leaves its fields at their zero off it, and the asking router
 reads it whole or refuses it. Where the same answer is also only shown, the

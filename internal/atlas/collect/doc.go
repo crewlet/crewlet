@@ -3,7 +3,8 @@
 // own credential already holds, and records on the atlas's log what the read
 // found that the log does not hold yet (ADR-0129). Its first source reads
 // Cloudflare: the account's name, every zone, every A, AAAA and CNAME record
-// and every certificate pack. Its second reads Datadog: the organization,
+// and every certificate pack, and its Workers, Pages projects, R2 buckets and
+// Tunnels by name where the token holds their optional read groups. Its second reads Datadog: the organization,
 // its monitors and their states, its service catalogue, its hosts and its
 // Synthetic tests. Its third reads GitHub (ADR-0131): every repository the
 // agents' installations cover, its workflows and its deployment environments.
@@ -14,15 +15,21 @@
 // project of the company's group, its pipeline and its environments.
 // Its sixth and seventh read Google Cloud and Scaleway (ADR-0137): every
 // project as an account, and what a Google Cloud project's enabled APIs say
-// it is used for. Its eighth reads Atlassian (ADR-0138): every site of the
-// organization as an account, and each product as what its account does.
+// it is used for; where a company asks, Scaleway's products are read too,
+// under an IAM application made for the atlas (ADR-0144). Its eighth reads
+// Atlassian (ADR-0138): every site of the organization as an account, and
+// each product as what its account does.
 // Its ninth and tenth ask Slack and Mattermost (ADR-0139) for the workspace's
 // own id and name, with a bot token one of the agents already holds. Its
 // eleventh reads AWS (ADR-0148), as a role of its own that the company adds
 // to its stack by choice: the Regions in use, instances, databases, load
 // balancers, queues, buckets and public DNS. Google Cloud's source also
 // searches what each project runs (ADR-0149), as a service account of its
-// own, where the company asks.
+// own, where the company asks. Its twelfth and thirteenth read DigitalOcean
+// and Expo (ADR-0146), each with a read-only identity a person makes for the
+// atlas alone, since neither vendor gives the company a credential of its
+// own: a team's resources and the names that point at them, and an
+// account's projects and their builds.
 //
 // # A source may be the company's choice
 //
@@ -71,6 +78,12 @@
 // vendor, and otherwise only names it ([Builder.Names]); an entry the voice
 // never claimed is released by its retirement, never denied, since a denial
 // would retire what another source holds.
+//
+// A part behind a permission nobody asked the company for is OPTIONAL
+// ([Unread.Optional], ADR-0145): a refusal of it is carried like any other,
+// and the standing names it only where the voice holds an entry the part
+// said exists. A company that never gave the permission lost nothing, so its
+// source reads as whole.
 //
 // # A person may ask for a read, and the floor is the duty's
 //
