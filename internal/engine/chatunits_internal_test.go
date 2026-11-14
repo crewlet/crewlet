@@ -685,7 +685,7 @@ func aNodeWithCompanyInMode(t *testing.T, mode statelog.MaintenanceMode, doc str
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {

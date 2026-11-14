@@ -127,7 +127,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany))
 	if err != nil {
@@ -227,7 +227,7 @@ func TestAFailedBootWithdrawsItsGitletStatus(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  backend: gitlet\n"))

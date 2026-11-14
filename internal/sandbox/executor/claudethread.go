@@ -649,9 +649,10 @@ func wireDecode(raw []byte, v any) error {
 // eachElement hands each element of list, raw JSON holding one list, to each,
 // in order, as it reads it: the element's raw bytes, as written but for the
 // whitespace around them, valid only while each runs, so each copies what it
-// keeps. It NEVER COLLECTS THEM. It stops at the first error each returns,
-// reads no element after it, and returns that error unchanged; a list that is
-// no list, or that does not decode, is an error of its own.
+// keeps, and where in list they sit, the offset of their first byte. It NEVER
+// COLLECTS THEM. It stops at the first error each returns, reads no element
+// after it, and returns that error unchanged; a list that is no list, or that
+// does not decode, is an error of its own.
 //
 // THE ONE WALK of a list a box wrote, under [threadDecoding], so what a list
 // costs its reader is what each makes of one element at a time, never the
@@ -664,10 +665,12 @@ func wireDecode(raw []byte, v any) error {
 // ([threadLine.Usage]), the lists a run's event stream and a person's
 // transcript of a session decode (a message's blocks, [eachClaudeBlock]; a
 // tool's answer, [toolAnswer]; an OpenCode step's items, [eachOpenCodeItem];
-// a run's result's errors, [claudeResult.errorsSaid]), and a call's result
+// a run's result's errors, [claudeResult.errorsSaid]), a call's result
 // content, which the reader that tells a relaunch which of its calls a kept
-// session holds (exact telling) reads no further than its second element.
-func eachElement(list json.RawMessage, each func(element json.RawMessage) error) error {
+// session holds (exact telling) reads no further than its second element, and
+// a loaded-tools record's list, which the scrub cuts a definition out of where
+// it sits in the line ([withoutDefinitions]).
+func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
 	}
@@ -680,7 +683,7 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage) error)
 		if err != nil {
 			return err
 		}
-		if err = each(element); err != nil {
+		if err = each(element, int(dec.InputOffset())-len(element)); err != nil {
 			return err
 		}
 	}
@@ -696,9 +699,10 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage) error)
 // eachKey hands each key of object, raw JSON holding one object, to each, in
 // order, as it reads it, beside that key's value: the key's name unquoted as
 // [threadDecoding] reads a name (an escape resolved, and invalid UTF-8 or a
-// lone surrogate as U+FFFD), and the value's raw bytes, as written but for
-// the whitespace around them. Each is valid only while each runs, so each
-// copies what it keeps. It NEVER COLLECTS THEM, and never folds two keys of
+// lone surrogate as U+FFFD), the value's raw bytes, as written but for the
+// whitespace around them, and where in object the value sits, the offset of
+// its first byte. Each is valid only while each runs, so each copies what it
+// keeps. It NEVER COLLECTS THEM, and never folds two keys of
 // one name into one: a key written twice is handed both times, in its place,
 // and which of the two counts is each's to say (JSON.parse reads the last).
 // It stops at the first error each returns, reads no key after it, and
@@ -714,15 +718,18 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage) error)
 // naming a model in each of its 95,315 keys cost the run's event stream
 // 286,787 allocations and 45 MB, 42.6 times the line, and a line of four
 // mebibytes four times that (measured): about 1.4 GB at the 32 MiB a line of
-// the stream may hold. Its reader: a run's result's spend model by model
-// ([claudeResult.sinceLastResult]).
+// the stream may hold. Its readers: a run's result's spend model by model
+// ([claudeResult.sinceLastResult]), and the scrub's reading of a loaded-tools
+// record, which finds where the record's attachment and the attachment's list
+// sit in the line ([lastValue]) and the name of each definition it lists
+// ([brokenDefinition]).
 //
 // THE NAME IS HANDED AS BYTES, in a buffer the walk reuses, never as a
 // string: a string would be an allocation for every key, which a reader that
 // keeps none would pay for each key of an object of millions. A reader
 // compares it as string(name), which costs nothing, and makes a string of a
 // name it keeps.
-func eachKey(object json.RawMessage, each func(name []byte, value json.RawMessage) error) error {
+func eachKey(object json.RawMessage, each func(name []byte, value json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(object, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
 		return fmt.Errorf("is %s, not an object", wireKind(trimmed))
 	}
@@ -747,7 +754,7 @@ func eachKey(object json.RawMessage, each func(name []byte, value json.RawMessag
 		if err != nil {
 			return err
 		}
-		if err = each(name, value); err != nil {
+		if err = each(name, value, int(dec.InputOffset())-len(value)); err != nil {
 			return err
 		}
 	}
@@ -1244,7 +1251,7 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 	// block. An empty list's kinds are empty, never nil, which only a content
 	// that is no list reads as.
 	m := threadMessage{kinds: []string{}}
-	if err := eachElement(content, func(raw json.RawMessage) error {
+	if err := eachElement(content, func(raw json.RawMessage, _ int) error {
 		b, err := contentBlock(raw)
 		if err != nil {
 			return fmt.Errorf("content block %d: %w", len(m.kinds)+1, err)
@@ -1546,7 +1553,7 @@ func usageCounted(u threadUsage, iterations json.RawMessage) error {
 		return nil
 	}
 	var last []byte
-	if err := eachElement(iterations, func(entry json.RawMessage) error {
+	if err := eachElement(iterations, func(entry json.RawMessage, _ int) error {
 		passed, err := iterationPassedOver(entry)
 		if err == nil && !passed {
 			last = append(last[:0], entry...)
@@ -1710,7 +1717,7 @@ func (l threadLine) ToolResultsCleared() (bool, error) {
 	// AN EDIT AT A TIME ([eachElement]), as a message's content is read: a list
 	// of edits refused at its first costs that edit, however many follow.
 	cleared, edits := false, 0
-	if err := eachElement(applied.Edits, func(raw json.RawMessage) error {
+	if err := eachElement(applied.Edits, func(raw json.RawMessage, _ int) error {
 		edits++
 		uses, err := clearedToolUses(raw)
 		if err != nil {

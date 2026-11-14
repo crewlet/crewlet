@@ -97,6 +97,9 @@ func Guide() setup.Guide {
 			{Text: "Create an account API token on your {link}.", Link: "api_token", Yields: "api_token"},
 			{Text: "Give it these account permissions:", Grants: account},
 			{Text: "And these zone permissions, on all zones:", Grants: zone},
+			// OPTIONAL, AND SAID SO (ADR-0145): a token without them is whole.
+			{Text: "Optional, to see " + words.And(atlasShows()) + " in Atlas, also give it these account permissions:",
+				Grants: atlasGrants()},
 			{Text: "Paste the token here and test it."},
 		},
 		Caution: &setup.Caution{
@@ -112,7 +115,27 @@ func Guide() setup.Guide {
 func provisionerMore() string {
 	account, zone := provisionerGrants()
 	return "Account permissions: " + words.And(said(account)) + ". Zone permissions, on all zones: " +
-		words.And(said(zone)) + ". Crewlet grants an agent nothing this token does not hold."
+		words.And(said(zone)) + ". Crewlet grants an agent nothing this token does not hold. Optional, to see " +
+		words.And(atlasShows()) + " in Atlas: the account permissions " + words.And(said(atlasGrants())) +
+		", which no agent is ever given. Remove them from the token to undo it."
+}
+
+// atlasGrants is the atlas's optional permissions as the token builder
+// names them, and atlasShows what each lets the atlas show.
+func atlasGrants() []string {
+	out := make([]string, 0, len(atlasPermissions))
+	for _, p := range atlasPermissions {
+		out = append(out, p.builder)
+	}
+	return out
+}
+
+func atlasShows() []words.Said {
+	out := make([]words.Said, 0, len(atlasPermissions))
+	for _, p := range atlasPermissions {
+		out = append(out, words.Said(p.shows))
+	}
+	return out
 }
 
 // said is permission names as prose names them, unquoted, as the token

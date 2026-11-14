@@ -35,6 +35,13 @@
  * signed in never downloads, and `resolve` names them like any other screen
  * so a link to `#/login` is a link to a page.
  *
+ * # And one screen in a frame with no sidebar
+ *
+ * An artifact's standalone page (`#/artifacts/{id}/standalone`, opened in a
+ * new tab) is drawn in the frame, which holds its session, socket, assistant
+ * and panels, but with no sidebar ([Shell]'s `standalone`), so its bar and the
+ * artifact take the whole window. Decided on the resolved route, as above.
+ *
  * # Keyed on the subject, every screen that has one
  *
  * A hash change re-renders this switch rather than remounting it, so
@@ -284,7 +291,7 @@ export function screenFor(route: Resolved): ReactNode {
     case "artifact-folder":
       return <ArtifactFolderPage key={route.id} id={route.id} />;
     case "artifact":
-      return <ArtifactPage key={route.id} id={route.id} />;
+      return <ArtifactPage key={route.id} id={route.id} standalone={route.standalone} />;
     case "new-artifact": {
       if (route.kind === null) return <NewArtifactRedirect />;
       const Create = NEW_ARTIFACT[route.kind];
@@ -445,8 +452,9 @@ function Frame() {
       </ScreenBoundary>
     );
   }
+  const standalone = where.resolved && where.screen === "artifact" && where.standalone;
   return (
-    <Shell>
+    <Shell standalone={standalone}>
       <ScreenBoundary resetKey={address} region={path}>
         <Screen where={where} path={route.path} />
       </ScreenBoundary>

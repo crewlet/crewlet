@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +43,7 @@ const (
 var googleHosts = []string{
 	"https://sts.googleapis.com", "https://iamcredentials.googleapis.com", "https://iam.googleapis.com",
 	"https://cloudresourcemanager.googleapis.com", "https://serviceusage.googleapis.com",
+	"https://cloudasset.googleapis.com",
 }
 
 // testClock is a world's time, which a wait moves forward rather than spends.
@@ -149,6 +151,18 @@ type fakeGoogle struct {
 	unmapped map[string]any
 	// requests is every request served, by method and path.
 	requests []string
+
+	// atlasTrusted lets the federated subject act as the atlas's account,
+	// which exists where addAtlas made it; assets is what each project runs,
+	// as Cloud Asset Inventory answers a search, and assetPage how many
+	// results one page holds (zero is all). searched is each search's query.
+	atlasTrusted bool
+	// assetsOff answers every search as Google does with the Cloud Asset API
+	// off in the project the call is billed to.
+	assetsOff bool
+	assets    map[string][]map[string]any
+	assetPage int
+	searched  []url.Values
 
 	writes   []string
 	versions []int
@@ -368,6 +382,8 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, ":generateAccessToken"):
 		f.impersonate(w, r, who, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/-/serviceAccounts/"),
 			":generateAccessToken"))
+	case who == atlasAccount && r.Method == http.MethodGet && strings.HasSuffix(path, ":searchAllResources"):
+		f.searchAssets(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/"), ":searchAllResources"))
 	case who != provisioner:
 		f.fail(w, http.StatusForbidden, "PERMISSION_DENIED", "only the provisioner calls these")
 	case path == "/v3/projects:search":
@@ -491,6 +507,7 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request, who, ac
 		f.fail(w, http.StatusNotFound, "NOT_FOUND", "Not found; Gaia id not found for email "+account)
 		return
 	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == provisioner:
+	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == atlasAccount && f.atlasTrusted:
 	case who == provisioner && f.delegates(target):
 		if f.mintRefusals > 0 {
 			f.mintRefusals--
@@ -507,6 +524,62 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request, who, ac
 	}
 	value, expires := f.issue(target.Email, time.Duration(seconds)*time.Second)
 	f.answer(w, map[string]any{"accessToken": value, "expireTime": expires.Format(time.RFC3339)})
+}
+
+// atlasAccount is the atlas's service account in the fake's identity project.
+var atlasAccount = googlecloud.AtlasAccountIn(identity)
+
+// addAtlas makes the atlas's account the identity block makes, trusted by the
+// federated subject.
+func (f *fakeGoogle) addAtlas() {
+	f.accounts["100000000000000000099"] = &fakeAccount{ID: googlecloud.AtlasAccountID, Email: atlasAccount,
+		UniqueID: "100000000000000000099", DisplayName: "Crewlet atlas"}
+	f.atlasTrusted = true
+}
+
+// searchAssets is searchAllResources on one project, as the atlas's account:
+// refused where the project holds no assets entry (the role was never
+// granted there), and paged by assetPage.
+func (f *fakeGoogle) searchAssets(w http.ResponseWriter, r *http.Request, project string) {
+	q := r.URL.Query()
+	f.searched = append(f.searched, q)
+	if f.assetsOff {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED",
+			"message": "Cloud Asset API has not been used in project " + identity + " before or it is disabled.",
+			"details": []any{map[string]any{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+				"reason": "SERVICE_DISABLED"}}}})
+		return
+	}
+	all, granted := f.assets[project]
+	if !granted {
+		f.fail(w, http.StatusForbidden, "PERMISSION_DENIED",
+			"The caller does not have permission cloudasset.assets.searchAllResources on projects/"+project)
+		return
+	}
+	start := 0
+	if tok := q.Get("pageToken"); tok != "" {
+		start, _ = strconv.Atoi(strings.TrimPrefix(tok, "p"))
+	}
+	end, next := len(all), ""
+	if f.assetPage > 0 && start+f.assetPage < len(all) {
+		end, next = start+f.assetPage, "p"+strconv.Itoa(start+f.assetPage)
+	}
+	results := make([]map[string]any, 0, end-start)
+	for _, a := range all[start:end] {
+		row := map[string]any{"project": "projects/123456789", "labels": map[string]any{"owner": "atlas-canary"},
+			"description": "atlas-canary", "networkTags": []string{"atlas-canary"},
+			"kmsKeys": []string{"atlas-canary"}, "parentFullResourceName": "atlas-canary"}
+		for k, v := range f.unmapped {
+			row[k] = v
+		}
+		for k, v := range a {
+			row[k] = v
+		}
+		results = append(results, row)
+	}
+	f.answer(w, map[string]any{"results": results, "nextPageToken": next})
 }
 
 // delegates reports an account whose own policy lets the provisioner mint for it.

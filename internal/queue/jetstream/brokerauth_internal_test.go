@@ -147,7 +147,7 @@ func signerOfUser(t *testing.T, u processUser) signer {
 // leaf row, red.
 func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	t.Parallel()
-	member := Config{ServerName: "a", ClusterName: "fleet", StoreDir: t.TempDir(),
+	member := Config{ServerName: "a", ClusterName: "fleet", StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: fleetAuthOf(t, authRing)}
 	auth := testAuth(t, member)
 	global, system := auth.ns.GlobalAccount(), auth.ns.SystemAccount()
@@ -266,7 +266,7 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 
 	// A MEMBER WITH NO SYSTEM ACCOUNT ADMITS NO SYSTEM KEY: a solo member
 	// mints none, and a key from another start is a stranger's.
-	solo := testAuth(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	solo := testAuth(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	stray, err := newProcessUser("stray system account")
 	if err != nil {
 		t.Fatal(err)

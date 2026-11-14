@@ -75,7 +75,7 @@ func baseEngine(t *testing.T, b config.Bootstrap) *Engine {
 	t.Helper()
 	b.Node.Roles = []string{"data", "seats", "workers"}
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b})
 	if err != nil {

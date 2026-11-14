@@ -20,7 +20,7 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	for _, r := range reqs {
 		fields = append(fields, r.Field)
 	}
-	if !slices.Equal(fields, []string{"provisioner", "federation_key", "provider", "enabled"}) {
+	if !slices.Equal(fields, []string{"provisioner", "federation_key", "provider", "atlas_read", "enabled"}) {
 		t.Fatalf("fields %v", fields)
 	}
 	key, provider := reqs[1], reqs[2]
@@ -30,8 +30,8 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	if provider.Required || !provider.Checkable || !slices.Equal(provider.CheckWith, []string{"provisioner", "federation_key"}) {
 		t.Errorf("before the key, the provider is %+v, want it optional and checked with the other two", provider)
 	}
-	if !reqs[3].Hidden || reqs[3].Default != "true" {
-		t.Errorf("enabled is %+v, want hidden and on", reqs[3])
+	if !reqs[4].Hidden || reqs[4].Default != "true" {
+		t.Errorf("enabled is %+v, want hidden and on", reqs[4])
 	}
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
 		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
@@ -78,11 +78,12 @@ func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 	t.Parallel()
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
 		Provisioner: provisioner, Provider: testProvider, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
+		AtlasRead: true,
 	}}
 	for _, r := range googlecloud.Requirements(testCompany, block, nil) {
 		want := map[string]string{
 			"provisioner": provisioner, "provider": testProvider,
-			"federation_key": "${" + googlecloud.FederationKeySecret + "}", "enabled": "true",
+			"federation_key": "${" + googlecloud.FederationKeySecret + "}", "atlas_read": "true", "enabled": "true",
 		}[r.Field]
 		if !r.Present || r.Stored != want {
 			t.Errorf("%s: present %v, stored %q; want %q", r.Field, r.Present, r.Stored, want)

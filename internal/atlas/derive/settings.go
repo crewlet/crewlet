@@ -365,7 +365,11 @@ func digitalocean(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	}
 	var team string
 	if d.Provisioning != nil {
-		team = strings.ToLower(d.Provisioning.Team)
+		// A NAME WITH A SPACE IS NO KEY: a team is keyed by its name's slug,
+		// as the read of the team keys it. A reference stays one, unresolved.
+		if team = d.Provisioning.Team; !strings.Contains(team, "${") {
+			team = config.DigitalOceanTeamRef(team)
+		}
 	}
 	b.account("integrations.digitalocean.provisioning.team", atlas.VendorDigitalOcean, team, team, "DigitalOcean",
 		d.Enabled, atlas.CapabilityCompute)

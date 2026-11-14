@@ -2,7 +2,8 @@
  * An artifact's page frame: one slim bar and the artifact, the panels at its
  * side opened from the bar and by their keys, each in the address so a link
  * opens on it and Back closes it, the addresses the old tabs had still
- * opening what they became, and a kind's own controls drawn in the bar.
+ * opening what they became, a kind's own controls drawn in the bar, and Open
+ * in new tab, which the standalone page it opens does not offer again.
  *
  * WHAT IS HELD HERE IS THE FRAME: the kind's view, the room, the datastore and
  * each panel's own body are stood in for, since each has suites of its own.
@@ -32,6 +33,8 @@ const versions = [3, 2, 1].map(
     }) as unknown as ArtifactVersionSummary,
 );
 const refetch = vi.fn();
+/** The reader's folder tree, as `artifact_folders` answers it. */
+let folders: unknown[] = [];
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/artifacts/useDataStore.ts", () => ({ useDataStore: vi.fn(() => null) }));
@@ -119,17 +122,31 @@ function KindStandIn({ kind }: { kind: string }) {
   return <p>The artifact itself</p>;
 }
 
-function mount(hash: string) {
+function mount(hash: string, standalone = false) {
   location.hash = hash;
   return render(
     <Router>
       <LayerHost>
         <ToastProvider>
-          <ArtifactPage id={ID} />
+          <ArtifactPage id={ID} standalone={standalone} />
         </ToastProvider>
       </LayerHost>
     </Router>,
   );
+}
+
+/** The rows of the bar's More, in one of its two arrangements, opened. */
+function moreRows(arrangement: "wide" | "narrow"): string[] {
+  const bar = screen.getByRole("banner");
+  const more = [...bar.querySelectorAll(`.crewlet-artifact-bar__${arrangement}`)]
+    .map((el) => within(el as HTMLElement).queryByRole("button", { name: /^More for/ }))
+    .find(Boolean)!;
+  fireEvent.click(more);
+  const rows = within(screen.getByRole("menu"))
+    .getAllByRole("menuitem")
+    .map((row) => row.textContent ?? "");
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  return rows;
 }
 
 /** The bar's control by name: the wide one (the narrow bar folds it into More). */
@@ -165,7 +182,14 @@ beforeEach(() => {
     updated_at: "2026-10-18T10:00:00Z",
   } as unknown as ArtifactDetail;
   vi.mocked(useQuery).mockImplementation(((what: string) => {
-    const data = what === "artifact" ? detail : what === "artifact_versions" ? { versions } : null;
+    const data =
+      what === "artifact"
+        ? detail
+        : what === "artifact_versions"
+          ? { versions }
+          : what === "artifact_folders"
+            ? { folders }
+            : null;
     return { data, loading: false, error: null, refusal: null, refetch };
   }) as never);
   vi.mocked(useDataStore).mockReturnValue(null);
@@ -174,6 +198,7 @@ beforeEach(() => {
   reader.login = "";
   reader.owner = "";
   roomOthers.length = 0;
+  folders = [];
 });
 
 afterEach(() => {
@@ -362,4 +387,40 @@ test("the title is renamed in place, through the same route Settings renames by"
     body: { title: "Q4 plan" },
   });
   expect(refetch).toHaveBeenCalled();
+});
+
+test("Open in new tab opens the standalone page at the version on show, with no opener", () => {
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  mount(`#/artifacts/${ID}?version=2`);
+  fireEvent.click(tool("Open in new tab"));
+  const standalone = `${location.origin}${location.pathname}#/artifacts/${ID}/standalone?version=2`;
+  expect(open).toHaveBeenCalledWith(standalone, "_blank", "noopener");
+  // THE SAME ACTION IN MORE, once in each arrangement: folded, the button is that row.
+  expect(moreRows("wide").filter((row) => row === "Open in new tab")).toHaveLength(1);
+  expect(moreRows("narrow").filter((row) => row === "Open in new tab")).toHaveLength(1);
+  open.mockRestore();
+});
+
+test("the standalone page leads back to the gallery and offers no second new tab", () => {
+  const folder = "0192f2c4-5555-7000-8000-000000000005";
+  folders = [{ id: folder, root: folder, name: "Marketing", depth: 0, status: "live" }];
+  detail = { ...detail, folder } as ArtifactDetail;
+  // IN THE FRAME the way back is the folder it is kept in; on its own page, the gallery.
+  mount(`#/artifacts/${ID}`);
+  expect(screen.getByRole("link", { name: "Back to Marketing" })).toBeTruthy();
+  cleanup();
+  mount(`#/artifacts/${ID}/standalone`, true);
+  const bar = screen.getByRole("banner");
+  expect(within(bar).getByRole("heading", { level: 1, name: "Q4 roadmap" })).toBeTruthy();
+  expect(within(bar).getByRole("link", { name: "Back to artifacts" }).getAttribute("href")).toBe(
+    "#/artifacts",
+  );
+  expect(within(bar).queryByRole("button", { name: "Open in new tab" })).toBeNull();
+  expect(moreRows("wide")).not.toContain("Open in new tab");
+  expect(moreRows("narrow")).not.toContain("Open in new tab");
+  // EVERYTHING ELSE IS THE SAME PAGE: its panels open over the artifact as they do in the frame.
+  fireEvent.click(tool("Details"));
+  expect(location.hash).toBe(`#/artifacts/${ID}/standalone?panel=details`);
+  expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
+  expect(screen.getByText("The artifact itself")).toBeTruthy();
 });

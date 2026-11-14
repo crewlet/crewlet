@@ -44,6 +44,8 @@ type fakeDO struct {
 	answer map[string]int
 	// revokeDown answers every revoke 503, as an outage would.
 	revokeDown bool
+	// inv is the team's resources as the listings answer them; nil has none.
+	inv *inventory
 }
 
 // route is one request shape the checks send, with the scope it needs.
@@ -147,6 +149,9 @@ func (f *fakeDO) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"account": map[string]any{
 			"name": p.name, "email": "owner@example.com", "uuid": "u-1", "status": p.status,
 			"team": map[string]any{"uuid": p.teamUUID, "name": p.team}}})
+		return
+	}
+	if f.inv != nil && r.Method == http.MethodGet && f.inv.serve(w, r, p) {
 		return
 	}
 	for _, rt := range f.routes {

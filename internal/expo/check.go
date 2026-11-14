@@ -40,6 +40,9 @@ type Checked struct {
 type Refusal struct {
 	Detail string
 	Hint   string
+
+	// dead marks a token Expo no longer accepts at all.
+	dead bool
 }
 
 func (r *Refusal) Error() string { return "expo: " + r.Detail }

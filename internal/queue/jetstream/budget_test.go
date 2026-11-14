@@ -22,7 +22,7 @@ import (
 func fileQueue(t *testing.T) *Queue {
 	t.Helper()
 	q, err := Open(SizedByTheDisk(t.Context(), "the case is about the cap a file store takes from its volume"),
-		Config{StoreDir: t.TempDir()})
+		Config{StoreDir: brokertest.TempDir(t)})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -44,7 +44,7 @@ func fileQueue(t *testing.T) *Queue {
 // subject IS the cap a volume gives keeps [fileQueue].
 func sizedFileQueue(t *testing.T) *Queue {
 	t.Helper()
-	return newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	return newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 }
 
 // budgetLog is a domain stream reserving ceiling bytes.

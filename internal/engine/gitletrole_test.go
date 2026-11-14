@@ -24,7 +24,7 @@ import (
 func TestTheFleetRoleCheckAsksTheCurrentCompanyForGitlet(t *testing.T) {
 	t.Parallel()
 	p := planeFor(t, newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		brokertest.GitletCacheIn(&b.Gitlet)
 		b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
 	})}))

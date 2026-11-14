@@ -27,7 +27,7 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	// THE BROKER'S OWN LIMIT DECLARED ([brokertest.StoreMaxBytes]): the case
 	// fills the log's ceiling, never the broker's, so the broker's limit is
 	// not read off the runner's free disk either.
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)

@@ -86,7 +86,7 @@ func TestAPasteIsHeldToScalewaysShape(t *testing.T) {
 // WHAT IS STORED IS SAID AS HELD, whether written or referenced.
 func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 	t.Parallel()
-	block := &config.Scaleway{Enabled: true, Provisioning: &config.ScalewayProvisioning{
+	block := &config.Scaleway{Enabled: true, Atlas: true, Provisioning: &config.ScalewayProvisioning{
 		OrganizationID: testOrg, AccessKey: provAccess, SecretKey: "${" + scaleway.ProvisionerSecret + "}",
 	}}
 	resolve := func(name string) (string, bool) { return provSecret, name == scaleway.ProvisionerSecret }
@@ -94,5 +94,33 @@ func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 		if !r.Present || (r.Resolved != nil && !*r.Resolved) {
 			t.Errorf("%s: present %v, resolved %v", r.Field, r.Present, r.Resolved)
 		}
+	}
+}
+
+// SEE MORE IN ATLAS IS ONE OPTIONAL SWITCH, OFF UNLESS SOMEBODY TURNS IT ON:
+// the form shows it, never requires it, offers it off, names every permission
+// set the application would hold and says how to undo it.
+//
+// Mutation: require the switch or default it on, and connecting Scaleway
+// makes an application nobody asked for.
+func TestSeeMoreInAtlasIsOneOptionalSwitch(t *testing.T) {
+	t.Parallel()
+	var atlas setup.Requirement
+	for _, r := range scaleway.Requirements(&config.Scaleway{Enabled: true}, nil) {
+		if r.Field == "atlas" {
+			atlas = r
+		}
+	}
+	if atlas.Kind != setup.KindToggle || atlas.ConfigPath != "integrations.scaleway.atlas" ||
+		atlas.Required || atlas.Hidden || atlas.Connect || atlas.Default != "false" || atlas.Present {
+		t.Fatalf("the switch: %+v", atlas)
+	}
+	for _, set := range scaleway.AtlasSets() {
+		if !strings.Contains(atlas.More, set) {
+			t.Errorf("the switch does not name %s", set)
+		}
+	}
+	if !strings.Contains(atlas.More, "Turn this off to delete") {
+		t.Errorf("the switch does not say how to undo it: %q", atlas.More)
 	}
 }

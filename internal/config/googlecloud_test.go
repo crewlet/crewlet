@@ -162,3 +162,21 @@ func TestGoogleCloudSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.
 		t.Error("an agent on Google Cloud is not required to name a project")
 	}
 }
+
+// THE ATLAS'S READER IS ONE SWITCH, OFF UNLESS WRITTEN: it names no account,
+// since the account is the identity project's crewlet-atlas.
+func TestGoogleCloudAtlasReadIsOffUnlessWritten(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		extra string
+		want  bool
+	}{{"", false}, {"\n      atlas_read: true", true}, {"\n      atlas_read: false", false}} {
+		c, err := config.ParseCompany([]byte("name: Acme\nintegrations:\n  google_cloud:\n" + completeGoogleCloud + tc.extra + "\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", tc.extra, err)
+		}
+		if got := c.Integrations.GoogleCloud.Provisioning.AtlasRead; got != tc.want {
+			t.Errorf("%q reads atlas_read %v, want %v", tc.extra, got, tc.want)
+		}
+	}
+}

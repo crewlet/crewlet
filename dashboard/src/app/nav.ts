@@ -1523,6 +1523,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "yours",
   "shared",
   "folders",
+  "standalone",
   "new",
   "setup",
   "gitlet",

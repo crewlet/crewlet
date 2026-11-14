@@ -189,7 +189,7 @@ func harnessLogBytes(room uint64) uint64 {
 // openLog provisions the code log on an embedded broker and opens it.
 func openLog(t testing.TB) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

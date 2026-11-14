@@ -256,7 +256,7 @@ func bundledLogin(t *testing.T) string {
 func bundleNode(t *testing.T, company *config.Company) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)

@@ -58,7 +58,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("googlecloud: no client")
 	}
 	c := opts.Client
-	if _, err := c.token(ctx); err != nil {
+	if _, err := c.token(ctx, c.provisioner); err != nil {
 		return nil, fmt.Errorf("googlecloud: the provisioner in integrations.google_cloud.provisioning %s: %w",
 			integration.Refusal(reject(err)), reject(err))
 	}

@@ -114,7 +114,7 @@ func bindOps(t *testing.T, e *engine.Engine) {
 func gitletNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
-		brokertest.StoreIn(&b.Stream, filepath.Join(filepath.Dir(b.Store.Path), "stream"))
+		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		brokertest.GitletCacheIn(&b.Gitlet)
 		b.Node.Roles = roles
 		b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,

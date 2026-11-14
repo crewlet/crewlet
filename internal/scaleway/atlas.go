@@ -18,9 +18,10 @@ import (
 // projects, as accounts, read whole under the provisioner key the company
 // already gave the engine. One listing, with GET alone.
 //
-// NOTHING INSIDE A PROJECT IS READ: the provisioner's policy holds project
-// read and IAM management and nothing of any product, so which products a
-// project uses is not something this key can be asked.
+// NOTHING INSIDE A PROJECT IS READ UNDER THAT KEY: the provisioner's policy
+// holds project read and IAM management and nothing of any product. What a
+// project holds is read under the atlas application's own key, where the
+// company switched it on (ADR-0144, atlasproducts.go).
 
 func init() { collect.Register(atlasSource{}) }
 
@@ -35,16 +36,16 @@ const partProjects = "projects"
 // accountKeyPrefix starts the key of every account Scaleway holds.
 const accountKeyPrefix = string(atlas.VendorScaleway) + "/"
 
-// atlasClient is the client a read makes, counted, from the company's block,
-// or [integration.ErrNotConfigured] where the company does not connect
+// atlasClient is the client a read makes and the counted transport under it,
+// from the company's block, or [integration.ErrNotConfigured] where the company does not connect
 // Scaleway or its key does not resolve.
-func atlasClient(in collect.Input) (*Client, func() int, error) {
+func atlasClient(in collect.Input) (*Client, *http.Client, func() int, error) {
 	if in.Config == nil {
-		return nil, nil, fmt.Errorf("scaleway: %w: no company document", integration.ErrNotConfigured)
+		return nil, nil, nil, fmt.Errorf("scaleway: %w: no company document", integration.ErrNotConfigured)
 	}
 	cfg := in.Config.Integrations.Scaleway
 	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
-		return nil, nil, fmt.Errorf("scaleway: %w: integrations.scaleway is off or has no provisioning block",
+		return nil, nil, nil, fmt.Errorf("scaleway: %w: integrations.scaleway is off or has no provisioning block",
 			integration.ErrNotConfigured)
 	}
 	var org, secret string
@@ -53,7 +54,7 @@ func atlasClient(in collect.Input) (*Client, func() int, error) {
 		secret = strings.TrimSpace(in.Env.Value(cfg.Provisioning.SecretKey))
 	}
 	if org == "" || secret == "" {
-		return nil, nil, fmt.Errorf("scaleway: %w: the Organization ID and the provisioner secret key did not "+
+		return nil, nil, nil, fmt.Errorf("scaleway: %w: the Organization ID and the provisioner secret key did not "+
 			"both resolve", integration.ErrNotConfigured)
 	}
 	base := in.HTTP
@@ -63,15 +64,15 @@ func atlasClient(in collect.Input) (*Client, func() int, error) {
 	counted, calls := collect.Counted(base)
 	client, err := NewClient(ClientOptions{OrganizationID: org, SecretKey: secret, HTTP: counted})
 	if err != nil {
-		return nil, nil, fmt.Errorf("scaleway: integrations.scaleway.provisioning.organization_id: %w", err)
+		return nil, nil, nil, fmt.Errorf("scaleway: integrations.scaleway.provisioning.organization_id: %w", err)
 	}
-	return client, calls, nil
+	return client, counted, calls, nil
 }
 
 // Collect reads the Organization's projects and reports them as claims in
 // the integration's voice. It writes nothing at Scaleway.
 func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read, error) {
-	client, calls, err := atlasClient(in)
+	client, counted, calls, err := atlasClient(in)
 	if err != nil {
 		return collect.Read{}, err
 	}
@@ -86,6 +87,11 @@ func (atlasSource) Collect(ctx context.Context, in collect.Input) (collect.Read,
 	switch {
 	case err == nil:
 		readProjects(b, org, projects)
+		// THE PRODUCTS ONLY BESIDE A WHOLE LISTING OF PROJECTS: a refused one
+		// carries every claim below the Organization as it stands.
+		if perr := readProducts(ctx, b, in, counted, org, projects); perr != nil {
+			return collect.Read{}, perr
+		}
 	case Status(err) == http.StatusForbidden:
 		// A KEY SCALEWAY KNOWS AND REFUSES THE LISTING lacks the permission
 		// set, which is a finding: a key it does not know answers 401.

@@ -37,7 +37,7 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	t.Parallel()
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	brokertest.GitletCacheIn(&boot.Gitlet)
 	SeedStore(t, &boot)
 	company, err := config.ParseCompany([]byte(nativeCleanupCompany))

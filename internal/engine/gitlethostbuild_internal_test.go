@@ -392,7 +392,7 @@ func TestADeclaredBrokersNodeHostsCodeOnAnyDisk(t *testing.T) {
 		cores = 16
 	)
 	b := config.DefaultBootstrap()
-	base := t.TempDir()
+	base := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(base, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(base, "stream"))
 	layout := prepareCache(t, filepath.Join(base, "git"))

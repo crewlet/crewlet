@@ -591,7 +591,7 @@ func seedRetiredPack(t *testing.T, e *Engine, id string, position int64, at time
 func codeNodeStore(t *testing.T) config.Bootstrap {
 	t.Helper()
 	b := testBootstrap(t)
-	dir := t.TempDir()
+	dir := brokertest.TempDir(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	brokertest.GitletCacheIn(&b.Gitlet)

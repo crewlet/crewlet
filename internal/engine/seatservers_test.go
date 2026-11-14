@@ -95,7 +95,7 @@ func sealingOptions(t *testing.T, doc string) engine.Options {
 	return engine.Options{
 		Company: parsedCompany(t, doc),
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+			brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 			b.Secrets = config.Secrets{
 				ActiveKeyID: "k1",
 				Keys: []config.SecretKey{{

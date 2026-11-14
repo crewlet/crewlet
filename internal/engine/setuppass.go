@@ -1347,6 +1347,7 @@ var (
 	_ setup.Teardowner = (*githubPass)(nil)
 	_ setup.Teardowner = (*gitlabPass)(nil)
 	_ setup.Teardowner = (*datadogPass)(nil)
+	_ setup.Teardowner = (*scalewayPass)(nil)
 )
 
 // gitlabAdminToken resolves the group Owner credential.
