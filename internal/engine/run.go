@@ -2878,8 +2878,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 // this node is still running turns on. Two nodes, one seat, arrived at through
 // the graceful path.
 //
-// STOP is what ends an engine. A caller's context bounds how long Start itself
-// may take, not how long the engine runs.
+// STOP is what ends an engine, and a caller's context is not a bound on Start:
+// it is the context whose end is the caller's stop, as `crewlet run` hands it
+// its signal context. A context that ends while the node starts IS that stop
+// (below), so a caller that hands Start a deadline for the start alone stops
+// the engine it is starting when the deadline passes.
 //
 // # A context that ends while the node starts is a stop already decided
 //
@@ -2903,7 +2906,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	})
 	err := e.node.Start(context.WithoutCancel(ctx))
 	// A DRAIN ALREADY BEGUN IS WAITED FOR, so a Start that returns after its
-	// context ended returns with the host draining, never a moment before it.
+	// context ended returns with the host draining, never a moment before it —
+	// and so the goroutine Start began ends inside Start, as every goroutine
+	// ends inside whatever started it: left running, its presence give-back
+	// could still be asking the store the caller's teardown is closing.
 	if !stopCut() {
 		<-cutDone
 	}
