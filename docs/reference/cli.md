@@ -3571,6 +3571,7 @@ expect:
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
   shows: [Spend by agent]         # text the turn's cards carry, ignoring case
+  never_shows: [Budgets]          # text no card of the turn carries, ignoring case
   brief:                          # a brief turn's card (mode: brief only)
     needs: [ENG-42, qa]           # the records its rows cite, in order; [] is "Nothing needs you"
     tones: [warning, danger]      # optional: each row's tone, in the same order
@@ -3593,7 +3594,8 @@ becomes a proposal, as it does in the dashboard, which is what `proposals`
 counts. `shows` reads the cards the turn drew (a table's title and cells, a
 proposal's rows and note), so a case can hold what the person was shown, not
 only what the answer said: the place a page is proposed in, or the reason a
-read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me
+read card gives; `never_shows` holds what no card may carry, such as an option
+row on an answer given in the person's own words. A `mode: brief` case runs a brief turn (the drawer's "Brief me
 on this page"), whose script ends with an `answer_brief` call; `brief` holds the
 card the engine drew from it, after the engine dropped every row whose record
 the turn did not read or the person may not open, and drew a danger tone only
