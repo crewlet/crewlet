@@ -2638,7 +2638,11 @@ const (
 	// policy's pencils, a duration typed as one) takes it to 6316.7 KiB
 	// (6,468,275 bytes): 6317 KiB.
 	// Delegated decisions made readable, on kit 0.134.0: 6322.5 KiB, 9,271 bytes over main: 6323 KiB.
-	treeBudget = 5<<20 + 1205<<10
+	// The release train of Ask Crewlet's grants, Think harder, tool families and
+	// settings page, the sign-in policy, the settings polish and Delegated
+	// decisions, on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554
+	// bytes over the 6313.4 KiB of main it was built on: 6343 KiB.
+	treeBudget = 5<<20 + 1223<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
