@@ -9,9 +9,12 @@
 //
 // The suite is written for an ASYNCHRONOUS backend even though the in-memory
 // twin dispatches inline: every positive assertion waits for the handler to
-// speak (a channel wake, not a poll), and a negative assertion is read behind
-// something that would have carried what it rules out — a later broadcast of
-// the same sender, a fence through the same feed, a barrier through the
+// speak (a channel wake, not a poll), for as long as the backend keeps
+// speaking — the bound is a pause with nothing delivered (stallFor), never the
+// wait's own length, which a loaded runner stretches on a healthy broker — and
+// a negative assertion is read behind something that would have carried what
+// it rules out — a later broadcast of the same sender, a fence through the
+// same feed, a barrier through the
 // listeners, a withdrawal's answer to its own bound, the backend's own count,
 // its own report that it has settled ([Capabilities.Settle]). Where nothing a
 // backend exports would carry it, the absence is decided beside the backend,
@@ -754,12 +757,14 @@ func settleStarted(ctx context.Context, t *testing.T) error {
 		return errors.New("the case started no queue through the suite (s.start or " +
 			"s.startQueue), so nothing was settled and a read behind it would decide nothing")
 	}
-	// BOUNDED AS LIVENESS by settleFor: a healthy backend settles once its
+	// BOUNDED AS LIVENESS by stallFor: a healthy backend settles once its
 	// dispatch has come round, which the harnesses keep well inside it, and
 	// one that never does — a mailbox it never empties, a loop it never ends
-	// — is what fails here. The bound decides nothing about what was
-	// delivered: the read behind it does.
-	settling, cancel := context.WithTimeout(ctx, settleFor)
+	// — is what fails here. A Settle shows no progress short of its answer,
+	// so the pause it may take is the whole of it, at the bound every wait
+	// holds a pause to. The bound decides nothing about what was delivered:
+	// the read behind it does.
+	settling, cancel := context.WithTimeout(ctx, stallFor)
 	defer cancel()
 	for _, q := range queues {
 		if err := settle(settling, t, q); err != nil {
@@ -785,13 +790,14 @@ func settleStarted(ctx context.Context, t *testing.T) error {
 // still waiting for otherwise. A case ends a window on its own clock behind it,
 // so that what closes the window is the gate the verb shut and never the clock.
 //
-// BOUNDED AS LIVENESS by settleFor: a consumer takes a verb in once its loop
-// has come round, which the harnesses keep well inside it, and one that never
-// does — a loop that ended rather than park, a gate it never reads — is what
-// fails here. The bound decides nothing about what was delivered.
+// BOUNDED AS LIVENESS by stallFor, a pause with nothing to show for it, which a
+// consumer's loop coming round once is: it takes a verb in once it has, which
+// the harnesses keep well inside it, and one that never does — a loop that
+// ended rather than park, a gate it never reads — is what fails here. The
+// bound decides nothing about what was delivered.
 func (s *suite) awaitParked(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) {
 	t.Helper()
-	parking, cancel := context.WithTimeout(ctx, settleFor)
+	parking, cancel := context.WithTimeout(ctx, stallFor)
 	defer cancel()
 	if err := s.caps.Parked(parking, t, q, topic, group); err != nil {
 		t.Fatalf("the %s consumer of (%s, %s) did not take the case's verb in: %v",
@@ -811,31 +817,74 @@ const holdReason = "no_turn_engine"
 // --- timing budgets -------------------------------------------------------
 
 const (
-	// settleFor bounds how long a positive assertion waits for a backend
-	// to deliver. Generous on purpose: a timeout here must mean "never
-	// delivered", never "delivered on a loaded CI box a moment late".
+	// stallFor is how long a positive wait goes WITHOUT PROGRESS before it
+	// is a hang: for a wait on a journal, with no delivery recorded; for a
+	// wait that sees no progress short of its own answer (a signal, a
+	// polled state, a backend's Settle, a verb taken in, a drain), with no
+	// answer. It ends a wait and decides nothing a healthy build does: a
+	// timeout here must mean "stopped", never "delivered on a loaded CI box
+	// a moment late".
 	//
-	// MEASURED, and the measurement moved what this paragraph says. Worst
-	// wait observed across a full run: 0.98ms on the in-memory twin, and
-	// 503-509ms on JetStream over five runs. Headroom on a real broker is
-	// therefore about 6x — not the comfortable margin "generous" implies.
+	// IT BOUNDS A PAUSE, NOT THE WAIT, because what a loaded runner does to
+	// a healthy broker is pause it. Its predecessor, settleFor, bounded the
+	// whole wait at three seconds from its start, measured against an idle
+	// JetStream (worst wait 503-509ms over five runs, about 6x headroom),
+	// and through a leaf on a shared CI runner under -race it cut four
+	// different cases of main in one day (#1204) while they were still
+	// delivering: one saw [c1 c2 c3 c1] of a sequence still arriving, and
+	// in the same windows a broker of the same process logged its own API
+	// handler answering one request in 5.46 s and 6.59 s. A total bound
+	// has to fit every hand-over a case waits for, each at the slowest a
+	// loaded runner makes it, so it grows with the case; a bound on the
+	// pause between two deliveries has to fit only the slowest ONE. So a
+	// journal's wait restarts this bound on every delivery, and a case that
+	// keeps delivering, however slowly, is never cut while it does.
 	//
-	// What consumes it is NOT delivery latency. In 5 of 5 runs the slowest
-	// wait was a REDELIVERY case, and redelivery is spaced by backend
-	// POLICY rather than backend health: JetStream ships a 1s nak delay and
-	// its conformance harness cuts that to 25ms so this suite can finish.
-	// At the shipped value three redeliveries would exhaust this budget on
-	// a perfectly healthy broker.
+	// THREE SECONDS OF PAUSE WOULD NOT HAVE DONE EITHER. With the leaf's
+	// link held 500ms each way and nothing else changed, the redelivery
+	// case #1204 lost came round in 6.1 to 10.2 s where three seconds had
+	// cut it every time, and one of its healthy redeliveries came 6.1 s
+	// after the attempt before it.
 	//
-	// So the IMPLICIT CONTRACT here is about redelivery SPACING, not
-	// hand-over: a backend must tune its redelivery delay down for the
-	// conformance run. This used to prescribe the opposite — "a backend
-	// that needs longer should say so rather than have this raised" — which
-	// sends a backend author to raise a constant every positive assertion
-	// in the suite pays, when the repair is one constant of their own.
-	// Raising this is the wrong fix for the only pressure ever measured on
-	// it.
-	settleFor = 3 * time.Second
+	// THIRTY SECONDS, against that 6.59 s, the slowest single pause a
+	// healthy process was measured to take: 4.5x it, as the Makefile's
+	// test timeout stands about 3x above the slowest green package. And
+	// half of clockedWindow, which a case leaves open on a clock it moves:
+	// a backend that kept that window on the wall clock delivers nothing
+	// while it is open, so its case stalls here a full half-window before
+	// the window could end on its own and pass the case (a test holds the
+	// two to that order). What it costs is only a broken build's: a case
+	// whose delivery never comes fails at thirty seconds rather than three.
+	//
+	// AND THE REDELIVERY SPACING THE OLD BOUND WAS SQUEEZED BY STILL BINDS,
+	// one gap at a time. Measured, the slowest healthy waits were REDELIVERY
+	// cases, spaced by backend POLICY rather than backend health: JetStream
+	// ships a 1s nak delay doubling to a thirty-second ceiling, and its
+	// conformance harness cuts them to 25ms and 50ms. Every redelivery is a
+	// delivery, so it restarts this bound — but the gap before it is a
+	// pause with nothing delivered, and the shipped ceiling meets this
+	// bound outright. So the contract is still about redelivery SPACING,
+	// not hand-over: a backend tunes its redelivery delay and its ceiling
+	// down for the conformance run, far inside this bound, and every case
+	// waiting on a redelivery pays that spacing in wall time besides.
+	// Raising this is not the repair for a spacing; the backend's own
+	// constant is.
+	stallFor = 30 * time.Second
+
+	// hangFor is the BACKSTOP a wait on a journal holds itself to while
+	// deliveries keep arriving without meeting its condition: a redelivery
+	// storm, a loop handing the same message round for ever, which restart
+	// stallFor on every lap and would otherwise run until the binary's own
+	// timeout.
+	//
+	// A healthy build never reaches it, because no wait in this suite waits
+	// for more than a handful of deliveries — the longest, a partition
+	// spending three attempts on passes beside two that run once, waits for
+	// five — and two minutes is eighteen of the slowest pause measured
+	// (stallFor's 6.59 s) back to back. A case that waits for many more
+	// deliveries than that in ONE wait should split it, rather than raise
+	// this.
+	hangFor = 2 * time.Minute
 
 	// quietFor is the timeout WaitForHandlers is handed where the case
 	// needs one that is not zero: on an idle queue, which returns without
@@ -856,15 +905,17 @@ const (
 	// Settle instead; and the linger cases whose tail still held one open
 	// end their window on a clock they move (Capabilities.LingerClock). Do
 	// not bring it back as a "wait for something" budget. Positive halves
-	// wait on settleFor and on a signal; negative ones on Settle.
+	// wait on a signal, bounded by stallFor; negative ones on Settle.
 	quietFor = 150 * time.Millisecond
 
 	// keepFor ends a case that waits on the keep of a dead letter at the
 	// transport's ceiling, and only so that a hang ends: such a case is
 	// decided by the keep's own completion, which a drain reports
 	// (WaitForHandlers), never by this bound. Generous on purpose: a keep of
-	// megabytes under the race detector on a loaded runner outlasted
-	// settleFor, which is sized for a delivery of a few bytes.
+	// megabytes under the race detector on a loaded runner outlasted the
+	// three seconds the suite's positive waits had then, which were sized
+	// for a delivery of a few bytes, and a keep is one step with no
+	// progress to see inside it, so stallFor's pause is no measure of it.
 	keepFor = 2 * time.Minute
 
 	// overlapRounds is how many publish/drain pairs the overlap case races
@@ -959,9 +1010,10 @@ const (
 	// THE CEILING, SO A CLOCK THE BACKEND IGNORED SHOWS. A backend that kept
 	// the window on the wall clock despite the clock it was handed would end
 	// a short window by itself a moment later, and a case could pass on that
-	// as though it had moved the clock; a window of a minute outlasts every
-	// bound the suite waits, so a case whose window only the clock can end
-	// fails instead.
+	// as though it had moved the clock; a window of a minute outlasts the
+	// pause any wait here allows (stallFor, half of it), and a window
+	// delivers nothing while it is open, so a case whose window only the
+	// clock can end fails instead.
 	//
 	// IT REPLACED racingWindow, a window of a second on the wall clock that
 	// every case whose SETUP had to land inside a window paid: the pause,
@@ -1022,7 +1074,7 @@ func (j *journal) all() []string {
 }
 
 // await blocks until cond accepts what has been recorded, failing the test
-// with the last observation if the settle budget runs out.
+// with the last observation if delivery stops short of it ([awaitDeliveries]).
 func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool) {
 	t.Helper()
 	j.awaitExpecting(t, what, cond, nil, false)
@@ -1034,20 +1086,59 @@ func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool
 // two awaits on one journal cannot inherit each other's expectation.
 func (j *journal) awaitExpecting(t *testing.T, what string, cond func(seen []string) bool, want []string, hasWant bool) {
 	t.Helper()
-	deadline := time.NewTimer(settleFor) //fixedwait:liveness
-	defer deadline.Stop()
+	ended, met := awaitDeliveries(func() bool { return cond(j.all()) }, j.ping)
+	if met {
+		return
+	}
+	seen := j.all()
+	timedOut(t, what, ended, verdictFor(seen, want, hasWant), seen)
+}
+
+// waitEnd is which bound ended a positive wait whose condition never held.
+type waitEnd int
+
+const (
+	// endStalled — nothing moved for stallFor: no delivery, for a wait on a
+	// journal; no answer, for a wait that sees nothing short of one.
+	endStalled waitEnd = iota
+	// endBackstop — deliveries kept arriving for hangFor and none of them
+	// met the condition.
+	endBackstop
+)
+
+// awaitDeliveries waits until met holds, reading it again whenever delivered
+// says a delivery was recorded, and reports which bound ended the wait when it
+// never held.
+//
+// BOUNDED BY PROGRESS, NOT BY ELAPSED TIME: every delivery restarts the
+// stallFor bound, so a backend still handing a case its deliveries is never cut
+// while it does, however slowly a loaded runner lets it (#1204), and a wait
+// ends on the pause only once a whole stallFor has passed with nothing
+// recorded. hangFor, from the start, is the backstop for a backend that keeps
+// delivering and never meets the condition. Both are LIVENESS: a healthy build
+// meets neither, and a broken one that never meets the condition is what they
+// end; what was delivered is decided by met and by the verdict after it.
+//
+// A delivery recorded before the wait began leaves its wake on delivered, and
+// restarts the bound once at the start: what met reads first already holds it.
+func awaitDeliveries(met func() bool, delivered <-chan struct{}) (waitEnd, bool) {
+	stalled := time.NewTimer(stallFor) //fixedwait:liveness
+	defer stalled.Stop()
+	backstop := time.NewTimer(hangFor) //fixedwait:liveness
+	defer backstop.Stop()
 	for {
-		if cond(j.all()) {
-			return
+		if met() {
+			return 0, true
 		}
 		select {
-		case <-j.ping:
-		case <-deadline.C:
-			if cond(j.all()) {
-				return
-			}
-			seen := j.all()
-			timedOut(t, what, verdictFor(seen, want, hasWant), seen)
+		case <-delivered:
+			// Reset discards a firing nobody received (Go 1.23's timers),
+			// so a stall the delivery raced is not read after it.
+			stalled.Reset(stallFor)
+		case <-stalled.C:
+			return endStalled, met()
+		case <-backstop.C:
+			return endBackstop, met()
 		}
 	}
 }
@@ -1189,13 +1280,13 @@ const (
 	verdictUnmet
 )
 
-// timedOut ends a case that overran the settle budget, naming only what the
-// evidence supports.
+// timedOut ends a case whose positive wait a bound ended (ended) before its
+// condition held, naming only what the evidence supports.
 //
 // An earlier version of this asserted its cause: anything that arrived at all
-// meant "a behavioural difference, not a timing one, so settleFor is not the
+// meant "a behavioural difference, not a timing one, so the budget is not the
 // suspect". That is wrong for every case awaiting a SEQUENCE. A backend slower
-// than the budget delivers e1 and not yet e2, which is "something arrived,
+// than the bound delivers e1 and not yet e2, which is "something arrived,
 // condition unmet" — so the message told the one reader whose problem WAS
 // timing to look anywhere but there. The fix for misattribution shipped with
 // the same misattribution pointing the other way, which is worth remembering
@@ -1204,48 +1295,57 @@ const (
 // So a prefix is now reported as a prefix and nothing is concluded from it, and
 // the no-delivery case cites how many deliveries this backend managed
 // elsewhere rather than offering advice.
-func timedOut(t *testing.T, what string, v deliveryVerdict, observed any) {
+func timedOut(t *testing.T, what string, ended waitEnd, v deliveryVerdict, observed any) {
 	t.Helper()
-	const budgetNote = "settleFor is a constant this suite advertises, not a promise the " +
-		"contract makes — and raising it is almost never the repair. Measured, the only pressure " +
-		"ever seen on it is REDELIVERY SPACING rather than delivery: check your backend's " +
-		"redelivery delay first (JetStream's harness cuts a 1s nak delay to 25ms for exactly " +
-		"this reason). Raising this blunts the check for every other backend, and every positive " +
-		"assertion in the suite pays for it."
+	const boundNote = "stallFor is a constant this suite advertises, not a promise the " +
+		"contract makes, and it bounds a PAUSE rather than the wait: every delivery restarts " +
+		"it, so a backend still delivering, however slowly, is never cut by it. Raising it is " +
+		"almost never the repair. Measured, the pressure on it is a loaded runner's pause (6.59 s " +
+		"at worst, through a leaf under -race) and REDELIVERY SPACING: check your backend's " +
+		"redelivery delay and its ceiling first (JetStream's harness cuts a 1s nak delay, doubling " +
+		"to 30s, to 25ms and 50ms for exactly this reason)."
+
+	how := fmt.Sprintf("nothing was delivered for %s (stallFor)", stallFor)
+	switch {
+	case ended == endBackstop:
+		how = fmt.Sprintf("deliveries kept arriving for %s (hangFor, the backstop) and none "+
+			"met the condition", hangFor)
+	case v == verdictUnmet:
+		how = fmt.Sprintf("the condition did not hold for %s (stallFor)", stallFor)
+	}
 
 	switch v {
 	case verdictPartial:
-		t.Fatalf("timed out after %s waiting for %s; delivery is INCOMPLETE, not wrong: "+
+		t.Fatalf("timed out waiting for %s: %s; delivery is INCOMPLETE, not wrong: "+
 			"handlers saw %v, a prefix of what was expected\n"+
-			"\tThat is exactly what a backend slower than this budget produces, so timing "+
-			"and behaviour are both live. This helper cannot tell them apart and does not "+
-			"guess. %s", settleFor, what, observed, budgetNote)
+			"\tThat is what a backend slower than this bound produces as much as a wrong "+
+			"one, so timing and behaviour are both live. This helper cannot tell them apart "+
+			"and does not guess. %s", what, how, observed, boundNote)
 	case verdictDiverged:
-		t.Fatalf("timed out after %s waiting for %s; handlers saw %v, which CONTRADICTS "+
+		t.Fatalf("timed out waiting for %s: %s; handlers saw %v, which CONTRADICTS "+
 			"what was expected rather than lagging it\n"+
-			"\tDelivery happened and was wrong, so settleFor is not the suspect.",
-			settleFor, what, observed)
+			"\tDelivery happened and was wrong, so the bound is not the suspect.",
+			what, how, observed)
 	case verdictUnknown:
-		t.Fatalf("timed out after %s waiting for %s; handlers saw %v under a condition this "+
+		t.Fatalf("timed out waiting for %s: %s; handlers saw %v under a condition this "+
 			"helper cannot decompose\n"+
 			"\tWhether more was still in flight is unknown, so treat timing and behaviour "+
-			"as both live. %s", settleFor, what, observed, budgetNote)
+			"as both live. %s", what, how, observed, boundNote)
 	case verdictUnmet:
-		t.Fatalf("timed out after %s waiting for %s; the condition never held\n"+
+		t.Fatalf("timed out waiting for %s: %s\n"+
 			"\tThis wait records no deliveries, so it has none to report and cannot tell "+
-			"a backend slower than this budget from a wrong one: treat timing and "+
-			"behaviour as both live. %s", settleFor, what, budgetNote)
+			"a backend slower than this bound from a wrong one: treat timing and "+
+			"behaviour as both live. %s", what, how, boundNote)
 	default:
 		seen := deliveriesObserved.Load()
-		evidence := fmt.Sprintf("This backend delivered %d events elsewhere in this run "+
-			"inside the same budget, so the budget is evidently sufficient for it — look "+
-			"at this case's own subject first.", seen)
+		evidence := fmt.Sprintf("This backend delivered %d events elsewhere in this run, "+
+			"so it is evidently delivering — look at this case's own subject first.", seen)
 		if seen == 0 {
 			evidence = "This backend has delivered NOTHING anywhere in this run, so suspect " +
-				"its setup or this budget before this case."
+				"its setup or this bound before this case."
 		}
-		t.Fatalf("timed out after %s waiting for %s; NOTHING was delivered\n\t%s %s",
-			settleFor, what, evidence, budgetNote)
+		t.Fatalf("timed out waiting for %s: %s; NOTHING was delivered\n\t%s %s",
+			what, how, evidence, boundNote)
 	}
 }
 
@@ -1320,23 +1420,15 @@ func (b *batchJournal) await(t *testing.T, what string, cond func(batches [][]st
 	b.awaitExpecting(t, what, cond, nil, false)
 }
 
+// awaitExpecting is [journal.awaitExpecting] for batches, bounded alike by
+// progress ([awaitDeliveries]): every batch recorded restarts the pause.
 func (b *batchJournal) awaitExpecting(t *testing.T, what string, cond func(batches [][]string) bool, want []int, hasWant bool) {
 	t.Helper()
-	deadline := time.NewTimer(settleFor) //fixedwait:liveness
-	defer deadline.Stop()
-	for {
-		if cond(b.all()) {
-			return
-		}
-		select {
-		case <-b.ping:
-		case <-deadline.C:
-			if cond(b.all()) {
-				return
-			}
-			timedOut(t, what, verdictFor(b.sizes(), want, hasWant), b.all())
-		}
+	ended, met := awaitDeliveries(func() bool { return cond(b.all()) }, b.ping)
+	if met {
+		return
 	}
+	timedOut(t, what, ended, verdictFor(b.sizes(), want, hasWant), b.all())
 }
 
 func (b *batchJournal) awaitSizes(t *testing.T, what string, want ...int) {
@@ -1362,6 +1454,9 @@ func (b *batchJournal) staysAt(ctx context.Context, t *testing.T, want int, what
 // awaitSignal waits for a channel to close, failing the test rather than
 // hanging its binary.
 //
+// BOUNDED BY stallFor, the pause every positive wait allows: a signal is one
+// step, with no progress to see short of it, so the wait for it is one pause.
+//
 // Every unbounded `<-ch` in a shared suite is a ten-minute timeout and a
 // goroutine dump for whichever backend author trips it, on a day they were
 // debugging something else. rescue runs first on the failure path, to unblock
@@ -1372,13 +1467,13 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	t.Helper()
 	select {
 	case <-ch:
-	case <-time.After(settleFor): //fixedwait:liveness
+	case <-time.After(stallFor): //fixedwait:liveness
 		if rescue != nil {
 			rescue()
 		}
 		// The case closes some of these channels itself, so a signal that
 		// never came says nothing about what was delivered.
-		timedOut(t, what, verdictUnmet, nil)
+		timedOut(t, what, endStalled, verdictUnmet, nil)
 	}
 }
 
@@ -1387,9 +1482,12 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 // Unlike a handler observation there is no signal to wake on — nothing calls
 // back when a deferral has been applied to a backlog — so this one genuinely
 // polls, and says so rather than pretending a channel exists.
+//
+// BOUNDED BY stallFor, as a signal is: the state a case polls is one step, and
+// the only progress the poll can see is the condition holding.
 func awaitState(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(settleFor)
+	deadline := time.Now().Add(stallFor)
 	for {
 		if cond() {
 			return
@@ -1402,7 +1500,7 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 			// cases wait here on state their handlers were already handed
 			// events to move, and that sentence sent the reader to the
 			// case's subject and setup.
-			timedOut(t, what, verdictUnmet, nil)
+			timedOut(t, what, endStalled, verdictUnmet, nil)
 		}
 		time.Sleep(2 * time.Millisecond) //fixedwait:liveness
 	}
@@ -1752,10 +1850,10 @@ func (s *suite) needListenBarrier(t *testing.T) func(ctx context.Context, q queu
 		t.Skip("backend cannot report its listeners having handled what they were handed")
 	}
 	return func(ctx context.Context, q queue.EventQueue) {
-		// BOUNDED AS LIVENESS by settleFor: the barrier waits only for
+		// BOUNDED AS LIVENESS by stallFor: the barrier waits only for
 		// handlers to return, and no case holds one while it asks, so
 		// only a barrier that never passes meets the bound — and fails.
-		bounded, cancel := context.WithTimeout(ctx, settleFor)
+		bounded, cancel := context.WithTimeout(ctx, stallFor)
 		defer cancel()
 		s.caps.ListenBarrier(bounded, t, q)
 	}

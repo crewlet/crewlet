@@ -1052,7 +1052,7 @@ func (s *suite) runCore(t *testing.T) {
 		awaitState(t, "every published message to be handled", func() bool {
 			return handled.Load() >= published.Load()
 		})
-		remaining, err := q.WaitForHandlers(ctx, settleFor)
+		remaining, err := q.WaitForHandlers(ctx, stallFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after the overlap: %v", err)
 		}
@@ -1102,7 +1102,7 @@ func (s *suite) runCore(t *testing.T) {
 
 		close(release)
 		awaitSignal(t, done, "the publish to return", func() {})
-		remaining, err = q.WaitForHandlers(ctx, settleFor)
+		remaining, err = q.WaitForHandlers(ctx, stallFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after release: %v", err)
 		}

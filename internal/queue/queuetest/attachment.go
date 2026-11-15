@@ -316,14 +316,14 @@ func (s *suite) runAttachment(t *testing.T) {
 				close(release)
 				t.Fatalf("Detach: %v", err)
 			}
-		case <-time.After(settleFor): //fixedwait:liveness
+		case <-time.After(stallFor): //fixedwait:liveness
 			// Release the handler so the process can still exit: a
 			// conformance suite that hangs a backend's test binary costs
 			// its author ten minutes and a goroutine dump to learn what
 			// one line could have told them.
 			close(release)
 			t.Fatalf("Detach blocked on an in-flight handler for %s.\n"+
-				"A fenced detach abandons a running handler; only Quiesce waits for one.", settleFor)
+				"A fenced detach abandons a running handler; only Quiesce waits for one.", stallFor)
 		}
 		close(release)
 		awaitSignal(t, published, "the deferral to be applied", func() {})

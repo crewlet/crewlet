@@ -106,14 +106,15 @@ func (s *suite) runReachability(t *testing.T) {
 		// the clock held to a margin of it, which a loaded runner lost on a
 		// refusal.
 		//
-		// SETTLEFOR, not reachWithin: this ask must NOT end on its
+		// STALLFOR, not reachWithin: this ask must NOT end on its
 		// deadline, so the deadline only sets how long a backend that
 		// buffered it takes to be caught, and a refusal never comes near
-		// it.
+		// it — at the pause every positive wait allows, which a loaded
+		// runner's refusal does not reach either.
 		//
 		// Mutation: have the refusal wait out the ask's deadline before it
 		// answers, and the ask returns with its deadline passed.
-		asked, cancelAsk := context.WithTimeout(ctx, settleFor)
+		asked, cancelAsk := context.WithTimeout(ctx, stallFor)
 		_, err := q.Ask(asked, "reach.refused", []byte("reach"), 1)
 		ended := asked.Err()
 		cancelAsk()
@@ -121,7 +122,7 @@ func (s *suite) runReachability(t *testing.T) {
 			t.Errorf("an Ask with its broker gone answered %v, its %s deadline %s, want "+
 				"queue.ErrUnavailable before its deadline: a request held for the "+
 				"reconnect is a retained one, delivered after its asker has gone",
-				err, settleFor, deadlineState(ended))
+				err, stallFor, deadlineState(ended))
 		}
 
 		// A DELETE THE BROKER CANNOT HEAR STILL DETACHES, on both backends
