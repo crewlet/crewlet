@@ -92,10 +92,11 @@ one operation. Every step happens in this order, or none does:
   administrator signed in within the step-up window. Where the grant raises
   (a permission that changes things at the vendor, or one the live catalogue
   cannot vouch for, `seataccess.RaisesGrant`), it is also decided as
-  `setup.access.raise`, which needs a person present. A stale proof is
-  answered `step_up_required`, and the dashboard's step-up ceremony sends the
-  same answer again. Nobody else may choose the option, and a seat never
-  may, whatever its words or its apps.
+  `setup.access.raise`, which needs a person present, so an access token
+  is refused it (`token_refused`). A stale proof is answered
+  `step_up_required`, and the dashboard's step-up ceremony sends the same
+  answer again. Nobody else may choose the option, and a seat never may
+  (both verbs are human-only), whatever its words or its apps.
 - **The grant is the stored request's.** The engine builds it from the request
   it stored when the agent asked: the permission, the scope, the hours and
   the reason. The option decides only whether it lapses after those hours or
