@@ -244,6 +244,55 @@ func TestAHeldCallLikeALateCallIsListedAgainForEveryHarness(t *testing.T) {
 	}
 }
 
+// THE CALL A PERSON APPROVED THAT THE LEAD TELLS IS LISTED NOWHERE, HELD OR NOT.
+// A later attempt at an answer tells the call the person allowed in its lead,
+// once. Where the point holds that call (the copy whose harness ended its own
+// run, which holds every call but the late ones; a kept capture cut off past
+// it; a kept capture its harness ended, placed past it), it is still no call
+// the session shows, and withheld, so it reads alike every told call of its
+// tool: beside a late call of that tool it is never listed again, so the brief
+// tells it once, by the lead. The call the run held for the person's approval,
+// its question, is a call the session shows, withheld too, so it is listed
+// again beside that late call.
+//
+// Mutation: put the call the lead tells on the held side wherever the point
+// holds it, and every case lists it again.
+func TestTheApprovedCallTheLeadTellsIsNeverListedAgain(t *testing.T) {
+	t.Parallel()
+	const (
+		heldLine     = "- tr_close_issue(arguments sealed for a person's approval, kept on no record) → error:"
+		approvedLine = "- tr_close_issue(arguments sealed for a person's approval, kept on no record) → success"
+	)
+	lateClose := digested(numbered("tr_close_issue", map[string]any{"issue": "8"}, 3, 3))
+	lateClose.Late = true
+	bridged := []runner.BridgedCall{heldFor("tr_close_issue", 1, 1), approvedFor("tr_close_issue", "held-1", 2, 2),
+		lateClose}
+	ownPast := keptBasis
+	ownPast.Through = 2
+	for name, tc := range map[string]struct {
+		basis runner.SessionBasis
+		end   sandbox.HarnessEnd
+	}{
+		"the copy whose harness ended its own run": {end: sandbox.HarnessEndOwnRun},
+		"a kept capture cut off past the approved call": {basis: cutOffKept(2),
+			end: sandbox.HarnessEndCutOff},
+		"a kept capture its harness ended, placed past the approved call": {basis: ownPast,
+			end: sandbox.HarnessEndOwnRun},
+	} {
+		brief := laterAttemptBrief(t, tc.basis, tc.end, bridged, nil)
+		if strings.Count(brief, "The call was made, and returned:") != 1 || !strings.Contains(brief, "closed #7") {
+			t.Errorf("%s: the lead does not tell once what the approved call returned:\n%s", name, brief)
+		}
+		if strings.Contains(brief, approvedLine) {
+			t.Errorf("%s: the call the lead tells is listed as well:\n%s", name, brief)
+		}
+		if again, listed := sectionOf(brief, listedAgainHeading); !listed || strings.Count(again, heldLine) != 1 {
+			t.Errorf("%s: the held call, the run's question, is not listed again beside the late call of its "+
+				"tool:\n%s", name, brief)
+		}
+	}
+}
+
 // A CALL THE WORDS SAY THE SESSION LACKS BRINGS NO LISTING. A session whose
 // harness ended its own run is told the calls after its save under words that
 // say they are not in it, so no call there is shown twice and none is taken for

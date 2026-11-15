@@ -739,12 +739,23 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		if slices.Contains(r.cfg.SkipNames, call.Name) {
 			continue
 		}
+		// THE CALL A PERSON APPROVED THAT THE LEAD TELLS is told once, by the
+		// lead, wherever the point places it: never in a list, and never on
+		// the held side either. Held at the point, it is still no call the
+		// session shows (the engine made it on the host once its job's
+		// harness had ended its run on the ask), and withheld, so it reads
+		// alike every told call of its tool: on the held side it would be
+		// listed again, told a second time under words that say the session
+		// shows it.
+		toldByLead := call.Approved && call.HeldID != "" && slices.Contains(leadHeld, call.HeldID)
 		if heldAt(call, through, owed) {
-			held = append(held, call)
+			if !toldByLead {
+				held = append(held, call)
+			}
 			out.HeldSubmission = out.HeldSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 			continue
 		}
-		if call.Approved && call.HeldID != "" && slices.Contains(leadHeld, call.HeldID) {
+		if toldByLead {
 			continue
 		}
 		if call.Late || call.Abandoned {
