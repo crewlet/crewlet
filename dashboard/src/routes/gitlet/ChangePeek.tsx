@@ -19,6 +19,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./Changes.tsx";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
+import "~/styles/gitlet.css";
 
 /**
  * How often an open peek reads its change again: a MINUTE, the listing's own

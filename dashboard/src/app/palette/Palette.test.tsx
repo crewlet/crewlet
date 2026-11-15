@@ -1778,7 +1778,7 @@ describe("code", () => {
       fireEvent.click(line.closest('[role="option"]')!);
     });
     expect(location.hash).toBe(
-      href(["gitlet", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
+      href(["gitlet", "repos", "web"], { ref: TIP, path: "src/app.ts", lines: "7" }),
     );
   });
 

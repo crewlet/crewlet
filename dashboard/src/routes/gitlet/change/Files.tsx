@@ -79,6 +79,7 @@ import {
   usePagedFindings,
 } from "./reads.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {

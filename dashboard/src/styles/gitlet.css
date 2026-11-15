@@ -1,0 +1,801 @@
+/* THE GITLET WORKSPACE (`routes/gitlet/`), and every screen that draws one of
+   its marks elsewhere (Home's changes waiting on a person, Settings › Gitlet,
+   a task's and a seat's changes): a sheet of its own, which arrives with the
+   first module that draws a `code-` class rather than in the first paint.
+
+   Laid out as a code host is laid out, and coloured by the one rule: nothing
+   here spends a hue but a state — a change merged, a meter met — and a diff
+   spends none at all (`diff.css`). A directory and a file are told apart by
+   their glyphs and their names, a seat by its own face, a picked line by a
+   rule at its edge. */
+
+/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
+   move on its own, above the grid. A ruled box rather than a callout, since
+   nothing here is a fault: it is a list, read first. */
+.code-person-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-block-end: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* A live change's readiness in the Changes grid: a meter of its own width
+   beside its count, since the kit's meter fills its box and has none. */
+.code-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.code-readiness__meter {
+  flex: 0 0 4rem;
+}
+.code-readiness__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.code-person-band__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A CHANGE'S PAGE (`routes/gitlet/change/`). Its timeline is a plain list of
+   records in log order, each ruled off the next; nothing in it is a state, so
+   nothing in it takes a hue. */
+.code-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-block-end: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-reply {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-carries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* THE FILES TAB: the file list beside the diff, the list a column of its own
+   width on a wide page and above the diff on a narrow one. */
+.code-files {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+@container page (width < 720px) {
+  .code-files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-files__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.code-files__file {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.code-files__file:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-files__file[aria-current="true"] {
+  background: var(--color-surface-pressed);
+}
+
+.code-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-suggestion {
+  margin: 0;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* PROVENANCE: a label and its value a row, the labels one column. */
+.code-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+
+.code-facts > div {
+  display: contents;
+}
+
+.code-facts dt {
+  color: var(--color-text-secondary);
+}
+
+.code-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A REPOSITORY'S PAGE (`routes/gitlet/repo/`). Its listings are plain ruled
+   tables and its file a column of numbered lines in the code face; nothing
+   here is a state, so nothing takes a hue. */
+.code-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-rules > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* IN SETTINGS' CARDS a rule is a row: what it says, then its controls at the
+   row's end, the rows ruled apart. */
+.code-rules__what {
+  display: flex;
+  flex: 1 1 18rem;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-rules > li:has(> .code-rules__what) + li:has(> .code-rules__what) {
+  padding-block-start: var(--spacing-2);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-rules__pattern {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Marks every Gitlet screen shares (`routes/gitlet/ui.tsx`) ----------- */
+
+/* A COMMIT'S ID: the kit's copy chip in the code face, at a list's size. */
+.code-sha {
+  font-size: var(--font-size-xs);
+}
+
+/* WHO DID WHAT, AND WHEN: a face, the name, the rest of the sentence and the
+   time, on one line that wraps between its words. */
+.code-byline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.code-byline__who {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-byline__verb {
+  min-width: 0;
+}
+
+.code-byline__when {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* AN ENTRY'S GLYPH, in the tertiary ink a word beside it reads past; a
+   directory's in the secondary, the step that says it opens further. Never
+   a hue: a folder is told by its drawing. */
+.code-glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-glyph--dir {
+  color: var(--color-text-secondary);
+}
+
+/* CLONE: the address in a block of its own, and what git asks for under it. */
+.code-clone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: min(30rem, 80vw);
+  padding: var(--spacing-3);
+}
+
+.code-clone__head {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-clone__url {
+  min-width: 0;
+}
+
+.code-clone__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ---- A repository's page (`routes/gitlet/repo/`) ------------------------- */
+
+/* THE BAR ABOVE THE CODE: the revision, the path, then the writes and the
+   clone pushed to its end, the whole wrapping on a narrow page. */
+.code-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.code-crumbs__root {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-crumbs__step {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* THE SLASH IS READ BETWEEN THE NAMES, so it takes the tertiary rung a
+   word does (`styles/rungs.test.ts`). */
+.code-crumbs__slash {
+  color: var(--color-text-tertiary);
+}
+
+.code-crumbs__here {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-crumbs__link {
+  overflow-wrap: anywhere;
+}
+
+/* AT THE ROOT, the branches and tags the picker picks among, each a link to
+   its list, in the bar beside it. */
+.code-ref-counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-4);
+  font-size: var(--font-size-sm);
+}
+
+.code-ref-counts__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-bar-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+/* A DIRECTORY'S CARD: the latest commit across its head, the entries flush
+   under it. */
+.code-browser {
+  overflow: hidden;
+}
+
+.code-latest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-latest__who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-latest__author {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-latest__subject {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-latest__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-latest__when {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* AN ENTRY OF A DIRECTORY: its glyph and its name on one line. */
+.code-tree-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-tree-entry__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A FILE'S CARD: its name, size and controls across the head, its lines
+   flush under it. The head wraps rather than squeezing a control's label. */
+.code-blob {
+  overflow: hidden;
+}
+
+.code-blob__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-blob__name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-blob__facts {
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-blob__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-blob__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.code-blob__note {
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  color: var(--color-text-secondary);
+}
+
+/* LOAD MORE, inside a card: in the card's own padding, under the lines. */
+.code-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+/* A FILE'S LINES: the number a button in its own track, the text in the
+   code face at the document's 13px, kept as git wrote it — a tab four
+   columns wide, as the code hosts draw one — and a line too wide scrolls the
+   file, never the page. */
+.code-source {
+  overflow-x: auto;
+  padding-block: var(--spacing-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+  tab-size: 4;
+}
+
+.code-source__line {
+  display: grid;
+  grid-template-columns: 7ch max-content;
+  column-gap: var(--spacing-4);
+  padding-inline-end: var(--spacing-4);
+}
+
+.code-source__line:hover {
+  background: var(--color-surface-hover);
+}
+
+/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
+   is the reader's place, not the line's state. */
+.code-source__line[data-picked],
+.code-blame tr[data-picked] {
+  box-shadow: inset 2px 0 0 var(--color-border-strong);
+}
+
+.code-source__number {
+  padding: 0 var(--spacing-2) 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-source__number:hover,
+.code-source__number[aria-pressed="true"] {
+  color: var(--color-text-primary);
+}
+
+.code-source__number:hover {
+  text-decoration-line: underline;
+}
+
+.code-source__text {
+  white-space: pre;
+}
+
+/* A FILE'S BLAME: each run of lines one commit last changed headed by that
+   commit — when, who and its subject — ruled off the run before it. */
+.code-blame {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+  tab-size: 4;
+}
+
+.code-blame tr[data-run] td {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-blame td {
+  padding: 0 var(--spacing-2);
+  vertical-align: top;
+}
+
+.code-blame__commit {
+  width: 22rem;
+  max-width: 22rem;
+  padding-inline-start: var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-inline-end: 1px solid var(--color-border-default);
+}
+
+/* A RUN'S HEAD IS ONE LINE TALL — its face sized by the text — so a line
+   that opens a run stands exactly where the file's own line does. */
+.code-blame__run {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-blame__when {
+  flex: none;
+  width: 7ch;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.code-blame__subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-blame__number {
+  width: 7ch;
+  text-align: right;
+  font-family: var(--font-family-mono);
+}
+
+.code-blame__text {
+  font-family: var(--font-family-mono);
+  white-space: pre;
+}
+
+/* THE README: a card under the files, its text at a reading measure. */
+.code-readme .prose {
+  max-width: var(--size-measure);
+}
+
+.code-readme__text {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* AN EMPTY REPOSITORY: its first file, and the commands that fill it, at a
+   reading measure. */
+.code-setup {
+  max-width: var(--size-measure);
+}
+
+/* THE ABOUT RAIL beside the code: the description, the counts, then the
+   properties. */
+.code-about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-about__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-about__stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+}
+
+.code-about__stats > li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-about__glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-about__owner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* A REF OF THE BRANCHES AND TAGS: its glyph, its name, its marks. */
+.code-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-ref__name {
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A SECTION OF A TAB BELOW ITS FIRST, with a heading of its own. */
+.code-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-block-start: var(--spacing-6);
+}
+
+.code-section__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ONE COMMIT OF THE HISTORY: its subject, then who wrote it, when, who
+   pushed it and its work item, on a second line that wraps. */
+.code-log-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding-block: var(--spacing-1);
+}
+
+.code-log-row__subject {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-log-row__by {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-log-row__author {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-log-row__work {
+  color: var(--color-text-tertiary);
+}
+
+/* ---- Gitlet › Search ------------------------------------------------------ */
+
+/* The bar's filters, then the lines by repository and file. */
+.code-search-filters {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
+}
+
+.code-search-coverage {
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
+.code-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.code-search-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-search-repo__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+
+.code-search-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-search-file__path {
+  overflow-wrap: anywhere;
+}
+
+/* A result's path, linking to its file: chrome, the heading its lines hang
+   under, drawn in the link ink with no underline. A link inside a sentence
+   takes .prose-link instead. */
+.code-search-file__link {
+  color: var(--color-brand-accent-ink);
+}
+
+.code-search-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.code-search-line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: var(--spacing-2);
+  padding-inline: var(--spacing-2);
+}
+
+/* A line's number is read (and is the link to the line), so it takes the
+   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
+.code-search-line__number {
+  text-align: end;
+  color: var(--color-text-tertiary);
+}
+
+.code-search-line__text {
+  white-space: pre;
+}

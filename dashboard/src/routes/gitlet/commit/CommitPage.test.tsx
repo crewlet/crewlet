@@ -373,7 +373,8 @@ test("a line the patch does not draw offers the file at the head on that line", 
   const open = await within(region).findByRole("link", { name: "Open app.go at line 40" });
   const target = new URL(open.getAttribute("href")!, "http://x");
   expect(target.hash).toContain("/gitlet/repos/web");
-  expect(target.hash).toContain("tab=files");
+  // THE CODE TAB IS THE REPOSITORY'S LANDING, so the address names no tab.
+  expect(target.hash).not.toContain("tab=");
   expect(target.hash).toContain(`ref=${SHA}`);
   expect(target.hash).toContain("path=app.go");
   expect(target.hash).toContain("lines=40");

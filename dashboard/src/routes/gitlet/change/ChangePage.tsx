@@ -66,6 +66,7 @@ import { Commits, Notified, Provenance } from "./Facts.tsx";
 import { RevertChangePanel } from "./ChangeWrites.tsx";
 import { MergePanel } from "./Merge.tsx";
 import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
+import "~/styles/gitlet.css";
 
 /** The page's tabs, the conversation first: what a reader opens a change for. */
 const CHANGE_TABS = [

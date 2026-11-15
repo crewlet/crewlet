@@ -33,6 +33,7 @@ import type {
 } from "~/protocol/index.ts";
 import { Readiness } from "../ChangePeek.tsx";
 import { positionBefore, usePagedComments, usePagedReviews } from "./reads.ts";
+import "~/styles/gitlet.css";
 
 /** One entry of the timeline, by the record that made it. */
 type Entry =

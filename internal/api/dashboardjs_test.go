@@ -2496,7 +2496,13 @@ const (
 	// and a Chatlet transcript laid out where the page draws it added 3,713
 	// bytes, nearly all script, over the 6132.6 KiB of main on kit 0.127.0,
 	// and took it to 6136.3 KiB (6,283,579 bytes): 6137 KiB.
-	treeBudget = 5<<20 + 1017<<10
+	// A Gitlet repository laid out as a code host lays one out (its Code tab
+	// with the latest commit across the files, the README and the About rail,
+	// a file's card with its blame runs, Clone, commits banded by day, the
+	// Changes tab and an empty repository's card), on a sheet of its own,
+	// added 16,451 bytes, script and sheet, and took it to 6152.4 KiB
+	// (6,300,030 bytes): 6153 KiB.
+	treeBudget = 5<<20 + 1033<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

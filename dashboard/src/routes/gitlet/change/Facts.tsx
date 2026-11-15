@@ -20,6 +20,7 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodeRevisionRow } from "~/protocol/index.ts";
 import { CHANGE_POLL_MS } from "./reads.ts";
+import "~/styles/gitlet.css";
 
 /** The change's revisions, newest first, each with the facts its home recorded. */
 export function Commits({
