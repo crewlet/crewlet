@@ -214,7 +214,7 @@ func EvidenceClasses() []Class {
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return append(append(out, pausedClasses()...), ClassScheduleUnproductive)
+	return append(append(out, PausedClasses()...), ClassScheduleUnproductive)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.

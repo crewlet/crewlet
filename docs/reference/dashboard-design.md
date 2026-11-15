@@ -4504,6 +4504,15 @@ budget, a company budget near or at its ceiling — are the status sentence's
 conditions take the sentence over. What the reader can settle is the
 decisions card beside it.
 
+**One pause, one row.** A seat the engine paused after the same failure twice
+(ADR-0117) is said by the advisor's finding for that failure, which names the
+seat (or every seat the failure holds) and the fix ("Agent X is paused because
+the sandbox could not start as configured"), and draws no seat row of its own
+beside it: the two said one pause twice, the second offering a resume that
+fails the same way. The finding classes are the engine's (`PAUSED_SEAT_CLASSES`
+in `contract/advisor.ts`, held to `advisor.PausedClasses`); a pause a person
+took, or an engine pause no finding says, keeps its seat row.
+
 **What a quiet list says is derived, not written.** Every condition names one
 of five subjects, `SUBJECTS` maps each to the phrase a reader sees, and a place
 that lists none draws the phrases of exactly the subjects whose home it is
