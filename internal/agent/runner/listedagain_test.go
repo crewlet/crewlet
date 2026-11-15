@@ -1,6 +1,7 @@
 package runner_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -169,15 +170,76 @@ func TestACallWhoseShownArgumentsDifferIsNotListedAgain(t *testing.T) {
 	}
 }
 
+// A VALUE READS AS THE VALUE IT IS, NEVER AS ITS SPELLING. The run's record
+// keeps a number as its literal's text, so a held call and a told call can
+// carry one value spelled two ways, and a model reading the told line beside
+// the session takes them for one: 7 and 7.0, 100 and 1e2, a key null in one
+// call and absent in the other, a number and a string that spells it, the
+// same within an object. Each such held call is listed again. Values a reader
+// tells apart are not: two numbers that differ, two strings that differ
+// however alike their numbers, arrays of different lengths, a key in one
+// object and not the other.
+//
+// Mutation: compare decoded values as Go values (reflect.DeepEqual), and the
+// alike cases go red; read null as a value of its own, and the null cases go
+// red; read two strings by their numbers, and the strings case goes red.
+func TestAValueReadsAsTheValueItIsNeverAsItsSpelling(t *testing.T) {
+	t.Parallel()
+	n := func(text string) json.Number { return json.Number(text) }
+	for name, tc := range map[string]struct {
+		held, told map[string]any
+		alike      bool
+	}{
+		"7 and 7.0":   {held: map[string]any{"issue": n("7")}, told: map[string]any{"issue": n("7.0")}, alike: true},
+		"100 and 1e2": {held: map[string]any{"issue": n("100")}, told: map[string]any{"issue": n("1e2")}, alike: true},
+		"0 and -0.0":  {held: map[string]any{"n": n("0")}, told: map[string]any{"n": n("-0.0")}, alike: true},
+		"one exponent past any float, spelled two ways": {held: map[string]any{"n": n("1e999999999")},
+			told: map[string]any{"n": n("10E+999999998")}, alike: true},
+		"a key null in the held call, absent in the told one": {
+			held: map[string]any{"channel": "C1", "thread_ts": nil}, told: map[string]any{"channel": "C1"},
+			alike: true},
+		"a key absent in the held call, null in the told one": {held: map[string]any{"channel": "C1"},
+			told: map[string]any{"channel": "C1", "thread_ts": nil}, alike: true},
+		"a string and the number it spells": {held: map[string]any{"issue": "7"},
+			told: map[string]any{"issue": n("7")}, alike: true},
+		"a string and the boolean it spells": {held: map[string]any{"draft": true},
+			told: map[string]any{"draft": "true"}, alike: true},
+		"an object's numbers and nulls": {
+			held:  map[string]any{"fields": map[string]any{"points": n("3"), "due": nil}, "ids": []any{n("1")}},
+			told:  map[string]any{"fields": map[string]any{"points": n("3.00")}, "ids": []any{n("1e0")}},
+			alike: true},
+		"two numbers that differ": {held: map[string]any{"issue": n("7")}, told: map[string]any{"issue": n("8")}},
+		"a 19-digit id one apart": {held: map[string]any{"id": n("1234567890123456789")},
+			told: map[string]any{"id": n("1234567890123456788")}},
+		"two strings whose numbers are equal": {held: map[string]any{"issue": "7"},
+			told: map[string]any{"issue": "7.0"}},
+		"arrays of different lengths": {held: map[string]any{"ids": []any{n("1")}},
+			told: map[string]any{"ids": []any{n("1"), n("2")}}},
+		"a key in one object and not the other": {held: map[string]any{"fields": map[string]any{"a": n("1")}},
+			told: map[string]any{"fields": map[string]any{"a": n("1"), "b": n("2")}}},
+	} {
+		held := digested(numbered("jira_update", tc.held, 1, 1))
+		told := digested(numbered("jira_update", tc.told, 2, 2))
+		if held.Digest == told.Digest {
+			t.Fatalf("%s: the two calls share a digest; the case needs two", name)
+		}
+		brief := lostRelaunch(t, cutOffKept(1), runner.Resume{Bridged: []runner.BridgedCall{held, told}}).Session.Brief
+		if _, listed := sectionOf(brief, listedAgainHeading); listed != tc.alike {
+			t.Errorf("%s: the held call is listed again %v, want %v:\n%s", name, listed, tc.alike, brief)
+		}
+	}
+}
+
 // A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS LISTED BESIDE EVERY CALL OF ITS TOOL.
 // Nothing says arguments not known whole read apart from any: a told call's
-// withheld, in flight, kept less than whole by the run's record or recorded
-// with no digest, or a held call's kept less than whole. So the held call is
+// withheld, in flight, kept less than whole by the run's record, recorded
+// with no digest or in text the engine could not read back, or a held call's
+// kept less than whole or not read back. So the held call is
 // listed again beside a told call of its tool whose arguments, as far as they
 // are known, differ.
 //
-// Mutation: read a call kept less than whole as one known whole, and its cases
-// go red.
+// Mutation: read a call kept less than whole, or one whose arguments were not
+// read back, as one known whole, and its cases go red.
 func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testing.T) {
 	t.Parallel()
 	withheld := runner.BridgedCall{Call: ledger.Call{Name: "slack_post", Result: "posted", Withheld: true},
@@ -187,6 +249,10 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 	heldShort := post("hi", 1)
 	heldShort.ArgsBytes = 70_000
 	undigested := numbered("slack_post", map[string]any{"channel": "C1", "text": "told"}, 2, 2)
+	unreadToldCall := post("told", 2)
+	unreadToldCall.Args = nil
+	unreadHeldCall := post("hi", 1)
+	unreadHeldCall.Args = nil
 	inFlight := []runner.BridgedCall{{Call: ledger.Call{Name: "slack_post", Result: runner.UnfinishedNote,
 		Failed: true, Digest: post("told", 2).Digest, Unfinished: true}, Seq: 2}}
 	for name, round := range map[string]runner.Resume{
@@ -197,9 +263,17 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 		"a held call its record kept less than whole": {
 			Bridged: []runner.BridgedCall{heldShort, post("told", 2)}},
 		"a told call with no digest": {Bridged: []runner.BridgedCall{post("hi", 1), undigested}},
+		"a told call whose record could not be read back": {
+			Bridged: []runner.BridgedCall{post("hi", 1), unreadToldCall}},
+		"a held call whose record could not be read back": {
+			Bridged: []runner.BridgedCall{unreadHeldCall, post("told", 2)}},
 	} {
 		brief := lostRelaunch(t, cutOffKept(1), round).Session.Brief
-		if again, listed := sectionOf(brief, listedAgainHeading); !listed || !strings.Contains(again, `"text":"hi"`) {
+		want := `"text":"hi"`
+		if round.Bridged[0].Args == nil {
+			want = "- slack_post() → success"
+		}
+		if again, listed := sectionOf(brief, listedAgainHeading); !listed || !strings.Contains(again, want) {
 			t.Errorf("%s: the held call is not listed again:\n%s", name, brief)
 		}
 	}

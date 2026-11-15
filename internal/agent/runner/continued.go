@@ -852,57 +852,6 @@ func listedAgain(held, told []BridgedCall, opts ledger.FormatOptions) []BridgedC
 	return out
 }
 
-// readAlike reports whether a model reading the line a brief tells t by,
-// rendered under opts, could take it for h, a call the session it continues
-// shows whole: the same tool, and arguments that read alike in t's line. Its
-// result is never compared: a successful call's line carries none, and two
-// calls of one tool whose arguments read alike read alike whatever they
-// returned.
-//
-// PER ARGUMENT, AS THE LINE SHOWS IT, never by the calls' digests alone. A
-// line shows a value as itself only where it fits the ledger's budget
-// ([ledger.ShowsWhole]); a longer one is a rewrite or omitted by its size, so
-// two writes to one path whose contents differ past the budget read alike in
-// their lines, digests apart. So a value t's line does not show whole may
-// equal anything, and h's and t's arguments read apart only where some key is
-// in one and not the other (a key the line shows is seen, whatever its value)
-// or t's line shows a value whole that h's differs from.
-//
-// ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT KNOWN WHOLE: withheld
-// ([ledger.Call.Withheld]), in flight ([ledger.Call.Unfinished]), kept less
-// than whole by the run's record ([BridgedCall.ArgsBytes]), or with no digest,
-// nothing having recorded them. Nothing says they read apart, and the one
-// direction that costs anything is reading two calls apart that a model takes
-// for one: listing a held call again that no told call could be taken for
-// costs a line, while leaving one out loses the told call.
-func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
-	switch {
-	case h.Name != t.Name:
-		return false
-	case !argsKnownWhole(h) || !argsKnownWhole(t) || h.Digest == t.Digest:
-		return true
-	}
-	for key, tv := range t.Args {
-		hv, ok := h.Args[key]
-		if !ok || (ledger.ShowsWhole(tv, opts) && !reflect.DeepEqual(hv, tv)) {
-			return false
-		}
-	}
-	for key := range h.Args {
-		if _, ok := t.Args[key]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// argsKnownWhole reports whether call's arguments are known whole: neither
-// withheld nor in flight, kept whole by the run's record, and digested where
-// they were admitted ([readAlike]).
-func argsKnownWhole(call BridgedCall) bool {
-	return !call.Withheld && !call.Unfinished && call.ArgsBytes == 0 && call.Digest != ""
-}
-
 // leftOut is the calls of group a render left out, shown being the calls of it
 // that render shows ([ledger.ShownCallGroups]): a call is shown where it is the
 // next shown call, walking both in order, and left out where it is not.
