@@ -382,6 +382,14 @@ func (r Request) Ask() []*events.Event {
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
 //
+// A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Every NAK this frame
+// makes of a delivery that failed (a partition's tail it could not requeue,
+// a park's requeue, a turn's failure) asks [queue.NodeFault] through
+// [nakFailure], so an outage, a queue no longer live or a stop or drain that
+// ended the delivery's context is NAK'd as the node's ([queue.NakNode]) and a
+// delivery whose budget it spends is kept with its group's unhandled
+// deliveries, never with its poison.
+//
 // NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
 // loop and comes back as an ordinary broken turn; anything else that panics
 // between the broker and the loop, in the stages below or in the turn's own
@@ -794,8 +802,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// is ever this delivery's to settle, and the tail, its copies
 			// waiting for the seat, is never gone with it ([goneBy]).
 			held.events, held.requeued = head, tail
+			// A requeue that failed for a reason of this node's is NAK'd
+			// as the node's own, never the mail's ([nakFailure]).
 			if err := d.Park(ctx, handle, tail); err != nil {
-				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
+				return nakFailure(ctx, fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
 			routing = inbox.Routing{
 				WorkKey: headKey, Events: head,
@@ -992,7 +1002,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// worked through, so this delivery is dropped when it comes
 			// round rather than answered a second time, out of order.
 			// See workedthrough.go.
-			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+			//
+			// THE NODE'S OWN where the queue tells the failure as this
+			// node's ([nakFailure]): a turn a drain ended, or one whose
+			// publish the broker did not answer, failed for nothing the
+			// mail did, so a delivery it spends is never kept as poison.
+			return nakFailure(ctx, fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
 	}
@@ -1567,9 +1582,10 @@ func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*even
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
-// requeued. Only behind a pause hold ([inbox.ActionPauseAndPark]): the copies
-// land on the inbox the delivery came from, and with nothing stopping the
-// consumer they would be fetched straight back.
+// requeued, as the node's own where the requeue failed for a reason of this
+// node's ([nakFailure]). Only behind a pause hold ([inbox.ActionPauseAndPark]):
+// the copies land on the inbox the delivery came from, and with nothing
+// stopping the consumer they would be fetched straight back.
 //
 // It takes the EVENTS rather than the screening that asked for them, so the
 // list it requeues is stated where it is decided.
@@ -1591,9 +1607,31 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 	// that settles its original ([goneBy]).
 	held.requeued = evs
 	if err := d.Park(ctx, handle, evs); err != nil {
-		return queue.Nak(fmt.Errorf("engine: park %s: %w", handle, err))
+		return nakFailure(ctx, fmt.Errorf("engine: park %s: %w", handle, err))
 	}
 	return queue.Ack()
+}
+
+// nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
+// failure ([queue.NakNode]) where the queue tells it is one ([queue.NodeFault]:
+// a broker that did not answer, a queue no longer live, a delivery whose
+// context this node's stop or drain ended), and as the mail's ([queue.Nak])
+// otherwise. Both return the delivery on the same backoff behind its
+// conversation's newer mail and spend the same budget; what differs is where a
+// delivery whose budget is spent is kept ([queue.RetiredTo]). Counted as the
+// mail's, an outage or a drain spending it put a healthy message with its
+// group's poison, which nothing replays; as the node's, it is kept with the
+// group's unhandled deliveries, as one no member handled.
+//
+// The requeue of a partition's tail, a park's requeue and a turn's failure all
+// answer through it, so a failure one of them keeps out of the poison is one
+// the others keep out too, and the test is the one internal/notify's wakes and
+// the seat control topic ask ([controlOutcome]).
+func nakFailure(ctx context.Context, err error) queue.Result {
+	if queue.NodeFault(ctx, err) {
+		return queue.NakNode(err)
+	}
+	return queue.Nak(err)
 }
 
 // dropWorked removes the events the completion ledger has already recorded.
