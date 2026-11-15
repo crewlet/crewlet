@@ -2503,8 +2503,11 @@ const maxKeyLine = 76 + 1
 // armour and no marker ([rule.next]); and an armour line holding a marker,
 // before its armour or after it, holds no key read across its lines
 // ([marked]), and one written on it is read back from its END no further
-// than the marker ([lineBack]); and no key's block is read across a line
-// holding a marker, which can stand for more text than its own ([marked]).
+// than the marker ([lineBack]); no key's block is read across a line
+// holding a marker, which can stand for more text than its own ([marked]);
+// a key's block ends short of what a rule names ([claims.shortOfNames]);
+// and what a rule leaves of a run of base64 it replaced some of, written
+// straight onto its marker, is read as the run it claimed ([claims.glued]).
 // The one exception is the last the package doc lists as still published: a
 // key's piece on the line of a value read below a password's key that a key's
 // END line goes on to, which a second pass can redact.
@@ -2793,7 +2796,7 @@ func readKeys(text string) ([][2]int, int, *claims) {
 		}
 		prev = e[1]
 	}
-	return mergeSpans(spans), open, c
+	return mergeSpans(c.shortOfNames(spans)), open, c
 }
 
 // mergeSpans is spans in order, those that overlap made one: a block read
@@ -4079,7 +4082,8 @@ func fragment(run string) bool {
 // beside its value. What it costs is a key's line that holds a token's shape
 // whole — `AKIA` or `ASIA` and sixteen capitals and digits, about once in two
 // thousand million lines of a key — read as a line interrupting it wherever it
-// is read.
+// is read. And what a rule leaves of a run it replaced some of, written
+// straight onto its marker, is that run still ([claims.glued]).
 type claims struct {
 	text string
 	// whole is what each rule replaces: a token, a password's key and
@@ -4097,10 +4101,12 @@ type claims struct {
 	read  bool
 }
 
-// any reports whether the rules replace any of text[start:end].
+// any reports whether the rules replace any of text[start:end], a run of
+// base64, or it is what a rule left of a run it replaced some of
+// ([claims.glued]).
 func (c *claims) any(start, end int) bool {
 	c.load()
-	return overlaps(c.whole, start, end)
+	return overlaps(c.whole, start, end) || c.glued(start, end)
 }
 
 // names reports whether a token or a password's key and separator takes any
@@ -4111,6 +4117,60 @@ func (c *claims) names(start, end int) bool {
 	c.load()
 	return overlaps(c.named, start, end)
 }
+
+// glued reports whether text[start:end], a run of base64, is written straight
+// onto a marker a rule writes, either side of it, with nothing between them:
+// what a rule left of a run it replaced some of, which a pass reads as that
+// run, claimed as the whole of it was ([claims]).
+//
+// WHAT A RULE LEAVES OF A RUN IS THE RUN IT CLAIMED. A token's pattern can
+// end inside a run of base64 (`sk-` and its body stop at a `+`, an `AKIA` id
+// after sixteen characters), so a token written straight onto a key's run
+// was one run with it: claimed, it was no piece of a key, and the rule
+// replaced the token alone. The marker that took its place is no base64, so
+// the rest of the run was a run of its own, which no rule claims, and a
+// second pass read it as the body of a key on an END's line and redacted
+// it: `sk-…Ab3+…== -----END RSA PRIVATE KEY-----` lost its run on the second
+// pass, and redacting twice was not redacting once. Read as glued to the
+// marker, the rest is claimed on every pass as the whole run was on the
+// first. The marker's own words are never base64 a key's could be, so
+// nothing else reads differently.
+//
+// Asked only for what a rule replaces ([claims.any]), never for what names
+// it ([claims.names]): that is asked only of a line a key's block is read
+// across, and no block is read across a line holding a marker ([marked]), so
+// no run it is asked of is beside one.
+//
+// What it costs is a key's run written straight onto a marker a text quotes,
+// with no space between them: read as a run a rule claims, as a run holding
+// a token's shape is, it is published where it is all a line holds of the
+// key. A text no pass has redacted holds a marker only where it quotes one.
+func (c *claims) glued(start, end int) bool {
+	before := start > 0 && c.text[start-1] == ']'
+	after := end < len(c.text) && c.text[end] == '['
+	if !before && !after {
+		return false
+	}
+	for _, m := range ruleMarkers() {
+		if before && strings.HasSuffix(c.text[:start], m) || after && strings.HasPrefix(c.text[end:], m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ruleMarkers is every marker a rule writes, each once ([claims.glued]): a
+// key's is none, since what a key's block leaves beside its marker is no run
+// it claimed.
+var ruleMarkers = sync.OnceValue(func() []string {
+	var markers []string
+	for _, r := range rules() {
+		if !slices.Contains(markers, r.with) {
+			markers = append(markers, r.with)
+		}
+	}
+	return markers
+})
 
 // load reads the claims the first time a run asks.
 func (c *claims) load() {
@@ -4170,6 +4230,56 @@ func overlaps(ranges [][2]int, start, end int) bool {
 		return 1
 	})
 	return i < len(ranges) && ranges[i][0] < end
+}
+
+// shortOfNames is spans, the end of each that falls inside what a rule's
+// match names ([claims.names]) moved back to where that begins: A KEY'S BLOCK
+// ENDS SHORT OF WHAT A RULE NAMES, so the rule finds it whole and replaces
+// what it names.
+//
+// A key on one line is read by its runs of base64, and a run at a full line's
+// width, and the body's short last run after one, are taken without asking
+// what claims them ([uncutRuns]), so a token, or an AWS secret's or a
+// password's key, written straight onto a key's run on a BEGIN's line began
+// inside the block and ended past it. The block's marker then took its head,
+// and what was left matched no rule: a run token written straight onto the
+// run after a BEGIN, the key's END straight after it, was redacted up to its
+// tag, its subject, expiry and signature published, and an AWS secret's key
+// lost its `secret`, its value published; and a second pass read the
+// signature's run, or the value, as a key's before the END and redacted it,
+// so redacting twice was not redacting once. Ended short of it, the rule
+// replaces the token, or the value the key names, as it does anywhere.
+//
+// ONLY ITS END: a block begins at its BEGIN's armour, which no match runs
+// into ([rule.next]), or, read back from an END, at a run no rule claims any
+// of ([claims.any]); and a block on its lines ends at a line's run, which
+// names nothing ([wrapping.bodyLine]), or at an END.
+func (c *claims) shortOfNames(spans [][2]int) [][2]int {
+	if len(spans) == 0 {
+		return spans
+	}
+	c.load()
+	for i, s := range spans {
+		if n, ok := within(c.named, s[1]); ok {
+			spans[i][1] = n[0]
+		}
+	}
+	return spans
+}
+
+// within is the range of ranges, in order and apart, that at falls strictly
+// inside, and whether there is one.
+func within(ranges [][2]int, at int) ([2]int, bool) {
+	i, _ := slices.BinarySearchFunc(ranges, at, func(r [2]int, at int) int {
+		if r[1] <= at {
+			return -1
+		}
+		return 1
+	})
+	if i < len(ranges) && ranges[i][0] < at {
+		return ranges[i], true
+	}
+	return [2]int{}, false
 }
 
 // piece reports whether text[start:end], a run of base64, is a piece of a key
