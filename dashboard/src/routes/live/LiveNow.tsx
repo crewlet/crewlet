@@ -55,6 +55,7 @@ import {
   Skeleton,
   peekClickHandler,
   TimeRangePicker,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import {
   BrainGlyph,
@@ -95,7 +96,7 @@ import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { AgentRow, EventSeries, ExecutorRow, InboxWaiting } from "~/protocol/index.ts";
-import { waitingWords } from "~/lib/inboxWaiting.ts";
+import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /**
@@ -637,6 +638,9 @@ function InBoxRow({
   now: number;
   onOpen: () => void;
 }) {
+  // THE RUNNING TURN'S ROW'S WORDS (`waitingCount`): one count of what is
+  // queued, with what it is in its tooltip and read out with the row.
+  const queued = waitingCount(waiting);
   return (
     // A REAL LINK to the executor's page, peeking on a plain click — the rule
     // every row in the product follows, written once in `peekClickHandler`.
@@ -651,7 +655,12 @@ function InBoxRow({
         <span className="truncate t-caption">
           {who}
           {run.harness ? ` · ${run.harness}` : ""}
-          {waitingWords(waiting).map((word) => ` · ${word.text}`)}
+          {queued && (
+            <span title={queued.detail}>
+              <span aria-hidden="true"> · {queued.text}</span>
+              <VisuallyHidden>{queued.detail}</VisuallyHidden>
+            </span>
+          )}
         </span>
       </span>
       <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>

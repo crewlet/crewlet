@@ -786,8 +786,9 @@ export interface Overlay {
   waiting?: InboxWaiting | null;
 }
 
-/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
- *  the seat (the priority lane), `background` the rest of its work. */
+/** What waits in a seat's inbox, per mailbox: `priority` counts the messages
+ *  in its priority lane, each one a person wrote that the seat owes an answer
+ *  to (a count of messages, not of people), `background` the rest of its work. */
 export interface InboxWaiting {
   priority: number;
   background: number;
