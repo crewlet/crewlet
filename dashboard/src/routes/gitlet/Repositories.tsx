@@ -41,11 +41,11 @@ import {
   Skeleton,
   TableDateCell,
   TableEntityCell,
-  TableKeyCell,
   TableNumberCell,
   TableTextCell,
   Tag,
 } from "@crewlethq/ui";
+import { SquareCodeGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { closedBy } from "~/app/nav.ts";
@@ -64,6 +64,7 @@ import { ImportRepoButton } from "./ImportRepo.tsx";
 import { NewRepoButton } from "./NewRepo.tsx";
 import { repoHref } from "./paths.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -173,17 +174,9 @@ export function Repositories() {
             {
               key: "name",
               header: "Repository",
-              floor: "10rem",
+              floor: "16rem",
               phoneLead: true,
-              cell: (r) => <TableKeyCell value={r.name} />,
-            },
-            {
-              key: "state",
-              header: "State",
-              shrink: true,
-              // AN ACTIVE REPOSITORY SAYS SO, quietly: a blank beside a
-              // Protection dash read as a value that failed to load.
-              cell: (r) => <RepoState repo={r} />,
+              cell: (r) => <RepoCell repo={r} />,
             },
             {
               key: "owner",
@@ -197,21 +190,6 @@ export function Repositories() {
                 ) : (
                   <UnitOwner name={unitByKey(index, r.owner.ref)?.name} unitKey={r.owner.ref} />
                 ),
-            },
-            {
-              key: "visibility",
-              header: "Read by",
-              shrink: true,
-              drop: 2,
-              // WHICH SEATS: a person reads every repository whatever this
-              // says (ADR-0088), and the title says so.
-              cell: (r) => (
-                <span title="Which seats read it. Every person reads every repository.">
-                  <TableTextCell>
-                    {r.visibility === "unit" ? "Its owner's seats" : "Every seat"}
-                  </TableTextCell>
-                </span>
-              ),
             },
             {
               key: "branch",
@@ -291,19 +269,53 @@ function emptyTitle(status: string): string {
   }
 }
 
-/** What a repository is: a tag beyond active, and the word itself, quiet, for active. */
-function RepoState({ repo }: { repo: CodeRepoSummary }) {
-  const word = repoStatusWord(repo.status);
-  if (!word) return <span className="muted">Active</span>;
-  // NEUTRAL: none of these is a fault. A deleted repository says when, since
-  // declaring it again restores it until it is purged.
+/**
+ * A repository as a row names it, as a code host lists one: its glyph and its
+ * name, its marks — its state where it is not active (none of them a fault, so
+ * outlined), a seat's scratch repository, a pull mirror, a repository only its
+ * owner's seats read — and its description under them. An active repository
+ * carries no mark: every other row's is the exception it reads for.
+ *
+ * NO LINK INSIDE: the row around it is one, to the repository's page.
+ */
+function RepoCell({ repo }: { repo: CodeRepoSummary }) {
+  const state = repoStatusWord(repo.status);
   return (
-    <Tag
-      appearance="outline"
-      title={repo.deleted_at ? `Deleted ${fmtDateTime(repo.deleted_at)}` : undefined}
-    >
-      {word}
-    </Tag>
+    <span className="code-repo-cell">
+      <span className="code-repo-cell__head">
+        <SquareCodeGlyph size="sm" className="code-glyph" />
+        <span className="code-repo-cell__name">{repo.name}</span>
+        {state && (
+          <Tag
+            size="sm"
+            appearance="outline"
+            title={repo.deleted_at ? `Deleted ${fmtDateTime(repo.deleted_at)}` : undefined}
+          >
+            {state}
+          </Tag>
+        )}
+        {repo.kind === "scratch" && (
+          <Tag size="sm" appearance="outline">
+            Scratch
+          </Tag>
+        )}
+        {repo.mirrored && (
+          <Tag size="sm" appearance="outline">
+            Pull mirror
+          </Tag>
+        )}
+        {repo.visibility === "unit" && (
+          <Tag
+            size="sm"
+            appearance="outline"
+            title="Only its owner's seats read it; every person does."
+          >
+            Unit
+          </Tag>
+        )}
+      </span>
+      {repo.description && <span className="code-repo-cell__description">{repo.description}</span>}
+    </span>
   );
 }
 
