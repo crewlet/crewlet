@@ -927,7 +927,7 @@ func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
 		return nil, []config.Warning{}, err
 	}
 	warnings := company.ReferenceWarnings()
-	if err = company.Validate(); err != nil {
+	if err = errors.Join(company.Validate(), company.ValidateHost(os.Geteuid())); err != nil {
 		return nil, warnings, err
 	}
 	epoch, err := engine.NewCompany(company)
