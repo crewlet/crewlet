@@ -2463,7 +2463,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// where it hosts code, so a fleet that declared its roles without
 		// git is never told nobody serves it until it would matter.
 		RoleNeeded: e.roleNeeded,
-		Turn:       e.mailboxTurn,
+		// AND EACH NEW EPOCH ITS PRESENCE IS CLAIMED AT, on which this
+		// node's status record is written at once rather than on the
+		// writer's next tick: until it is, every reader counts nothing of
+		// this node's ([Engine.statusRecordClaimed]).
+		PresenceClaimed: e.statusRecordClaimed,
+		Turn:            e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -3224,8 +3229,9 @@ func (e *Engine) Stop(ctx context.Context) {
 // stopping is the allowance this node's stop gives its leases back on — the
 // presence and seat leases, the sandbox coordinator's taker lease
 // ([Engine.stopSandbox]), the duties it releases, the holds its loops give
-// back as the teardown ends them ([Engine.tearingDown]), and the removal of
-// its MCP listings after them ([Engine.removeMCPListings]) — built once, by
+// back as the teardown ends them ([Engine.tearingDown]), and the removals of
+// its MCP listings and its status record after them
+// ([Engine.removeMCPListings], [Engine.removeStatusRecord]) — built once, by
 // the drain or by a failed boot's teardown, whichever comes first. See
 // [seat.StopBudget] for why one allowance and not one per step. Its size is
 // the stop allowance of this node's own lease TTL ([seat.StopAllowance], one
@@ -3480,12 +3486,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopHostLogins()
 	e.stopModelRetries()
 	// AND THIS NODE'S MCP LISTINGS' PUBLISHER, now that its servers are
-	// down — what it published is removed once the seats are given back,
-	// below — and its instances no longer answered; and its STATUS RECORD,
-	// whose rows describe those servers.
-	recordRemoved := e.stopStatusRecords(ctx)
+	// down, and its STATUS RECORD'S WRITER, whose rows describe those
+	// servers — what each wrote is removed once the seats are given back,
+	// below — and its instances no longer answered.
+	e.stopStatusRecords()
 	e.stopMCPListings()
-	recordRemoved()
 	e.stopMCPInstances(ctx)
 	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
@@ -3592,11 +3597,16 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the seat holders, and a holder that stops answering first costs a pass
 	// its expiry. See codeholds.go.
 	e.stopCodeHolds(ctx)
-	// AND WHAT THIS NODE PUBLISHED OF ITS MCP SERVERS, removed on what the
-	// give-backs above left of the stop's allowance: nothing counts the
-	// listings since the presence went, and a removal that runs out of it
-	// leaves them to the sweep ([Engine.removeMCPListings]).
-	e.removeMCPListings(ctx)
+	// AND WHAT THIS NODE PUBLISHED OF ITSELF — its MCP listings and its
+	// status record — removed together on what the give-backs above left of
+	// the stop's allowance: nothing counts either since the presence went,
+	// and a removal that runs out of it leaves them to the sweep and to the
+	// bucket's age ([Engine.removeMCPListings], [Engine.removeStatusRecord]).
+	// Together, so the two are charged once for the time they overlap.
+	var removals sync.WaitGroup
+	removals.Go(func() { e.removeMCPListings(ctx) })
+	removals.Go(func() { e.removeStatusRecord(ctx) })
+	removals.Wait()
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
 	// were not: a stdio server is a process TREE holding a seat's

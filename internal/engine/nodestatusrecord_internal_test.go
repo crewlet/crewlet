@@ -39,13 +39,17 @@ func recordedRows(t *testing.T, r coord.NodeStatusRecord) coord.NodeStatusRecord
 // them: a row per model entry the company declares, and the infra summary its
 // file gives.
 //
-// The record is written by the writer's own pass, driven here once Start has
-// claimed the presence rather than waited for on the loop's schedule, which
-// TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile holds on a bubble's
-// clock.
+// AND THE ENGINE RUNS THAT WRITER: the host's claim of the presence wakes it
+// ([Engine.statusRecordClaimed]) and its own loop writes the record, which the
+// case waits for rather than driving a pass; and a clean stop removes it,
+// which the case reads off the backends it lent the engine, still open after
+// the stop. TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile holds the
+// loop's schedule on a bubble's clock.
 //
 // Red on main: the presence's status carried `models` and `runners`, and the
-// presence carried `infra`.
+// presence carried `infra`. Mutations: start no loop (no record is ever
+// written), wire no claim hook (the claim wakes nothing), or remove nothing at
+// the stop (the record outlives it).
 func TestANodesStatusRowsLeaveItsPresenceLease(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -56,16 +60,26 @@ func TestANodesStatusRowsLeaveItsPresenceLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg})
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			e.Stop(context.Background())
+		}
+	})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	node := e.nodeID()
-	presence, err := e.backends.Coord.Get(t.Context(), coord.NodeResource(node))
+	presence, err := back.Coord.Get(t.Context(), coord.NodeResource(node))
 	if err != nil || presence == nil {
 		t.Fatalf("read the node's presence: %v, %v", presence, err)
 	}
@@ -91,21 +105,30 @@ func TestANodesStatusRowsLeaveItsPresenceLease(t *testing.T) {
 	if w == nil {
 		t.Fatal("a started node runs no status record writer")
 	}
-	if !w.pass(t.Context()) {
-		t.Fatal("the writer's pass did not answer on a node holding its presence")
+	// THE CLAIM WOKE THE WRITER: the host claims the presence inside Start,
+	// and the hook is told on that claim, so by Start's return it has been.
+	if w.woken.Load() == 0 {
+		t.Error("the presence was claimed and the status record's writer was never woken: " +
+			"the record waits a renew period after every boot")
 	}
-	records, err := e.backends.Fleet.NodeStatusRecords(t.Context())
-	if err != nil {
-		t.Fatalf("list the status records: %v", err)
+	live := func() (coord.NodeStatusRecord, bool) {
+		records, err := back.Fleet.NodeStatusRecords(t.Context())
+		if err != nil {
+			t.Fatalf("list the status records: %v", err)
+		}
+		leases, err := back.Coord.ListLive(t.Context(), coord.ClassNode)
+		if err != nil {
+			t.Fatalf("list the presence: %v", err)
+		}
+		r, counted := coord.LiveNodeStatuses(records, leases)[node]
+		return r, counted
 	}
-	live, err := e.backends.Coord.ListLive(t.Context(), coord.ClassNode)
-	if err != nil {
-		t.Fatalf("list the presence: %v", err)
-	}
-	record, counted := coord.LiveNodeStatuses(records, live)[node]
-	if !counted {
-		t.Fatalf("no record of %s counts at its presence's epoch %d: %+v", node, presence.Epoch, records)
-	}
+	var record coord.NodeStatusRecord
+	waitFor(t, "the node's own writer to write its record at its presence's epoch", func() bool {
+		var counted bool
+		record, counted = live()
+		return counted
+	})
 	var keys []string
 	for _, m := range record.Models {
 		keys = append(keys, m.Key)
@@ -116,6 +139,19 @@ func TestANodesStatusRowsLeaveItsPresenceLease(t *testing.T) {
 	if want := NodeInfra(e.boot); record.Infra.Meta() == nil || !slices.Equal(record.Infra.BrokerServers, want.BrokerServers) ||
 		record.Infra.ObjectsBackend != want.ObjectsBackend || record.Infra.Address != want.Address {
 		t.Errorf("the record says it runs on %+v, want what its file says, %+v", record.Infra, want)
+	}
+
+	// A CLEAN STOP REMOVES IT, rather than leaving it for the age.
+	stopped = true
+	e.Stop(context.Background())
+	records, err := back.Fleet.NodeStatusRecords(t.Context())
+	if err != nil {
+		t.Fatalf("list the status records after the stop: %v", err)
+	}
+	for _, r := range records {
+		if r.Node == node {
+			t.Errorf("a node that stopped cleanly left its status record %+v", r)
+		}
 	}
 }
 
@@ -161,13 +197,15 @@ func (w *writes) made() ([]time.Time, []coord.NodeStatusRecord) {
 //     little moves, so over a minute of nothing moving no gap between writes
 //     passes it, and so none passes the bucket's age, [coord.StatusFreshness];
 //   - a new presence epoch is written on the pass that sees it, whatever the
-//     reconcile's schedule, and a node holding no presence writes nothing;
+//     reconcile's schedule, and at once where a claim wakes the loop; a node
+//     holding no presence writes nothing;
 //   - a write the store refused is made again on the next pass;
 //   - a clean stop removes the record.
 //
 // Mutations: skip the reconcile rewrite (the record ages out: the longest gap
 // passes the age), compare the last answer too (the last-answer arm writes),
-// or drop the epoch from the comparison (the new epoch waits for the reconcile).
+// drop the epoch from the fingerprint (the new epoch waits for the reconcile),
+// or let a claim wake nothing (the claim's epoch waits for the next tick).
 func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -219,21 +257,19 @@ func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 			defer mu.Unlock()
 			f()
 		}
-		w := &statusRecordWriter{
-			store: store, node: "node-a", period: period, now: time.Now,
-			epoch: func() (int64, bool) {
+		w := newStatusRecordWriter(store, "node-a",
+			func() (int64, bool) {
 				mu.Lock()
 				defer mu.Unlock()
 				return epoch, held
 			},
-			rows: func(context.Context) coord.NodeStatusRecord {
+			func(context.Context) coord.NodeStatusRecord {
 				mu.Lock()
 				defer mu.Unlock()
 				r := rows
 				r.Models = slices.Clone(rows.Models)
 				return r
-			},
-		}
+			}, period, time.Now)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
 		go func() {
@@ -294,8 +330,20 @@ func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 			t.Errorf("a renew period after the epoch moved, the writes are %+v, want one at epoch 4", got)
 		}
 
+		// A CLAIM AT A NEW EPOCH WAKES THE LOOP: written at the instant
+		// of the claim, with no tick of the bubble's clock between.
+		time.Sleep(time.Second)
+		woke := time.Now()
+		set(func() { epoch = 5 })
+		w.claimed()
+		synctest.Wait()
+		if got := since(woke); len(got) != 1 || got[0].Epoch != 5 || !last().Equal(woke) {
+			t.Errorf("a claim at epoch 5 wrote %+v, want one write at it at the claim's instant", got)
+		}
+
 		// NO PRESENCE, NO WRITE, however long; and a refused write is
 		// made again on the next pass.
+		time.Sleep(time.Second)
 		set(func() { held = false })
 		gone := time.Now()
 		time.Sleep(2 * coord.ReconcileInterval)
@@ -306,7 +354,7 @@ func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 		store.mu.Lock()
 		store.refuse = true
 		store.mu.Unlock()
-		set(func() { held, epoch = true, 5 })
+		set(func() { held, epoch = true, 6 })
 		time.Sleep(period)
 		synctest.Wait()
 		store.mu.Lock()
@@ -315,8 +363,8 @@ func TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile(t *testing.T) {
 		retried := time.Now()
 		time.Sleep(period)
 		synctest.Wait()
-		if got := since(retried); len(got) != 1 || got[0].Epoch != 5 {
-			t.Errorf("after a refused write, the next pass wrote %+v, want the record at epoch 5", got)
+		if got := since(retried); len(got) != 1 || got[0].Epoch != 6 {
+			t.Errorf("after a refused write, the next pass wrote %+v, want the record at epoch 6", got)
 		}
 
 		// A CLEAN STOP removes the record.

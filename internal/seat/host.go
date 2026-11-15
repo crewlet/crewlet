@@ -246,6 +246,17 @@ type Config struct {
 	// lets the beat write it unbounded.
 	GitBackground func() int64
 
+	// PresenceClaimed is told the epoch of each presence this host claims at
+	// an epoch it did not hold the moment before: its first claim, and the
+	// claim after a lapse or after a drain it resumed from — never a renewal,
+	// which keeps its epoch. Called on the beat that claimed, once the claim
+	// is recorded, so [Host.PresenceEpoch] already answers it; it must not
+	// block. What a loop that files records under this node's presence epoch
+	// (its status record, internal/engine's nodestatusrecord.go) writes on at
+	// once, rather than on its own schedule: until it does, every reader
+	// counts nothing of this node's. Nil tells nobody.
+	PresenceClaimed func(epoch int64)
+
 	// RoleNeeded reports whether the COMPANY needs a role at all right now —
 	// false for git where the company hosts no code. Nil: every role is
 	// needed (every role but gitlet always is).
@@ -352,6 +363,8 @@ type Host struct {
 	// gitBackground is Config.GitBackground; nil on a node without the gitlet
 	// role.
 	gitBackground func() int64
+	// presenceClaimed is Config.PresenceClaimed; nil tells nobody.
+	presenceClaimed func(epoch int64)
 	// roleNeeded is Config.RoleNeeded; nil needs every role.
 	roleNeeded func(placement.NodeRole) bool
 	hooks      Hooks
@@ -462,24 +475,25 @@ func New(cfg Config) (*Host, error) {
 	ttl := orDuration(cfg.TTL, SeatLeaseTTL)
 
 	h := &Host{
-		backend:       cfg.Backend,
-		owner:         cfg.Owner,
-		nodeID:        cfg.NodeID,
-		seats:         cfg.Seats,
-		ready:         cfg.Ready,
-		serviceable:   cfg.Serviceable,
-		profile:       profile,
-		status:        cfg.Status,
-		gitBackground: cfg.GitBackground,
-		roleNeeded:    cfg.RoleNeeded,
-		hooks:         cfg.Hooks,
-		clock:         cfg.Clock,
-		protocol:      orInt(cfg.Protocol, coord.ProtocolVersion),
-		ttl:           ttl,
-		heartbeat:     orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
-		sweepEvery:    orDuration(cfg.SweepInterval, SweepInterval),
-		claimLimit:    orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
-		releaseLimit:  orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
+		backend:         cfg.Backend,
+		owner:           cfg.Owner,
+		nodeID:          cfg.NodeID,
+		seats:           cfg.Seats,
+		ready:           cfg.Ready,
+		serviceable:     cfg.Serviceable,
+		profile:         profile,
+		status:          cfg.Status,
+		gitBackground:   cfg.GitBackground,
+		presenceClaimed: cfg.PresenceClaimed,
+		roleNeeded:      cfg.RoleNeeded,
+		hooks:           cfg.Hooks,
+		clock:           cfg.Clock,
+		protocol:        orInt(cfg.Protocol, coord.ProtocolVersion),
+		ttl:             ttl,
+		heartbeat:       orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
+		sweepEvery:      orDuration(cfg.SweepInterval, SweepInterval),
+		claimLimit:      orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
+		releaseLimit:    orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
 		// One TTL — THIS host's, not the shipped constant. Tying the two
 		// together is the whole justification for the number: a deployment
 		// that shortens the lease would otherwise keep a 45-second silence

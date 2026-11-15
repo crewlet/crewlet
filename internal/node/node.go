@@ -92,6 +92,10 @@ type Config struct {
 	// see [seat.Config].GitBackground. Nil on a node without the gitlet role.
 	GitBackground func() int64
 
+	// PresenceClaimed is told each new epoch this node's presence is claimed
+	// at: see [seat.Config].PresenceClaimed. Nil tells nobody.
+	PresenceClaimed func(epoch int64)
+
 	// RoleNeeded is whether the company needs a role at all right now,
 	// asked by the fleet's unmanned-role check: see [seat.Config].RoleNeeded.
 	// Nil needs every role.
@@ -314,6 +318,7 @@ func New(cfg Config) (*Node, error) {
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
 		GitBackground:     cfg.GitBackground,
+		PresenceClaimed:   cfg.PresenceClaimed,
 		RoleNeeded:        cfg.RoleNeeded,
 		Hooks:             n,
 		TTL:               cfg.LeaseTTL,

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // THIS NODE'S STATUS RECORD: its MCP, model and runner rows and its infra
@@ -35,24 +37,29 @@ import (
 // # Under the presence epoch
 //
 // Each record carries the epoch of the presence this node held when it wrote
-// it, and readers count it only while that presence holds at that epoch. A pass
-// that finds the epoch moved writes at once, whatever it last wrote, since every
+// it, and readers count it only while that presence holds at that epoch. A
+// claim at a new epoch WAKES the loop ([seat.Config].PresenceClaimed), so the
+// record is written as the presence is claimed — at boot, after a lapse, and
+// after a drain the node resumed from — rather than up to a renew period
+// later, during which every reader would count nothing of this node's. A pass
+// that finds the epoch moved writes whatever it last wrote, since every
 // reader stopped counting the record the old epoch named. A node that holds no
 // presence writes nothing: its record would be one no reader counts, under an
 // epoch that is about to move.
 //
-// # Removed at a clean stop
+// # Removed at a clean stop, on the stop's one allowance
 //
-// A node that stops says so: its record goes with its presence rather than
-// standing until the age passes. A removal that fails costs nothing, since its
-// readers stopped counting it when its presence went.
+// A node that stops says so: its record goes rather than standing until the
+// age passes. The removal is one step of the stop's allowance
+// ([seat.StopStep]), made once the seats are given back, because what falls
+// back when it fails is the bucket's age, and every reader stopped counting the
+// record when the presence went with the drain: running out of the allowance
+// costs no more than not trying ([seat.StopBudget], "Only what lapses"). It
+// removes up to the latest epoch this node asked to write at, never a later
+// incarnation's record ([coord.NodeStatusRecords]).
 
-// statusRecordRemoveBound is how long a stopping node gives the removal of its
-// record: the reconcile interval, as the removal of its MCP listings has
-// ([Engine.stopMCPListings]), past which the age removes it anyway.
-const statusRecordRemoveBound = coord.ReconcileInterval
-
-// statusRecords is this node's status record writer, while it runs.
+// statusRecords is this node's status record writer: while it runs, and, once
+// its loop is stopped, until the teardown removes what it wrote.
 type statusRecords struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -76,6 +83,13 @@ type statusRecordWriter struct {
 
 	// period is how often a pass runs: the host's renew period.
 	period time.Duration
+
+	// wake asks the loop for a pass now ([statusRecordWriter.claimed]):
+	// one buffered, so a claim while a pass runs is the next pass and two
+	// claims before it are one. woken counts the claims that asked, which
+	// is what a case reads to see that the host's hook reaches the loop.
+	wake  chan struct{}
+	woken atomic.Int64
 
 	now func() time.Time
 
@@ -106,14 +120,8 @@ func (e *Engine) startStatusRecords(ctx context.Context) {
 		return
 	}
 	host := e.node.Host()
-	w := &statusRecordWriter{
-		store:  e.backends.Fleet,
-		node:   e.nodeID(),
-		epoch:  host.PresenceEpoch,
-		rows:   e.statusRecordRows,
-		period: host.RenewPeriod(),
-		now:    e.now,
-	}
+	w := newStatusRecordWriter(e.backends.Fleet, e.nodeID(), host.PresenceEpoch, e.statusRecordRows,
+		host.RenewPeriod(), e.now)
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	e.statusRecords.mu.Lock()
@@ -125,31 +133,50 @@ func (e *Engine) startStatusRecords(ctx context.Context) {
 	}()
 }
 
-// stopStatusRecords ends the writer and begins removing this node's record,
-// and returns the wait for the removal.
-//
-// BESIDE THE MCP LISTINGS' REMOVAL, never after it: the teardown calls this
-// before [Engine.stopMCPListings] and waits after, so a store that does not
-// answer costs the stop one [statusRecordRemoveBound], not one per record
-// family. Neither removal is a give-back of the stop's allowance
-// ([seat.StopBudget]): what falls back when it fails is the bucket's age, and
-// every reader stopped counting the record when the presence went.
-func (e *Engine) stopStatusRecords(ctx context.Context) (wait func()) {
+// statusRecordClaimed is the seat host's word that this node's presence was
+// claimed at a new epoch ([seat.Config].PresenceClaimed): the writer's next
+// pass is now. Called on the beat, so it never blocks; a node whose writer
+// has not started, or has stopped, has nothing to wake.
+func (e *Engine) statusRecordClaimed(int64) {
 	e.statusRecords.mu.Lock()
-	cancel, done, w := e.statusRecords.cancel, e.statusRecords.done, e.statusRecords.writer
-	e.statusRecords.cancel, e.statusRecords.done, e.statusRecords.writer = nil, nil, nil
+	w, running := e.statusRecords.writer, e.statusRecords.cancel != nil
+	e.statusRecords.mu.Unlock()
+	if running {
+		w.claimed()
+	}
+}
+
+// stopStatusRecords ends the writer's loop and waits out its pass in flight,
+// so nothing writes the record behind its removal. What it wrote stands until
+// [Engine.removeStatusRecord].
+func (e *Engine) stopStatusRecords() {
+	e.statusRecords.mu.Lock()
+	cancel, done := e.statusRecords.cancel, e.statusRecords.done
+	e.statusRecords.cancel, e.statusRecords.done = nil, nil
 	e.statusRecords.mu.Unlock()
 	if cancel == nil {
-		return func() {}
+		return
 	}
 	cancel()
-	removed := make(chan struct{})
-	go func() {
-		defer close(removed)
-		<-done
-		w.remove(ctx)
-	}()
-	return func() { <-removed }
+	<-done
+}
+
+// removeStatusRecord removes this node's record, once its loop has stopped
+// ([Engine.stopStatusRecords]), as ONE STEP OF THE STOP'S ALLOWANCE: see "Removed
+// at a clean stop" above.
+func (e *Engine) removeStatusRecord(ctx context.Context) {
+	e.statusRecords.mu.Lock()
+	w, running := e.statusRecords.writer, e.statusRecords.cancel != nil
+	if !running {
+		e.statusRecords.writer = nil
+	}
+	e.statusRecords.mu.Unlock()
+	if w == nil || running {
+		return
+	}
+	removeCtx, done := seat.StopStep(context.WithoutCancel(ctx))
+	defer done()
+	w.remove(removeCtx)
 }
 
 // statusRecordRows is this node's rows as its record carries them, each read
@@ -163,8 +190,17 @@ func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
 	}
 }
 
+// newStatusRecordWriter is a writer for node's record, its loop not yet run.
+func newStatusRecordWriter(store coord.NodeStatusRecords, node string, epoch func() (int64, bool),
+	rows func(context.Context) coord.NodeStatusRecord, period time.Duration, now func() time.Time,
+) *statusRecordWriter {
+	return &statusRecordWriter{store: store, node: node, epoch: epoch, rows: rows, period: period,
+		now: now, wake: make(chan struct{}, 1)}
+}
+
 // run is the writer's loop: a pass, then a wait of a renew period, or less
-// where the reconcile interval since the last write comes due first.
+// where the reconcile interval since the last write comes due first or a claim
+// at a new presence epoch wakes it.
 func (w *statusRecordWriter) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -173,8 +209,28 @@ func (w *statusRecordWriter) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+		case <-w.wake:
+			if !timer.Stop() {
+				// The timer fired as the wake came: its tick is
+				// this pass too, and the channel is drained so the
+				// Reset below starts from nothing pending.
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 		timer.Reset(w.wait(w.pass(ctx)))
+	}
+}
+
+// claimed asks the loop for a pass now, on a claim of the presence at a new
+// epoch. Never blocks: a pass already asked for is the one this asks for.
+func (w *statusRecordWriter) claimed() {
+	w.woken.Add(1)
+	select {
+	case w.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -248,8 +304,8 @@ func (w *statusRecordWriter) pass(ctx context.Context) bool {
 }
 
 // remove removes this node's record, up to the latest epoch it asked to write
-// one at, bounded by [statusRecordRemoveBound]. A writer that never asked has
-// nothing of its own to remove.
+// one at, on whatever bound ctx carries. A writer that never asked has nothing
+// of its own to remove.
 func (w *statusRecordWriter) remove(ctx context.Context) {
 	w.mu.Lock()
 	through := w.through
@@ -257,10 +313,8 @@ func (w *statusRecordWriter) remove(ctx context.Context) {
 	if through == 0 {
 		return
 	}
-	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusRecordRemoveBound)
-	defer cancel()
-	if err := w.store.DeleteNodeStatus(removeCtx, w.node, through); err != nil {
-		log.WarnContext(removeCtx, "node_status_record_not_removed", "node", w.node, "error", err,
+	if err := w.store.DeleteNodeStatus(ctx, w.node, through); err != nil {
+		log.WarnContext(ctx, "node_status_record_not_removed", "node", w.node, "error", err,
 			"detail", "readers stopped counting it with this node's presence; the bucket's age removes it")
 	}
 }

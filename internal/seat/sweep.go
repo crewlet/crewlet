@@ -1215,7 +1215,12 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 
 	h.mu.Lock()
 	draining := h.draining
+	claimed := false
 	if !draining {
+		// A NEW EPOCH, not merely a lease in hand where none was: a
+		// lapsed lease stays in hand until the claim that replaces it,
+		// at the epoch the store mints for a lease that lapsed.
+		claimed = h.nodeLease == nil || h.nodeLease.Epoch != lease.Epoch
 		h.nodeLease = lease
 		h.presenceRenewedAt = asked
 	}
@@ -1228,6 +1233,10 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 		// dropped it leaves
 		// peers reserving capacity for a node that will never claim again.
 		h.giveUpLease(ctx, *lease)
+		return
+	}
+	if claimed && h.presenceClaimed != nil {
+		h.presenceClaimed(lease.Epoch)
 	}
 }
 

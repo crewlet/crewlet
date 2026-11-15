@@ -109,3 +109,36 @@ func TestAPresenceEpochIsAnsweredWhileHeldAndMovesWithANewClaim(t *testing.T) {
 			second, held, first)
 	}
 }
+
+// EACH NEW PRESENCE EPOCH IS TOLD ONCE, AND A RENEWAL IS NOT. A loop that files
+// records under this node's presence epoch writes at once on a claim at a new
+// one, since until it does no reader counts anything of this node's; a
+// renewal keeps the epoch and tells nobody, so the loop is not woken on every
+// beat.
+//
+// Mutation: tell every successful claim, or none, and this is red.
+func TestEachNewPresenceEpochIsToldOnceAndARenewalIsNot(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var told []int64
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo"),
+		PresenceClaimed: func(epoch int64) { told = append(told, epoch) }})
+	h.renewNodePresence(f.ctx)
+	first, held := h.PresenceEpoch()
+	if !held || len(told) != 1 || told[0] != first {
+		t.Fatalf("the first claim at epoch %d (%v) told %v, want it once", first, held, told)
+	}
+	h.renewNodePresence(f.ctx)
+	if len(told) != 1 {
+		t.Errorf("a renewal at the same epoch told %v, want nothing more", told)
+	}
+	h.BeginDrain(f.ctx)
+	h.ResumeClaiming(f.ctx)
+	second, held := h.PresenceEpoch()
+	if !held || second == first {
+		t.Fatalf("after a drain and a resume the epoch is %d (%v): the case reads nothing", second, held)
+	}
+	if len(told) != 2 || told[1] != second {
+		t.Errorf("the claim after a resume told %v, want %d after %d", told, second, first)
+	}
+}
