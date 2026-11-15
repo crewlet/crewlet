@@ -89,7 +89,10 @@ dashboard picked for it. Only an agent wears one: a person is drawn as
 themself and a unit is neutral. It is drawn as the agent's own badge
 (`SeatAvatar`) and its node on the two charts, and nothing reads state from
 it, so the status glyph on its corner and the word beside it still say what
-the seat is doing. The
+the seat is doing. It is drawn only where the seat's name is printed beside
+it: a badge standing alone, as the work list's Assignee column and a board
+card's foot draw it, is the seat's initials, because every seat that chose
+nothing shares one look and a column of that one picture names nobody. The
 org builder's Add dialog suggests a character no agent in the draft wears yet
 and the next colour round the six, so a company growing one agent at a time is
 told apart before anybody has chosen; the suggestion is written into the new
