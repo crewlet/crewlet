@@ -133,7 +133,7 @@ func TestAGrantLeavesTheAccountBeforeItsExpiry(t *testing.T) {
 	if !slices.Contains(w.roles(projectWeb), pubsubEditor) {
 		t.Fatalf("the seat holds %v, want Pub/Sub Editor", w.roles(projectWeb))
 	}
-	w.clock.advance(expires.Sub(w.clock.now()) - seataccess.LapseLead + time.Second)
+	w.clock.at(expires.Add(-seataccess.LapseLead + time.Second))
 	w.sync()
 	w.wantRoles(projectWeb, config.GoogleCloudLevelViewer)
 }

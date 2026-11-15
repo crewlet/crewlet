@@ -68,6 +68,14 @@ func (c *testClock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
+// at sets the clock to an instant the case states, so a case reaches it
+// without reading how far off it is.
+func (c *testClock) at(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
 func (c *testClock) sleep(ctx context.Context, d time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
