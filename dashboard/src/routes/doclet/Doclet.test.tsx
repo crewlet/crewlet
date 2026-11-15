@@ -540,7 +540,7 @@ test("the newest change leads in its own tile, and the feed holds the rest", asy
       .getAttribute("href"),
   ).toBe("#/doclet/pages/p-1");
 
-  const feed = screen.getByRole("region", { name: /Recently written/ });
+  const feed = screen.getByRole("region", { name: /Recent activity/ });
   expect(
     within(feed)
       .getAllByRole("heading", { level: 3 })
@@ -555,6 +555,59 @@ test("the newest change leads in its own tile, and the feed holds the rest", asy
   expect(within(feed).getByRole("link", { name: "Every change" }).getAttribute("href")).toBe(
     "#/settings/audit?kind=doclet",
   );
+});
+
+// ONE ROW PER PAGE, AND NEVER THE FEATURED ONE. Three people answering one
+// comment were three rows of one page, and the page the big tile opens was
+// listed again beside it under every comment on it. The one change the tile
+// leads with says its time once, on the line naming who made it. Mutation:
+// fold by change instead of by page (`pageRows`), or time a lone note, and
+// this fails.
+test("recent activity lists each page once, never the featured page, and a lone note has no second time", async () => {
+  landing({
+    page_activity: {
+      changes: [
+        written("c-5", "2026-09-24T23:00:00Z", {
+          kind: "comment",
+          excerpt: "Looks right to me.",
+          actor: "jane",
+          actor_kind: "human",
+        }),
+        written("c-4", "2026-09-24T22:59:00Z", { kind: "comment", excerpt: "Agreed." }),
+        written("c-3", "2026-09-24T22:00:00Z", {
+          page_id: "p-2",
+          title: "Meeting notes 8",
+          kind: "comment",
+          excerpt: "Looks right to me.",
+        }),
+        written("c-2", "2026-09-24T21:59:00Z", {
+          page_id: "p-2",
+          title: "Meeting notes 8",
+          kind: "comment",
+          excerpt: "Can you confirm the numbers?",
+          actor: "jane",
+          actor_kind: "human",
+        }),
+        written("c-1", "2026-09-24T21:00:00Z", { page_id: "p-3", title: "Runbook 7" }),
+      ],
+    },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() => expect(within(latest).getByText("Jane Founder")).toBeTruthy());
+  const notes = [...latest.querySelectorAll(".knowledge-latest-note")];
+  expect(notes.map((n) => n.textContent)).toEqual(["“Looks right to me.”"]);
+  expect(notes[0]?.querySelector("time")).toBeNull();
+  expect(latest.querySelector(".knowledge-latest-who time")?.textContent).toBe("Today 08:00");
+
+  const feed = screen.getByRole("region", { name: /Recent activity/ });
+  const rows = within(feed).getAllByRole("listitem");
+  expect(rows.map((r) => r.querySelector(".truncate")?.textContent)).toEqual([
+    "Meeting notes 8",
+    "Runbook 7",
+  ]);
+  // THE NEWEST CHANGE TO EACH PAGE is its row.
+  expect(rows[0]?.textContent).toContain("Crewlet-SWE commented");
+  expect(feed.textContent).not.toContain("Settlement algorithm");
 });
 
 // OPEN TO READ: what each save said, the lines the newest save changed as the
@@ -614,7 +667,7 @@ test("the newest saves are open to read: each note, the lines changed, and the o
   expect(opening?.textContent).toContain("Nets every balance first.");
   expect(latest.textContent?.match(/Settlement algorithm/g)).toHaveLength(1);
   // THE TWO SAVES ARE ONE ROW, and it leads: the feed holds only the new page.
-  const feed = screen.getByRole("region", { name: /Recently written/ });
+  const feed = screen.getByRole("region", { name: /Recent activity/ });
   expect(within(feed).getAllByRole("listitem")).toHaveLength(1);
   expect(feed.textContent).not.toContain("Settlement algorithm");
 });
@@ -745,8 +798,8 @@ test("a new page leads with its opening, and no note repeats its title", async (
   expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
   expect(latest.textContent?.match(/Split modes/g)).toHaveLength(1);
   // NOTHING ELSE was written: the big tile is the whole story, and no
-  // three-row Recently written tile beside it says "nothing else".
-  expect(screen.queryByRole("region", { name: /Recently written/ })).toBeNull();
+  // three-row Recent activity tile beside it says "nothing else".
+  expect(screen.queryByRole("region", { name: /Recent activity/ })).toBeNull();
   expect(document.querySelector(".knowledge-tiles")?.getAttribute("data-written")).toBe("none");
 });
 
@@ -767,7 +820,7 @@ test("a change to a page that is gone never leads and links nowhere", async () =
       "Provisioner runbook",
     ),
   );
-  const feed = screen.getByRole("region", { name: /Recently written/ });
+  const feed = screen.getByRole("region", { name: /Recent activity/ });
   const gone = within(feed).getByRole("listitem");
   expect(gone.textContent).toContain("A page that is gone");
   expect(within(gone).queryByRole("link")).toBeNull();
@@ -781,8 +834,8 @@ test("an empty landing says so once, and each small tile in one line", async () 
   );
   const tile = (name: RegExp) => screen.getByRole("region", { name });
   // ONCE: the newest change's tile says nothing has been written, and no
-  // three-row Recently written tile beside it says the same (`data-written`).
-  expect(screen.queryByRole("region", { name: /Recently written/ })).toBeNull();
+  // three-row Recent activity tile beside it says the same (`data-written`).
+  expect(screen.queryByRole("region", { name: /Recent activity/ })).toBeNull();
   expect(document.querySelector(".knowledge-tiles")?.getAttribute("data-written")).toBe("none");
   expect(
     within(tile(/Continue reading/)).getByText("The pages you open are listed here."),
@@ -895,7 +948,7 @@ test("the landing draws a credential by its login, and the engine's change as th
       ],
     },
   });
-  const feed = await screen.findByRole("region", { name: /Recently written/ });
+  const feed = await screen.findByRole("region", { name: /Recent activity/ });
   await waitFor(() => expect(within(feed).getAllByRole("listitem")).toHaveLength(2));
   const rows = within(feed).getAllByRole("listitem");
   expect(rows[0]?.textContent).toMatch(/Release checklist.*ci\.docs wrote it/);
@@ -974,7 +1027,7 @@ test("a row under a company day says its time of day on the company's clock", as
       ],
     },
   });
-  const written = await screen.findByRole("region", { name: /Recently written/ });
+  const written = await screen.findByRole("region", { name: /Recent activity/ });
   await waitFor(() => expect(within(written).getByText(/Onboarding/)).toBeTruthy());
   const days = within(written)
     .getAllByRole("heading", { level: 3 })
@@ -1032,7 +1085,7 @@ test("a new page's row never repeats its title as its note", async () => {
       ],
     },
   });
-  const written = await screen.findByRole("region", { name: /Recently written/ });
+  const written = await screen.findByRole("region", { name: /Recent activity/ });
   // A FIRST LINE THAT IS NOT THE TITLE IS THE NOTE, as it always was.
   await waitFor(() => expect(within(written).getByText("Welcome to the team.")).toBeTruthy());
   const deploy = within(written)

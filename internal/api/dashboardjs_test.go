@@ -2577,6 +2577,11 @@ const (
 	// assignee and archive, its files uploaded, replaced and removed, and
 	// every day field on the company's calendar) added 35,861 bytes, script
 	// and sheet, and took it to 6223.7 KiB (6,373,042 bytes): 6224 KiB.
+	// A Doclet page's bar without the search, recent activity read by page
+	// and a trashed page read only, an empty sheet's columns named in place,
+	// New design's own Create design, and Chatlet's switcher, phone rows,
+	// wording and toasts at the foot added 5,540 bytes and took it to
+	// 6138.1 KiB (6,285,406 bytes): 6139 KiB.
 	treeBudget = 5<<20 + 1104<<10
 )
 

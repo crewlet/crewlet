@@ -60,7 +60,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArtifactMakeRow, ButtonLink, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
+import {
+  ArtifactMakeRow,
+  ButtonLink,
+  Callout,
+  LivePreviewBudgetProvider,
+  Section,
+} from "@crewlethq/ui";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import {
@@ -74,9 +80,10 @@ import { useNow } from "~/lib/clock.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { offeredKinds, settingsSectionOpen } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
+import { needsWords } from "~/lib/access.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
+import { KIND_WORDS, TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import { NewArtifactButton } from "./new/NewArtifactMenu.tsx";
 import {
   DEFAULT_SORT,
@@ -108,16 +115,6 @@ const SCOPE: Readonly<Record<ArtifactSection, ArtifactListScope>> = {
 
 /** The Make row's heading: what the reader does there, said plainly. */
 export const MAKE_TITLE = "Start a new artifact";
-
-/** What each kind is called on the Make row: the kind's word, said as what one makes. */
-const MAKE_WORDS: Readonly<Record<MakeKind, string>> = {
-  doc: "Docs",
-  slides: "Slides",
-  design: "Design",
-  dashboard: "Dashboard",
-  html: "HTML",
-  sheet: "Sheet",
-};
 
 /**
  * What each kind is for, in a few words under its name on the Make row: what
@@ -328,6 +325,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         />
       </GalleryBar>
       {newFolder && <NewTopFolder onClose={() => setNewFolder(false)} />}
+      {!author.can && author.block === "no_access" && <MakeHeld />}
       {showMake && <MakeRow />}
       <GalleryToolbar
         kind={kind}
@@ -389,9 +387,11 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         empty={
           rows.length === 0 && pinned.items.length === 0
             ? trashed
-              ? {
+              ? // THE NOTE ABOVE SAYS WHO SEES THE TRASH AND HOW LONG AN
+                // ARTIFACT STAYS, so the empty state says how one gets here.
+                {
                   title: "Nothing in the trash",
-                  hint: `An artifact you trash stays here for ${TRASH_KEPT}, then is deleted.`,
+                  hint: "An artifact you move to the trash from its More menu waits here, ready to restore.",
                 }
               : filtered
                 ? noMatch(q.trim(), kind)
@@ -432,6 +432,23 @@ function NewTopFolder({ onClose }: { onClose: () => void }) {
   return <NewFolderDialog parent={null} index={tree.index} onClose={onClose} open />;
 }
 
+/**
+ * WHAT THE MISSING ACCESS HOLDS BACK, said on the page: making an artifact.
+ * The gallery stays open to a reader without Artifacts access, since a share
+ * alone admits them to what was shared, so neither the sidebar nor the page
+ * is locked; but New held with only a pointer's title was the one sign, where
+ * Doclet and Gitlet say "You need … access" in words on the page. One quiet
+ * line, in the same words every held control uses.
+ */
+function MakeHeld() {
+  return (
+    <Callout variant="info" appearance="quiet">
+      {needsWords("Making an artifact", ["artifacts"])} What is shared with you opens here all the
+      same.
+    </Callout>
+  );
+}
+
 function MakeRow() {
   const runs = useServicesRun();
   return (
@@ -442,7 +459,9 @@ function MakeRow() {
         aria-label={MAKE_TITLE}
         items={offeredKinds(runs).map((k) => ({
           kind: k,
-          label: MAKE_WORDS[k],
+          // ONE NAME PER KIND, the New menu's and every card's (`KIND_WORDS`):
+          // a second table here called a doc "Docs" beside the menu's "Doc".
+          label: KIND_WORDS[k],
           detail: MAKE_DETAILS[k],
           href: href(newArtifactPath(k)),
         }))}

@@ -104,20 +104,16 @@ test("a company on another tracker is offered nothing of Worklet", () => {
   expect(rows).toContain("doclet");
   const places = DESTINATIONS.filter((d) => !serviceShown(d, jira)).map((d) => d.key);
   expect(places).toEqual(
-    expect.arrayContaining([
-      "me",
-      "worklet",
-      "worklet-tasks",
-      "settings-spend-tasks",
-      "artifacts-new-design",
-    ]),
+    expect.arrayContaining(["me", "worklet", "worklet-tasks", "settings-spend-tasks"]),
   );
+  // A DESIGN IS FINISHED ON ITS PAGE (Create design), so New design stays:
+  // only its Ask an agent waits on Worklet.
+  expect(places).not.toContain("artifacts-new-design");
   // AN ADDRESS UNDER ONE IS NOT OFFERED EITHER, an item's included.
   expect(pathShown(["worklet", "ENG-42"], jira)).toBe(false);
   expect(serviceOfPath(["me", "asked-of-me"])).toBe("tracker");
   expect(pathShown(["inbox"], jira)).toBe(true);
-  // NEW DESIGN'S ONE WAY TO FINISH IS AN AGENT, which files a task.
-  expect(offeredKinds(jira)).toEqual(MAKE_ORDER.filter((k) => k !== "design"));
+  expect(offeredKinds(jira)).toEqual([...MAKE_ORDER]);
   expect(offeredKinds({ tracker: true, knowledge: true, chat: true, code: true })).toEqual([
     ...MAKE_ORDER,
   ]);

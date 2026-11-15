@@ -115,14 +115,10 @@ function face(builder: Builder | undefined, size: "xs" | "sm"): ReactNode {
 
 /**
  * The bar's "Ask an agent": the suggested agent's character beside its words,
- * pressed while the panel is open. On a kind only an agent makes, it is the
- * page's primary action while the panel is closed (`primary`).
+ * pressed while the panel is open. Every kind's own action closes the bar, so
+ * this is never its primary.
  */
-export function askTool(
-  who: WhoBuildsItState,
-  panel: AskPanel,
-  primary = false,
-): ArtifactBarTool & { emphasis?: "primary" } {
+export function askTool(who: WhoBuildsItState, panel: AskPanel): ArtifactBarTool {
   const suggested = who.builders[0];
   return {
     key: "ask",
@@ -130,7 +126,7 @@ export function askTool(
     icon: face(suggested, "xs"),
     onSelect: panel.toggle,
     labelled: true,
-    ...(primary && !panel.open ? { emphasis: "primary" as const } : { pressed: panel.open }),
+    pressed: panel.open,
   };
 }
 

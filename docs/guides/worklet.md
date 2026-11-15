@@ -1838,7 +1838,10 @@ drawn for everybody and held with that reason for anybody without it.
   (`write_project{target_date, default_assignee, archived}`). It sends only
   what you changed, and archiving names itself on the button and says what it
   does before it is pressed. The project's lead may, and so may an admin;
-  archiving is a person's, never an agent's. About lists the project's
+  archiving is a person's, never an agent's. Anybody else sees **Edit
+  project** held with "Editing this project needs Admin access, or leading
+  it." before anything is chosen, and the engine refuses the change all the
+  same. About lists the project's
   **Labels** with **Add label** (any colleague may declare one), and
   **Rename** and **Archive** on each (the lead's); archived labels are listed
   under them, since the tasks filed under one keep it. Its **Fields** card

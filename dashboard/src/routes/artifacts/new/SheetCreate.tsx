@@ -523,7 +523,6 @@ export function SheetCreate() {
       }}
       handoff={{
         tool: askTool(who, panel),
-        open: () => panel.setOpen(true),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}

@@ -118,10 +118,26 @@ test("lists every direct conversation, newest first, and no room", async () => {
   // Each row is an item of a list, and nothing is open on arrival.
   expect(bo.closest("li")?.parentElement?.tagName).toBe("UL");
   expect(screen.getByText("Choose a conversation")).toBeTruthy();
-  // The page's one heading is the trail's last crumb; the list's menu is a control.
+  // The page's one heading is the trail's last crumb.
   expect(screen.getAllByRole("heading", { level: 1 }).map((h) => h.textContent)).toEqual([
     "Direct messages",
   ]);
+});
+
+// ONE CONTROL CALLED DIRECT MESSAGES: the top bar's switcher, right above the
+// list. The list's head drew a second one, a menu of New message (already the
+// head's own button) and Mark all as read, which is now a button of its own,
+// held with its reason while nothing is unread.
+test("the list's head is no second Direct messages control; Mark all as read is its own button", async () => {
+  mount(<DirectMessagesView />, "#/chatlet/dms");
+  await waitFor(() => expect(rows()).toHaveLength(3));
+  const list = document.querySelector<HTMLElement>(".chat-dms-list")!;
+  expect(within(list).queryByRole("button", { name: /Direct messages/ })).toBeNull();
+  const head = list.querySelector<HTMLElement>(".chat-dms-head")!;
+  // A conversation is unread (Bo's), so Mark all as read is offered, not held.
+  const markAll = within(head).getByRole("button", { name: "Mark all as read" });
+  expect(markAll.getAttribute("aria-disabled")).not.toBe("true");
+  expect(within(head).getByRole("button", { name: "New message" })).toBeTruthy();
 });
 
 test("a row's date is long where the column is wide, and short, with the switch's word dropped, where it is narrow", async () => {
@@ -172,7 +188,7 @@ test("Unreads keeps the unread conversations and the open one; the find field na
   fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
   await waitFor(() => expect(rows()).toEqual([DM_BO, DM_OPS]));
   fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Find a direct message" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Find a conversation" }), {
     target: { value: "ops" },
   });
   await waitFor(() => expect(rows()).toEqual([GROUP, DM_OPS]));

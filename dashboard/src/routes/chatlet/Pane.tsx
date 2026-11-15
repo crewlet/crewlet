@@ -31,7 +31,9 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 // THE PANES', DIALOGS' AND VIEWS' OWN SHEET, arriving with the chat chunk this
 // module is in (`styles/classes.test.ts`' LAZY_SHEETS).
 import "~/styles/chatlet-panes.css";
+import { useToastBeside } from "~/app/toastInset.tsx";
 import type { ChatPane } from "./nav.tsx";
+import { PANE_CLASS } from "./PanePanel.tsx";
 import { CatchUpPane } from "./CatchUp.tsx";
 import { DetailsPane } from "./Details.tsx";
 import { ProfilePane } from "./Profile.tsx";
@@ -60,15 +62,34 @@ function paneKey(pane: ChatPane): string {
   }
 }
 
-export function ChatPaneHost({ pane, onClose }: { pane: ChatPane | null; onClose: () => void }) {
+export function ChatPaneHost({
+  pane,
+  onClose,
+  beside = true,
+}: {
+  pane: ChatPane | null;
+  onClose: () => void;
+  /** The pane stands beside the conversation; false where it covers a narrow chat area whole. */
+  beside?: boolean;
+}) {
   useOpenerReturn(pane !== null);
+  const host = useRef<HTMLDivElement>(null);
+  // A TOAST NEVER LIES OVER AN OPEN PANE: the stack stands beside it, at the
+  // window's foot, as it stands beside the assistant (`toastInset.tsx`). Where
+  // the pane covers a narrow chat area whole there is nothing beside it to
+  // stand on, and the stack keeps clear of the pane's foot instead.
+  useToastBeside(
+    () => host.current?.querySelector<HTMLElement>(`.${PANE_CLASS}`) ?? null,
+    pane !== null && beside,
+    pane ? paneKey(pane) : "",
+  );
   if (!pane) return null;
   const key = paneKey(pane);
   return (
     // DRAWS NO BOX of its own (`display: contents`), so the panel inside is
     // the frame's grid item; it is here so focus inside a pane is told apart
     // from focus anywhere else.
-    <div className={HOST_CLASS}>
+    <div ref={host} className={HOST_CLASS}>
       {pane.kind === "thread" ? (
         <ThreadPane key={key} room={pane.room} root={pane.root} onClose={onClose} />
       ) : pane.kind === "details" ? (

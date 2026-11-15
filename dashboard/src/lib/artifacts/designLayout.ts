@@ -69,6 +69,12 @@ export interface DraftBoard {
 export interface DesignDraft {
   boards: DraftBoard[];
   notes: CanvasNote[];
+  /**
+   * The starting layout the boards were laid from (its id), which the
+   * layouts stay marked by when the reader goes back to them. Left out for
+   * boards no layout laid.
+   */
+  start?: string;
 }
 
 /** A starting layout: a few boards laid out for a common kind of design. */
@@ -168,7 +174,7 @@ export function draftFrom(layout: StarterLayout): DesignDraft {
       brief: "",
     });
   }
-  return { boards: tidy(boards), notes: [] };
+  return { boards: tidy(boards), notes: [], start: layout.id };
 }
 
 /**

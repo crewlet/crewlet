@@ -72,7 +72,7 @@ import { MessageBody } from "./Body.tsx";
 import { ChatFace } from "./Face.tsx";
 import { nameRefusal, normalizeName, startable } from "./name.ts";
 import { useChatFrame, useChatNav, type ChatDialog } from "./nav.tsx";
-import { handlesOf, matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
+import { handlesOf, matchesPerson, seatLine, useChatPeople, type ChatPerson } from "./people.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
@@ -620,6 +620,10 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
       onClose={leave}
       size="md"
       phoneSheet
+      // THE LIST TAKES THE ROOM THE DIALOG HAS (`.chat-suggest__list`): the
+      // body is a column its one child fills, and the suggestions are what
+      // grows into it and scrolls, under a field and over a foot that stay.
+      fill
       icon={<UserPlusGlyph size="md" />}
       title={`Add people to ${name}`}
       subtitle="Add people and agents from the company. Everyone you add sees the room’s history."
@@ -644,7 +648,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
         </>
       }
     >
-      <div className="chat-form">
+      <div className="chat-form chat-form--fills">
         {unit ? (
           <p className="chat-dialog-note">
             A team room&rsquo;s members come from the org chart. Change the team there to change who
@@ -738,7 +742,7 @@ export function SuggestedPerson({
       avatar={<ChatFace person={person} size={32} />}
       name={person.name}
       tag={person.kind === "agent" ? <Tag size="xs">Agent</Tag> : undefined}
-      detail={person.doing || person.team || undefined}
+      detail={seatLine(person) || undefined}
       mark={selected === undefined ? "none" : "toggle"}
       selected={selected}
       onSelect={onSelect}

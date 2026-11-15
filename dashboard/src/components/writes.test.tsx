@@ -22,6 +22,7 @@ import {
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { PROJECT_EDIT_HELD } from "~/lib/useWriteAccess.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
@@ -316,6 +317,36 @@ test("editing a project sends only the facets that moved, and archiving says so 
   fireEvent.click(within(dialog).getByRole("button", { name: "Archive project" }));
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ project: "ENG", archived: true });
+});
+
+// THE PROJECT'S OWN RULE, BEFORE ANYTHING IS FILLED: a project's settings
+// are its lead's or an admin's, which the engine decides. Held only by the
+// act's Worklet access, the button opened the dialog for any Worklet reader,
+// who chose a date and was refused at Save.
+test("Edit project is held for a reader neither the project's lead nor an admin, and open to its lead", () => {
+  const PRIYA: ViewerState = {
+    ...JANE,
+    login: "priya",
+    handle: "priya",
+    owner: "priya",
+    admin: false,
+    grants: ["worklet"],
+  };
+  vi.mocked(useViewer).mockReturnValue(PRIYA);
+  const { unmount } = mount(
+    <EditProjectButton project="ENG" name="Core platform" target="" lead="jane" />,
+  );
+  const held = screen.getByRole("button", { name: "Edit project" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(held.getAttribute("aria-describedby")!)?.textContent).toBe(
+    PROJECT_EDIT_HELD,
+  );
+  fireEvent.click(held);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  unmount();
+  mount(<EditProjectButton project="ENG" name="Core platform" target="" lead="priya" />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  expect(screen.getByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
 });
 
 // ENTER IS A SUBMIT THE SAVE BUTTON NEVER SEES: the dialog is a form, so a

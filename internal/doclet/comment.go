@@ -91,6 +91,9 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 				if err = s.refuseReserved(actor, head.Container, false); err != nil {
 					return statelog.Decision{}, err
 				}
+				if err = refuseTrashed(head); err != nil {
+					return statelog.Decision{}, err
+				}
 				asks := statedBy(actor, in.Asks)
 				wakes, closes, err := stakesTx(ctx, tx, pageID, comment.ReplyTo,
 					actor.Name(), mentions, asks != nil && *asks)
@@ -185,6 +188,9 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 					return statelog.Decision{}, moved
 				}
 				if err = s.refuseReserved(actor, head.Container, false); err != nil {
+					return statelog.Decision{}, err
+				}
+				if err = refuseTrashed(head); err != nil {
 					return statelog.Decision{}, err
 				}
 				read = revision
@@ -297,6 +303,9 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 					return statelog.Decision{}, moved
 				}
 				if err = s.refuseReserved(actor, head.Container, false); err != nil {
+					return statelog.Decision{}, err
+				}
+				if err = refuseTrashed(head); err != nil {
 					return statelog.Decision{}, err
 				}
 				// THE AUTHOR IS READ IN THE DECIDE'S OWN SNAPSHOT, which

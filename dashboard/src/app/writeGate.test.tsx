@@ -33,7 +33,7 @@ import type { SeatLive } from "~/lib/seatLive.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { ANSWER_SEAT_HELD, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { ANSWER_SEAT_HELD, PROJECT_EDIT_HELD, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { SRC, type Node, isLocalSource, modules, parse } from "~/test/source.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
@@ -395,6 +395,12 @@ interface Fixture {
    * whom the engine refuses on this seat however many changes it makes for them.
    */
   seatRule?: true;
+  /**
+   * The sentence it holds with for a reader every change is made for, where
+   * the object's own rule admits only its lead or an admin and none of these
+   * readers leads it: a project's Edit project.
+   */
+  leadRule?: string;
   /** What the company runs, where the control's change turns on it; every service otherwise. */
   services?: OrgServices;
 }
@@ -425,9 +431,10 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
   },
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/, tool: "restore_work_item" },
   EditProjectButton: {
-    props: { project: "ENG", target: "2026-12-18" },
+    props: { project: "ENG", target: "2026-12-18", lead: "eng-lead" },
     name: /^Edit project$/,
     tool: "write_project",
+    leadRule: PROJECT_EDIT_HELD,
   },
   PinButton: {
     props: { view: "v1", name: "Triage", pinned: false },
@@ -771,12 +778,18 @@ describe.each(
     })),
   ),
 )("$control", ({ Control, fixture }) => {
-  const { props, name, tool, handed, fill, notServed, seatRule, services } = fixture;
+  const { props, name, tool, handed, fill, notServed, seatRule, leadRule, services } = fixture;
 
   test.each(READERS)("is drawn for $who, enabled only where it can act", (reader) => {
     const viewer = reader.viewer(tool);
     // THE SEAT'S RULE ADMITS AN ADMIN OR A LEAD, and none of these readers leads the seat.
-    const reason = reader.reason === null && seatRule && !viewer.admin ? notServed! : reader.reason;
+    // A PROJECT'S RULE ADMITS ITS LEAD OR AN ADMIN, and none of these readers leads it.
+    const reason =
+      reader.reason === null && seatRule && !viewer.admin
+        ? notServed!
+        : reader.reason === null && leadRule && !viewer.admin
+          ? leadRule
+          : reader.reason;
     vi.mocked(useViewer).mockReturnValue(viewer);
     if (services) vi.mocked(useOrg).mockReturnValue({ name: "Acme", services } as never);
     // THE FRAME'S ROUTER AND LIVE REGION, as every screen has them: a remedy

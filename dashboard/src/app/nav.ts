@@ -210,9 +210,7 @@ export interface Section {
   /**
    * The service built into Crewlet this section reads, where the rest of its
    * workspace reads none: Expensive tasks names its tasks by Worklet's keys
-   * and titles, and New design's one way to finish is asking an agent,
-   * which files a task. Hidden where the company does not run it
-   * ([serviceShown]).
+   * and titles. Hidden where the company does not run it ([serviceShown]).
    */
   service?: Service;
   /**
@@ -333,14 +331,6 @@ const NEW_ARTIFACT_PAGES: Readonly<
 };
 
 /**
- * The kinds made ONLY by asking an agent: a design's create page lays out its
- * boards and hands them to an agent, which files the work as a task, so where
- * the company runs no Worklet the page has no way to finish and is not
- * offered. Every other kind has a create a person finishes on the page.
- */
-const MADE_BY_AN_AGENT: ReadonlySet<MakeKind> = new Set(["design"]);
-
-/**
  * The create page of each kind, as sections of Artifacts reached from its
  * Make row and New menu (`tab: false`), in the order they are offered there.
  */
@@ -350,8 +340,10 @@ const NEW_ARTIFACT_SECTIONS: readonly Section[] = MAKE_ORDER.map((kind) => ({
   path: ["artifacts", "new", kind],
   ...NEW_ARTIFACT_PAGES[kind],
   tab: false,
+  // EVERY KIND IS FINISHED ON ITS PAGE BY A PERSON, a design's boards
+  // included (Create design), so none waits on Worklet: where the company
+  // runs none, a create page offers no Ask an agent and is otherwise whole.
   grants: ["artifacts"],
-  ...(MADE_BY_AN_AGENT.has(kind) ? { service: "tracker" as const } : {}),
 }));
 
 /**

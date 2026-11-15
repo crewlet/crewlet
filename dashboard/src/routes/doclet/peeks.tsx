@@ -141,13 +141,12 @@ function spaceFacts({
       // WHO FILES HERE comes from the config (a unit's `space:`), so it answers
       // even for a space nobody has written in yet.
       label: "Filed by",
-      value: !units ? (
-        <EmptyValue label={ownerSentence(owners)} />
-      ) : units.length > 0 ? (
-        units.map((u) => u.name).join(", ")
-      ) : (
-        <EmptyValue label="No team owns this space" />
-      ),
+      value:
+        units && units.length > 0 ? (
+          units.map((u) => u.name).join(", ")
+        ) : (
+          <EmptyValue label={ownerSentence(owners)} />
+        ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO: two units may share a space.
       // BY ITS ID, which a rename does not move: a unit's name is prose two
       // units may share, and a link by it opened whichever came first.

@@ -12,14 +12,14 @@
  * public room only.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { ChatDialogHost, characters, foundingMembers } from "./Dialogs.tsx";
+import { ChatDialogHost, SuggestedPerson, characters, foundingMembers } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import type { ChatDialog } from "./nav.tsx";
 
@@ -145,6 +145,19 @@ describe("every dialog's write is drawn for every reader, held with why", () => 
 });
 
 describe("Add people", () => {
+  // THE SUGGESTIONS TAKE THE ROOM THE DIALOG HAS: the body is a column its one
+  // form fills (the kit's `fill`), and the list is what grows and scrolls in it
+  // (`dialogs.layout.test.tsx` measures that). As the kit's scrolling block,
+  // the list had nothing to grow into, so it carried a cap of its own.
+  test("the dialog's body is one its form fills, so the list can grow into it", async () => {
+    open({ kind: "people", room: ROOM });
+    await screen.findByRole("textbox", { name: /find people and agents/i });
+    const list = document.querySelector<HTMLElement>(".chat-suggest__list")!;
+    const form = list.closest<HTMLElement>(".chat-form")!;
+    expect(form.classList.contains("chat-form--fills")).toBe(true);
+    expect(form.parentElement!.classList.contains("crewlet-modal__body--fill")).toBe(true);
+  });
+
   test("Enter takes the first match, Backspace gives back the last chip, Add sends the handles", async () => {
     const { onClose } = open({ kind: "people", room: ROOM });
     const field = await screen.findByRole("textbox", { name: /find people and agents/i });
@@ -213,6 +226,27 @@ describe("Add people", () => {
     expect(await screen.findByText(/members come from the org chart/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^add$/i })).toBeNull();
   });
+});
+
+// ONE KIND OF LINE UNDER EVERY AGENT a pick list offers (Add people, New
+// message, Search's People): what it is doing, else its state. Its team stood
+// there for an agent that was not working, so one read "Core" among "Working".
+test("a suggested agent's line is its state when it is not working, never its team", () => {
+  const agent = {
+    handle: "qa",
+    name: "QA Agent",
+    kind: "agent" as const,
+    avatar: null,
+    team: "Core",
+    state: "idle" as const,
+    status: undefined,
+    doing: "",
+    known: true,
+  };
+  render(<SuggestedPerson person={agent} onSelect={() => {}} />);
+  const row = screen.getByRole("button", { name: /QA Agent/ });
+  expect(row.textContent).toMatch(/Idle/);
+  expect(row.textContent).not.toMatch(/Core/);
 });
 
 describe("a room's topic and description", () => {

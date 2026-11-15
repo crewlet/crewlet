@@ -54,11 +54,12 @@ import { isAccessOption } from "~/lib/grants.ts";
 import { AccessGrantDialog } from "~/components/advisorFix.tsx";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
-import { useAnswerHold } from "~/lib/useWriteAccess.ts";
+import { projectEditHold, useAnswerHold } from "~/lib/useWriteAccess.ts";
 import { useSeatMessage } from "~/lib/seatMessage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
@@ -328,9 +329,11 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
  *
  * A COMPANY WRITE (`contract/actions.ts` scope `company`): a project's
  * settings are what every seat's tracker reads, so it is offered on the
- * project's own page and nowhere else. WHO MAY is the engine's rule, not this
- * control's (the project's lead or an admin, and for archiving a person, not
- * an agent), and a refusal says so in the engine's sentence.
+ * project's own page and nowhere else. WHO MAY is the engine's rule, read here
+ * before anything is filled ([projectEditHold]): the project's lead or an
+ * admin, and for archiving a person, not an agent. Anybody else sees the
+ * control held with that sentence rather than a dialog whose Save is refused;
+ * a refusal that still comes back is said in the engine's words.
  *
  * ONLY WHAT MOVED IS SENT, because each facet is decided on its own: a lead
  * who changed the date is not asked about the archive, and an empty date
@@ -354,6 +357,7 @@ export function EditProjectButton({
   target,
   assignee,
   archived,
+  lead,
   open: held,
   onOpenChange,
 }: {
@@ -364,6 +368,8 @@ export function EditProjectButton({
   /** Who unassigned work lands on now, a seat's handle, or "" for triage. */
   assignee?: string;
   archived?: boolean;
+  /** Who leads the project (its record's `lead.handle`), who may edit it beside an admin. */
+  lead?: string | undefined;
   /**
    * Whether the dialog is open, for a page that also opens it from somewhere
    * other than this button — the page bar's "More" on a phone, where the
@@ -373,6 +379,7 @@ export function EditProjectButton({
   onOpenChange?: (open: boolean) => void;
 }) {
   const write = useAct("write_project");
+  const ruled = projectEditHold(useViewer(), lead);
   const [own, setOwn] = useState(false);
   const open = held ?? own;
   const setOpen = (next: boolean) => {
@@ -387,6 +394,7 @@ export function EditProjectButton({
         variant="secondary"
         leadingIcon={<PencilGlyph />}
         showRefusal={false}
+        blocked={ruled}
         onPress={() => setOpen(true)}
       >
         Edit project

@@ -58,11 +58,19 @@ export function PageCommentThread({
   title,
   comments,
   now,
+  hold,
 }: {
   pageID: string;
   title: string;
   comments: PageComment[];
   now: number;
+  /**
+   * The page's own reason it takes no comment (it is in the trash). The thread
+   * is then read only: no field at all, since the page says above why nothing
+   * changes, and a box anybody can type into and nobody can send is no
+   * answer to a page that is read only for everyone.
+   */
+  hold?: string | undefined;
 }) {
   const write = useAct("comment_on_page");
   const remark = useKeyedGesture();
@@ -72,7 +80,9 @@ export function PageCommentThread({
   const rows = useMemo<CommentThreadComment[]>(() => {
     const seats = indexOrg(org).byHandle;
     return comments.map((c) => {
-      const own = ownsRemark(c, viewer);
+      // A PAGE IN THE TRASH IS READ ONLY, its reader's own remarks included:
+      // the engine refuses an edit or a removal there as it refuses a comment.
+      const own = !hold && ownsRemark(c, viewer);
       return {
         id: c.id,
         author: c.author ? principalOfSeat(seats.get(c.author), c.author) : null,
@@ -85,7 +95,7 @@ export function PageCommentThread({
         removable: own,
       };
     });
-  }, [comments, org, viewer]);
+  }, [comments, org, viewer, hold]);
 
   // A REFUSAL IS SAID IN A TOAST, in the engine's words: the control that made
   // the press stays where it was, and the thread keeps the words typed.
@@ -111,15 +121,20 @@ export function PageCommentThread({
       comments={rows}
       subject={title}
       now={now}
-      // ALWAYS GIVEN, so a reader who cannot write sees the field and why it
-      // is closed to them, rather than a thread that silently has no composer.
-      onSubmit={async (body, replyTo) => {
-        const result = await write.run(
-          { page: pageID, body, ...(replyTo ? { reply_to: replyTo.id } : {}) },
-          { done: `Commented on “${title}”` },
-        );
-        return !!result && (result.kind === "applied" || result.kind === "pending");
-      }}
+      // GIVEN WHENEVER THE PAGE TAKES A COMMENT, so a reader who cannot write
+      // sees the field and why it is closed to them, rather than a thread
+      // that silently has no composer. A page in the trash takes none.
+      onSubmit={
+        hold
+          ? undefined
+          : async (body, replyTo) => {
+              const result = await write.run(
+                { page: pageID, body, ...(replyTo ? { reply_to: replyTo.id } : {}) },
+                { done: `Commented on “${title}”` },
+              );
+              return !!result && (result.kind === "applied" || result.kind === "pending");
+            }
+      }
       onEdit={async (comment, body) =>
         said(
           await remark.run({

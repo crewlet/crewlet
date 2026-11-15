@@ -39,7 +39,11 @@ export function followersOf(page: Pick<Page, "watchers" | "muted">): string[] {
   return (page.watchers ?? []).filter((handle) => !muted.has(handle));
 }
 
-export function WatchControl({ page }: { page: Page }) {
+/**
+ * The eye and who it tells. `hold` is the page's own reason no change can be
+ * made to it (a page in the trash), said before the reader's own.
+ */
+export function WatchControl({ page, hold }: { page: Page; hold?: string | undefined }) {
   const viewer = useViewer();
   const who = usePeople();
   const toast = useToast();
@@ -48,11 +52,13 @@ export function WatchControl({ page }: { page: Page }) {
   const me = viewer.handle;
   const watching = me !== "" && followers.includes(me);
   // NO SEAT, NO SUBSCRIPTION: see "Which name is you" above.
-  const held = !save.access.can
-    ? save.access.reason
-    : viewer.unbound
-      ? "A watch is kept under a seat, and this credential is bound to none, so nothing could tell it about a change."
-      : undefined;
+  const held = hold
+    ? hold
+    : !save.access.can
+      ? save.access.reason
+      : viewer.unbound
+        ? "A watch is kept under a seat, and this credential is bound to none, so nothing could tell it about a change."
+        : undefined;
   const names = followers.map((h) => (h === me ? "you" : who(h).name));
   // WHO THE COUNT COUNTS, said after the number in words only a screen reader
   // hears: the button is NAMED BY THE NUMBER IT SHOWS ("2 watching: you,

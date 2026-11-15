@@ -8152,7 +8152,9 @@ export interface QueryMap {
   chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
-  containers: { containers: PageContainer[] };
+  /* `skills` NAMES THE SPACE TOOL SKILLS ARE WRITTEN IN, absent on a company
+     that turned tool skills off: Agent skills points at it when it holds none. */
+  containers: { containers: PageContainer[]; skills?: string };
   page_activity: PageActivityAnswer;
   page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;

@@ -13,21 +13,25 @@
  *
  * # The panel follows the selection, as a design tool's does
  *
- * With nothing selected the panel says what the canvas holds and how to
- * shape a board. The design's name, brief and references are the hand-off's,
- * since they are what the agent is asked, and on a phone the hand-off is the
- * screen: every field the ask waits on is in it. With a board selected it is the board's: its name, its
+ * With nothing selected the panel holds the design's name and says what the
+ * canvas holds and how to shape a board. The brief and references are the
+ * hand-off's, since they are what the agent is asked. With a board selected it is the board's: its name, its
  * frame (a preset or a custom size), its place in the order and what it is
  * for. The list of boards beside the canvas is the canvas's other half: the
  * board picked on one is marked on the other.
  *
- * # Asking is the primary action
+ * # Create design is the bar's own action, as every kind's is
  *
- * Only an agent draws a design, so the hand-off is the page's one way to make
- * it: the page arrives with the hand-off panel open beside the canvas
- * (`AskAgent.tsx`), holding the design's brief, its references, who builds it
- * and the boards that go with them, and the bar's "Ask an agent" is its
- * primary while the panel is closed. The canvas stays the page.
+ * The bar ends on Create design, which makes the design from the boards as
+ * they are laid out, each a placeholder saying what it is for, with no
+ * agent asked: a person who places boards themselves (Blank canvas) makes
+ * one without the panel. An agent draws the boards, so the page arrives with
+ * the hand-off panel open beside the canvas (`AskAgent.tsx`), holding the
+ * design's brief, its references, who builds it and the boards that go with
+ * them, and its send creates and asks; the bar's "Ask an agent" stands
+ * before Cancel, where every kind puts it. The canvas stays the page, and
+ * the design's name is the canvas's own (the panel with nothing selected),
+ * since both ways of making it need one.
  *
  * # Created, it is a real design waiting for its first draft
  *
@@ -67,6 +71,7 @@ import {
   LaptopGlyph,
   LayoutGridGlyph,
   MonitorGlyph,
+  PaletteGlyph,
   PlusGlyph,
   PresentationGlyph,
   SmartphoneGlyph,
@@ -299,9 +304,11 @@ export function DesignCreate() {
     );
   };
 
-  const hold =
-    (title.trim() === "" ? "Name the design first." : titleProblem(title)) ??
-    (draft ? draftHold(draft) : "Pick a layout.");
+  // THE LAYOUT FIRST, THEN THE NAME: the name is asked on the canvas's own
+  // panel, which picking a layout opens.
+  const hold = !draft
+    ? "Pick a layout."
+    : ((title.trim() === "" ? "Name the design first." : titleProblem(title)) ?? draftHold(draft));
   const briefBudget = textBudget(brief, DESIGN_BRIEF_MAX_BYTES, "a design's brief");
   const builder = chosenAgent(who);
   const noPages = useNoPagesHold();
@@ -333,6 +340,9 @@ export function DesignCreate() {
         (builder ? undefined : "Add an agent to the chart to build it.") ??
         (briefBudget.over ? "Shorten the brief." : (hold ?? taskTooLong))));
   const busy = create.busy || ask.busy;
+  // CREATE DESIGN WAITS ON WHAT THE DESIGN ITSELF NEEDS, and on nothing the
+  // ask does: who builds it, the brief and the task's length are the panel's.
+  const createHold = noPages ?? (!access.can ? access.reason : hold);
   // WHAT IS OPEN, for the assistant: the name, the references, each board's
   // name and purpose, and the hand-off. A layout is picked as a press of it
   // would, while nothing is laid out yet; a board's place and size are the
@@ -434,6 +444,27 @@ export function DesignCreate() {
     nav,
   ]);
 
+  /** Create design: the boards as placeholders, no agent asked, then the design. */
+  const createOnly = useCallback(async () => {
+    if (!draft || createHold || busy) return;
+    // A DESIGN MADE FOR AN ASK THAT WAS REFUSED is the one this press means:
+    // a second press never makes a second design.
+    let id = made;
+    if (!id) {
+      const answer = await create.run(
+        createDesign({
+          title: title.trim(),
+          layout: layoutOf(draft),
+          ...(workItem ? { workItem } : {}),
+          ...(folder ? { folder } : {}),
+        }),
+      );
+      if (answer?.kind !== "done" || typeof answer.body.artifact !== "string") return;
+      id = answer.body.artifact;
+    }
+    nav.replace(artifactPath(id));
+  }, [draft, createHold, busy, made, create, title, workItem, folder, nav]);
+
   const count = draft ? plural(draft.boards.length, "board") : undefined;
   const tools = draft
     ? [
@@ -461,7 +492,17 @@ export function DesignCreate() {
   return (
     <CreateShell
       kind="design"
-      notice={noPages && <Callout variant="info">{noPages}</Callout>}
+      notice={
+        noPages ? (
+          <Callout variant="info">{noPages}</Callout>
+        ) : create.answer && create.answer.kind !== "done" ? (
+          // SAID ACROSS THE PAGE, not in the panel: Create design is pressed
+          // with the panel closed as often as open.
+          <Callout variant="danger" title="The design was not created" live="polite">
+            <p>{create.answer.text}</p>
+          </Callout>
+        ) : null
+      }
       status={
         create.busy
           ? "Creating the design…"
@@ -473,9 +514,18 @@ export function DesignCreate() {
       }
       tools={tools}
       onCancel={() => (dirty ? setConfirmLeave(true) : leave())}
+      action={{
+        label: "Create design",
+        icon: <PaletteGlyph size="sm" />,
+        onSelect: () => void createOnly(),
+        ...(createHold
+          ? { disabledReason: createHold }
+          : busy
+            ? { disabledReason: "The design is being made." }
+            : {}),
+      }}
       handoff={{
-        tool: askTool(who, panel, true),
-        open: () => panel.setOpen(true),
+        tool: askTool(who, panel),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}
@@ -532,11 +582,6 @@ export function DesignCreate() {
             ]}
             notice={
               <>
-                {create.answer && create.answer.kind !== "done" && (
-                  <Callout variant="danger" title="The design was not created" live="polite">
-                    <p>{create.answer.text}</p>
-                  </Callout>
-                )}
                 {ask.refusal && (
                   <Callout
                     live="polite"
@@ -563,19 +608,6 @@ export function DesignCreate() {
             hold={blocked}
             busy={busy}
           >
-            <FormField label="Design name" required error={titleProblem(title)}>
-              {(field) => (
-                <Input
-                  id={field.id}
-                  aria-describedby={field.describedBy}
-                  aria-invalid={field.invalid || undefined}
-                  value={title}
-                  placeholder="Launch site"
-                  autoComplete="off"
-                  onChange={(event) => setTitle(event.currentTarget.value)}
-                />
-              )}
-            </FormField>
             <ListInput
               label="References"
               itemName="link"
@@ -602,6 +634,7 @@ export function DesignCreate() {
             onPick={pick}
             onBack={draft ? () => setPicking(false) : undefined}
             boards={draft?.boards.length ?? 0}
+            chosen={draft?.start}
           />
         </div>
       ) : (
@@ -699,6 +732,8 @@ export function DesignCreate() {
                 />
               ) : (
                 <DesignPanel
+                  title={title}
+                  onTitle={setTitle}
                   boards={draft.boards.length}
                   addBoard={
                     <AddBoardMenu
@@ -736,11 +771,20 @@ function LayoutPicker({
   onPick,
   onBack,
   boards,
+  chosen,
 }: {
   onPick: (layout: StarterLayout) => void;
   onBack: (() => void) | undefined;
   boards: number;
+  /** The layout the boards on the canvas were laid from, marked as chosen. */
+  chosen: string | undefined;
 }) {
+  // FOCUS LANDS ON THE CHOSEN LAYOUT when the reader comes back to them,
+  // on the first while none is.
+  const at = Math.max(
+    0,
+    STARTER_LAYOUTS.findIndex((l) => l.id === chosen),
+  );
   const first = useRef<HTMLLIElement>(null);
   useEffect(() => {
     first.current?.querySelector("button")?.focus();
@@ -757,7 +801,7 @@ function LayoutPicker({
         {STARTER_LAYOUTS.map((layout, i) => {
           const drawn = draftFrom(layout).boards;
           return (
-            <li key={layout.id} ref={i === 0 ? first : undefined}>
+            <li key={layout.id} ref={i === at ? first : undefined}>
               <ArtifactKindTile
                 kind="design"
                 label={layout.label}
@@ -776,6 +820,7 @@ function LayoutPicker({
                     <span className="design-create-start-blank" />
                   )
                 }
+                selected={layout.id === chosen}
                 onSelect={() => onPick(layout)}
               />
             </li>
@@ -846,11 +891,15 @@ function BoardPlaceholder({ board }: { board: DraftBoard }) {
   );
 }
 
-/** The panel with nothing selected: what the canvas holds, and how to shape a board. */
+/** The panel with nothing selected: the design's name, what the canvas holds, and how to shape a board. */
 function DesignPanel({
+  title,
+  onTitle,
   boards,
   addBoard,
 }: {
+  title: string;
+  onTitle: (title: string) => void;
   boards: number;
   /** Add board, drawn here where the list of boards that carries it is folded away. */
   addBoard: ReactNode;
@@ -861,11 +910,24 @@ function DesignPanel({
         <h2 className="design-create-panel-title">Design</h2>
         <span className="design-create-panel-add">{addBoard}</span>
       </div>
+      <FormField label="Design name" required error={titleProblem(title)}>
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid || undefined}
+            value={title}
+            placeholder="Launch site"
+            autoComplete="off"
+            onChange={(event) => onTitle(event.currentTarget.value)}
+          />
+        )}
+      </FormField>
       <p className="design-create-note">
         {boards === 0
           ? "Place a board on the canvas to start."
           : `${plural(boards, "board")} on the canvas. Select one to set its size, its place in the order and what it is for.`}{" "}
-        The design's name, brief and references are in Ask an agent.
+        The brief and references for an agent are in Ask an agent.
       </p>
     </div>
   );
