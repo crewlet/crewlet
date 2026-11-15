@@ -507,7 +507,8 @@ func TestAReadStandingByWhoseTakerIsGoneIsWithdrawnNotWaitedFor(t *testing.T) {
 			t.Fatalf("standing by = %v, %v", stood, err)
 		}
 		lapse(store)
-		got, found, err := rig.coordinator.awaitCapture(t.Context(), rig.get("t1"), SessionCaptureBudget)
+		got, found, err := rig.coordinator.awaitCapture(t.Context(), rig.get("t1"), SessionCaptureBudget,
+			captureInFlight)
 		if err != nil || !found {
 			t.Fatalf("awaitCapture = %v, %v", found, err)
 		}
@@ -1033,7 +1034,8 @@ func TestAWaitLeavesAReadStandingByWhoseTakerHolds(t *testing.T) {
 		if stood, err := rig.pending.StandBy(t.Context(), "t1", standby); err != nil || !stood {
 			t.Fatalf("standing by = %v, %v", stood, err)
 		}
-		got, found, err := rig.coordinator.awaitCapture(t.Context(), rig.get("t1"), 5*captureWaitTick)
+		got, found, err := rig.coordinator.awaitCapture(t.Context(), rig.get("t1"), 5*captureWaitTick,
+			captureInFlight)
 		if err != nil || !found {
 			t.Fatalf("awaitCapture = %v, %v", found, err)
 		}

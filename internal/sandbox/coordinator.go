@@ -5771,7 +5771,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			if !mayAsk && c.keepsSessions() {
 				return errAskAway
 			}
-			waited, found, err := c.awaitCapture(ctx, run, endCaptureWait)
+			waited, found, err := c.awaitCapture(ctx, run, endCaptureWait, captureInFlight)
 			switch {
 			case err != nil:
 				return fmt.Errorf("sandbox: ending run %s, whose turn's end waits for its capture: %w",

@@ -170,6 +170,17 @@ func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 		SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept, BoxSince: at.Add(-time.Hour)}
 }
 
+// overtakenBy is the final take of save's job at the place after save, refused
+// at now: a read that collected the job while save was still being kept, whose
+// keep the store then refused.
+func overtakenBy(save sandbox.SessionCapture, now time.Time) *sandbox.SessionCapture {
+	final := save
+	final.CaptureSeq, final.State, final.Final, final.Interrupted = save.CaptureSeq+1, sandbox.CaptureRefused, true,
+		false
+	final.Object, final.At, final.Reason = "", now, "the object store had no room for the session"
+	return &final
+}
+
 // continuableSources answers the sessions questions over rows, deciding each
 // row's continuity off runs and a relaunch of ana's turns on a Claude Code
 // member ([claudeTarget]).
@@ -501,7 +512,9 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 // being collected — its session is taken by the read that collects it — the
 // capture of that job still being kept, which a relaunch waits for, or its
 // record sent and never answered, which a relaunch asks the log for again
-// before it decides and continues where it landed; what a
+// before it decides and continues where it landed, a save of the job under way
+// as much as its newest capture, where a final take that overtook the save was
+// refused; what a
 // relaunch is launched on not to be said now — every member of the seat's
 // chain sitting out its plan, where which of them takes the relaunch decides
 // it, or the node holding the seat not answering; a round lost a second time,
@@ -512,8 +525,9 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 // saying why.
 //
 // Mutation: read a job still working as one that left no capture, a capture
-// still being kept, or one whose record awaits its answer, as one not kept, a
-// target that cannot be said as one with no
+// still being kept, or one whose record awaits its answer, as one not kept (a
+// save of the job under way beside a refused final take that overtook it among
+// them), a target that cannot be said as one with no
 // runner, a second loss as a round continued from its capture, or a collected
 // job's resume as one that carries nothing on in its box, and a case goes red.
 func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(t *testing.T) {
@@ -548,6 +562,22 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				unanswered.Object, unanswered.At = objstore.KeyAt(now.Add(-time.Minute)).String(), now
 				r.Status, r.Launch.Collected = sandbox.StatusRunning, true
 				r.Lost, r.Capture = &sandbox.JobLoss{Cause: sandbox.LossBoxGone}, &unanswered
+			}},
+		"a save of the job still being kept, beside a refused final take that overtook it": {
+			target: claudeTarget(), why: "capture 2) is still being kept",
+			run: func(r *sandbox.PendingRun, now time.Time) {
+				save := *r.Kept
+				save.CaptureSeq, save.State, save.Interrupted = 2, sandbox.CaptureBegun, true
+				save.Object, save.At = "", now.Add(-time.Second)
+				r.Saving, r.Capture = &save, overtakenBy(save, now)
+			}},
+		"a save of the job whose record awaits its answer, beside a refused final take that overtook it": {
+			target: claudeTarget(), why: "asks the executor log",
+			run: func(r *sandbox.PendingRun, now time.Time) {
+				save := *r.Kept
+				save.CaptureSeq, save.State, save.Interrupted = 2, sandbox.CaptureUnresolved, true
+				save.Object, save.At = objstore.KeyAt(now.Add(-time.Minute)).String(), now
+				r.Saving, r.Capture = &save, overtakenBy(save, now)
 			}},
 		"every member sitting out": {target: sittingOut, why: "sitting out its plan"},
 		"the holder not answering": {target: silent, why: "did not say"},

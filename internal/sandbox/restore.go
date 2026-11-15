@@ -113,9 +113,16 @@ import (
 // capture does: what that job did is lost to the relaunch whichever session
 // it starts in.
 //
+// A SAVE UNDER WAY IS WAITED FOR THE SAME WAY ([PendingRun.Saving],
+// saving.go): a capture of the job taken while it still worked, which a final
+// take of the job can overtake while it still uploads. Where that final take
+// is refused, the save is the job's newest session anybody kept, so the
+// relaunch waits for it as for the newest capture ([relaunchWaitsOn]), settles
+// and asks it as the newest, and names it by its own place.
+//
 // WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
 // capture whose taker is gone — its taker lease lapsed or held at another
-// epoch ([Coordinator.settleGoneTaker], session.go) — is settled from the
+// epoch ([Coordinator.settleGone], session.go) — is settled from the
 // turn's row on the log, so a relaunch that follows its taker's crash or
 // restart continues a capture whose record the log took before that read
 // rather than starting fresh beside it; and a capture whose record was sent
@@ -128,10 +135,11 @@ import (
 // keeps, and its run named the turn's own as a session it may read
 // ([namedThoughRefused], [ContinuedSession.KeptTurn]).
 //
-// SO A READER IS TOLD NEITHER AS DECIDED: while a capture is still being kept,
-// or its record awaits the log's answer, which the relaunch asks again
-// ([captureAwaitsAnswer]), what the relaunch continues cannot be said, and a
-// reader is told that rather than a no ([ReadContinuityOf]).
+// SO A READER IS TOLD NEITHER AS DECIDED: while a capture or a save under way
+// is still being kept ([relaunchWaitsOn]), or its record awaits the log's
+// answer, which the relaunch asks again ([captureAwaitsAnswer]), what the
+// relaunch continues cannot be said, and a reader is told that rather than a
+// no ([ReadContinuityOf]).
 //
 // # Never a session that ran out of context
 //
@@ -597,9 +605,9 @@ type ReadContinuity struct {
 // UNDECIDED WHERE THE LAUNCH WOULD NOT DECIDE NOW EITHER, never a no: the job a
 // relaunch would follow still working, or being collected — whose session is
 // taken by the read that collects it, and kept off that read; the capture of
-// that job still being kept, which a relaunch waits for ([relaunchCaptureWait]),
-// or its record sent and never answered, which a relaunch asks the log for
-// again ([captureAwaitsAnswer]);
+// that job, or a save under way beside it, still being kept, which a relaunch
+// waits for ([relaunchCaptureWait]), or its record sent and never answered,
+// which a relaunch asks the log for again ([captureAwaitsAnswer]);
 // what the launch would be launched on not to be said now
 // ([RelaunchTarget.Undecided]); a relaunch that only the resume of the job's
 // collection decides, as it reads how the job ended, until its turn begins and
@@ -609,7 +617,7 @@ type ReadContinuity struct {
 // carries its round on; and an ended row whose conversation's head the read did
 // not name beside it. Once the turn has said, the row is decided on what it
 // said, its review included. now is the reader's clock, against which a begun
-// capture is in flight ([captureInFlight]) and an unanswered one's object
+// capture is in flight ([relaunchWaitsOn]) and an unanswered one's object
 // within the window a record may name it in ([pastRecordWithin]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
@@ -719,30 +727,36 @@ func endingContinuity(row executorkeep.TurnRow, run *PendingRun, later laterLaun
 // instead, as its conversation names its turns.
 //
 // UNDECIDED WHILE THE CAPTURE OF THE JOB IT FOLLOWS AWAITS ITS RECORD'S ANSWER
-// ([captureAwaitsAnswer]), as while that capture is still being kept: the
-// relaunch asks the log for that record again before it decides, and
-// continues the capture where it landed ([Coordinator.ContinuedCapture]), so
-// "not continued, its record was never answered" would be a no the relaunch
-// itself may not give. Not in a company that keeps no session, whose relaunch
-// asks nothing of a kept capture ([RelaunchTarget.NoKept]).
+// ([captureAwaitsAnswer]), as while a capture the relaunch waits for is still
+// being kept ([relaunchWaitsOn]), a save under way beside the job's newest as
+// much as the newest: the relaunch waits for the one and asks the log for
+// the other's record again before it decides, and continues the capture where
+// it landed ([Coordinator.ContinuedCapture]), so "not continued, its record
+// was never answered" would be a no the relaunch itself may not give. Each is
+// named by its own place. Not in a company that keeps no session, whose
+// relaunch asks nothing of a kept capture ([RelaunchTarget.NoKept]).
 func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
 	later laterLaunch, now time.Time) ReadContinuity {
 
-	switch {
-	case jobWorking(run):
+	if jobWorking(run) {
 		return ReadContinuity{Why: fmt.Sprintf("the job a relaunch would follow (launch %d) is still "+
 			"working or being collected, and its session is taken and kept by the read that collects it",
 			run.LaunchSeq)}
-	case captureInFlight(run, now):
+	}
+	if waits := relaunchWaitsOn(run, now); waits != nil {
 		return ReadContinuity{Why: fmt.Sprintf("the capture of the job a relaunch would follow (launch %d, "+
-			"capture %d) is still being kept", run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
-	case target.Undecided:
+			"capture %d) is still being kept", waits.LaunchSeq, waits.CaptureSeq)}
+	}
+	if target.Undecided {
 		return ReadContinuity{Why: target.Why}
-	case target.NoKept == "" && captureAwaitsAnswer(run, now):
-		return ReadContinuity{Why: fmt.Sprintf("the record of the capture of the job a relaunch would "+
-			"follow (launch %d, capture %d) was sent and never answered, and a relaunch asks the executor "+
-			"log for it again before it decides, continuing that capture where it landed",
-			run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
+	}
+	if target.NoKept == "" {
+		if asks := captureAwaitsAnswer(run, now); asks != nil {
+			return ReadContinuity{Why: fmt.Sprintf("the record of the capture of the job a relaunch would "+
+				"follow (launch %d, capture %d) was sent and never answered, and a relaunch asks the executor "+
+				"log for it again before it decides, continuing that capture where it landed",
+				asks.LaunchSeq, asks.CaptureSeq)}
+		}
 	}
 	kept := ContinuityOf(row, &run, run.LaunchSeq, target.restorer())
 	if target.NoKept != "" {
@@ -854,9 +868,10 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 
 // RereadsRow reports whether a reader that read row below the level a relaunch
 // reads it (executordomain.RelaunchRead) must read it again there before deciding its
-// continuity: only where the decision reaches the row — the turn live and not
-// ending, its job neither working nor its capture still being kept nor
-// awaiting its record's answer ([captureAwaitsAnswer]) — and the
+// continuity: only where the decision reaches the row (the turn live and not
+// ending, its job neither working nor a capture or save of it still being kept,
+// [relaunchWaitsOn], nor awaiting its record's answer, [captureAwaitsAnswer])
+// and the
 // row names another capture than the one run's record keeps, or the record
 // keeps none: whether a relaunch of a turn that has kept nothing continues the
 // session its first launch was handed is decided on the row's hold as the
@@ -870,8 +885,8 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 // (statelog's linearizable read), one after another, for an answer the row it
 // held already gave.
 func RereadsRow(row executorkeep.TurnRow, run *PendingRun, now time.Time) bool {
-	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) ||
-		captureAwaitsAnswer(*run, now) {
+	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || relaunchWaitsOn(*run, now) != nil ||
+		captureAwaitsAnswer(*run, now) != nil {
 		return false
 	}
 	kept := run.Kept
@@ -907,20 +922,46 @@ func jobWorking(run PendingRun) bool {
 	return false
 }
 
-// captureAwaitsAnswer reports whether run's newest capture is one of the job a
-// relaunch would follow whose record was sent and never answered, which an ask
-// may still land: its object not past objstore.RecordWithin
-// ([pastRecordWithin]), past which the ask refuses it unasked. A relaunch asks
-// that record again under its own operation before it decides what it
-// continues ([Coordinator.settleUnresolved]) and continues the capture where
-// it landed ([Coordinator.ContinuedCapture]), so until then no reader can say
-// what that relaunch continues. An earlier job's capture is no such question:
-// a relaunch continues only the newest of the job it follows ([followedCapture]).
-func captureAwaitsAnswer(run PendingRun, now time.Time) bool {
-	c := run.Capture
-	return c != nil && c.State == CaptureUnresolved && c.LaunchSeq == run.LaunchSeq &&
-		!pastRecordWithin(c.Object, now)
+// captureAwaitsAnswer is the stamp of the job a relaunch would follow whose
+// record was sent and never answered, which an ask may still land
+// ([SessionCapture.unresolvedWithin]: its object not past
+// objstore.RecordWithin, past which the ask refuses it unasked): run's newest
+// capture, else its save under way ([PendingRun.saving]); nil where neither
+// is. A relaunch asks that record again under its own operation before it
+// decides what it continues ([Coordinator.settleUnresolved]) and continues
+// the capture where it landed ([Coordinator.ContinuedCapture]), so until then
+// no reader can say what that relaunch continues. An earlier job's stamp is no
+// such question: a relaunch continues only a capture of the job it follows
+// ([followedCapture]).
+//
+// THE SAVE AS MUCH AS THE NEWEST: a final take of the job that overtook a save
+// whose record went unanswered holds the newest place, and where that take
+// was refused, the save, once its ask lands it, is the job's newest kept
+// session.
+func captureAwaitsAnswer(run PendingRun, now time.Time) *SessionCapture {
+	for _, stamp := range []*SessionCapture{run.Capture, run.saving(now)} {
+		if stamp != nil && stamp.LaunchSeq == run.LaunchSeq && stamp.unresolvedWithin(now) {
+			return stamp
+		}
+	}
+	return nil
 }
+
+// relaunchWaitsOn is the stamp a relaunch of run's turn waits for before it
+// decides which session it continues ([Coordinator.ContinuedCapture]), and a
+// reader waits on rather than decide ([relaunchContinuity], [RereadsRow]); nil
+// where there is none. It is every stamp the turn's end waits for
+// ([stampInFlight]), the newest capture being kept or stood by for, else a
+// save under way being kept, answered as the stamp itself so that the reason a
+// relaunch or a reader gives names the one it waited on by its own place,
+// never the newest place a final take that overtook a save holds.
+func relaunchWaitsOn(run PendingRun, now time.Time) *SessionCapture {
+	return stampInFlight(run, now)
+}
+
+// relaunchWaits is [relaunchWaitsOn] as the rule a relaunch's wait reads
+// ([Coordinator.awaitCapture]): whether it still waits.
+func relaunchWaits(run PendingRun, now time.Time) bool { return relaunchWaitsOn(run, now) != nil }
 
 // boxCarry is whether a relaunch carrying a run's round on in the box its job
 // ran in would continue the session that box holds ([inParkedBox]).
@@ -1069,8 +1110,8 @@ type ContinuedSession struct {
 }
 
 // relaunchCaptureWait bounds how long a relaunch waits for the capture of the
-// job it follows to be kept, on the frame that relaunches: see the file
-// comment.
+// job it follows to be kept, or a save under way beside it
+// ([relaunchWaitsOn]), on the frame that relaunches: see the file comment.
 //
 // FIFTEEN SECONDS, from what an ordinary keep is: the turn's operations minted
 // and the seat's live sessions listed (reads of the coordination store), an
@@ -1100,7 +1141,10 @@ const relaunchCaptureWait = 15 * time.Second
 // followed job's capture whose record was never answered, asked again under
 // its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
 // alone, it left a relaunch reading a record the log had taken as one never
-// answered, and starting a session of its own beside it.
+// answered, and starting a session of its own beside it. A SAVE UNDER WAY of
+// the turn is waited for, settled and asked the same way as its newest
+// capture ([relaunchWaitsOn], [captureAwaitsAnswer]), and a reason the wait
+// leaves names the stamp it waited on.
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
@@ -1125,7 +1169,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: what the wait
 	// below leaves of it is what an ask of an unanswered record gets.
 	settleBy := time.Now().Add(c.relaunchWait)
-	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
+	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait, relaunchWaits)
 	if !found {
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"
@@ -1142,17 +1186,18 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 			"could not be read: %v", err)
 	}
 	var why string
-	if captureInFlight(run, c.now()) {
+	if waits := relaunchWaitsOn(run, c.now()); waits != nil {
 		why = fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
 			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
-			run.Capture.LaunchSeq, run.Capture.CaptureSeq, c.relaunchWait)
+			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
 	} else {
-		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved &&
-			newest.LaunchSeq == run.LaunchSeq {
-			ask, cancel := context.WithDeadline(ctx, settleBy)
-			run = c.settleUnresolved(ask, settleBy, run)
-			cancel()
-		}
+		// THE FOLLOWED JOB'S UNANSWERED RECORDS, its newest capture's and a
+		// save's beside it: one past the window a record may name it in is
+		// refused unasked, and stamped so.
+		followed := func(stamp SessionCapture) bool { return stamp.LaunchSeq == run.LaunchSeq }
+		ask, cancel := context.WithDeadline(ctx, settleBy)
+		run = c.settleUnresolved(ask, settleBy, run, followed)
+		cancel()
 		_, why = followedCapture(run, run.LaunchSeq)
 	}
 	// THE TURN'S OWN WHERE ITS RECORD KEEPS A CAPTURE OF IT, read after the

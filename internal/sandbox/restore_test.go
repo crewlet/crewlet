@@ -1267,7 +1267,9 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // now either: a job still working, or a claim whose read has not taken the job's
 // final capture and whose turn has not begun, a capture still being kept, one
 // whose record awaits the log's answer, which the relaunch asks again and
-// continues where it landed — but for an earlier job's, which no relaunch
+// continues where it landed (a save under way beside a refused final take that
+// overtook it as much as the newest capture, named by its own place), but for
+// an earlier job's, which no relaunch
 // continues, one whose object is past the window a record may name it in,
 // which the ask refuses unasked, and in a company that keeps no session,
 // whose relaunch asks nothing — a target that cannot be said, a round lost a
@@ -1286,7 +1288,9 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // final capture, or whose turn has said what it does, as one still collecting,
 // leave a turn that said it undecided, let a box of another harness or cell
 // count as the parked one, tell a refused capture the row names by the
-// run's record alone, decide a capture whose record awaits its answer, or
+// run's record alone, decide a capture or a save whose record awaits its
+// answer, or one still being kept, name the newest place for the save waited
+// on, or
 // wait on one past its window, an earlier job's, or one in a company that
 // keeps no session, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
@@ -1314,6 +1318,15 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	unanswered := func(minted time.Time) *SessionCapture {
 		c := kept
 		c.CaptureSeq, c.State, c.Object, c.At = 2, CaptureUnresolved, objstore.KeyAt(minted).String(), minted
+		return &c
+	}
+	// overtook is the job's final take at the place after save, refused: a
+	// read that collected the job while save was still being kept, whose keep
+	// the store then refused.
+	overtook := func(save SessionCapture) *SessionCapture {
+		c := final
+		c.CaptureSeq, c.State, c.Interrupted, c.At = save.CaptureSeq+1, CaptureRefused, false, now
+		c.Reason = "the object store had no room for the session"
 		return &c
 	}
 	for name, tc := range map[string]struct {
@@ -1405,6 +1418,19 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		}},
 		"a capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
 			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
+		"a save of the job being kept, beside a refused final take that overtook it": {target: target,
+			whyHolds: "(launch 2, capture 2) is still being kept", run: func(r *PendingRun) {
+				save := kept
+				save.CaptureSeq, save.State, save.Interrupted, save.At = 2, CaptureBegun, true, now.Add(-time.Second)
+				r.Saving, r.Capture = &save, overtook(save)
+			}},
+		"a save of the job whose record awaits its answer, beside a refused final take that overtook it": {
+			target: target, whyHolds: "(launch 2, capture 2) was sent and never answered",
+			run: func(r *PendingRun) {
+				save := unanswered(now.Add(-time.Minute))
+				save.Interrupted = true
+				r.Saving, r.Capture = save, overtook(*save)
+			}},
 		"a lost job's capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
 			run: func(r *PendingRun) {
 				r.Status, r.Launch.Collected, r.Lost = StatusRunning, true, &JobLoss{Cause: LossBoxGone}
@@ -1464,12 +1490,15 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // ANSWER: where the decision reaches the row's capture and the row names
 // another than the one its run's record keeps — a copy of the log behind the
 // record — never where it names the kept one, which decides as the relaunch's
-// read would, nor where the job still works, its capture is still being kept
-// or awaits its record's answer, or its turn has ended, which decide without
-// the row's capture. A capture unanswered past the window a record may name it
+// read would, nor where the job still works, its capture, or a save of it
+// under way beside a refused final take, is still being kept or awaits its
+// record's answer, or its turn has ended, which decide without the row's
+// capture. A capture unanswered past the window a record may name it
 // in awaits nothing, and its row is read again.
 //
-// Mutation: read every live row again, or none, and a case goes red.
+// Mutation: read every live row again, or none, or read again a row whose
+// job's save under way the relaunch would still wait for or ask, and a case
+// goes red.
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1492,12 +1521,27 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 			Object: objstore.KeyAt(minted).String(), At: minted, Through: new(0)}
 		return r
 	}
+	// besideASave is a run whose job's final take at place 4 was refused while
+	// a save of the job at place 3 was in state, its object minted at minted.
+	besideASave := func(state CaptureState, minted time.Time) *PendingRun {
+		r := run()
+		save := SessionCapture{LaunchSeq: 2, CaptureSeq: 3, State: state, Interrupted: true,
+			Object: objstore.KeyAt(minted).String(), At: minted, Through: new(0)}
+		final := SessionCapture{LaunchSeq: 2, CaptureSeq: 4, State: CaptureRefused, Final: true, At: now,
+			Through: new(0)}
+		r.Saving, r.Capture = &save, &final
+		return r
+	}
 	for name, tc := range map[string]struct {
 		row   executorkeep.TurnRow
 		run   *PendingRun
 		again bool
 	}{
-		"a row behind its run's record":    {row: naming(1), run: run(), again: true},
+		"a row behind its run's record": {row: naming(1), run: run(), again: true},
+		"a row whose job's save under way is being kept": {row: naming(1),
+			run: besideASave(CaptureBegun, now.Add(-time.Second))},
+		"a row whose job's save under way awaits its record's answer": {row: naming(1),
+			run: besideASave(CaptureUnresolved, now.Add(-time.Minute))},
 		"a row naming the kept capture":    {row: naming(2), run: run()},
 		"a row whose job is still working": {row: naming(1), run: working},
 		"an ended turn's row":              {row: ended, run: run()},

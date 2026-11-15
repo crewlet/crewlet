@@ -2780,7 +2780,7 @@ type PendingStore interface {
 	// ([SessionCapture.sameTake]), still BEGUN.
 	// It is the write of a node that did not take the capture and settles it
 	// from the executor log once its taker is gone
-	// ([Coordinator.settleGoneTaker]) — a decision made from a copy of the
+	// ([Coordinator.settleGone]) — a decision made from a copy of the
 	// row on which the take stood begun, so where the row has moved on since
 	// — the taker's own outcome stamped, an unresolved record it sent among
 	// them, or a newer take's place — nothing is written and false is
