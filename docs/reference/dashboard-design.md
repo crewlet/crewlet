@@ -3147,8 +3147,10 @@ company did.** That is Home until its reader arranges it (see
   one refusing and on the company's when the company's is, with the refusing
   window focused (see [Company › Budgets](#company--budgets-raised-in-place)),
   and **Reassign** of the item it was on. An ask with no options is
-  answered in words in place: **Reply** opens the field under the question
-  and sends `comment_on_work_item{answers, body}`. Every
+  answered in words in place: it says "Asks for a written answer" (what it
+  asks for, never "Answered in words", which under an open question read as
+  though it had been), and **Answer** opens the field ("Answer CTO") under the
+  question and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. A parked run and a stopped seat sit under the same head
   as an ask, the seat's name said there and not again in the row's title, with
@@ -3353,7 +3355,9 @@ question (with **executor** after the name), or what an update did ("Mentioned
 you", "Changed its status") with its excerpt after it in the quiet ink. And
 the task it is about, as a quiet link of its own under the row: its key and
 title (one `work_items{key}` read resolves the titles of every row that names
-its task by key alone), which opens the task in the frame's side panel on a
+its task by key alone), the title left out where it IS the row's question, as
+an ask filed with its task (`create_work_item{ask}`) asks in the task's own
+title, which opens the task in the frame's side panel on a
 plain click and its own page on a modified one. An excerpt the engine
 COMPOSED names its author by name as the row's head does: the engine writes
 "maya-ops put LEAD-3 at position 1 of your priorities" with a handle, for the
@@ -3364,8 +3368,11 @@ column of rows read as a column of alerts) and is the one row marked current.
 
 **The pane reads one item top to bottom, with nothing to open.** One sentence
 says who is asking, what is asked of the reader and on which task ("CTO asks
-for your approval on LEAD-12 Q4 release plan"); the time is on the row, so it
-is not repeated. The question follows in large type, then its context, then
+for your approval on LEAD-12 Q4 release plan", the task by key alone where its
+title is the question); the time is on the row, so it is not repeated. The
+question follows in large type, then its context (for an ask filed with its
+task, the task's description, read for the pane, since the engine files that
+ask's body as the title and the asker's words as the description), then
 the asker's reasoning on an inset ground ("CTO recommends **Hold release**")
 with the evidence it cites under it: a task, a page, a turn trace, an
 executor or a link. An update's pane names what it did as its heading, quotes a
@@ -3425,7 +3432,8 @@ choice}`), the recommended one first and filled, all through ONE write so a
 second choice cannot be sent while the first is in flight. **Something else**
 opens the field in their place and sends the answer in words
 (`{item, answers, body}`); an ask with no options is answered in that field
-from the start. Where the ask promised a channel (`decision.inform`) the line
+from the start. The field is worded as an answer ("Answer CTO"),
+never as an instruction to the asker ("Tell … what you want"). Where the ask promised a channel (`decision.inform`) the line
 under the answer says "Your answer is also posted to #channel": the engine
 holds the asker to it (`ExternalNotification.owes`), and an ask that promised
 nothing draws no such line. A parked executor's pane is drawn as a
@@ -3724,8 +3732,11 @@ A change is a sentence about the task ("Jane Founder filed this in ENG",
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
-is a card with its ask, answer or choice and a **Reply**, under its author and
-the day and minute it was written. Its prose keeps a reading measure of about
+is a card with its ask, answer or choice and a **Reply**, which says something
+without answering, under its author and the day and minute it was written. An
+open ask put to the reader is answered on its own card, and an ask with no
+options says what it asks for ("Asks for a written answer") over **Answer**,
+never a second Reply. Its prose keeps a reading measure of about
 seventy characters while a table or a block of code in it takes the card's
 whole width, and a report's headings step it into sections. A comment much
 longer than a screenful is folded behind **Show more** (the kit's `Clamp`),
@@ -5534,7 +5545,7 @@ a tool arrives in it with the control that sends it. The controls
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
 | Link an atlas entry · remove one | A work item's rail, Atlas entries | `update_work_item{item, linked_entries}`, a delta of entry ids; adding takes Atlas as well as Worklet |
 | An option · Something else and Send answer | A parked executor in the Inbox's pane, and its Answer dialog | `answer_executor{turn_id, launch_id, choice}` / `answer_executor{turn_id, launch_id, answer}` |
-| Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
+| Accept · Change and Submit · Something else · Answer | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
 | Create › Folder | A space's outline, at the end of an open level | `write_page{title, body: "", container, parent?}`: a page with an empty body is a folder |

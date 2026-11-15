@@ -200,7 +200,7 @@ test("an answer in words sends on Enter, and its hint says the keys", async () =
       layout="buttons"
     />,
   );
-  const field = screen.getByRole("textbox", { name: "Reply to Ada Okonkwo" });
+  const field = screen.getByRole("textbox", { name: "Answer Ada Okonkwo" });
   expect(document.querySelector(".crewlet-composer__hint")!.textContent).toMatch(
     /to send, .*for a new line$/,
   );

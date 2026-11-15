@@ -2848,3 +2848,31 @@ test("a reader without Gitlet is asked no change, and the task draws no Changes 
   expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
   expect(screen.queryByRole("table", { name: "Changes" })).toBeNull();
 });
+
+// AN ASK NOBODY HAS ANSWERED SAYS WHAT IT ASKS FOR, and its card offers one
+// Reply: "Answered in words" under an open question read as though it had
+// been answered, and the answer's own button was a second "Reply" beside the
+// comment's, which says something without answering.
+test("an open ask in words reads as waiting for its answer, with one Reply and one Answer", async () => {
+  const words = {
+    id: "c-9",
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent" as const,
+    body: "Which vendor should we use?",
+    created_at: "2031-04-12T09:00:00Z",
+    ask: "jane",
+  };
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({ comments: [words] }),
+      work_comments: { comments: [words] },
+    },
+  });
+  await settle();
+  const card = screen.getAllByText("Which vendor should we use?")[0]!.closest("article")!;
+  expect(within(card).getByText("Asks for a written answer")).toBeTruthy();
+  expect(card.textContent).not.toContain("Answered in words");
+  expect(within(card).getAllByRole("button", { name: "Reply" })).toHaveLength(1);
+  expect(within(card).getByRole("button", { name: "Answer" })).toBeTruthy();
+});

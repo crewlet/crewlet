@@ -66,6 +66,7 @@ import {
   type AnswerWords,
   type InboxRow,
   type Who,
+  titleBeside,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
@@ -555,7 +556,12 @@ const InboxItem = memo(function InboxItem({
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
+          <TaskLink
+            item={item}
+            label={rowKey(row)}
+            title={titleBeside(row, title ?? taskTitleOf(row))}
+            glyph
+          />
         ) : undefined
       }
     >

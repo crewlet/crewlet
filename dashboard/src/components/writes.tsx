@@ -790,7 +790,7 @@ type AnswerAskProps = {
  * Accept sends the recommended option; Change opens every option with its
  * detail line, plus "Something else", whose field sends a reply instead of a
  * choice. An ask with no recommendation offers Answer in their place, and an
- * ask with no options at all offers Reply, which opens the field alone. While
+ * ask with no options at all offers Answer, which opens the field alone. While
  * the options are open the recommendation line is hidden: the list says it
  * on the option itself.
  *
@@ -906,7 +906,9 @@ function AskAnswer({
   };
   // ONE FIELD'S WORDS FOR EVERY LAYOUT: "instead" only beside options it
   // replaces, and one verb for sending an answer.
-  const placeholder = words ? `Tell ${asker} what you want` : `Tell ${asker} what you want instead`;
+  // AN ANSWER, WORDED AS ONE: "Tell CTO what you want" read as giving an
+  // instruction to the person who asked a question.
+  const placeholder = words ? `Answer ${asker}` : `Answer ${asker} in your own words`;
   const actions = (
     <>
       <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
@@ -926,7 +928,7 @@ function AskAnswer({
   );
   const composer = (
     <Composer
-      label={words ? `Reply to ${asker}` : "Something else"}
+      label={words ? `Answer ${asker}` : "Something else"}
       value={text}
       onChange={setText}
       onSubmit={submit}
@@ -948,7 +950,7 @@ function AskAnswer({
         return (
           <Stack gap={2}>
             <Composer
-              label={`Reply to ${asker}`}
+              label={`Answer ${asker}`}
               value={text}
               onChange={setText}
               onSubmit={submit}
@@ -1024,7 +1026,10 @@ function AskAnswer({
               blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
               onPress={() => onOpenChange(true)}
             >
-              {rec ? "Change" : words ? "Reply" : "Answer"}
+              {/* ANSWER, NOT REPLY: the comment the ask sits on offers Reply,
+                  which says something WITHOUT answering, and two Replies on
+                  one card did two different things. */}
+              {rec ? "Change" : "Answer"}
             </WriteButton>
           </span>
           <RefusalNote write={write} />

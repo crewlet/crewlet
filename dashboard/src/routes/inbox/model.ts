@@ -857,9 +857,50 @@ export function answeredTexts(answered: AnsweredDecision): string[] {
   return "run" in answered ? runAskTexts(answered.run) : askTexts(answered.ask);
 }
 
-/** What an ask says beside its question: the body, or what follows its first line. */
+/** Whether two texts say the same words, their markdown, case and spacing aside. */
+function sameWords(a: string, b: string): boolean {
+  const words = (text: string) => plainText(text).replace(/\s+/g, " ").trim().toLowerCase();
+  return words(a) !== "" && words(a) === words(b);
+}
+
+/**
+ * Whether an ask is its task's own question: filed WITH the task
+ * (`create_work_item{ask}`), whose title is the question and whose body the
+ * engine fills with that title, while the context the asker wrote is the
+ * task's DESCRIPTION, which the ask row does not carry ([askContext]).
+ */
+export function askIsItsTask(ask: WorkAskRow): boolean {
+  return sameWords(ask.body, ask.title);
+}
+
+/**
+ * The title a row names its task by beside what the row asks, or undefined
+ * where the title IS the question: an ask filed with its task asks in the
+ * task's own title, and the row and the pane printed the sentence twice.
+ */
+export function titleBeside(row: InboxRow, title: string | undefined): string | undefined {
+  if (!title) return title;
+  const question =
+    row.kind === "decision" && row.subject.kind === "ask"
+      ? askQuestion(row.subject.ask)
+      : row.kind === "answered"
+        ? answeredQuestion(row.answered)
+        : "";
+  return sameWords(question, title) ? undefined : title;
+}
+
+/**
+ * What an ask says beside its question: the body, or what follows its first
+ * line, and never the question again. An ask filed with its task carries the
+ * task's title as its body ([askIsItsTask]), which is no context: that ask's
+ * context is the task's description, which the pane reads.
+ */
 export function askContext(ask: WorkAskRow): string {
-  if (ask.decision || askIsMessage(ask)) return ask.body.trim();
+  // A MESSAGE IS HEADED "A question for you" and read whole below it, its
+  // own task's long title included, so it keeps its body.
+  if (askIsMessage(ask)) return ask.body.trim();
+  if (askIsItsTask(ask)) return "";
+  if (ask.decision) return sameWords(ask.body, ask.decision.question) ? "" : ask.body.trim();
   const lines = ask.body.split("\n");
   const first = lines.findIndex((l) => l.trim());
   return first < 0
