@@ -439,14 +439,15 @@ func (p *Pulls) Owed(info *jetstream.ConsumerInfo) uint64 {
 }
 
 // FirstPullRemakes is how many times a reader makes its consumer again after
-// one never got its first pull ([Unpulled]), before it asks that consumer once
-// more on the same inbox and waits for the delivery like any other.
+// one never got its first pull ([Unpulled]), before it waits for that
+// consumer's delivery like any other — this package's readers, on the same
+// inbox, and internal/objstore/natsobj's gets and walks alike, since the drop
+// is the cluster's whoever reads.
 //
-// THREE, internal/objstore/natsobj's own number for the same drop, for its
-// reason: a cluster dropped a first pull one read in twenty-five at the worst
+// THREE: a cluster dropped a first pull one read in twenty-five at the worst
 // measured, and a pull made again was dropped as often as a first one, so
-// after three one read in four hundred thousand would still be waiting — and a
-// consumer still without its pull after three is behind a link slow enough
-// to hold the pull itself back, where a fourth consumer only adds a create
-// while the pull is on its way.
+// after two remakes one read in fifteen thousand would still be waiting, and
+// after three one in four hundred thousand. A consumer still without its pull
+// after three is behind a link slow enough to hold the pull itself back, where
+// a fourth consumer only adds a create while the pull is on its way.
 const FirstPullRemakes = 3
