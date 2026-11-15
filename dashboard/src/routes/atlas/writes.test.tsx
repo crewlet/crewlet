@@ -204,7 +204,11 @@ describe("what the write controls send", () => {
 
   test("the words over an entry's diagram count what the diagram draws, the entries around it among them", () => {
     expect(touchingSentence({ usedBy: 0, reliesOn: 0, around: 1 })).toBe(
-      "0 entries rely on it, it relies on 0, and 1 stands around it.",
+      "Nothing relies on it, it relies on nothing, and 1 stands around it.",
+    );
+    // Mutation: count none as "0 entries" again.
+    expect(touchingSentence({ usedBy: 0, reliesOn: 0, around: 0 })).toBe(
+      "Nothing relies on it, and it relies on nothing.",
     );
     expect(touchingSentence({ usedBy: 1, reliesOn: 2, around: 0 })).toBe(
       "1 entry relies on it, and it relies on 2.",
@@ -255,10 +259,16 @@ describe("a reader who may not write", () => {
         .getAttribute("href"),
     ).toBe("#/company/org");
     fireEvent.click(screen.getByRole("button", { name: /More to do with web-1/ }));
+    // SAID ONCE, above the items, which stay listed and held. Mutation: leave
+    // each item its own copy of the sentence.
+    const menu = await screen.findByRole("menu");
+    const panel =
+      menu.closest("[role='dialog'], .crewlet-menu, .crewlet-popover") ?? menu.parentElement!;
+    expect(panel.textContent!.split(SEATLESS)).toHaveLength(2);
     for (const name of [/Set owner/, /Link a page/, /Merge with/, /Split/, /Retire/, /Purge/]) {
       const item = await screen.findByRole("menuitem", { name });
       expect(item.getAttribute("aria-disabled"), String(name)).toBe("true");
-      expect(item.textContent, String(name)).toContain(SEATLESS);
+      expect(item.textContent, String(name)).not.toContain(SEATLESS);
       expect(item.textContent, String(name)).not.toContain(WRITE_REASONS.not_served);
     }
   });
@@ -268,6 +278,26 @@ describe("a reader who may not write", () => {
     const confirm = await screen.findByRole("button", { name: "Confirm" });
     await waitFor(() => expect(reasonOf(confirm)).toContain(WRITE_REASONS.not_served));
     expect(document.querySelector(".atlas-actions__note")).toBeNull();
+  });
+
+  // A PURGED ENTRY IS LEFT: the toast says it is gone, and its page stayed
+  // drawn with every control live until a reload said Not Found. Mutation:
+  // drop the leave on success and the address stays on the erased entry.
+  test("a purge of the entry leaves its page for the atlas", async () => {
+    const admin = { ...ADA, grants: ["atlas", "admin"], acts: [...ATLAS_ACTS, "atlas_purge"] };
+    const { company } = mountEntry(admin);
+    fireEvent.click(await screen.findByRole("button", { name: /More to do with web-1/ }));
+    const purge = await screen.findByRole("menuitem", { name: /Purge/ });
+    await waitFor(() => expect(purge.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.click(purge);
+    const dialog = await screen.findByRole("alertdialog", { name: "Purge from the atlas" });
+    // THE KEY IS TYPED BACK, as the dialog asks.
+    const key = disputedServer(company).entry.ref.key;
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: key } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Erase for good" }));
+    await waitFor(() => expect(posted.map((one) => one.tool)).toEqual(["atlas_purge"]));
+    await waitFor(() => expect(location.hash).toBe("#/company/atlas"));
+    expect(location.hash).not.toContain(company.web1.id);
   });
 
   test("a purge is held for anybody but an administrator, in words", async () => {

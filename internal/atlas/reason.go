@@ -3,6 +3,8 @@ package atlas
 import (
 	"fmt"
 	"slices"
+	"strings"
+	"unicode/utf8"
 )
 
 // EVERY SENTENCE HERE IS THE ENGINE'S OWN: a closed word of the vocabulary and
@@ -30,22 +32,28 @@ var signalReasons = map[SignalKind]string{
 }
 
 // Reason is why e is not quiet, in one sentence: its most urgent open signal
-// and how many more are open, or that its sources disagree. Empty for a quiet
-// entry. It says only what the reader of e may read, since e carries only the
-// signals they may.
+// and, beside it, a second one named or how many more are open; or that its
+// sources disagree. Empty for a quiet entry. It says only what the reader of e
+// may read, since e carries only the signals they may.
+//
+// A SECOND SIGNAL IS NAMED, never "one more thing needs attention", which told
+// a reader there was something else and nothing of what. Two or more beyond
+// the first are counted.
 func (e Entry) Reason() string {
 	if len(e.Signals) > 0 {
-		first := e.Signals[0]
+		at := 0
 		if i := slices.IndexFunc(e.Signals, func(s Signal) bool { return s.Severity == SeverityDanger }); i >= 0 {
-			first = e.Signals[i]
+			at = i
 		}
-		sentence := signalReasons[first.Kind]
-		if sentence == "" {
-			sentence = "Something on it needs attention"
-		}
+		first := e.Signals[at]
+		sentence := reasonOf(first.Kind)
 		switch more := len(e.Signals) - 1; {
 		case more == 1:
-			return sentence + ", and one more thing needs attention"
+			other := e.Signals[1-at]
+			if other.Kind == first.Kind {
+				return sentence + ", and one more like it"
+			}
+			return sentence + ", and " + lowerFirst(reasonOf(other.Kind))
 		case more > 1:
 			return fmt.Sprintf("%s, and %d more things need attention", sentence, more)
 		}
@@ -60,4 +68,19 @@ func (e Entry) Reason() string {
 		return "A newer report contradicts what a person recorded"
 	}
 	return "Two sources disagree, and nobody has settled it"
+}
+
+// reasonOf is what a signal of kind k means for its entry.
+func reasonOf(k SignalKind) string {
+	if sentence := signalReasons[k]; sentence != "" {
+		return sentence
+	}
+	return "Something on it needs attention"
+}
+
+// lowerFirst is a sentence of signalReasons set after a comma: every one opens
+// with an article, never a name.
+func lowerFirst(sentence string) string {
+	r, size := utf8.DecodeRuneInString(sentence)
+	return strings.ToLower(string(r)) + sentence[size:]
 }

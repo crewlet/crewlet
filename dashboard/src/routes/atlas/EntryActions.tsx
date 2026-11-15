@@ -28,6 +28,8 @@ import {
   type MenuEntry,
   type SelectOption,
 } from "@crewlethq/ui";
+import { usePeek } from "~/app/frame/peekAddress.ts";
+import { useNavigator } from "~/app/router.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { href } from "~/app/router.tsx";
 import type {
@@ -45,7 +47,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
-import { SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
+import { SEATLESS, SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
 import { LABEL_MAX, WAITING, WriteDialog } from "./AddEntry.tsx";
 import { ClaimList } from "./Decisions.tsx";
 import { EntryPicker, OwnerField, PageField, type OwnerChoice } from "./pickers.tsx";
@@ -67,6 +69,13 @@ export const PURGE_HELD = "Purging takes Admin access.";
 
 type Dialog =
   "correct" | "owner" | "relate" | "unrelate" | "page" | "merge" | "split" | "retire" | "purge";
+
+/** An item held by the seatless reason, without saying it again: the menu says it once. */
+function saidOnce(item: MenuEntry): MenuEntry {
+  if (item.kind === "separator" || item.description !== SEATLESS) return item;
+  const { description: _said, ...rest } = item;
+  return rest;
+}
 
 /** The names of the entries one entry's relations point at, by id. */
 export type Names = ReadonlyMap<string, string>;
@@ -102,6 +111,20 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
   const ownedBy = declaredOn(entry, (edge) => edge.relation === "owned_by");
   const relatedBy = declaredOn(entry, removableEdge);
   const close = () => setDialog(null);
+  // HELD FOR ONE REASON, SAID ONCE: a reader holding no seat is offered no
+  // change at all, and the same two lines under each of seven items made a
+  // menu the height of a page that said one thing seven times. The menu says
+  // it once above its items, which stay held and listed.
+  const seatless = !correct.can && correct.reason === SEATLESS;
+  // A PURGED ENTRY IS LEFT, as the toast says it is gone: its sheet closes
+  // (and its selection with it), its page goes back to the atlas. It stayed
+  // drawn, every control on it live, until a reload said Not Found.
+  const nav = useNavigator();
+  const peek = usePeek();
+  const leave = () => {
+    if (peek?.kind === "atlas" && peek.id === entry.id) nav.filter({ peek: null, sel: null });
+    else nav.to(["company", "atlas"]);
+  };
   const items: MenuEntry[] = [
     {
       key: "owner",
@@ -209,7 +232,13 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
         >
           Correct
         </Button>
-        <Menu label={`More to do with ${entry.name}`} trigger="More" align="end" items={items} />
+        <Menu
+          label={`More to do with ${entry.name}`}
+          trigger="More"
+          align="end"
+          items={seatless ? items.map(saidOnce) : items}
+          header={seatless ? <span className="atlas-actions__held">{SEATLESS}</span> : undefined}
+        />
       </div>
       <SeatlessNote access={correct} />
       {declared && <DeclaredNote declared={declared} linked={admin} />}
@@ -225,7 +254,7 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
       {dialog === "merge" && <MergeDialog answer={answer} onClose={close} />}
       {dialog === "split" && <SplitDialog entry={entry} onClose={close} />}
       {dialog === "retire" && <RetireDialog entry={entry} onClose={close} />}
-      {dialog === "purge" && <PurgeDialog entry={entry} onClose={close} />}
+      {dialog === "purge" && <PurgeDialog entry={entry} onClose={close} onErased={leave} />}
     </div>
   );
 }
@@ -834,7 +863,7 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
     <ConfirmModal
       open
       title={`Retire ${entry.name}?`}
-      message="It leaves the map at once. It stays in its history and under the retired entries, and Restore brings it back."
+      message="It leaves the map at once. It stays in its history, Filter › Show retired entries only lists it, and Restore on its page brings it back."
       confirmLabel="Retire"
       cancelLabel="Keep it"
       onClose={onClose}
@@ -866,7 +895,16 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
  * what it is, typed back to confirm, and sent only after the engine's fresh
  * sign-in check.
  */
-function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
+function PurgeDialog({
+  entry,
+  onClose,
+  onErased,
+}: {
+  entry: AtlasEntry;
+  onClose: () => void;
+  /** The entry itself was erased: leave it. */
+  onErased: () => void;
+}) {
   const write = useSeated(useAct("atlas_purge"));
   const [what, setWhat] = useState<"entry" | "value">("entry");
   const [value, setValue] = useState("");
@@ -894,11 +932,15 @@ function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
       danger
       alert
       onClose={onClose}
-      onSubmit={() =>
-        write.run(what === "entry" ? { atlas_entry: member } : { value }, {
+      onSubmit={async () => {
+        const result = await write.run(what === "entry" ? { atlas_entry: member } : { value }, {
           done: what === "entry" ? `Purged ${entry.name}` : "Purged a value from the atlas",
-        })
-      }
+        });
+        // ONE KEY OF A MERGED ENTRY leaves the entry under its other keys.
+        const gone = what === "entry" && !merged;
+        if (gone && (result?.kind === "applied" || result?.kind === "pending")) onErased();
+        return result;
+      }}
     >
       <SegmentedControl
         label="What to erase"

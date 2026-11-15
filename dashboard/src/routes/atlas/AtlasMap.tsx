@@ -37,7 +37,17 @@ import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import type { TraceChoice } from "./filters.ts";
 import { HEALTH_TONES, MAP_LABELS, MAP_TONES, cardOf, carrying, lineOf } from "./graph.tsx";
 import { EntryDisc, HealthWord, VendorLead } from "./parts.tsx";
-import { HEALTH, KINDS, LANES, MAP_ROWS, VENDORS, entries, openTasks } from "./words.ts";
+import {
+  HEALTH,
+  KINDS,
+  LANES,
+  MAP_ROWS,
+  VENDORS,
+  entries,
+  openTasks,
+  reliedOn,
+  reliedOnBy,
+} from "./words.ts";
 
 /**
  * Entries stand in vendor groups, closed, past this many drawn. About
@@ -56,18 +66,27 @@ function groupOf(summary: Pick<AtlasSummary, "lane" | "vendor">): string {
 }
 
 /**
- * The column each service stands in: one right of the deepest service that
- * calls it, so a request reads left to right inside the lane. A cycle stops
- * at the entry it started from.
+ * The column each service on a call chain stands in: one right of the deepest
+ * service that calls it, so a request reads left to right inside the lane. A
+ * cycle stops at the entry it started from.
+ *
+ * A SERVICE ON NO CHAIN NAMES NO COLUMN: it neither calls nor is called by
+ * another service, so no column means anything for it, and the map flows it
+ * across the lane's columns as it flows every other lane. Named depth 0, every
+ * one stood in the first column: 64 of 78 services in one column set the fit
+ * of the whole map at a size no name reads.
  */
 export function serviceColumns(answer: AtlasMapAnswer): Map<string, number> {
   const inLane = new Set(
     answer.nodes.filter((node) => node.lane === "services").map((node) => node.id),
   );
   const callers = new Map<string, string[]>();
+  const chained = new Set<string>();
   for (const edge of answer.edges) {
     if (edge.family !== "calls" || !inLane.has(edge.from) || !inLane.has(edge.to)) continue;
     callers.set(edge.to, [...(callers.get(edge.to) ?? []), edge.from]);
+    chained.add(edge.from);
+    chained.add(edge.to);
   }
   const depths = new Map<string, number>();
   const depthOf = (id: string, walking: Set<string>): number => {
@@ -84,20 +103,37 @@ export function serviceColumns(answer: AtlasMapAnswer): Map<string, number> {
     return depth;
   };
   const last = LANES.services.columns - 1;
-  return new Map([...inLane].map((id) => [id, Math.min(last, depthOf(id, new Set()))]));
+  return new Map([...chained].map((id) => [id, Math.min(last, depthOf(id, new Set()))]));
 }
 
-/** The lanes as the map draws them, row by row, each saying what would fill it when it is empty. */
+/**
+ * The lanes as the map draws them, row by row, each saying what would fill it
+ * when it is empty.
+ *
+ * A NARROWED MAP DRAWS THE LANES THAT HOLD SOMETHING (`onlyFilled`): every
+ * lane drawn at its full width, empty ones included, set the fit, so the four
+ * entries a filter left opened on a phone as four marks with no name. Each is
+ * as wide as the columns its matches fill. While nothing at all matches, every
+ * lane is drawn, each saying so.
+ */
 function bandsOf(
   lanes: AtlasMapAnswer["lanes"],
   emptyOf: (lane: AtlasLane) => ReactNode,
+  onlyFilled = false,
 ): GraphBand[] {
-  const answered = new Set(lanes.map((one) => one.lane));
+  const filled = lanes.filter((one) => one.count > 0);
+  const drawn = onlyFilled && filled.length > 0 ? filled : lanes;
+  const answered = new Set(drawn.map((one) => one.lane));
+  const counts = new Map(drawn.map((one) => [one.lane, one.count]));
   const placed = new Set(MAP_ROWS.flatMap((row) => row.lanes));
   const lane = (id: AtlasLane) => ({
     id,
     label: LANES[id].label,
-    columns: LANES[id].columns,
+    // A NARROWED LANE IS AS WIDE AS WHAT MATCHED: two matches in a lane three
+    // columns wide stood beside an empty column the fit still had to hold.
+    columns: onlyFilled
+      ? Math.max(1, Math.min(LANES[id].columns, counts.get(id) ?? 0))
+      : LANES[id].columns,
     empty: emptyOf(id),
   });
   return MAP_ROWS.map((row, i) => ({
@@ -108,6 +144,14 @@ function bandsOf(
       ...(i === MAP_ROWS.length - 1 ? [...answered].filter((id) => !placed.has(id)) : []),
     ].map(lane),
   })).filter((band) => band.lanes.length > 0);
+}
+
+/**
+ * The path a selection lights, counted over every hop: how many entries rely
+ * on it however far up, and how many it relies on however far down.
+ */
+export function pathSentence(up: number, down: number): string {
+  return `Over every hop, ${reliedOnBy(up)} and it relies on ${reliedOn(down)}`;
 }
 
 export function AtlasMap({
@@ -173,19 +217,28 @@ export function AtlasMap({
             id: group.key,
             lane: group.lane,
             label: group.vendor ? VENDORS[group.vendor].name : NO_VENDOR,
-            lead: <VendorLead vendor={group.vendor} />,
+            // A LEAD ONLY WHERE THERE IS A MARK: an element drawing nothing
+            // took the card's cell and left it a blank box (No vendor, and
+            // vendors the kit has no mark for); with none, the card draws its
+            // own open-me glyph there.
+            ...(group.vendor && VENDORS[group.vendor].mark
+              ? { lead: <VendorLead vendor={group.vendor} /> }
+              : {}),
           }))
         : [],
     [answer, grouped],
   );
   const bands = useMemo(
     () =>
-      bandsOf(answer.lanes, (lane) =>
-        narrowed ? (
-          "Nothing in this lane matches the filters."
-        ) : (
-          <EmptyLane lane={lane} held={held} />
-        ),
+      bandsOf(
+        answer.lanes,
+        (lane) =>
+          narrowed ? (
+            "Nothing in this lane matches the filters."
+          ) : (
+            <EmptyLane lane={lane} held={held} />
+          ),
+        narrowed,
       ),
     [answer, narrowed, held],
   );
@@ -197,12 +250,15 @@ export function AtlasMap({
   const [arrived] = useState(selectedId);
 
   const selected = selectedId === null ? undefined : byId.get(selectedId);
+  // THE PATH THE MAP LIGHTS, COUNTED OVER EVERY HOP and said so, in the verb
+  // the entry's own counts use one step out ("1 entry relies on it"), so the
+  // dock and the sheet never read as two answers to one question.
   const impact = useMemo(() => {
     if (!selected) return "";
     const lines = carrying(edges);
     const up = graphReach(lines, selected.id, "up", Number.POSITIVE_INFINITY).nodes.size - 1;
     const down = graphReach(lines, selected.id, "down", Number.POSITIVE_INFINITY).nodes.size - 1;
-    return `${entries(up)} ${up === 1 ? "depends" : "depend"} on it, and it depends on ${down.toLocaleString()}`;
+    return pathSentence(up, down);
   }, [selected, edges]);
 
   return (

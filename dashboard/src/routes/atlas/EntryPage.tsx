@@ -45,17 +45,18 @@ import { ATLAS_POLL_MS, SELECT_KEY, TRACE_KEY } from "./filters.ts";
 import {
   EntryHead,
   Facts,
-  RelatedList,
+  RelatedSections,
   Signals,
   Touches,
-  dependsOn,
   entryPath,
   namesOf,
+  relatedCount,
   selfOf,
   useEntryReads,
-  usedBy,
+  useRelated,
   type EntryReads,
 } from "./entry.tsx";
+import type { RelatedGroups } from "./Neighbourhood.tsx";
 import { FactValue, sourceName } from "./parts.tsx";
 import {
   EntryWork,
@@ -111,8 +112,7 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
   const panelId = useId();
   const [tab, setTab] = useTab<Tab>("tab", TABS);
   const { entry } = answer;
-  const below = dependsOn(entry, reads.next.data);
-  const above = usedBy(answer);
+  const groups = useRelated(entry.id, reads);
   const disputed = disagreements(entry);
   const conflicts = disputed.facts.length + disputed.relations.length;
   const work = useEntryWork(entry.id);
@@ -132,7 +132,7 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
           items={TABS.map((value) => ({
             value,
             label: TAB_LABELS[value],
-            ...(value === "relations" ? { count: below.length + above.length || null } : {}),
+            ...(value === "relations" ? { count: relatedCount(groups) || null } : {}),
             // A PLACE CLOSED TO THE READER IS LOCKED, NEVER HIDDEN: the tab
             // stays, with the key and the access to ask for.
             ...(value === WORK_TAB
@@ -160,7 +160,7 @@ function EntryReading({ answer, reads }: { answer: AtlasEntryAnswer; reads: Entr
         />
         <div className="tabpanel" role="tabpanel" id={panelId} tabIndex={0}>
           {tab === "overview" && <Overview entry={entry} reads={reads} now={now} />}
-          {tab === "relations" && <Relations answer={answer} below={below} above={above} />}
+          {tab === "relations" && <Relations answer={answer} groups={groups} reads={reads} />}
           {tab === WORK_TAB && <EntryWork reading={work} />}
           {tab === "sources" && <Sources entry={entry} names={namesOf(reads)} now={now} />}
           {tab === "history" && (
@@ -289,31 +289,18 @@ function externalPath(edge: AtlasEdge): string[] | null {
 
 function Relations({
   answer,
-  below,
-  above,
+  groups,
+  reads,
 }: {
   answer: AtlasEntryAnswer;
-  below: ReturnType<typeof dependsOn>;
-  above: ReturnType<typeof usedBy>;
+  groups: RelatedGroups | null;
+  reads: EntryReads;
 }) {
   const { entry } = answer;
   const outside = entry.relations.filter((edge) => edge.external && edge.name);
   return (
     <Stack gap={5}>
-      <Section
-        spacing="tight"
-        headingLevel={2}
-        title={`Depends on (${below.length.toLocaleString()})`}
-      >
-        <RelatedList related={below} none="It depends on no other entry." />
-      </Section>
-      <Section
-        spacing="tight"
-        headingLevel={2}
-        title={`Used by (${above.length.toLocaleString()})`}
-      >
-        <RelatedList related={above} none="No other entry depends on it." />
-      </Section>
+      <RelatedSections groups={groups} reads={reads} headingLevel={2} />
       {outside.length > 0 && (
         <Section spacing="tight" headingLevel={2} title="Owners and pages">
           <div className="atlas-related">
@@ -347,7 +334,7 @@ function Upstream({ id, name }: { id: string; name: string }) {
   const answer = trace.data;
   const reached = answer?.hops.reduce((sum, hop) => sum + hop.entries.length, 0) ?? 0;
   return (
-    <Section spacing="tight" headingLevel={2} title="What depends on it, hop by hop">
+    <Section spacing="tight" headingLevel={2} title="What relies on it, over every hop">
       {!answer ? (
         trace.loading ? (
           <Skeleton variant="text" rows={2} label="Tracing" />
@@ -362,16 +349,19 @@ function Upstream({ id, name }: { id: string; name: string }) {
           </QueryState>
         )
       ) : reached === 0 ? (
-        <p className="muted">Nothing on the map depends on {name}.</p>
+        <p className="muted">Nothing on the map relies on {name}.</p>
       ) : (
         <>
           <p className="muted">
-            {entries(reached)} {reached === 1 ? "depends" : "depend"} on {name}
+            Over every hop, {entries(reached)} {reached === 1 ? "relies" : "rely"} on {name}
             {answer.truncated
               ? ", and the trace stopped at its bound before walking every hop"
               : ""}
-            .{" "}
-            <Link href={href(["company", "atlas"], { [SELECT_KEY]: id, [TRACE_KEY]: "up" })}>
+            . {/* IN THE SENTENCE, so it is drawn as a link among words: underlined. */}
+            <Link
+              href={href(["company", "atlas"], { [SELECT_KEY]: id, [TRACE_KEY]: "up" })}
+              size="inherit"
+            >
               Show it on the map
             </Link>
           </p>

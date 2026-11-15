@@ -2536,6 +2536,13 @@ const (
 	// bar, header and dialog, a schedule's controls following its saved switch
 	// and its cron fields named, a limit's range, the org chart's warnings and
 	// counts, a session's device, Live's words) took it to 6196.4 KiB: 6197 KiB.
+	// Kit 0.129.0 (each trunk count placed clear of the map's titles, cards
+	// and other counts, the legend's switches tied to what they draw, the
+	// zoom steppers held at their limits) and an Atlas round (an address
+	// read against the closed sets, one grouping of what an entry touches,
+	// the retired filter, a failed source said in a sentence) added 7,464
+	// bytes, script and sheet, and took it to 6185.4 KiB (6,333,883 bytes):
+	// 6186 KiB.
 	treeBudget = 5<<20 + 1077<<10
 )
 
