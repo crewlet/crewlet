@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -19,7 +20,7 @@ import (
 // whose hydration was still running, every row of it as its own; a cycle
 // begun before a seat's release went on publishing it beside the release's
 // flush, or started on it after the release had forgotten it; and the release
-// of a seat whose taking failed flushed this node's own copies. A seat is now
+// of a seat whose hydration failed flushed this node's own copies. A seat is now
 // carried only under its holding here: live from a hydration that completed,
 // for the cycle's calls, releasing from the start of its release, for the
 // flush's, and none otherwise. The cases below hold each publisher.
@@ -35,6 +36,28 @@ func heldFromEmpty(s *Syncer, handle string) *Syncer {
 	defer s.mu.Unlock()
 	s.holdings[handle] = &seatHolding{state: live}
 	return s
+}
+
+// boundary is where the seat's own writes begin on s: its holding's
+// ([seatHolding.boundary]), and 0 for a seat with none.
+func (s *Syncer) boundary(handle string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if held := s.holdings[handle]; held != nil {
+		return held.boundary
+	}
+	return 0
+}
+
+// backlogRows is every row of the seat db holds for the backlog to carry: in
+// a table it carries, stamped at or below through.
+func backlogRows(t *testing.T, db *store.DB, through int64) int {
+	t.Helper()
+	n := 0
+	for _, spec := range backlogPassOrder {
+		n += len(stamped(t, db, spec, 0, through))
+	}
+	return n
 }
 
 // noMarksOf says every mark s keeps for the seat: none is what a case after a
@@ -92,11 +115,15 @@ func (j *takingJS) Publish(ctx context.Context, subject string, body []byte,
 // seat's memory, this node holds older copies of the same rows, and the
 // cycle's two calls run while the hydration opens its first table's replay:
 // on a node taking the seat for the first time, and on one whose syncer
-// still held the seat from before.
+// still held the seat from before, its backlog carried and marked. Once the
+// hydration has completed, the seat's backlog is everything this node holds
+// for it, from its first row: a mark of the holding from before would skip
+// the rows it had carried, which are the republish that puts this node's rows
+// back on a changelog restored or recreated meanwhile.
 //
 // Mutation: publish a seat with no live holding, begin the holding as the
-// hydration begins, or leave a holding the hydration found in place, and this
-// goes red.
+// hydration begins, leave a holding the hydration found in place, or keep its
+// marks, and this goes red.
 func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -121,13 +148,26 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 			kept := openStore(t)
 			seedMemory(t, kept)
 			writeNotesUnder(t, kept, "k", 3, 0)
-			s := New(kept, jsOn(t, conn), func(string) string { return seat.AgentID })
+			changelog := jsOn(t, conn)
+			s := New(kept, changelog, func(string) string { return seat.AgentID })
 			if tc.heldBefore {
-				heldFromEmpty(s, seat.Handle)
+				// THE HOLDING FROM BEFORE, its backlog carried, onto a
+				// changelog of its own so the peer's rows stay the newer,
+				// which marks every row this node holds.
+				s.js = &roundTripJS{}
+				if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
+					t.Fatalf("record the boundary from before: %v", err)
+				}
+				if carried, err := s.PublishBacklog(t.Context(), seat.Handle); err != nil ||
+					carried.Rows == 0 {
+					t.Fatalf("the premise: the backlog from before answered %+v (%v), want "+
+						"its rows carried", carried, err)
+				}
+				s.js = changelog
 			}
 			var own, backlog Carried
 			var ownErr, backlogErr error
-			js := &takingJS{JetStream: s.js, during: func() {
+			js := &takingJS{JetStream: changelog, during: func() {
 				own, ownErr = s.PublishOwn(t.Context(), seat.Handle)
 				backlog, backlogErr = s.PublishBacklog(t.Context(), seat.Handle)
 			}}
@@ -151,11 +191,14 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 			}
 
 			// AND ONCE THE HYDRATION HAS COMPLETED, the cycle carries the
-			// seat: what this node held for it is now its backlog.
+			// seat: what this node held for it is now its backlog, every
+			// row of it from the first.
+			want := backlogRows(t, kept, s.boundary(seat.Handle))
 			if carried, err := s.PublishBacklog(t.Context(), seat.Handle); err != nil ||
-				carried.Rows == 0 {
+				carried.Rows != want {
 				t.Errorf("after the hydration the seat's backlog answered %+v (%v), want its "+
-					"rows carried", carried, err)
+					"%d rows carried: none skipped by a mark of the holding before it",
+					carried, err, want)
 			}
 		})
 	}
@@ -240,8 +283,11 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 // its next row, in every table, and the row it was sending as the Forget came
 // moves no mark when it is acknowledged. Here 300 notes, a page being about a
 // hundred and twenty-five, besides a row of every table, in the seat's own
-// range and in its backlog, with the Forget inside the publish of the tenth row,
-// or between the first page and the second.
+// range and in its backlog, with the Forget inside the publish of the tenth
+// row, or between the first page and the second. A call that goes on moves no
+// mark, so it reads the same page again and again: the changelog refuses
+// every row past those the seat holds, which fails the case rather than
+// leaving it to the test binary's timeout.
 //
 // Mutation: check the holding only as the call begins, or once per page or
 // per table, or move a mark under a holding that has ended, and this goes red.
@@ -258,7 +304,7 @@ func TestAPublishAForgetOvertakesStopsAtItsNextRowAndLeavesNoMark(t *testing.T) 
 				db := openStore(t)
 				seedMemory(t, db)
 				writeNotes(t, db, 300, noteWidth)
-				js := &roundTripJS{}
+				js := &roundTripJS{most: 300 + len(tables)}
 				s := New(db, js, func(string) string { return seat.AgentID })
 				publish := s.PublishOwn
 				if of == ownRange {
@@ -388,13 +434,13 @@ func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegin
 // A SEAT WHOSE HYDRATION FAILED FLUSHES NOTHING ON ITS RELEASE.
 //
 // A seat whose acquisition fails is given straight back, and its release
-// flushes it. Its hydration may have failed before it read the seat's
+// flushed it. Its hydration may have failed before it read the seat's
 // profiles, skills and onboarding marker, so this node's store still holds
 // its own copies of them, older than the changelog's where a peer has held
 // the seat since, and the flush put them over the peer's (#511's second
 // comment). A hydration that fails begins no holding, so the release has none
-// to turn and its flush carries nothing; one that completes does, and its
-// release flushes. Here a peer published the seat, this node holds older
+// to turn and a flush carries nothing; one that
+// completes does, and its release flushes. Here a peer published the seat, this node holds older
 // copies, and its hydration fails as a replay opens: on a node that never held
 // the seat, and on one whose syncer still held it from before.
 //

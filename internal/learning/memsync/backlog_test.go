@@ -63,11 +63,23 @@ type roundTripJS struct {
 	trip  func(ctx context.Context) error
 	acked []string
 	on    func(n int)
+
+	// most, when above 0, is the most rows it acknowledges: every publish
+	// past them is refused ([errPastMost]), so a case whose call goes on
+	// re-reading a page it can no longer mark fails on its own terms rather
+	// than running until the test binary times out.
+	most int
 }
+
+// errPastMost is a roundTripJS's refusal of a row past its most.
+var errPastMost = errors.New("the changelog was asked for more rows than the seat holds")
 
 func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 	_ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 
+	if j.most > 0 && len(j.acked) >= j.most {
+		return nil, errPastMost
+	}
 	if j.trip != nil {
 		if err := j.trip(ctx); err != nil {
 			return nil, err
@@ -446,8 +458,8 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 // range. Each page is read above the seat's mark, read again at each page, so
 // a page read after the other call has had rows acknowledged starts above
 // them, and the two send again at most the page each already held. The case
-// runs the second publish, whole, inside the first's publish of its first
-// row.
+// holds that to a wider overlap than the one row, under one holding: it runs
+// the second publish, whole, inside the first's publish of its first row.
 //
 // Mutation: read the mark once per table rather than at each page, and the
 // first publish sends the table again from where its first page ended.

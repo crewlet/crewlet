@@ -225,7 +225,7 @@ type Syncer struct {
 	// completes ([Syncer.Hydrate], "What a hydration begins"), turned to
 	// releasing as its release begins ([Syncer.Releasing]), and ended as the
 	// release forgets it ([Syncer.Forget]). A seat with none, one still being
-	// taken, one whose taking failed, or one released, is published by
+	// taken, one whose hydration failed, or one released, is published by
 	// nobody here (crewlet/crewlet#511). Under mu beside the marks, in memory
 	// for the same reason, and dropped with them by a restart and a release.
 	holdings map[string]*seatHolding
@@ -284,8 +284,10 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
 
 // holding is what this node's holding of a seat lets publish the seat's
 // memory: the memory sync cycle while the seat is held, or the release's flush
-// once it is being given back, never both at once, and neither before the
-// seat's hydration here has completed or after its release has forgotten it.
+// once it is being given back, never both at once but for the one row a cycle
+// was sending as the release began ([Syncer.stillHolds]), and neither before
+// the seat's hydration here has completed or after its release has forgotten
+// it.
 //
 // A seat's memory on the changelog is last writer wins, one message per row
 // (codec.go, upsert), which is safe only while ONE publisher at a time carries
@@ -295,9 +297,9 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
 // had begun before the seat's release went on publishing it beside the
 // release's flush, or started on it after the release had forgotten it, and
 // put older copies of its profiles, skills and onboarding marker over what
-// the flush and the next holder wrote; and the release of a seat whose taking
-// failed flushed this node's own copies of them, which can be older than the
-// changelog's.
+// the flush and the next holder wrote; and the release of a seat whose
+// hydration failed flushed this node's own copies of them, which can be older
+// than the changelog's.
 type holding string
 
 const (
@@ -335,7 +337,7 @@ type seatHolding struct {
 // ErrNotHeld is what a publish of a seat answers when this node's holding of
 // the seat does not let that call carry it ([holding]): a cycle's call for a
 // seat still being taken, being released, or released; a flush's call for a
-// seat whose taking failed. Answered at once when the call begins without
+// seat whose hydration failed. Answered at once when the call begins without
 // such a holding, and at the call's next row when the holding changes under
 // it, after which nothing more of the seat is carried. The caller has nothing
 // of the seat to carry and nothing to report: the seat is not, or no longer,
@@ -403,12 +405,12 @@ type Carried struct {
 //
 // ONLY WHILE THE SEAT'S HOLDING HERE IS LIVE ([holding]): from the moment its
 // hydration completed until its release begins. A seat with no live holding,
-// one still being taken, being released or released, is carried by nothing
-// here: the call answers [ErrNotHeld] at once and reads nothing. And the call
-// checks the holding again before each row, so a release that begins while a
-// cycle is partway through the seat stops that cycle at its next row: only
-// the row it was publishing as the release began can still land beside the
-// flush (crewlet/crewlet#511).
+// one still being taken, being released or released, is carried by no cycle's
+// call here: the call answers [ErrNotHeld] at once and reads nothing. And the
+// call checks the holding again before each row, so a release that begins
+// while a cycle is partway through the seat stops that cycle at its next row:
+// only the row it was publishing as the release began can still land beside
+// the flush (crewlet/crewlet#511).
 //
 // A table with a watermark is carried above the larger of its own mark and the
 // holding's boundary ([Syncer.Hydrate], "Where this holding's writes begin"), a
@@ -493,7 +495,8 @@ func (s *Syncer) Releasing(handle string) {
 // FlushOwn is [Syncer.PublishOwn] for the release's last turn: the same own
 // pass, from the marks the cycles left, carried only while the seat's holding
 // here is RELEASING ([Syncer.Releasing]). A seat with none, whose hydration
-// here never completed, answers [ErrNotHeld] and reads nothing.
+// here never completed, or one whose holding is still live, answers
+// [ErrNotHeld] and reads nothing.
 func (s *Syncer) FlushOwn(ctx context.Context, handle string) (Carried, error) {
 	return s.publish(ctx, handle, releasing, ownRange, ownPassOrder)
 }
@@ -748,10 +751,11 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // ([ErrNotHeld]), where it carried every row this node held for it, as its
 // own, over the newer rows the hydration had yet to read (crewlet/crewlet#511).
 // A hydration that fails begins none, so the release that gives the seat back
-// flushes nothing ([Syncer.FlushOwn]). And a hydration ENDS any holding of
-// the seat as it begins, which a release forgets first anyway
-// ([Syncer.Forget]): a seat being taken is not published, whatever this node
-// held of it before.
+// flushes nothing ([Syncer.Releasing]). And a hydration FORGETS the seat as it
+// begins ([Syncer.Forget]), which a release has done first anyway: it ends any
+// holding of the seat and drops its marks, so a seat being taken is not
+// published, whatever this node held of it before, and no mark of an earlier
+// holding skips rows of this one's backlog.
 //
 // # What it reports
 //
@@ -764,8 +768,9 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 		return 0, nil
 	}
 	// THE SEAT IS BEING TAKEN, so nothing here publishes it until this
-	// hydration completes ("What a hydration begins").
-	s.endHolding(handle)
+	// hydration completes, and nothing of a holding before this one is left
+	// to skip rows of this one's backlog ("What a hydration begins").
+	s.Forget(handle)
 	ref := s.seat(handle)
 	if ref.AgentID == "" {
 		// NO ADDRESS ON THE CHANGELOG ([AgentIDFor]): nothing was published
@@ -1351,7 +1356,9 @@ func (s *Syncer) holdingIn(handle string, under holding) *seatHolding {
 // ASKED BEFORE THE ROW IS SENT, and not held across the send, so the one row
 // a call was publishing as the holding changed can still land after the
 // change: a release's flush can then have carried the same row before it, and
-// a cycle's older copy of a whole table's row replace the flush's
+// the cycle's copy, read before the flush's, replace it. Any row can be that
+// one: a profile, skill or onboarding marker rewritten since the cycle read
+// it, or a diary note or episode whose vector was filled since
 // (crewlet/crewlet#511). Closing that row too would hold the lock across a
 // broker round trip, on which every other seat's publish and the release
 // itself would wait.
@@ -1359,26 +1366,6 @@ func (s *Syncer) stillHolds(handle string, held *seatHolding, under holding) boo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.holdings[handle] == held && held.state == under
-}
-
-// endHolding ends the seat's holding here, if it has one: nothing here
-// publishes the seat from now on, and a call publishing it stops at its next
-// row.
-func (s *Syncer) endHolding(handle string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.holdings, handle)
-}
-
-// boundary is where the seat's own writes begin on this node: its holding's
-// ([seatHolding.boundary]), and 0 for a seat with none.
-func (s *Syncer) boundary(handle string) int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if held := s.holdings[handle]; held != nil {
-		return held.boundary
-	}
-	return 0
 }
 
 // recordBoundary reads where this node's change sequence stands and begins the
@@ -1404,7 +1391,10 @@ func (s *Syncer) recordBoundary(ctx context.Context, handle string) error {
 }
 
 // Forget ends a released seat's holding here, and drops its marks, of both its
-// ranges, and its boundary with the holding.
+// ranges, and its boundary with the holding. Called by the release once its
+// flush has returned, and by a hydration as it begins ([Syncer.Hydrate],
+// "What a hydration begins"), so a holding a release never forgot leaves
+// nothing behind either.
 //
 // The seat's next holding here takes a new boundary as its hydration
 // completes, and both of its ranges start from 0: its backlog is then

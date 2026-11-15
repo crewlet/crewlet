@@ -92,7 +92,7 @@
 // is published only under its HOLDING here: live from the moment its
 // hydration completes, when the memory sync cycle carries it; releasing from
 // the moment its release begins, when only the release's flush does; and
-// none before the hydration completes, after a taking that failed, and once
+// none before the hydration completes, after one that failed, and once
 // the release has forgotten it. Every call checks the holding before each row
 // it sends, so a cycle partway through a seat as its release begins stops at
 // its next row (crewlet/crewlet#511).
@@ -430,15 +430,15 @@ func barrierSubject(seat string) string {
 //
 // Last writer wins is safe rather than merely convenient while ONE node at a
 // time publishes the seat, which is what holding it means: the changelog's
-// latest value for a subject is then the value its current owner wrote. A
-// node publishes a seat only under its holding there ([Syncer.PublishOwn],
+// latest value for a subject is then the value its current owner wrote. A node
+// publishes a seat only under its holding there ([Syncer.PublishOwn],
 // [Syncer.Releasing]), so neither a cycle the releasing node began before the
-// release, nor a successor still taking the seat, nor the release of a taking
-// that failed publishes an older copy after the newer one. Two things still
-// can: the one row a cycle was sending as the release began, which can land
-// after the flush's copy of it, and two nodes holding the seat at once, a
-// node whose lease lapsed under it still carrying the seat while the next
-// holder writes it (crewlet/crewlet#511).
+// release, nor a successor still taking the seat, nor the release of a seat
+// whose hydration failed publishes an older copy after the newer one. Two
+// things still can: the one row a cycle was sending as the release began,
+// which can land after the flush's copy of it, and two nodes holding the seat
+// at once, a node whose lease lapsed under it still carrying the seat while
+// the next holder writes it (crewlet/crewlet#511).
 func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	columns := make([]string, 0, len(t.columns))
 	values := make([]any, 0, len(t.columns))

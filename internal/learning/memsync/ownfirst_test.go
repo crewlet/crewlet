@@ -525,15 +525,16 @@ func TestTheRowAtTheBoundaryIsTheBacklogsAndIsCarriedOnce(t *testing.T) {
 //
 // A cycle takes no seat's lock, so a call of it and a release's flush can
 // overlap, by the row the cycle was sending as the release began: the same
-// range twice, or the flush's own pass beside the cycle's backlog. Each
+// range twice, or the flush's own pass beside the cycle's backlog. The case
+// holds the marks to a wider overlap than that one row, under one holding: a
+// second whole call inside the first's publish of its first row, over 300
+// notes held when the boundary was taken and 300 the seat wrote after. Each
 // range's mark claims only rows its calls had acknowledged, so at every
 // publish, before its row is counted, every row of either range stamped at or
 // below that range's mark has been acknowledged, and neither mark has moved
-// back. A call reading a page
-// after the other had rows acknowledged starts above them, and two calls of
-// different ranges neither read nor move each other's marks. The second call
-// runs whole inside the first's publish of its first row, over 300 notes held
-// when the boundary was taken and 300 the seat wrote after.
+// back. A call reading a page after the other had rows acknowledged starts
+// above them, and two calls of different ranges neither read nor move each
+// other's marks.
 //
 // Mutation: move a mark before its row is acknowledged, share one mark between
 // the ranges, or read the mark once per table rather than at each page, and
@@ -546,7 +547,7 @@ func TestTwoPublishesOfASeatAtOnceKeepEachRangesMarksSound(t *testing.T) {
 	}{
 		{"its own pass twice", ownRange, ownRange},
 		{"its backlog twice", backlogRange, backlogRange},
-		{"a flush's own pass with a cycle's backlog inside it", ownRange, backlogRange},
+		{"an own pass with a backlog inside it", ownRange, backlogRange},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
