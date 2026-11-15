@@ -400,7 +400,12 @@ export function HistoryView({
             from the pages loaded, so clicking a bar would narrow the window to
             a slice of what happened to be fetched — and the page that came
             back would be a different set from the bar that was clicked. */}
-        {records.length > 0 ? (
+        {/* NO CLAIM BEFORE AN ANSWER: loading draws the chart's place, and a
+            failed read draws nothing here, its error being said once below.
+            "No change came back" was true of both, and read as the answer. */}
+        {records.length === 0 && state.loading ? (
+          <Skeleton variant="box" height={96} label="Loading the chart" />
+        ) : records.length === 0 && state.error ? null : records.length > 0 ? (
           <Histogram
             bars={bars}
             bucket={range.bucket}
