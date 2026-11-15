@@ -164,7 +164,7 @@
           "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
-          "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
+          "description": "Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30.",
           "maximum": 40,
           "minimum": 0,
           "type": [

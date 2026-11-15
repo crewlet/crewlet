@@ -2629,7 +2629,9 @@ const (
 	// it was built on: 6314 KiB.
 	// A proposal's caution, step-up and expiry (kit 0.132.0) take it to
 	// 6316.2 KiB (6,467,757 bytes): 6317 KiB.
-	treeBudget = 5<<20 + 1197<<10
+	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
+	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
+	treeBudget = 5<<20 + 1205<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

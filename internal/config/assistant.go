@@ -64,7 +64,7 @@ type Assistant struct {
 	// the shape a seat's llm_auxiliary takes.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."`
 
-	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30."`
+	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30."`
 	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900."`
 	ProposalTTLSeconds int `yaml:"proposal_ttl_seconds,omitempty" json:"proposal_ttl_seconds,omitempty" js:"min=0;max=3600" desc:"How long a proposed change waits for approval, 60..3600 seconds. Absent: 900."`
 	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30."`
@@ -225,14 +225,19 @@ func (b assistantBound) value(v int) int {
 	return v
 }
 
-// check reports v when it is set and out of range.
+// rangeOf is b as the settings registry declares it ([settingRanges]); 0 is
+// absent, the default.
+func (b assistantBound) rangeOf() Range {
+	return Range{Min: float64(b.min), Max: atMost(float64(b.max)), OrZero: true}
+}
+
+// check reports v when it is set and out of range; absent (0) is the default.
 func (b assistantBound) check(path Path, v int, p *problems) {
-	if v == 0 || (v >= b.min && v <= b.max) {
+	if v == 0 {
 		return
 	}
-	p.add(at(path, b.key), ErrOutOfRange,
-		"must be %d..%d %s, or absent for the default of %d, got %d",
-		b.min, b.max, b.unit, b.def, v)
+	p.within(at(path, b.key), float64(v), fmt.Sprintf("in %s, or absent for the default of %d",
+		b.unit, b.def))
 }
 
 // On reports whether the company turned the assistant on.

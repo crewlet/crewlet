@@ -538,6 +538,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "spend":
     case "spend-tasks":
     case "limits":
+    case "ask-crewlet":
     case "people":
     case "service-accounts":
     case "tokens":

@@ -423,7 +423,7 @@ providers:
 assistant:
   enabled: true                         # absent or false: off
   llm: [assistant]                      # providers.llm keys, a fallback chain
-  max_steps: 30                         # tool steps per turn, 1..40
+  max_steps: 30                         # model rounds per turn, 1..40
   turn_timeout_seconds: 900             # longest turn, 30..1200
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
@@ -444,7 +444,7 @@ assistant:
 |---|---|---|
 | `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
-| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `max_steps` | 30 | The most model rounds one turn may take before its answer, each calling any number of tools: enough to look a route up, read what it touches and propose the change. |
 | `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a harness launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |

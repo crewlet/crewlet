@@ -153,6 +153,7 @@ const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Limits = lazyScreen("settings", (m) => m.Limits);
+const AssistantSettings = lazyScreen("settings", (m) => m.AssistantSettings);
 const People = lazyScreen("settings", (m) => m.People);
 const ServiceAccounts = lazyScreen("settings", (m) => m.ServiceAccounts);
 const ApiTokens = lazyScreen("settings", (m) => m.ApiTokens);
@@ -333,6 +334,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Secrets key={route.name ?? ""} name={route.name} />;
     case "limits":
       return <Limits />;
+    case "ask-crewlet":
+      return <AssistantSettings />;
     case "spend":
       return <Spend />;
     case "spend-tasks":

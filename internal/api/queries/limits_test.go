@@ -63,6 +63,13 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"code.scratch.idle_days":                      "14",
 		"code.scratch.max_per_seat":                   "20",
 		"chat.chatlet.message_retention_days":         "90",
+		"assistant.max_steps":                         "12",
+		"assistant.turn_timeout_seconds":              "600",
+		"assistant.proposal_ttl_seconds":              "300",
+		"assistant.retention_days":                    "60",
+		"assistant.deep_work.timeout_seconds":         "900",
+		"assistant.deep_work.max_steps":               "120",
+		"assistant.deep_work.max_tokens":              "500000",
 	}
 	doc := "name: Acme\n" + nest(withContext(written))
 	c, err := config.ParseCompany([]byte(doc))
@@ -126,6 +133,12 @@ func withContext(flat map[string]string) map[string]string {
 	for key := range flat {
 		if strings.HasPrefix(key, "code.") {
 			out["code.backend"] = "gitlet"
+		}
+		// Deep work's bounds need deep work, which needs a Claude Code entry.
+		if strings.HasPrefix(key, "assistant.deep_work.") {
+			out["assistant.deep_work.llm"] = "deep"
+			out["providers.llm.deep.harness"] = "claude-code"
+			out["providers.llm.deep.model"] = "sonnet"
 		}
 	}
 	return out
@@ -314,6 +327,9 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 			outside = append(outside, 1)
 		}
 		for _, v := range outside {
+			if r.OrZero && v == 0 {
+				continue // admitted by the range itself
+			}
 			doc := "name: Acme\n" + nest(withContext(map[string]string{row.Key: fmt.Sprint(v)}))
 			_, err := config.ParseCompany([]byte(doc))
 			problem, ok := problemAt(config.Problems(err), row.Key)
