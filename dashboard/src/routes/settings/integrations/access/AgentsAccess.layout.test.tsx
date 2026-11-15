@@ -12,9 +12,14 @@ import { Router } from "~/app/router.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import { githubAnswer } from "./fixtures.ts";
 
-// LONGER THAN THE COLUMN at either width, so the chip has to give way.
+// LONGER THAN THE ROOM at either width, so the chip has to give way. A
+// flexible column is sized by what it holds (kit 0.130.2) rather than taking
+// an even share, so a name the table has room for is drawn whole; this one is
+// longer than the room the table has at 1440px.
 const LONG =
-  "example/customer-onboarding-notification-delivery-service-for-enterprise-tenants-in-every-region";
+  "example/customer-onboarding-notification-delivery-service-for-enterprise-tenants-in-every-region" +
+  "-with-audited-retries-per-tenant-throttling-and-a-dead-letter-queue-in-every-availability-zone" +
+  "-replicated-to-a-second-provider-for-the-tenants-whose-contracts-require-one";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
