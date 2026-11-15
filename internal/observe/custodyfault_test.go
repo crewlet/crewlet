@@ -67,9 +67,10 @@ func (f failingLog) SettleCustody(ctx context.Context, batchID string, kept bool
 // (store.ErrCustodyRefused: here one that names no origin); everything else
 // is this node's: what the queue tells as its node's (queue.NodeFault: here a
 // context this node's leaving the group ended, at the write, the claim or the
-// settle), a claim that named no keeper (the coordination store's unknown
-// answer, every error of a claim but the undecidable record's, which the
-// delivery acknowledges, whether or not its backend wrapped it in
+// settle), which wins over the store's mark (here a batch naming no origin met
+// as the keeper left), a claim that named no keeper (the coordination store's
+// unknown answer, every error of a claim but the undecidable record's, which
+// the delivery acknowledges, whether or not its backend wrapped it in
 // coord.ErrUnavailable), and this node's own store failing at the write once
 // every record validated or at the settle, whether closed under the keeper
 // or failing with an error it left unmarked.
@@ -80,7 +81,9 @@ func (f failingLog) SettleCustody(ctx context.Context, batchID string, kept bool
 // store's refusal and the closed store's write row does; send back the
 // settle's failure with queue.Nak and both settle rows do; send back a
 // refusal with queue.NakNode and the row of a batch that names no origin
-// counts it against the node.
+// counts it against the node; let the store's mark win over what the queue
+// tells as the node's and the row of a batch naming no origin met as the
+// keeper left counts it against the batch.
 func TestAFailureOfThisNodesIsNeverTheBatchsOwn(t *testing.T) {
 	t.Parallel()
 	unmarked := errors.New("disk I/O error")
@@ -125,6 +128,9 @@ func TestAFailureOfThisNodesIsNeverTheBatchsOwn(t *testing.T) {
 			closeAtClaim: true, origin: "seats-1", nodes: true},
 		"a settle its store failed unmarked": {settle: unmarked, origin: "seats-1", nodes: true},
 		"a batch that names no origin":       {},
+		// The store's refusal met as the keeper left the group: what the
+		// queue tells as the node's wins over the mark.
+		"a batch naming no origin this node's leaving cut short": {endFirst: true, nodes: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
