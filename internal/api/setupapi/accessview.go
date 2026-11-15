@@ -12,12 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// accessSeatRead serves GET /setup/integrations/{kind}/access/seats/{handle}/{lane}:
-// one agent's lane as its Agents tab row reads, in words ([seataccess.ViewOf]),
-// for a reader that shows one agent's access rather than the whole tab: with
-// its grants beside its level, its open requests for one, and the lane's
-// catalogue counted, each entry they name worded, and those `permission`
-// matches.
+// for a reader of one agent's access: with its grants, open requests, catalogue
+// count, and the entries `permission` matches.
 func (s *Service) accessSeatRead(w http.ResponseWriter, r *http.Request) {
 	kind, ok := accessKind(w, r)
 	if !ok {

@@ -10,38 +10,20 @@ import (
 	"unicode"
 )
 
-// What a lane view says of a seat's grants beside its level (ADR-0150), its
-// agent's open requests for one (ADR-0118) and the lane's catalogue, worded by
-// the engine from the access answer and the stored requests, so a reader of
-// one agent's access (the assistant's get_seat_access) can say what the agent
-// holds, what it asked for and what a person must add at the vendor without
-// reading the whole Agents tab.
-//
-// THE CATALOGUE IS NEVER WORDED WHOLE. A vendor's catalogue runs to hundreds
-// of permissions (Cloudflare's permission groups, AWS's actions), past what one
-// read hands a model, so the view counts it and words only the entries the
-// seat's grants and requests name and those a lookup matches, at most
-// [MaxLookup] of them, as a list of their own.
+// A lane view's words for a seat's grants (ADR-0150), its open requests
+// (ADR-0118) and the lane's catalogue, which is counted and never worded whole.
 
-// MaxLookup is the most catalogue entries a lookup answers: a screen of one
-// permission's variants (its read and its edit, at the account and at a zone)
-// with room to spare, about a fifth of what a model reads of one card, so a
-// lookup too broad to answer says that more matched and asks for a longer
-// part of the name rather than listing half a catalogue.
+// MaxLookup is the most entries a lookup answers: one permission's variants with
+// room to spare.
 const MaxLookup = 12
 
-// MaxLookupChars bounds a lookup ([ViewQuery.Lookup]) in characters: the
-// longest name a catalogue gives a permission (Cloudflare's run to about sixty
-// characters) with room to spare, so a lookup is part of one name and never a
-// paragraph. The seat read refuses a longer one.
+// MaxLookupChars bounds a lookup: longer than any permission's name.
 const MaxLookupChars = 100
 
-// viewTime is how a lane view writes an instant: to the minute, in UTC, said
-// as such, since the sentence is read by people in any zone.
+// viewTime writes an instant to the minute, in UTC.
 const viewTime = "2006-01-02 15:04 UTC"
 
-// wordGrants fills out's grant sentences from the lane's answer, its offer and
-// q's requests and lookup.
+// wordGrants fills out's grant, request and catalogue words.
 func wordGrants(out *LaneView, offer Options, la LaneAnswer, q ViewQuery) {
 	now := q.Now
 	if now.IsZero() {
@@ -119,24 +101,20 @@ func wordGrants(out *LaneView, offer Options, la LaneAnswer, q ViewQuery) {
 
 // LookupEntry is one catalogue entry a lookup matched, judged for one seat.
 type LookupEntry struct {
-	// ID is the vendor's own name for the permission, which a grant
-	// stores; Name how a person finds it at the vendor; Group the heading
-	// the vendor lists it under.
+	// ID is the vendor's name a grant stores; Name how a person finds it; Group its
+	// heading.
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Group string `json:"group,omitempty"`
 
-	// Write is a permission that may change things at the vendor, so
-	// granting it asks a fresh step-up.
+	// Write is a permission that changes things, so granting it asks a step-up.
 	Write bool `json:"write"`
 
-	// Level is which level holds it, in words: "Already in this agent's
-	// level", "Configure and above", or "No level".
+	// Level is which level holds it, in words.
 	Level string `json:"level"`
 
-	// Grantable is "Yes" where the company's connection can grant it, and
-	// otherwise the vendor's reason it cannot yet; Missing is what a person
-	// adds to the connection at the vendor first, and ActionURL where.
+	// Grantable is "Yes", or why the connection cannot grant it yet; Missing is what
+	// to add at the vendor, and ActionURL where.
 	Grantable string `json:"grantable"`
 	Missing   string `json:"missing,omitempty"`
 	ActionURL string `json:"action_url,omitempty"`
@@ -159,8 +137,7 @@ func lookupEntry(offer Options, e GrantEntry, level string) LookupEntry {
 	return out
 }
 
-// seatRequests is each request of requests that the seat asked on lane, oldest
-// first.
+// seatRequests is the seat's requests on lane, oldest first.
 func seatRequests(requests []GrantRequest, handle string, lane Lane) []GrantRequest {
 	var out []GrantRequest
 	for _, r := range requests {
@@ -174,9 +151,7 @@ func seatRequests(requests []GrantRequest, handle string, lane Lane) []GrantRequ
 	return out
 }
 
-// grantWords is one grant as a sentence: "Origin Rules: Edit on example.com
-// until 2026-11-15 20:00 UTC, granted by Ada Lovelace on 2026-11-15 for the
-// agent's request abcde12345".
+// grantWords is one grant as a sentence.
 func grantWords(offer Options, g Grant, enabled bool, have Observed, now time.Time) string {
 	entry, listed := offer.Grantable(g.Permission)
 	var b strings.Builder
@@ -212,10 +187,7 @@ func grantWords(offer Options, g Grant, enabled bool, have Observed, now time.Ti
 	return b.String()
 }
 
-// requestWords is one open request as a sentence, with the option ids its
-// question grants it by: "request abcde12345 asks for Origin Rules: Edit on
-// example.com for 4 hours, on OPS-77 on 2026-11-15; its question grants it
-// with grant-rabcde12345-t (for 4 hours) or grant-rabcde12345-p (for good)".
+// requestWords is one open request as a sentence, with its two grant options.
 func requestWords(offer Options, r GrantRequest) string {
 	entry, listed := offer.Grantable(r.Permission)
 	hours := strconv.Itoa(r.Hours) + " hours"
@@ -236,10 +208,7 @@ func requestWords(offer Options, r GrantRequest) string {
 	return b.String()
 }
 
-// entryWords is one catalogue entry as a sentence, judged for a seat on level:
-// "Origin Rules: Edit (Zone, changes things, in no level): The provisioner
-// token does not hold Origin Rules: Edit; a person adds Origin Rules: Edit to
-// the company's connection at https://...".
+// entryWords is one catalogue entry as a sentence, judged for a seat on level.
 func entryWords(offer Options, e GrantEntry, level string) string {
 	var facts []string
 	if e.Group != "" {
@@ -272,9 +241,7 @@ func entryWords(offer Options, e GrantEntry, level string) string {
 	return words
 }
 
-// inLevelName is the one level a catalogue entry names as the lowest holding
-// it ([GrantEntry.InLevel]), by the vendor's name for it, its id where the
-// offer names none.
+// inLevelName is the vendor's name for an entry's lowest level, else its id.
 func inLevelName(offer Options, id string) string {
 	if l, _, ok := offer.Level(id); ok && l.Name != "" {
 		return l.Name
@@ -301,8 +268,7 @@ func grantableWords(integration string, beside, lacking int) string {
 	return words + fmt.Sprintf("; the company's connection lacks %d of them", lacking)
 }
 
-// entryName is a permission by the catalogue's name, its identifier where the
-// catalogue does not list it now.
+// entryName is a permission by the catalogue's name, else its id.
 func entryName(e GrantEntry, listed bool, permission string) string {
 	if listed && e.Name != "" {
 		return e.Name
@@ -310,9 +276,7 @@ func entryName(e GrantEntry, listed bool, permission string) string {
 	return permission
 }
 
-// grantWhere is where a grant or request applies, in the lane's own words: its
-// scope entries, the whole connection for an account permission, or the
-// lane's whole reach for a scoped one naming none.
+// grantWhere is where a grant or request applies, in the lane's words.
 func grantWhere(offer Options, e GrantEntry, listed bool, scope []string) string {
 	switch {
 	case len(scope) > 0:
@@ -325,16 +289,14 @@ func grantWhere(offer Options, e GrantEntry, listed bool, scope []string) string
 	return "on its whole reach"
 }
 
-// entryMatches reports whether lookup is part of e's name or identifier,
-// ignoring case and the punctuation between words, so "origin rules edit"
-// finds "Origin Rules: Edit".
+// entryMatches reports whether lookup is part of e's name or id, ignoring case
+// and punctuation.
 func entryMatches(e GrantEntry, lookup string) bool {
 	want := looseWords(lookup)
 	return want != "" && (strings.Contains(looseWords(e.Name), want) || strings.Contains(looseWords(e.ID), want))
 }
 
-// looseWords is s lowercased with every run of characters other than letters
-// and digits one space.
+// looseWords is s lowercased, each run of non-letters one space.
 func looseWords(s string) string {
 	return strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
