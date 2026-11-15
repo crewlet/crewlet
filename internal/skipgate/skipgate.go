@@ -210,6 +210,26 @@ func (s *span) at(action string, now time.Time) {
 	}
 }
 
+// parentOf is the span of the test test is a direct subtest of: the LONGEST
+// prefix of its name, cut at a slash, that names a test still running in pkg.
+//
+// Not the name up to its last slash: a subtest's own name may hold one —
+// `t.Run(mode+"/"+shape, …)` makes ONE subtest, `normal/a_data_node`, under
+// the test that ran it — and cut at its last slash it named a parent that
+// never ran, so its subtests were credited to nobody and the parent read its
+// whole wait for them as its own time (internal/engine's table tests, up to
+// 129 s each for nine cases of a millisecond). A test's ancestors are all
+// still running while it runs, so the longest running prefix is its parent;
+// a name with no running prefix is a top-level test.
+func parentOf(spans map[string]*span, pkg, test string) *span {
+	for i := strings.LastIndex(test, "/"); i > 0; i = strings.LastIndex(test[:i], "/") {
+		if p := spans[pkg+"\x00"+test[:i]]; p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
 // childRun and childEnded read a direct subtest's `run` and its result,
 // handing the parent that subtest's busy stretches.
 func (s *span) childRun(now time.Time) { s.lastChildRun = now }
@@ -475,10 +495,7 @@ func read(in *bufio.Scanner, out *os.File) report {
 					spans[key] = sp
 				}
 				sp.at(e.Action, e.Time)
-				var parent *span
-				if i := strings.LastIndex(e.Test, "/"); i > 0 {
-					parent = spans[e.Package+"\x00"+e.Test[:i]]
-				}
+				parent := parentOf(spans, e.Package, e.Test)
 				switch e.Action {
 				case "run":
 					if parent != nil {
