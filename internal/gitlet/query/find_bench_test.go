@@ -14,22 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// BenchmarkFind is a person's "go to file", timed whole through a Gitlet
-// node's query server, over one commit of findFiles files in findDirs
-// directories, fast-imported and pushed once:
-//
-//   - query=first is the first query of the tree: every iteration a server
-//     whose page bound is a byte narrower than the last one's, which keys the
-//     listing's pages apart (BenchmarkCodeRead's cache=miss), so each runs
-//     the recursive listing of the whole tree and stages every page of it for
-//     the memo, as the first query of a tree does.
-//   - query=typing is a person typing on: the queries of findTyping in turn,
-//     the tree's pages in the memo, so each walks the listing from it with no
-//     git but the read's check, and ranks every file in Go.
-//
-// Each reports the p50, p95 and p99 of one find. The typing arm decides
-// whether the walk of the memo is the finder's path: it must be far inside
-// the read's budget (gitproc.ReadDeadline), as a keystroke's answer is.
+// BenchmarkFind times a find through a node's query server over findFiles
+// files: query=first lists the tree and stages its pages, query=typing walks
+// them from the memo. Each reports p50, p95 and p99.
 func BenchmarkFind(b *testing.B) {
 	gitlettest.Quiet(b)
 	r := newFindRig(b)

@@ -10194,7 +10194,7 @@ implementation:
 |---|---|---|
 | `GET /gitlet/repos/{name}/refs` | `code_refs` | Its live refs under `?prefix=` (`refs/heads/`, the default, `refs/tags/`, or a directory of either ending in `/`), by name, a page at a time (`?limit=` 1–1000, unset or `0` is 200, and `?cursor=`); the first page carries the repository in detail too |
 | `GET /gitlet/repos/{name}/tree` | `code_tree` | A directory's entries at `?ref=` — its root, or `?path=` (`?path_b64=` for a path's exact bytes) — or, with `?recursive=true`, every file below it, a page at a time (`?cursor=`) |
-| `GET /gitlet/repos/{name}/find` | `code_find` | The files of `?ref=`'s tree whose path holds `?q=`'s characters in order, in any case (each character one of the path's, a space too; at most 256 bytes): `matches`, best first, each its `path` (`path_b64` beside it where it is not UTF-8), `oid`, `mode` and `spans`, the runs of the path's characters matched, as `[start, end)` code points; a file whose name holds the query ranks before one whose directories do, then the closer the characters, the earlier and the shorter the name. `?limit=` (1–100, unset or `0` is 50) bounds them, and fewer are answered where their paths fill one answer; `total` is how many files match and `files` how many the tree holds. One answer, no next page: type on to narrow it. A link is a file, a submodule is not |
+| `GET /gitlet/repos/{name}/find` | `code_find` | The files of `?ref=`'s tree whose path holds `?q=`'s characters in order, in any case (each character one of the path's, a space too; at most 256 bytes): `matches`, best first, each its `path` (`path_b64` beside it where it is not UTF-8), `oid`, `mode` and `spans`, the runs of the path's characters matched, as `[start, end)` code points; a file whose name holds the query ranks before one whose directories do, then the closer the characters, the earlier and the shorter the name. `?limit=` (1–100, unset or `0` is 50) bounds them, and fewer are answered where their paths fill one answer; `total` is how many files match and `files` how many the tree holds. One answer, no next page: type on to narrow it. A link is a file; a submodule is not, nor is a path past 4 KiB |
 | `GET /gitlet/repos/{name}/blob` | `code_blob` | A file's lines at `?ref=` and `?path=`, `?start_line=` to `?end_line=`, a page at a time; `?ref=` a blob's own id with no path reads that blob, and a path naming a directory answers its listing |
 | `GET /gitlet/repos/{name}/log` | `code_log` | The commits that changed `?path=` — or every commit — newest first from `?ref=`, each with its parents, its author, its two dates and its subject: `?limit=` a page (1–100, unset or `0` is 25), `?grep=` a literal its message must hold, `?since=` (RFC 3339) the oldest commit date kept |
 | `GET /gitlet/repos/{name}/blame` | `code_blame` | Which commit last changed each line of the file `?path=` at `?ref=`, `?start_line=` to `?end_line=` (at most 500 lines a read), a page at a time |
@@ -10242,8 +10242,8 @@ A content question adds these refusals to the code reads':
 - `400 bad_params` for a revision that names nothing, a `code_commit` `sha`
   that is not a whole commit id (an abbreviation is expanded by `code_log`
   with it as `ref` and `limit=1`), a read too large to answer whole — narrow
-  it — a `code_find` with no `q`, one past 256 bytes, or a `limit` past 100,
-  and a parameter the read does not take;
+  it — a `code_find` with no `q`, one past 256 bytes, not UTF-8 or holding a
+  NUL, or a `limit` past 100, and a parameter the read does not take;
 - `503 unavailable` where no Gitlet node holding the repository could answer
   in time, which is never an answer about the repository.
 

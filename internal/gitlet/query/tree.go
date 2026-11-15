@@ -47,13 +47,9 @@ func (r *read) noDirectory(objs found, rev object) error {
 // list is a page of tree's listing — the directory dir under rev — from the
 // entry at, and, where m takes them, every page after it.
 //
-// each, where set, is handed EVERY ENTRY from at to the listing's end as git
-// writes it, whether or not a page holds it: a find's walk of a whole listing
-// (find.go), which ranks every file it passes. Such a run refuses no entry
-// for its size. An entry no page could hold, the asked one's first included,
-// is no file a find answers either (its path is past MaxGitPathBytes, which no
-// read names back): the run goes on past it, cutting no page from there, as a
-// listing's run does past an entry wider than a page.
+// each, where set, is handed EVERY ENTRY from at to the listing's end, paged
+// or not (a find's walk, find.go). Such a run refuses no entry for its size:
+// past one no page holds it goes on, cutting no page from there.
 func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, at cursor,
 	m *memoRun, each func(gitlet.TreeEntry)) (gitlet.GitAnswer, error) {
 

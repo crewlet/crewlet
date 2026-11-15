@@ -44,15 +44,9 @@ func foundPaths(f *gitlet.FindAnswer) []string {
 	return out
 }
 
-// A FIND RANKS THE BASENAME FIRST AND BY CONTIGUITY. Over one tree, each
-// query answers its files in exactly the order the rank says: a file whose
-// name holds the query before one whose directories alone do; then the
-// fewer characters between the matched ones, the earlier the match in the
-// name, the shorter the name, the shorter the path, and last the path's
-// bytes; each with the runs of its path the query matched, as code points.
-// The bytes break a tie whichever file the heap of the best happens to evict:
-// of three files equal but for their bytes and a better one listed after
-// them, the two best are the better one and the first of the three.
+// A FIND RANKS THE BASENAME FIRST AND BY CONTIGUITY, each query answering in
+// the rank's order with its spans; of three files tied but for their bytes and
+// a better one after them, the two best are the better one and the first.
 //
 // Mutations: drop the tier, the gaps, the start, the excess or the length
 // from the rank, or put the bytes before the length → red; drop the bytes
@@ -85,7 +79,8 @@ func TestAFindRanksTheBasenameFirstAndByContiguity(t *testing.T) {
 			{"main.go.orig", [][2]int{{0, 7}}}, {"src/domain.go", [][2]int{{6, 13}}}}},
 		{"rdm", []found{{"a/rdm.md", [][2]int{{2, 5}}}, {"b/rdm.md", [][2]int{{2, 5}}},
 			{"aa/rdm.md", [][2]int{{3, 6}}}, {"rdm.txt", [][2]int{{0, 3}}},
-			{"rxdxm", [][2]int{{0, 1}, {2, 3}, {4, 5}}}, {"readme.md", [][2]int{{0, 1}, {3, 5}}}, {"main/readme.md", [][2]int{{5, 6}, {8, 10}}},
+			{"rxdxm", [][2]int{{0, 1}, {2, 3}, {4, 5}}}, {"readme.md", [][2]int{{0, 1}, {3, 5}}},
+			{"main/readme.md", [][2]int{{5, 6}, {8, 10}}},
 			{"src/domain.go", [][2]int{{1, 2}, {4, 5}, {6, 7}}}}},
 	} {
 		f := findOf(t, s, findQ(repo, head, tc.query, 0))
@@ -109,11 +104,8 @@ func TestAFindRanksTheBasenameFirstAndByContiguity(t *testing.T) {
 	}
 }
 
-// A FIND FOLDS CASE AS strings.EqualFold DOES: simple folding on both sides,
-// each rune standing for its fold orbit, so README finds readme.md and
-// license finds LICENSE, `k` finds a name spelled with U+212A KELVIN SIGN,
-// and `ß` neither finds `ss` nor is found by it, which only full case mapping
-// would equate.
+// A FIND FOLDS CASE AS strings.EqualFold DOES: README finds readme.md, `k`
+// finds U+212A KELVIN SIGN, and `ß` neither finds `ss` nor is found by it.
 //
 // Mutations: fold the query alone (lower-case it, the paths as they are) →
 // license finds nothing, red; fold ß to ss, as full case mapping does →
@@ -142,13 +134,8 @@ func TestAFindFoldsCaseAsEqualFoldDoes(t *testing.T) {
 	}
 }
 
-// A FIND MATCHES NO BYTE THAT IS NOT TEXT. A name holding one Latin-1 byte
-// and one holding a run of two bytes that are not UTF-8 are found by the
-// characters around them, answered as every read answers such a path (the
-// text with U+FFFD, the exact bytes in path_b64), and the run is ONE
-// position of the path as it is carried, so the spans index that text; while
-// neither the character the byte meant in Latin-1 nor U+FFFD itself finds
-// either.
+// A FIND MATCHES NO BYTE THAT IS NOT TEXT: such a run is one position, found
+// by the characters around it and by neither its Latin-1 reading nor U+FFFD.
 //
 // Mutations: decode an invalid byte as U+FFFD and match it → the U+FFFD
 // query finds both, red; count each invalid byte as a position → the second
@@ -183,15 +170,9 @@ func TestAFindMatchesNoByteThatIsNotText(t *testing.T) {
 	}
 }
 
-// A FIND KEEPS ITS LIMIT AND COUNTS EVERY MATCH. Of a tree of 300 files, a
-// symbolic link among them and a submodule beside them, 120 match: a find
-// naming no limit answers the best 50, one naming 100 the best 100, both
-// counting all 120 matches of the 300 files; the link is a file a find
-// answers, the submodule none. The best are the first of the whole ranking,
-// which the names make plain: the link's short name first, then the files
-// whose name begins with the query, those whose name holds it after one
-// character, and those whose name holds it spread out, each group by its
-// bytes. And a find no Gitlet node answers is refused as it is validated.
+// A FIND KEEPS ITS LIMIT AND COUNTS EVERY MATCH: 120 of 300 files match, the
+// best 50 (or 100) are answered in rank order, a link is a file and a
+// submodule is not, and an invalid find is refused as it is validated.
 //
 // Mutations: count a submodule as a file → files is 301, red; keep the first
 // matches the listing passes rather than the best → the link is missing, red;
@@ -313,14 +294,9 @@ func lsTrees(runs []run) int {
 	return n
 }
 
-// A FIND KEEPS NOTHING OF ITS OWN AND RUNS NO GIT ONCE ITS TREE IS LISTED. The
-// first find of a tree runs the read's check and ONE recursive listing of the
-// root tree by its id, whose pages the memo keeps; a second and a third query
-// of it, and a find of another commit holding the same tree, run the check
-// alone, and answer what a node with no memo answers. The memo holds the
-// listing's pages after the first query and nothing more after the third: no
-// answer of a query is kept. And the pages are the ones an unstamped listing
-// of the tree's id reads, which the memo then answers with no git.
+// A FIND KEEPS NOTHING OF ITS OWN AND RUNS NO GIT ONCE ITS TREE IS LISTED: one
+// listing by the tree's id serves every later query and every commit holding
+// the tree, and the memo holds the listing's pages and no answer.
 //
 // Mutations: memoize a find's answer → the memo grows with each query, red;
 // key the pages by the commit → the other commit's find lists the tree again,
@@ -426,10 +402,8 @@ func (c *missOnce) MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool) {
 	return c.Cache.MemoGet(s, k)
 }
 
-// A FIND GOES ON FROM THE PAGE ITS MEMO LACKS. Where the listing's second page
-// is missing from the memo, as a trimmed cohort leaves it, the find runs ONE
-// listing from it, answers what it answered with every page there, and puts
-// the pages back: the find after it runs none.
+// A FIND GOES ON FROM THE PAGE ITS MEMO LACKS: with the second page gone it
+// lists once from there, answers as before and puts the pages back.
 //
 // Mutations: refuse the find, or rank the pages the walk read alone, at a
 // page the memo lacks → red; list the tree from its first entry and hand the
@@ -472,10 +446,8 @@ func TestAFindGoesOnFromThePageItsMemoLacks(t *testing.T) {
 	}
 }
 
-// A FIND IS ONE ANSWER CUT BY ITS BYTES. A hundred files whose paths are near
-// gitlet.MaxGitPathBytes and cost six bytes of JSON a character all match:
-// the answer holds the best of them that fit gitlet.MaxGitAnswerBytes, in
-// order, and counts every one.
+// A FIND IS ONE ANSWER CUT BY ITS BYTES: of a hundred matching paths near
+// gitlet.MaxGitPathBytes it answers the best that fit, and counts all.
 //
 // Mutation: answer the limit's matches whatever they encode to → red.
 func TestAFindIsOneAnswerCutByItsBytes(t *testing.T) {
@@ -501,5 +473,28 @@ func TestAFindIsOneAnswerCutByItsBytes(t *testing.T) {
 		if want := fmt.Sprintf("%sf%03d", deep, i); p != want {
 			t.Errorf("match %d is %q, want the %d-th best", i, p[len(deep):], i)
 		}
+	}
+}
+
+// A PATH NO READ NAMES IS NO FILE A FIND HOLDS. Beside b/a.txt, a blob at a
+// path of about 10 KiB, past gitlet.MaxGitPathBytes, that matches best: the
+// find answers b/a.txt and counts one file.
+//
+// Mutation: rank the long path → it fills the answer alone, nothing fits, red.
+func TestAFindPassesAPathNoReadNames(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	x.commit(map[string]string{"b/a.txt": "x\n"}, "a file")
+	long := strings.Repeat(strings.Repeat("<", 250)+"/", 40) + "a"
+	blob := strings.TrimSpace(x.git("hash-object", "-w", "b/a.txt"))
+	x.git("update-index", "--add", "--cacheinfo", "100644,"+blob+","+long)
+	x.git("commit", "-q", "-m", "a path past the bound")
+	x.push(gitlettest.RepoName, "main")
+	head := x.p.Head(x.work)
+	repo := x.repo(gitlettest.RepoName)
+	s := x.server(0, query.Options{})
+	f := findOf(t, s, findQ(repo, head, "a", 0))
+	if got := foundPaths(f); !slices.Equal(got, []string{"b/a.txt"}) || f.Total != 1 || f.Files != 1 {
+		t.Errorf("the find of a answered %q (%d of %d files), want b/a.txt, 1 of 1", got, f.Total, f.Files)
 	}
 }

@@ -5480,7 +5480,8 @@ blob, its mode and `spans`, the runs of the path's characters the query
 matched as `[start, end)` code points, which a finder draws in bold; then
 `total`, how many files of the tree match, and `files`, how many it holds.
 One answer, with no next page: a person narrows the list by typing on. A
-symbolic link is a file; a submodule is not, having no file to open.
+symbolic link is a file; a submodule is not, having no file to open, and
+neither is a path longer than 4 KiB, which no read can name.
 
 **What it costs.** A find reads the tree's recursive listing as the
 [memo](#the-memo) keeps it, by the tree's own id rather than the commit's, so

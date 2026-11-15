@@ -6,16 +6,9 @@ import (
 	"unicode/utf8"
 )
 
-// A FIND OF ONE COMMIT'S FILES ([GitFind]) is a finder's "go to file": the
-// files of a commit's root tree whose path holds the characters a person
-// typed, in order and in any case, ranked so the file they mean is first. It
-// is a git read like any other, walked to the repository's Gitlet nodes in
-// their order, but its git is a LISTING the node already keeps: the tree's
-// recursive listing, read page by page from the node's memo by the tree's own
-// id (internal/gitlet/query's find.go), so the second and every later query of
-// a person typing runs no git at all. The query is matched in Go and never
-// handed to git. An estate request, never a record, so it moves no
-// RecordVersion and takes no versionedFields row.
+// A FIND ([GitFind]) is a finder's "go to file": the files of a commit's tree
+// whose path holds the typed characters in order. An estate request, never a
+// record, so it moves no RecordVersion.
 
 // THE FINDER'S BOUNDS.
 const (
@@ -90,8 +83,8 @@ type FindAnswer struct {
 	// fewer where their paths fill the answer's bytes.
 	Matches []FindMatch `json:"matches"`
 	// Total is how many files of the tree match, and Files how many files
-	// the tree holds: every blob of its recursive listing, a link among them
-	// and a submodule not.
+	// the tree holds: every blob of its recursive listing whose path is at
+	// most MaxGitPathBytes, a link among them and a submodule not.
 	Total int `json:"total"`
 	Files int `json:"files"`
 }

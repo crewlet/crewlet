@@ -14,37 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A FIND ([gitlet.GitFind]) is the files of a commit's root tree whose path
-// holds a query's characters in order, ranked in Go over the tree's RECURSIVE
-// LISTING as the memo keeps it: the pages an unstamped `code_tree` of the
-// tree's own id with recursion cuts (gitlet.GitQuery.Unstamped), keyed by the
-// tree alone, so every commit holding the tree and every reader of it share
-// one set of pages. Keyed by the commit, as a listing asked by a commit is, two
-// commits holding one tree would hold it twice and a find of each would list
-// it again.
-//
-// THE WALK NEEDS NO SHARE. The pages are read in order from the memo with no
-// unit of the share held, as any memo hit is, each entry handed to the finder
-// as it passes. At the first page the memo lacks (never cut, or trimmed with
-// its cohort under the walk) the find takes ONE unit and runs ONE `ls-tree
-// -z -l -r <tree>` from that page's cursor, within the read's one budget of
-// git, which hands the finder every entry from there and stages that page and
-// every one after it for the memo, as a listing's run does. So the first query
-// of a tree lists it once, and every later query of it, a person typing,
-// runs no git at all; a trimmed page costs one listing from it. A listing the
-// budget cannot finish refuses the find as too large: a ranking of part of a
-// tree would rank files the person never sees above the one they mean.
-//
-// NOTHING IS MEMOIZED PER QUERY (memoizable): a query's answer is a page per
-// keystroke in a memo the whole node shares, and the pages it reads are the
-// listing's, which a tree read already keeps.
+// A find ranks, in Go, the tree's recursive listing as the memo keeps it by
+// the tree's own id: every commit holding the tree shares one set of pages, a
+// person typing runs git at most once per tree, and nothing is kept per query.
 
-// findRead answers a find: the root tree's recursive listing walked page by
-// page from the memo, unstamped and by the tree's id, every file matched as
-// it passes; from the first page the memo lacks, ONE `ls-tree -z -l -r <tree>`
-// from that page's cursor under one unit of the share and the read's one
-// budget of git, cutting and staging that page and every one after it for the
-// memo, as a listing's run does.
+// findRead answers a find: the listing's pages walked from the memo, and from
+// the first page it lacks ONE `ls-tree -z -l -r <tree>` under one unit of the
+// share, staging that page and every later one.
 func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, error) {
 	fq := r.q.Find
 	rev := objs.revs[fq.Rev]
@@ -131,9 +107,9 @@ func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, erro
 
 // found is the find's answer: the finder's best, best first, as many as fit
 // the room an answer naming rev and tree leaves, with how many match and how
-// many files the tree holds. One match always fits: a path is at most
-// gitlet.MaxGitPathBytes, 24 KiB escaped, and its spans at most one pair a
-// query's character.
+// many files the tree holds. One match always fits: the finder ranks no path
+// past gitlet.MaxGitPathBytes, 24 KiB escaped, and its spans are at most one
+// pair a query's character.
 func (r *read) found(rev object, tree string, f *finder) gitlet.GitAnswer {
 	envelope := gitlet.GitAnswer{Kind: gitlet.GitFind, Rev: rev.peeled, Find: &gitlet.FindAnswer{Tree: tree,
 		Matches: []gitlet.FindMatch{}, Total: widest, Files: widest}}
@@ -153,36 +129,16 @@ func (r *read) found(rev object, tree string, f *finder) gitlet.GitAnswer {
 	return gitlet.GitAnswer{Kind: gitlet.GitFind, Rev: rev.peeled, Find: out}
 }
 
-// THE MATCH. A path's exact bytes (PathB64 decoded where set) are read as
-// POSITIONS: each rune folded to the smallest rune of its unicode.SimpleFold
-// orbit (fold, a log's literal's too: `k`, `K` and U+212A KELVIN SIGN are
-// one), the equivalence strings.EqualFold uses, and each maximal run
-// of bytes that are not UTF-8 ONE position, folded to noRune, which no query
-// rune equals: one, because gitlet.WirePath carries such a run as one U+FFFD
-// (strings.ToValidUTF8), so a position is a code point of the path as the
-// answer carries it and a match's spans index it. The query matches where its
-// runes are a subsequence of the positions.
-//
-// ITS WINDOW over a text T, linear in T (fzf's first algorithm): the forward
-// pass takes each query rune at its first position from the left, ending at
-// e; the backward pass from e takes them again from the right, starting at s.
-// The matched positions are the backward pass's, so the window is as tight as
-// it can be for that end, and gaps is what it holds besides the query.
-//
-// THE RANK, smaller first: the tier (0 where the basename, the positions
-// after the last `/`, holds the query, and T is the basename; 1 where only
-// the whole path does, and T is the path), the window's gaps (0 is
-// contiguous), its start in T (0 is a prefix), T's positions beyond the
-// query's (0 is the basename itself), the path's length in bytes, and its
-// bytes, so two files equal in every other term rank the same on every node.
-// A quadratic best alignment is never run: a 256-byte query over a 4 KiB
-// path stays linear.
+// THE MATCH: a path's runes, folded as a log's literal folds them, hold the
+// query's as a subsequence (fzf's linear forward and backward passes), each
+// run of bytes that are not UTF-8 one position that nothing matches.
 
 // noRune is the position of a run of bytes that are not UTF-8.
 const noRune rune = -1
 
 // positions appends to buf p's positions and answers them, with where its
-// basename's begin.
+// basename's begin. A run of invalid bytes is one position, as
+// gitlet.WirePath carries it as one U+FFFD.
 func positions(buf []rune, p string) ([]rune, int) {
 	buf, base := buf[:0], 0
 	bad := false
@@ -231,7 +187,9 @@ func window(t, q []rune) (s, e int, ok bool) {
 	}
 }
 
-// rank is a match's place in the order; smaller is better.
+// rank is a match's place in the order, smaller first: name before
+// directories (tier), gaps, start, positions beyond the query, path length,
+// and last the bytes, so every node ranks a tree the same.
 type rank struct {
 	tier, gaps, start, excess, length int
 }
@@ -286,14 +244,18 @@ func newFinder(query string, limit int) *finder {
 	return f
 }
 
-// entry takes one listing entry: a blob (any mode but 160000's commit) is a
-// file; anything else is passed.
+// entry takes one listing entry: a blob (any mode but 160000's commit) whose
+// path is at most gitlet.MaxGitPathBytes is a file; anything else is passed,
+// a longer path being one no read names back (gitlet.GitPath).
 func (f *finder) entry(e gitlet.TreeEntry) {
 	if e.Type != "blob" {
 		return
 	}
-	f.files++
 	raw := rawPath(e)
+	if len(raw) > gitlet.MaxGitPathBytes {
+		return
+	}
+	f.files++
 	var base int
 	f.pos, base = positions(f.pos, raw)
 	r, ok := f.rank(f.pos, base)

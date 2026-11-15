@@ -3276,8 +3276,8 @@ func (k GitReadKind) EnginesOwn() bool {
 // content — a listing, a file's lines, a diff, a comparison, an interdiff, a
 // history, a blame or a find — which a read may ask cut and answered with no
 // stamp ([GitQuery.Unstamped]). A find's answer is a function of the tree, the
-// query, the limit and the build, so a find by whole ids is one a browser may
-// keep for a typing session at no cost to the node. Never a landed-in read, whose answer IS what the
+// query, the limit and the build, so a browser may keep a find by whole ids
+// for a typing session. Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
 // checks file, which the engine and a change's own reads ask, never a
 // question that keeps a page.
