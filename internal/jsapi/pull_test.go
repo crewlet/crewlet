@@ -3,6 +3,8 @@ package jsapi_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,41 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // pulledStream is the stream the pull cases read, on [pullServer].
 const pulledStream = "PULLS"
 
-// pullServer is a broker with no JetStream domain ([jsapitest]'s requirement),
-// a connection to it, and a client of its account's API, with [pulledStream]
-// made on it holding the bodies given, in order, on pulls.a.
+// pullServer is [testBroker]'s broker, a connection to it and a client of its
+// account's API, with [pulledStream] made on it holding the bodies given, in
+// order, on pulls.a.
 func pullServer(t *testing.T, bodies ...[]byte) (*server.Server, *nats.Conn, jetstream.JetStream) {
 	t.Helper()
-	srv, err := server.NewServer(&server.Options{
-		ServerName:        "jsapi-pull-test",
-		JetStream:         true,
-		DontListen:        true,
-		StoreDir:          brokertest.TempDir(t),
-		JetStreamMaxStore: brokertest.StoreMaxBytes,
-	})
-	if err != nil {
-		t.Fatalf("configure the broker: %v", err)
-	}
-	go srv.Start()
-	if !srv.ReadyForConnections(30 * time.Second) {
-		srv.Shutdown()
-		t.Fatal("the broker did not become ready")
-	}
-	t.Cleanup(func() {
-		srv.Shutdown()
-		srv.WaitForShutdown()
-	})
-	nc, err := nats.Connect("", nats.InProcessServer(srv))
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
+	srv, nc := testBroker(t, "jsapi-pull-test")
 	js, err := jsapi.Account().Client(nc)
 	if err != nil {
 		t.Fatal(err)
@@ -270,31 +248,81 @@ func TestDeliveringIsArrivalWithoutBase64(t *testing.T) {
 // A PULL THE SERVER WOULD REFUSE IS REFUSED BY NAME, BEFORE IT IS SENT.
 //
 // A pull with no expiry stands on the server for good, and one whose heartbeat
-// is more than half its expiry the server answers with a bare `400`; each is
-// refused here, naming what is wrong, with nothing sent.
+// is more than half its expiry the server answers with `400 Bad Request -
+// heartbeat value too large`; each is refused here, naming what is wrong, with
+// NOTHING SENT — a refused pull that went out anyway would leave that `400` on
+// the reader's one inbox, read as the end of whichever pull it asked next.
+// Here five such pulls are refused, each naming its field, and then one with a
+// heartbeat of exactly half its expiry, which the server takes, is asked: it
+// is the ONLY pull to reach the broker before a marker published after it on
+// the same connection, and answered, it is held and heartbeated until it
+// expires, never refused.
 //
-// Mutation: send a pull whose heartbeat is past half its expiry, and its row
-// is asked.
+// Mutation: send the pull before its checks, and five more reach the broker,
+// the first of them a refusal on the inbox.
 func TestAPullTheServerWouldRefuseIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	_, nc, js := pullServer(t)
+	srv, nc, js := pullServer(t)
 	p := pullsOf(t, nc, js, "refused", "pulls.none")
+	held := jsapitest.Hold(t, srv, jsapitest.ConsumerNext(pulledStream))
 	for _, tc := range []struct {
 		name               string
 		n, maxBytes        int
 		expires, heartbeat time.Duration
+		names              string
 	}{
-		{"no delivery asked", 0, 0, time.Second, 0},
-		{"a negative byte bound", 1, -1, time.Second, 0},
-		{"no expiry", 1, 0, 0, 0},
-		{"a heartbeat past half the expiry", 1, 0, time.Second, 501 * time.Millisecond},
-		{"a negative heartbeat", 1, 0, time.Second, -time.Millisecond},
+		{"no delivery asked", 0, 0, time.Second, 0, "delivery"},
+		{"a negative byte bound", 1, -1, time.Second, 0, "byte bound"},
+		{"no expiry", 1, 0, 0, 0, "expiry"},
+		{"a heartbeat past half the expiry", 1, 0, time.Second, 501 * time.Millisecond, "heartbeat"},
+		{"a negative heartbeat", 1, 0, time.Second, -time.Millisecond, "heartbeat"},
 	} {
-		if err := p.Ask(tc.n, tc.maxBytes, tc.expires, tc.heartbeat); err == nil {
-			t.Errorf("%s: asked, want refused", tc.name)
+		err := p.Ask(tc.n, tc.maxBytes, tc.expires, tc.heartbeat)
+		if err == nil || !strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s: asked with %v, want refused naming its %s", tc.name, err, tc.names)
 		}
 	}
 	if err := p.Ask(1, 0, time.Second, 500*time.Millisecond); err != nil {
-		t.Errorf("a heartbeat of half the expiry, which the server takes: %v", err)
+		t.Fatalf("a heartbeat of half the expiry, which the server takes: %v", err)
+	}
+
+	// THE MARKER, on the pulls' own subject and connection, reaches the
+	// broker after every pull the reader sent before it.
+	const marker = "jsapi.pull-test.marker"
+	if err := nc.PublishRequest(fmt.Sprintf(server.JSApiRequestNextT, pulledStream, "refused"),
+		marker, nil); err != nil {
+		t.Fatalf("send the marker: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	var sent []*jsapitest.Read
+	for {
+		read, err := held.Next(ctx)
+		if err != nil {
+			t.Fatalf("the marker never reached the broker, after %d pulls: %v", len(sent), err)
+		}
+		if read.Reply() == marker {
+			break
+		}
+		sent = append(sent, read)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("%d pulls reached the broker, want only the one asked with a heartbeat of half "+
+			"its expiry", len(sent))
+	}
+	held.Release()
+	if err := sent[0].Answer(); err != nil {
+		t.Fatalf("send the pull on: %v", err)
+	}
+	for {
+		ev := next(t, p)
+		if ev.Kind == jsapi.Heartbeat {
+			continue
+		}
+		if ev.Kind != jsapi.Expired {
+			t.Errorf("the pull asked with a heartbeat of half its expiry said %q (%s %s), want "+
+				"its heartbeats and then its expiry", ev.Kind, ev.Code, ev.Description)
+		}
+		break
 	}
 }
