@@ -915,7 +915,14 @@ function Tokens({
         count={credentials.data ? working.length : undefined}
         actions={
           <>
-            <Checkbox label="Show revoked and expired" checked={all} onCheckedChange={setAll} />
+            {/* At the head's controls' step, beside a small button: a
+                body-step label stood larger than the card's own title. */}
+            <Checkbox
+              size="sm"
+              label="Show revoked and expired"
+              checked={all}
+              onCheckedChange={setAll}
+            />
             <Button size="small" variant="secondary" onClick={() => setMinting(true)}>
               New token
             </Button>

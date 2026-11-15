@@ -69,7 +69,7 @@ describe("file storage", () => {
     expect(screen.getByText("data-a")).toBeTruthy();
     expect(
       screen.getByText(
-        /^Deleted 12 objects that no file names, of 1,840 stored \(.*\); abandoned 1 unfinished upload$/,
+        /^Removed 12 objects no file uses, of 1,840 stored \(.*\); abandoned 1 unfinished upload$/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
@@ -91,9 +91,7 @@ describe("file storage", () => {
     // ONE OF EACH FINDING, so each is drawn by what it is called.
     expect(new Set(files.map((m) => m.finding))).toEqual(new Set(OBJECT_FINDINGS));
     expect(screen.getByText("1,828 named, 1 missing, 1 damaged, 1 unanswered")).toBeTruthy();
-    expect(
-      screen.getByText("The fleet's own NATS object bucket, replicated like the stream"),
-    ).toBeTruthy();
+    expect(screen.getByText("Inside the fleet, copied like the rest of its data")).toBeTruthy();
   });
 
   test("an audit that failed keeps what the last whole one found, and says it failed", () => {
@@ -109,7 +107,7 @@ describe("file storage", () => {
   test("a collection that stopped judging says what it deleted first, and why it stopped", () => {
     renderCard(block("skipped"));
     expect(
-      screen.getByText(/^Deleted 500 objects that no file names, then stopped: a record this node/),
+      screen.getByText(/^Removed 500 objects no file uses, then stopped: a record this node/),
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
@@ -142,15 +140,15 @@ describe("file storage", () => {
     expect(screen.getByText("Collector passes")).toBeTruthy();
     expect(screen.queryByText("File storage")).toBeNull();
     // THE STORE IS A SETTING, in the settings table every Settings page draws
-    // one in, with its key; the node that ran the passes heads their card.
+    // one in, named and sourced in the reader's words (its key is the table's
+    // to keep); the node that ran the passes heads their card.
     const store = screen.getByRole("table", { name: "Where files are kept" });
     const row = within(store).getByRole("row", { name: /Store/ });
-    expect(within(row).getByText("store.objects.backend")).toBeTruthy();
     expect(
       within(row)
         .getAllByRole("cell")
         .map((c) => c.textContent),
-    ).toEqual(["S3 bucket https://s3.example.com/files/acme/", "crewlet.yaml"]);
+    ).toEqual(["S3 bucket https://s3.example.com/files/acme/", "Node configuration file"]);
     const passes = screen.getByText("Collector passes").closest(".crewlet-card") as HTMLElement;
     expect(within(passes).getByText("Last run by", { exact: false })).toBeTruthy();
     expect(within(passes).getByRole("link", { name: "data-a" })).toBeTruthy();
@@ -196,5 +194,25 @@ describe("file storage", () => {
       }),
     ).toBe("Stopped: the bucket did not answer");
     expect(backendSummary("gcs:x")).toBe("gcs:x");
+  });
+
+  // A PASS THAT REMOVED NOTHING SAYS SO, rather than counting zero twice in a
+  // clause ("Deleted 0 objects that no file names, of 0 stored").
+  test("a pass that removed nothing says so in a sentence of its own", () => {
+    const pass = {
+      at: "",
+      completed: true,
+      aged: 0,
+      deleted: 0,
+      referenced: 0,
+      abandoned: 0,
+    };
+    expect(collectSummary({ ...pass, listed: 0 })).toBe(
+      "Nothing is stored yet, so there was nothing to remove",
+    );
+    expect(collectSummary({ ...pass, listed: 1 })).toBe("Nothing to remove among 1 stored object");
+    expect(collectSummary({ ...pass, listed: 1840 })).toBe(
+      "Nothing to remove among 1,840 stored objects",
+    );
   });
 });

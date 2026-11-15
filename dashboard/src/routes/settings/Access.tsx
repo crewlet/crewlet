@@ -168,7 +168,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, plural, tsKey } from "~/lib/format.ts";
+import { NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -473,6 +474,21 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
       {words?.label ?? fallback}
     </Tag>
   );
+}
+
+/**
+ * What the open-seats figure is out of, in a sentence: "0" over "4 total" read
+ * as a fraction with its slash missing ("Open seats 0 / 4 total"), and a
+ * figure of none said nothing about the seats that are held.
+ */
+export function openSeatsWords(vacant: number, invited: number, total: number): string {
+  const of =
+    vacant === 0 && invited === 0
+      ? total === 1
+        ? "the one human seat is held"
+        : `all ${total} human seats are held`
+      : `of ${plural(total, "human seat")}`;
+  return invited > 0 ? `${of} · ${invited} invited` : of;
 }
 
 /**
@@ -869,7 +885,7 @@ export function People() {
                   value={seats.data ? vacant : EMPTY_VALUE}
                   sub={
                     seats.data
-                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      ? openSeatsWords(vacant, invited, seatRows.length)
                       : listsNoCompany(seats)
                         ? "no company yet"
                         : "not read"
@@ -1215,8 +1231,8 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
-        and changed with a restart. A person&rsquo;s own tokens are on their Account.
+        The tokens this node accepts, set in its configuration file and {NODE_FILE_CHANGE}. A
+        person&rsquo;s own tokens are on their Account.
       </PageNote>
       <Card padding="none">
         <Card.Header
@@ -1242,7 +1258,7 @@ export function ApiTokens() {
             defaultSort="id"
             empty={{
               title: "This node declares no API token",
-              hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
+              hint: `Tokens are set in the node's configuration file and ${NODE_FILE_CHANGE}.`,
             }}
             columns={[
               // IDENTIFIERS ARE NEVER CUT: a token's label and the login it
@@ -1636,7 +1652,11 @@ function Invitations({
       <Card.Header
         icon={<SendGlyph size="sm" />}
         count={rows.length}
-        actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
+        // THE HEAD'S CONTROLS' STEP: a body-step label here stood larger than
+        // the card's own title beside it.
+        actions={
+          <Checkbox size="sm" label="Show used and expired" checked={all} onCheckedChange={onAll} />
+        }
       >
         <Card.Title>Invitations</Card.Title>
       </Card.Header>

@@ -16,8 +16,8 @@
  * # Drawn as every read-only settings page is
  *
  * Each group is a card holding a [SettingsTable], the shape Settings › Limits
- * takes: the setting, its key under `api.auth` in the node's file, the value
- * enforced, and where the value comes from. The session's idle limit is the
+ * takes: the setting by its name (its key under `api.auth` behind the table's
+ * copy control), the value enforced, and where the value comes from. The session's idle limit is the
  * one value no file sets (an engine constant, see `queries.SignInPolicy`), and
  * its source says so rather than pointing at a key that does not exist.
  */
@@ -26,10 +26,11 @@ import { Card, InlineCode, SettingsTable, PageNote } from "@crewlethq/ui";
 import { ClockGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { fmtSetting, plural } from "~/lib/format.ts";
+import { FROM_NODE_FILE, NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
 /** Where a value set in the node's file comes from. */
-const FROM_FILE = "crewlet.yaml";
+const FROM_FILE = FROM_NODE_FILE;
 
 export function SignInPolicy() {
   const { data, loading, error, refusal, detail } = useQuery("sign_in_policy", undefined, {
@@ -38,18 +39,15 @@ export function SignInPolicy() {
   return (
     <>
       <PageNote>
-        {/* THE KEYS AS CODE, and no parenthesis round a code chip: "(
-            polish-native ," read as a stray bracket beside a padded box. */}
+        {/* THE NODE BY NAME AND THE FILE IN WORDS: the keys are on each row's
+            copy control, for the operator who edits the file. */}
         {data ? (
           <>
-            How node <InlineCode>{data.node}</InlineCode> signs people in: set under{" "}
-            <InlineCode>api.auth</InlineCode> in its crewlet.yaml, and changed with a restart.
+            How node <InlineCode>{data.node}</InlineCode> signs people in. Each value is set in its
+            configuration file and {NODE_FILE_CHANGE}.
           </>
         ) : (
-          <>
-            Set under <InlineCode>api.auth</InlineCode> in each node&rsquo;s crewlet.yaml, and
-            changed with a restart.
-          </>
+          <>Each value is set in the node&rsquo;s configuration file and {NODE_FILE_CHANGE}.</>
         )}
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
