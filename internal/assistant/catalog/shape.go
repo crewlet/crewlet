@@ -289,6 +289,8 @@ var narrowingQuery = map[string]bool{
 	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
 	"collection": true, "field": true, "due": true, "author": true,
 	"lane": true, "vendor": true, "confidence": true, "health": true,
+	// THE IDENTITY TRAIL's: whom its entries are about, and one kind of entry.
+	"person": true, "event": true,
 }
 
 // narrowWords are the arguments a person reads by other words than their

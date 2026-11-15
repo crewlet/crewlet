@@ -531,14 +531,16 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	return built, out.Validate()
 }
 
-// morePast reads an answer's word that rows lie past its page: a cursor that
-// is present and not empty, or a flag that is true.
+// morePast reads an answer's word that rows lie past its page: a non-empty
+// cursor (a position cursor is empty at zero) or a true flag.
 func morePast(v any) bool {
 	switch m := v.(type) {
 	case bool:
 		return m
 	case string:
 		return m != ""
+	case json.Number:
+		return m.String() != "0"
 	case nil:
 		return false
 	}

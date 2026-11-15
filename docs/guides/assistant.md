@@ -492,7 +492,9 @@ permission (`agent-lacks-a-github-permission`, which reads the agent's access
 and proposes the grant in Crewlet), whether an integration is set up right
 for one agent (`integration-set-up-for-an-agent`), and why an integration's
 last check and an agent's last applied differ (`two-access-clocks`, which
-proposes nothing). The flags and the suite format are in the
+proposes nothing). `who-changed-what` answers who changed a task and which
+change was refused from the audit log. The flags and the suite format are in
+the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

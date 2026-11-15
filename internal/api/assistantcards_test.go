@@ -172,6 +172,8 @@ func atlasEntryID(k atlas.Kind, key string) string { return atlas.MustRef(k, key
 // answer, because this App does not stand their surface up.
 var heldElsewhere = map[string]bool{
 	"get_org_chart/seats": true, // internal/api/iamapi: TestTheSeatsCardReadsTheSeatsAnswer
+	// internal/api/iamapi: TestTheIdentityTrailCardReadsTheAuditAnswer
+	"list_audit_events/identity": true,
 }
 
 // ONE AGENT'S LANE is a setup route this App does not stand up, held by
@@ -208,6 +210,8 @@ var answerTypes = map[string]assistanttest.ValueTypes{
 	"get_spend/phase":           {"row": reflect.TypeFor[tokens.PhaseRow]()},
 	"get_spend_series/by_group": {"row": reflect.TypeFor[tokens.GroupRow]()},
 	"get_fleet_health/backups":  {"row": reflect.TypeFor[queries.BackupRunRow]()},
+	// THE EVENT LOG, which only a running fleet writes.
+	"list_audit_events/actions": {"row": reflect.TypeFor[store.EventRecord]()},
 }
 
 // ---- a company whose every source answers ------------------------------ //
