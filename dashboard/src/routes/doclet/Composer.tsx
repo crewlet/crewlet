@@ -73,7 +73,8 @@ import type { PageStatus } from "~/protocol/index.ts";
 import { useAssistantDraft, useDraftState, writeParts, writeVia } from "~/app/assistant/draft.ts";
 import { composerDraft, type ComposerValues } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
-import { DocletBar, PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 
 /** The composer's own entry in the slash menu: a new page links to any page. */
@@ -269,7 +270,6 @@ export function Composer() {
   if (read && spaces.length === 0) {
     return (
       <>
-        <DocletBar />
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="There is no space to file a page in yet"
@@ -324,7 +324,8 @@ export function Composer() {
 
   return (
     <>
-      <DocletBar>
+      {/* THE NEW PAGE'S OWN ACTIONS ALONE, no search: see `DocletBar`. */}
+      <PageActions>
         <Button
           size="small"
           variant="ghost"
@@ -335,7 +336,7 @@ export function Composer() {
         </Button>
         {save("draft", "Save as draft", "secondary")}
         {save("published", "Publish", "primary")}
-      </DocletBar>
+      </PageActions>
 
       <div className="knowledge-composer">
         <div className="knowledge-composer-main">

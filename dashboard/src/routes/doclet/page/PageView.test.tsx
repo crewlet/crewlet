@@ -1184,3 +1184,26 @@ test("a page title past the engine's cap is held whole and said, not cut", async
   expect(reasonOf(publish)).toContain("too long");
   expect(posted).toEqual([]);
 });
+
+// A PAGE'S BAR IS THE PAGE'S OWN ACTIONS, and so is the composer's. The trail
+// is the one thing on a bar that gives way, and a search field with its
+// ranking menu beside a page's watch, History, Edit and More took the room its
+// ancestors needed: at 1440 "Doclet" fell to "D…", and at 390 the bar took
+// three rows. Mutation: draw `DocletBar` on either screen and this fails.
+test("a page's bar and the composer's hold their own actions and no search", async () => {
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /History/ })).toBeTruthy();
+  expect(screen.queryByRole("search")).toBeNull();
+  expect(screen.queryByRole("searchbox", { name: "Search pages" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Rank by/ })).toBeNull();
+
+  cleanup();
+  location.hash = "#/doclet/new?space=ENG";
+  mount(<Composer />, { viewer: JANE, pages: { pages: [], limit: 500, total: 0 } });
+  await settle();
+  expect(screen.getByRole("button", { name: /Save as draft/ })).toBeTruthy();
+  expect(screen.queryByRole("search")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Rank by/ })).toBeNull();
+});

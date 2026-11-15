@@ -72,6 +72,7 @@ import {
 import { pageSpaceKey, pageUpKey } from "~/app/crumbs.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
@@ -417,7 +418,8 @@ export function PageView({ id }: { id: string }) {
       {/* WHILE EDITING, THE BAR IS THE EDITOR'S: its state, Cancel and Save
           (`Editor.tsx`), drawn into the same slot. */}
       {!editing && (
-        <DocletBar>
+        // THE PAGE'S OWN ACTIONS ALONE, no search: see `DocletBar`.
+        <PageActions>
           {page && (
             <>
               <WatchControl page={page} />
@@ -465,7 +467,7 @@ export function PageView({ id }: { id: string }) {
               </span>
             </>
           )}
-        </DocletBar>
+        </PageActions>
       )}
 
       {loading && !data && <Skeleton variant="text" rows={10} label="Loading the page" />}

@@ -1423,7 +1423,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/doclet` | **Doclet**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Doclet screen *(the whole of Doclet needs Doclet access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/doclet` | **Doclet**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row sits on every Doclet screen and the search on its lists *(the whole of Doclet needs Doclet access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
 | `#/doclet/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/doclet/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/doclet/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
@@ -9082,8 +9082,12 @@ as they are typed in.
 Doclet is the approved **Home** layout. No column of navigation stands
 beside the screen (the workspace's section renderer is `none`, `app/nav.ts`):
 the spaces are ONE ROW at the top of every Doclet screen, the search sits in
-the page bar of every Doclet screen, and a page is read at the full width
-of the sheet. The landing, a space and the search's answer take the sheet's
+the page bar of the landing, a space and the results, and a page is read at
+the full width of the sheet. A page's bar and the composer's hold that page's
+own actions and no search: the trail is the one thing on a bar that gives
+way, and a search field with its ranking menu beside a page's actions cut its
+ancestors to stubs at 1440 and took a phone's bar to three rows. There `/`
+opens the palette, which searches pages too. The landing, a space and the search's answer take the sheet's
 whole width as every screen's column does, with no cap of their own: capped at
 the kit's content maximum, they sat in a 1600px column against the left edge
 of a 2560px screen (`styles/frame.test.ts` refuses a screen that caps itself

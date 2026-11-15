@@ -10,8 +10,9 @@
  * opening); every other save, comment and new page down the right (Recently
  * written); and four small tiles, for the pages a person read last (Continue
  * reading), starred (Pinned) and follows (Watching), and the agents' own two
- * places. The search sits in the page bar of every Doclet screen
- * (`DocletSearchBar`); with a phrase in the address this screen is the
+ * places. The search sits in the page bar of this screen and a space's
+ * (`DocletBar`), never in a page's, whose bar is that page's own actions; with
+ * a phrase in the address this screen is the
  * RANKED ANSWER instead, grouped by space beside a preview of the chosen
  * result.
  *

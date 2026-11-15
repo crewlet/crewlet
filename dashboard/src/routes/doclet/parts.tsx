@@ -288,8 +288,8 @@ export function SpacesRow({ current }: { current?: string | undefined }) {
 }
 
 /**
- * The search, in the page bar of every Doclet screen: a field, and the
- * ranking mode in a menu BESIDE it. A control inside a text box is one a
+ * The search, in the page bar of Doclet's landing, a space and the results: a
+ * field, and the ranking mode in a menu BESIDE it. A control inside a text box is one a
  * pointer reaches by missing the box, so the menu sits next to the field
  * rather than in it.
  *
@@ -397,7 +397,19 @@ export function DocletSearchBar() {
   );
 }
 
-/** The page bar every Doclet screen draws: the search, then the screen's own actions. */
+/**
+ * The page bar of Doclet's LISTS (the landing, a space, the results): the
+ * search, then the screen's own actions.
+ *
+ * NOT A PAGE'S BAR, nor the composer's. A screen that is one page, read or
+ * being written, fills its bar with that page's own actions (the watch,
+ * History, Edit and More; Discard, Save as draft and Publish), and the trail
+ * is the one thing on a bar that gives way: a search field and its ranking
+ * menu beside them took some 360px from it, so at 1440 a page's ancestors fell
+ * to stubs ("D…", "Product Man…"), at 768 the composer's controls wrapped under
+ * the trail, and at 390 a page's bar took three rows with Edit alone on the
+ * last. There, `/` opens the palette, which searches pages as well.
+ */
 export function DocletBar({ children }: { children?: ReactNode }) {
   return (
     <PageActions>
