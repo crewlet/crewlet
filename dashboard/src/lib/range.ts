@@ -29,7 +29,8 @@
 import { useCallback, useMemo } from "react";
 import { useKeptRange } from "~/lib/keptRange.ts";
 import { fmtMinute, parseUTC } from "~/lib/format.ts";
-import { dateTimeFormat, knownZone, type DateShape } from "~/lib/formatters.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { companyZone, dateIn, dayLabelIn } from "~/lib/companyDay.ts";
 
 /** The windows every time-ranged screen offers, in the order a control reads. */
 export const RANGES = ["15m", "1h", "6h", "1d", "7d", "30d", "90d"] as const;
@@ -592,11 +593,6 @@ export function todayWindow(now: number, zone: string | undefined): Interval {
   return { from: companyMidnight(now, zone), to: now, today: true };
 }
 
-/** The company date (`YYYY-MM-DD`) an instant falls on in `zone`. */
-export function dayLabelIn(at: number, zone: string | undefined): string {
-  return dateIn(zone)(at);
-}
-
 /**
  * The time of day an instant reads on the company's clock: "15:52".
  *
@@ -617,21 +613,6 @@ export function clockIn(at: number, zone: string | undefined): string {
 }
 
 const CLOCK: DateShape = Object.freeze({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-
-/**
- * The zone this runtime reads the company's clock in: `zone` itself, or UTC
- * where it names none — the engine's own reading of an empty name
- * (`internal/period`'s `LoadZone`) — or names one this runtime's `Intl` does
- * not know ([knownZone], whose module says how such a name reaches a page).
- *
- * ONE RULE for every reading of the company's clock, so a time and the day it
- * is listed under, or a window and the day it resets, are read on one clock
- * even where that clock is the fallback; and asked once a zone, so a list of
- * rows on a clock this runtime cannot read builds nothing a row.
- */
-export function companyZone(zone: string | undefined): string {
-  return knownZone(zone || "UTC") ?? "UTC";
-}
 
 /**
  * The first instant of the company date `label` in `zone`, or null for a
@@ -691,14 +672,4 @@ export function daysInterval(
   // A DAY IS AT MOST 25 HOURS, so 26 past the last day's start is inside the
   // day after it, whose midnight is where this window ends.
   return { from, to: companyMidnight(last + 26 * 3_600_000, zone) };
-}
-
-/** `en-CA` writes a date in this shape as `YYYY-MM-DD`, which sorts as the date does. */
-const YMD: DateShape = Object.freeze({ year: "numeric", month: "2-digit", day: "2-digit" });
-
-/** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */
-function dateIn(zone: string | undefined): (at: number) => string {
-  // `en-CA` writes a date as `YYYY-MM-DD`, which sorts as the date does.
-  const format = dateTimeFormat("en-CA", companyZone(zone), YMD);
-  return (at) => format.format(at);
 }

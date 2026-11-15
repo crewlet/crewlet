@@ -1280,11 +1280,17 @@ retired and removed at boot, so a stale value does not sit in a reader's
 profile for ever. The session cookie is the only credential the dashboard
 has, and nothing of it is in browser storage. There is no zone or date
 preference: every timestamp is drawn in the browser's own zone and its
-locale's own date spelling, and that zone is also the one a day is filed in.
-A calendar cell and a timeline column are that zone's date, so
-a task stamped "Sep 23" is never in the cell for the 22nd — while a day's
-arithmetic (the grid, the span between two dates) is civil and moves with no
-zone. There is no company switcher: one engine runs one company.
+locale's own date spelling. A **day field** is not a timestamp: a task's due
+date and start date, and a custom date field without a time, are dates on the
+company's calendar (`org.timezone`), drawn as that date to every reader. The
+engine stores a due or start date as the company's midnight, and read on the
+browser's clock that midnight is the evening before for anybody west of the
+company. So the rail, a list's Due and Start columns, a card, a change
+sentence, a calendar cell and a timeline column all read the company's date,
+the calendar the engine's standing, overdue mark and `due=` day range are cut
+on, while a day's arithmetic (the grid, the span between two dates) is civil
+and moves with no zone. There is no company switcher: one engine runs one
+company.
 
 **The lockup is the company**, beside the product's mark: "Nimbus", on one
 line, and the way home. The product's name stands in only while no company has

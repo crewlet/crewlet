@@ -66,6 +66,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ATLAS, DOCLET, accessNames, holds, lockReason } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
+import { companyDayOf, dayLabelIn, fmtCompanyDay, useCompanyZone } from "~/lib/companyDay.ts";
+import { daysBetween } from "~/lib/timeline.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import type { AtlasNamed, AtlasSummary } from "~/contract/atlas.ts";
 import { ListedArtifactCard } from "~/routes/artifacts/parts.tsx";
@@ -74,11 +76,10 @@ import { KINDS as ENTRY_KINDS } from "~/routes/atlas/words.ts";
 import { NewArtifactMenu } from "~/routes/artifacts/new/NewArtifactMenu.tsx";
 import {
   fmtCount,
-  fmtDate,
+  fmtCivilDay,
   fmtDateTime,
   fmtDuration,
   humanize,
-  inTime,
   plural,
   relTime,
 } from "~/lib/format.ts";
@@ -331,7 +332,7 @@ function useItemFields(props: RailProps): Property[] {
           onSave={(day) =>
             edits?.edit(
               { due: day },
-              day ? `Set ${item.key} due ${fmtDate(day)}` : `Cleared ${item.key}'s due date`,
+              day ? `Set ${item.key} due ${fmtCivilDay(day)}` : `Cleared ${item.key}'s due date`,
             )
           }
         />
@@ -352,7 +353,7 @@ function useItemFields(props: RailProps): Property[] {
                   edits?.edit(
                     { start: day },
                     day
-                      ? `Set ${item.key} to start ${fmtDate(day)}`
+                      ? `Set ${item.key} to start ${fmtCivilDay(day)}`
                       : `Cleared ${item.key}'s start`,
                   )
                 }
@@ -633,13 +634,14 @@ function DateValue({
   now: number;
   allDay?: boolean;
   /** The engine's standing of a DUE date on the company's calendar — see
-   *  [standingWords]. A start date has none, and reads its distance off the
-   *  shared clock instead. */
+   *  [standingWords]. A start date has none, and its distance is counted the
+   *  same way here, in whole days of the company's calendar. */
   standing?: { days: number; overdue?: boolean };
   /** A `YYYY-MM-DD`, or null to clear. */
   onSave: (day: string | null) => Promise<ActResult | null> | undefined;
 }) {
   const edits = useItemEdits();
+  const zone = useCompanyZone();
   const editor = useInlineEdit<string>(field, `the ${field} date`, RAIL_FIELD);
   const { draft } = editor;
   if (draft !== null && edits?.can) {
@@ -671,18 +673,27 @@ function DateValue({
   // THE DISTANCE, never the date a second time: past a month the shared
   // clock's relative reading IS the absolute date, and the rail printed
   // "Nov 09, 2026" twice. A due date takes the engine's words instead.
-  const absolute = at ? fmtDate(at) : "";
+  //
+  // THE DATE IS THE COMPANY'S ([companyDayOf]), the calendar the engine's
+  // standing beside it is counted on: read on this browser's clock, a day
+  // picked as Nov 30 read Nov 29 to every reader west of the company. Only a
+  // due date with a time of its own names an instant, on the title.
+  const absolute = at ? fmtCompanyDay(at, zone) : "";
+  const instant = at && field === "due" && !allDay ? fmtDateTime(at) : undefined;
+  // A DATE WITH NO STANDING (a start date) is counted the way the engine
+  // counts one: whole days on the company's calendar, from its today.
+  const day = at ? companyDayOf(at, zone) : "";
   const distance = !at
     ? ""
     : standing
       ? standingWords(standing)
-      : Date.parse(at) >= now
-        ? inTime(at, now)
-        : relTime(at, now);
+      : day
+        ? standingWords({ days: daysBetween(dayLabelIn(now, zone), day) })
+        : "";
   const shown = at ? (
     <span className={cx("task-date", standing?.overdue && "overdue")}>
       <CalendarGlyph size="xs" />
-      <span title={fmtDateTime(at)}>{absolute}</span>
+      <span title={instant}>{absolute}</span>
       {distance && distance !== absolute && (
         <span className={standing?.overdue ? undefined : "muted"}>{distance}</span>
       )}
@@ -700,7 +711,7 @@ function DateValue({
         className="task-edit"
         label={`Change the ${label.toLowerCase()}`}
         icon={<PencilGlyph size="xs" />}
-        onClick={() => editor.start(at ? at.slice(0, 10) : "")}
+        onClick={() => editor.start(day)}
       />
     </span>
   );

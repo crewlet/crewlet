@@ -105,9 +105,11 @@ import {
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
 import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
   changeClauses,
   changeLabel,
+  changeLabels,
   changeMark,
   changePhrase,
   describeChange,
@@ -269,11 +271,16 @@ export function Activity({
 
   // WHAT A DELTA'S OTHER END IS CALLED, from every page of the change feed —
   // a relation, a re-parent and a cascade name the other task by its id.
-  const labels = useMemo<RowChrome & LabelContext>(() => {
-    const keys: Record<string, string> = {};
-    for (const answer of changes.answers) Object.assign(keys, answer.keys ?? {});
-    return { ...chrome, taskKey: (id: string) => keys[id] ?? "" };
-  }, [chrome, changes.answers]);
+  const zone = useCompanyZone();
+  const labels = useMemo<RowChrome & LabelContext>(
+    () =>
+      changeLabels(
+        chrome,
+        changes.answers.map((answer) => answer.keys),
+        zone,
+      ),
+    [chrome, changes.answers, zone],
+  );
 
   // THE THREAD THIS READER IS SHOWN: the paged one, or (asked without
   // Worklet) the one the task's answer carried, with nothing beside it.

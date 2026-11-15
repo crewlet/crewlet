@@ -57,7 +57,7 @@ import {
   type Period,
 } from "~/lib/ceilings.ts";
 import { companyDateLabel, fmtCount, fmtDateTime, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 import { useOrgBudget } from "~/lib/store-hooks.ts";
 import { useCeilingWrite, type CeilingWrite, type TypedCeilings } from "~/lib/useCeilingWrite.ts";
 import { useQuery } from "~/lib/useQuery.ts";

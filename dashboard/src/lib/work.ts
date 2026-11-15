@@ -24,16 +24,14 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   civilAt,
   civilKey,
-  fmtDate,
+  fmtCivilDay,
   fmtDateTime,
-  fromWall,
   humanize,
-  parseUTC,
   plural,
   possessive,
-  readerDay,
 } from "./format.ts";
 import { dateTimeFormat, type DateShape } from "./formatters.ts";
+import { companyDayOf, dayLabelIn, fmtCompanyDay } from "./companyDay.ts";
 // MARKDOWN AS TEXT, from the pure half of the markdown files, never the
 // renderer: `plainText` walks the grammar the renderer walks, and a private
 // stripper here instead would be a second copy of its rules, which is the drift
@@ -503,6 +501,46 @@ export interface LabelContext {
    * it reaches the sentence.
    */
   taskKey?: (id: string) => string;
+  /**
+   * The company's zone (`org.timezone`, empty for UTC), which a DAY field's
+   * value is read in: a due or start date travels as the company's midnight,
+   * and the day is the company's ([companyDayOf]).
+   */
+  zone?: string;
+}
+
+/**
+ * A change feed's label context: the screen's chrome, with what its answers
+ * name (the tasks a delta points at by id, each page's map in turn, a later
+ * one winning) and the company zone a day field is read in.
+ *
+ * ONE BUILDER for every feed that renders a change: a task's Activity, the
+ * History lens and a project's Latest changes each built their own, and the
+ * project's dropped the answer's `keys`, so one link read "linked it to
+ * ENG-2" on the task and "Linked: added e811dd8f-…" on its project.
+ */
+export function changeLabels<C extends LabelContext>(
+  chrome: C,
+  keys: Iterable<Record<string, string> | undefined>,
+  zone: string,
+): C & LabelContext {
+  const named: Record<string, string> = {};
+  for (const map of keys) Object.assign(named, map ?? {});
+  return { ...chrome, taskKey: (id: string) => named[id] ?? "", zone };
+}
+
+/**
+ * Who made a change, by the name the rest of the product uses: the seat's name
+ * where the author is a seat (an agent, or a person the identity directory
+ * binds to one, whom the engine records AS that seat, `iam.ActorFor`), the
+ * login of anybody else, and the engine where nobody did. Every feed names its
+ * actors through this, so a project's Latest changes no longer printed a
+ * handle under rows that named the same person elsewhere.
+ */
+export function changeActor(record: WorkActivityRecord, chrome: LabelContext): string {
+  // THE ENGINE WRITES AS ITS NODE, a name that means nothing beside a person's.
+  if (!record.actor || record.actor_kind === "system") return "the engine";
+  return chrome.seatName?.(record.actor) ?? record.actor;
 }
 
 /**
@@ -1225,12 +1263,15 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
         .join(", ");
     case "routing_unit":
       return ctx.unitName?.(value) ?? value;
-    // [fmtDate], which is what the Plan group of the rail renders Start and Due
-    // with. Not [fmtDateCompact]: dropping the year is for a COLUMN of dates,
-    // where the one date not in this year is what has to stand out.
+    // [fmtCompanyDay], which is what the Plan group of the rail renders Start
+    // and Due with: the day on the COMPANY's calendar, never the instant read
+    // on this browser's clock, so "changed the due date to Nov 30" says the
+    // day that was picked to every reader. In full rather than compact:
+    // dropping the year is for a COLUMN of dates, where the one date not in
+    // this year is what has to stand out.
     case "due":
     case "start":
-      return fmtDate(value);
+      return fmtCompanyDay(value, ctx.zone);
     // THE STORED FORM IS `90m` (minutesText) and the rail reads "1h 30m". A form
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
@@ -1523,8 +1564,11 @@ export function fieldValueText(
   switch (field.type) {
     case "checkbox":
       return value === true ? "Yes" : "No";
+    // A DATE WITHOUT A TIME IS STORED AS ITS DATE (`internal/worklet`'s
+    // coerce), and a date is drawn as itself: read as an instant it parsed as
+    // UTC midnight and named the day before west of Greenwich.
     case "date":
-      return def?.config?.time ? fmtDateTime(String(value)) : fmtDate(String(value));
+      return def?.config?.time ? fmtDateTime(String(value)) : fmtCivilDay(String(value));
     case "number":
     case "progress":
     case "rollup": {
@@ -2740,32 +2784,24 @@ export function dueFilterLabel(value: string): string {
 }
 
 /**
- * One of the READER's days, as the `due` filter that selects exactly it.
+ * One of the company's days, as the `due` filter that selects exactly it.
  *
- * TWO INSTANTS, NEVER TWO DATES. The calendar buckets a task into the reader's
- * day ([dayKey], in the zone the preferences chose) and the engine reads a bare
- * date on the COMPANY's clock — so `range:2031-04-16..2031-04-17` is a
- * different day for every reader not in the company's zone, and a task due at
- * 23:30 in the cell would be missing from the list its "+N more" opened. The
- * instants are the reader's own midnights, and the range is half-open like
- * every range the grammar takes.
+ * TWO BARE DATES, which the engine reads on the COMPANY's clock: the calendar
+ * buckets a task into its company day ([dayKey]), the day its due date names,
+ * so the list a cell's "+N more" opens is cut on the same calendar as the
+ * cell. Half-open, like every range the grammar takes.
  */
 export function dayRange(day: string): string {
-  const start = fromWall(`${day}T00:00`);
-  const next = civilAt(day);
-  const end = next === null ? null : fromWall(`${civilKey(next + 86_400_000)}T00:00`);
-  if (start === null || end === null) return "";
-  return `range:${new Date(start).toISOString()}..${new Date(end).toISOString()}`;
+  const at = civilAt(day);
+  if (at === null) return "";
+  return `range:${day}..${civilKey(at + 86_400_000)}`;
 }
 
-/** The reader's day a [dayRange] filter selects, or "" for any other value. */
+/** The company day a [dayRange] filter selects, or "" for any other value. */
 export function dayOfRange(value: string): string {
-  const m = /^range:(\S+)\.\.(\S+)$/.exec(value);
+  const m = /^range:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(value);
   if (!m) return "";
-  const from = Date.parse(m[1]!);
-  if (Number.isNaN(from) || !m[1]!.includes("T")) return "";
-  const day = readerDay(from);
-  return dayRange(day) === value ? day : "";
+  return dayRange(m[1]!) === value ? m[1]! : "";
 }
 
 /**
@@ -3105,8 +3141,8 @@ export function endNote(args: {
  * branch with no range, which is the one state that branch must never be in. A
  * mangled month is a bad address, not a company whose work has no dates.
  */
-export function monthOrNow(month: string, now: number): string {
-  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : monthOf(now);
+export function monthOrNow(month: string, todayKey: string): string {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : todayKey.slice(0, 7);
 }
 
 /**
@@ -3307,9 +3343,9 @@ export interface CalendarCell {
   today: boolean;
 }
 
-/** The month an instant falls in, in the reader's zone, as `YYYY-MM`. */
-export function monthOf(now: number): string {
-  return readerDay(now).slice(0, 7);
+/** The month an instant falls in on the company's calendar, as `YYYY-MM`. */
+export function monthOf(now: number, zone: string | undefined): string {
+  return dayLabelIn(now, zone).slice(0, 7);
 }
 
 export function shiftMonth(month: string, by: number): string {
@@ -3405,10 +3441,9 @@ export function calendarWeeks(month: string, todayKey: string): CalendarCell[][]
  *
  * THE GRID'S OWN BOUNDS rather than the month's, and that is the whole point:
  * the first and last rows carry days of the neighbouring months, and a query
- * bounded by the month would draw those cells permanently empty. It also
- * absorbs the one offset nothing else can: the engine resolves a bare date in
- * the COMPANY's zone and the cells are bucketed in the READER's, so a due date
- * within a day of either edge is inside the asked-for range either way.
+ * bounded by the month would draw those cells permanently empty. The engine
+ * resolves a bare date on the COMPANY's clock, which is the calendar the cells
+ * are bucketed on ([dayKey]), so the range asks for exactly the cells drawn.
  */
 export function gridRange(weeks: CalendarCell[][]): { from: string; to: string } {
   const first = weeks[0]?.[0]?.key ?? "";
@@ -3418,10 +3453,15 @@ export function gridRange(weeks: CalendarCell[][]): { from: string; to: string }
   return { from: first, to: after === null ? "" : civilKey(after + 86_400_000) };
 }
 
-/** The reader's `YYYY-MM-DD` an instant falls on, or empty when it is unreadable. */
-export function dayKey(ts: string | undefined): string {
-  const at = parseUTC(ts);
-  return at ? readerDay(at) : "";
+/**
+ * The company's `YYYY-MM-DD` a due date names, or empty when it is unreadable.
+ *
+ * THE COMPANY'S DAY, never the reader's ([companyDayOf]): a due date picked as
+ * Nov 30 is stored as the company's midnight, and bucketed on the reader's
+ * clock it sat in Nov 29's cell for every reader west of the company.
+ */
+export function dayKey(ts: string | undefined, zone: string | undefined): string {
+  return companyDayOf(ts, zone);
 }
 
 /**
@@ -3433,10 +3473,13 @@ export function dayKey(ts: string | undefined): string {
  * because a reader who cannot see the omission reads the month as the whole
  * backlog.
  */
-export function bucketByDay(rows: WorkSummary[]): Map<string, WorkSummary[]> {
+export function bucketByDay(
+  rows: WorkSummary[],
+  zone: string | undefined,
+): Map<string, WorkSummary[]> {
   const out = new Map<string, WorkSummary[]>();
   for (const row of rows) {
-    const key = dayKey(row.due);
+    const key = dayKey(row.due, zone);
     if (!key) continue;
     const day = out.get(key);
     if (day) day.push(row);

@@ -36,7 +36,9 @@ import {
   dayKey,
   defaultView,
   authorOf,
+  changeActor,
   changeClauses,
+  changeLabels,
   changeLabel,
   changeWhole,
   describeChange,
@@ -1337,34 +1339,40 @@ test("a month shifts across a year boundary in both directions", () => {
   expect(shiftMonth("2031-01", -1)).toBe("2030-12");
 });
 
-// A DUE DATE IS BUCKETED IN THE READER'S OWN DAY. The instant arrives in UTC
-// and a task due at half past eleven at night is due that night to the person
-// reading it — expressed against `Date` rather than a literal, so the case
-// holds in whatever zone the test runs in.
-test("an instant is bucketed on the day it falls on locally", () => {
-  const at = new Date(2031, 3, 16, 23, 30, 0);
-  expect(dayKey(at.toISOString())).toBe("2031-04-16");
-  expect(dayKey(undefined)).toBe("");
-  expect(dayKey("not a date")).toBe("");
+// A DUE DATE IS BUCKETED ON THE COMPANY'S DAY. A day picked as the 16th is
+// stored as the company's midnight, which is the evening of the 15th for a
+// reader west of it (this suite reads in Berlin, so a New York company's
+// midnight is 06:00 here), and the cell is the day that was picked.
+test("a due date is bucketed on the company's day it names", () => {
+  expect(dayKey("2031-04-16T04:00:00Z", "America/New_York")).toBe("2031-04-16");
+  expect(dayKey("2031-04-15T22:00:00Z", "Europe/Berlin")).toBe("2031-04-16");
+  expect(dayKey("2031-04-16T00:00:00Z", "")).toBe("2031-04-16");
+  expect(dayKey(undefined, "")).toBe("");
+  expect(dayKey("not a date", "")).toBe("");
 });
 
 // ROWS WITHOUT A DUE DATE ARE DROPPED rather than bucketed under today:
 // putting undated work on the current day invents a deadline nobody set.
 test("only dated rows reach a day, ordered by when they are due", () => {
   const due = (iso: string) => new Date(iso).toISOString();
-  const buckets = bucketByDay([
-    row("late", { due: due("2031-04-16T18:00:00Z") }),
-    row("early", { due: due("2031-04-16T06:00:00Z") }),
-    row("undated"),
-  ]);
-  const key = dayKey(due("2031-04-16T06:00:00Z"));
+  const buckets = bucketByDay(
+    [
+      row("late", { due: due("2031-04-16T18:00:00Z") }),
+      row("early", { due: due("2031-04-16T06:00:00Z") }),
+      row("undated"),
+    ],
+    "",
+  );
+  const key = dayKey(due("2031-04-16T06:00:00Z"), "");
   expect(buckets.get(key)?.map((r) => r.id)).toEqual(["early", "late"]);
   expect([...buckets.values()].flat()).toHaveLength(2);
 });
 
-test("the current month comes from the reader's own clock", () => {
-  const now = new Date(2031, 6, 4, 12, 0, 0);
-  expect(monthOf(now.getTime())).toBe("2031-07");
+test("the current month comes from the company's clock", () => {
+  // 23:30 UTC on 31 July is already August in Tokyo.
+  const now = Date.parse("2031-07-31T23:30:00Z");
+  expect(monthOf(now, "UTC")).toBe("2031-07");
+  expect(monthOf(now, "Asia/Tokyo")).toBe("2031-08");
 });
 
 // A COUNT SAID TWICE IS A COUNT THAT READS AS TWO FACTS. The hint exists to
@@ -1478,16 +1486,16 @@ test("the calendar's window wins the one due key, and never leaves it unset", ()
   expect(unwindowed.due).toBeUndefined();
 });
 
-// A MONTH THE ADDRESS BAR MANGLED FALLS BACK TO THE READER'S OWN. `calendarWeeks`
+// A MONTH THE ADDRESS BAR MANGLED FALLS BACK TO THE COMPANY'S OWN. `calendarWeeks`
 // over an unparseable one returns NO WEEKS: `Number` gives `NaN`, `??` does not
 // catch `NaN`, the cell count is `NaN` and the loop never runs — which takes
 // `buildItemsParams` down the calendar branch with no range at all.
-test("a month the address bar mangled falls back to the reader's own", () => {
-  const now = Date.parse("2031-04-16T12:00:00Z");
-  expect(monthOrNow("2031-04", now)).toBe("2031-04");
-  expect(monthOrNow("oops", now)).toBe(monthOf(now));
-  expect(monthOrNow("2031-13", now)).toBe(monthOf(now));
-  expect(monthOrNow("", now)).toBe(monthOf(now));
+test("a month the address bar mangled falls back to the company's own", () => {
+  const today = "2031-05-16";
+  expect(monthOrNow("2031-04", today)).toBe("2031-04");
+  expect(monthOrNow("oops", today)).toBe("2031-05");
+  expect(monthOrNow("2031-13", today)).toBe("2031-05");
+  expect(monthOrNow("", today)).toBe("2031-05");
   // WHY the guard exists, rather than tidiness.
   expect(calendarWeeks("oops", "")).toHaveLength(0);
 });
@@ -2085,4 +2093,39 @@ test("a task's page moves to its address from another of its names, and only fro
   } as unknown as Parameters<typeof movedAddress>[1];
   expect(movedAddress("t-2", duplicate)).toBeNull();
   expect(movedAddress("ENG-5", duplicate)).toBeNull();
+});
+
+// A DAY IN A SENTENCE IS THE COMPANY'S: "set the due date to Nov 30" for a day
+// picked as the 30th, read here in Berlin west of a Tokyo company, where its
+// midnight is the afternoon of the 29th. Mutation: read it on the reader's
+// clock and the sentence names the 29th.
+test("a due or start date in a sentence is the company's day", () => {
+  const ctx: LabelContext = { zone: "Asia/Tokyo" };
+  expect(changeClauses({ due: { from: "", to: "2026-11-29T15:00:00Z" } }, ctx)).toEqual([
+    "set the due date to Nov 30, 2026",
+  ]);
+  expect(
+    describeChange(
+      record({ kind: "fields", fields: { start: { from: "", to: "2026-11-19T15:00:00Z" } } }),
+      ctx,
+    ),
+  ).toBe(`Start: ${EMPTY_VALUE} → Nov 20, 2026`);
+});
+
+// ONE BUILDER OF A FEED'S LABELS, so no feed drops what its answers name.
+test("a change feed's labels resolve every page's task keys, the later page winning", () => {
+  const labels = changeLabels(
+    { viewer: "jane" },
+    [{ "t-1": "ENG-1", "t-2": "OLD-2" }, undefined, { "t-2": "ENG-2" }],
+    "Asia/Tokyo",
+  );
+  expect(labels.taskKey?.("t-1")).toBe("ENG-1");
+  expect(labels.taskKey?.("t-2")).toBe("ENG-2");
+  expect(labels.taskKey?.("t-9")).toBe("");
+  expect(labels.zone).toBe("Asia/Tokyo");
+  expect(labels.viewer).toBe("jane");
+  expect(changeActor(record({ actor: "jane" }), { seatName: () => "Jane Founder" })).toBe(
+    "Jane Founder",
+  );
+  expect(changeActor(record({ actor: "node-1", actor_kind: "system" }), {})).toBe("the engine");
 });

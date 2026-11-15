@@ -24,7 +24,7 @@ import { Card, SegmentedControl, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";

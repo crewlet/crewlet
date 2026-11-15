@@ -27,6 +27,7 @@ import {
   WEEKDAYS,
   type CalendarCell,
 } from "~/lib/work.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
 export function CalendarView({
@@ -56,7 +57,8 @@ export function CalendarView({
   /** The rest of the month, where the answer carried a cursor. */
   more?: { load: () => void; note: string };
 }) {
-  const buckets = useMemo(() => bucketByDay(rows), [rows]);
+  const zone = useCompanyZone();
+  const buckets = useMemo(() => bucketByDay(rows, zone), [rows, zone]);
   return (
     <Card padding="none">
       <div className="work-cal">

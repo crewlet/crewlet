@@ -105,7 +105,7 @@ import {
   type DataGridSelection,
 } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
-import { Assignee, DueMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { Assignee, DayMark, DueMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { LIST_GIVES_WAY, givingWay, workListColumns } from "~/components/workGrid.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
 import { type Shape, itemAddress } from "~/lib/work.ts";
@@ -395,7 +395,10 @@ function startColumn(): DataGridColumn<WorkSummary> {
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
-      row.start ? <TableDateCell value={row.start} /> : <EmptyValue label="No date" />,
+      // A DAY, as the Due column beside it draws one ([DayMark]): the kit's
+      // date cell reads an instant on this browser's clock, which put a start
+      // picked as the 20th on the 19th west of the company.
+      row.start ? <DayMark day={row.start} /> : <EmptyValue label="No date" />,
   });
 }
 

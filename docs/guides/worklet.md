@@ -866,6 +866,11 @@ and a task's all-day due date — begins at 01:00; where a zone sets its clock
 back from 01:00 to 00:00, as Cuba does, midnight happens twice and the day
 begins at the first. The week is the ISO week, Monday to Monday.
 
+The dashboard draws a due date and a start date as the company's date too, for
+every reader wherever they are: a task due on the 30th reads Nov 30 in its
+rail, its list row, its card, its history and its calendar cell, never the
+29th for a reader west of the company's clock.
+
 ### The timeline
 
 A task's `start` and `due` are its bar. A task carrying only a `due` is a

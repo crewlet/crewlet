@@ -313,6 +313,35 @@ test("the due date reads the engine's standing, in the danger tone when late", a
   expect(far.textContent!.split(date).length - 1).toBe(1);
 });
 
+// A DAY PICKED IS THE DAY SHOWN, to every reader. The engine stores a day as
+// the company's midnight; this suite reads in Berlin, west of a Tokyo company,
+// where that midnight is the afternoon before, so the rail read Nov 29 for a
+// due date picked as Nov 30 and opened its editor on the 29th. Mutation: draw
+// the instant on the reader's clock and both read a day early.
+test("a due and a start date read as the company's day, and open their editor on it", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    org: { ...ORG, timezone: "Asia/Tokyo" },
+    answers: {
+      work_item: detail({
+        task: task({
+          due_at: "2026-11-29T15:00:00Z",
+          due_all_day: true,
+          start_at: "2026-11-19T15:00:00Z",
+        }),
+      }),
+    },
+  });
+  await settle();
+  expect(rowValue("Due").textContent).toContain("Nov 30, 2026");
+  expect(rowValue("Due").textContent).not.toContain("Nov 29");
+  expect(rowValue("Start").textContent).toContain("Nov 20, 2026");
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  expect((screen.getByLabelText("Due date of ENG-42") as HTMLInputElement).value).toBe(
+    "2026-11-30",
+  );
+});
+
 test("a standing reads in whole calendar days, and late only where the engine says so", () => {
   expect(standingWords({ days: 0 })).toBe("today");
   expect(standingWords({ days: 1 })).toBe("tomorrow");

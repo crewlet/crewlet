@@ -86,7 +86,10 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
+  changeActor,
+  changeLabels,
   pageCount,
   pageNote,
   SCOPE_GROUPS,
@@ -418,6 +421,13 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
     { pollMs: 60_000 },
   );
   const records = feed.data?.records ?? [];
+  // THE FEED'S OWN LABELS ([changeLabels]): the tasks its deltas name by id,
+  // and the company zone a day field is read in, beside the page's chrome.
+  const zone = useCompanyZone();
+  const labels = useMemo(
+    () => changeLabels(chrome, [feed.data?.keys], zone),
+    [chrome, feed.data, zone],
+  );
   return (
     <Card>
       <Card.Header
@@ -464,7 +474,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                       </span>
                     </div>
                     <span className="t-caption truncate">
-                      {describeChange(record, chrome)} · {record.actor || "the engine"}
+                      {describeChange(record, labels)} · {changeActor(record, labels)}
                     </span>
                   </div>
                 );
