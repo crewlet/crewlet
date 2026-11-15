@@ -254,21 +254,26 @@ type Release struct {
 	// would start a run of its own each time and never be given up.
 	BoxAnswered bool
 
-	// HostStoreSilent is whether the claim's collection left this node's
-	// clock on the store of the host of the job's box running
-	// ([Coordinator.hostClocked]): that host last answered that its store did
-	// not answer its read of the run's row. The release records it on the
-	// job's record ([LaunchRecord.HostStoreSilent]), so a node that restarts,
-	// or the seat's next holder, reads it there before it acknowledges a
-	// delivery of the job's completion.
-	//
-	// HostStoreAnswered is whether the claim's collection read the job's box,
-	// or found it failing to be read, which its host could say only where its
-	// store answered: the release clears that record. Neither leaves it as it
-	// stands: a claim that learned nothing of that store, a host that did not
-	// answer at all among them. A release cannot say both, and one that does
-	// is refused.
-	HostStoreSilent, HostStoreAnswered bool
+	// HostStoreSilentSince, where set, is when this node's clock on the store
+	// of the host of the job's box started, which the claim's collection left
+	// running ([Coordinator.hostClocked]): that host last answered that its
+	// store did not answer its read of the run's row. The release records it
+	// on the job's record ([LaunchRecord.HostStoreSilentSince]), so a node
+	// that restarts, or the seat's next holder, reads it there before it
+	// acknowledges a delivery of the job's completion.
+	HostStoreSilentSince time.Time
+
+	// HostStoreAnswered is whether the claim learned that the store of the
+	// host of the job's box answers: its collection read the box, or found it
+	// failing to be read, which that host could say only where its store
+	// answered, or the delivery it was made for is a waiter's announcement of
+	// the job made after the silence its record holds ([announcedAfter]),
+	// which that waiter made only having read the run's row through that
+	// store. The release clears that record. Neither leaves it as it stands:
+	// a claim that learned nothing of that store, a host that did not answer
+	// at all among them. A release cannot say both, and one that does is
+	// refused.
+	HostStoreAnswered bool
 
 	// Fence is the lease the claim was taken under.
 	Fence Fence
@@ -4817,17 +4822,26 @@ type LaunchRecord struct {
 	// it on the question it asked on its way out.
 	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
 
-	// HostStoreSilent says the host of this job's box last answered a
-	// collection of it that its own coordination store did not answer its
-	// read of the run's row ([BoxReadReply.Unsettled]), and has answered
-	// nothing since that says its store answers: the DURABLE TWIN of the
-	// collecting node's clock on that host's store ([hostUnsettled]), written
-	// by the release of every claim whose collection found it so
-	// ([Release.HostStoreSilent]) and cleared by the release of one whose
-	// collection read the box ([Release.HostStoreAnswered]). A release that
-	// learned nothing of that store, a host that did not answer at all among
-	// them, leaves it as it stands, and the job's next launch starts without
-	// it.
+	// HostStoreSilentSince, where set, says the host of this job's box last
+	// answered a collection of it that its own coordination store did not
+	// answer its read of the run's row ([BoxReadReply.Unsettled]), and has
+	// answered nothing since that says its store answers, and is when the
+	// collecting node's clock on that store started, by that node's clock:
+	// the DURABLE TWIN of that clock ([hostUnsettled]), written by the
+	// release of every claim whose collection found it so
+	// ([Release.HostStoreSilentSince]), the latest such clock's start
+	// replacing an earlier one, and cleared by the release of one that
+	// learned that store answers ([Release.HostStoreAnswered]). A release
+	// that learned nothing of that store, a host that did not answer at all
+	// among them, leaves it as it stands, and the job's next launch starts
+	// without it.
+	//
+	// AN INSTANT, NOT A FLAG, because a waiter's announcement of the job made
+	// after it ends it ([announcedAfter]), and one made before it does not:
+	// that waiter announced the job having read its row through the store
+	// this records as silent, so an announcement made later says the store
+	// answered since, while one made earlier, still being delivered, says
+	// nothing of it.
 	//
 	// ON THE JOB'S RECORD because the clock is in one node's memory: while
 	// that host's store is silent its waiter announces nothing, so a
@@ -4838,7 +4852,7 @@ type LaunchRecord struct {
 	// node reads the row before it acknowledges a delivery no clock of its own
 	// covers, and hands back and renews one whose job this says is unannounced
 	// (renew.go).
-	HostStoreSilent bool `json:"host_store_silent,omitempty"`
+	HostStoreSilentSince time.Time `json:"host_store_silent_since,omitzero"`
 
 	// HarnessEnd is how the job's harness ended, as the read that collected
 	// the job found it ([Coordinator.readBox], [PendingStore.MarkHarnessEnd]):

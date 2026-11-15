@@ -4051,6 +4051,12 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // before its last, so a restart, a release or a clearing nothing signals loses
 // nothing, and the two arriving together resume the run once. A drain's and a
 // seat let go of still DEFER it, which hands it on rather than acknowledging it.
+// A DELIVERY THAT IS THAT HOST'S WAITER'S OWN ANNOUNCEMENT, made after the
+// clock or the record began, ends both and is acknowledged on its refusal as
+// above: that waiter read the run's record through the store they say is
+// silent, and announces the job again from there. The coordinator's renewals
+// are marked as such, so it never takes one for that announcement
+// (internal/sandbox's renew.go).
 //
 // # Everything else NAKs
 //
@@ -4076,8 +4082,14 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // ([queue.NodeFault], the one test internal/notify's wakes are classified by
 // too): a publish the broker did not answer or a queue no longer live refused,
 // the announcement of a park's question among them, and any failure under a
-// context that has ended, a collection this node's stop, drain or seat move cut
-// short ("interrupted") among them. A refusal that waits is still acknowledged
+// context that has ended, a collection this node's stop or seat move cut short
+// ("interrupted") among them. A DRAIN'S CUT IS NOT ONE: it ends only the turn's
+// admission context (internal/node's cut), never the delivery's, so a hand-back
+// it interrupted reads as no failure of this node's here and is NAK'd as the
+// message's. Nothing turns on it: the cut fires only once the queue's own
+// broker connection is closed for good, so no outcome of that delivery reaches
+// the broker, and the message comes back to the seat's next holder when its
+// ack wait lapses, as every delivery a lost connection held does. A refusal that waits is still acknowledged
 // whatever the context, as above. A failure the completion itself caused (a
 // resume that failed, a refusal that names nothing to wait on) stays the
 // message's wherever a waiter announces the job again; while none can, it is

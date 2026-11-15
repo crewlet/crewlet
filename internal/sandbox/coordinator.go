@@ -1573,7 +1573,10 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // settled nothing included, hands it back marked [ErrUnannounced], and it is
 // RENEWED here, where the delivery in hand is, whatever the hand-back:
 // announced afresh before that delivery is the last its budget allows, and
-// acknowledged once the fresh announcement is out (renew.go).
+// acknowledged once the fresh announcement is out (renew.go). A DELIVERY THAT
+// IS THE WAITER'S ANNOUNCEMENT OF THE JOB MADE SINCE ends both
+// ([announcedAfter]): that waiter read the row through the store they say is
+// silent, and announces the job again from there.
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -1582,6 +1585,8 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorLaunched:
 		return c.OnStarted(ctx, *payload)
 	case *types.ExecutorFinished:
+		c.hearAnnouncement(ctx, *payload, ev)
+		ctx = delivering(ctx, ev)
 		return c.lost(payload.AgentHandle, c.renewing(ctx, *payload, ev, c.OnCompleted(ctx, *payload, ev)))
 	case *types.ExecutorAnswerGiven:
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
@@ -3168,16 +3173,19 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	//
 	// The hand-back records what the claim learned of the store of the host
 	// of the job's box, as every hand-back does ([Coordinator.unclaimAt]).
-	var silent, answered bool
+	var (
+		silent   time.Time
+		answered bool
+	)
 	if err != nil {
-		silent, answered = c.hostStoreSeen(run, failure{})
+		silent, answered = c.hostStoreSeen(ctx, run, failure{})
 	}
 	c.mu.Lock()
 	var handBack *claimRelease
 	movedBack := func() {}
 	if err != nil {
 		handBack, movedBack = c.handingBackLocked(run, parkUnrecordedDetail, failure{}, nil)
-		handBack.release.HostStoreSilent, handBack.release.HostStoreAnswered = silent, answered
+		handBack.release.HostStoreSilentSince, handBack.release.HostStoreAnswered = silent, answered
 	}
 	moved := c.wroteCountLocked(write, err == nil)
 	c.mu.Unlock()
@@ -4861,10 +4869,10 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail stri
 	// AND WHAT THE CLAIM LEARNED OF THE STORE OF THE HOST OF THE JOB'S BOX,
 	// onto the job's record, so a restart or the seat's next holder reads it
 	// before it acknowledges a delivery no clock of its own covers (renew.go).
-	silent, answered := c.hostStoreSeen(run, failed)
+	silent, answered := c.hostStoreSeen(ctx, run, failed)
 	c.mu.Lock()
 	cr, moved := c.handingBackLocked(run, detail, failed, hold)
-	cr.release.HostStoreSilent, cr.release.HostStoreAnswered = silent, answered
+	cr.release.HostStoreSilentSince, cr.release.HostStoreAnswered = silent, answered
 	cr.release.RelaunchRefusedIn = refusedIn
 	c.mu.Unlock()
 	moved()

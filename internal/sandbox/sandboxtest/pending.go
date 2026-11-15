@@ -2963,55 +2963,72 @@ func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.P
 
 // A RELEASE RECORDS WHAT THE STORE OF THE HOST OF THE JOB'S BOX LAST SAID, on
 // the job's record, where its claim learned anything of it: a release whose
-// collection found that store silent marks the job, one whose collection read
-// the box clears the mark, and one that learned nothing leaves it as it
+// collection found that store silent marks the job with when its clock
+// started, a later one with the later start, one that learned that store
+// answers clears the mark, and one that learned nothing leaves it as it
 // stands. A release cannot say both, and one that does is refused and writes
 // nothing. The job's next launch starts without it: the host of its box, and
 // what that host's store says, are that job's.
 func testAReleaseRecordsWhatTheHostsStoreLastSaid(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	later := first.Add(time.Minute)
 	mustLaunched(t, s, run("t1"))
 	silent := releaseOf(mustClaim(t, s, "t1"))
-	silent.HostStoreSilent = true
+	silent.HostStoreSilentSince = first
 	if released, err := s.ReleaseClaim(ctx, "t1", silent); err != nil || !released {
 		t.Fatalf("release of a collection whose host found its store silent = %v, %v", released, err)
 	}
-	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || !got.Launch.HostStoreSilent {
-		t.Fatalf("the row reads %s, its host's store silent %v; want it running and marked", got.Status,
-			got.Launch.HostStoreSilent)
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning ||
+		!got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("the row reads %s, its host's store silent since %v; want it running and marked since %v",
+			got.Status, got.Launch.HostStoreSilentSince, first)
 	}
 
 	mustRelease(t, s, mustClaim(t, s, "t1"))
-	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilent {
-		t.Fatal("a release that learned nothing of the host's store cleared what an earlier one recorded")
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("a release that learned nothing of the host's store left it silent since %v; want %v",
+			got.Launch.HostStoreSilentSince, first)
+	}
+
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.HostStoreSilentSince = later
+	if released, err := s.ReleaseClaim(ctx, "t1", again); err != nil || !released {
+		t.Fatalf("release of a later collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Fatalf("a later clock's release left the job silent since %v; want the later start, %v",
+			got.Launch.HostStoreSilentSince, later)
 	}
 
 	claimed := mustClaim(t, s, "t1")
 	both := releaseOf(claimed)
-	both.HostStoreSilent, both.HostStoreAnswered = true, true
+	both.HostStoreSilentSince, both.HostStoreAnswered = first, true
 	if _, err := s.ReleaseClaim(ctx, "t1", both); err == nil {
 		t.Error("a release that says the host's store was both silent and answering was accepted")
 	}
-	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || !got.Launch.HostStoreSilent {
-		t.Errorf("the refused release wrote the row: %s, its host's store silent %v", got.Status,
-			got.Launch.HostStoreSilent)
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed ||
+		!got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Errorf("the refused release wrote the row: %s, its host's store silent since %v", got.Status,
+			got.Launch.HostStoreSilentSince)
 	}
 	answered := releaseOf(claimed)
 	answered.HostStoreAnswered = true
 	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
-		t.Fatalf("release of a collection that read the box = %v, %v", released, err)
+		t.Fatalf("release of a claim that learned the host's store answers = %v, %v", released, err)
 	}
-	if got := mustGet(t, s, "t1"); got.Launch.HostStoreSilent {
-		t.Fatal("a release whose collection read the box left the job marked")
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
+		t.Fatalf("a release that learned the host's store answers left the job silent since %v",
+			got.Launch.HostStoreSilentSince)
 	}
 
 	marked := releaseOf(mustClaim(t, s, "t1"))
-	marked.HostStoreSilent = true
+	marked.HostStoreSilentSince = first
 	if released, err := s.ReleaseClaim(ctx, "t1", marked); err != nil || !released {
 		t.Fatalf("release marking the job again = %v, %v", released, err)
 	}
 	mustBeginLaunch(t, s, run("t1"))
-	if got := mustGet(t, s, "t1"); got.Launch.HostStoreSilent {
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
 		t.Error("the job's next launch inherited what the last job's host's store said")
 	}
 }

@@ -1282,7 +1282,7 @@ func (r *coordRig) restart(t *testing.T, q Publisher, node string, fence Fence, 
 // a job recorded LOST with that host keeps its completion renewed until its
 // round is carried on ([LossLaunchNodeStoreSilent]), and so does one whose
 // record says that host last found its store silent
-// ([LaunchRecord.HostStoreSilent]), which every claim's release writes: a
+// ([LaunchRecord.HostStoreSilentSince]), which every claim's release writes: a
 // node that keeps no clock reads the row before it acknowledges a delivery.
 //
 // Mutation: key the renewal on this node's clock alone, and a carry that fails
@@ -1338,9 +1338,9 @@ func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
 		}); err != nil || !marked {
 			t.Fatalf("the premise: recording the loss = %v, %v", marked, err)
 		}
-		if got := rig.get("t1"); got.Launch.HostStoreSilent || clocked(rig) {
-			t.Fatalf("the premise: the record says the host's store is silent (%v), clocked %v; want neither",
-				got.Launch.HostStoreSilent, clocked(rig))
+		if got := rig.get("t1"); !got.Launch.HostStoreSilentSince.IsZero() || clocked(rig) {
+			t.Fatalf("the premise: the record says the host's store is silent since %v, clocked %v; want neither",
+				got.Launch.HostStoreSilentSince, clocked(rig))
 		}
 		rig.coordinator.pending = &silentStore{PendingStore: rig.coordinator.pending, silent: []string{"WatchLog"}}
 		_, ev := rig.completion("t1")
@@ -1411,4 +1411,120 @@ func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
 			})
 		})
 	}
+}
+
+// waiterAnnounces publishes t1's completion as the host's waiter announces it
+// on its schedule once its store answers again, and returns its id: a fresh
+// announcement, made a second after the delivery in hand on the bubble's
+// clock, so it is stamped after any clock a collection started at that
+// delivery. Called only inside a bubble, from a case's delivery hook.
+//
+//fixedwait:bubble
+func (r *renewRig) waiterAnnounces(t *testing.T) uuid.UUID {
+	t.Helper()
+	time.Sleep(time.Second)
+	_, ev := r.completion("t1")
+	ev.Timestamp = time.Now().UTC()
+	if err := r.broker.Publish(t.Context(), sweControl(), ev); err != nil {
+		t.Errorf("the waiter's announcement: %v", err)
+	}
+	return ev.ID
+}
+
+// A WAITER'S ANNOUNCEMENT MADE SINCE THE CLOCK STARTED ENDS IT, AND A RENEWAL
+// NEVER DOES. The waiter that drives a box announces its job only having read
+// the run's row through its store, so its announcement made after the clock on
+// that store started says the store answered since: it ends this node's clock
+// and, on the release a claim of it makes, the job's record of the silence,
+// and a refusal of it is acknowledged as any is where a waiter stands behind
+// it. A renewal is marked as one ([renewalField]) and says nothing of that
+// store. Unmarked and unheard, the clock and its record stood through every
+// announcement the waiter made once its store answered again, and while a
+// refusal that settles nothing lasted, each was handed back and renewed beside
+// the chain already in flight: one more chain for every announcement.
+//
+// Mutation: read a renewal as the waiter's announcement, and the chain the
+// renewals carry is acknowledged at its first refusal with nothing left to
+// resume the turn; never end the clock at the waiter's announcement, and the
+// chains in flight grow by one for each; leave the job's record standing at the
+// release of a claim the waiter's announcement made, and a restarted node goes
+// on renewing a job whose host's store answers.
+func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one chain in flight across the waiter's announcements while a refusal lasts", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := newRenewRig(t)
+			// THE FIRST RESUME IS ADMITTED, and its collection starts the
+			// clock on the host; the host's store answers again at the
+			// second delivery, and its waiter announces the job then and on
+			// its schedule after, while the gate refuses past several
+			// messages' budgets on a condition nothing signals.
+			gate := &refusingGate{admit: 1, refuse: 5 * (renewBudget + 1), cleared: func() {}}
+			r.coordinator.gate = gate.gate
+			var waiter []uuid.UUID
+			r.atDelivery(func(n int) {
+				if n == 2 {
+					r.store.answer()
+				}
+				if n == 2 || n == 8 || n == 14 {
+					waiter = append(waiter, r.waiterAnnounces(t))
+				}
+			})
+			r.announce(t)
+			if len(waiter) != 3 {
+				t.Fatalf("the premise: the waiter announced the job %d times; want 3", len(waiter))
+			}
+			if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
+				t.Fatalf("%d of the job's announcements were dead-lettered", len(dead))
+			}
+			resumed := r.resumer.calls()
+			if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
+				t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account",
+					len(resumed), resumed)
+			}
+			seen := r.deliveries()
+			for i, d := range seen {
+				if d.waiting > 1 {
+					t.Fatalf("delivery %d of %d was handed over with %d more announcements waiting; want the "+
+						"one chain in flight, and at most the waiter's announcement beside it", i+1, len(seen),
+						d.waiting)
+				}
+			}
+			_, times := announcements(seen)
+			for _, id := range waiter {
+				if times[id] != 1 {
+					t.Fatalf("the waiter's announcement %s was delivered %d times; want it acknowledged at its "+
+						"first refusal", id, times[id])
+				}
+			}
+		})
+	})
+
+	t.Run("the release a claim of the waiter's announcement makes clears the job's record", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		since := rig.get("t1").Launch.HostStoreSilentSince
+		if since.IsZero() {
+			t.Fatal("the premise: the hand-back recorded no silence of the host's store")
+		}
+		// THE NODE RESTARTS, keeping no clock, and the host's waiter
+		// announces the job a second after the silence was recorded; the
+		// host itself then does not answer the claim's read, which says
+		// nothing of its store.
+		rig.restart(t, rig.queue, "node-b", rigLease, nil)
+		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
+		_, ev := rig.completion("t1")
+		ev.Timestamp = since.Add(time.Second)
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); err != nil {
+			t.Fatalf("the waiter's announcement whose read the host did not answer = %v; want it acknowledged, "+
+				"its waiter announcing the job again", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || !got.Launch.HostStoreSilentSince.IsZero() {
+			t.Fatalf("the release left the run %s, its host's store silent since %v; want it running, the "+
+				"record cleared", got.Status, got.Launch.HostStoreSilentSince)
+		}
+	})
 }

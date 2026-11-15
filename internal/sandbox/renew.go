@@ -21,7 +21,7 @@ import (
 // completion NAK'd, and asked again until the host's store answers or the box
 // timeout passes, when the job is recorded lost with that host and its round
 // carried on ([Coordinator.loseWithHost]). And the claim's release writes what
-// the host said onto the job's record ([LaunchRecord.HostStoreSilent]), the
+// the host said onto the job's record ([LaunchRecord.HostStoreSilentSince]), the
 // clock's durable twin, which the release of a collection that reads the box
 // clears.
 //
@@ -89,6 +89,28 @@ import (
 // a restart was NAK'd until its budget was spent, and such a refusal was
 // acknowledged, each leaving the job with nothing to announce it until that
 // host's store answered.
+//
+// A WAITER'S ANNOUNCEMENT MADE SINCE ENDS BOTH. Every renewal is marked as
+// one ([renewalField]), so a delivery says whether it is the waiter's own
+// announcement of the job or a renewal. That waiter announces the job only
+// having read the run's row through the store the clock times, so an
+// announcement of its stamped after the clock started, or after the instant
+// the job's record holds, says that store answered since ([announcedAfter]):
+// it ends this node's clock as it is delivered ([Coordinator.hearAnnouncement])
+// and the record at the release a claim of it makes
+// ([Coordinator.hostStoreSeen]), and a refusal of it is acknowledged as any is
+// where a waiter stands behind it (ADR-0063). One made before, still being
+// delivered, ends nothing. Unmarked, the two were one, and the clock and its
+// record stood through every announcement that waiter made once its store
+// answered again: while a refusal that settles nothing lasted, each was handed
+// back and renewed beside the chain already in flight, one more for every
+// announcement, about twelve an hour. The chain in flight is renewed on its own
+// budget until a release clears the record, one chain, as before. A fleet mixed
+// with a build from before renewals existed is unchanged by the mark: that
+// build neither renews nor reads it (it rides the envelope's bag, which every
+// backend carries verbatim and every republish keeps), so every unmarked
+// completion on the wire is a waiter's announcement, and such a node holding
+// the seat acknowledges a refusal and NAKs a failure as it always did.
 //
 // ONE PATH IS LEFT, and no row can close it: a refusal of a job no collection
 // has read since its host's store went silent. Nothing durable says so then,
@@ -201,7 +223,7 @@ func unannounced(ev types.ExecutorFinished, err error) error {
 func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event,
 	err error,
 ) error {
-	if trigger == nil || !c.unannouncedJob(ctx, ev) {
+	if trigger == nil || !c.unannouncedJob(ctx, ev, trigger) {
 		return err
 	}
 	err = unannounced(ev, err)
@@ -225,7 +247,8 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 // unannouncedJob reports whether nothing but a delivery of ev's completion
 // announces it again: this node keeps a clock on the store of the host of the
 // job's box ([Coordinator.hostClocked]), or, where it keeps none, the run's
-// row says so ([unannouncedOnRow]), read here.
+// row says so ([unannouncedOnRow]), read here; trigger is the delivery in
+// hand, nil for a re-fire, which has none.
 //
 // THE ROW, NEVER THIS NODE'S MEMORY ALONE: the clock does not outlive a
 // restart, and the seat's next holder starts with none, while the host's
@@ -233,12 +256,12 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 // way. A row this node's own store does not answer says nothing, and the
 // delivery is left as it came: the waiter, whose store answers once this
 // node's does, announces the job again then.
-func (c *Coordinator) unannouncedJob(ctx context.Context, ev types.ExecutorFinished) bool {
+func (c *Coordinator) unannouncedJob(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) bool {
 	if c.hostClocked(ev.TurnID, ev.LaunchID) {
 		return true
 	}
 	run, found, err := c.pending.Get(ctx, ev.TurnID)
-	return err == nil && found && unannouncedOnRow(run, ev.LaunchID)
+	return err == nil && found && unannouncedOnRow(run, ev.LaunchID, trigger)
 }
 
 // unannouncedOnRow reports whether run's row says that nothing but a delivery
@@ -247,13 +270,111 @@ func (c *Coordinator) unannouncedJob(ctx context.Context, ev types.ExecutorFinis
 // job is recorded lost with the host of its box because that host's store did
 // not answer it ([LossLaunchNodeStoreSilent]), and its round is not carried
 // on yet, which the job's next launch or the run's ending is; or its record
-// says that host last found its store silent ([LaunchRecord.HostStoreSilent]).
-func unannouncedOnRow(run PendingRun, launch string) bool {
+// says that host last found its store silent
+// ([LaunchRecord.HostStoreSilentSince]) and trigger, the delivery in hand, is
+// no waiter's announcement of the job made since ([announcedAfter]), which
+// says that store answered.
+func unannouncedOnRow(run PendingRun, launch string, trigger *events.Event) bool {
 	if run.LaunchID != launch || run.Ending != nil ||
 		(run.Status != StatusRunning && run.Status != StatusResumed) {
 		return false
 	}
-	return run.Launch.HostStoreSilent || (run.Lost != nil && run.Lost.Cause == LossLaunchNodeStoreSilent)
+	if run.Lost != nil && run.Lost.Cause == LossLaunchNodeStoreSilent {
+		return true
+	}
+	since := run.Launch.HostStoreSilentSince
+	return !since.IsZero() && !announcedAfter(trigger, since)
+}
+
+// renewalField is the envelope bag key that marks a completion this node
+// announced afresh ([Coordinator.renew]), which every backend carries verbatim
+// and every republish keeps, as [queue.PriorityField] is.
+//
+// SO A DELIVERY SAYS WHETHER IT IS A WAITER'S ANNOUNCEMENT OR A RENEWAL. A
+// waiter announces a job only having read the run's row through its store, so
+// its announcement made after the clock on that store started says that store
+// answered since ([announcedAfter]), while a renewal, made because it did
+// not, says nothing of it. Unmarked, the two were one: the clock and its
+// record stood through every announcement that waiter made once its store
+// answered again, and each was handed back and renewed beside the chain
+// already in flight, one more for each, for as long as a refusal that settles
+// nothing lasted.
+const renewalField = "completion_renewal"
+
+// renewal reports whether ev is a completion a node announced afresh
+// ([renewalField]).
+func renewal(ev *events.Event) bool {
+	if ev == nil {
+		return false
+	}
+	marked, _ := ev.Payload[renewalField].(bool)
+	return marked
+}
+
+// announcedAfter reports whether trigger, a delivery of a job's completion, is
+// a waiter's announcement of it made after since, the start of a clock on the
+// store of the host of its box or its record of it: no renewal
+// ([renewalField]), published after that instant. That waiter announces the
+// job only having read the run's row through the store the clock times, so
+// the store answered since.
+//
+// STRICTLY AFTER, BY THE ANNOUNCEMENT'S OWN STAMP ([events.Event.Timestamp]):
+// an announcement made before the clock started, its first delivery among
+// them, still being delivered, says nothing of the silence the clock found,
+// and read as that store's answer it dropped the clock while the store was
+// still silent, and the delivery that was the job's one copy was acknowledged.
+// The stamp is the waiter's node's clock and since the collecting node's, as a
+// hold's instant is written by one node and read by another's
+// ([PendingRun.Held]): an announcement read wrongly takes a skew between the
+// two larger than the time from the announcement to that host's read that
+// found its store silent, which the read's own round trip and the reply's
+// carry to the collecting node are part of.
+func announcedAfter(trigger *events.Event, since time.Time) bool {
+	return trigger != nil && !renewal(trigger) && trigger.Timestamp.After(since)
+}
+
+// deliveredKey is the context key under which a delivery's attempt carries the
+// delivery itself ([delivering]).
+type deliveredKey struct{}
+
+// delivering is ctx carrying trigger, the delivery of a job's completion an
+// attempt is made for, so the release that hands its claim back records what
+// that delivery says of the store of the host of its box
+// ([Coordinator.hostStoreSeen]).
+func delivering(ctx context.Context, trigger *events.Event) context.Context {
+	return context.WithValue(ctx, deliveredKey{}, trigger)
+}
+
+// deliveredIn is the delivery ctx's attempt is made for ([delivering]), or nil.
+func deliveredIn(ctx context.Context) *events.Event {
+	trigger, _ := ctx.Value(deliveredKey{}).(*events.Event)
+	return trigger
+}
+
+// hearAnnouncement ends this node's clock on the store of the host of the box
+// of ev's job ([hostUnsettled]) where trigger, the delivery in hand, is a
+// waiter's announcement of the job made after that clock started
+// ([announcedAfter]): that store answered since, and the waiter that read the
+// row through it announces the job again from there. Answered here, before
+// the delivery is claimed, so the claim's collection starts the clock again
+// where that store is silent once more, and a refusal of the delivery is
+// acknowledged as any is where a waiter stands behind it.
+func (c *Coordinator) hearAnnouncement(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) {
+	c.mu.Lock()
+	kept, ok := c.unsettled[ev.TurnID]
+	heard := ok && kept.launch == ev.LaunchID && announcedAfter(trigger, kept.since)
+	if heard {
+		delete(c.unsettled, ev.TurnID)
+	}
+	c.mu.Unlock()
+	if heard {
+		log.InfoContext(ctx, "sandbox_host_store_answered",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,
+			"silent_for_s", trigger.Timestamp.Sub(kept.since).Seconds(),
+			"detail", "the waiter that drives the job's box announced it after its node's coordination "+
+				"store was found silent, which it does only having read the run through that store; this "+
+				"node stops renewing the job's completion")
+	}
 }
 
 // renew announces ev's completion afresh on its seat's control topic, for a
@@ -280,6 +401,9 @@ func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trig
 	if trigger != nil {
 		renewed.Source = trigger.Source
 	}
+	// MARKED A RENEWAL, so no node reads it as the waiter's announcement
+	// ([renewalField]).
+	renewed.Payload = map[string]any{renewalField: true}
 	if err := c.queue.Publish(ctx, control, renewed); err != nil {
 		return fmt.Errorf("sandbox: announcing the completion of %s afresh: %w", ev.TurnID, err)
 	}

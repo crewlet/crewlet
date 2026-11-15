@@ -519,7 +519,7 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // IN THIS NODE'S MEMORY, as the waiter's clock on an absent node is: a restart
 // or the seat's next holder starts it again, which can only make the verdict
 // later. What it says of the host is not left to memory, though: every
-// claim's release writes it onto the job's record ([LaunchRecord.HostStoreSilent],
+// claim's release writes it onto the job's record ([LaunchRecord.HostStoreSilentSince],
 // [Coordinator.hostStoreSeen]), so a restart or the seat's next holder hands
 // back and renews the job's completion as the clock would before its own
 // first collection starts one (renew.go). A silence this node's own store shares gives nothing up: no claim of
@@ -535,7 +535,12 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // read its host answers with its store answering, whatever the read came to,
 // the box's own failure to be read included ([Coordinator.noteHostStore]): the
 // silence it times is over, and that host's waiter announces the job again
-// from there. A FAILED ATTEMPT IS OTHERWISE NO SETTLE, and keeps it: a
+// from there. And it goes at that waiter's announcement of the job made after
+// the clock started ([Coordinator.hearAnnouncement]), which that waiter made
+// only having read the run's row through that store: kept past it, while a
+// refusal that settles nothing lasted, every announcement the waiter made from
+// there was handed back and renewed beside the one already in flight, one more
+// chain for each. A FAILED ATTEMPT IS OTHERWISE NO SETTLE, and keeps it: a
 // hand-back that has the job collected again, and a loss recorded with the
 // host ([Coordinator.loseWithHost]) whose carry or resume then fails, whose
 // next collection finds the bound passed at once and whose completion is
@@ -615,26 +620,39 @@ func (c *Coordinator) hostUnsettledFor(run PendingRun, cause error, now time.Tim
 // through that store, announces nothing, and every hand-back of the job's
 // completion is renewed (renew.go).
 func (c *Coordinator) hostClocked(turnID, launch string) bool {
+	_, clocked := c.hostClockedSince(turnID, launch)
+	return clocked
+}
+
+// hostClockedSince is [Coordinator.hostClocked], and when the clock started.
+func (c *Coordinator) hostClockedSince(turnID, launch string) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept, ok := c.unsettled[turnID]
-	return ok && kept.launch == launch
+	if !ok || kept.launch != launch {
+		return time.Time{}, false
+	}
+	return kept.since, true
 }
 
-// hostStoreSeen is what a claim of run's job learned of the store of the host
-// of its box, for the release that gives the claim back to record on the job
-// ([Release.HostStoreSilent], [LaunchRecord.HostStoreSilent]): silent where
-// this node's clock on that store still runs once the claim's collection is
-// done ([Coordinator.hostClocked]); answered where the collection read the
-// box, or counted a failure to read it, which the host could say only with
-// its store answering (failed is what the release counts); and neither for a
-// claim that learned nothing of it, a host that did not answer at all among
-// them, which leaves the record as it stands.
-func (c *Coordinator) hostStoreSeen(run PendingRun, failed failure) (silent, answered bool) {
-	if c.hostClocked(run.TurnID, run.LaunchID) {
-		return true, false
+// hostStoreSeen is what a claim of run's job, made under ctx, learned of the
+// store of the host of its box, for the release that gives the claim back to
+// record on the job ([Release.HostStoreSilentSince],
+// [LaunchRecord.HostStoreSilentSince]): silent since this node's clock on that
+// store started, where it still runs once the claim's collection is done
+// ([Coordinator.hostClocked]); answered where the collection read the box, or
+// counted a failure to read it, which the host could say only with its store
+// answering (failed is what the release counts), or where the delivery the
+// claim was made for is a waiter's announcement of the job made after the
+// silence run's record holds ([announcedAfter]); and neither for a claim that
+// learned nothing of it, a host that did not answer at all among them, which
+// leaves the record as it stands.
+func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed failure) (time.Time, bool) {
+	if since, clocked := c.hostClockedSince(run.TurnID, run.LaunchID); clocked {
+		return since, false
 	}
-	return false, run.BoxAnswered || run.Collected || !failed.collectFailed.IsZero()
+	return time.Time{}, run.BoxAnswered || run.Collected || !failed.collectFailed.IsZero() ||
+		announcedAfter(deliveredIn(ctx), run.Launch.HostStoreSilentSince)
 }
 
 // ReadHostedBox makes, for the node that asked, the read of a box on this

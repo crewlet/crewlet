@@ -414,7 +414,7 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 	if ctx.Err() != nil {
 		return
 	}
-	before := c.unannouncedJob(ctx, kept.ev)
+	before := c.unannouncedJob(ctx, kept.ev, nil)
 	started := new(atomic.Bool)
 	err := c.OnCompleted(startingClock(ctx, started), kept.ev, kept.trigger)
 	switch {

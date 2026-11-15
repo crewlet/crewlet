@@ -761,7 +761,7 @@ func worstRow(t *testing.T) PendingRun {
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
 		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
-		EndedAtDeadline:   true, HostStoreSilent: true, HarnessEnd: HarnessEnd(plain(32)),
+		EndedAtDeadline:   true, HostStoreSilentSince: worstAt, HarnessEnd: HarnessEnd(plain(32)),
 		// WHAT THE COPY IN ITS BOX CARRIED, at its widest: a figure of
 		// nineteen digits, a source as long as an end's word, and the job it
 		// names a launch id as the begin mints one ([LaunchRecord.Context]).
