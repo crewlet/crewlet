@@ -239,6 +239,17 @@ test("Save is held on the value the document already writes", async () => {
   expect(calls).toEqual([]);
 });
 
+// A tap on a held pencil opens its reason, which is how touch is told.
+test("a reader without the grant is told why on a tap of the held pencil", async () => {
+  await show(SKILLS, "Tool skills", {}, READER_VIEWER);
+  const pencil = screen.getByRole("button", { name: "Change Tool skills" });
+  fireEvent.pointerDown(pencil, { pointerType: "touch" });
+  fireEvent.pointerLeave(pencil, { pointerType: "touch" });
+  expect(screen.getByRole("tooltip").textContent).toBe(
+    `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
+  );
+});
+
 // The held reason is the kit tooltip's, so keyboard focus shows it, not hover alone.
 test("a reader without the grant sees the pencil held, and its reason on keyboard focus", async () => {
   await show(SKILLS, "Tool skills", {}, READER_VIEWER);

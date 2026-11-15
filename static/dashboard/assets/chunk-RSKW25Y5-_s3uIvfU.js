@@ -1,0 +1,1 @@
+import{Er as e,Gn as t,In as n,Nt as r,Pt as i,Tr as a,dn as o}from"./chunk-CYF22JOT-BpHUT-Tp.js";import{t as s}from"./react-C1iE8mnY.js";var c=s(),l={html:r,doc:i,slides:t,design:n,dashboard:o,sheet:e,brand:a};function u({kind:e,size:t=`md`}){let n=l[e];return(0,c.jsx)(n,{size:t})}export{u as t};
