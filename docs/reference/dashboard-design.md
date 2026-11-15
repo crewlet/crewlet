@@ -908,9 +908,15 @@ labels are the chosen project's own, and the assignee completes against the
 chart with the engine's `colleague` match offered first — as the **best match**,
 its row's hint as short as every other's (`@handle · best match`), because the
 kit's hint does not shrink and its label does: the tier written into the hint
-drew the seat's name as "Age…", or not at all. Why it matched is in the row's
-accessible name and, once that seat is taken, on the field's help line ("The
-engine's match for “front”: part of the name matches"). The field's clear
+drew the seat's name as "Age…", or not at all. Which tier matched is the
+resolver's business and is said nowhere: once a seat is taken the help line says
+what choosing it does ("Ada Okonkwo is notified and follows it") and nothing of
+the matcher. What the sheet holds is kept for the tab while it holds anything
+(`routes/worklet/newTaskDraft.ts`, in `sessionStorage`), so a reload mid-title
+loses nothing: the same door opening the sheet again brings the draft back,
+another door (another project, a seat's question) starts from its own preset,
+and filing it, discarding it or a sign-in that hands the browser on lets it go.
+The field's clear
 control is the kit's own, inside the field as a search box draws it, so the
 completion list — anchored to the field's box — spans everything it hangs
 from; beside the field it was a column the list did not cover, and the help

@@ -24,11 +24,12 @@
  * The assignee field completes against the org chart by name and handle, and
  * asks the engine's own resolver (`colleague`) what the typed words mean —
  * the same four tiers a seat's `lookup_colleague` uses. The engine's match is
- * offered FIRST, as the "best match", and why it matched ("part of the name
- * matches") is said once that seat is taken; several candidates are a list
- * and never a guess. Left empty the task lands where the project sends
- * unassigned work — its default assignee, else triage for its lead — and the
- * field says which before anybody presses anything.
+ * offered FIRST, as the "best match"; which tier matched is the resolver's
+ * business and is not said to a person ("part of the name matches" read as
+ * the matcher talking); several candidates are a list and never a guess.
+ * Left empty the task lands where the project sends unassigned work — its
+ * default assignee, else triage for its lead — and the field says which
+ * before anybody presses anything.
  *
  * WORDS ARE NOT A SEAT. What is typed is not an assignee until a seat is taken
  * from the list, and words left in the field unchosen HOLD Create rather than
@@ -98,6 +99,7 @@ import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib
 import { humanize, textBudget } from "~/lib/format.ts";
 import { PROJECT_PAGE, TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import type { WorkProjectDetail } from "~/protocol/index.ts";
+import { forgetDraft, keepDraft, keptDraft } from "./newTaskDraft.ts";
 
 /** How many seats the assignee field offers at once. */
 const SEAT_CHOICES = 8;
@@ -244,21 +246,25 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
   const rows = useMemo(() => projects.data?.projects ?? [], [projects.data]);
 
-  const [draft, setDraft] = useState<NewTaskDraft>(() => ({
-    project: startingProject(preset, viewer.project, []),
-    title: preset.title ?? "",
-    body: preset.description ?? "",
-    type: preset.type ?? "",
-    status: preset.status ?? "",
-    assignee: preset.assignee ?? "",
-    assigneeText: preset.assignee
-      ? (index.byHandle.get(preset.assignee)?.name ?? preset.assignee)
-      : "",
-    priority: preset.priority ?? "",
-    due: "",
-    labels: preset.labels ?? [],
-    ask: preset.ask ?? "",
-  }));
+  // A DRAFT THIS TAB KEPT FOR THE SAME DOOR comes back: see `newTaskDraft.ts`.
+  const [draft, setDraft] = useState<NewTaskDraft>(
+    () =>
+      keptDraft(preset) ?? {
+        project: startingProject(preset, viewer.project, []),
+        title: preset.title ?? "",
+        body: preset.description ?? "",
+        type: preset.type ?? "",
+        status: preset.status ?? "",
+        assignee: preset.assignee ?? "",
+        assigneeText: preset.assignee
+          ? (index.byHandle.get(preset.assignee)?.name ?? preset.assignee)
+          : "",
+        priority: preset.priority ?? "",
+        due: "",
+        labels: preset.labels ?? [],
+        ask: preset.ask ?? "",
+      },
+  );
   const set = <K extends keyof NewTaskDraft>(key: K, value: NewTaskDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
@@ -317,6 +323,13 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   const typed = draftTouched(draft, preset);
   const [discard, setDiscard] = useState<(() => void) | null>(null);
   const released = useRef(false);
+  // KEPT FOR THE TAB WHILE IT HOLDS SOMETHING, so a reload loses none of it;
+  // a sheet back to what its door opened with keeps nothing.
+  useEffect(() => {
+    if (released.current) return;
+    if (typed) keepDraft(preset, draft);
+    else forgetDraft();
+  }, [typed, draft, preset]);
   const leave = () => (typed ? setDiscard(() => onClose) : onClose());
   useLeaveGuard(
     typed
@@ -377,6 +390,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     if (!result) return;
     if (result.kind === "applied") {
       released.current = true;
+      forgetDraft();
       onClose();
       // AT THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a key a
       // restored counter handed out again opens the task that claimed it.
@@ -384,6 +398,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       if (address) nav.to(["worklet", address]);
     } else if (result.kind === "pending") {
       released.current = true;
+      forgetDraft();
       onClose();
     }
   };
@@ -637,6 +652,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           onClose={() => setDiscard(null)}
           onConfirm={() => {
             released.current = true;
+            forgetDraft();
             setDiscard(null);
             discard();
           }}
@@ -697,13 +713,10 @@ function landingOf(
  * silently dropped from it either.
  *
  * THE NAME IS WHAT A ROW IS READ FOR, so the engine's row carries a hint as
- * short as every other row's ("@handle · best match") and the tier that
- * matched is said where there is room for it: in the row's accessible name,
- * and on the field's help line once that seat is taken. The kit's hint does
- * not shrink and its label does, so the tier written into the hint — "the
- * engine's match: part of the name matches" — took the whole row and drew
- * the seat's name as "Age…", or not at all, in exactly the one case the row
- * exists for.
+ * short as every other row's ("@handle · best match"). The kit's hint does
+ * not shrink and its label does, so the tier once written into the hint took
+ * the whole row and drew the seat's name as "Age…". Once a seat is taken the
+ * help line says what choosing it does, and only that.
  */
 function AssigneeField({
   seats,
@@ -734,10 +747,6 @@ function AssigneeField({
   // who "Agent SWE" is after the reader took Agent SWE is a read for nothing.
   const asking = open && colleagueSendable(term) && term !== chosen?.name;
   const colleague = useQuery("colleague", { q: term }, { enabled: asking });
-  // WHY THE ENGINE OFFERED THE SEAT THAT WAS TAKEN, kept from the press: once
-  // the field holds the seat's name the engine is no longer asked, and the
-  // words it matched are gone from the field.
-  const [matched, setMatched] = useState<{ handle: string; words: string; why: string }>();
 
   const suggested = asking ? colleague.data?.match : undefined;
   const top = suggested ? seats.find((s) => s.handle === suggested.handle) : undefined;
@@ -758,27 +767,12 @@ function AssigneeField({
       hint,
     });
     return [
-      ...(top && suggested
-        ? [
-            row(
-              top,
-              <>
-                {handleLabel(top.handle)} · best match
-                <span className="sr-only">, the engine's match: {suggested.why}</span>
-              </>,
-            ),
-          ]
-        : []),
+      ...(top && suggested ? [row(top, `${handleLabel(top.handle)} · best match`)] : []),
       ...local.map((s) =>
         row(s, `${handleLabel(s.handle)} · ${s.kind === "human" ? "person" : "agent"}`),
       ),
     ];
   }, [seats, term, top, suggested]);
-
-  // THE TIER IS SAID ONLY FOR THE SEAT IT WAS SAID ABOUT: a reader who took
-  // the engine's match and then another seat is not told why the first one
-  // matched.
-  const why = matched && matched.handle === value ? matched : undefined;
 
   return (
     <FormField
@@ -791,9 +785,7 @@ function AssigneeField({
       // or it is empty — and only the last is where "left empty" is true.
       helper={
         value
-          ? `${chosen?.name ?? handleLabel(value)} is notified and follows it.${
-              why ? ` The engine's match for “${quoted(why.words)}”: ${why.why}.` : ""
-            }`
+          ? `${chosen?.name ?? handleLabel(value)} is notified and follows it.`
           : unchosen
             ? "Pick a seat from the list."
             : landing
@@ -829,11 +821,6 @@ function AssigneeField({
           }}
           onCommit={(option) => {
             const seat = seats.find((s) => s.handle === option.value);
-            setMatched(
-              top && suggested && option.value === top.handle
-                ? { handle: top.handle, words: term, why: suggested.why }
-                : undefined,
-            );
             onChange({ assignee: option.value, text: seat?.name ?? option.value });
             onOpenChange(false);
           }}
