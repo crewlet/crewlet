@@ -118,6 +118,17 @@ export interface SetupSSHServer {
   last_test?: SetupSSHTest;
 }
 
+/**
+ * One host key a server presented to a scan (`ssh.ScannedKey`): its line, its
+ * type and fingerprint, and why it cannot be pinned where it cannot.
+ */
+export interface SetupSSHScannedKey {
+  line: string;
+  type: string;
+  fingerprint_sha256: string;
+  problem?: string;
+}
+
 /** One command of the atlas's inventory, as the server's gate takes it. */
 interface SetupSSHInventoryCommand {
   command: string;
