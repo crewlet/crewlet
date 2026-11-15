@@ -1164,7 +1164,7 @@ func (s *CoordStore) OweRefusal(ctx context.Context, turnID, launch string, owed
 		return false, nil
 	}
 	_, written, err := s.write(ctx, turnID, true, fence, func(run *PendingRun) bool {
-		if run.LaunchID != launch || run.Status != StatusRunning || run.Launch.RefusalOwed != "" {
+		if run.LaunchID != launch || !run.completionUnsettled() || run.Launch.RefusalOwed != "" {
 			return false
 		}
 		run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = owed.Condition, owed.Since.UTC()

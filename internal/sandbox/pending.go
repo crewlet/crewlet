@@ -295,6 +295,24 @@ type OwedRefusal struct {
 // is what gives the field its share of the row (rowbytes.go).
 const MaxOwedConditionBytes = 32
 
+// completionUnsettled reports whether the job the row holds has a completion
+// nothing has settled yet, which an acknowledged refusal of it leaves owed
+// ([PendingStore.OweRefusal]): the job running, or claimed for its completion
+// ([CompletionTail]). The caller matches the job, and writes live, which
+// refuses a run whose ending is decided ([ErrRunEnding]).
+//
+// A CLAIM SETTLES NOTHING BY ITSELF. A kept completion is re-fired the moment
+// its condition is signalled, so a re-fire's claim can land between the gate's
+// refusal of a delivery and that refusal's record, and a claim handed back,
+// its attempt cut short before its collection heard from the box's host, puts
+// the completion back as it was: owed only where the job was unclaimed, the
+// refusal acknowledged meanwhile was owed by nothing once it was. A RECORDED
+// ANSWER'S CLAIM is not one: the job it holds parked on its question, which
+// settled its completion, and its answer carries the run on.
+func (r PendingRun) completionUnsettled() bool {
+	return r.Status == StatusRunning || (r.Status == StatusResumed && r.Answer == nil)
+}
+
 // License is what an ending may be DECIDED under ([PendingStore.DecideEnding]):
 // the lease, the statuses and the job it was decided on.
 //
@@ -2876,9 +2894,11 @@ type PendingStore interface {
 	// acknowledged a delivery of its completion it refused, and owes the
 	// completion its re-fire ([LaunchRecord.RefusalOwed]), reporting whether
 	// THIS call wrote it: ONE WRITE, made only where the row still holds that
-	// job running and unclaimed, with no ending decided, and its record owes
-	// no refusal yet, so a re-announcement refused again writes nothing and
-	// the record keeps the first refusal's condition and instant. Under the
+	// job with its completion unsettled, running or claimed for its
+	// completion, with no ending decided, since a claim handed back puts the
+	// completion back as it was, and its record owes no refusal yet, so a
+	// re-announcement refused again writes nothing and the record keeps the
+	// first refusal's condition and instant. Under the
 	// holder's fence: a row a newer lease owns refuses it with
 	// [ErrSeatNotHeld]. A refusal that names no condition, or one past
 	// [MaxOwedConditionBytes], or no instant, is an error and writes nothing.
@@ -4899,7 +4919,8 @@ type LaunchRecord struct {
 	// which starts the job's record afresh, or the run's end, which deletes
 	// the row. A claim leaves it: a claim handed back puts the completion
 	// back, still owed, and one whose resume settles it reaches one of those
-	// three writes.
+	// three writes. And a refusal acknowledged while another attempt holds
+	// the job's claim is written on the claimed row, for that reason.
 	//
 	// ON THE JOB'S RECORD, NEVER IN ONE NODE'S MEMORY ALONE. An acknowledged
 	// refusal is safe because the waiter that drives the job's box

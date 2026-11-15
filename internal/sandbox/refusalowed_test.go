@@ -131,6 +131,91 @@ func TestAnAcknowledgedRefusalOutlivesItsHolder(t *testing.T) {
 	}
 }
 
+// claimedFirst is a run store on which another attempt's claim of a job's
+// completion lands before each owed refusal of it is recorded
+// ([PendingStore.OweRefusal]), under fence: the claim of a re-fire this node
+// started for the kept completion the moment its condition was signalled,
+// between the gate's refusal of a delivery and that refusal's record.
+type claimedFirst struct {
+	PendingStore
+	fence Fence
+}
+
+func (s *claimedFirst) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
+	fence Fence,
+) (bool, error) {
+	_, won, err := s.ClaimForResume(ctx, turnID, CompletionTail(launch), s.fence)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("the premise: another attempt's claim of %s: %w", turnID, err)
+	case !won:
+		return false, fmt.Errorf("the premise: another attempt's claim of %s did not win", turnID)
+	}
+	return s.PendingStore.OweRefusal(ctx, turnID, launch, owed, fence)
+}
+
+// A REFUSAL ACKNOWLEDGED WHILE ANOTHER ATTEMPT HOLDS THE JOB'S CLAIM IS OWED
+// TOO. A kept completion is re-fired on a goroutine of its own the moment its
+// condition is signalled, so a re-fire's claim can land between the gate's
+// refusal of a delivery and that refusal's record. A claim settles nothing by
+// itself: one handed back, its attempt cut short by this node's stop before
+// its collection heard from the box's host, puts the completion back as it
+// was. Recorded only on a job running and unclaimed, the refusal acknowledged
+// meanwhile was owed by nothing once that claim was handed back, and after the
+// restart no recovery re-fired the job, which no waiter announces while its
+// host's store is silent.
+//
+// Mutation: record an owed refusal only where the job is running and
+// unclaimed, and the job's record owes nothing once the claim is handed back,
+// and the completion is never carried.
+func TestARefusalAcknowledgedUnderAnotherAttemptsClaimIsOwed(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	// NODE-B HOLDS THE SEAT, and the job's box is on node-a's host, whose
+	// coordination store does not answer its read of the run's row.
+	host, _ := unsettledHost(t, rig)
+	plain := rig.coordinator.pending
+	rig.coordinator.pending = &claimedFirst{PendingStore: plain, fence: rigLease}
+	gate := &conditionGate{}
+	gate.refuse(conditionLimit)
+	rig.coordinator.gate = gate.admit
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); controlResult(err).Outcome != queue.OutcomeAck {
+		t.Fatalf("the premise: the refused delivery = %v, left %s; want it acknowledged", err,
+			controlResult(err).Outcome)
+	}
+	// THE OTHER ATTEMPT IS CUT SHORT by this node's stop before its
+	// collection hears from the box's host, and its claim is handed back
+	// uncounted.
+	released, err := plain.ReleaseClaim(t.Context(), "t1",
+		Release{Launch: payload.LaunchID, To: StatusRunning, Fence: rigLease})
+	if err != nil || !released {
+		t.Fatalf("the premise: handing the other attempt's claim back = %v, %v", released, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.RefusalOwed != conditionLimit {
+		t.Fatalf("the claim handed back left the run %s, its record owing %q; want it running and owing the "+
+			"refusal acknowledged under the claim, %q", got.Status, got.Launch.RefusalOwed, conditionLimit)
+	}
+	// THE NODE RESTARTS, the host's store still silent; its recovery owes the
+	// completion again, and carries it once the condition is signalled.
+	rig.coordinator.pending = plain
+	next := &conditionGate{}
+	next.refuse(conditionLimit)
+	rig.restart(t, rig.queue, "node-b", rigLease, next.admit)
+	if err := rig.recoverSeat(t.Context(), rigLease.Owner, rigLease.Epoch); err != nil {
+		t.Fatalf("recovering the seat: %v", err)
+	}
+	rig.coordinator.inflight.Wait()
+	host.answer()
+	next.refuse("")
+	rig.coordinator.Readmit(conditionLimit, "swe")
+	rig.coordinator.inflight.Wait()
+	if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+		t.Fatalf("the turn resumed %d times (%+v) once its condition was signalled; want it carried once, on "+
+			"its box's account", len(resumed), resumed)
+	}
+}
+
 // owedRefusals is a run store that counts the owed refusals it records
 // ([PendingStore.OweRefusal]) and does not answer that write while silent is
 // set, as a coordination store that did not answer it does.

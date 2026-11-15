@@ -133,6 +133,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
 		{"AReleaseRecordsWhatTheHostsStoreLastSaid", testAReleaseRecordsWhatTheHostsStoreLastSaid},
 		{"AnOwedRefusalIsRecordedOnceAndSettledByThePark", testAnOwedRefusalIsRecordedOnceAndSettledByThePark},
+		{"AnOwedRefusalIsRecordedOnAClaimOfItsCompletion", testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -3082,7 +3083,7 @@ func testAnOwedRefusalIsRecordedOnceAndSettledByThePark(t *testing.T, s sandbox.
 
 	claimed := mustClaim(t, s, "t1")
 	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first}); err != nil || wrote {
-		t.Errorf("an owed refusal on a claimed job = %v, %v; want nothing written", wrote, err)
+		t.Errorf("a second owed refusal on a claimed job = %v, %v; want nothing written", wrote, err)
 	}
 	mustRelease(t, s, claimed)
 	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" {
@@ -3113,6 +3114,39 @@ func testAnOwedRefusalIsRecordedOnceAndSettledByThePark(t *testing.T, s sandbox.
 	mustBeginLaunch(t, s, run("t2"))
 	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
 		t.Error("the job's next launch inherited the refusal the last job owed")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ON A JOB CLAIMED FOR ITS COMPLETION, NEVER ON A
+// RECORDED ANSWER'S CLAIM. A claim settles nothing by itself: one handed back
+// puts the completion back as it was, so a refusal acknowledged while another
+// attempt holds the job's claim is recorded on the claimed row, and is still
+// owed once that claim is handed back. A recorded answer's claim holds a job
+// that parked on its question, which settled its completion, and takes none.
+func testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	owed := sandbox.OwedRefusal{Condition: "provider", Since: at}
+	launch := mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
+	if wrote, err := s.OweRefusal(ctx, "t1", launch, owed, fence); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a job claimed for its completion = %v, %v; want it written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(at) {
+		t.Fatalf("the claim handed back left the run %s owing %q since %v; want it running and still owing "+
+			"provider since %v", got.Status, got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, at)
+	}
+
+	asking := claimedAnswerOn(t, s, "t2", answerOf("r1", "use main"), false)
+	if wrote, err := s.OweRefusal(ctx, "t2", asking, owed, sandbox.Fence{}); err != nil || wrote {
+		t.Errorf("an owed refusal on a recorded answer's claim = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Errorf("a recorded answer's claim owes %q; want nothing owed of a job its question settled",
+			got.Launch.RefusalOwed)
 	}
 }
 
