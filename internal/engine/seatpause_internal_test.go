@@ -702,3 +702,47 @@ func (s *foldAtResume) ResumeTopic(ctx context.Context, topic, group string, at 
 	}
 	return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
 }
+
+// A SEAT'S RELEASE LEAVES NO RECORD OF A PAUSE HOLD BEHIND.
+//
+// The release's detach drops every hold on the seat's inbox and ends the
+// attachment each was taken for, and the release forgets the seat's parks.
+// The records of a person's pause hold and of the no-model pause were left:
+// each named the attachment that had ended, and a later lift lifted nothing
+// on it and logged that it had (`seat_pause_lifted`, `seat_inbox_resumed`).
+//
+// Mutation: keep either record at the release, and this fails.
+func TestASeatsReleaseLeavesNoRecordOfItsPauseHolds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	e.adoptSeatPauses(ctx, map[uuid.UUID]coord.SeatPause{})
+	pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+	if err := e.pause(ctx, "ceo", "no turn engine"); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	e.pauses.mu.Lock()
+	_, held := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if !held || !slices.Contains(recorded(e), "ceo") {
+		t.Fatalf("before the release: pause hold recorded=%v, no-model record %v; want both",
+			held, recorded(e))
+	}
+
+	// AS THE NODE RELEASES A SEAT: its inbox detached, then the hook.
+	if _, err := q.Detach(ctx, topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat)); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	e.releaseSeat(ctx, placement.Seat{ID: ceoSeat, Handle: "ceo"})
+
+	e.pauses.mu.Lock()
+	at, held := e.pauses.held[ceoSeat]
+	e.pauses.mu.Unlock()
+	if held {
+		t.Errorf("the released seat's pause hold is still recorded, for the ended attachment %d", at)
+	}
+	if got := recorded(e); slices.Contains(got, "ceo") {
+		t.Errorf("the released seat's no-model pause is still recorded: %v", got)
+	}
+}

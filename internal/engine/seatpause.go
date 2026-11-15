@@ -33,7 +33,8 @@ import (
 //     in order, and is delivered when somebody resumes it. Taken only for a
 //     seat this node holds, because a hold is taken for one attachment of the
 //     inbox (seatinbox.go) and a node that does not hold the seat has none to
-//     name; a detach drops it with the attachment, which is why the seat's
+//     name; a detach drops it with the attachment, and the seat's release
+//     the record of it ([Engine.forgetPauseHold]), which is why the seat's
 //     preparation on the node that acquires a paused seat takes it again
 //     before the node attaches the inbox ([Engine.acquireInbox]). Every hold
 //     is taken and recorded as ONE STEP under the lock the pauses are folded
@@ -309,6 +310,21 @@ func (e *Engine) recordHeldLocked(seat uuid.UUID, inbox queue.Attachment) {
 		e.pauses.held = map[uuid.UUID]queue.Attachment{}
 	}
 	e.pauses.held[seat] = inbox
+}
+
+// forgetPauseHold drops the record of seat's pause hold, for a seat this node
+// has released ([Engine.releaseSeat]).
+//
+// NOT THE HOLD, which the release's detach dropped with the attachment it was
+// taken for. Left, the record named that ended attachment, which no lift can
+// reach: a resume afterwards lifted nothing on it and logged
+// `seat_pause_lifted` all the same. The release forgets the seat's attachment
+// first ([Engine.detachInbox]), so a pause folded after this records nothing
+// for the seat, and a lift in flight lifts nothing and holds nothing again.
+func (e *Engine) forgetPauseHold(seat uuid.UUID) {
+	e.pauses.mu.Lock()
+	defer e.pauses.mu.Unlock()
+	delete(e.pauses.held, seat)
 }
 
 // seatLabel is how a log line names a seat: its handle in the running company,

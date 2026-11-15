@@ -229,6 +229,20 @@ func (e *Engine) reholdModelHold(ctx context.Context, id uuid.UUID) {
 			"delivery to it pauses it again")
 }
 
+// forgetModelHold drops the record of seat's no-model pause, for a seat this
+// node has released ([Engine.releaseSeat]).
+//
+// NOT THE HOLD, which the release's detach dropped with the attachment it was
+// taken for. Left, the record named that ended attachment: the next release
+// lifted nothing on it and logged `seat_inbox_resumed` all the same. The
+// release forgets the seat's attachment first ([Engine.detachInbox]), so a
+// pause asked after this is refused and records nothing.
+func (e *Engine) forgetModelHold(seat uuid.UUID) {
+	e.modelHolds.mu.Lock()
+	defer e.modelHolds.mu.Unlock()
+	delete(e.modelHolds.seats, seat)
+}
+
 // seatID resolves a seat handle to the id its mailbox is named by, through
 // the company this node is running.
 //

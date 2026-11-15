@@ -4447,6 +4447,12 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// ([seatParks.forget]).
 	e.forgetBudgetPark(seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
+	// AND THE RECORDS OF ITS PAUSE HOLDS, a person's and the no-model one,
+	// for the same reason: the detach dropped the holds, and a record left
+	// names the attachment that ended, which a later lift lifts nothing on
+	// and reports lifted.
+	e.forgetPauseHold(seat.ID)
+	e.forgetModelHold(seat.ID)
 	// AND WHAT IT READ OF THE SEAT'S HELD CONVERSATIONS: the next holder reads its own.
 	e.conversations.forget(seat.ID)
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
