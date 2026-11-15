@@ -2554,7 +2554,12 @@ const (
 	// the grid key registry, empty spend drawn empty, the diff's per-line
 	// marks) added 13,042 bytes and took it to 6195.7 KiB (6,344,395 bytes):
 	// 6196 KiB.
-	treeBudget = 5<<20 + 1077<<10
+	// The release train of those four (the operations fixes, the Atlas round,
+	// the Worklet follow-up and the Settings and Account fixes), merged with
+	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
+	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
+	// built on: 6218 KiB.
+	treeBudget = 5<<20 + 1098<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
