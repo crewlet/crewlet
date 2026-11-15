@@ -1578,6 +1578,19 @@ Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
 logging.
 
+### The engine's user and Claude Code
+
+**Do not run the engine as root when it hosts Claude Code executors in a `direct` or
+`container` box.** Those boxes run the harness as the engine's own user, and a seat's
+Claude Code executor starts with `--permission-mode bypassPermissions`, which Claude
+Code refuses for uid 0 (`--dangerously-skip-permissions cannot be used with root/sudo
+privileges`). Every launch would fail at its seat's first work, so the engine refuses
+to apply a company that puts one there: `crewlet validate`, a boot, an apply and a
+config write answer with the entry's `run_in` path, and `crewlet llm doctor` reports
+it under `executor` as a problem. Run the engine as a non-root user (the container
+image already does), or put the entry in `run_in: e2b`. An OpenCode entry is not
+affected.
+
 ### Where a box writes
 
 A `direct` or `container` box is a directory on the engine host, made under

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -833,14 +834,20 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 // ([config.Company.ValidateCharterChange]), so a charter fault the write did
 // not touch is a warning on the answer rather than a refusal of the write.
 func authoredRules(next, prior *config.Company) error {
-	return errors.Join(next.Validate(), next.ValidateCharterChange(prior))
+	return errors.Join(next.Validate(), next.ValidateHost(processEUID()), next.ValidateCharterChange(prior))
 }
+
+// processEUID is the user this node runs as, which a launch's rules depend
+// on ([config.Company.ValidateHost]). A write is refused at the door of a node
+// that could not apply it, rather than published for it to refuse on every
+// tick. A variable so a test judges a root node without being one.
+var processEUID = os.Geteuid
 
 // runnableRules is what a stored document re-activated as it is (a reload, a
 // revert) is held to: the rules a running company depends on, and none a
 // build is free to change, since a newer peer may have admitted it.
 func runnableRules(next, _ *config.Company) error {
-	return next.ValidateRunnable()
+	return errors.Join(next.ValidateRunnable(), next.ValidateHost(processEUID()))
 }
 
 // importRules is what an import is held to ([Service.mayImport]): every rule
@@ -848,7 +855,7 @@ func runnableRules(next, _ *config.Company) error {
 // the answer carries, because a restored file must import whatever its charter
 // says.
 func importRules(next, _ *config.Company) error {
-	return next.Validate()
+	return errors.Join(next.Validate(), next.ValidateHost(processEUID()))
 }
 
 // patchDraft is a JSON Merge Patch over the active document.
