@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -46,6 +47,17 @@ type GrantDesk interface {
 	// Declined drops request id and records that by declined it; a request
 	// already gone is the outcome asked for.
 	Declined(ctx context.Context, id, by string) error
+
+	// Grant saves the grant request id asks for, for the seat asker, as the
+	// person ctx resolves to: built from the request as stored, for good
+	// where permanent and for the request's hours otherwise, checked
+	// against the live catalogue, one revision, recorded, its request
+	// settled and its sync started (ADR-0118). Before anything is written it
+	// asks admit, handed whether the grant raises ([seataccess.NeedsStepUp]),
+	// and returns admit's refusal as it is. A request that lapsed or was
+	// settled is [seataccess.ErrNoRequest]; one it cannot save as asked is a
+	// [*seataccess.GrantRefused].
+	Grant(ctx context.Context, asker, id string, permanent bool, admit func(raise bool) error) error
 }
 
 // requestGrant is request_access's integration form.
@@ -260,10 +272,20 @@ func nearest(opts seataccess.Options, asked string) string {
 	return " It offers " + words.And(found) + "."
 }
 
-// grantRequestChosen refuses an answer choosing a request's grant before the
-// fleet's active revision holds it for the asking agent: the grant is saved
-// first and only then answered (ADR-0118), whoever sends it. Nil where the
-// choice is no request's grant.
+// grantRequestChosen makes choosing a request's grant option the approval
+// (ADR-0118): the choice is decided at the access write's own proof, the grant
+// is saved from the stored request, and only then is the answer posted. An
+// answer whose grant is already held (one sent again after its grant landed)
+// saves nothing twice. Nil where the choice is no request's grant, or once
+// its grant is held; the refusal to return otherwise, and nothing is posted.
+//
+// THE PROOF IS THE ACCESS WRITE'S, NEVER THE COMMENT'S. A comment asks no
+// step-up, so the choice is decided as [authz.ActionSetupAccessWrite] (an
+// administrator within the step-up window) and, where the grant raises, as
+// [authz.ActionSetupAccessRaise] too (a person present), through the same
+// seam every check a tool takes after a read goes through. A seat is refused
+// both, whatever it holds and whatever the words it read said, so no agent
+// ever approves a grant.
 func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 
@@ -272,8 +294,8 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 		return nil
 	}
 	if d.Grants == nil {
-		refused := failed(CommentOnWorkTool + ": this server cannot confirm the grant, so the answer " +
-			"was not posted. Answer from the dashboard, which saves it first.")
+		refused := failed(CommentOnWorkTool + ": this server cannot save the grant, so the answer " +
+			"was not posted. Answer from the dashboard of a node that serves the setup surface.")
 		return &refused
 	}
 	held, err := d.Grants.Granted(ctx, thread.AnsweredAuthor, id, permanent)
@@ -282,12 +304,61 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 		refused := failed(fmt.Sprintf("%s: the grant could not be confirmed (%v), so the answer was "+
 			"not posted. Try again in a moment.", CommentOnWorkTool, err))
 		return &refused
-	case !held:
-		refused := failed(fmt.Sprintf("%s: %s does not hold the grant yet. Save it first, then answer: "+
-			"the agent is told yes only once it holds it.", CommentOnWorkTool, thread.AnsweredAuthor))
+	case held:
+		return nil
+	}
+	// THE WRITE FIRST, before anything is read for the save, so a caller who
+	// may not save one learns that and nothing else; the raise once the save
+	// has judged the grant against the live catalogue.
+	if err := d.authorizeGrant(ctx, authz.ActionSetupAccessWrite); err != nil {
+		refusal := authorityRefusal(string(authz.ActionSetupAccessWrite), err)
+		return &refusal
+	}
+	err = d.Grants.Grant(ctx, thread.AnsweredAuthor, id, permanent, func(raise bool) error {
+		if !raise {
+			return nil
+		}
+		return d.authorizeGrant(ctx, authz.ActionSetupAccessRaise)
+	})
+	var refusedGrant *seataccess.GrantRefused
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrRefused) || errors.Is(err, ErrUndecidable) || errors.Is(err, ErrNoAuthorizer):
+		refusal := authorityRefusal(string(authz.ActionSetupAccessRaise), err)
+		return &refusal
+	case errors.Is(err, seataccess.ErrNoRequest):
+		refused := failed(fmt.Sprintf("%s: the agent's request %s has lapsed or was already settled, "+
+			"so nothing was granted and the answer was not posted. Answer \"Not now\", and the agent "+
+			"asks again if it still needs it.", CommentOnWorkTool, id))
+		return &refused
+	case errors.As(err, &refusedGrant):
+		refused := failed(fmt.Sprintf("%s: the grant was not saved, so the answer was not posted: %s.",
+			CommentOnWorkTool, refusedGrant.Reason))
+		return &refused
+	default:
+		refused := failed(fmt.Sprintf("%s: the grant could not be saved (%v), so the answer was not "+
+			"posted. Try again in a moment.", CommentOnWorkTool, err))
+		return &refused
+	}
+	// THE ANSWER WAITS ON THE ACTIVE REVISION, as every answer choosing a
+	// grant does: one this node does not serve yet is answered again once it
+	// does, and the grant is not saved twice.
+	if held, err = d.Grants.Granted(ctx, thread.AnsweredAuthor, id, permanent); err != nil || !held {
+		refused := failed(fmt.Sprintf("%s: the grant was saved, and this node does not serve its "+
+			"revision yet, so the answer was not posted. Send the same answer again in a moment; "+
+			"the grant is not saved twice.", CommentOnWorkTool))
 		return &refused
 	}
 	return nil
+}
+
+// authorizeGrant decides one access verb of the caller: an administrator's,
+// within the verb's proof window.
+func (d WorkDeps) authorizeGrant(ctx context.Context, action authz.Action) error {
+	if d.Authorize == nil {
+		return ErrNoAuthorizer
+	}
+	return d.Authorize(ctx, action, authz.Object{Kind: authz.KindCompany})
 }
 
 // requestDeclined settles the request a posted "Not now" answered, recording

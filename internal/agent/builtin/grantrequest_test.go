@@ -2,14 +2,20 @@ package builtin_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	_ "github.com/crewlet/crewlet/internal/cloudflare" // registers the vendor whose lane takes grants
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -24,6 +30,32 @@ type fakeGrantDesk struct {
 	withdrawn []string
 	declined  []string
 	granted   bool
+
+	// raise is whether a grant the desk saves raises, saveErr what its save
+	// answers, and asked every save it was asked for, saved those it made.
+	raise   bool
+	saveErr error
+	asked   []string
+	saved   []string
+}
+
+// Grant saves the request's grant once admit admits it, as the engine's desk
+// does, and holds it from then on.
+func (d *fakeGrantDesk) Grant(_ context.Context, asker, id string, permanent bool,
+	admit func(raise bool) error) error {
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.asked = append(d.asked, fmt.Sprintf("%s/%s/%v", asker, id, permanent))
+	if d.saveErr != nil {
+		return d.saveErr
+	}
+	if err := admit(d.raise); err != nil {
+		return err
+	}
+	d.saved = append(d.saved, id)
+	d.granted = true
+	return nil
 }
 
 func (d *fakeGrantDesk) Offer(context.Context, string, seataccess.Lane) (seataccess.Desired, seataccess.Options, error) {
@@ -45,6 +77,8 @@ func (d *fakeGrantDesk) Withdraw(_ context.Context, id string) error {
 }
 
 func (d *fakeGrantDesk) Granted(context.Context, string, string, bool) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.granted, nil
 }
 
@@ -227,5 +261,154 @@ func TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt(t *testing.T) {
 	}
 	if len(desk.declined) != 1 || desk.declined[0] != id {
 		t.Errorf("declined = %v, want the request settled", desk.declined)
+	}
+}
+
+// grantAdmin is a person holding admin who signed in through a browser
+// session, proved who they are within the step-up window where fresh, and
+// through a machine token where via names one.
+func grantAdmin(fresh bool, via string) context.Context {
+	reauth := time.Now().Add(-time.Minute)
+	if fresh {
+		reauth = time.Now().Add(time.Hour)
+	}
+	if via == "" {
+		via = "session:browser"
+	}
+	return iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee3"),
+		Kind: iam.KindPerson, Login: "founder", Stage: iam.StageActive,
+		Grants: []iam.Grant{iam.GrantAdmin}, ReauthAt: reauth, Via: via,
+	})
+}
+
+// answerGrant answers the CTO agent's grant request on ENG-1 with choice, as
+// caller: a person through the operator's surface, or the seat itself.
+func answerGrant(t *testing.T, desk *fakeGrantDesk, caller context.Context, choice string) (
+	tools.Result, *fakeTracker) {
+
+	t.Helper()
+	const id = "abcdefghij"
+	trk := newFakeTracker()
+	trk.thread.AnswersDecision = &decision.Decision{Options: []decision.Option{
+		{ID: seataccess.GrantOptionTemporary(id), Label: "Grant for this change"},
+		{ID: seataccess.GrantOptionPermanent(id), Label: "Add permanently"},
+		{ID: "decline", Label: "Not now"}}}
+	trk.thread.AnsweredAuthor = "agent-cto"
+	deps := grantDeps(trk, desk)
+	deps.Actor = operatorActor
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Work: deps})); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := reg.Lookup(builtin.CommentOnWorkTool)
+	if !ok {
+		t.Fatal("comment_on_work_item is not registered")
+	}
+	got, err := entry.Tool.(tools.SeatCallable).CallForTurn(caller, nil, map[string]any{
+		"item": "ENG-1", "answers": "c-ask", "choice": choice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got, trk
+}
+
+// CHOOSING A REQUEST'S GRANT OPTION IS THE APPROVAL (ADR-0118): an
+// administrator's choice saves the grant the stored request asks for, for its
+// hours or for good as the option says, and only then posts the answer; an
+// answer whose grant is held already saves nothing twice; and a save that
+// fails (a request lapsed or settled, a grant the catalogue no longer gives)
+// posts nothing, saying why. Mutation: post before the save, or save again a
+// grant already held, and this fails.
+func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
+	t.Parallel()
+	const id = "abcdefghij"
+	for _, c := range []struct {
+		name   string
+		choice string
+		asked  string
+	}{
+		{"for its hours", seataccess.GrantOptionTemporary(id), "agent-cto/" + id + "/false"},
+		{"for good", seataccess.GrantOptionPermanent(id), "agent-cto/" + id + "/true"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			desk := newGrantDesk()
+			got, trk := answerGrant(t, desk, grantAdmin(true, ""), c.choice)
+			if got.Failed || len(trk.patched) != 1 || trk.patched[0].Comment.Choice != c.choice {
+				t.Fatalf("answer = %+v with %d writes, want the answer posted", got, len(trk.patched))
+			}
+			if !slices.Equal(desk.asked, []string{c.asked}) || len(desk.saved) != 1 {
+				t.Errorf("saves asked %v, made %v; want the one grant saved before the answer",
+					desk.asked, desk.saved)
+			}
+		})
+	}
+
+	held := newGrantDesk()
+	held.granted = true
+	if got, trk := answerGrant(t, held, grantAdmin(true, ""), seataccess.GrantOptionTemporary(id)); got.Failed ||
+		len(trk.patched) != 1 || len(held.asked) != 0 {
+		t.Errorf("an answer whose grant is held = %+v, %d writes, saves asked %v; want it posted "+
+			"and nothing saved again", got, len(trk.patched), held.asked)
+	}
+
+	for name, c := range map[string]struct {
+		err  error
+		says string
+	}{
+		"lapsed":  {seataccess.ErrNoRequest, "has lapsed or was already settled"},
+		"refused": {&seataccess.GrantRefused{Reason: "Origin Rules: Edit: The provisioner token does not hold it"}, "The provisioner token does not hold it"},
+	} {
+		desk := newGrantDesk()
+		desk.saveErr = c.err
+		got, trk := answerGrant(t, desk, grantAdmin(true, ""), seataccess.GrantOptionTemporary(id))
+		if !got.Failed || len(trk.patched) != 0 || !strings.Contains(got.Output, c.says) {
+			t.Errorf("%s: answer = %+v with %d writes, want it refused saying %q", name, got,
+				len(trk.patched), c.says)
+		}
+	}
+}
+
+// A REQUEST'S GRANT IS CHOSEN ONLY AT THE ACCESS WRITE'S OWN PROOF, NEVER BY AN
+// AGENT. The comment asks no step-up, so the choice is decided as
+// setup.access.write: an administrator past the step-up window is asked to
+// prove it is them, and a grant that raises (a permission that changes things)
+// is also decided as setup.access.raise, which a machine token is refused. A
+// seat holding every grant is refused whatever it read. In every refused case
+// nothing is saved and nothing is posted. Mutation: decide the choice on the
+// comment's own verb, or skip the raise, and this fails.
+func TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof(t *testing.T) {
+	t.Parallel()
+	choice := seataccess.GrantOptionTemporary("abcdefghij")
+	for _, c := range []struct {
+		name   string
+		caller context.Context
+		raise  bool
+		saved  bool
+		says   string
+	}{
+		{"an administrator within the window", grantAdmin(true, ""), false, true, ""},
+		{"an administrator raising, in person", grantAdmin(true, ""), true, true, ""},
+		{"an administrator past the window", grantAdmin(false, ""), false, false, "setup.access.write"},
+		{"a machine token raising", grantAdmin(true, "pat:0123"), true, false, "setup.access.raise"},
+		{"an agent holding every grant", everyGrant(), false, false, "setup.access.write"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			desk := newGrantDesk()
+			desk.raise = c.raise
+			got, trk := answerGrant(t, desk, c.caller, choice)
+			if c.says == string(authz.ActionSetupAccessWrite) && len(desk.asked) != 0 {
+				t.Errorf("a caller who may not save a grant had the save asked for: %v", desk.asked)
+			}
+			if saved := len(desk.saved) == 1; saved != c.saved || (len(trk.patched) == 1) != c.saved {
+				t.Fatalf("saved %v with %d writes (%s), want saved and posted %v", saved,
+					len(trk.patched), got.Output, c.saved)
+			}
+			if !c.saved && (!got.Failed || !strings.Contains(got.Output, c.says)) {
+				t.Errorf("refusal %q does not name %s", got.Output, c.says)
+			}
+		})
 	}
 }
