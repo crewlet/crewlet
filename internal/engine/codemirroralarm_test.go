@@ -59,10 +59,14 @@ roles:
 // passes are the case's too (engine.PollHomeForTest): waiting for the loop's
 // own ticker sat out two of its gitlethome.Backstop minutes, two thirds of
 // the case's two minutes on CI, for a pass that is the same pass either way.
+// Each clock move waits for the attempt before it to be recorded as ended
+// (mirror.Options.Ended), never only for its dial.
 //
 // Mutations: leave the mirrors' half out of the reading (codeReading), and
 // the alarm never fires; count a mirror as failing from its first failed
-// attempt, or at the interval alone, and it fires inside its promise.
+// attempt, or at the interval alone, and it fires inside its promise; move
+// the clock at the first dial again with the worker's record of the attempt
+// held back past it, and the second attempt never dials.
 func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)
@@ -70,6 +74,7 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	var offset atomic.Int64
 	clock := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
 	dialed := make(chan string, 16)
+	ended := make(chan error, 16)
 	refused := errors.New("the other host refuses every connection")
 	e, err := engine.New(t.Context(), engine.WithMirrorSeams(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, mirrorCompany),
@@ -83,6 +88,14 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 			default:
 			}
 			return gitproc.Remote{}, refused
+		}
+		o.Ended = func(_ string, out bool, err error) {
+			if out {
+				select {
+				case ended <- err:
+				default:
+				}
+			}
 		}
 		return o
 	}))
@@ -114,12 +127,26 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 			}
 		}
 	}
+	// waitEnded waits until the worker has recorded the dialed attempt's end.
+	waitEnded := func(which string) {
+		t.Helper()
+		select {
+		case err := <-ended:
+			if !errors.Is(err, refused) {
+				t.Fatalf("the push mirror's %s attempt ended with %v, want the dial's refusal", which, err)
+			}
+		case <-time.After(time.Minute): //fixedwait:liveness
+			t.Fatalf("the push mirror's %s attempt dialed and never ended", which)
+		}
+	}
 
 	// INSIDE THE PROMISE: a first attempt, failed, and a second one twenty
-	// minutes on — past its retry, short of the interval and its grace.
+	// minutes on: past its retry, short of the interval and its grace.
 	waitDial("first")
+	waitEnded("first")
 	offset.Store(int64(20 * time.Minute))
 	waitDial("second")
+	waitEnded("second")
 	if r := engine.CodeReadingForTest(t.Context(), e); r.CodeMirrorFailing != 0 {
 		t.Fatalf("the reading counts %d failing mirror(s) twenty minutes into its first failure (%s, %s); "+
 			"want none inside gitlet.MirrorInterval + mirror.AttemptDeadline", r.CodeMirrorFailing,
