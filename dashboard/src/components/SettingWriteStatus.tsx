@@ -40,7 +40,6 @@ export function SettingWriteStatus({
       {state.kind === "refused" && (
         <Callout variant="danger" title="Nothing was saved">
           <span>{state.message}</span>
-          {state.hint && <span> {state.hint}</span>}
           {state.reload && (
             <div className="row gap-2">
               <Button size="small" variant="secondary" onClick={onReload}>

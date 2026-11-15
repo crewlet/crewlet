@@ -379,6 +379,8 @@ test("an unsealed active revision is replaced by a whole document, under its own
   });
   await press(screen.getByRole("button", { name: "Replace the document" }));
   expect(screen.getByText(unsealed.detail)).toBeTruthy();
+  // THE API'S ADVICE IS NOT DRAWN: the screen says what to do in its own words.
+  expect(document.body.textContent).not.toContain("PUT /config");
   const editor = screen.getByLabelText("The company document, as YAML") as HTMLTextAreaElement;
   expect(editor.value).toBe("");
   type(editor, YAML);

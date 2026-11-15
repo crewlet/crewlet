@@ -95,7 +95,6 @@ function Refused({ words, onReload }: { words: RefusalWords; onReload?: () => vo
   return (
     <Callout variant="danger" title="Nothing was saved" role="alert">
       <span>{words.message}</span>
-      {words.hint && <span> {words.hint}</span>}
       {words.reload && onReload && (
         <div className="row gap-2">
           <Button size="small" variant="secondary" onClick={onReload}>
@@ -122,7 +121,6 @@ function notSaved(outcome: Exclude<ConfigWriteOutcome, { kind: "saved" }>): Refu
     return {
       message: "The engine checked the change but stored nothing. Try again.",
       reload: false,
-      hint: "",
     };
   }
   return configRefusalWords(outcome, REREAD);
@@ -415,7 +413,6 @@ type Checked =
   | {
       readonly kind: "problems";
       readonly problems: readonly ConfigProblem[];
-      readonly hint: string;
     }
   | { readonly kind: "refused"; readonly words: RefusalWords };
 
@@ -488,7 +485,6 @@ export function DocumentEditor({
               message:
                 "No company is configured yet. Import one with crewlet config import, or finish setup.",
               reload: false,
-              hint: "",
             },
           });
           return;
@@ -570,12 +566,11 @@ export function DocumentEditor({
         words: {
           message: `The engine stored the check as revision ${outcome.revisionId.slice(0, 10)}. ${REREAD}`,
           reload: true,
-          hint: "",
         },
       };
     }
     if (outcome.kind === "problems" && !isUnsealedRefusal(outcome)) {
-      return { kind: "problems", problems: outcome.problems, hint: outcome.hint };
+      return { kind: "problems", problems: outcome.problems };
     }
     return { kind: "refused", words: configRefusalWords(outcome, REREAD) };
   }
@@ -632,7 +627,7 @@ export function DocumentEditor({
         return;
       }
       if (outcome.kind === "problems" && !isUnsealedRefusal(outcome)) {
-        setChecked({ kind: "problems", problems: outcome.problems, hint: outcome.hint });
+        setChecked({ kind: "problems", problems: outcome.problems });
         return;
       }
       setChecked({ kind: "refused", words: notSaved(outcome) });
@@ -708,7 +703,6 @@ export function DocumentEditor({
             {ready.replacing ? (
               <Callout variant="warning" title="The active revision can't be read">
                 <span>{ready.replacing.message}</span>
-                {ready.replacing.hint && <span> {ready.replacing.hint}</span>}
                 <span>
                   {" "}
                   Paste or import the whole document here: nothing is read from the revision it
@@ -829,7 +823,6 @@ function CheckResult({
               </li>
             ))}
           </ul>
-          {checked.hint && <span>{checked.hint}</span>}
         </Callout>
       )}
       {checked.kind === "refused" && <Refused words={checked.words} />}
@@ -842,7 +835,6 @@ function failedWords(err: unknown): RefusalWords {
   return {
     message: `The request could not be sent: ${err instanceof Error ? err.message : String(err)}. Reload before trying again.`,
     reload: true,
-    hint: "",
   };
 }
 
