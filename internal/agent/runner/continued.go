@@ -935,7 +935,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	// of dropped calls alone carries it too.
 	claims := len(late) > 0 || out.LateDropped > 0 || (as.mayShow && (len(after) > 0 || out.Dropped > 0))
 	if claims && !as.fresh {
-		out.Other = r.otherCalls(round, through, history, as, out, told, listed, b)
+		out.Other = r.otherCalls(round, history, as, out, told, listed, b)
 	}
 	return out, omitted
 }
@@ -989,13 +989,13 @@ func shownNames(names []string, group []BridgedCall, at []int) []string {
 // The entry of history standing for round.of is the round's own, its calls
 // and tallies the round's (a send-back's closed rounds hold it last), so it
 // is read nowhere here.
-func (r *Runner) otherCalls(round roundCalls, through *int, history []ledger.Iteration, as toldAs,
+func (r *Runner) otherCalls(round roundCalls, history []ledger.Iteration, as toldAs,
 	out prompts.AfterSave, told []string, listed []ledger.Call, b provenance.Boundary) prompts.OtherCalls {
 
-	named := func(tools []string, unnamed bool) prompts.ToolsNamed {
+	named := func(of []string, unnamed bool) prompts.ToolsNamed {
 		var n prompts.ToolsNamed
 		for _, tool := range told {
-			if slices.Contains(tools, tool) {
+			if slices.Contains(of, tool) {
 				n.Tools = append(n.Tools, provenance.Neutralise(b, tool))
 			}
 		}
@@ -1027,7 +1027,7 @@ func (r *Runner) otherCalls(round roundCalls, through *int, history []ledger.Ite
 		absorbed, absorbedUnnamed = talliedNames(absorbed, absorbedUnnamed, entry.Absorbed)
 	}
 	absorbed, absorbedUnnamed = talliedNames(absorbed, absorbedUnnamed, round.absorbed)
-	if droppedMayShow(round, through, as, out) {
+	if droppedMayShow(round, as, out) {
 		dropped, droppedUnnamed = talliedNames(dropped, droppedUnnamed, round.elided)
 	}
 	other := prompts.OtherCalls{EarlierTurns: r.cfg.Resume != nil && r.cfg.Resume.Base != nil,
@@ -1058,21 +1058,23 @@ func talliedNames(names []string, unnamed bool, elided []ledger.Elided) ([]strin
 
 // droppedMayShow reports whether the session may show some of the calls
 // round's log dropped from its middle, as [Runner.calledAfter] tells round's
-// calls from through as as says, out being what it told: never where it
-// dropped none; and else wherever the point is not known to hold them apart.
-// A NIL through is the copy that holds every call of the round but the late
-// ones, dropped or not; calls told as ones the session may already show
-// (as.mayShow) are past a point it may have passed; a dropped late call
-// (out.LateDropped) may be shown as any late call may; and where the log
-// dropped more than it dropped past the point, or lists a call with no number,
-// an older build's append that makes that count an over-count, some dropped
-// call may be at or below it. ONLY WHERE NONE OF THAT HOLDS are they all past
-// a point the session ends at: the log this build numbers puts every dropped
-// call past it ([droppedAfterSave] exact), and the list's words say its calls
-// are not in the session, so the dropped ones are not either.
-func droppedMayShow(round roundCalls, through *int, as toldAs, out prompts.AfterSave) bool {
+// calls as as says, out being what it told: never where it dropped none; and
+// else wherever the point is not known to hold them apart. Calls told as ones
+// the session may already show (as.mayShow) are past a point it may have
+// passed; a dropped late call (out.LateDropped) may be shown as any late call
+// may; and where the log dropped more than it dropped past the point
+// (out.Dropped), or lists a call with no number (an older build's append,
+// which [droppedAfterSave] cannot place and so may over-count by), some
+// dropped call may be at or below it. A NIL point, the copy that holds every
+// call of the round but the late ones, dropped or not, is the first of those
+// last: calledAfter counts nothing past it, so out.Dropped is zero. ONLY WHERE
+// NONE OF THAT HOLDS are they all past a point the session ends at: the log
+// this build numbers puts every dropped call past it ([droppedAfterSave]
+// exact), and the list's words say its calls are not in the session, so the
+// dropped ones are not either.
+func droppedMayShow(round roundCalls, as toldAs, out prompts.AfterSave) bool {
 	dropped := ledger.Count(round.elided)
-	return dropped > 0 && (through == nil || as.mayShow || out.LateDropped > 0 || dropped > out.Dropped ||
+	return dropped > 0 && (as.mayShow || out.LateDropped > 0 || dropped > out.Dropped ||
 		slices.ContainsFunc(round.bridged, func(call BridgedCall) bool { return call.Appended == 0 }))
 }
 
