@@ -113,6 +113,13 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "DelegatedDecisionsAnswer", []map[string]any{body}, false)
+	// THE SPOT-CHECK RATE'S RANGE AND DEFAULT ARE THE ENGINE'S, so a form
+	// never offers a rate the document refuses.
+	if sample := asMap(t, body["sample"]); sample["default"] != float64(delegated.DefaultSampleOneIn) ||
+		sample["min"] != float64(1) || sample["max"] != float64(1000) {
+		t.Errorf("the answer's sample is %v, want default %d within 1 to 1000", sample,
+			delegated.DefaultSampleOneIn)
+	}
 	rules := rowsOf(t, body["rules"])
 	holdShape(t, "DelegatedRule", rules, false)
 	if len(rules) != 2 || len(rowsOf(t, rules[1]["required_checks"])) != 1 {

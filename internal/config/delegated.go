@@ -122,6 +122,12 @@ const (
 	delegatedMaxCheckNameBytes = 128
 )
 
+// DelegatedSampleRange is the spot-check rate a rule may set in
+// sample_one_in, lowest and highest, and the engine's default where it sets none.
+func DelegatedSampleRange() (lowest, highest, fallback int) {
+	return 1, delegatedMaxSampleOneIn, delegated.DefaultSampleOneIn
+}
+
 // SampleRate is one in how many of the rule's decisions are spot-checked.
 func (r DelegatedRule) SampleRate() int {
 	if r.SampleOneIn == 0 {

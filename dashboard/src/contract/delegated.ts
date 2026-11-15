@@ -156,6 +156,8 @@ export interface DelegatedDecisionsAnswer {
    * with the range a change is held to.
    */
   limits: LimitsAnswer["limits"];
+  /** The spot-check rate a rule may set (`sample_one_in`), and the engine's default. */
+  sample: { default: number; min: number; max: number };
   /** The company day the digest covers, `2026-11-09`. */
   day: string;
   since: string;
