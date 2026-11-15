@@ -65,12 +65,13 @@ import (
 // memory server's (dvs @289057540, `mcp__${IL}__memory_` @284883475, IL
 // "memory"), and its code mode folds only its own Poll calls (KFt
 // @293413848, `H.name===wi`, wi "Poll" @288129013), none of them a bridged
-// call. So no rule of the Poll calls a reply holds is needed, as the design
-// once had one (C7): no bridged call is a Poll.
+// call. So no rule of the Poll calls a reply holds is needed: no bridged call
+// is a Poll.
 //
-// MEASURED: of the calls the probes kept with one use and one result, both
-// handed, (C) holds all 951 of the main threads' and all 109 of the
-// subagents'. It TELLS, knowingly,
+// MEASURED over the orders the facility hands, each thread file the reading
+// reads: of the calls the probes kept with one use and one result, both
+// handed, (C) holds all 935 of the main threads' and all 113 of the
+// subagents', and of the fixtures' all 50 and all 24. It TELLS, knowingly,
 // some shapes the request does pair, none measured: another reply between F
 // and U whose use merges back, a prompt merged into a results message before
 // the reply goes on, a results record in the stretch answering another reply,

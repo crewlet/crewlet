@@ -3033,8 +3033,10 @@ relaunch's behaviour without a reading. Measured (probe T, both releases): a
 continuation hands its model each whole-line result of its main thread the
 model hands after its last restart, verbatim and with its call, the results of
 parallel calls off the chain among them, every one of which the rule holds;
-and of the calls the probes kept with one use and one result, both handed, it
-holds all 951 of the main threads' and all 109 of the subagents'.
+and over the orders the facility hands each thread file the reading reads, of
+the calls the probes kept with one use and one result, both handed, its
+structure holds all 935 of the main threads' and all 113 of the subagents'
+(and of the test fixtures', all 50 and all 24).
 
 A result its harness replaced for its model is live in no thread: behind a
 flag Anthropic's servers set, Claude Code hands its model a preview in place of
