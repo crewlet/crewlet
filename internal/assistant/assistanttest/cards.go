@@ -371,11 +371,8 @@ var (
 	rawType  = reflect.TypeFor[json.RawMessage]()
 )
 
-// fillDepth is the deepest a filled value is set, which ends a recursive type:
-// deep enough for the deepest member a card reads, a list of records each
-// carrying a question whose options are a list of records (a page, its list,
-// a row, its decision and the record it points to, the options, an option,
-// and an option's fields).
+// fillDepth is the deepest a filled value is set, which ends a recursive type and
+// reaches a decision's option fields (a page, a row, its decision, an option).
 const fillDepth = 7
 
 func fill(v reflect.Value, at time.Time, depth int) {

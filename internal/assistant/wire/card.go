@@ -159,10 +159,8 @@ type EntityItem struct {
 	Label string       `json:"label"`
 	Fact  string       `json:"fact,omitempty"`
 	Depth int          `json:"depth,omitempty"`
-	// Facts are what the item carries beyond its label and fact, each a
-	// detail the drawer leaves out and the model reads: a comment's question,
-	// whom it asks, its options and the recommendation. Absent on an item
-	// that carries none.
+	// Facts are details the drawer leaves out and the model reads (a comment's
+	// question and options); absent on an item with none.
 	Facts []Fact `json:"facts,omitempty"`
 	Open  *Link  `json:"open,omitempty"`
 }

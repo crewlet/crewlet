@@ -77,27 +77,16 @@ type Column struct {
 	// an empty one: a room's "#", as every screen draws a room's name, so
 	// the card and the screen say "#launch" alike.
 	Prefix string
-	// Else, where named, is the path read where Path holds nothing: a list
-	// whose rows are of two kinds keeps one value in one of two places (a
-	// question's decision under an ask's `ask`, or under a parked
-	// executor's `run`), and one column says both.
+	// Else is read where Path holds nothing, so one column says a value that rows of
+	// two kinds keep in two places (an ask's decision, a parked run's).
 	Else string
 	// Entries, where set, writes a value that is a list of records entry by
 	// entry ([Entries]) rather than by each record's name.
 	Entries *Entries
 }
 
-// Entries is how a value that is a list of records is written as one text: each
-// entry on a line of its own, led by what a reply names it by, then its words.
-// A question's options read
-//
-//	origin-rule: Origin rule with a Host override (Needs the Pro plan)
-//	worker: A Worker route on the free tier
-//
-// WRITTEN BY THE ID AN ANSWER NAMES, never by the label alone: a list of records
-// is otherwise written by each one's name ([text]), and options written as
-// "Origin rule, A Worker route" left a model nothing to choose with, so it read
-// the raw answer instead and was cut at what one step reads.
+// Entries writes a list of records one line per entry, led by the id an answer
+// names it by: "worker: A Worker route on the free tier (detail)".
 type Entries struct {
 	// Lead is the path within an entry to what leads its line: the id an
 	// answer names it by (an option's), or what it is (a piece of evidence's
@@ -261,12 +250,8 @@ type Items struct {
 	// Noun is what one item and several are called ("policy", "policies"),
 	// which the drawer counts a folded card's list with.
 	Noun wire.Noun
-	// Facts are what an item carries beyond its label and its fact, paths
-	// within the item, each kept on the card as a detail the drawer leaves
-	// out and the model reads: a comment that asks a question carries who it
-	// asks, the question's options and the recommendation, which a comment
-	// drawn as its words and its author alone dropped. An item with no value
-	// at a fact's path carries no such fact.
+	// Facts are an item's further values, paths within it, kept as details the drawer
+	// leaves out and the model reads (a comment's question and options).
 	Facts []Fact
 	Open  *Open
 }
@@ -882,10 +867,8 @@ func (c Column) cell(row any) any {
 	return cell(c.Type, v)
 }
 
-// write is v, a list of records (or one record), written entry by entry: each
-// on a line of its own, its lead, then its first word after a colon and every
-// other in parentheses, each on one line. A value that is no record writes
-// nothing.
+// write is v (a list of records, or one) one entry per line: the lead, then the
+// first word after a colon and the rest in parentheses.
 func (en *Entries) write(v any) string {
 	var list []any
 	switch t := v.(type) {

@@ -24,13 +24,8 @@ const optionLines = "origin-rule: Origin rule (Needs the Pro plan)\n" +
 	"worker: A Worker route\n" +
 	"defer: Defer until the release"
 
-// A LIST OF RECORDS IS WRITTEN BY WHAT AN ANSWER NAMES EACH BY, entry by entry:
-// a question's options lead with their ids, so a model choosing one has the id
-// to answer with, where a list written by each record's name alone ("Origin
-// rule, A Worker route") left it none. A column reads its Else where its Path
-// holds nothing, so a list of two kinds of row says one value in one column,
-// and the model reads the cell as the card holds it. Mutation: drop the lead,
-// or read Path alone, and this fails.
+// A list of records is written entry by entry, led by its id, and a column reads
+// its Else where its Path holds nothing; the model reads the cell as written.
 func TestAListOfRecordsIsWrittenByWhatAnAnswerNamesEachBy(t *testing.T) {
 	t.Parallel()
 	entries := &cards.Entries{Lead: "id", Words: []string{"label", "detail"}}
@@ -73,11 +68,8 @@ func TestAListOfRecordsIsWrittenByWhatAnAnswerNamesEachBy(t *testing.T) {
 	}
 }
 
-// AN ITEM CARRIES ITS DETAILS TO THE MODEL: a comment that asks a question is
-// listed with whom it asks and its options, each a detail the drawer leaves out
-// and the model's summary keeps by its label, and an item with nothing at a
-// fact's path carries no such fact. Mutation: drop an item's facts from the
-// build or from the summary, or keep an empty one, and this fails.
+// An item's facts are details the drawer leaves out and the model's summary keeps;
+// an empty one is absent.
 func TestAnItemCarriesItsDetailsToTheModel(t *testing.T) {
 	t.Parallel()
 	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "key", Key: "key",
